@@ -5,6 +5,7 @@ import { SessionList } from "./session/SessionList";
 import { SessionDetail } from "./session/SessionDetail";
 import { NewSession } from "./session/NewSession";
 import { sortSessions } from "./session/list";
+import { useIsNarrow } from "./session/useIsNarrow";
 import "./session/session.css";
 
 /**
@@ -25,40 +26,54 @@ export function Sessions({
   const [showNew, setShowNew] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
+  const narrow = useIsNarrow();
   const sessions: SessionRow[] = state.sessions;
   const selected = sessions.find((s) => s.id === selectedId) ?? null;
 
   // Nothing selected (or the selection was deleted elsewhere): fall to the most
   // urgent session so the screen is never a blank right-hand pane by default.
+  //
+  // Never when narrow. There the two panes take turns, so auto-selecting would
+  // replace the list with a detail view the moment it rendered, and the list
+  // would be unreachable.
   const fallback = useMemo(() => sortSessions(sessions.filter((s) => s.archivedAt == null))[0] ?? null, [sessions]);
   useEffect(() => {
-    if (!selected && fallback) onSelect(fallback.id);
-  }, [selected, fallback, onSelect]);
+    if (!narrow && !selected && fallback) onSelect(fallback.id);
+  }, [narrow, selected, fallback, onSelect]);
 
   // An archived session reached by deep link must still be visible in the list.
   useEffect(() => {
     if (selected?.archivedAt != null) setShowArchived(true);
   }, [selected]);
 
-  return (
-    <div className="sx-wrap">
-      <SessionList
-        sessions={sessions}
-        selectedId={selected?.id ?? null}
-        onSelect={onSelect}
-        onNew={() => setShowNew(true)}
-        showArchived={showArchived}
-        onToggleArchived={setShowArchived}
-      />
+  // Narrow: one pane at a time. Splitting 720px of height between a list and a
+  // detail leaves the detail ~70px of transcript under its own header, tabs and
+  // composer — a pane too small to use, not a tight one.
+  const showList = !narrow || !selected;
+  const showDetail = !narrow || selected != null;
 
-      {selected ? (
+  return (
+    <div className="sx-wrap" data-panes={narrow ? "one" : "two"}>
+      {showList && (
+        <SessionList
+          sessions={sessions}
+          selectedId={selected?.id ?? null}
+          onSelect={onSelect}
+          onNew={() => setShowNew(true)}
+          showArchived={showArchived}
+          onToggleArchived={setShowArchived}
+        />
+      )}
+
+      {showDetail && selected ? (
         <SessionDetail
           key={selected.id}
           session={selected}
           attention={selected.attention}
+          onBack={narrow ? () => onSelect(null) : undefined}
           onDeleted={() => onSelect(null)}
         />
-      ) : (
+      ) : showDetail && (
         <div className="sx-detail">
           <div className="sx-panel">
             <Empty

@@ -13,10 +13,13 @@ type Tab = "activity" | "diff" | "task";
 export function SessionDetail({
   session,
   attention,
+  onBack,
   onDeleted,
 }: {
   session: Session;
   attention: Attention;
+  /** Set only when the detail is the whole screen and the list is hidden. */
+  onBack?: () => void;
   onDeleted: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("activity");
@@ -31,6 +34,11 @@ export function SessionDetail({
     <div className="sx-detail">
       <div className="sx-header">
         <div className="sx-header-top">
+          {onBack && (
+            <Button size="sm" variant="ghost" onClick={onBack}>
+              ← Sessions
+            </Button>
+          )}
           <h2>{session.title}</h2>
           <StatusPill status={session.status} />
           <div className="sx-header-actions">

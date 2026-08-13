@@ -14,7 +14,7 @@ import type {
   PrInfo,
   Session,
 } from "../../../src/core/types";
-import { api } from "../api";
+import { api, repoShort } from "../api";
 import { AttentionBadge, Button, Empty, Icon, RelativeTime, StatusPill } from "../components";
 import "./inbox.css";
 
@@ -181,6 +181,22 @@ function QuietGroup({
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * `repo · branch`, with the repo shortened to its last path segment.
+ *
+ * A local repo's `ref` is an absolute path — worktrees under a temp dir run to
+ * ~90 characters, which wraps the row onto two lines and pushes the branch out
+ * of sight. The last segment is what identifies the repo to a person; the full
+ * path stays on the title so it is still recoverable without leaving the row.
+ */
+function RepoBranch({ session }: { session: Session }) {
+  return (
+    <span className="mono" title={`${session.repo} · ${session.branch}`}>
+      {repoShort(session.repo)} · {session.branch}
+    </span>
   );
 }
 

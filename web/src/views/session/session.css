@@ -556,7 +556,30 @@
 .sx-scope-hint li { margin-top: 2px; }
 
 /* narrow windows: the list collapses above the detail rather than squeezing */
+/* Below the breakpoint the board shows ONE pane at a time — Sessions.tsx
+   mounts either the list or the detail and pairs this with a back button.
+   Stacking them was the previous answer and it does not work: at 720px the
+   detail was left ~70px of transcript beneath its own header, tabs and
+   composer, and the list's share landed mid-row, which read as a broken
+   layout rather than as something scrollable. Whichever pane is mounted now
+   gets the full height. Keep NARROW_PX in useIsNarrow.ts in step with this. */
 @media (max-width: 900px) {
-  .sx-wrap { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); }
-  .sx-list { border-right: 0; border-bottom: 1px solid var(--border); }
+  .sx-wrap {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .sx-list { border-right: 0; }
+
+  /* Three tabs plus counts can exceed a phone width; let them scroll rather
+     than wrap into a second row that pushes the panel down. */
+  .sx-tabs { overflow-x: auto; scrollbar-width: none; }
+  .sx-tabs::-webkit-scrollbar { display: none; }
+  .sx-tab { flex: none; }
+
+  .sx-header { padding: 12px 12px 0; }
+  .sx-panel { padding: 12px; }
+  .sx-steer { padding: 10px 12px 12px; }
+  .sx-tool-title { max-width: 55%; }
+  .sx-form { min-width: 0; }
 }
