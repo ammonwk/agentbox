@@ -1,110 +1,253 @@
 import { Database } from "bun:sqlite";
-import { dbPath, ensureDirs } from "./paths";
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
+import { DEFAULT_MODEL, dbPath, ensureDirs } from "./paths";
+import { isGitRepo, resolveDefaultBranch, repoFullNameOf, run } from "./git";
 import type { Session, SessionStatus, Repo, AgentSettings } from "./types";
 
 let db: Database | null = null;
+let openedAt = "";
 
 export function getDb(): Database {
-  if (db) return db;
+  // Keyed on the resolved path, not just "is it open". Caching the handle alone
+  // would be the module-scope `AGENTBOX_HOME` bug one level down: a changed home
+  // would keep answering from the database opened against the previous one.
+  const path = dbPath();
+  if (db && openedAt === path) return db;
   ensureDirs();
-  db = new Database(dbPath, { create: true });
+  db = new Database(path, { create: true });
+  openedAt = path;
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   migrate(db);
   return db;
 }
 
+// ---------------------------------------------------------------- schema
+
+const SESSIONS_DDL = `
+  CREATE TABLE IF NOT EXISTS sessions (
+    id             TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    prompt         TEXT NOT NULL,
+    status         TEXT NOT NULL,
+    repo           TEXT NOT NULL,
+    branch         TEXT NOT NULL,
+    worktree       TEXT,
+    model          TEXT NOT NULL,
+    follow_ups     INTEGER NOT NULL DEFAULT 0,
+    last_message   TEXT,
+    tool_calls     INTEGER NOT NULL DEFAULT 0,
+    exit_code      INTEGER,
+    pid            INTEGER,
+    pr_number      INTEGER,
+    repo_full_name TEXT,
+    cost_usd       REAL,
+    tokens         INTEGER,
+    blocked        INTEGER NOT NULL DEFAULT 0,
+    flag_reason    TEXT,
+    omp_session_id TEXT,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    started_at     INTEGER,
+    archived_at    INTEGER
+  );
+`;
+
+const REPOS_DDL = `
+  CREATE TABLE IF NOT EXISTS repos (
+    id             TEXT PRIMARY KEY,
+    ref            TEXT NOT NULL UNIQUE,
+    kind           TEXT NOT NULL,
+    display_name   TEXT NOT NULL,
+    full_name      TEXT,
+    default_branch TEXT NOT NULL DEFAULT 'main',
+    added_at       INTEGER NOT NULL
+  );
+`;
+
+function columnsOf(d: Database, table: string): string[] {
+  return (d.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+}
+
+/**
+ * The old schema carried `session_dir` and `waiting_for_input`, both of which
+ * the new model dropped — `waiting` is a status now, and nothing ever read the
+ * session dir back out. Rather than accreting columns forever we rebuild the
+ * table and copy every row across; there is one real database (the author's
+ * laptop) and no row is worth losing.
+ */
 function migrate(d: Database) {
+  d.exec(SESSIONS_DDL);
+  d.exec(REPOS_DDL);
   d.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id            TEXT PRIMARY KEY,
-      title         TEXT NOT NULL,
-      prompt        TEXT NOT NULL,
-      status        TEXT NOT NULL,
-      repo          TEXT NOT NULL,
-      branch        TEXT NOT NULL,
-      worktree      TEXT,
-      session_dir   TEXT NOT NULL,
-      model         TEXT NOT NULL,
-      follow_ups    INTEGER NOT NULL DEFAULT 0,
-      last_message  TEXT,
-      exit_code     INTEGER,
-      pid           INTEGER,
-      pr_number     INTEGER,
-      repo_full_name TEXT,
-      cost_usd      REAL,
-      tokens        INTEGER,
-      created_at    INTEGER NOT NULL,
-      updated_at    INTEGER NOT NULL,
-      archived_at   INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS repos (
-      id           TEXT PRIMARY KEY,
-      ref          TEXT NOT NULL UNIQUE,
-      kind         TEXT NOT NULL,
-      display_name TEXT NOT NULL,
-      added_at     INTEGER NOT NULL
-    );
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
   `);
-  // additive migrations for the interactive engine
-  const cols = (d.query("PRAGMA table_info(sessions)").all() as { name: string }[]).map((c) => c.name);
-  if (!cols.includes("waiting_for_input")) d.exec("ALTER TABLE sessions ADD COLUMN waiting_for_input INTEGER NOT NULL DEFAULT 0");
-  if (!cols.includes("blocked")) d.exec("ALTER TABLE sessions ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0");
-  if (!cols.includes("omp_session_id")) d.exec("ALTER TABLE sessions ADD COLUMN omp_session_id TEXT");
+
+  migrateSessions(d);
+  migrateRepos(d);
 }
 
-// ---- sessions ----
+function migrateSessions(d: Database) {
+  const cols = columnsOf(d, "sessions");
+  const legacy = cols.includes("session_dir") || cols.includes("waiting_for_input");
+  if (!legacy) {
+    // A table created by this version, or one already rebuilt. Only genuinely
+    // new columns can be missing, and those are safe to add in place.
+    if (!cols.includes("tool_calls")) d.exec("ALTER TABLE sessions ADD COLUMN tool_calls INTEGER NOT NULL DEFAULT 0");
+    if (!cols.includes("flag_reason")) d.exec("ALTER TABLE sessions ADD COLUMN flag_reason TEXT");
+    if (!cols.includes("started_at")) d.exec("ALTER TABLE sessions ADD COLUMN started_at INTEGER");
+    return;
+  }
+
+  const hadOmpId = cols.includes("omp_session_id");
+  const hadBlocked = cols.includes("blocked");
+  d.transaction(() => {
+    d.exec("ALTER TABLE sessions RENAME TO sessions_legacy");
+    d.exec(SESSIONS_DDL);
+    // `started_at` is genuinely unknown for old rows — a session's first turn
+    // was never recorded — so it stays null rather than being guessed from
+    // created_at, which would put a wrong elapsed time on the detail header.
+    d.exec(`
+      INSERT INTO sessions (
+        id, title, prompt, status, repo, branch, worktree, model, follow_ups,
+        last_message, tool_calls, exit_code, pid, pr_number, repo_full_name,
+        cost_usd, tokens, blocked, flag_reason, omp_session_id,
+        created_at, updated_at, started_at, archived_at
+      )
+      SELECT
+        id, title, prompt, status, repo, branch, worktree, model, follow_ups,
+        last_message, 0, exit_code, pid, pr_number, repo_full_name,
+        cost_usd, tokens, ${hadBlocked ? "COALESCE(blocked, 0)" : "0"}, NULL,
+        ${hadOmpId ? "omp_session_id" : "NULL"},
+        created_at, updated_at, NULL, archived_at
+      FROM sessions_legacy
+    `);
+    d.exec("DROP TABLE sessions_legacy");
+  })();
+}
+
+function migrateRepos(d: Database) {
+  const cols = columnsOf(d, "repos");
+  if (!cols.includes("full_name")) d.exec("ALTER TABLE repos ADD COLUMN full_name TEXT");
+  if (!cols.includes("default_branch")) {
+    d.exec("ALTER TABLE repos ADD COLUMN default_branch TEXT NOT NULL DEFAULT 'main'");
+  }
+  // Backfill the two fields registration now resolves up front. Only rows that
+  // predate them are touched, so this runs once and costs nothing thereafter.
+  const stale = d
+    .query("SELECT id, ref, kind FROM repos WHERE full_name IS NULL OR default_branch = ''")
+    .all() as { id: string; ref: string; kind: string }[];
+  for (const row of stale) {
+    const path = row.kind === "local" ? row.ref : null;
+    const fullName = row.kind === "github" ? row.ref : path ? repoFullNameOf(path) : null;
+    const branch = path ? resolveDefaultBranch(path) : "main";
+    d.run("UPDATE repos SET full_name = ?, default_branch = ? WHERE id = ?", [fullName, branch, row.id]);
+  }
+}
+
+// -------------------------------------------------------------- sessions
 
 type SessionRow = {
   id: string; title: string; prompt: string; status: string; repo: string;
-  branch: string; worktree: string | null; session_dir: string; model: string;
-  follow_ups: number; last_message: string | null; exit_code: number | null;
-  pid: number | null; pr_number: number | null; repo_full_name: string | null;
-  cost_usd: number | null; tokens: number | null;
-  waiting_for_input: number; blocked: number; omp_session_id: string | null;
-  created_at: number; updated_at: number; archived_at: number | null;
+  branch: string; worktree: string | null; model: string;
+  follow_ups: number; last_message: string | null; tool_calls: number;
+  exit_code: number | null; pid: number | null; pr_number: number | null;
+  repo_full_name: string | null; cost_usd: number | null; tokens: number | null;
+  blocked: number; flag_reason: string | null; omp_session_id: string | null;
+  created_at: number; updated_at: number; started_at: number | null;
+  archived_at: number | null;
 };
+
+/**
+ * Persisted Session fields → their column. This is the one place that knows the
+ * mapping: it drives the insert, the targeted update, and (by omission) which
+ * fields are in-memory only. `permission` is deliberately absent — it lives on
+ * the running ACP connection and must never be written.
+ */
+const SESSION_COLUMNS = {
+  title: "title",
+  prompt: "prompt",
+  status: "status",
+  repo: "repo",
+  branch: "branch",
+  worktree: "worktree",
+  model: "model",
+  followUps: "follow_ups",
+  lastMessage: "last_message",
+  toolCalls: "tool_calls",
+  exitCode: "exit_code",
+  pid: "pid",
+  prNumber: "pr_number",
+  repoFullName: "repo_full_name",
+  costUsd: "cost_usd",
+  tokens: "tokens",
+  blocked: "blocked",
+  flagReason: "flag_reason",
+  ompSessionId: "omp_session_id",
+  createdAt: "created_at",
+  updatedAt: "updated_at",
+  startedAt: "started_at",
+  archivedAt: "archived_at",
+} as const satisfies Partial<Record<keyof Session, string>>;
+
+type PersistedKey = keyof typeof SESSION_COLUMNS;
+
+/** SQLite has no boolean; everything else round-trips as-is. */
+function toSql(key: PersistedKey, value: unknown): string | number | null {
+  if (key === "blocked") return value ? 1 : 0;
+  if (value === undefined || value === null) return null;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  return value as string | number;
+}
 
 function rowToSession(r: SessionRow): Session {
   return {
     id: r.id, title: r.title, prompt: r.prompt, status: r.status as SessionStatus,
-    repo: r.repo, branch: r.branch, worktree: r.worktree, sessionDir: r.session_dir,
-    model: r.model, followUps: r.follow_ups, lastMessage: r.last_message,
+    repo: r.repo, branch: r.branch, worktree: r.worktree, model: r.model,
+    followUps: r.follow_ups, lastMessage: r.last_message, toolCalls: r.tool_calls,
     exitCode: r.exit_code, pid: r.pid, prNumber: r.pr_number,
     repoFullName: r.repo_full_name, costUsd: r.cost_usd, tokens: r.tokens,
-    waitingForInput: !!r.waiting_for_input, blocked: !!r.blocked,
-    ompSessionId: r.omp_session_id,
-    createdAt: r.created_at, updatedAt: r.updated_at, archivedAt: r.archived_at,
+    blocked: !!r.blocked, flagReason: r.flag_reason, ompSessionId: r.omp_session_id,
+    createdAt: r.created_at, updatedAt: r.updated_at, startedAt: r.started_at,
+    archivedAt: r.archived_at,
   };
 }
 
 export function insertSession(s: Session) {
+  const keys = Object.keys(SESSION_COLUMNS) as PersistedKey[];
+  const cols = ["id", ...keys.map((k) => SESSION_COLUMNS[k])];
+  const values: (string | number | null)[] = [s.id, ...keys.map((k) => toSql(k, s[k]))];
   getDb().run(
-    `INSERT INTO sessions (id,title,prompt,status,repo,branch,worktree,session_dir,model,follow_ups,last_message,exit_code,pid,pr_number,repo_full_name,cost_usd,tokens,waiting_for_input,blocked,omp_session_id,created_at,updated_at,archived_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [s.id, s.title, s.prompt, s.status, s.repo, s.branch, s.worktree, s.sessionDir,
-     s.model, s.followUps, s.lastMessage, s.exitCode, s.pid, s.prNumber,
-     s.repoFullName, s.costUsd, s.tokens, s.waitingForInput ? 1 : 0,
-     s.blocked ? 1 : 0, s.ompSessionId, s.createdAt, s.updatedAt, s.archivedAt]
+    `INSERT INTO sessions (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
+    values
   );
 }
 
+/**
+ * Write only the fields that were passed. The streamed-text path calls this on
+ * every chunk of assistant output; rewriting all 24 columns (after a read to
+ * find their current values) turned one character of text into a whole-row
+ * round-trip.
+ */
 export function updateSession(id: string, patch: Partial<Session>) {
-  const cur = getSession(id);
-  if (!cur) return;
-  const next = { ...cur, ...patch, updatedAt: Date.now() };
-  getDb().run(
-    `UPDATE sessions SET title=?,prompt=?,status=?,repo=?,branch=?,worktree=?,session_dir=?,model=?,follow_ups=?,last_message=?,exit_code=?,pid=?,pr_number=?,repo_full_name=?,cost_usd=?,tokens=?,waiting_for_input=?,blocked=?,omp_session_id=?,created_at=?,updated_at=?,archived_at=? WHERE id=?`,
-    [next.title, next.prompt, next.status, next.repo, next.branch, next.worktree,
-     next.sessionDir, next.model, next.followUps, next.lastMessage, next.exitCode,
-     next.pid, next.prNumber, next.repoFullName, next.costUsd, next.tokens,
-     next.waitingForInput ? 1 : 0, next.blocked ? 1 : 0, next.ompSessionId,
-     next.createdAt, next.updatedAt, next.archivedAt, id]
-  );
+  const assignments: string[] = [];
+  const values: (string | number | null)[] = [];
+  for (const key of Object.keys(patch) as (keyof Session)[]) {
+    if (!(key in SESSION_COLUMNS) || key === "updatedAt") continue;
+    const k = key as PersistedKey;
+    assignments.push(`${SESSION_COLUMNS[k]} = ?`);
+    values.push(toSql(k, patch[key]));
+  }
+  if (assignments.length === 0) return;
+  assignments.push("updated_at = ?");
+  values.push(patch.updatedAt ?? Date.now());
+  values.push(id);
+  getDb().run(`UPDATE sessions SET ${assignments.join(", ")} WHERE id = ?`, values);
 }
 
 export function getSession(id: string): Session | null {
@@ -126,45 +269,190 @@ export function deleteSession(id: string) {
   getDb().run("DELETE FROM sessions WHERE id = ?", [id]);
 }
 
-// ---- repos ----
+// ----------------------------------------------------------------- repos
 
-type RepoRow = { id: string; ref: string; kind: string; display_name: string; added_at: number };
+type RepoRow = {
+  id: string; ref: string; kind: string; display_name: string;
+  full_name: string | null; default_branch: string; added_at: number;
+};
+
+function rowToRepo(r: RepoRow): Repo {
+  return {
+    id: r.id, ref: r.ref, kind: r.kind as Repo["kind"], displayName: r.display_name,
+    fullName: r.full_name, defaultBranch: r.default_branch, addedAt: r.added_at,
+  };
+}
 
 export function insertRepo(r: Repo) {
-  getDb().run("INSERT OR IGNORE INTO repos (id,ref,kind,display_name,added_at) VALUES (?,?,?,?,?)",
-    [r.id, r.ref, r.kind, r.displayName, r.addedAt]);
+  getDb().run(
+    "INSERT OR IGNORE INTO repos (id,ref,kind,display_name,full_name,default_branch,added_at) VALUES (?,?,?,?,?,?,?)",
+    [r.id, r.ref, r.kind, r.displayName, r.fullName, r.defaultBranch, r.addedAt]
+  );
 }
 
 export function listRepos(): Repo[] {
   const rows = getDb().query("SELECT * FROM repos ORDER BY added_at ASC").all() as RepoRow[];
-  return rows.map((r) => ({
-    id: r.id, ref: r.ref, kind: r.kind as Repo["kind"],
-    displayName: r.display_name, addedAt: r.added_at,
-  }));
+  return rows.map(rowToRepo);
+}
+
+export function getRepoById(id: string): Repo | null {
+  const row = getDb().query("SELECT * FROM repos WHERE id = ?").get(id) as RepoRow | null;
+  return row ? rowToRepo(row) : null;
+}
+
+/** Look a repo up by the `ref` a Session stores. Sessions record the ref, not
+ *  the id, so this is the lookup the engine needs to find a session's repo. */
+export function getRepo(ref: string): Repo | null {
+  const row = getDb().query("SELECT * FROM repos WHERE ref = ?").get(ref) as RepoRow | null;
+  return row ? rowToRepo(row) : null;
 }
 
 export function deleteRepo(id: string) {
   getDb().run("DELETE FROM repos WHERE id = ?", [id]);
 }
 
-// ---- settings ----
+/**
+ * Register a repo from what the human typed: a local path or an `owner/name`
+ * slug.
+ *
+ * Registration is where the slow questions get asked — is this a git repo, what
+ * is its default branch, does it have a GitHub remote — so that spawning a
+ * session and listing PRs never have to. Async because it talks to the network
+ * for a slug we have not cloned yet.
+ */
+export async function addRepo(ref: string): Promise<Repo> {
+  const trimmed = ref.trim();
+  if (!trimmed) throw new Error("a repo path or owner/name slug is required");
+
+  const existing = getRepo(normalizeRef(trimmed));
+  if (existing) return existing;
+
+  const isPath = /^[~./]/.test(trimmed) || trimmed.startsWith("/");
+  const record: Repo = isPath
+    ? localRepo(normalizeRef(trimmed))
+    : githubRepo(trimmed);
+  insertRepo(record);
+  return getRepo(record.ref) ?? record;
+}
+
+function normalizeRef(ref: string): string {
+  if (ref.startsWith("~/")) return join(homedir(), ref.slice(2));
+  if (ref === "~") return homedir();
+  if (/^[./]/.test(ref)) return resolve(ref);
+  return ref;
+}
+
+function localRepo(path: string): Repo {
+  if (!isGitRepo(path)) throw new Error(`not a git repository: ${path}`);
+  return {
+    id: randomUUID(),
+    ref: path,
+    kind: "local",
+    displayName: basename(path) || path,
+    fullName: repoFullNameOf(path),
+    defaultBranch: resolveDefaultBranch(path),
+    addedAt: Date.now(),
+  };
+}
+
+function githubRepo(slug: string): Repo {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug)) {
+    throw new Error(`use a local path or an owner/repo GitHub slug, not "${slug}"`);
+  }
+  return {
+    id: randomUUID(),
+    ref: slug,
+    kind: "github",
+    displayName: slug,
+    fullName: slug,
+    // Asked before the clone exists, so it goes to the remote directly. A
+    // wrong answer here sends every worktree off the wrong branch, so failing
+    // is better than assuming "main".
+    defaultBranch: remoteDefaultBranch(slug),
+    addedAt: Date.now(),
+  };
+}
+
+function remoteDefaultBranch(slug: string): string {
+  const r = run(["git", "ls-remote", "--symref", `https://github.com/${slug}.git`, "HEAD"]);
+  if (r.code !== 0) {
+    throw new Error(`could not reach github.com/${slug}: ${r.stderr.split("\n")[0]?.trim() ?? "unknown error"}`);
+  }
+  const m = r.stdout.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m);
+  if (!m) throw new Error(`github.com/${slug} reported no default branch`);
+  return m[1];
+}
+
+// -------------------------------------------------------------- settings
+
+export const DEFAULT_SETTINGS: AgentSettings = {
+  theme: "system",
+  model: DEFAULT_MODEL,
+  autoApprove: true,
+  maxMinutes: 60,
+  systemPrompt: "",
+  supervisor: {
+    enabled: true,
+    everyToolCalls: 25,
+    model: DEFAULT_MODEL,
+  },
+  advisor: {
+    enabled: false,
+    model: DEFAULT_MODEL,
+  },
+};
+
+/** A partial of AgentSettings whose nested objects may also be partial. */
+export type SettingsPatch = {
+  [K in keyof AgentSettings]?: AgentSettings[K] extends object
+    ? Partial<AgentSettings[K]>
+    : AgentSettings[K];
+};
+
+/**
+ * Merge a patch over a full settings object, one level into the nested groups.
+ *
+ * A flat `{...base, ...patch}` replaces `supervisor` wholesale, so a UI toggle
+ * that sends `{supervisor: {enabled: false}}` would drop `everyToolCalls` and
+ * `model` — the setting reads back as whatever the default happened to be.
+ */
+export function mergeSettings(base: AgentSettings, patch: SettingsPatch): AgentSettings {
+  // The two nested groups are named rather than discovered, so adding a third
+  // is a compile error here instead of a field that silently stops merging.
+  const { supervisor, advisor, ...scalars } = patch;
+  return {
+    ...base,
+    ...defined(scalars),
+    supervisor: { ...base.supervisor, ...defined(supervisor ?? {}) },
+    advisor: { ...base.advisor, ...defined(advisor ?? {}) },
+  };
+}
+
+/** Drop keys whose value is `undefined`: JSON round-trips absent fields as
+ *  undefined, and spreading those would erase the value they are absent from. */
+function defined<T extends object>(o: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const key of Object.keys(o) as (keyof T)[]) {
+    if (o[key] !== undefined) out[key] = o[key];
+  }
+  return out;
+}
 
 export function getSettings(): AgentSettings {
-  const defaults: AgentSettings = {
-    theme: "system",
-    model: "opencode-go/deepseek-v4-flash",
-    autoApprove: true,
-    maxMinutes: 60,
-  };
   const row = getDb().query("SELECT value FROM settings WHERE key = 'agent'").get() as
     | { value: string }
     | null;
-  if (!row) return defaults;
+  if (!row) return DEFAULT_SETTINGS;
+  let stored: SettingsPatch;
   try {
-    return { ...defaults, ...(JSON.parse(row.value) as Partial<AgentSettings>) };
+    stored = JSON.parse(row.value) as SettingsPatch;
   } catch {
-    return defaults;
+    // A corrupt row would otherwise throw on every request; defaults keep the
+    // app usable and the next save overwrites it.
+    console.error("agentbox: settings row is not valid JSON — falling back to defaults");
+    return DEFAULT_SETTINGS;
   }
+  return mergeSettings(DEFAULT_SETTINGS, stored);
 }
 
 export function saveSettings(s: AgentSettings) {

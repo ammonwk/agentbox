@@ -10,43 +10,64 @@ const SKILL_ROOTS: { source: SkillInfo["source"]; dir: string }[] = [
   { source: "project", dir: join(process.cwd(), ".claude", "skills") },
 ];
 
-interface Frontmatter {
-  name?: string;
-  description?: string;
-}
-
-/** Parse the leading YAML frontmatter block of a SKILL.md. */
-function parseFrontmatter(text: string): { fm: Frontmatter; body: string } {
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!m) return { fm: {}, body: text };
-  const fm: Frontmatter = {};
+/** Parse the leading YAML frontmatter block of a SKILL.md. Only the two scalar
+ *  keys we display are read; the body is not, because nothing renders it. */
+function parseFrontmatter(text: string): { name?: string; description?: string } {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return {};
+  const fm: { name?: string; description?: string } = {};
   for (const line of m[1].split("\n")) {
-    const kv = line.match(/^(\w+):\s*(.*)$/);
-    if (kv) (fm as Record<string, string>)[kv[1]] = kv[2].replace(/^["']|["']$/g, "");
+    const kv = line.match(/^(name|description):\s*(.*)$/);
+    if (kv) fm[kv[1] as "name" | "description"] = kv[2].trim().replace(/^["']|["']$/g, "");
   }
-  return { fm, body: m[2].trim() };
+  return fm;
 }
 
-export function listSkills(): SkillInfo[] {
-  const out: SkillInfo[] = [];
+export interface SkillScan {
+  skills: SkillInfo[];
+  warnings: string[];
+}
+
+/**
+ * Every SKILL.md under the known roots.
+ *
+ * This walks the filesystem and reads every file it finds, so like `listPrs`
+ * it belongs to the cold refresh only — it was previously recomputed on every
+ * 400ms broadcast.
+ */
+export function listSkills(): SkillScan {
+  const skills: SkillInfo[] = [];
+  const warnings: string[] = [];
   for (const { source, dir } of SKILL_ROOTS) {
     if (!existsSync(dir)) continue;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      warnings.push(`Could not read skills in ${dir}: ${(e as Error).message}`);
+      continue;
+    }
+    for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const skillDir = join(dir, entry.name);
       const file = join(skillDir, "SKILL.md");
       if (!existsSync(file)) continue;
-      const raw = readFileSync(file, "utf8");
-      const { fm, body } = parseFrontmatter(raw);
-      out.push({
+      let raw: string;
+      try {
+        raw = readFileSync(file, "utf8");
+      } catch (e) {
+        warnings.push(`Could not read ${file}: ${(e as Error).message}`);
+        continue;
+      }
+      const fm = parseFrontmatter(raw);
+      skills.push({
         name: fm.name ?? entry.name,
         description: fm.description ?? "",
         source,
         path: skillDir,
-        body,
       });
     }
   }
-  out.sort((a, b) => a.name.localeCompare(b.name));
-  return out;
+  skills.sort((a, b) => a.name.localeCompare(b.name));
+  return { skills, warnings };
 }

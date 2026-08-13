@@ -1,0 +1,265 @@
+/* Settings layout. Consumes tokens and primitives from styles.css; defines none. */
+
+.settings {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings .card {
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings h3 {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+/* Pulls a section's lede up against its heading, against the card's gap. */
+.settings .card > .hint {
+  margin-top: -8px;
+}
+
+.settings .warn,
+.settings .error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+}
+.settings .warn {
+  background: color-mix(in srgb, var(--warning) 12%, var(--panel));
+  color: var(--text);
+}
+.settings .warn > svg {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+.settings .error {
+  background: color-mix(in srgb, var(--danger) 12%, var(--panel));
+  color: var(--text);
+}
+
+/* A switch plus its explanation. Deliberately NOT a <label> wrapper: a
+ * `role="switch"` button is labelable, so wrapping it would make a click
+ * anywhere in the hint paragraph flip the setting. */
+.toggle-row {
+  gap: 4px;
+}
+
+/* A CommitInput with a trailing unit ("minutes", "tool calls"). */
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.input-row .commit {
+  flex: 1;
+  min-width: 0;
+}
+.input-row .suffix {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.save-mark {
+  font-size: 11.5px;
+  font-weight: 550;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: -6px;
+}
+.save-mark.saving {
+  color: var(--muted);
+}
+.save-mark.saved {
+  color: var(--success);
+}
+.save-mark.error {
+  color: var(--danger);
+}
+
+.repo-add {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.repo-add .input {
+  flex: 1;
+}
+
+.repo-list,
+.skill-list,
+.diag-list,
+.diag-warnings {
+  list-style: none;
+}
+
+.repo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+}
+.repo-row + .repo-row {
+  border-top: 1px solid var(--border);
+}
+.repo-row .name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.repo-row .ref,
+.repo-row .branch,
+.repo-row .slug {
+  font-size: 11.5px;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repo-row .ref {
+  flex: 1;
+}
+.repo-row .branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.repo-row > :last-child {
+  margin-left: auto;
+}
+
+/* Provenance tag, shared by repos (local/github) and skills (global/agents/project). */
+.src {
+  font-size: 10.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+.src.local,
+.src.project {
+  color: var(--success);
+}
+.src.github,
+.src.agents {
+  color: var(--info);
+}
+.src.global {
+  color: var(--accent);
+}
+
+.skill-list li {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 10px 0;
+}
+.skill-list li + li {
+  border-top: 1px solid var(--border);
+}
+.skill-list .name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.skill-list .desc {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.skill-list .path {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.diag-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.diag-head .mono {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.diag-list li {
+  display: grid;
+  grid-template-columns: 90px auto 1fr;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 9px 0;
+}
+.diag-list li + li {
+  border-top: 1px solid var(--border);
+}
+.diag-list .name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.diag-list .state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.diag-list li.ok .state {
+  color: var(--success);
+}
+.diag-list li.bad .state {
+  color: var(--danger);
+}
+.diag-list .detail {
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.diag-list .consequence {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.diag-warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: 7px 0;
+  color: var(--text);
+}
+.diag-warnings li > svg {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .repo-add {
+    flex-direction: column;
+  }
+  .repo-add .input {
+    width: 100%;
+  }
+  .diag-list li,
+  .skill-list li {
+    grid-template-columns: 1fr;
+  }
+}

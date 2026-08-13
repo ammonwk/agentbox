@@ -4,10 +4,30 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>agentbox</title>
+    <meta name="color-scheme" content="light dark" />
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='6' fill='%230d0d0d'/%3E%3Crect x='8' y='8' width='16' height='4' rx='1.5' fill='%23f97316'/%3E%3Crect x='8' y='16' width='10' height='4' rx='1.5' fill='%23fafafa'/%3E%3Crect x='8' y='22' width='13' height='3' rx='1.5' fill='%23636363'/%3E%3C/svg%3E"
     />
+    <script>
+      // Paint in the right theme before React mounts. The real preference is a
+      // server setting; this is only the cache App.tsx writes on every change,
+      // so a reload does not flash white before the socket answers.
+      (function () {
+        var pref = null;
+        try {
+          pref = localStorage.getItem("agentbox.theme");
+        } catch (err) {
+          // Private-mode Safari throws on localStorage; the system default is fine.
+        }
+        var dark =
+          pref === "dark" ||
+          ((pref === null || pref === "system") &&
+            matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

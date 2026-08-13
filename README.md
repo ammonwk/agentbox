@@ -1,33 +1,36 @@
 # agentbox
 
-A board for spawning and maintaining **omp** sessions — built from scratch,
-inspired by switchyard's shape (conductor, agents, PRs, skills, settings) but
-not its code or its terminal look. Polished, dark/light web app.
+A board for running and babysitting **omp** coding agents.
+
+The model doing the work is cheap and capable but not stable — it does well on
+well-scoped tasks and badly when left alone. agentbox is built around that:
+everything here optimises for **noticing a wrong turn quickly and correcting it
+cheaply**.
 
 ## What it does
 
-- **Spawn** an omp session on any registered repo: agentbox carves a fresh git
-  worktree and drives omp over **ACP** (Agent Client Protocol).
-- **Maintain** sessions, truly interactively:
-  - **Steer** — send messages while it's running (queued and delivered when the
-    turn ends) or when it's waiting.
-  - **Interrupt** — cancel the current turn; the conversation and queue survive.
-  - **Waiting** — when a turn ends or the agent needs input, the session is
-    "waiting" and your next message resumes the *same* conversation.
-  - **Approvals** — bash and other permission-gated tools surface an
-    Approve/Deny prompt (auto-approved if you prefer).
-- **Conductor** — everything that needs you, in one list: failed/lost sessions,
-  sessions waiting on an approval, done sessions with an open PR, and open PRs.
-- **Pull requests** — open PRs across your registered GitHub repos via `gh`.
-- **Skills** — inventory of your skills from `~/.claude/skills`,
-  `~/.agents/skills`, and the project.
-- **MCP server** — a conductor agent can spawn, steer, interrupt, approve, and
-  babysit every agent via MCP tools (`wait` is the babysitting primitive).
-- **Settings** — theme (light/dark/system), model, auto-approve, max run time,
-  and repository management.
+- **Spawn** an omp session on any registered repo. agentbox cuts a fresh git
+  worktree off the repo's default branch, injects its own system prompt, and
+  drives omp over ACP (Agent Client Protocol).
+- **Watch** what the agent actually does — every tool call, with its arguments
+  and result, streamed live. Not just what it says it did.
+- **Review** the work as a diff, in the app, before it ever reaches a PR.
+- **Steer** it mid-run. A message to a waiting agent lands immediately; a
+  message to a running one is queued until its current turn ends.
+- **Supervise** it automatically. agentbox watches tool calls for the two ways
+  a cheap model fails — spiraling (repeating a failing command, thrashing one
+  file) and drifting (taking the easy path instead of the right one). It nudges
+  the second and stops the first, flagging it for you. A flagged session
+  resumes in one click.
+- **Approve** permission requests, or let it run unattended.
 
-Sessions run with your existing omp setup — model
-`opencode-go/deepseek-v4-flash` via OpenCode Go, or anything else omp can reach.
+## The three pages
+
+| Page | What's there |
+|---|---|
+| **Inbox** | Everything wanting a human, ranked: sessions that failed, stopped, or need an approval, plus open PRs. Empty is the good state. |
+| **Sessions** | The board. Session list on the left, full detail on the right — activity, diff, task, and the steer box. |
+| **Settings** | Run defaults, the system prompt every agent receives, supervision config, repos, skills, and diagnostics. |
 
 ## Install
 
@@ -35,57 +38,84 @@ Requires **bun**, **omp** (install via `omp.sh`), **git**, and **gh**.
 
 ```bash
 bun install
-bun run web:build   # build the UI
-bun bin/agentbox doctor   # sanity check
+bun run web:build          # build the UI
+bun bin/agentbox doctor    # check omp / git / gh and report what's missing
 ```
 
 ## Run
 
 ```bash
-bun bin/agentbox            # http://127.0.0.1:4479 (serves the built UI)
-# or, during development:
-bun run dev                 # backend (watch)
-bun run web:dev             # vite dev server on :5173 → proxies to :4479
+bun bin/agentbox           # http://127.0.0.1:4479
+# during development:
+bun run dev                # backend, watch mode
+bun run web:dev            # vite on :5173, proxying to :4479
 ```
 
-Everything (worktrees, logs, sqlite) lives under `~/.local/share/agentbox`.
-Set `AGENTBOX_HOME` to relocate it. Port overrides: `AGENTBOX_PORT`.
+Worktrees, logs, prompts and the sqlite DB live under
+`~/.local/share/agentbox`. `AGENTBOX_HOME` relocates it; `AGENTBOX_PORT`
+changes the port.
 
-## MCP (for a conductor agent)
+## The system prompt
 
-Register the MCP server with opencode, then restart opencode:
+agentbox injects its own guidance into every session via omp's
+`--append-system-prompt`. It layers:
+
+1. the harness contract — that a human is watching, that messages arrive
+   mid-run, what "done" means, and the scope discipline a cheap model needs;
+2. your overlay from **Settings → System prompt**;
+3. the repo's own `.omp/APPEND_SYSTEM.md`, if it has one — passing the flag
+   suppresses omp's discovery of that file, so agentbox concatenates it rather
+   than silently replacing it.
+
+Prompt files are written under `AGENTBOX_HOME`, never into the worktree, so
+they cannot end up in a diff.
+
+## Supervision
+
+Two independent layers, both optional:
+
+- **The supervisor** (agentbox's own) counts **tool calls**, not turns — an ACP
+  turn is an entire agentic loop, so turn boundaries would fire roughly never.
+  Free heuristics run on every call; a cheap judge model runs every N calls or
+  when a heuristic trips. It nudges, or it interrupts and flags. It reuses your
+  existing omp auth and adds no credentials, and it can never take a session
+  down by failing.
+- **The advisor** is omp's built-in second model, enabled with `--advisor`. It
+  reviews each turn and injects notes into the *running* agent — the one thing
+  agentbox cannot do from outside the process. It needs a model assigned to
+  omp's `advisor` role; without one the flag does nothing.
+
+## MCP
+
+A conductor agent can drive the whole board over MCP.
 
 ```bash
-bun bin/agentbox install    # add the agentbox MCP server to opencode
-bun bin/agentbox uninstall  # remove it
+bun bin/agentbox install     # register with opencode (backs up your config)
+bun bin/agentbox uninstall
 ```
 
-Exposed tools: `state`, `list_sessions`, `spawn_session`, `send_message`,
-`interrupt`, `reply_permission`, `wait`, `get_transcript`, `archive_session`,
-`delete_session`, `list_prs`, `list_repos`, `add_repo`, `list_skills`,
-`get_settings`, `set_settings`. `wait` polls until a session stops working —
-the core of babysitting. A typical conductor loop:
-
-1. `spawn_session` → `wait` → check the result
-2. `send_message` to steer, `interrupt` to cut a turn, `reply_permission` to
-   approve bash
-3. `archive_session` / `delete_session` when done
+The server is a thin client over the running agentbox HTTP API, so the HTTP
+server stays the single owner of every omp process.
 
 ## Layout
 
 ```
-bin/agentbox        CLI (serve / mcp / install / doctor / version)
-src/core/           domain: types, db, paths, git, acp (interactive engine),
-                    sessions, conductor, prs, skills, settings, state
-src/server/         Bun.serve HTTP + WebSocket API
-src/mcp/            MCP server (thin adapter over the HTTP API)
-web/                React + Vite UI (dark/light)
+bin/agentbox        CLI: serve / doctor / mcp / install / uninstall
+src/core/types.ts   the domain model — the web app imports it directly
+src/core/           acp (ACP engine), sessions (lifecycle), supervisor,
+                    prompts, db, state, conductor, diff, git, prs, skills
+src/server/         Bun.serve HTTP + WebSocket
+src/mcp/            MCP server
+web/                React + Vite UI
+prompts/            prompt text, edited as content rather than code
+DESIGN.md           the design contract this is built against
 ```
 
 ## Notes
 
-- PR tracking needs `gh` authenticated for the repos you register.
-- Local repos are used in place; `owner/repo` slugs are cloned under
+- PR tracking needs `gh` authenticated for the repos you register. If it isn't,
+  Settings → Diagnostics says so; PRs don't silently read as "none".
+- Local repos are used in place. `owner/repo` slugs are cloned under
   `~/.local/share/agentbox/repos`.
-- Sessions stay alive between turns (one omp process per session). If the
-  process dies, the next message you send resumes the saved conversation.
+- One omp process per session, alive between turns. If it dies the conversation
+  survives — the session shows as lost and resumes from where it was.
