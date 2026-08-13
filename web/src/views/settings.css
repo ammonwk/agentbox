@@ -24,15 +24,24 @@
   margin-top: -8px;
 }
 
+/* Block, not flex. These are <p>s of prose containing inline <code>, and flex
+ * makes every inline node its own flex item — the sentence gets laid out as
+ * [icon][text][code][text] in a ROW, squeezed into columns. The icon hangs in
+ * the padding instead, so the prose stays one wrapping paragraph. */
 .settings .warn,
 .settings .error {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: block;
+  position: relative;
   font-size: 12.5px;
   line-height: 1.55;
   border-radius: var(--radius-sm);
-  padding: 9px 11px;
+  padding: 9px 11px 9px 34px;
+}
+.settings .warn > svg,
+.settings .error > svg {
+  position: absolute;
+  left: 11px;
+  top: 10px;
 }
 .settings .warn {
   background: color-mix(in srgb, var(--warning) 12%, var(--panel));
@@ -40,7 +49,9 @@
 }
 .settings .warn > svg {
   color: var(--warning);
-  flex-shrink: 0;
+}
+.settings .error > svg {
+  color: var(--danger);
 }
 .settings .error {
   background: color-mix(in srgb, var(--danger) 12%, var(--panel));

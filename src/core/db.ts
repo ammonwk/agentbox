@@ -257,7 +257,17 @@ export function getSession(id: string): Session | null {
   return row ? rowToSession(row) : null;
 }
 
-export function listSessions(includeArchived = false): Session[] {
+/**
+ * `includeArchived` is required, deliberately.
+ *
+ * It defaulted to `false`, which is how "the Inbox excludes archived sessions"
+ * came to be true by accident rather than by decision — nothing stated the
+ * intent, so widening the source later would have silently re-entered archived
+ * rows into consumers that had never had to think about them. Every caller now
+ * says which it wants at the callsite, and a new one cannot get an answer it
+ * did not ask for.
+ */
+export function listSessions(includeArchived: boolean): Session[] {
   const rows = getDb()
     .query(includeArchived ? "SELECT * FROM sessions ORDER BY updated_at DESC"
                           : "SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC")

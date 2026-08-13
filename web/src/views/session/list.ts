@@ -5,9 +5,19 @@
  * and this list can never disagree; this file only sorts and buckets by it.
  */
 
+import type { AttentionKind } from "../../../../src/core/types";
 import type { SessionRow } from "../../api";
 
-export type SectionId = "attention" | "working" | "quiet";
+export type SectionId = "attention" | "working" | "idle" | "quiet";
+
+/**
+ * The kinds that mean a human has something to *do*. `idle` is deliberately
+ * not among them: it means "a turn ended and nothing is wrong", which
+ * described 15 of 22 real sessions permanently — filing that under "Needs you"
+ * is the same overstatement that produced a 72-item Inbox. It still carries a
+ * rank, so it still orders the board; it just does not shout.
+ */
+const ACTIONABLE = new Set<AttentionKind>(["approval", "failed", "flagged", "review"]);
 
 export interface Section {
   id: SectionId;
@@ -23,14 +33,16 @@ export function sortSessions(sessions: SessionRow[]): SessionRow[] {
 }
 
 function sectionOf(s: SessionRow): SectionId {
-  if (s.attention.kind !== "none") return "attention";
+  if (ACTIONABLE.has(s.attention.kind)) return "attention";
   if (s.status === "running" || s.status === "spawning") return "working";
+  if (s.attention.kind === "idle") return "idle";
   return "quiet";
 }
 
 const SECTION_LABEL: Record<SectionId, string> = {
   attention: "Needs you",
   working: "Working",
+  idle: "Idle",
   quiet: "Quiet",
 };
 
@@ -41,7 +53,7 @@ const SECTION_LABEL: Record<SectionId, string> = {
 export function sectionsFor(sessions: SessionRow[], showArchived: boolean): Section[] {
   const visible = sessions.filter((s) => showArchived || s.archivedAt == null);
   const sorted = sortSessions(visible);
-  const order: SectionId[] = ["attention", "working", "quiet"];
+  const order: SectionId[] = ["attention", "working", "idle", "quiet"];
   return order
     .map((id) => ({ id, label: SECTION_LABEL[id], sessions: sorted.filter((s) => sectionOf(s) === id) }))
     .filter((sec) => sec.sessions.length > 0);

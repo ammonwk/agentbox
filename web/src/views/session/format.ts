@@ -38,27 +38,47 @@ function str(input: unknown, keys: string[]): string | null {
  * A one-line subtitle for a tool row, derived from the shape of `rawInput`.
  *
  * omp does not put the tool's name on the wire (see ToolCall in types.ts), so
- * this classifies on `kind` plus whichever argument key is present. Returning
- * null is fine — the row still has `title`.
+ * this classifies on `kind` plus whichever argument key is present.
+ *
+ * Key names confirmed against a live omp run: `command` for execute, `path`
+ * for read/search/edit (edit also carries `old_string`/`new_string`). The
+ * other spellings are kept as fallbacks — they cost nothing and the observed
+ * set is one model's worth of evidence, not the whole surface.
  */
 export function toolSummary(call: ToolCall): string | null {
+  const summary = rawSummary(call);
+  if (summary === null) return null;
+  // Live titles are intent strings and rendered commands — "$ node test.js"
+  // for a call whose input is {command: "node test.js"}. Repeating that as a
+  // subtitle is noise in a row built to be scanned.
+  if (call.title.includes(summary)) return null;
+  return summary;
+}
+
+function rawSummary(call: ToolCall): string | null {
   switch (call.kind) {
     case "execute":
       return str(call.input, ["command", "cmd", "script"]);
-    case "search":
-      return str(call.input, ["pattern", "query", "regex", "glob"]);
     case "fetch":
-      return str(call.input, ["url", "uri"]);
+      return str(call.input, ["url", "uri"]) ?? pathish(call);
+    case "search":
+      // Observed carrying `path` (a directory listing), not only a pattern.
+      return str(call.input, ["pattern", "query", "regex", "glob"]) ?? pathish(call);
     case "read":
     case "edit":
     case "delete":
-      return str(call.input, ["file_path", "path", "filePath", "file"]) ?? call.locations[0] ?? null;
+      return pathish(call);
     case "move":
-      return str(call.input, ["source", "from", "old_path"]);
+      return str(call.input, ["source", "from", "old_path"]) ?? pathish(call);
     case "think":
     case "other":
       return null;
   }
+}
+
+/** The file or directory a call names, however the tool spelled the key. */
+function pathish(call: ToolCall): string | null {
+  return str(call.input, ["file_path", "path", "filePath", "file"]) ?? call.locations[0] ?? null;
 }
 
 export const KIND_LABEL: Record<ToolKind, string> = {

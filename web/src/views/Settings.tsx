@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentSettings, AppState, Repo, SkillInfo } from "../../../src/core/types";
-import { api, type Health } from "../api";
-import { Button, CommitInput, Confirm, Empty, Field, Icon, Toggle } from "../components";
+import { api, type DepState, type Health } from "../api";
+import {
+  Button,
+  CommitInput,
+  Confirm,
+  Empty,
+  Field,
+  Icon,
+  RelativeTime,
+  Toggle,
+} from "../components";
 import "./settings.css";
 
 export function Settings({ state }: { state: AppState }) {
@@ -485,13 +494,13 @@ function Diagnostics({ warnings }: { warnings: string[] }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Health shells out to look for binaries and is not on the WebSocket, so it
-  // is fetched once and then only when asked for. Never polled.
-  const refresh = useCallback(() => {
+  // The probe runs subprocesses and is not on the WebSocket, so it is fetched
+  // once on mount and then only when asked for. Never polled.
+  const load = useCallback((force: boolean) => {
     setLoading(true);
     setError(null);
     api
-      .health()
+      .health(force)
       .then(setHealth)
       .catch((e: unknown) => {
         setHealth(null);
@@ -500,7 +509,10 @@ function Diagnostics({ warnings }: { warnings: string[] }) {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(refresh, [refresh]);
+  // Mount takes the server's ~60s cache; Re-check forces a fresh probe, because
+  // the person pressing it has usually just fixed the thing it reports on and a
+  // cached "still broken" would read as the fix having failed.
+  useEffect(() => load(false), [load]);
 
   return (
     <section className="card">
@@ -515,10 +527,14 @@ function Diagnostics({ warnings }: { warnings: string[] }) {
       </p>
 
       <div className="diag-head">
-        <Button variant="ghost" icon={Icon.refresh} loading={loading} onClick={refresh}>
+        <Button variant="ghost" icon={Icon.refresh} loading={loading} onClick={() => load(true)}>
           Re-check
         </Button>
-        {health && <span className="mono">agentbox {health.version}</span>}
+        {health && (
+          <span className="mono">
+            agentbox {health.version} · checked <RelativeTime ts={health.checkedAt} />
+          </span>
+        )}
       </div>
 
       {error && (
@@ -532,18 +548,21 @@ function Diagnostics({ warnings }: { warnings: string[] }) {
         <ul className="diag-list">
           <DepRow
             name="omp"
-            present={health.omp}
-            whenMissing="Nothing can be spawned. Every new session will fail at launch until omp is on PATH."
+            state={health.ompState}
+            detail={health.ompDetail}
+            consequence="Nothing can be spawned — every new session fails at launch."
           />
           <DepRow
             name="gh"
-            present={health.gh}
-            whenMissing="Pull requests are invisible everywhere in agentbox: the Inbox lists none, and a session whose branch has an open PR never becomes a review item. Install the GitHub CLI, then run `gh auth login` — being logged out fails this check just as a missing binary does."
+            state={health.ghState}
+            detail={health.ghDetail}
+            consequence="Pull requests are invisible everywhere in agentbox: the Inbox lists none, and a session whose branch has an open PR never becomes a review item."
           />
           <DepRow
             name="git"
-            present={health.git}
-            whenMissing="No worktree can be created and no diff can be read, so sessions cannot run at all."
+            state={health.gitState}
+            detail={health.gitDetail}
+            consequence="No worktree can be cut and no diff can be read, so sessions cannot run at all."
           />
         </ul>
       )}
@@ -570,33 +589,44 @@ function Diagnostics({ warnings }: { warnings: string[] }) {
 }
 
 /**
- * `ready` rather than `installed`: the probe runs each program, so the boolean
- * means usable, not merely present on PATH. Saying "installed" would be the
- * claim the server used to make and no longer does.
- *
- * The server also sends `<dep>State` ("ok" | "unusable" | "missing") and a
- * `<dep>Detail` sentence carrying the version when ready and the reason when
- * not. Neither is on `Health` in `api.ts` yet, so this row cannot tell a
- * missing binary from a broken one — it reports the problem without naming
- * which. Wire both once the client type catches up.
+ * `missing` and `unusable` get different words because they need different
+ * acts: one is "install it", the other is "it is there and something about it
+ * is wrong". Collapsing them is what let an unauthenticated `gh` read as
+ * "you have no pull requests".
+ */
+const STATE_LABEL: Record<DepState, string> = {
+  ok: "ready",
+  unusable: "installed, not usable",
+  missing: "not found",
+};
+
+/**
+ * `detail` is the server's own sentence — the version when ready, the reason
+ * and its fix when not. `consequence` is what agentbox specifically loses,
+ * which the probe has no way to know. The two do not repeat each other: the
+ * detail says what to type, this says what is broken until you type it.
  */
 function DepRow({
   name,
-  present,
-  whenMissing,
+  state,
+  detail,
+  consequence,
 }: {
   name: string;
-  present: Health["omp"];
-  whenMissing: string;
+  state: DepState;
+  detail: string | null;
+  consequence: string;
 }) {
+  const ok = state === "ok";
   return (
-    <li className={present ? "ok" : "bad"}>
+    <li className={ok ? "ok" : "bad"}>
       <span className="mono name">{name}</span>
       <span className="state">
-        {present ? <Icon.check size={15} /> : <Icon.alert size={15} />}
-        {present ? "ready" : "not working"}
+        {ok ? <Icon.check size={15} /> : <Icon.alert size={15} />}
+        {STATE_LABEL[state]}
       </span>
-      {!present && <p className="consequence">{whenMissing}</p>}
+      {detail && <span className="mono detail">{detail}</span>}
+      {!ok && <p className="consequence">{consequence}</p>}
     </li>
   );
 }

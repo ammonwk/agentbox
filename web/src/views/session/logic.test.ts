@@ -255,12 +255,16 @@ describe("list ordering", () => {
     const list = [
       session({ id: "needs", attention: { kind: "flagged", rank: 1, label: "halted" } }),
       session({ id: "busy", attention: none, status: "running" }),
+      // Observed live: every finished session carries `idle`, so bucketing it
+      // as "Needs you" put all three real sessions under that heading.
+      session({ id: "resting", attention: { kind: "idle", rank: 5, label: "waiting for you" } }),
       session({ id: "idle", attention: none, status: "done" }),
       session({ id: "gone", attention: none, status: "done", archivedAt: 5 }),
     ];
     expect(sectionsFor(list, false).map((s) => [s.id, s.sessions.map((x) => x.id)])).toEqual([
       ["attention", ["needs"]],
       ["working", ["busy"]],
+      ["idle", ["resting"]],
       ["quiet", ["idle"]],
     ]);
     expect(sectionsFor(list, true).find((s) => s.id === "quiet")!.sessions.map((s) => s.id)).toEqual([
@@ -383,6 +387,45 @@ describe("formatting", () => {
       expect(canResume(session({ id: "x", attention: none, status }))).toBe(false);
       expect(canSteer(status)).toBe(true);
     }
+  });
+
+  test("tool summaries handle the shapes a live omp run actually produced", () => {
+    // Captured from session 62b6cf7e on 4499: 13 real calls. Titles are intent
+    // strings or rendered commands, never tool names.
+    const run = call("1", "ok", {
+      kind: "execute",
+      title: "$ node test.js",
+      input: { command: "node test.js" },
+      locations: [],
+    });
+    // The title already reads "$ node test.js" — repeating it is noise.
+    expect(toolSummary(run)).toBeNull();
+
+    const read = call("2", "ok", {
+      kind: "read",
+      title: "read package.json",
+      input: { path: "./package.json" },
+      locations: ["/tmp/wt/package.json"],
+    });
+    expect(toolSummary(read)).toBe("./package.json");
+
+    // `search` arrived carrying a path, not a pattern — the original guess
+    // list would have returned null and dropped the only useful detail.
+    const search = call("3", "ok", {
+      kind: "search",
+      title: "list repo files",
+      input: { path: "." },
+      locations: ["/tmp/wt"],
+    });
+    expect(toolSummary(search)).toBe(".");
+
+    const edit = call("4", "ok", {
+      kind: "edit",
+      title: "add JSDoc to greet function",
+      input: { path: "./greet.js", old_string: "function greet", new_string: "/** … */\nfunction greet" },
+      locations: ["/tmp/wt/greet.js"],
+    });
+    expect(toolSummary(edit)).toBe("./greet.js");
   });
 
   test("tool summaries read the argument shape, since ACP sends no tool name", () => {

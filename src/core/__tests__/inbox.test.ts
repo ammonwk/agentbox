@@ -99,6 +99,39 @@ describe("inboxItems", () => {
     ]);
   });
 
+  test("an archived session never appears, whatever it needs", () => {
+    // Archiving is the act of dealing with something. This exclusion used to
+    // hold by accident — archived sessions never left the server — so it is
+    // asserted across every kind that would otherwise get in.
+    const archived = { archivedAt: 123 };
+    const items = inboxItems(
+      [
+        session({ id: "a", status: "failed", ...archived }),
+        session({ id: "b", status: "flagged", ...archived }),
+        session({ id: "c", status: "done", prNumber: 7, ...archived }),
+        session({
+          id: "d",
+          blocked: true,
+          permission: { id: "p", title: "Run it", tool: "execute", options: [] },
+          ...archived,
+        }),
+      ],
+      [pr({ sessionId: "c" })]
+    );
+    expect(items).toEqual([]);
+  });
+
+  test("archiving one session does not hide its unarchived siblings", () => {
+    const items = inboxItems(
+      [
+        session({ id: "kept", status: "failed" }),
+        session({ id: "gone", status: "failed", archivedAt: 123 }),
+      ],
+      []
+    );
+    expect(items.map((i) => i.session.id)).toEqual(["kept"]);
+  });
+
   test("a PR with no session behind it is not an inbox item", () => {
     // "Every open PR on the repo" is not a to-do list. A PR reaches the Inbox
     // only through the session that produced it.

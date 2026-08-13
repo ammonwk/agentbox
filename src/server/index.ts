@@ -182,19 +182,19 @@ export const router = new Router(mapCoreError)
 
   .add("GET", "/api/health", ({ url }) => {
     // Cached: every probe runs its program. Nothing polls this route, and
-    // `?refresh=1` is there for the Re-check button —
-    // the user who has just fixed their auth is the one who needs a fresh
-    // answer. It is never reachable from a broadcast path.
+    // `?refresh=1` is for the Re-check button — the user who has just fixed
+    // their auth is the one who needs a fresh answer. Never on a broadcast path.
     const deps = dependencies(url.searchParams.get("refresh") === "1");
+
+    // Each dependency is reported ONLY as its tri-state. There is deliberately
+    // no per-dependency boolean: `gh: true` for an installed-but-logged-out
+    // `gh` is precisely the ambiguity the tri-state exists to remove, and
+    // shipping both leaves the imprecise field there to be reached for. A
+    // caller that wants a boolean derives it from `state === "ok"`.
     return json({
-      // Booleans mean USABLE, not merely installed: an unauthenticated `gh`
-      // makes every PR in the app silently absent, which is not "fine".
+      // The one exception, because it is a summary rather than a second
+      // representation of any single dependency.
       ok: deps.omp.state === "ok" && deps.gh.state === "ok" && deps.git.state === "ok",
-      omp: deps.omp.state === "ok",
-      gh: deps.gh.state === "ok",
-      git: deps.git.state === "ok",
-      // The tri-state and its reason, so the UI can tell "not installed" from
-      // "installed and logged out" — the two produce identical empty output.
       ompState: deps.omp.state,
       ghState: deps.gh.state,
       gitState: deps.git.state,

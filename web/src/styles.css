@@ -663,12 +663,22 @@ code {
   flex-direction: column;
   gap: 5px;
 }
+/* Wraps the label and hint together, identically in both of Field's branches. */
+.field-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* Block as well as flex children: correct even if these spans are ever used
+ * somewhere that is not a flex container. */
 .field-label {
+  display: block;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
 }
 .field-hint {
+  display: block;
   font-size: 12px;
   color: var(--muted);
   line-height: 1.45;

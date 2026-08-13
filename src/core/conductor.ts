@@ -160,6 +160,18 @@ export function inboxItems(sessions: Session[], prs: PrInfo[]): InboxItem[] {
   const items: InboxItem[] = [];
 
   for (const session of sessions) {
+    // Archiving IS the act of dealing with something, so an archived session is
+    // never an Inbox item.
+    //
+    // This test is doing real work. It used to be satisfied by accident —
+    // `getHotState` built its list from `listSessions(false)`, so archived
+    // sessions could not reach any caller. The day archived sessions started
+    // being carried to the client, that accident would have silently turned
+    // Archive into a no-op that leaves the row sitting in the Inbox. Correct
+    // behaviour resting on an unstated fact elsewhere breaks far from the edit
+    // that breaks it, with no error.
+    if (session.archivedAt !== null) continue;
+
     const attention = attentionOf(session);
     if (!INBOX_KINDS.has(attention.kind)) continue;
     items.push({

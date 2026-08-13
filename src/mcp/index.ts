@@ -85,6 +85,9 @@ function sessionView(s: BoardSession | Session) {
       : undefined,
     // The supervisor halted this run; `flagReason` is its sentence, verbatim.
     flagReason: s.flagReason ?? undefined,
+    // `board` filters archived sessions out, but a tool called with an id
+    // still resolves one — say so rather than presenting finished work as live.
+    archived: s.archivedAt === null ? undefined : true,
     repo: s.repo,
     branch: s.branch,
     model: s.model,

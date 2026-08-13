@@ -417,6 +417,12 @@ export function Field({
   children: ReactNode | ((id: string) => ReactNode);
 }) {
   const id = useId();
+  // The label and hint live inside ONE element in both branches. They used to
+  // be a fragment spliced straight into each branch, which meant they were
+  // flex children of `.field` in the plain form and inline spans inside a
+  // `<label>` in the function form — so the function form ran the label and
+  // hint together with no break, on every field with an explicit id. Sharing
+  // the wrapper is what makes the two branches unable to diverge visually.
   const head = (
     <>
       <span className="field-label">{label}</span>
@@ -427,14 +433,16 @@ export function Field({
   if (typeof children === "function") {
     return (
       <div className="field">
-        <label htmlFor={id}>{head}</label>
+        <label className="field-head" htmlFor={id}>
+          {head}
+        </label>
         {children(id)}
       </div>
     );
   }
   return (
     <label className="field">
-      {head}
+      <span className="field-head">{head}</span>
       {children}
     </label>
   );

@@ -36,9 +36,18 @@ let scans: ScanCache | null = null;
 let cold: ColdState | null = null;
 let coldFingerprint = "";
 
+/**
+ * Archived sessions are included, with `archivedAt` set, and the UI filters them
+ * for display.
+ *
+ * Withholding them made Archive an undoable delete wearing a reversible label:
+ * the archived count could only ever be 0, the "show archived" toggle had
+ * nothing to reveal, and a deep link to an archived session resolved to
+ * nothing. Anything that must not count them has to say so — see `inboxItems`.
+ */
 export function getHotState(): HotState {
   return {
-    sessions: listSessions(false).map((s) => {
+    sessions: listSessions(true).map((s) => {
       const session = { ...s, permission: pendingPermissionOf(s.id) };
       return { ...session, attention: attentionOf(session) };
     }),
@@ -70,7 +79,10 @@ export function refreshCold(rescan = false): boolean {
   const settings = getSettings();
 
   if (!scans || rescan) {
-    const pr = listPrs(repos, listSessions(false));
+    // Archived sessions included deliberately: `listPrs` uses them only to
+    // attach a `sessionId` to a PR, and a PR does not stop being that session's
+    // work because the session was archived.
+    const pr = listPrs(repos, listSessions(true));
     const skill = listSkills();
     scans = {
       prs: pr.prs,
