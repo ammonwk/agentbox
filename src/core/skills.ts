@@ -14,12 +14,42 @@ import type { SkillInfo } from "./types";
  * provider at `priority: 70`, and sorts providers *descending* by priority — so
  * `.claude` is consulted first. Project-level beats user-level within a
  * provider, which is why the repo-local root leads.
+ *
+ * Resolved per call rather than at module scope. `process.cwd()` genuinely
+ * changes during a process, and freezing it at import pinned the project root
+ * to whatever directory the server happened to start in — the same shape as the
+ * `paths.ts` bug that had tests writing into the developer's real data.
  */
-const SKILL_ROOTS: { source: SkillInfo["source"]; dir: string }[] = [
-  { source: "project", dir: join(process.cwd(), ".claude", "skills") },
-  { source: "global", dir: join(homedir(), ".claude", "skills") },
-  { source: "agents", dir: join(homedir(), ".agents", "skills") },
-];
+export interface SkillRoot {
+  source: SkillInfo["source"];
+  dir: string;
+}
+
+/**
+ * `$HOME` first, and not merely for tests.
+ *
+ * Honouring `$HOME` is the Unix contract — it is how a sandbox, a systemd unit
+ * or `HOME=... cmd` redirects a process — and Bun's `homedir()` is the anomaly:
+ * it resolves once and ignores a later `process.env.HOME`, verified rather than
+ * assumed. Reading the variable first makes agentbox agree with every other
+ * tool on the box about where home is; `homedir()` remains the fallback for
+ * platforms that do not set it, Windows included.
+ *
+ * Do not "simplify" this back to a bare `homedir()`. It reads as redundant and
+ * is not: the tests below would start reading the developer's real skills
+ * directory, which is the exact class of thing they exist to prevent.
+ */
+function home(): string {
+  return process.env.HOME || homedir();
+}
+
+export function skillRoots(): SkillRoot[] {
+  return [
+    { source: "project", dir: join(process.cwd(), ".claude", "skills") },
+    { source: "global", dir: join(home(), ".claude", "skills") },
+    { source: "agents", dir: join(home(), ".agents", "skills") },
+  ];
+}
 
 /**
  * Parse the leading YAML frontmatter of a SKILL.md — just the two keys we
@@ -96,10 +126,10 @@ export interface SkillScan {
  * it belongs to the cold refresh only — it was previously recomputed on every
  * 400ms broadcast.
  */
-export function listSkills(): SkillScan {
+export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
   const skills: SkillInfo[] = [];
   const warnings: string[] = [];
-  for (const { source, dir } of SKILL_ROOTS) {
+  for (const { source, dir } of roots) {
     if (!existsSync(dir)) continue;
     let entries;
     try {
@@ -141,7 +171,7 @@ export function listSkills(): SkillScan {
   // These are not always copies of each other: on this machine `go-for-it` and
   // `vibed` differ between roots by more than a kilobyte, and `vibed`'s two
   // descriptions describe visibly different behaviour. So the winner is not
-  // arbitrary and the precedence has to match omp's, which SKILL_ROOTS now does
+  // arbitrary and the precedence has to match omp's, which `skillRoots()` now does
   // and cites. The surviving entry keeps its own `source` and `path`, so the UI
   // still says truthfully which copy won.
   const byName = new Map<string, SkillInfo>();
