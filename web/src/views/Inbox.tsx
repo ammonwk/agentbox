@@ -171,9 +171,7 @@ function QuietGroup({
               </SessionLink>
               <div className="inbox-meta">
                 <StatusPill status={s.status} />
-                <span className="mono">
-                  {s.repo} · {s.branch}
-                </span>
+                <RepoBranch session={s} />
                 <span>{s.toolCalls} tool calls</span>
                 <RelativeTime ts={s.updatedAt} />
               </div>
@@ -249,9 +247,7 @@ function SessionRow({
 
         <div className="inbox-meta">
           <StatusPill status={session.status} />
-          <span className="mono">
-            {session.repo} · {session.branch}
-          </span>
+          <RepoBranch session={session} />
           {pr && (
             <span className="mono">
               #{pr.number}

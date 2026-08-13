@@ -343,6 +343,31 @@ Accessibility is part of "good", not a later pass: real `<button>`s, labelled
 controls, visible focus rings, Escape closes overlays, and no click target
 below 32px.
 
+## Verifying a change to the UI
+
+Four separate times in this rework, someone judged a screen against code that
+was not the code running. It produced two false bug reports and two rounds of
+diagnosing already-correct files. The variants:
+
+1. The browser cached `index.html`, so a rebuild kept serving the old hashed
+   asset. Fixed at the source — `no-cache` on the document, `immutable` on
+   `/assets/*` — but the habit below still applies.
+2. `dist/` was older than an agent's edit; the fix was in the source and not in
+   the bundle.
+3. `agent-browser open <same url>` with only the hash changed is a
+   **same-document navigation and does not refetch**. `agent-browser reload` is
+   the reliable step after a build.
+4. A visual check was run before the build finished.
+
+**So: build, reload, then confirm the page is running what you think.** Compare
+the `<script src>` hash against what `curl /` returns before believing anything
+a screenshot tells you.
+
+And the reason to look at all: typecheck, 294 tests and a clean build did not
+catch a `Field` that concatenated every label with its hint, a flex rule that
+shredded a paragraph of prose, or an `.sr-only` element that made the whole
+application scrollable off-screen. Those needed eyes.
+
 ## Quality bar
 
 - `bun run typecheck` clean. `strict`, `noUnusedLocals` and

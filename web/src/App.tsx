@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -77,6 +78,16 @@ export function App() {
     [navigate],
   );
 
+  // A page change starts at the top of that page. Without this the scroller
+  // keeps the offset from the page you left — scroll down Settings, click
+  // Inbox, and you arrive 266px in with its heading above the fold. Keyed on
+  // `page` and not the whole route, so picking another session on the board
+  // (where `.content` does not scroll anyway) is not a scroll event.
+  const contentRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    contentRef.current?.scrollTo(0, 0);
+  }, [route.page]);
+
   useEffect(() => {
     document.title = counts.inbox > 0 ? `(${counts.inbox}) agentbox` : "agentbox";
   }, [counts.inbox]);
@@ -143,6 +154,7 @@ export function App() {
         <main
           className={`content ${route.page === "sessions" && state ? "flush" : ""}`}
           id="content"
+          ref={contentRef}
           tabIndex={-1}
         >
           {!state ? (
@@ -200,10 +212,14 @@ function useCountdown(to: number | null): number | null {
 
 function ConnectionChip() {
   const { connected, downSince } = useConnection();
+  const label = connected ? "Live" : downSince ? "Offline" : "Connecting…";
   return (
-    <div className={`conn ${connected ? "on" : "off"}`}>
+    // `title` and the wrapped label so the narrow rail can drop the word and
+    // keep the dot: whether the data is live is the one thing that must stay
+    // legible at every width, and the rail used to hide the chip outright.
+    <div className={`conn ${connected ? "on" : "off"}`} title={`Connection: ${label}`}>
       <span className="dot" aria-hidden="true" />
-      {connected ? "Live" : downSince ? "Offline" : "Connecting…"}
+      <span className="conn-label">{label}</span>
     </div>
   );
 }

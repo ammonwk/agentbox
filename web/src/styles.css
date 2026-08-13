@@ -162,8 +162,19 @@ code {
 
 /* --------------------------------------------------------------- utilities */
 
+/* Visually hidden, audible to a screen reader.
+ *
+ * `fixed`, not the conventional `absolute`. An absolutely positioned element
+ * with no positioned ancestor resolves against the INITIAL containing block,
+ * so it is not clipped by `.content`'s `overflow: auto` (which is not its
+ * containing block) nor by `.app`'s `overflow: hidden`. Its static position
+ * inside a long scroll panel then sets the height of the *document*: one
+ * hidden label at the bottom of Settings made the page 1938px tall against a
+ * 577px viewport, so the window itself scrolled and the entire UI — sidebar
+ * included — could be scrolled off-screen. `fixed` resolves against the
+ * viewport and can never contribute to document height. */
 .sr-only {
-  position: absolute;
+  position: fixed;
   width: 1px;
   height: 1px;
   padding: 0;
@@ -751,6 +762,10 @@ textarea,
 
 .toggle {
   display: inline-flex;
+  /* Shrink to the switch and its label. As a flex child of a column `.field`
+   * it otherwise stretches, so the click target — and the focus ring — spanned
+   * the whole card and empty space to the right of the label flipped it. */
+  align-self: flex-start;
   align-items: center;
   gap: 9px;
   min-height: var(--tap);
@@ -808,8 +823,13 @@ textarea,
   }
   .brand span,
   .nav-label,
-  .conn {
+  .conn-label {
     display: none;
+  }
+  /* The dot stays. Hiding the whole chip left no way to tell live from stale. */
+  .conn {
+    justify-content: center;
+    padding: 6px 0;
   }
   .brand {
     justify-content: center;

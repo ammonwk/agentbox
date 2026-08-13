@@ -274,14 +274,27 @@ export function Modal({
   const hintId = useId();
   const downOnBackdrop = useRef(false);
 
+  /** Whatever had focus when this dialog opened, so closing can hand it back.
+   *
+   * Captured during the first RENDER, not in the effect. By the time an effect
+   * runs, an `autoFocus` inside the dialog has already taken focus — reading it
+   * there recorded a node that is unmounted on close, so focus fell to <body>
+   * and a keyboard user was dumped at the top of the document. */
+  const [restoreTo] = useState<HTMLElement | null>(
+    () => document.activeElement as HTMLElement | null,
+  );
+
   useEffect(() => {
     const box = boxRef.current;
     if (!box) return;
-    const restoreTo = document.activeElement as HTMLElement | null;
 
     const focusable = () =>
       [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
-    (focusable()[0] ?? box).focus();
+    // Only take focus if nothing in here has it. React applies `autoFocus`
+    // when it inserts the node, which is before this effect runs — focusing
+    // the first focusable unconditionally stole focus from the field the view
+    // deliberately marked, and landed the New Session dialog on its close X.
+    if (!box.contains(document.activeElement)) (focusable()[0] ?? box).focus();
 
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -317,7 +330,9 @@ export function Modal({
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
       document.body.style.overflow = prevOverflow;
-      restoreTo?.focus?.();
+      // `isConnected`: the opener can itself have been removed by whatever the
+      // dialog did — deleting a session unmounts the row its Delete lived in.
+      if (restoreTo?.isConnected) restoreTo.focus();
     };
   }, []);
 
