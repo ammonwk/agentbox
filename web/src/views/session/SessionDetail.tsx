@@ -89,7 +89,15 @@ export function SessionDetail({
         </div>
 
         <div className="sx-facts">
-          <span title={session.repo}>{repoShort(session.repo)}</span>
+          {/* `repoShort` renders /work/a/agentbox and /work/b/agentbox
+              identically, and this header is where someone confirms which
+              checkout they are about to interrupt or delete. So the hover
+              carries the worktree — the actual directory — not just the repo
+              ref. The destructive path does not rely on hover at all: the
+              delete confirmation spells out the worktree and branch in full. */}
+          <span title={`${session.repo}\nworktree: ${session.worktree ?? "(none — nothing checked out)"}`}>
+            {repoShort(session.repo)}
+          </span>
           <code>{session.branch}</code>
           <span>{shortModel(session.model)}</span>
           <span>{elapsed} elapsed</span>

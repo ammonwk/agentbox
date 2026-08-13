@@ -439,9 +439,18 @@ function Repositories({ repos, sessions }: { repos: Repo[]; sessions: AppState["
           confirmLabel="Remove"
           danger={usedBy(confirming) > 0}
           body={
-            usedBy(confirming) > 0
-              ? `${usedBy(confirming)} session${usedBy(confirming) === 1 ? "" : "s"} still reference this repo and will lose the link to it. Their worktrees stay on disk and nothing is deleted, and the repo can be added back at any time.`
-              : "Nothing on disk is deleted and it can be added back at any time."
+            <>
+              {/* The full ref, not just the display name: two registered repos
+                  can share a basename, and the path is the only thing that
+                  tells them apart. A dialog that names the ambiguous one is
+                  not a confirmation. */}
+              <p className="mono">{confirming.ref}</p>
+              <p>
+                {usedBy(confirming) > 0
+                  ? `${usedBy(confirming)} session${usedBy(confirming) === 1 ? "" : "s"} still reference this repo and will lose the link to it. Their worktrees stay on disk and nothing is deleted, and the repo can be added back at any time.`
+                  : "Nothing on disk is deleted and it can be added back at any time."}
+              </p>
+            </>
           }
           onConfirm={() => void remove(confirming)}
           onCancel={() => setConfirming(null)}
@@ -459,10 +468,13 @@ function Skills({ skills }: { skills: SkillInfo[] }) {
       <h3>Skills</h3>
       <p className="hint">
         Every <code>SKILL.md</code> the agents can reach. Scanned from{" "}
-        <code>~/.claude/skills</code>, <code>~/.agents/skills</code>, and{" "}
         <code>.claude/skills</code> under the directory agentbox was started
-        from. Read-only here — add one by putting a folder with a{" "}
-        <code>SKILL.md</code> in it into any of those three roots.
+        from, then <code>~/.claude/skills</code>, then{" "}
+        <code>~/.agents/skills</code> — in that order, because that is the
+        order omp resolves them in. A name found in an earlier root wins, and
+        the later copies are not listed: one entry here is one skill an agent
+        can actually load. Read-only — add one by putting a folder with a{" "}
+        <code>SKILL.md</code> in it into any of the three roots.
       </p>
       {skills.length === 0 ? (
         <Empty title="No skills found">

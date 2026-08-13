@@ -120,7 +120,11 @@ export function SessionList({
                   </div>
                 )}
 
-                <div className="sx-row-meta">
+                {/* A local repo's ref is an absolute path — ~90 chars for a
+                    worktree under a temp dir, which would wrap and push the
+                    branch out of the row. Shorten, but keep the full path
+                    reachable on hover rather than throwing it away. */}
+                <div className="sx-row-meta" title={`${s.repo} · ${s.branch}`}>
                   <span>{repoShort(s.repo)}</span>
                   <code>{s.branch}</code>
                   <span>·</span>
