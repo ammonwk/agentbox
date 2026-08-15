@@ -70,7 +70,7 @@ export function sinceParam(url: URL): number | undefined {
  * setting nothing reads.
  */
 export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch {
-  const known = ["theme", "model", "autoApprove", "maxMinutes", "systemPrompt", "supervisor", "advisor"];
+  const known = ["theme", "model", "autoApprove", "systemPrompt", "supervisor", "advisor"];
   for (const key of Object.keys(body)) {
     if (!known.includes(key)) throw new HttpError(400, `unknown setting: ${key}`);
   }
@@ -85,7 +85,6 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
   }
   if (body.model !== undefined) patch.model = requireString(body, "model");
   if (body.autoApprove !== undefined) patch.autoApprove = requireBoolean(body, "autoApprove");
-  if (body.maxMinutes !== undefined) patch.maxMinutes = requirePositiveInt(body, "maxMinutes");
   if (body.systemPrompt !== undefined) {
     // An empty overlay is a legitimate choice, so this one may be blank.
     if (typeof body.systemPrompt !== "string") throw new HttpError(400, "systemPrompt must be a string");

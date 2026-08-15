@@ -78,7 +78,7 @@ export interface Session {
   updatedAt: number;
   /** First moment a turn started running — for elapsed time. */
   startedAt: number | null;
-  archivedAt: number | null;
+  closedAt: number | null;
 
   /** Live, in-memory only: set when `blocked`. Not persisted. */
   permission?: PermissionRequest | null;
@@ -269,12 +269,131 @@ export interface AgentSettings {
   theme: "light" | "dark" | "system";
   model: string;
   autoApprove: boolean;
-  /** Wall-clock cap handed to omp as --max-time. */
-  maxMinutes: number;
   /** agentbox's own append-system-prompt overlay. Editable in Settings. */
   systemPrompt: string;
   supervisor: SupervisorSettings;
   advisor: AdvisorSettings;
+}
+
+// ----------------------------------------------------------------- metrics
+
+export interface TempReading {
+  name: string;
+  celsius: number;
+  /** The temperature at which this sensor is in trouble, when it publishes one. */
+  critical?: number;
+  /** Fraction of the way to critical, for ranking. */
+  pressure?: number;
+}
+
+/**
+ * The machine itself.
+ *
+ * Nearly everything is optional because nearly everything can be absent: a
+ * kernel built without PSI, a desktop with no battery, a chip whose hwmon
+ * publishes nothing we can name. Absent is rendered as nothing, never as zero.
+ */
+export interface SystemState {
+  at: number;
+  cores: number;
+  /** Per-core busy fraction 0-1, in core order. */
+  perCore: number[];
+  /** Whole-machine busy fraction 0-1. */
+  cpu: number;
+  /** Current aggregate clock, MHz, and the maximum the CPU will do. */
+  mhz?: number;
+  mhzMax?: number;
+
+  memTotal: number;
+  memAvailable: number;
+  /** Page cache and buffers — reclaimable, so shown apart from real use. */
+  memCache: number;
+  swapTotal: number;
+  swapUsed: number;
+
+  load1: number;
+  load5: number;
+  load15: number;
+  /** Runnable tasks, straight from /proc/loadavg. */
+  runnable?: number;
+
+  /**
+   * Pressure stall information: the share of the last ten seconds in which at
+   * least one task was stalled waiting for a resource. This is the number that
+   * actually explains a machine feeling slow, and no other metric substitutes
+   * for it — CPU can read 100% while nothing is stalled, and 40% while
+   * everything is.
+   */
+  psiCpu?: number;
+  psiIo?: number;
+  psiMem?: number;
+
+  temps: TempReading[];
+  /** Times the package has been thermally throttled since boot. */
+  throttleCount?: number;
+  /** Fraction of the last sample interval spent thermally throttled, 0-1. */
+  throttleDuty: number;
+  /** True when the package was throttled at all during the last sample. */
+  throttling: boolean;
+
+  diskFree?: number;
+  diskTotal?: number;
+
+  acOnline?: boolean;
+  batteryPct?: number;
+  batteryStatus?: string;
+  /** Watts, positive whether charging or discharging. */
+  watts?: number;
+}
+
+/** How much of the machine one session's process subtree is holding. */
+export interface LoadSample {
+  /** Percent of ONE core, htop-style: 400% is four cores, not an error. */
+  cpuPct: number;
+  memBytes: number;
+  /**
+   * Which memory figure this is. `pss` divides shared pages between the
+   * processes holding them and is the one that can be summed; `rss` is the
+   * first-poll fallback and overstates. Labelled so the fallback is visible
+   * rather than silently wrong.
+   */
+  memKind: "pss" | "rss";
+  /** Processes in the subtree, the agent included. */
+  procs: number;
+  /** Recent cpuPct samples, oldest first, for the sparkline. */
+  history: number[];
+  /** Shell tool calls outliving a parked turn. Absent when there are none. */
+  backgroundShells?: number;
+}
+
+/** What a process in a session's subtree is doing there. */
+export type ProcRole = "agent" | "mcp" | "tool" | "child";
+
+export interface ProcDetail {
+  pid: number;
+  ppid: number;
+  name: string;
+  cmd: string;
+  role: ProcRole;
+  /** Percent of one core, over the interval between the two process tables. */
+  cpuPct: number;
+  rssBytes: number;
+  pssBytes?: number;
+  /** Depth below the agent, for indenting the tree. */
+  depth: number;
+  ageMs: number;
+}
+
+/**
+ * Pushed on a fixed cadence, never suppressed — see metrics.ts for why this is
+ * a third channel rather than part of `hot`. `system` is null before the first
+ * sweep lands, and on any platform that cannot be measured.
+ */
+export interface MetricsState {
+  at: number;
+  system: SystemState | null;
+  /** Keyed by session id. A session with no pid is simply absent. */
+  load: Record<string, LoadSample>;
 }
 
 // ------------------------------------------------------------ wire shapes
@@ -286,6 +405,54 @@ export interface HotState {
 }
 
 /** Changes rarely and costs subprocesses to build. Pushed only when it moves. */
+// ------------------------------------------------------------- worktrees
+
+/** Why a worktree may or may not be reclaimed. `reason` is for the UI to group
+ *  on; `detail` is the sentence a human reads. */
+export interface WorktreeVerdict {
+  safe: boolean;
+  reason:
+    | "merged" | "closed" | "clean" | "orphan"
+    | "main" | "locked" | "live" | "dirty" | "open-pr" | "ahead" | "unknown";
+  detail: string;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  repoId: string;
+  repoName: string;
+  branch: string | null;
+  bytes: number;
+  /** The repo's own checkout, listed so its size is visible but never offered
+   *  for removal. */
+  isMain: boolean;
+  /** agentbox cut this one, as opposed to a worktree made by hand. */
+  ours: boolean;
+  /** Registered with git but no longer on disk — `git worktree prune` fodder. */
+  missing: boolean;
+  sessionId: string | null;
+  sessionTitle: string | null;
+  live: boolean;
+  pr: "open" | "merged" | "closed" | "none" | "unknown";
+  verdict: WorktreeVerdict;
+}
+
+export interface WorktreeScan {
+  scannedAt: number;
+  items: WorktreeInfo[];
+  /** `gh` was needed to judge at least one branch and never answered, so every
+   *  PR state below is a guess. */
+  ghUnavailable: boolean;
+}
+
+export interface ReclaimResult {
+  removed: string[];
+  /** Per-path, with the reason — a reclaim that silently skips half its input
+   *  reads as a reclaim that worked. */
+  failed: { path: string; error: string }[];
+  bytesFreed: number;
+}
+
 export interface ColdState {
   repos: Repo[];
   prs: PrInfo[];
@@ -302,6 +469,9 @@ export type ServerMessage =
   | { type: "hot"; state: HotState }
   | { type: "cold"; state: ColdState }
   | { type: "events"; sessionId: string; events: TranscriptEvent[] }
+  // Its own channel because it is neither: pushed on a fixed cadence and never
+  // suppressed, since every sample differs and a suppressed one reads as live.
+  | { type: "metrics"; state: MetricsState }
   | { type: "error"; message: string };
 
 /** Client → server. A client watches at most one session's event stream. */

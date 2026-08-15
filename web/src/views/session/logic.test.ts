@@ -57,7 +57,7 @@ function session(over: Partial<SessionRow> & { id: string; attention: Attention 
     createdAt: 0,
     updatedAt: 0,
     startedAt: null,
-    archivedAt: null,
+    closedAt: null,
   };
   return { ...base, ...over };
 }
@@ -251,7 +251,7 @@ describe("list ordering", () => {
     expect(sortSessions(list).map((s) => s.id)).toEqual(["new-urgent", "old-urgent", "fresh-calm"]);
   });
 
-  test("sections bucket by attention then activity, and hide archived by default", () => {
+  test("sections bucket by attention then activity, and hide closed by default", () => {
     const list = [
       session({ id: "needs", attention: { kind: "flagged", rank: 1, label: "halted" } }),
       session({ id: "busy", attention: none, status: "running" }),
@@ -259,7 +259,7 @@ describe("list ordering", () => {
       // as "Needs you" put all three real sessions under that heading.
       session({ id: "resting", attention: { kind: "idle", rank: 5, label: "waiting for you" } }),
       session({ id: "idle", attention: none, status: "done" }),
-      session({ id: "gone", attention: none, status: "done", archivedAt: 5 }),
+      session({ id: "gone", attention: none, status: "done", closedAt: 5 }),
     ];
     expect(sectionsFor(list, false).map((s) => [s.id, s.sessions.map((x) => x.id)])).toEqual([
       ["attention", ["needs"]],
@@ -386,6 +386,15 @@ describe("formatting", () => {
     for (const status of ["running", "waiting", "done", "spawning"] as const) {
       expect(canResume(session({ id: "x", attention: none, status }))).toBe(false);
       expect(canSteer(status)).toBe(true);
+    }
+  });
+
+  test("a closed session resumes whatever its status says", () => {
+    // Closing a `done` session keeps `done` — the PR really is open — so
+    // status alone would hide the button on a session the server would have
+    // happily resumed. This must agree with `canResume` in sessions.ts.
+    for (const status of ["done", "dead", "waiting"] as const) {
+      expect(canResume(session({ id: "x", attention: none, status, closedAt: 123 }))).toBe(true);
     }
   });
 

@@ -25,6 +25,7 @@ import {
 import { inboxItems } from "../../src/core/conductor";
 import { Button, Empty, Icon, type IconComponent } from "./components";
 import { hrefOf, parseHash, type PageId, type Route } from "./route";
+import { SystemBar } from "./SystemBar";
 import { Inbox } from "./views/Inbox";
 import { Sessions } from "./views/Sessions";
 import { Settings } from "./views/Settings";
@@ -171,6 +172,12 @@ export function App() {
             <Settings state={state} />
           )}
         </main>
+
+        {/* A sibling of `.content` inside the flex column, not `position:
+            fixed`. A floating status bar's failure mode is covering the last
+            row of whatever you are reading; this one takes its height out of
+            the scroller instead, so it cannot. */}
+        <SystemBar />
       </div>
     </div>
   );
@@ -186,9 +193,9 @@ function countsOf(state: AppState | null): Record<PageId, number> {
     // two drifted to 72 against 67 on the same screen — a badge that is not
     // literally the page's own count is a second opinion, not a summary.
     inbox: inboxItems(state.sessions, state.prs).length,
-    // No archived filter: `state.sessions` is `listSessions(false)`, which is
+    // No closed filter: `state.sessions` is `listSessions(false)`, which is
     // `WHERE archived_at IS NULL`. Filtering again would read as a guard and
-    // hide that archived sessions never reach the client at all.
+    // hide that closed sessions never reach the client at all.
     sessions: state.sessions.filter((s) => s.status === "running" || s.status === "spawning").length,
     settings: 0,
   };

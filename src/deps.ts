@@ -69,8 +69,9 @@ function probeOmp(): DepStatus {
   if (r.code !== 0) {
     return { state: "unusable", detail: `omp is installed but will not run: ${r.said.split("\n")[0]?.slice(0, 160)}` };
   }
-  // The version, not a boolean: DESIGN.md's engine notes are pinned to a
-  // specific omp release, so "which one" is the actionable half of the answer.
+  // The version, not a boolean: what agentbox knows about omp's ACP surface was
+  // established against a specific release, so "which one" is the actionable
+  // half of the answer when something stops lining up.
   return { state: "ok", detail: r.said.split("\n")[0]?.trim() || "installed" };
 }
 

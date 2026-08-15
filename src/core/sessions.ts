@@ -1,12 +1,12 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import {
-  insertSession, updateSession, getSession, listSessions, deleteSession,
+  insertSession, updateSession, getSession, listSessions,
   getRepo, getSettings,
 } from "./db";
 import { logPathFor } from "./paths";
-import { createWorktree, removeWorktree, run, findOpenPr, repoFullNameOf, currentBranch } from "./git";
+import { createWorktree, run, findOpenPr, repoFullNameOf, currentBranch } from "./git";
 import { AcpRunner, messageOf, type PermissionInfo } from "./acp";
 import { writeSessionPrompt, writeWatchdog, frameSupervisorMessage } from "./prompts";
 import { forgetSession, onToolCall, supervisorEvents } from "./supervisor";
@@ -291,6 +291,10 @@ export function ompAvailable(): boolean {
 
 // -------------------------------------------------------- runner plumbing
 
+/** Statuses that imply a live omp process, so losing one means the session is
+ *  `dead`. See the note in `onExit`. */
+const EXPECTS_A_PROCESS = new Set<Session["status"]>(["spawning", "running", "waiting"]);
+
 function makeRunner(id: string): AcpRunner {
   return new AcpRunner(
     id,
@@ -349,7 +353,18 @@ function makeRunner(id: string): AcpRunner {
           exitCode: code,
           // The process is gone but the omp conversation is on disk, so this is
           // resumable rather than terminal.
-          ...(s.status === "running" || s.status === "spawning" ? { status: "dead" as const } : {}),
+          //
+          // `waiting` belongs here as much as `running` does: an idle session
+          // still has a live process behind it, and when that process goes away
+          // the session looked untouched — still "waiting", so still no Resume
+          // button, since RESUMABLE does not include it. The only way out was to
+          // send a message and rely on `sendMessage`'s relaunch path.
+          //
+          // `flagged` and `done` are left alone deliberately. Both are verdicts
+          // about the work rather than the process, and both outrank "the
+          // process exited": flagged carries the reason `resumeSession` replays,
+          // and done means the PR is already open.
+          ...(EXPECTS_A_PROCESS.has(s.status) ? { status: "dead" as const } : {}),
         });
         broadcast();
       },
@@ -387,7 +402,6 @@ async function startRunner(id: string, message: string): Promise<void> {
       worktree: s.worktree,
       model: s.model,
       promptFile,
-      maxMinutes: settings.maxMinutes,
       advisor: settings.advisor.enabled,
       resumeSessionId: s.ompSessionId,
     });
@@ -455,7 +469,7 @@ export function spawnSession(repo: Repo, prompt: string, opts: SpawnOptions = {}
     createdAt: Date.now(),
     updatedAt: Date.now(),
     startedAt: null,
-    archivedAt: null,
+    closedAt: null,
   };
   insertSession(session);
 
@@ -546,6 +560,17 @@ export async function sendMessage(
 const RESUMABLE = new Set<Session["status"]>(["flagged", "dead", "failed"]);
 
 /**
+ * Resume is offered for any halted status, and separately for anything closed.
+ *
+ * Closing is orthogonal to status: it usually lands on `dead`, but a session
+ * closed while `done` keeps `done`, and "the PR is open" is no reason to refuse
+ * to reopen the conversation that produced it.
+ */
+export function canResume(s: Session): boolean {
+  return RESUMABLE.has(s.status) || s.closedAt !== null;
+}
+
+/**
  * Bring a halted session back. This is the only route back from a restart:
  * the runner map is in-memory, so every live session is `dead` afterwards.
  *
@@ -558,7 +583,7 @@ const RESUMABLE = new Set<Session["status"]>(["flagged", "dead", "failed"]);
 export async function resumeSession(id: string): Promise<Session> {
   const s = getSession(id);
   if (!s) throw new NotFound(`no session ${id}`);
-  if (!RESUMABLE.has(s.status)) throw new Conflict(`a ${s.status} session cannot be resumed`);
+  if (!canResume(s)) throw new Conflict(`a ${s.status} session cannot be resumed`);
 
   const stale = running.get(id);
   if (stale) {
@@ -566,7 +591,9 @@ export async function resumeSession(id: string): Promise<Session> {
     running.delete(id);
   }
   if (!s.worktree || !existsSync(s.worktree)) restoreWorktree(s);
-  updateSession(id, { blocked: false });
+  // Resuming a closed session brings it back onto the board. Leaving it hidden
+  // would start a run nothing lists.
+  updateSession(id, { blocked: false, closedAt: null });
 
   // With an omp session id the conversation is intact and we only need to say
   // "carry on". Without one the agent never got as far as a conversation, so
@@ -619,15 +646,24 @@ export function flagSession(id: string, reason: string): void {
   broadcast();
 }
 
-export function archiveSession(id: string): Session | null {
-  if (!getSession(id)) return null;
-  updateSession(id, { archivedAt: Date.now() });
-  broadcast();
-  return getSession(id);
-}
+/**
+ * Put a session away: stop its process, drop its in-memory state, hide it from
+ * the board. Everything durable survives — the record, the log, the branch and
+ * the worktree — so a closed session resumes like any other halted one.
+ *
+ * This replaced a pair of actions, Archive (a flag and nothing else) and Delete
+ * (which also destroyed the worktree, the branch and the log). The pair asked
+ * the wrong question. "I am done looking at this" is the common case and it was
+ * only served by the option that leaked a checkout per session — a gigabyte
+ * each on a real repo — while the option that reclaimed the disk also threw
+ * away the branch, which is the one thing that makes a session resumable.
+ * Reclaiming disk is now its own deliberate act, in Settings, over worktrees
+ * rather than sessions.
+ */
+export function closeSession(id: string): Session | null {
+  const s = getSession(id);
+  if (!s) return null;
 
-/** Delete the session, its worktree, its branch and its log. Destructive. */
-export function destroySession(id: string) {
   const acp = running.get(id);
   if (acp) acp.kill();
   running.delete(id);
@@ -637,21 +673,17 @@ export function destroySession(id: string) {
   prLookupError.delete(id);
   forgetSession(id);
 
-  const s = getSession(id);
-  if (s?.worktree) {
-    const repo = getRepo(s.repo);
-    if (repo) removeWorktree(repo, s.branch, id);
-  }
-  const log = logPathFor(id);
-  if (existsSync(log)) {
-    try {
-      unlinkSync(log);
-    } catch (err) {
-      console.error(`[agentbox] could not remove ${log}: ${messageOf(err)}`);
-    }
-  }
-  deleteSession(id);
+  updateSession(id, {
+    closedAt: Date.now(),
+    blocked: false,
+    pid: null,
+    // We just killed the process, so a status that implies one is now a lie.
+    // `done`, `flagged` and `failed` are verdicts about the work rather than
+    // the process and are left to stand — `closedAt` is what "closed" means.
+    ...(EXPECTS_A_PROCESS.has(s.status) ? { status: "dead" as const } : {}),
+  });
   broadcast();
+  return getSession(id);
 }
 
 /**

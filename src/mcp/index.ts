@@ -85,9 +85,9 @@ function sessionView(s: BoardSession | Session) {
       : undefined,
     // The supervisor halted this run; `flagReason` is its sentence, verbatim.
     flagReason: s.flagReason ?? undefined,
-    // `board` filters archived sessions out, but a tool called with an id
+    // `board` filters closed sessions out, but a tool called with an id
     // still resolves one — say so rather than presenting finished work as live.
-    archived: s.archivedAt === null ? undefined : true,
+    closed: s.closedAt === null ? undefined : true,
     repo: s.repo,
     branch: s.branch,
     model: s.model,
@@ -182,10 +182,10 @@ server.registerTool(
   async () => {
     const st = await board();
     return text({
-      // Archived sessions ride along in `HotState` so the UI can offer a
-      // "show archived" toggle. They are finished work by definition, and a
+      // Closed sessions ride along in `HotState` so the UI can offer a
+      // "show closed" toggle. They are finished work by definition, and a
       // conductor paying context for them would be paying for noise.
-      sessions: st.sessions.filter((s) => s.archivedAt === null).map(sessionView),
+      sessions: st.sessions.filter((s) => s.closedAt === null).map(sessionView),
       openPrs: st.prs
         .filter((p) => p.state === "OPEN")
         .map((p) => ({
@@ -467,37 +467,20 @@ server.registerTool(
 );
 
 server.registerTool(
-  "archive_session",
+  "close_session",
   {
-    title: "File a finished session off the board",
+    title: "Put a finished session away",
     description:
-      "Hides a session you are done with. Nothing is destroyed — the transcript, the worktree " +
-      "and the branch all remain, and the session can still be read by id.\n\n" +
-      "Archive as soon as a session's PR is open or its work is abandoned. A board full of " +
+      "Stops the session's process and takes it off the board. Nothing is destroyed — the " +
+      "transcript, the worktree and the branch all remain, the session can still be read by " +
+      "id, and `resume_session` brings it back.\n\n" +
+      "Close as soon as a session's PR is open or its work is abandoned. A board full of " +
       "finished sessions is how a real one gets missed.",
     inputSchema: { session_id: z.string() },
   },
   async ({ session_id }) => {
-    await api<Session>(`/api/sessions/${session_id}/archive`, { method: "POST" });
-    return text(`archived ${session_id}`);
-  },
-);
-
-server.registerTool(
-  "delete_session",
-  {
-    title: "Destroy a session and its work",
-    description:
-      "UNRECOVERABLE. Kills the process, then deletes the worktree and its branch — every " +
-      "uncommitted change and every commit that was never pushed is gone, and there is no undo.\n\n" +
-      "Use `archive_session` unless you specifically want the code destroyed. Before deleting, " +
-      "check `get_diff`: if there is work worth keeping, have the agent commit and push it " +
-      "first. Deleting a session whose PR is already open is safe — the PR lives on GitHub.",
-    inputSchema: { session_id: z.string() },
-  },
-  async ({ session_id }) => {
-    await api<{ ok: true }>(`/api/sessions/${session_id}`, { method: "DELETE" });
-    return text(`deleted ${session_id} — worktree and branch destroyed`);
+    await api<Session>(`/api/sessions/${session_id}/close`, { method: "POST" });
+    return text(`closed ${session_id}`);
   },
 );
 

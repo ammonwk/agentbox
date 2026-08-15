@@ -53,7 +53,7 @@ function makeSession(over: Partial<Session> = {}): Session {
     createdAt: 0,
     updatedAt: 0,
     startedAt: null,
-    archivedAt: null,
+    closedAt: null,
     ...over,
   };
 }
@@ -76,7 +76,6 @@ function makeSettings(over: Partial<AgentSettings> = {}): AgentSettings {
     theme: "system",
     model: "deepseek-v4-flash",
     autoApprove: false,
-    maxMinutes: 30,
     systemPrompt: "",
     supervisor: { enabled: true, everyToolCalls: 25, model: "deepseek-v4-flash" },
     advisor: { enabled: false, model: "deepseek-v4-flash" },

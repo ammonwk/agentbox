@@ -379,9 +379,9 @@ function SessionActions({
           <Button
             variant="ghost"
             icon={Icon.archive}
-            loading={pending === "archive"}
+            loading={pending === "close"}
             disabled={pending !== null}
-            onClick={() => run("archive", () => api.archiveSession(session.id))}
+            onClick={() => run("close", () => api.closeSession(session.id))}
           >
             Dismiss
           </Button>

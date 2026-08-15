@@ -1,29 +1,30 @@
 import { useState, useSyncExternalStore } from "react";
 import type { Attention, Session } from "../../../../src/core/types";
 import { api, clockNow, fmtCost, fmtDuration, fmtTokens, repoShort, subscribeToClock } from "../../api";
-import { AttentionBadge, Button, Confirm, Icon, RelativeTime, StatusPill } from "../../components";
+import { AttentionBadge, Button, Icon, RelativeTime, StatusPill } from "../../components";
 import { Activity } from "./Activity";
 import { DiffPanel } from "./DiffPanel";
+import { LoadPanel } from "./LoadPanel";
 import { Steer } from "./Steer";
 import { canInterrupt, canResume, RESUME_HINT, shortModel } from "./format";
 import { useAction } from "./useAction";
 
-type Tab = "activity" | "diff" | "task";
+type Tab = "activity" | "diff" | "task" | "load";
 
 export function SessionDetail({
   session,
   attention,
   onBack,
-  onDeleted,
+  onClosed,
 }: {
   session: Session;
   attention: Attention;
   /** Set only when the detail is the whole screen and the list is hidden. */
   onBack?: () => void;
-  onDeleted: () => void;
+  /** A closed session leaves the board, so the selection has to go somewhere. */
+  onClosed: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("activity");
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const { run, busy, error } = useAction();
   // The shared 1s ticker, so a running session's elapsed time moves without
   // this screen owning an interval of its own.
@@ -70,20 +71,18 @@ export function SessionDetail({
               size="sm"
               variant="ghost"
               icon={Icon.archive}
-              disabled={busy || session.archivedAt != null}
-              title={session.archivedAt ? "Already archived" : "Archive this session"}
-              onClick={() => void run(() => api.archiveSession(session.id))}
+              disabled={busy || session.closedAt != null}
+              title={
+                session.closedAt
+                  ? "Already closed"
+                  : "Stop this session and take it off the board. The branch, the worktree and the transcript are kept — Resume brings it back."
+              }
+              onClick={() => void run(async () => {
+                await api.closeSession(session.id);
+                onClosed();
+              })}
             >
-              {session.archivedAt ? "Archived" : "Archive"}
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              icon={Icon.trash}
-              disabled={busy}
-              onClick={() => setConfirmDelete(true)}
-            >
-              Delete
+              {session.closedAt ? "Closed" : "Close"}
             </Button>
           </div>
         </div>
@@ -148,6 +147,9 @@ export function SessionDetail({
           <TabButton id="activity" tab={tab} setTab={setTab} label="Activity" count={session.toolCalls} />
           <TabButton id="diff" tab={tab} setTab={setTab} label="Diff" />
           <TabButton id="task" tab={tab} setTab={setTab} label="Task" />
+          {/* Last, and only mounted when opened: the panel behind it walks
+              smaps for the whole subtree on a 5s timer. */}
+          <TabButton id="load" tab={tab} setTab={setTab} label="Load" />
         </div>
       </div>
 
@@ -159,31 +161,10 @@ export function SessionDetail({
         />
       )}
       {tab === "task" && <TaskPanel session={session} />}
+      {tab === "load" && <LoadPanel sessionId={session.id} />}
 
       <Steer session={session} />
 
-      {confirmDelete && (
-        <Confirm
-          title="Delete this session?"
-          body={
-            <>
-              The worktree at <code>{session.worktree ?? "(already gone)"}</code> and the branch{" "}
-              <code>{session.branch}</code> are destroyed along with the record. Anything the agent
-              wrote and did not push is lost. This cannot be undone.
-            </>
-          }
-          danger
-          confirmLabel="Delete session"
-          onCancel={() => setConfirmDelete(false)}
-          onConfirm={() => {
-            setConfirmDelete(false);
-            void run(async () => {
-              await api.deleteSession(session.id);
-              onDeleted();
-            });
-          }}
-        />
-      )}
     </div>
   );
 }

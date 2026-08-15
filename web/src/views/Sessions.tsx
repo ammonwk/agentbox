@@ -24,7 +24,7 @@ export function Sessions({
   onSelect: (id: string | null) => void;
 }) {
   const [showNew, setShowNew] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
 
   const narrow = useIsNarrow();
   const sessions: SessionRow[] = state.sessions;
@@ -36,14 +36,14 @@ export function Sessions({
   // Never when narrow. There the two panes take turns, so auto-selecting would
   // replace the list with a detail view the moment it rendered, and the list
   // would be unreachable.
-  const fallback = useMemo(() => sortSessions(sessions.filter((s) => s.archivedAt == null))[0] ?? null, [sessions]);
+  const fallback = useMemo(() => sortSessions(sessions.filter((s) => s.closedAt == null))[0] ?? null, [sessions]);
   useEffect(() => {
     if (!narrow && !selected && fallback) onSelect(fallback.id);
   }, [narrow, selected, fallback, onSelect]);
 
-  // An archived session reached by deep link must still be visible in the list.
+  // An closed session reached by deep link must still be visible in the list.
   useEffect(() => {
-    if (selected?.archivedAt != null) setShowArchived(true);
+    if (selected?.closedAt != null) setShowClosed(true);
   }, [selected]);
 
   // Narrow: one pane at a time. Splitting 720px of height between a list and a
@@ -60,8 +60,8 @@ export function Sessions({
           selectedId={selected?.id ?? null}
           onSelect={onSelect}
           onNew={() => setShowNew(true)}
-          showArchived={showArchived}
-          onToggleArchived={setShowArchived}
+          showClosed={showClosed}
+          onToggleClosed={setShowClosed}
         />
       )}
 
@@ -71,7 +71,7 @@ export function Sessions({
           session={selected}
           attention={selected.attention}
           onBack={narrow ? () => onSelect(null) : undefined}
-          onDeleted={() => onSelect(null)}
+          onClosed={() => onSelect(null)}
         />
       ) : showDetail && (
         <div className="sx-detail">

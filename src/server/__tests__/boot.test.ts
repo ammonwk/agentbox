@@ -130,7 +130,7 @@ test("the running server serves the API contract, not just a port", async () => 
 test("PUT /api/settings deep-merges a nested partial and keeps its siblings", async () => {
   const base = `http://127.0.0.1:${port}`;
   type Settings = {
-    maxMinutes: number;
+    model: string;
     supervisor: { enabled: boolean; everyToolCalls: number; model: string };
     advisor: { enabled: boolean; model: string };
   };
@@ -168,9 +168,9 @@ test("PUT /api/settings deep-merges a nested partial and keeps its siblings", as
   expect(three.data?.advisor.model).toBe(before.advisor.model);
   expect(three.data?.supervisor.everyToolCalls).toBe(10); // untouched group intact
 
-  const scalar = await put({ maxMinutes: 45 });
+  const scalar = await put({ model: "provider/other" });
   expect(scalar.status).toBe(200);
-  expect(scalar.data?.maxMinutes).toBe(45);
+  expect(scalar.data?.model).toBe("provider/other");
   expect(scalar.data?.supervisor.enabled).toBe(true);
 
   const bad = await put({ supervisor: { enabled: "yes" } });
@@ -205,14 +205,18 @@ test("index.html revalidates and hashed assets are immutable", async () => {
   expect(bundle.headers.get("content-type")).toContain("javascript");
 }, 20_000);
 
-test("a WebSocket client gets hot then cold, and an error for garbage", async () => {
+test("a WebSocket client gets its opening snapshot, and an error for garbage", async () => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   const seen: { type: string }[] = [];
   const done = Promise.withResolvers<void>();
 
   ws.onmessage = (e) => {
     seen.push(JSON.parse(String(e.data)) as { type: string });
-    if (seen.length === 3) done.resolve();
+    // Resolve on the reply to the garbage rather than on a message count: the
+    // opening snapshot has grown once already (hot, cold, and now metrics), and
+    // an assertion keyed to how many frames arrive first fails on the next
+    // channel added rather than on anything being wrong.
+    if (seen.some((s) => s.type === "error")) done.resolve();
   };
   ws.onerror = () => done.reject(new Error("websocket failed to connect"));
   ws.onopen = () => ws.send("this is not json");
@@ -223,7 +227,11 @@ test("a WebSocket client gets hot then cold, and an error for garbage", async ()
   ]);
   ws.close();
 
-  expect(seen.map((s) => s.type).slice(0, 2).sort()).toEqual(["cold", "hot"]);
+  const types = seen.map((s) => s.type);
+  // Both states arrive unasked, so a client paints something before it has
+  // sent anything.
+  expect(types).toContain("hot");
+  expect(types).toContain("cold");
   // The old handler was `message(_ws) {}` — garbage was silently discarded.
-  expect(seen[2]?.type).toBe("error");
+  expect(types).toContain("error");
 }, 20_000);

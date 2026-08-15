@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { mkdirSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { repoRoot, worktreeRoot } from "./paths";
 import type { Repo } from "./types";
 
@@ -43,6 +43,67 @@ export function run(cmd: string[], cwd?: string, env?: Record<string, string>): 
 
 /** Exit code we synthesise when the executable itself is not on PATH. */
 export const MISSING_BINARY = 127;
+
+/**
+ * `run`, without blocking the event loop, so callers can have several in
+ * flight.
+ *
+ * Everything else in this file is `spawnSync`, which is right for the one-shot
+ * questions the rest of agentbox asks. The worktree scan is the exception: it
+ * asks the same question of a hundred and fifty directories, and those are
+ * independent I/O-bound subprocesses. Run serially they took 45 seconds.
+ */
+export async function runAsync(
+  cmd: string[],
+  cwd?: string,
+  env?: Record<string, string>,
+): Promise<CmdResult> {
+  try {
+    const proc = Bun.spawn(cmd, {
+      cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr };
+  } catch (err) {
+    // Same reason as `run`: a missing binary throws rather than exiting non-zero.
+    return { code: MISSING_BINARY, stdout: "", stderr: `${cmd[0]}: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * How many subprocesses the scan keeps in flight.
+ *
+ * The work is waiting on the disk, not on a core, so this is well above the CPU
+ * count on purpose. Past roughly this point the disk is saturated and the only
+ * thing more concurrency buys is process table pressure.
+ */
+export const SCAN_CONCURRENCY = 16;
+
+/** `items.map(fn)` with at most `limit` running at once. Results keep input
+ *  order regardless of what finishes first. */
+export async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!, i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 /** First non-empty line of a command's stderr, for error messages. */
 function firstLine(text: string): string {
@@ -233,11 +294,132 @@ export function createWorktree(
   return { path: abs, fullName };
 }
 
-export function removeWorktree(repo: Repo, branch: string, id: string) {
-  const repoPath = repoCheckoutPath(repo);
-  const abs = join(worktreeRoot(), id);
-  run(["git", "worktree", "remove", "--force", abs], repoPath);
-  run(["git", "branch", "-D", branch], repoPath);
+/**
+ * Drop a worktree directory, keeping its branch.
+ *
+ * The branch is deliberately left alone. It is the only durable record of what
+ * a session did, and `createWorktree` rebuilds a checkout from it on demand —
+ * so removing the directory costs nothing but disk, while `git branch -D`
+ * alongside it would turn "reclaimed" into "unresumable".
+ */
+export function removeWorktreeAt(repoPath: string, worktreePath: string): CmdResult {
+  const r = run(["git", "worktree", "remove", "--force", worktreePath], repoPath);
+  // `worktree remove` refuses a path git has already forgotten (a directory
+  // left behind by an interrupted removal, say). Prune and take the directory
+  // itself, or the entry is undeletable through this path forever.
+  if (r.code !== 0 && existsSync(worktreePath)) {
+    run(["git", "worktree", "prune"], repoPath);
+    rmSync(worktreePath, { recursive: true, force: true });
+  }
+  return r;
+}
+
+/** One entry from `git worktree list --porcelain`. */
+export interface WorktreeEntry {
+  path: string;
+  /** Short branch name, or null when the checkout is detached. */
+  branch: string | null;
+  head: string | null;
+  /** The repo's own checkout. Never removable — `git worktree remove` refuses
+   *  it, and it is where the human works. */
+  isMain: boolean;
+  locked: boolean;
+}
+
+/**
+ * Every worktree git knows about for this repo, the main checkout included.
+ *
+ * The main checkout is first in porcelain output and is flagged rather than
+ * dropped: callers need to *show* it (it is usually the biggest directory on
+ * disk) while never offering to delete it.
+ */
+export function listWorktreesOf(repoPath: string): WorktreeEntry[] {
+  const r = run(["git", "worktree", "list", "--porcelain"], repoPath);
+  if (r.code !== 0) return [];
+
+  const out: WorktreeEntry[] = [];
+  let cur: Partial<WorktreeEntry> | null = null;
+  const flush = () => {
+    if (cur?.path) {
+      out.push({
+        path: cur.path,
+        branch: cur.branch ?? null,
+        head: cur.head ?? null,
+        isMain: out.length === 0,
+        locked: cur.locked ?? false,
+      });
+    }
+    cur = null;
+  };
+
+  for (const line of r.stdout.split("\n")) {
+    const t = line.trim();
+    if (t.startsWith("worktree ")) {
+      flush();
+      cur = { path: t.slice("worktree ".length) };
+    } else if (!cur) {
+      continue;
+    } else if (t.startsWith("HEAD ")) {
+      cur.head = t.slice("HEAD ".length);
+    } else if (t.startsWith("branch ")) {
+      cur.branch = t.slice("branch ".length).replace(/^refs\/heads\//, "");
+    } else if (t === "locked" || t.startsWith("locked ")) {
+      cur.locked = true;
+    }
+  }
+  flush();
+  return out;
+}
+
+/** The branch a checkout is on, or null when detached or unreadable. */
+export async function branchAt(worktreePath: string): Promise<string | null> {
+  const r = await runAsync(["git", "rev-parse", "--abbrev-ref", "HEAD"], worktreePath);
+  const name = r.stdout.trim();
+  return r.code === 0 && name && name !== "HEAD" ? name : null;
+}
+
+/** True when the worktree has uncommitted or untracked changes — the one thing
+ *  in it that no branch is holding a copy of. */
+export async function isDirty(worktreePath: string): Promise<boolean> {
+  const r = await runAsync(["git", "status", "--porcelain"], worktreePath);
+  // A worktree we cannot read is treated as dirty: the safe reclaim path must
+  // never take "the command failed" for "there is nothing here".
+  if (r.code !== 0) return true;
+  return r.stdout.trim().length > 0;
+}
+
+/**
+ * Commits on this worktree's HEAD that `base` does not have.
+ *
+ * -1 when the question cannot be answered (no such base, unreadable repo), which
+ * callers treat the same way as "yes, there is work here".
+ */
+export async function commitsAhead(worktreePath: string, base: string): Promise<number> {
+  for (const ref of [base, `origin/${base}`]) {
+    const r = await runAsync(["git", "rev-list", "--count", `${ref}..HEAD`], worktreePath);
+    if (r.code === 0) {
+      const n = Number(r.stdout.trim());
+      if (Number.isInteger(n)) return n;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Bytes on disk under a path.
+ *
+ * One `du` per path, run concurrently by the caller. A single `du` over every
+ * path at once looks cheaper — one process instead of a hundred — but it walks
+ * the directories one after another, and the walk is the cost. Measured over
+ * 29 GB of worktrees: batched into one process, 13s; a process each at 16 in
+ * flight, 2.5s.
+ *
+ * An unreadable directory reports 0 rather than failing the scan.
+ */
+export async function diskBytesOf(path: string): Promise<number> {
+  const r = await runAsync(["du", "-sk", path]);
+  const kb = Number(r.stdout.split(/\s+/)[0]);
+  return Number.isFinite(kb) ? kb * 1024 : 0;
 }
 
 // ------------------------------------------------------------- github
@@ -274,6 +456,71 @@ export function findOpenPr(repoFullName: string, branch: string): PrLookup {
   }
   const first = rows[0]?.number;
   return { ok: true, number: typeof first === "number" ? first : null };
+}
+
+/**
+ * What GitHub thinks of a branch, closed and merged PRs included.
+ *
+ * `findOpenPr` deliberately asks only about open PRs, because that is the
+ * question "is this session done" turns on. Reclaiming disk asks the opposite
+ * one — is this branch *finished with* — and a merged PR is the strongest
+ * possible yes. `unknown` covers both "gh could not answer" and "gh is not
+ * here", and the reclaim path must never read it as "finished".
+ */
+export type PrState = "open" | "merged" | "closed" | "none" | "unknown";
+
+/**
+ * Every branch of a repo that has ever had a PR, and what became of it.
+ *
+ * One call for the whole repo rather than one per branch. Asking per branch
+ * meant a network round trip for each of a few dozen worktrees, which is most
+ * of what made a scan take minutes.
+ *
+ * Returns null — not an empty map — when gh could not answer, because the two
+ * mean opposite things: an empty map says "this repo has no PRs, so nothing is
+ * finished on GitHub", and null says "we do not know". Reading the second as
+ * the first is how a reclaim deletes a merged branch's worktree... or worse,
+ * decides an open PR's worktree is stale.
+ */
+export async function prStatesOf(
+  repoFullName: string,
+  limit = 300,
+): Promise<Map<string, PrState> | null> {
+  if (!repoFullName) return null;
+  const r = await runAsync([
+    "gh", "pr", "list",
+    "--repo", repoFullName,
+    "--state", "all",
+    "--json", "headRefName,state",
+    "--limit", String(limit),
+  ]);
+  if (r.code !== 0) return null;
+
+  let rows: { headRefName?: unknown; state?: unknown }[];
+  try {
+    rows = JSON.parse(r.stdout) as { headRefName?: unknown; state?: unknown }[];
+  } catch {
+    return null;
+  }
+
+  // A branch can carry several PRs over its life. Open outranks everything —
+  // reopening is a thing people do, and reclaiming under an open PR surprises
+  // someone. Merged outranks closed for the same reason in reverse: it is the
+  // stronger statement that the work landed.
+  const rank: Record<string, number> = { OPEN: 3, MERGED: 2, CLOSED: 1 };
+  const best = new Map<string, string>();
+  for (const row of rows) {
+    const branch = typeof row.headRefName === "string" ? row.headRefName : null;
+    if (!branch) continue;
+    const state = String(row.state ?? "").toUpperCase();
+    if ((rank[state] ?? 0) > (rank[best.get(branch) ?? ""] ?? 0)) best.set(branch, state);
+  }
+
+  const out = new Map<string, PrState>();
+  for (const [branch, state] of best) {
+    out.set(branch, state === "OPEN" ? "open" : state === "MERGED" ? "merged" : "closed");
+  }
+  return out;
 }
 
 /** Turn a failed `gh` invocation into something a human can act on. */

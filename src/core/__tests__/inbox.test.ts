@@ -39,7 +39,7 @@ function session(patch: Partial<Session> = {}): Session {
     createdAt: 0,
     updatedAt: 1000,
     startedAt: 0,
-    archivedAt: null,
+    closedAt: null,
     ...patch,
   };
 }
@@ -99,21 +99,21 @@ describe("inboxItems", () => {
     ]);
   });
 
-  test("an archived session never appears, whatever it needs", () => {
-    // Archiving is the act of dealing with something. This exclusion used to
-    // hold by accident — archived sessions never left the server — so it is
+  test("a closed session never appears, whatever it needs", () => {
+    // Closing is the act of dealing with something. This exclusion used to
+    // hold by accident — closed sessions never left the server — so it is
     // asserted across every kind that would otherwise get in.
-    const archived = { archivedAt: 123 };
+    const closed = { closedAt: 123 };
     const items = inboxItems(
       [
-        session({ id: "a", status: "failed", ...archived }),
-        session({ id: "b", status: "flagged", ...archived }),
-        session({ id: "c", status: "done", prNumber: 7, ...archived }),
+        session({ id: "a", status: "failed", ...closed }),
+        session({ id: "b", status: "flagged", ...closed }),
+        session({ id: "c", status: "done", prNumber: 7, ...closed }),
         session({
           id: "d",
           blocked: true,
           permission: { id: "p", title: "Run it", tool: "execute", options: [] },
-          ...archived,
+          ...closed,
         }),
       ],
       [pr({ sessionId: "c" })]
@@ -121,11 +121,11 @@ describe("inboxItems", () => {
     expect(items).toEqual([]);
   });
 
-  test("archiving one session does not hide its unarchived siblings", () => {
+  test("closing one session does not hide its open siblings", () => {
     const items = inboxItems(
       [
         session({ id: "kept", status: "failed" }),
-        session({ id: "gone", status: "failed", archivedAt: 123 }),
+        session({ id: "gone", status: "failed", closedAt: 123 }),
       ],
       []
     );
@@ -136,7 +136,7 @@ describe("inboxItems", () => {
     // "Every open PR on the repo" is not a to-do list. A PR reaches the Inbox
     // only through the session that produced it.
     expect(inboxItems([], [pr({ sessionId: null })])).toEqual([]);
-    expect(inboxItems([], [pr({ sessionId: "archived-session" })])).toEqual([]);
+    expect(inboxItems([], [pr({ sessionId: "closed-session" })])).toEqual([]);
   });
 
   test("a review row carries the PR it opened", () => {

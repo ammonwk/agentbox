@@ -19,9 +19,9 @@ describe("mergeSettings", () => {
   });
 
   test("scalars replace", () => {
-    const next = mergeSettings(DEFAULT_SETTINGS, { theme: "dark", maxMinutes: 5 });
+    const next = mergeSettings(DEFAULT_SETTINGS, { theme: "dark", model: "x/y" });
     expect(next.theme).toBe("dark");
-    expect(next.maxMinutes).toBe(5);
+    expect(next.model).toBe("x/y");
   });
 
   test("false and empty string are values, not absences", () => {
@@ -29,6 +29,15 @@ describe("mergeSettings", () => {
     const next = mergeSettings(base, { autoApprove: false, systemPrompt: "" });
     expect(next.autoApprove).toBe(false);
     expect(next.systemPrompt).toBe("");
+  });
+
+  // The stored row is JSON from whatever build wrote it last, so it outlives
+  // the code. `maxMinutes` was removed and every existing install still has it
+  // sitting in that row.
+  test("a setting that no longer exists is dropped rather than carried along", () => {
+    const next = mergeSettings(DEFAULT_SETTINGS, { maxMinutes: 60 } as never);
+    expect("maxMinutes" in next).toBe(false);
+    expect(next).toEqual(DEFAULT_SETTINGS);
   });
 
   test("an explicit undefined does not erase the current value", () => {

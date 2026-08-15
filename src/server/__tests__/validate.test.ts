@@ -59,7 +59,6 @@ describe("settings patches the UI actually sends", () => {
   });
 
   test("top-level scalars still work", () => {
-    expect(parseSettingsPatch({ maxMinutes: 45 })).toEqual({ maxMinutes: 45 });
     expect(parseSettingsPatch({ theme: "dark" })).toEqual({ theme: "dark" });
     expect(parseSettingsPatch({ autoApprove: false })).toEqual({ autoApprove: false });
     expect(parseSettingsPatch({ model: "x/y" })).toEqual({ model: "x/y" });
@@ -87,7 +86,7 @@ describe("settings patches the UI actually sends", () => {
 describe("settings patches that should be refused", () => {
   test("unknown keys, at the top level and nested", () => {
     expect(rejects({ superviser: {} })).toContain("unknown setting: superviser");
-    expect(rejects({ maxMinuts: 5 })).toContain("unknown setting");
+    expect(rejects({ systemPrompot: "x" })).toContain("unknown setting");
   });
 
   test("wrong types name the full path", () => {
@@ -98,7 +97,6 @@ describe("settings patches that should be refused", () => {
     expect(rejects({ supervisor: { everyToolCalls: 2.5 } })).toContain("supervisor.everyToolCalls");
     expect(rejects({ advisor: { model: "" } })).toContain("advisor.model");
     expect(rejects({ theme: "neon" })).toContain("theme must be");
-    expect(rejects({ maxMinutes: -1 })).toContain("maxMinutes");
     expect(rejects({ systemPrompt: 42 })).toContain("systemPrompt");
   });
 

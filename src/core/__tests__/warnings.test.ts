@@ -4,8 +4,8 @@ import { listPrs } from "../prs";
 import type { Repo, Session } from "../types";
 
 /**
- * `ColdState.warnings` is the mechanism behind DESIGN.md's "if `gh` is missing,
- * the UI says `gh` is missing". It had never been non-empty in a running
+ * `ColdState.warnings` is the mechanism behind "if `gh` is missing, the UI says
+ * `gh` is missing". It had never been non-empty in a running
  * agentbox, which means its whole path was unverified — and it did not work:
  * `Bun.spawnSync` *throws* on a missing binary rather than returning a non-zero
  * exit, so an absent `gh` propagated an exception out of the cold refresh

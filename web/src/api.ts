@@ -13,11 +13,15 @@ import type {
   ClientMessage,
   ColdState,
   HotState,
+  MetricsState,
+  ProcDetail,
+  ReclaimResult,
   Repo,
   ServerMessage,
   Session,
   SessionDiff,
   TranscriptEvent,
+  WorktreeScan,
 } from "../../src/core/types";
 // The health tri-state, imported rather than redeclared: a second copy of
 // `"ok" | "unusable" | "missing"` is a copy that can drift from the probe.
@@ -34,7 +38,11 @@ export type {
   ColdState,
   DiffFile,
   HotState,
+  LoadSample,
+  MetricsState,
   PermissionRequest,
+  ProcDetail,
+  ProcRole,
   PrInfo,
   Repo,
   Session,
@@ -43,6 +51,8 @@ export type {
   SkillInfo,
   SupervisorSettings,
   SupervisorVerdict,
+  SystemState,
+  TempReading,
   ToolCall,
   ToolKind,
   ToolStatus,
@@ -120,21 +130,31 @@ export const api = {
 
   spawnSession: (input: { repoId: string; prompt: string; model?: string; branch?: string }) =>
     post<Session>("/api/sessions", input),
-  deleteSession: (id: string) => request<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   sendMessage: (id: string, text: string) => post<Session>(`/api/sessions/${id}/message`, { text }),
   interruptSession: (id: string) => post<Session>(`/api/sessions/${id}/interrupt`),
   resumeSession: (id: string) => post<Session>(`/api/sessions/${id}/resume`),
   replyPermission: (id: string, approved: boolean) =>
     post<Session>(`/api/sessions/${id}/permission`, { approved }),
-  archiveSession: (id: string) => post<Session>(`/api/sessions/${id}/archive`),
+  closeSession: (id: string) => post<Session>(`/api/sessions/${id}/close`),
   /** Backlog fetch. The live transcript comes over the socket — never poll this. */
   events: (id: string, since = 0) =>
     request<TranscriptEvent[]>(`/api/sessions/${id}/events?since=${since}`),
   diff: (id: string) => request<SessionDiff>(`/api/sessions/${id}/diff`),
+  /** The per-process drilldown. Expensive server-side (smaps walks the whole
+   *  subtree) — only ever behind an opened panel, never on the board. */
+  load: (id: string) => request<{ procs: ProcDetail[] }>(`/api/sessions/${id}/load`),
 
   repos: () => request<Repo[]>("/api/repos"),
   addRepo: (ref: string) => post<Repo>("/api/repos", { ref }),
   deleteRepo: (id: string) => request<{ ok: boolean }>(`/api/repos/${id}`, { method: "DELETE" }),
+
+  /** Slow by construction — many git and gh calls. Only ever on a button. */
+  scanWorktrees: (scope: "all" | "agentbox") =>
+    post<WorktreeScan>("/api/worktrees/scan", { scope }),
+  /** `force` skips the dirty/unmerged guards. The main checkout and any
+   *  worktree a session is live in are refused regardless. */
+  reclaimWorktrees: (paths: string[], force = false) =>
+    post<ReclaimResult>("/api/worktrees/reclaim", { paths, force }),
 
   settings: () => request<AgentSettings>("/api/settings"),
   /** Deep-merges server-side, so a partial is a patch, not a replacement. */
@@ -326,6 +346,39 @@ export function useAppState(): { state: AppState | null; connected: boolean; war
   return { state, connected, warnings: cold?.warnings ?? [] };
 }
 
+// ----------------------------------------------------------------- metrics
+
+/**
+ * The machine and the per-session load, straight off the socket.
+ *
+ * Deliberately NOT folded into `useAppState`. Metrics arrive on their own
+ * cadence and every frame differs, so joining them to `hot` would re-render
+ * every session row on the board twice a second to move one number in a bar at
+ * the bottom of the screen. Components that want the bar subscribe to this;
+ * everything else is untouched.
+ *
+ * There is no HTTP seed here, unlike `useAppState`. The server replays its last
+ * sweep on connect, and a metrics reading that cannot be refreshed is not worth
+ * painting — `stale` says so rather than leaving a frozen number on screen.
+ */
+export function useMetrics(): { metrics: MetricsState | null; stale: boolean } {
+  const [metrics, setMetrics] = useState<MetricsState | null>(null);
+  const { connected } = useConnection();
+
+  useEffect(
+    () =>
+      wire.onMessage((msg) => {
+        // `at: 0` is the server's snapshot before its first sweep has landed —
+        // a real message carrying nothing yet, which is not the same as a
+        // reading and must not be painted as one.
+        if (msg.type === "metrics" && msg.state.at > 0) setMetrics(msg.state);
+      }),
+    [],
+  );
+
+  return { metrics, stale: !connected };
+}
+
 // -------------------------------------------------------------- transcript
 
 /**
@@ -454,6 +507,16 @@ export function fmtTokens(t: number | null): string {
   if (t >= 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
   if (t >= 1000) return `${(t / 1000).toFixed(1)}k`;
   return `${t}`;
+}
+
+/** Disk sizes. Binary units, because that is what `du` reports and what a file
+ *  manager will agree with. */
+export function fmtBytes(b: number): string {
+  if (b <= 0) return "0 B";
+  if (b >= 1 << 30) return `${(b / (1 << 30)).toFixed(1)} GB`;
+  if (b >= 1 << 20) return `${Math.round(b / (1 << 20))} MB`;
+  if (b >= 1 << 10) return `${Math.round(b / (1 << 10))} KB`;
+  return `${b} B`;
 }
 
 export function repoShort(ref: string): string {

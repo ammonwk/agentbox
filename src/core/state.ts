@@ -37,12 +37,12 @@ let cold: ColdState | null = null;
 let coldFingerprint = "";
 
 /**
- * Archived sessions are included, with `archivedAt` set, and the UI filters them
+ * Closed sessions are included, with `closedAt` set, and the UI filters them
  * for display.
  *
- * Withholding them made Archive an undoable delete wearing a reversible label:
- * the archived count could only ever be 0, the "show archived" toggle had
- * nothing to reveal, and a deep link to an archived session resolved to
+ * Withholding them made Close an undoable delete wearing a reversible label:
+ * the closed count could only ever be 0, the "show closed" toggle had
+ * nothing to reveal, and a deep link to a closed session resolved to
  * nothing. Anything that must not count them has to say so — see `inboxItems`.
  */
 export function getHotState(): HotState {
@@ -79,9 +79,9 @@ export function refreshCold(rescan = false): boolean {
   const settings = getSettings();
 
   if (!scans || rescan) {
-    // Archived sessions included deliberately: `listPrs` uses them only to
+    // Closed sessions included deliberately: `listPrs` uses them only to
     // attach a `sessionId` to a PR, and a PR does not stop being that session's
-    // work because the session was archived.
+    // work because the session was closed.
     const pr = listPrs(repos, listSessions(true));
     const skill = listSkills();
     scans = {

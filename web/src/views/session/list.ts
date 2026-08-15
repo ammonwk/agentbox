@@ -50,8 +50,8 @@ const SECTION_LABEL: Record<SectionId, string> = {
  * Bucket for scanning. Sections are always in the same order so the list does
  * not reshuffle under the cursor, and empty ones are dropped.
  */
-export function sectionsFor(sessions: SessionRow[], showArchived: boolean): Section[] {
-  const visible = sessions.filter((s) => showArchived || s.archivedAt == null);
+export function sectionsFor(sessions: SessionRow[], showClosed: boolean): Section[] {
+  const visible = sessions.filter((s) => showClosed || s.closedAt == null);
   const sorted = sortSessions(visible);
   const order: SectionId[] = ["attention", "working", "idle", "quiet"];
   return order

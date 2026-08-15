@@ -1,7 +1,7 @@
 /** The agentbox HTTP + WebSocket server.
  *
  * One process owns every omp session; the web UI and the MCP server are both
- * clients of this API. Two rules from DESIGN.md shape the whole file:
+ * clients of this API. Two rules shape the whole file:
  *
  *   1. `gh` never runs on a broadcast path. State is split into `hot`
  *      (sessions, cheap, pushed on change) and `cold` (repos/prs/skills/
@@ -24,8 +24,7 @@ import {
   BadRequest,
   Conflict,
   NotFound,
-  archiveSession,
-  destroySession,
+  closeSession,
   eventsOf,
   interruptSession,
   reconcile,
@@ -36,6 +35,13 @@ import {
   spawnSession,
 } from "../core/sessions";
 import { diffOf } from "../core/diff";
+import {
+  metricsEvents,
+  metricsSnapshot,
+  procDetail,
+  setMetricsWatchers,
+} from "../core/metrics";
+import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import {
   addRepo,
   deleteRepo,
@@ -48,7 +54,13 @@ import {
 } from "../core/db";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
-import type { ColdState, ServerMessage, Session, TranscriptEvent } from "../core/types";
+import type {
+  ColdState,
+  MetricsState,
+  ServerMessage,
+  Session,
+  TranscriptEvent,
+} from "../core/types";
 import { HttpError, Router, fail, json, readBody } from "./router";
 import {
   optionalString,
@@ -63,7 +75,7 @@ import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 const PORT = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT);
 const HOST = process.env.AGENTBOX_HOST ?? "127.0.0.1";
 
-/** How long session changes are batched before a `hot` push. DESIGN.md. */
+/** How long session changes are batched before a `hot` push. */
 const HOT_COALESCE_MS = 250;
 
 /**
@@ -82,9 +94,22 @@ type Socket = ServerWebSocket<SocketState>;
 
 const clients = new Set<Socket>();
 
+/**
+ * The one place a socket leaves the broadcast set.
+ *
+ * `close` is not the only way clients go away — a socket that dies mid-write is
+ * dropped here too, and if that path skipped the watcher count then a browser
+ * killed without a clean close would leave the metrics sampler reading /proc
+ * every two seconds for nobody, for the life of the process.
+ */
+function dropClient(ws: Socket): void {
+  if (!clients.delete(ws)) return;
+  setMetricsWatchers(clients.size);
+}
+
 function send(ws: Socket, msg: ServerMessage): void {
   if (ws.readyState !== WebSocket.OPEN) {
-    clients.delete(ws);
+    dropClient(ws);
     return;
   }
   try {
@@ -92,7 +117,7 @@ function send(ws: Socket, msg: ServerMessage): void {
   } catch (e) {
     // The socket died between the readyState check and the write. Drop it
     // rather than letting a corpse accumulate in the broadcast set.
-    clients.delete(ws);
+    dropClient(ws);
     console.error(`[ws] dropping a dead socket: ${(e as Error).message}`);
   }
 }
@@ -115,6 +140,19 @@ function scheduleHot(): void {
 
 function onCold(state: ColdState): void {
   broadcast({ type: "cold", state });
+}
+
+/**
+ * Straight to the wire, uncoalesced and unsuppressed.
+ *
+ * Both of the other channels are throttled — `hot` coalesces a burst, `cold`
+ * drops a push whose fingerprint matches the last one. Neither is right here.
+ * The sampler already sets the cadence, and every sample differs by
+ * construction, so suppressing one would just be a stale reading wearing a live
+ * one's clothes.
+ */
+function onMetrics(state: MetricsState): void {
+  broadcast({ type: "metrics", state });
 }
 
 function onSessionEvents(sessionId: string, events: TranscriptEvent[]): void {
@@ -218,11 +256,6 @@ export const router = new Router(mapCoreError)
     return json(session, 201);
   })
 
-  .add("DELETE", "/api/sessions/:id", ({ params }) => {
-    destroySession(sessionOr404(params.id!).id);
-    return json({ ok: true });
-  })
-
   .add("POST", "/api/sessions/:id/message", async ({ req, params }) => {
     const body = await readBody(req);
     return json(await sendMessage(params.id!, requireString(body, "text"), "human"));
@@ -241,8 +274,8 @@ export const router = new Router(mapCoreError)
     return json(await replyPermission(params.id!, requireBoolean(body, "approved")));
   })
 
-  .add("POST", "/api/sessions/:id/archive", ({ params }) => {
-    const s = archiveSession(params.id!);
+  .add("POST", "/api/sessions/:id/close", ({ params }) => {
+    const s = closeSession(params.id!);
     if (!s) throw new HttpError(404, `session not found: ${params.id}`);
     return json(s);
   })
@@ -256,6 +289,19 @@ export const router = new Router(mapCoreError)
   .add("GET", "/api/sessions/:id/diff", ({ params }) =>
     json(diffOf(sessionOr404(params.id!))),
   )
+
+  /**
+   * The per-process breakdown behind one session's load figure.
+   *
+   * On demand and never polled by the board: this is the only caller that reads
+   * per-process PSS, and `smaps_rollup` makes the kernel walk every VMA — the
+   * single most expensive read in the product. A session with no live process
+   * returns an empty list rather than an error; "not running" is an answer.
+   */
+  .add("GET", "/api/sessions/:id/load", async ({ params }) => {
+    const s = sessionOr404(params.id!);
+    return json({ procs: s.pid === null ? [] : await procDetail(s.pid) });
+  })
 
   .add("GET", "/api/repos", () => json(listRepos()))
 
@@ -273,6 +319,32 @@ export const router = new Router(mapCoreError)
     deleteRepo(params.id!);
     refreshCold();
     return json({ ok: true });
+  })
+
+  // Both of these shell out to git and gh many times over, so neither is on a
+  // broadcast path and neither is cached — they run when the human asks.
+  .add("POST", "/api/worktrees/scan", async ({ req }) => {
+    const body = await readBody(req);
+    const scope = optionalString(body, "scope") ?? "all";
+    if (scope !== "all" && scope !== "agentbox") {
+      throw new HttpError(400, "scope must be all or agentbox");
+    }
+    return json(await scanWorktrees(scope));
+  })
+
+  .add("POST", "/api/worktrees/reclaim", async ({ req }) => {
+    const body = await readBody(req);
+    const paths = body.paths;
+    if (!Array.isArray(paths) || paths.some((p) => typeof p !== "string")) {
+      throw new HttpError(400, "paths must be an array of strings");
+    }
+    if (paths.length === 0) throw new HttpError(400, "paths is empty — nothing to reclaim");
+    const force = body.force === undefined ? false : requireBoolean(body, "force");
+    const result = await reclaimWorktrees(paths as string[], { force });
+    // A reclaimed worktree changes what the session detail can show, so the
+    // board has to hear about it.
+    broadcast({ type: "hot", state: getHotState() });
+    return json(result);
   })
 
   .add("GET", "/api/settings", () => json(getSettings()))
@@ -309,6 +381,10 @@ export function startServer(): void {
   sessionEvents.on("hot", scheduleHot);
   sessionEvents.on("events", onSessionEvents);
   stateEvents.on("cold", onCold);
+  // Note there is no `startMetrics()` beside `startColdRefresh()`: the sampler
+  // is driven entirely by whether anyone is connected. An agentbox left running
+  // with no tab open reads /proc exactly never.
+  metricsEvents.on("metrics", onMetrics);
 
   Bun.serve<SocketState>({
     port: PORT,
@@ -318,12 +394,18 @@ export function startServer(): void {
         clients.add(ws);
         send(ws, { type: "hot", state: getHotState() });
         send(ws, { type: "cold", state: getColdState() });
+        // The last sweep, so a tab that opens between polls paints something
+        // real immediately instead of an empty bar for two seconds. It carries
+        // its own `at`, so the client can tell a replayed reading from a live
+        // one rather than trusting it because it arrived on connect.
+        send(ws, { type: "metrics", state: metricsSnapshot() });
+        setMetricsWatchers(clients.size);
       },
       message(ws, raw) {
         handleClientMessage(ws, raw);
       },
       close(ws) {
-        clients.delete(ws);
+        dropClient(ws);
       },
     },
     fetch(req, srv) {

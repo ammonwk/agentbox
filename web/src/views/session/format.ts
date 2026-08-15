@@ -111,16 +111,29 @@ export function canInterrupt(s: Session): boolean {
   return s.status === "running" || s.status === "spawning";
 }
 
-/** A halted session must be resumable in one click — DESIGN.md, Behaviour rules. */
 /**
+ * A halted session must be resumable in one click.
+ *
  * The three halted states are all resumable, and they resume identically:
  * re-run the original task. `failed` is included because it usually means the
  * session never launched, which is exactly the case a person wants to retry —
  * and because the Inbox already offered Resume on it, so omitting it here made
  * two views of one session disagree about what could be done to it.
+ *
+ * Closed sessions are resumable too, whatever their status. Closing usually
+ * lands on `dead`, but one closed while `done` keeps `done` — and "its PR is
+ * open" is no reason to refuse to reopen the conversation. This has to agree
+ * with `canResume` in sessions.ts: the server is what actually decides, so a
+ * narrower rule here is a button that is missing from a session that would
+ * have accepted the click.
  */
 export function canResume(s: Session): boolean {
-  return s.status === "flagged" || s.status === "dead" || s.status === "failed";
+  return (
+    s.closedAt !== null ||
+    s.status === "flagged" ||
+    s.status === "dead" ||
+    s.status === "failed"
+  );
 }
 
 /** One wording for the action, so the Inbox and the board cannot drift. */

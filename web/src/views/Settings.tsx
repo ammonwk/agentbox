@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentSettings, AppState, Repo, SkillInfo } from "../../../src/core/types";
-import { api, type DepState, type Health } from "../api";
+import type {
+  AgentSettings,
+  AppState,
+  ReclaimResult,
+  Repo,
+  SkillInfo,
+  WorktreeScan,
+} from "../../../src/core/types";
+import { api, fmtBytes, type DepState, type Health } from "../api";
 import {
   Button,
   CommitInput,
@@ -24,6 +31,7 @@ export function Settings({ state }: { state: AppState }) {
       <SystemPrompt {...section} />
       <Supervision {...section} />
       <Repositories repos={repos} sessions={sessions} />
+      <Disk />
       <Skills skills={skills} />
       <Diagnostics warnings={warnings} />
     </div>
@@ -61,18 +69,6 @@ function ToggleRow({
 // ------------------------------------------------------------ run defaults
 
 function RunDefaults({ settings, save, saveStateOf }: SectionProps) {
-  const [minutesError, setMinutesError] = useState<string | null>(null);
-
-  function commitMinutes(raw: string) {
-    const n = Number(raw.trim());
-    if (!Number.isInteger(n) || n < 1) {
-      setMinutesError(`"${raw}" is not a whole number of minutes — nothing was saved.`);
-      return;
-    }
-    setMinutesError(null);
-    save("maxMinutes", { maxMinutes: n });
-  }
-
   return (
     <section className="card">
       <h3>Run defaults</h3>
@@ -110,29 +106,6 @@ function RunDefaults({ settings, save, saveStateOf }: SectionProps) {
           does at any layer — it edits files and runs commands in its worktree
           with no confirmation from anyone. The supervisor below is then the
           only brake, and it reacts after the fact rather than before.
-        </p>
-      )}
-
-      <Field
-        label="Max run time"
-        hint="Handed to omp as --max-time. When it runs out omp stops the session where it stands: whatever the agent had already written stays in the worktree, no pull request is opened, nothing is rolled back, and the session turns up in your Inbox. It is a spend cap rather than a deadline the agent knows about — it will not hurry to finish."
-      >
-        {(id) => (
-          <div className="input-row">
-            <CommitInput
-              id={id}
-              value={String(settings.maxMinutes)}
-              placeholder="60"
-              onCommit={commitMinutes}
-            />
-            <span className="suffix">minutes</span>
-          </div>
-        )}
-      </Field>
-      <SaveMark state={saveStateOf("maxMinutes")} />
-      {minutesError && (
-        <p className="error" role="alert">
-          {minutesError}
         </p>
       )}
     </section>
@@ -461,6 +434,221 @@ function Repositories({ repos, sessions }: { repos: Repo[]; sessions: AppState["
 }
 
 // ------------------------------------------------------------------ skills
+
+/**
+ * Reclaim disk from worktrees.
+ *
+ * This exists because Close deliberately keeps a session's checkout: the branch
+ * is what makes a session resumable, and a close that destroyed a gigabyte to
+ * clear a row off the board was the wrong trade. So the disk is reclaimed here
+ * instead — explicitly, over worktrees rather than sessions, after the human has
+ * read what is about to go.
+ *
+ * Nothing on this screen runs on its own. The scan shells out to git several
+ * times per worktree and to `gh` once per branch, which is far too expensive to
+ * put behind a render.
+ */
+function Disk() {
+  const [scope, setScope] = useState<"all" | "agentbox">("all");
+  const [scan, setScan] = useState<WorktreeScan | null>(null);
+  const [busy, setBusy] = useState<null | "scan" | "safe" | "nuke">(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ReclaimResult | null>(null);
+  const [confirmNuke, setConfirmNuke] = useState(false);
+
+  const removable = scan ? scan.items.filter((w) => !w.isMain && !w.live) : [];
+  const safe = removable.filter((w) => w.verdict.safe);
+  const safeBytes = safe.reduce((n, w) => n + w.bytes, 0);
+  const allBytes = removable.reduce((n, w) => n + w.bytes, 0);
+
+  async function act<T>(kind: "scan" | "safe" | "nuke", fn: () => Promise<T>) {
+    setBusy(kind);
+    setError(null);
+    try {
+      return await fn();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function rescan(next = scope) {
+    const s = await act("scan", () => api.scanWorktrees(next));
+    if (s) {
+      setScan(s);
+      setResult(null);
+    }
+  }
+
+  async function reclaim(kind: "safe" | "nuke", paths: string[], force: boolean) {
+    const r = await act(kind, () => api.reclaimWorktrees(paths, force));
+    if (!r) return;
+    setResult(r);
+    // The list the human is looking at just became wrong. Re-deriving it from
+    // `removed` would drift from what is actually on disk; asking again cannot.
+    const fresh = await api.scanWorktrees(scope).catch(() => null);
+    if (fresh) setScan(fresh);
+  }
+
+  return (
+    <section className="card">
+      <h3>Disk</h3>
+      <p className="hint">
+        Every session keeps its worktree when you close it, because the checkout
+        is what Resume comes back to. They add up — a worktree of a large repo is
+        a gigabyte — so this is where you get the space back. Removing a worktree
+        never touches its branch: a session whose worktree is gone still resumes,
+        it just checks the branch out again first.
+      </p>
+
+      <div className="input-row">
+        <Button
+          variant="primary"
+          icon={Icon.search}
+          loading={busy === "scan"}
+          disabled={busy !== null}
+          onClick={() => void rescan()}
+        >
+          Scan for worktrees
+        </Button>
+        <Toggle
+          checked={scope === "all"}
+          onChange={(v) => {
+            const next = v ? "all" : "agentbox";
+            setScope(next);
+            if (scan) void rescan(next);
+          }}
+          label="Include worktrees agentbox did not create"
+        />
+      </div>
+
+      {busy === "scan" && (
+        <p className="hint" role="status">
+          Scanning — reading every worktree of every registered repo, checking
+          each for changes, asking GitHub what became of each branch, and sizing
+          it all on disk. Tens of seconds is normal.
+        </p>
+      )}
+
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+
+      {scan && scan.ghUnavailable && (
+        <p className="warn">
+          <Icon.alert size={15} /> <code>gh</code> could not be reached, so no
+          branch could be checked for a merged or closed pull request. Only
+          worktrees that are clean <em>and</em> have nothing their base branch is
+          missing count as safe below.
+        </p>
+      )}
+
+      {scan && (
+        <>
+          <p className="hint" role="status">
+            {removable.length === 0
+              ? "Nothing removable found."
+              : `${removable.length} worktree${removable.length === 1 ? "" : "s"}, ${fmtBytes(allBytes)} on disk.`}
+          </p>
+
+          {removable.length > 0 && (
+            <div className="input-row">
+              <Button
+                icon={Icon.trash}
+                loading={busy === "safe"}
+                disabled={busy !== null || safe.length === 0}
+                title={
+                  safe.length === 0
+                    ? "Nothing is safe to delete — every worktree below has changes, an open PR, or could not be checked."
+                    : "Removes only worktrees with nothing to lose: clean, and either merged, closed, or holding no commits their base branch does not have."
+                }
+                onClick={() => void reclaim("safe", safe.map((w) => w.path), false)}
+              >
+                Delete {safe.length} safe ({fmtBytes(safeBytes)})
+              </Button>
+              <Button
+                variant="danger"
+                icon={Icon.alert}
+                loading={busy === "nuke"}
+                disabled={busy !== null}
+                onClick={() => setConfirmNuke(true)}
+              >
+                Delete all {removable.length} ({fmtBytes(allBytes)})
+              </Button>
+            </div>
+          )}
+
+          {result && (
+            <p className={result.failed.length > 0 ? "warn" : "hint"} role="status">
+              Removed {result.removed.length}, freeing {fmtBytes(result.bytesFreed)}.
+              {result.failed.length > 0 && (
+                <>
+                  {" "}
+                  {result.failed.length} could not be removed:{" "}
+                  {result.failed.map((f) => `${f.path} (${f.error})`).join("; ")}
+                </>
+              )}
+            </p>
+          )}
+
+          {scan.items.length > 0 && (
+            <ul className="worktree-list">
+              {scan.items.map((w) => (
+                <li className="worktree-row" key={w.path}>
+                  <span className={`src ${w.verdict.safe ? "safe" : "keep"}`}>
+                    {w.verdict.safe ? "safe" : "keep"}
+                  </span>
+                  <span className="mono size">{fmtBytes(w.bytes)}</span>
+                  <span className="mono ref" title={w.path}>
+                    {w.path}
+                  </span>
+                  <span className="mono branch">
+                    <Icon.branch size={13} /> {w.branch ?? "detached"}
+                  </span>
+                  <span className="name">{w.repoName}</span>
+                  {!w.ours && !w.isMain && (
+                    <span className="faint" title="Not created by agentbox.">
+                      foreign
+                    </span>
+                  )}
+                  <span className="faint reason">{w.verdict.detail}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+
+      {confirmNuke && (
+        <Confirm
+          title={`Delete all ${removable.length} worktrees?`}
+          body={
+            <>
+              This removes {fmtBytes(allBytes)} across {removable.length} worktree
+              {removable.length === 1 ? "" : "s"}, including{" "}
+              {removable.length - safe.length} that {removable.length - safe.length === 1 ? "is" : "are"}{" "}
+              <strong>not</strong> safe — uncommitted changes and commits that were
+              never pushed are gone for good. Branches are kept, so anything
+              committed and on a branch survives. The repo's own checkout and any
+              worktree a running session is using are skipped.
+            </>
+          }
+          danger
+          confirmLabel={`Delete ${removable.length} worktrees`}
+          onCancel={() => setConfirmNuke(false)}
+          onConfirm={() => {
+            setConfirmNuke(false);
+            void reclaim("nuke", removable.map((w) => w.path), true);
+          }}
+        />
+      )}
+    </section>
+  );
+}
 
 function Skills({ skills }: { skills: SkillInfo[] }) {
   return (

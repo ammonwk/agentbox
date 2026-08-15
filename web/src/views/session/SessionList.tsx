@@ -2,23 +2,24 @@ import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
 import { AttentionBadge, Button, Empty, Icon, RelativeTime, StatusPill } from "../../components";
 import { repoShort, type SessionRow } from "../../api";
 import { flatten, neighbourId, sectionsFor } from "./list";
+import { LoadCell } from "./load";
 
 export function SessionList({
   sessions,
   selectedId,
   onSelect,
   onNew,
-  showArchived,
-  onToggleArchived,
+  showClosed,
+  onToggleClosed,
 }: {
   sessions: SessionRow[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
-  showArchived: boolean;
-  onToggleArchived: (next: boolean) => void;
+  showClosed: boolean;
+  onToggleClosed: (next: boolean) => void;
 }) {
-  const sections = useMemo(() => sectionsFor(sessions, showArchived), [sessions, showArchived]);
+  const sections = useMemo(() => sectionsFor(sessions, showClosed), [sessions, showClosed]);
   const ordered = useMemo(() => flatten(sections), [sections]);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
@@ -38,7 +39,7 @@ export function SessionList({
     rowRefs.current.get(next)?.focus();
   }
 
-  const archivedCount = sessions.filter((s) => s.archivedAt != null).length;
+  const closedCount = sessions.filter((s) => s.closedAt != null).length;
 
   return (
     <div className="sx-list">
@@ -46,15 +47,15 @@ export function SessionList({
         <span className="sx-list-count">
           {ordered.length} session{ordered.length === 1 ? "" : "s"}
         </span>
-        {archivedCount > 0 && (
+        {closedCount > 0 && (
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => onToggleArchived(!showArchived)}
-            aria-pressed={showArchived}
-            title={showArchived ? "Hide archived sessions" : `Show ${archivedCount} archived`}
+            onClick={() => onToggleClosed(!showClosed)}
+            aria-pressed={showClosed}
+            title={showClosed ? "Hide closed sessions" : `Show ${closedCount} closed`}
           >
-            {showArchived ? "Hide archived" : `Archived ${archivedCount}`}
+            {showClosed ? "Hide closed" : `Closed ${closedCount}`}
           </Button>
         )}
         <Button variant="primary" size="sm" icon={Icon.plus} onClick={onNew}>
@@ -82,7 +83,7 @@ export function SessionList({
             >
               {sessions.length === 0
                 ? "Spawn one: pick a repo and describe the task. agentbox cuts a worktree, runs omp on it, and everything it does shows up here."
-                : "Every session is archived. Show archived to bring them back into the list."}
+                : "Every session is closed. Show closed to bring them back into the list."}
             </Empty>
           </div>
         )}
@@ -130,6 +131,10 @@ export function SessionList({
                   <span>·</span>
                   <RelativeTime ts={s.updatedAt} />
                 </div>
+
+                {/* Renders nothing when the session has no live process, so a
+                    finished row keeps the height it always had. */}
+                <LoadCell sessionId={s.id} />
               </button>
             ))}
           </div>

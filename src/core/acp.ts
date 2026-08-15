@@ -63,8 +63,6 @@ export interface LaunchOptions {
    * assertions in `launch`.
    */
   promptFile: string;
-  /** Wall-clock cap handed to omp as `--max-time <n>m`. */
-  maxMinutes: number;
   /** Pass `--advisor`, enabling omp's advisor runtime. */
   advisor: boolean;
   /** Resume this omp conversation instead of opening a new one. */
@@ -346,7 +344,6 @@ export class AcpRunner {
       "omp", "acp",
       "--model", opts.model,
       "--append-system-prompt", opts.promptFile,
-      "--max-time", `${opts.maxMinutes}m`,
     ];
     if (opts.advisor) argv.push("--advisor");
 

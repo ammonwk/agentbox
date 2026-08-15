@@ -23,6 +23,15 @@ cheaply**.
   the second and stops the first, flagging it for you. A flagged session
   resumes in one click.
 - **Approve** permission requests, or let it run unattended.
+- **Close** a session when you are done with it. That stops the process and
+  takes it off the board, but keeps the transcript, the branch and the
+  worktree — Resume brings it back, checking the branch out again if its
+  worktree has since been reclaimed. Nothing is destroyed by closing.
+- **Reclaim** the disk deliberately, in Settings → Disk. Worktrees are a
+  gigabyte apiece on a large repo, so agentbox scans every worktree of every
+  registered repo (not only its own), says which have nothing to lose — clean,
+  or with a merged or closed PR — and removes them on request. Branches are
+  always kept.
 
 ## The three pages
 
@@ -30,7 +39,7 @@ cheaply**.
 |---|---|
 | **Inbox** | Everything wanting a human, ranked: sessions that failed, stopped, or need an approval, plus open PRs. Empty is the good state. |
 | **Sessions** | The board. Session list on the left, full detail on the right — activity, diff, task, and the steer box. |
-| **Settings** | Run defaults, the system prompt every agent receives, supervision config, repos, skills, and diagnostics. |
+| **Settings** | Run defaults, the system prompt every agent receives, supervision config, repos, disk reclaim, skills, and diagnostics. |
 
 ## Install
 
@@ -108,7 +117,6 @@ src/server/         Bun.serve HTTP + WebSocket
 src/mcp/            MCP server
 web/                React + Vite UI
 prompts/            prompt text, edited as content rather than code
-DESIGN.md           the design contract this is built against
 ```
 
 ## Notes

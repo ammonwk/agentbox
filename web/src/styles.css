@@ -872,3 +872,451 @@ textarea,
     scroll-behavior: auto !important;
   }
 }
+
+/* ------------------------------------------------------------- system bar */
+
+/*
+ * A permanent strip across the bottom of every page. It is a flex sibling of
+ * `.content` rather than `position: fixed`, so it can never cover the last row
+ * of a table — the failure mode of every floating status bar.
+ */
+.sysbar {
+  border-top: 1px solid var(--border);
+  background: var(--sunken);
+  flex-shrink: 0;
+  min-width: 0;
+}
+/* Dimmed rather than unmounted when the socket is down: removing it would make
+ * a disconnect look like a machine that stopped having a temperature. */
+.sysbar[data-stale="true"] {
+  opacity: 0.55;
+}
+
+.sysbar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  height: 42px;
+  padding: 0 14px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+.sysbar-row:hover {
+  background: var(--hover);
+}
+
+.sys-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-width: 0;
+}
+.sys-cell.narrow {
+  gap: 6px;
+}
+
+.sys-spacer {
+  flex: 1;
+}
+
+.sys-figs {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+.sys-figs .label,
+.sysblock > .label,
+.load-stat .label {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.sys-figs b {
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Two steps, not one: amber is "worth knowing", red is "this is the reason
+ * things are slow". Both also change weight, so the distinction survives a
+ * light background and a greyscale print. */
+.sys-figs b[data-warn="true"] {
+  color: var(--warning);
+  font-weight: 650;
+}
+.sys-figs b[data-bad="true"] {
+  color: var(--danger);
+  font-weight: 650;
+}
+
+.sys-div {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  flex: none;
+}
+
+.sys-stale {
+  font-size: 11px;
+  color: var(--danger);
+  flex: none;
+}
+
+.sys-chevron {
+  color: var(--faint);
+  font-size: 10px;
+  flex: none;
+}
+
+/* One bar per core — the graph you were about to open System Monitor for. */
+.corebars {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: 24px;
+  flex: none;
+}
+.corebars i {
+  width: 5px;
+  background: var(--success);
+  opacity: 0.62;
+  display: block;
+}
+.corebars i[data-hot="true"] {
+  background: var(--warning);
+  opacity: 1;
+}
+
+/* Memory: used and cache as separate segments, because counting page cache as
+ * "used" is the classic way to panic about a machine that is perfectly fine. */
+.stackbar {
+  display: flex;
+  width: 130px;
+  height: 8px;
+  background: var(--border);
+  border-radius: 2px;
+  flex: none;
+  overflow: hidden;
+}
+.stackbar.thin {
+  height: 5px;
+  width: 54px;
+}
+.stackbar.grow {
+  flex: 1;
+  width: auto;
+}
+.seg-used {
+  background: var(--success);
+  display: block;
+}
+.seg-cache {
+  background: var(--border-strong);
+  display: block;
+}
+
+/* Throttling is a condition, not a measurement, so it gets a border as well as
+ * a colour — an aspect that survives being printed in greyscale. */
+.sys-cell.throttled {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+}
+.sys-cell.throttled .label,
+.sys-cell.throttled b {
+  color: var(--danger);
+}
+
+/* ── The expanded sheet ── */
+
+.sysdetail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  border-top: 1px solid var(--border);
+  max-height: 40vh;
+  overflow: auto;
+}
+.sysblock {
+  padding: 12px 14px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.sysblock > .label {
+  margin-bottom: 8px;
+}
+.sysblock .hint {
+  margin-top: 8px;
+}
+
+.sysline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  font-size: 12px;
+}
+/* Wide enough for the longest label in any block; narrower and "throttled"
+ * wraps onto a second line and overlaps the row beneath it. */
+.sysline > .muted {
+  width: 96px;
+  flex: none;
+  white-space: nowrap;
+}
+.sysline .grow {
+  flex: 1;
+}
+.sysline b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+/* Shrinkable, and clipped rather than overflowing. A seven-figure throttle
+ * count next to its note is wider than the narrowest block this grid allows,
+ * and without `min-width: 0` a nowrap note refuses to shrink and simply runs
+ * out past the divider into the next column. */
+.sysline .faint {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.coregrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 14px;
+}
+.coreslot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.coreslot > .faint {
+  width: 16px;
+  text-align: right;
+  flex: none;
+}
+.coreslot b {
+  width: 34px;
+  text-align: right;
+  font-weight: 500;
+  flex: none;
+}
+.corebar-h {
+  flex: 1;
+  height: 7px;
+  background: var(--border);
+  border-radius: 2px;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+.corebar-h i {
+  display: block;
+  height: 100%;
+  background: var(--success);
+  opacity: 0.62;
+}
+.corebar-h i[data-hot="true"] {
+  background: var(--warning);
+  opacity: 1;
+}
+
+@media (max-width: 860px) {
+  /* On a narrow window the bar keeps only what fits: cores, memory, and
+   * anything actually wrong. The rest is one tap away in the sheet. */
+  .sysbar-row {
+    gap: 10px;
+    padding: 0 10px;
+  }
+  .sysbar-row .sys-div {
+    display: none;
+  }
+  .stackbar {
+    width: 70px;
+  }
+  .sysblock {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* -------------------------------------------------------- per-session load */
+
+.load-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.load-nums {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.load-nums b {
+  font-weight: 500;
+  color: var(--muted);
+}
+/* A full core or more. Colour alone would fail the contrast test the status
+ * pills are held to, so this also gets weight. */
+.load-nums b[data-hot="true"],
+.proc-table [data-hot="true"] {
+  color: var(--warning);
+  font-weight: 650;
+}
+
+.load-bg {
+  font-size: 10px;
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* Discrete bars, not a smoothed line: each is one two-second sample, and a
+ * curve between them would imply we measured the gap. */
+.spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 16px;
+  width: 50px;
+  flex: none;
+}
+.spark i {
+  flex: 1;
+  min-width: 1px;
+  background: var(--border-strong);
+  display: block;
+}
+.spark i[data-hot="true"] {
+  background: var(--warning);
+}
+.spark-empty {
+  border-bottom: 1px solid var(--border);
+  height: 16px;
+  width: 50px;
+  display: block;
+  flex: none;
+}
+
+/* ── The drilldown ── */
+
+.loadpanel {
+  padding: 14px 16px 20px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.load-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.load-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--border);
+}
+.load-stat:last-child {
+  border-right: 0;
+}
+.load-stat b {
+  font-size: 19px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.load-stat .faint {
+  font-size: 10.5px;
+}
+
+.proc-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.proc-table td,
+.proc-table th {
+  font-size: 12px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.proc-table th {
+  color: var(--faint);
+  font-weight: 500;
+}
+.proc-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.proc-table .truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.proc-table tr[data-role="agent"] td {
+  background: var(--raised);
+}
+
+.role-tag {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.role-tag[data-role="mcp"] {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+}
+.role-tag[data-role="tool"] {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.role-tag[data-role="agent"] {
+  color: var(--muted);
+  border-color: var(--border-strong);
+}
+
+/* A share-of-subtree bar behind the figure, so the one process holding most of
+ * the memory is findable without reading every row. */
+.membar {
+  position: relative;
+  display: inline-block;
+  padding: 1px 4px;
+  z-index: 0;
+}
+.membar::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: var(--f);
+  /* Against --border this was invisible: the bar and the row differed by two
+   * values of grey. It has to read as a bar at a glance or it is decoration. */
+  background: var(--border-strong);
+  border-radius: 2px;
+  z-index: -1;
+}

@@ -192,7 +192,7 @@ const SESSION_COLUMNS = {
   createdAt: "created_at",
   updatedAt: "updated_at",
   startedAt: "started_at",
-  archivedAt: "archived_at",
+  closedAt: "archived_at",
 } as const satisfies Partial<Record<keyof Session, string>>;
 
 type PersistedKey = keyof typeof SESSION_COLUMNS;
@@ -214,7 +214,7 @@ function rowToSession(r: SessionRow): Session {
     repoFullName: r.repo_full_name, costUsd: r.cost_usd, tokens: r.tokens,
     blocked: !!r.blocked, flagReason: r.flag_reason, ompSessionId: r.omp_session_id,
     createdAt: r.created_at, updatedAt: r.updated_at, startedAt: r.started_at,
-    archivedAt: r.archived_at,
+    closedAt: r.archived_at,
   };
 }
 
@@ -258,25 +258,21 @@ export function getSession(id: string): Session | null {
 }
 
 /**
- * `includeArchived` is required, deliberately.
+ * `includeClosed` is required, deliberately.
  *
- * It defaulted to `false`, which is how "the Inbox excludes archived sessions"
+ * It defaulted to `false`, which is how "the Inbox excludes closed sessions"
  * came to be true by accident rather than by decision — nothing stated the
- * intent, so widening the source later would have silently re-entered archived
+ * intent, so widening the source later would have silently re-entered closed
  * rows into consumers that had never had to think about them. Every caller now
  * says which it wants at the callsite, and a new one cannot get an answer it
  * did not ask for.
  */
-export function listSessions(includeArchived: boolean): Session[] {
+export function listSessions(includeClosed: boolean): Session[] {
   const rows = getDb()
-    .query(includeArchived ? "SELECT * FROM sessions ORDER BY updated_at DESC"
+    .query(includeClosed ? "SELECT * FROM sessions ORDER BY updated_at DESC"
                           : "SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC")
     .all() as SessionRow[];
   return rows.map(rowToSession);
-}
-
-export function deleteSession(id: string) {
-  getDb().run("DELETE FROM sessions WHERE id = ?", [id]);
 }
 
 // ----------------------------------------------------------------- repos
@@ -399,7 +395,6 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   theme: "system",
   model: DEFAULT_MODEL,
   autoApprove: true,
-  maxMinutes: 60,
   systemPrompt: "",
   supervisor: {
     enabled: true,
@@ -432,7 +427,11 @@ export function mergeSettings(base: AgentSettings, patch: SettingsPatch): AgentS
   const { supervisor, advisor, ...scalars } = patch;
   return {
     ...base,
-    ...defined(scalars),
+    // Keyed off `base` rather than spread blind: the stored row is JSON written
+    // by an older build, so it can carry settings that no longer exist. It
+    // carried `maxMinutes` for exactly this reason — a removed setting that
+    // would otherwise ride along in every GET and get rewritten on every save.
+    ...defined(known(scalars, base)),
     supervisor: { ...base.supervisor, ...defined(supervisor ?? {}) },
     advisor: { ...base.advisor, ...defined(advisor ?? {}) },
   };
@@ -440,6 +439,16 @@ export function mergeSettings(base: AgentSettings, patch: SettingsPatch): AgentS
 
 /** Drop keys whose value is `undefined`: JSON round-trips absent fields as
  *  undefined, and spreading those would erase the value they are absent from. */
+/** Drops keys that `base` does not have, so a setting deleted from the code
+ *  cannot survive in the stored row. */
+function known<T extends object>(o: Record<string, unknown>, base: T): Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(o)) {
+    if (key in base) out[key] = o[key];
+  }
+  return out as Partial<T>;
+}
+
 function defined<T extends object>(o: T): Partial<T> {
   const out: Partial<T> = {};
   for (const key of Object.keys(o) as (keyof T)[]) {
