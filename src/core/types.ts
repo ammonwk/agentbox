@@ -61,7 +61,17 @@ export interface Session {
   toolCalls: number;
 
   exitCode: number | null;
+  /** The omp process itself. */
   pid: number | null;
+  /**
+   * The `agentbox host <id>` process that owns the omp child.
+   *
+   * Agents outlive the web server, so "is this session live" can no longer be
+   * answered by looking in a map on the server's heap. This is the durable
+   * half of that answer — the socket is the other half, and the authoritative
+   * one, since a pid can be reused by an unrelated process.
+   */
+  hostPid: number | null;
   prNumber: number | null;
   repoFullName: string | null;
   costUsd: number | null;
@@ -80,8 +90,16 @@ export interface Session {
   startedAt: number | null;
   closedAt: number | null;
 
-  /** Live, in-memory only: set when `blocked`. Not persisted. */
-  permission?: PermissionRequest | null;
+  /**
+   * The permission prompt the agent is parked on, set iff `blocked`.
+   *
+   * Persisted, which it did not used to be. It lived on the ACP connection in
+   * the server's memory, so restarting the server lost the question while the
+   * agent went on waiting for an answer to it — survivable when the restart
+   * killed the agent too, and a deadlock now that it doesn't. The host still
+   * holds the promise that answers it; this is the copy the UI reads.
+   */
+  permission: PermissionRequest | null;
 }
 
 export interface PermissionRequest {

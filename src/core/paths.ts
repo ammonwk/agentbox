@@ -57,3 +57,23 @@ export function sessionDirFor(id: string): string {
 export function logPathFor(id: string): string {
   return join(logDir(), `${id}.jsonl`);
 }
+
+/**
+ * Where a session host's stdout and stderr go.
+ *
+ * Separate from the transcript: this is the host process's own output — a
+ * stack trace from a failed launch, omp's stderr — and it is the only place
+ * that survives to explain a host that died before it could write an event.
+ */
+export function hostLogPathFor(id: string): string {
+  return join(logDir(), `host-${id}.log`);
+}
+
+/**
+ * The `agentbox` entry point, resolved from this file rather than from the
+ * cwd or PATH. The server spawns it to start hosts, and it has to be the
+ * binary of the build that is running, not whichever one a shell would find.
+ */
+export function agentboxBin(): string {
+  return join(packageRoot, "bin", "agentbox");
+}

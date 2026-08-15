@@ -313,6 +313,9 @@ export class AcpRunner {
   private pendingPerm: PendingPermission | null = null;
   private autoApprove: () => boolean;
   private closed = false;
+  /** `onExit` is a terminal event and consumers act on it; two would take a
+   *  relaunched session down as if it had just died. */
+  private exitReported = false;
   private tools = new ToolCallTracker();
 
   constructor(id: string, events: AcpEvents, autoApprove: () => boolean) {
@@ -327,6 +330,13 @@ export class AcpRunner {
 
   get alive(): boolean {
     return !!this.proc && !this.closed;
+  }
+
+  /** The omp conversation this runner is attached to, once it has opened one.
+   *  The host reports it so a reconnecting server can tell a launched agent
+   *  apart from one still negotiating. */
+  get ompSession(): string | null {
+    return this.ompSessionId;
   }
 
   /** Launch `omp acp` and open (or resume) an ACP session. Returns its id. */
@@ -373,10 +383,14 @@ export class AcpRunner {
       .catch((err: unknown) => onErr(myId, `stderr closed: ${messageOf(err)}`));
 
     proc.exited.then((code) => {
-      if (!this.closed) {
-        this.closed = true;
-        this.events.onExit(this.id, code);
-      }
+      // Reported even when the exit was our own doing. This used to be guarded
+      // by `closed`, which `kill` sets before killing — so a deliberate stop
+      // was the one exit nobody was ever told about. That was survivable while
+      // the server owned the runner and simply dropped it from a map; it is
+      // not now, because a session's host process waits on exactly this to
+      // know its work is over, and without it the host outlives its agent.
+      this.closed = true;
+      this.reportExit(code);
     });
 
     const output = new WritableStream<Uint8Array>({
@@ -449,7 +463,7 @@ export class AcpRunner {
         this.closed = true;
         rejectSid(new Error(messageOf(err)));
         this.events.onError(this.id, messageOf(err));
-        this.events.onExit(this.id, -1);
+        this.reportExit(-1);
       }
     });
 
@@ -586,6 +600,13 @@ export class AcpRunner {
 
   get permission(): PermissionInfo | null {
     return this.pendingPerm?.info ?? null;
+  }
+
+  /** An exit is announced once, whichever path notices it first. */
+  private reportExit(code: number) {
+    if (this.exitReported) return;
+    this.exitReported = true;
+    this.events.onExit(this.id, code);
   }
 
   /** Stop the omp process. The conversation survives via its omp session id. */

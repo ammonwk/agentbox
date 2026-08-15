@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { DEFAULT_MODEL, dbPath, ensureDirs } from "./paths";
 import { isGitRepo, resolveDefaultBranch, repoFullNameOf, run } from "./git";
-import type { Session, SessionStatus, Repo, AgentSettings } from "./types";
+import type { Session, SessionStatus, Repo, AgentSettings, PermissionRequest } from "./types";
 
 let db: Database | null = null;
 let openedAt = "";
@@ -20,6 +20,13 @@ export function getDb(): Database {
   openedAt = path;
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
+  // There is more than one writer now: every live session's host process
+  // writes its own transcript and status, alongside the server. WAL lets them
+  // read concurrently but still serialises writes, and without a busy timeout
+  // the loser of a race gets an instant SQLITE_BUSY rather than waiting the
+  // millisecond the other write takes — which would surface as a dropped
+  // transcript event under nothing more exotic than two agents talking at once.
+  db.exec("PRAGMA busy_timeout = 5000");
   migrate(db);
   return db;
 }
@@ -41,6 +48,8 @@ const SESSIONS_DDL = `
     tool_calls     INTEGER NOT NULL DEFAULT 0,
     exit_code      INTEGER,
     pid            INTEGER,
+    host_pid       INTEGER,
+    permission     TEXT,
     pr_number      INTEGER,
     repo_full_name TEXT,
     cost_usd       REAL,
@@ -101,6 +110,8 @@ function migrateSessions(d: Database) {
     if (!cols.includes("tool_calls")) d.exec("ALTER TABLE sessions ADD COLUMN tool_calls INTEGER NOT NULL DEFAULT 0");
     if (!cols.includes("flag_reason")) d.exec("ALTER TABLE sessions ADD COLUMN flag_reason TEXT");
     if (!cols.includes("started_at")) d.exec("ALTER TABLE sessions ADD COLUMN started_at INTEGER");
+    if (!cols.includes("host_pid")) d.exec("ALTER TABLE sessions ADD COLUMN host_pid INTEGER");
+    if (!cols.includes("permission")) d.exec("ALTER TABLE sessions ADD COLUMN permission TEXT");
     return;
   }
 
@@ -156,7 +167,8 @@ type SessionRow = {
   id: string; title: string; prompt: string; status: string; repo: string;
   branch: string; worktree: string | null; model: string;
   follow_ups: number; last_message: string | null; tool_calls: number;
-  exit_code: number | null; pid: number | null; pr_number: number | null;
+  exit_code: number | null; pid: number | null; host_pid: number | null;
+  permission: string | null; pr_number: number | null;
   repo_full_name: string | null; cost_usd: number | null; tokens: number | null;
   blocked: number; flag_reason: string | null; omp_session_id: string | null;
   created_at: number; updated_at: number; started_at: number | null;
@@ -166,8 +178,13 @@ type SessionRow = {
 /**
  * Persisted Session fields → their column. This is the one place that knows the
  * mapping: it drives the insert, the targeted update, and (by omission) which
- * fields are in-memory only. `permission` is deliberately absent — it lives on
- * the running ACP connection and must never be written.
+ * fields are in-memory only.
+ *
+ * `permission` is here now. It used to be excluded on the grounds that it
+ * belonged to the live ACP connection, which stopped being true when agents
+ * moved into host processes: the server can be restarted out from under a
+ * blocked agent, and the prompt it is blocked on has to still be answerable
+ * afterwards.
  */
 const SESSION_COLUMNS = {
   title: "title",
@@ -182,6 +199,8 @@ const SESSION_COLUMNS = {
   toolCalls: "tool_calls",
   exitCode: "exit_code",
   pid: "pid",
+  hostPid: "host_pid",
+  permission: "permission",
   prNumber: "pr_number",
   repoFullName: "repo_full_name",
   costUsd: "cost_usd",
@@ -201,8 +220,24 @@ type PersistedKey = keyof typeof SESSION_COLUMNS;
 function toSql(key: PersistedKey, value: unknown): string | number | null {
   if (key === "blocked") return value ? 1 : 0;
   if (value === undefined || value === null) return null;
+  // The only structured column. Stored as JSON rather than spread across four
+  // more columns because nothing queries into it — it is written whole by the
+  // host and read whole by the UI.
+  if (key === "permission") return JSON.stringify(value);
   if (typeof value === "boolean") return value ? 1 : 0;
   return value as string | number;
+}
+
+function permissionFromSql(raw: string | null): PermissionRequest | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as PermissionRequest;
+  } catch {
+    // A half-written or older-shaped value must not take the session's whole
+    // row down; the worst case is a prompt the user answers from the agent's
+    // own transcript instead.
+    return null;
+  }
 }
 
 function rowToSession(r: SessionRow): Session {
@@ -210,7 +245,8 @@ function rowToSession(r: SessionRow): Session {
     id: r.id, title: r.title, prompt: r.prompt, status: r.status as SessionStatus,
     repo: r.repo, branch: r.branch, worktree: r.worktree, model: r.model,
     followUps: r.follow_ups, lastMessage: r.last_message, toolCalls: r.tool_calls,
-    exitCode: r.exit_code, pid: r.pid, prNumber: r.pr_number,
+    exitCode: r.exit_code, pid: r.pid, hostPid: r.host_pid,
+    permission: permissionFromSql(r.permission), prNumber: r.pr_number,
     repoFullName: r.repo_full_name, costUsd: r.cost_usd, tokens: r.tokens,
     blocked: !!r.blocked, flagReason: r.flag_reason, ompSessionId: r.omp_session_id,
     createdAt: r.created_at, updatedAt: r.updated_at, startedAt: r.started_at,

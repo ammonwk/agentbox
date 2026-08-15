@@ -3,7 +3,7 @@ import { listSessions, listRepos, getSettings } from "./db";
 import { listPrs } from "./prs";
 import { listSkills } from "./skills";
 import { attentionOf } from "./conductor";
-import { ompAvailable, pendingPermissionOf, sessionEvents } from "./sessions";
+import { ompAvailable, sessionEvents } from "./sessions";
 import type { AppState, ColdState, HotState, PrInfo, SkillInfo } from "./types";
 
 /**
@@ -48,8 +48,9 @@ let coldFingerprint = "";
 export function getHotState(): HotState {
   return {
     sessions: listSessions(true).map((s) => {
-      const session = { ...s, permission: pendingPermissionOf(s.id) };
-      return { ...session, attention: attentionOf(session) };
+      // `permission` is a column now, written by the host that is holding the
+      // request open, so the row already carries it.
+      return { ...s, attention: attentionOf(s) };
     }),
     serverTime: Date.now(),
   };

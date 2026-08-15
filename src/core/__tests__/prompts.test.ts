@@ -42,6 +42,8 @@ function makeSession(over: Partial<Session> = {}): Session {
     lastMessage: null,
     toolCalls: 0,
     exitCode: null,
+    hostPid: null,
+    permission: null,
     pid: null,
     prNumber: null,
     repoFullName: null,

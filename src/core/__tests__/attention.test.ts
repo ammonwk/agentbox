@@ -27,6 +27,8 @@ function session(patch: Partial<Session> = {}): Session {
     lastMessage: null,
     toolCalls: 0,
     exitCode: null,
+    hostPid: null,
+    permission: null,
     pid: 1,
     prNumber: null,
     repoFullName: "o/r",

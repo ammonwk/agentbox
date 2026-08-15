@@ -31,7 +31,8 @@ function session(worktree: string | null): Session {
   return {
     id: "s1", title: "t", prompt: "p", status: "waiting", repo,
     branch: "work", worktree, model: "m", followUps: 0, lastMessage: null,
-    toolCalls: 0, exitCode: null, pid: null, prNumber: null, repoFullName: null,
+    toolCalls: 0, exitCode: null, pid: null, hostPid: null, permission: null,
+    prNumber: null, repoFullName: null,
     costUsd: null, tokens: null, blocked: false, flagReason: null,
     ompSessionId: null, createdAt: 0, updatedAt: 0, startedAt: null, closedAt: null,
   };

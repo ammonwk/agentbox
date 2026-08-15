@@ -46,6 +46,8 @@ function session(over: Partial<SessionRow> & { id: string; attention: Attention 
     lastMessage: null,
     toolCalls: 0,
     exitCode: null,
+    hostPid: null,
+    permission: null,
     pid: null,
     prNumber: null,
     repoFullName: null,

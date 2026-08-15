@@ -103,15 +103,16 @@ bun bin/agentbox install     # register with opencode (backs up your config)
 bun bin/agentbox uninstall
 ```
 
-The server is a thin client over the running agentbox HTTP API, so the HTTP
-server stays the single owner of every omp process.
+The MCP server is a thin client over the running agentbox HTTP API, so there is
+one description of a session however you reach it.
 
 ## Layout
 
 ```
-bin/agentbox        CLI: serve / doctor / mcp / install / uninstall
+bin/agentbox        CLI: serve / doctor / mcp / host / install / uninstall
 src/core/types.ts   the domain model — the web app imports it directly
-src/core/           acp (ACP engine), sessions (lifecycle), supervisor,
+src/core/           acp (ACP engine), host (one agent's process), hostproto
+                    (the control socket), sessions (lifecycle), supervisor,
                     prompts, db, state, conductor, diff, git, prs, skills
 src/server/         Bun.serve HTTP + WebSocket
 src/mcp/            MCP server
@@ -127,3 +128,11 @@ prompts/            prompt text, edited as content rather than code
   `~/.local/share/agentbox/repos`.
 - One omp process per session, alive between turns. If it dies the conversation
   survives — the session shows as lost and resumes from where it was.
+- **Agents do not depend on the server.** Each live session runs under its own
+  `agentbox host` process, which owns the omp child and writes the transcript
+  and the session row directly. The server talks to hosts over a unix socket in
+  each session's directory, and reconnects to whatever is still running when it
+  starts. So you can restart, upgrade or kill the server mid-turn and the agents
+  carry on — a turn started under one server routinely finishes under the next,
+  or under none at all. Sessions started before an upgrade keep running the code
+  they were spawned with; new ones pick up the new code immediately.

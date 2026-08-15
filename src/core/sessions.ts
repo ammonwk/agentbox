@@ -1,16 +1,20 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import {
+  appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync,
+  statSync, writeFileSync,
+} from "node:fs";
 import {
   insertSession, updateSession, getSession, listSessions,
   getRepo, getSettings,
 } from "./db";
-import { logPathFor } from "./paths";
-import { createWorktree, run, findOpenPr, repoFullNameOf, currentBranch } from "./git";
-import { AcpRunner, messageOf, type PermissionInfo } from "./acp";
-import { writeSessionPrompt, writeWatchdog, frameSupervisorMessage } from "./prompts";
-import { forgetSession, onToolCall, supervisorEvents } from "./supervisor";
-import type { Repo, Session, SupervisorVerdict, ToolCall, TranscriptEvent } from "./types";
+import { join } from "node:path";
+import { agentboxBin, hostLogPathFor, logPathFor, sessionDirFor } from "./paths";
+import { createWorktree, run } from "./git";
+import { messageOf } from "./acp";
+import { HostClient } from "./hostproto";
+import { forgetSession } from "./supervisor";
+import type { Repo, Session, TranscriptEvent } from "./types";
 
 /** "hot" → a session changed · "cold" → repos/prs/skills/settings changed ·
  *  "events" → (sessionId, TranscriptEvent[]) for a session's watchers. */
@@ -39,8 +43,6 @@ const FLUSH_MS = 200;
 const RING_SIZE = 2000;
 /** Assistant tail kept for the list row. */
 const TAIL_CHARS = 4000;
-/** Floor on how often one session may shell out to `gh` looking for its PR. */
-const PR_CHECK_MS = 30_000;
 
 const RESUME_MESSAGE =
   "Continue from where you left off. If the work was already finished, say so instead of redoing it.";
@@ -62,12 +64,26 @@ interface LogLine {
  * A session's append-only event log: JSONL on disk so it survives a restart,
  * with the tail mirrored in memory so the usual "what happened since seq N"
  * question costs nothing.
+ *
+ * The in-memory tail is a cache of a file that ANOTHER PROCESS may be writing.
+ * A live session's log is written by its host process, and read here by the
+ * server; a ring populated once at load would answer every later question with
+ * a snapshot of the moment the server happened to start, which reaches the UI
+ * as an agent that fell silent. So reads re-read — but only the bytes appended
+ * since last time, tracked by `offset`, because a session with a few hundred
+ * tool calls has a log too big to re-parse on every poll.
+ *
+ * Exactly one process may append to a given log. For a live session that is
+ * its host: `seq` is a per-instance counter, so two appenders would hand the
+ * same number to different events and clients would silently skip one.
  */
 export class EventLog {
   private readonly path: string;
   private seq = 0;
   private ring: TranscriptEvent[] = [];
   private loaded = false;
+  /** Bytes of `path` already folded into `ring`. Never past a partial line. */
+  private offset = 0;
 
   constructor(path: string) {
     this.path = path;
@@ -79,7 +95,7 @@ export class EventLog {
     if (this.loaded) return;
     this.loaded = true;
     if (!existsSync(this.path)) return;
-    const { events, skipped } = readLog(this.path);
+    const { events, skipped } = this.readNew();
     for (const ev of events) {
       if (ev.seq > this.seq) this.seq = ev.seq;
       this.ring.push(ev);
@@ -103,7 +119,54 @@ export class EventLog {
     }
   }
 
+  /**
+   * Fold any bytes appended since the last read into the ring.
+   *
+   * Stops at the last complete line: a writer mid-`append` leaves a partial
+   * JSON object at the end of the file, and consuming it would both lose the
+   * event and desynchronise `offset` from the line boundaries forever.
+   */
+  private readNew(): ReadResult {
+    let size: number;
+    try {
+      size = statSync(this.path).size;
+    } catch {
+      return { events: [], skipped: 0 };
+    }
+    // The file shrank, so it is not the file we were reading — a session
+    // resumed onto a fresh log, or the home was swapped under a test. Start over.
+    if (size < this.offset) {
+      this.offset = 0;
+      this.ring = [];
+      this.seq = 0;
+    }
+    if (size === this.offset) return { events: [], skipped: 0 };
+
+    const text = readFrom(this.path, this.offset, size);
+    const lastNewline = text.lastIndexOf("\n");
+    // Nothing but a partial line so far; leave `offset` where it is and try
+    // again on the next read, once the writer has finished it.
+    if (lastNewline === -1) return { events: [], skipped: 0 };
+    const complete = text.slice(0, lastNewline + 1);
+    this.offset += Buffer.byteLength(complete, "utf8");
+    return parseLines(complete);
+  }
+
+  /** Pick up whatever another process has appended since we last looked. */
+  private refresh() {
+    this.load();
+    const { events } = this.readNew();
+    for (const ev of events) {
+      if (ev.seq > this.seq) this.seq = ev.seq;
+      this.ring.push(ev);
+    }
+    if (this.ring.length > RING_SIZE) this.ring = this.ring.slice(-RING_SIZE);
+  }
+
   append(body: EventBody, raw?: unknown): TranscriptEvent {
+    // Not `refresh`: this instance is the log's only writer, so there is
+    // nothing of anyone else's to pick up, and a stat on every assistant delta
+    // is a syscall per character of streamed output.
     this.load();
     const event = { seq: ++this.seq, ts: Date.now(), ...body } as TranscriptEvent;
     const line: LogLine = raw === undefined ? { event } : { event, raw };
@@ -114,6 +177,7 @@ export class EventLog {
     } catch (err) {
       console.error(`[agentbox] event log write failed (${this.path}): ${messageOf(err)}`);
     }
+    this.offset += Buffer.byteLength(JSON.stringify(line) + "\n", "utf8");
     this.ring.push(event);
     if (this.ring.length > RING_SIZE) this.ring.shift();
     return event;
@@ -122,7 +186,7 @@ export class EventLog {
   /** Everything with `seq > since`. Reads the file only when the request
    *  reaches back past the ring. */
   since(since: number): TranscriptEvent[] {
-    this.load();
+    this.refresh();
     const first = this.ring[0];
     if (!first || first.seq <= since + 1) {
       return since <= 0 ? [...this.ring] : this.ring.filter((e) => e.seq > since);
@@ -131,7 +195,7 @@ export class EventLog {
   }
 
   get lastSeq(): number {
-    this.load();
+    this.refresh();
     return this.seq;
   }
 }
@@ -143,6 +207,25 @@ interface ReadResult {
   skipped: number;
 }
 
+/** Bytes `[from, to)` of a file, as text. Used to read only what a host has
+ *  appended since the last look, instead of the whole transcript. */
+function readFrom(path: string, from: number, to: number): string {
+  const length = to - from;
+  if (length <= 0) return "";
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const buf = Buffer.allocUnsafe(length);
+    const read = readSync(fd, buf, 0, length, from);
+    return buf.subarray(0, read).toString("utf8");
+  } catch (err) {
+    console.error(`[agentbox] event log tail read failed (${path}): ${messageOf(err)}`);
+    return "";
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
 function readLog(path: string): ReadResult {
   let text: string;
   try {
@@ -151,6 +234,10 @@ function readLog(path: string): ReadResult {
     console.error(`[agentbox] event log read failed (${path}): ${messageOf(err)}`);
     return { events: [], skipped: 0 };
   }
+  return parseLines(text);
+}
+
+function parseLines(text: string): ReadResult {
   const events: TranscriptEvent[] = [];
   let skipped = 0;
   for (const line of text.split("\n")) {
@@ -255,8 +342,37 @@ function streamOf(id: string): SessionStream {
   return s;
 }
 
-function appendEvent(id: string, body: EventBody, raw?: unknown): TranscriptEvent {
+/**
+ * Record an event against a session.
+ *
+ * Exported for the host process, which is the only writer of a live session's
+ * log — see the note on `EventLog`. The server calls this only for sessions
+ * that have no host: a spawn that failed before one existed, and the like.
+ */
+export function appendEvent(id: string, body: EventBody, raw?: unknown): TranscriptEvent {
   return streamOf(id).emit(body, raw);
+}
+
+/** An assistant delta, coalesced by the stream. Host-side. */
+export function streamText(id: string, text: string): void {
+  streamOf(id).text(text);
+}
+
+/** The assistant's message is complete. Host-side. */
+export function endStreamTurn(id: string): void {
+  streamOf(id).endTurn();
+}
+
+/** Push anything held in the batch window to disk and to listeners. Host-side,
+ *  on the way out: whatever the agent said last belongs in the transcript even
+ *  though the flush timer never fired. */
+export function flushStream(id: string): void {
+  streamOf(id).flush();
+}
+
+/** The newest sequence number this session's log has reached. */
+export function lastSeqOf(id: string): number {
+  return streamOf(id).log.lastSeq;
 }
 
 /** Everything this session recorded after `since`. */
@@ -268,164 +384,186 @@ export function eventsOf(id: string, since = 0): TranscriptEvent[] {
 
 // ------------------------------------------------------------- run state
 
-const running = new Map<string, AcpRunner>();
-/** Sessions between "row inserted" and "runner registered". `reconcile` must
+/**
+ * Control connections to the host process of each live session.
+ *
+ * This replaced a `Map<string, AcpRunner>` — the agents themselves, on the
+ * server's heap. That map was why restarting the server killed every running
+ * turn, and why `reconcile` opened by declaring every live session dead. These
+ * are sockets to processes that are still there, so losing them costs a
+ * reconnect and nothing else.
+ */
+const hosts = new Map<string, HostClient>();
+/** Sessions between "row inserted" and "host connected". `reconcile` must
  *  not declare these dead — they are mid-launch, not vanished. */
 const launching = new Set<string>();
-const lastPrCheck = new Map<string, number>();
-/** Last PR-lookup failure reported per session, so a permanently broken `gh`
- *  is said once rather than at every turn boundary. */
-const prLookupError = new Map<string, string>();
-
-/** Live permission detail, if this session is parked on an approval. Only ever
- *  set while a runner is holding the request open: after a restart the session
- *  is `dead` and there is nothing to approve, so this correctly reads null. */
-export function pendingPermissionOf(id: string): PermissionInfo | null {
-  return running.get(id)?.permission ?? null;
-}
+/** Per session, the last seq already forwarded to watching clients. The host
+ *  writes the log, so the server learns what is new by re-reading from here. */
+const forwarded = new Map<string, number>();
 
 export function ompAvailable(): boolean {
   const r = run(["sh", "-lc", "command -v omp || which omp"]);
   return r.code === 0 && r.stdout.trim().length > 0;
 }
 
-// -------------------------------------------------------- runner plumbing
+// ---------------------------------------------------------- host plumbing
 
 /** Statuses that imply a live omp process, so losing one means the session is
- *  `dead`. See the note in `onExit`. */
-const EXPECTS_A_PROCESS = new Set<Session["status"]>(["spawning", "running", "waiting"]);
+ *  `dead`. Exported for the host, which is where a process now goes away. */
+export const EXPECTS_A_PROCESS = new Set<Session["status"]>(["spawning", "running", "waiting"]);
 
-function makeRunner(id: string): AcpRunner {
-  return new AcpRunner(
-    id,
-    {
-      onText: (sid, text) => streamOf(sid).text(text),
+/** How long a freshly spawned host has to open its socket before we call the
+ *  launch failed. Generous: it has a database to open and a prompt to write. */
+const HOST_READY_MS = 15_000;
 
-      onToolStart: (sid, call) => {
-        const s = getSession(sid);
-        if (s) updateSession(sid, { toolCalls: s.toolCalls + 1 });
-        appendEvent(sid, { type: "tool", call });
-      },
+/**
+ * Adopt a host connection: wire its pushes into the server's fan-out.
+ *
+ * A host's `changed` push is the server's cue that the database and the log
+ * have moved on. Everything the UI shows is then read back from those, so
+ * there is exactly one description of a session and no chance of the socket
+ * and the database disagreeing about it.
+ */
+function adopt(id: string, client: HostClient): HostClient {
+  hosts.set(id, client);
+  return client;
+}
 
-      // Same `call.id` as the start event: consumers upsert on it rather than
-      // rendering the call twice.
-      onToolEnd: (sid, call, raw) => {
-        appendEvent(sid, { type: "tool", call }, raw);
-        supervise(sid, call);
-      },
+function onHostChanged(id: string, kind: "hot" | "cold") {
+  pumpEvents(id);
+  broadcast();
+  if (kind === "cold") sessionEvents.emit("cold");
+}
 
-      onAdvisory: (sid, severity, text) => appendEvent(sid, { type: "advisory", severity, text }),
-
-      onTurnEnd: (sid, stopReason, tokens) => {
-        streamOf(sid).endTurn();
-        appendEvent(sid, { type: "turn", stopReason });
-        const s = getSession(sid);
-        // omp reports tokens per turn, so the session total is a running sum.
-        if (s && tokens > 0) updateSession(sid, { tokens: (s.tokens ?? 0) + tokens });
-        // A supervisor flag raised during the turn outranks "the turn ended".
-        if (s && s.status !== "flagged") updateSession(sid, { status: "waiting", blocked: false });
-        maybeLinkPr(sid);
-        broadcast();
-      },
-
-      // Already cumulative for the session, and it keeps climbing across a
-      // resume into a new process — so it is set, not added.
-      onUsage: (sid, costUsd) => {
-        updateSession(sid, { costUsd });
-        broadcast();
-      },
-
-      onPermission: (sid, info) => {
-        appendEvent(sid, { type: "permission", title: info.title, approved: null });
-        updateSession(sid, { status: "waiting", blocked: true });
-        broadcast();
-      },
-
-      onError: (sid, message) => appendEvent(sid, { type: "error", message }),
-
-      onExit: (sid, code) => {
-        running.delete(sid);
-        const s = getSession(sid);
-        if (!s) return;
-        updateSession(sid, {
-          pid: null,
-          blocked: false,
-          exitCode: code,
-          // The process is gone but the omp conversation is on disk, so this is
-          // resumable rather than terminal.
-          //
-          // `waiting` belongs here as much as `running` does: an idle session
-          // still has a live process behind it, and when that process goes away
-          // the session looked untouched — still "waiting", so still no Resume
-          // button, since RESUMABLE does not include it. The only way out was to
-          // send a message and rely on `sendMessage`'s relaunch path.
-          //
-          // `flagged` and `done` are left alone deliberately. Both are verdicts
-          // about the work rather than the process, and both outrank "the
-          // process exited": flagged carries the reason `resumeSession` replays,
-          // and done means the PR is already open.
-          ...(EXPECTS_A_PROCESS.has(s.status) ? { status: "dead" as const } : {}),
-        });
-        broadcast();
-      },
-    },
-    () => getSettings().autoApprove
-  );
+function onHostGone(id: string) {
+  if (hosts.get(id)?.alive === false) hosts.delete(id);
+  // Whatever the host wrote on its way out is the truth; the socket closing
+  // is just how we find out to go and read it.
+  pumpEvents(id);
+  broadcast();
 }
 
 /**
- * Launch omp for a session and deliver `message` as its first turn.
+ * Forward anything the host has appended to watching websocket clients.
+ *
+ * The events themselves never cross the control socket. The host appends to
+ * the session's JSONL, says "changed", and this re-reads from the cursor —
+ * which means a server that was not running when the events were written
+ * catches up on them the moment it connects, by the same path.
+ */
+function pumpEvents(id: string) {
+  const since = forwarded.get(id) ?? 0;
+  const events = eventsOf(id, since);
+  if (events.length === 0) return;
+  forwarded.set(id, events[events.length - 1]!.seq);
+  sessionEvents.emit("events", id, events);
+}
+
+/** Start where the log already is, so adopting a long-running host does not
+ *  replay its entire transcript at whoever is watching. */
+function markForwarded(id: string) {
+  forwarded.set(id, lastSeqOf(id));
+}
+
+/**
+ * Connect to a session's existing host, if it has one.
+ *
+ * The socket is the authority on whether a session is live. The stored
+ * `hostPid` is a hint used to avoid a pointless connect attempt, never a
+ * verdict: pids are reused, and a stale one naming some unrelated process
+ * would otherwise read as a healthy agent.
+ */
+async function connectHost(id: string): Promise<HostClient | null> {
+  const existing = hosts.get(id);
+  if (existing?.alive) return existing;
+  try {
+    const client = await HostClient.connect(
+      id,
+      (kind) => onHostChanged(id, kind),
+      () => onHostGone(id)
+    );
+    markForwarded(id);
+    return adopt(id, client);
+  } catch {
+    hosts.delete(id);
+    return null;
+  }
+}
+
+/**
+ * Spawn a host for a session and deliver `message` as its first turn.
+ *
+ * The host is deliberately severed from this process: `setsid` puts it in its
+ * own session and process group, and its output goes to a file rather than a
+ * pipe. Both matter. A child sharing our process group takes the terminal's
+ * SIGHUP with us, and a child writing into an inherited pipe dies of SIGPIPE
+ * the moment the reader goes away — which is precisely the "restarting
+ * agentbox kills every agent" behaviour this is meant to end.
  *
  * Every failure path lands on the session record: a session that never started
  * is `failed`, one whose conversation still exists on omp's side is `dead` and
  * can be resumed.
  */
-async function startRunner(id: string, message: string): Promise<void> {
+async function startHost(id: string, message: string): Promise<void> {
   const s = getSession(id);
   if (!s) throw new NotFound(`no session ${id}`);
   if (!s.worktree) throw new Conflict("session has no worktree");
 
   launching.add(id);
-  const acp = makeRunner(id);
-  running.set(id, acp);
-  updateSession(id, { status: "spawning", blocked: false });
+  updateSession(id, { status: "spawning", blocked: false, permission: null });
   broadcast();
 
+  let logFd: number | null = null;
   try {
-    const repo = getRepo(s.repo);
-    if (!repo) throw new Conflict(`repo is no longer registered: ${s.repo}`);
-    const settings = getSettings();
-    const promptFile = writeSessionPrompt(s, repo, settings);
-    if (settings.advisor.enabled) writeWatchdog(s, settings);
+    mkdirSync(sessionDirFor(id), { recursive: true });
+    // On disk before the host exists, so a server that dies in the gap between
+    // spawning it and it starting up still delivers the message.
+    const messageFile = join(sessionDirFor(id), "first-message.txt");
+    writeFileSync(messageFile, message);
 
-    const ompSessionId = await acp.launch({
-      worktree: s.worktree,
-      model: s.model,
-      promptFile,
-      advisor: settings.advisor.enabled,
-      resumeSessionId: s.ompSessionId,
-    });
-    updateSession(id, {
-      ompSessionId,
-      pid: acp.pid,
-      status: "running",
-      startedAt: s.startedAt ?? Date.now(),
-    });
-    acp.send(message);
+    logFd = openSync(hostLogPathFor(id), "a");
+    const child = Bun.spawn(
+      ["setsid", process.execPath, agentboxBin(), "host", id, "--first-message", messageFile],
+      {
+        cwd: s.worktree,
+        stdin: "ignore",
+        stdout: logFd,
+        stderr: logFd,
+        env: { ...process.env },
+      }
+    );
+    // We do not wait on it and we do not own it. `unref` is what lets this
+    // process exit while the host keeps running.
+    child.unref();
+
+    const client = await waitForHost(id);
+    if (!client) throw new Error(`host did not come up within ${HOST_READY_MS}ms`);
   } catch (err) {
-    running.delete(id);
-    acp.kill();
     const detail = messageOf(err);
-    appendEvent(id, { type: "error", message: `failed to start omp: ${detail}` });
+    appendEvent(id, { type: "error", message: `failed to start the agent host: ${detail}` });
     updateSession(id, {
       status: s.ompSessionId ? "dead" : "failed",
       exitCode: 1,
       pid: null,
+      hostPid: null,
       lastMessage: `Failed to start omp: ${detail.slice(0, 300)}`,
     });
   } finally {
+    if (logFd !== null) closeSync(logFd);
     launching.delete(id);
     broadcast();
+  }
+}
+
+/** Poll for the host's socket. It appears when the host is ready to be told
+ *  things, which is a different and later moment than "the process exists". */
+async function waitForHost(id: string): Promise<HostClient | null> {
+  const deadline = Date.now() + HOST_READY_MS;
+  for (;;) {
+    const client = await connectHost(id);
+    if (client) return client;
+    if (Date.now() >= deadline) return null;
+    await Bun.sleep(50);
   }
 }
 
@@ -458,6 +596,8 @@ export function spawnSession(repo: Repo, prompt: string, opts: SpawnOptions = {}
     lastMessage: null,
     toolCalls: 0,
     exitCode: null,
+    hostPid: null,
+    permission: null,
     pid: null,
     prNumber: null,
     repoFullName: null,
@@ -473,13 +613,15 @@ export function spawnSession(repo: Repo, prompt: string, opts: SpawnOptions = {}
   };
   insertSession(session);
 
-  // No `launching` bookkeeping here: everything up to `startRunner`'s first
-  // await is synchronous, and `startRunner` claims the flag itself.
+  // No `launching` bookkeeping here: everything up to `startHost`'s first
+  // await is synchronous, and `startHost` claims the flag itself.
   try {
     const { path, fullName } = createWorktree(repo, id, session.branch, adopt ?? undefined);
     updateSession(id, { worktree: path, repoFullName: fullName });
-    appendEvent(id, { type: "user", text: task, from: "human" });
-    void startRunner(id, task).catch((err: unknown) => failSetup(id, err));
+    // The opening prompt is not recorded here. The host owns this session's
+    // log the moment it starts, and it writes the prompt when it delivers it —
+    // two processes appending would hand out the same sequence number twice.
+    void startHost(id, task).catch((err: unknown) => failSetup(id, err));
   } catch (err) {
     failSetup(id, err);
   }
@@ -517,42 +659,61 @@ function failSetup(id: string, err: unknown) {
 /**
  * Steer a session. Delivered now if it is idle, queued until the turn ends if
  * it is mid-turn; either way the conversation is restarted first if the
- * process died. `from` separates human steering from supervisor nudges.
+ * process died.
+ *
+ * This used to take a `from` discriminating human steering from supervisor
+ * nudges. The supervisor runs inside the host now and nudges its own agent
+ * directly, so everything arriving here is a person.
  */
-export async function sendMessage(
-  id: string,
-  text: string,
-  from: "human" | "supervisor" = "human"
-): Promise<Session> {
+export async function sendMessage(id: string, text: string): Promise<Session> {
   const s = getSession(id);
   if (!s) throw new NotFound(`no session ${id}`);
   const body = text.trim();
   if (!body) throw new BadRequest("message is empty");
   if (launching.has(id)) throw new Conflict("session is still starting — try again in a moment");
 
-  appendEvent(id, { type: "user", text: body, from });
-  if (from === "human") updateSession(id, { followUps: s.followUps + 1 });
-
-  const acp = running.get(id);
-  if (acp?.alive) {
+  // The message is NOT recorded here. Whoever ends up delivering it records
+  // it: a live host as it sends, or the new host started below. The server
+  // appending its own line to a log the host is writing would collide on the
+  // sequence number and lose one of the two events.
+  const host = await connectHost(id);
+  if (host) {
     try {
-      acp.send(body);
-      updateSession(id, { status: "running", blocked: false });
+      await host.send(body);
     } catch (err) {
-      // A runner that is present but not connected: relaunch onto the same omp
-      // conversation rather than losing the message.
+      // A host that is there but will not take the message: relaunch onto the
+      // same omp conversation rather than losing it.
       appendEvent(id, { type: "error", message: `relaunching after send failed: ${messageOf(err)}` });
-      acp.kill();
-      running.delete(id);
-      await startRunner(id, body);
+      await stopHost(id);
+      await startHost(id, body);
     }
   } else {
     if (!s.worktree || !existsSync(s.worktree)) throw new Conflict("this session's worktree is gone");
-    running.delete(id);
-    await startRunner(id, body);
+    hosts.delete(id);
+    await startHost(id, body);
   }
   broadcast();
   return getSession(id)!;
+}
+
+/**
+ * Ask a session's host to stop, and stop waiting on it either way.
+ *
+ * The host answers by killing omp, which lands on its `onExit` and takes the
+ * host down with it. A host that does not answer is already broken, and the
+ * server must not block on it — dropping the client is enough for this process
+ * to move on, and `reconcile` will find any real orphan later.
+ */
+async function stopHost(id: string): Promise<void> {
+  const host = hosts.get(id);
+  hosts.delete(id);
+  if (!host?.alive) return;
+  try {
+    await host.kill();
+  } catch {
+    // It was already gone, or is wedged. Either way we are done with it.
+  }
+  host.detach();
 }
 
 /** Statuses Resume is offered for. `failed` is here deliberately: see the note
@@ -585,11 +746,7 @@ export async function resumeSession(id: string): Promise<Session> {
   if (!s) throw new NotFound(`no session ${id}`);
   if (!canResume(s)) throw new Conflict(`a ${s.status} session cannot be resumed`);
 
-  const stale = running.get(id);
-  if (stale) {
-    stale.kill();
-    running.delete(id);
-  }
+  await stopHost(id);
   if (!s.worktree || !existsSync(s.worktree)) restoreWorktree(s);
   // Resuming a closed session brings it back onto the board. Leaving it hidden
   // would start a run nothing lists.
@@ -602,10 +759,10 @@ export async function resumeSession(id: string): Promise<Session> {
   if (s.ompSessionId) {
     text = s.flagReason ? `${RESUME_MESSAGE}\n\nYou were halted because: ${s.flagReason}` : RESUME_MESSAGE;
   }
-  appendEvent(id, { type: "user", text, from: "human" });
   // `flagReason` is cleared only after the launch, because the system prompt
-  // written during it tells the agent why it was halted.
-  await startRunner(id, text);
+  // written during it tells the agent why it was halted. The resume
+  // instruction itself is recorded by the host that delivers it.
+  await startHost(id, text);
   updateSession(id, { flagReason: null });
   broadcast();
   return getSession(id)!;
@@ -615,25 +772,35 @@ export async function resumeSession(id: string): Promise<Session> {
 export async function interruptSession(id: string): Promise<Session> {
   const s = getSession(id);
   if (!s) throw new NotFound(`no session ${id}`);
-  const acp = running.get(id);
-  if (acp?.alive) {
-    acp.interrupt();
+  const host = await connectHost(id);
+  if (host) {
+    await host.interrupt();
   } else if (s.status === "running" || s.status === "spawning") {
     // Nothing to interrupt: the process is already gone.
-    updateSession(id, { status: "dead", pid: null, blocked: false });
+    updateSession(id, { status: "dead", pid: null, hostPid: null, blocked: false, permission: null });
   }
   broadcast();
   return getSession(id)!;
 }
 
-/** Approve or deny the permission the agent is parked on. */
+/**
+ * Approve or deny the permission the agent is parked on.
+ *
+ * The prompt is read from the session row rather than from a connection,
+ * because the server may never have seen the request: the host can have raised
+ * it, persisted it and gone on waiting while this process was being restarted.
+ * The host still holds the promise, so answering it is a message away.
+ */
 export async function replyPermission(id: string, approved: boolean): Promise<Session> {
-  const acp = running.get(id);
-  const info = acp?.permission;
-  if (!acp || !info) throw new Conflict("this session is not waiting on a permission");
-  acp.replyPermission(info.id, approved);
-  appendEvent(id, { type: "permission", title: info.title, approved });
-  updateSession(id, { status: approved ? "running" : "waiting", blocked: false });
+  const s = getSession(id);
+  if (!s) throw new NotFound(`no session ${id}`);
+  const info = s.permission;
+  if (!info) throw new Conflict("this session is not waiting on a permission");
+  const host = await connectHost(id);
+  if (!host) throw new Conflict("this session's agent is no longer running");
+  // The host records the answer and clears the prompt; it is the one that
+  // knows whether the agent actually accepted it.
+  await host.replyPermission(info.id, approved);
   broadcast();
   return getSession(id)!;
 }
@@ -664,19 +831,21 @@ export function closeSession(id: string): Session | null {
   const s = getSession(id);
   if (!s) return null;
 
-  const acp = running.get(id);
-  if (acp) acp.kill();
-  running.delete(id);
+  // Deliberately not awaited: closing is a UI action and must stay instant.
+  // The host tears itself down when omp goes, and `reconcile` catches any that
+  // did not hear us.
+  void stopHost(id);
   streams.get(id)?.dispose();
   streams.delete(id);
-  lastPrCheck.delete(id);
-  prLookupError.delete(id);
+  forwarded.delete(id);
   forgetSession(id);
 
   updateSession(id, {
     closedAt: Date.now(),
     blocked: false,
+    permission: null,
     pid: null,
+    hostPid: null,
     // We just killed the process, so a status that implies one is now a lie.
     // `done`, `flagged` and `failed` are verdicts about the work rather than
     // the process and are left to stand — `closedAt` is what "closed" means.
@@ -687,99 +856,61 @@ export function closeSession(id: string): Session | null {
 }
 
 /**
- * Reconcile the database against reality at startup: anything the record calls
- * live that we are not actually running died with the previous process.
+ * Reconcile the database against reality at startup.
+ *
+ * This function used to open by declaring every live session dead, on the
+ * sound reasoning that the processes had died with the previous server. That
+ * is no longer true and the inversion is the point of the whole change: a
+ * session's agent is its own process, so the first thing to do at boot is go
+ * and knock on its door.
+ *
+ * Only a session whose socket refuses us is genuinely gone. `hostPid` is not
+ * consulted as evidence — a pid outlives the process that owned it and can be
+ * reissued to something unrelated, so a stale one would resurrect a dead
+ * session as convincingly as a live one keeps a real one.
  */
-export function reconcile() {
+export async function reconcile(): Promise<void> {
+  const orphans: Session[] = [];
   for (const s of listSessions(true)) {
-    if (running.has(s.id) || launching.has(s.id)) continue;
-    if (s.status === "running" || s.status === "spawning") {
-      updateSession(s.id, { status: "dead", pid: null, blocked: false });
-    } else if (s.blocked) {
+    if (launching.has(s.id)) continue;
+    if (s.closedAt !== null) continue;
+    const host = await connectHost(s.id);
+    if (host) continue;
+    orphans.push(s);
+  }
+
+  for (const s of orphans) {
+    if (EXPECTS_A_PROCESS.has(s.status)) {
+      updateSession(s.id, {
+        status: "dead",
+        pid: null,
+        hostPid: null,
+        blocked: false,
+        permission: null,
+      });
+    } else if (s.blocked || s.permission) {
       // The permission request died with the process holding it open.
-      updateSession(s.id, { blocked: false });
+      updateSession(s.id, { blocked: false, permission: null });
+    } else if (s.hostPid !== null) {
+      updateSession(s.id, { hostPid: null });
     }
   }
+  broadcast();
 }
 
-// ------------------------------------------------------------- supervisor
-
-function supervise(id: string, call: ToolCall) {
-  const s = getSession(id);
-  if (!s) return;
-  try {
-    onToolCall(s, call);
-  } catch (err) {
-    // Supervision is advisory. It may never take a session down.
-    appendEvent(id, { type: "error", message: `supervisor failed: ${messageOf(err)}` });
-  }
+/** Let go of every host without disturbing it. Called when the server is
+ *  shutting down: the agents are not ours to take with us. */
+export function detachHosts(): void {
+  for (const [, host] of hosts) host.detach();
+  hosts.clear();
 }
 
-supervisorEvents.on("verdict", (sessionId: string, verdict: SupervisorVerdict) => {
-  try {
-    appendEvent(sessionId, { type: "supervisor", verdict });
-    if (verdict.state === "ok") return;
-    void (async () => {
-      if (verdict.state === "adrift") {
-        await sendMessage(sessionId, frameSupervisorMessage(verdict.nudge ?? verdict.reason), "supervisor");
-      } else {
-        await interruptSession(sessionId);
-        flagSession(sessionId, verdict.reason);
-      }
-    })().catch((err: unknown) => {
-      appendEvent(sessionId, { type: "error", message: `supervisor action failed: ${messageOf(err)}` });
-    });
-  } catch (err) {
-    console.error(`[agentbox] verdict handling failed for ${sessionId}: ${messageOf(err)}`);
-  }
-});
+/** Live control connections, for the server's status reporting. */
+export function liveHostCount(): number {
+  return [...hosts.values()].filter((h) => h.alive).length;
+}
 
 // ---------------------------------------------------------------- helpers
-
-/**
- * Look for an open PR on this session's branch, at most once per
- * `PR_CHECK_MS`. `gh` is a subprocess, so this deliberately never runs on a
- * broadcast path — only at a turn boundary, and only for a session that has
- * done enough to have opened something.
- */
-function maybeLinkPr(id: string) {
-  const s = getSession(id);
-  if (!s || s.prNumber !== null || s.toolCalls === 0) return;
-  if (!s.worktree || !existsSync(s.worktree)) return;
-  const last = lastPrCheck.get(id) ?? 0;
-  if (Date.now() - last < PR_CHECK_MS) return;
-  lastPrCheck.set(id, Date.now());
-
-  const fullName = s.repoFullName ?? repoFullNameOf(s.worktree);
-  if (!fullName) return; // no GitHub remote — there is no PR to find
-
-  const pr = findOpenPr(fullName, currentBranch(s.worktree) || s.branch);
-  if (!pr.ok) {
-    // `gh` is missing or unauthenticated. Without this the session just never
-    // reaches `done` and nothing says why. Reported once per distinct error,
-    // because the check runs at every turn boundary and a broken `gh` stays
-    // broken — a transcript of the same line forever is not legibility.
-    if (prLookupError.get(id) !== pr.error) {
-      prLookupError.set(id, pr.error);
-      appendEvent(id, { type: "error", message: `Could not check for a pull request: ${pr.error}` });
-    }
-    return;
-  }
-  prLookupError.delete(id);
-  if (pr.number === null) return; // no open PR on this branch yet
-
-  updateSession(id, {
-    prNumber: pr.number,
-    repoFullName: fullName,
-    // An open PR is the one "it finished the job" signal we get — but not at
-    // the cost of hiding a session that is flagged or failed.
-    ...(s.status === "waiting" ? { status: "done" as const } : {}),
-  });
-  broadcast();
-  // Discovery only — never per turn or per lookup attempt. state.ts rescans
-  // the PR list on this, and that scan shells out to `gh`.
-  sessionEvents.emit("cold");
-}
 
 function tailText(text: string): string | null {
   const clean = text.trim().replace(/\s+/g, " ").slice(-400);

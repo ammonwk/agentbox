@@ -223,6 +223,7 @@ const USAGE = `usage: agentbox [serve|doctor|install|uninstall|mcp|version]
   install     register the MCP server with opencode
   uninstall   remove that registration
   mcp         run the MCP server on stdio (opencode invokes this)
+  host        run one session's agent (the server spawns these; not for hand use)
   version     print the version`;
 
 /**
@@ -264,8 +265,29 @@ export async function main(argv: string[]): Promise<number | null> {
     case "serve": {
       ensureDirs();
       const { startServer } = await import("../server/index");
-      startServer();
+      await startServer();
       return null;
+    }
+
+    /**
+     * Run one session's agent. Spawned by the server, not by a person.
+     *
+     * This is the process that actually owns an omp child. It is a command
+     * rather than something the server forks internally so that the agent is a
+     * plain OS process with no tie to whoever started it: the server can be
+     * restarted, upgraded or killed and this keeps running.
+     */
+    case "host": {
+      const sessionId = argv[1];
+      if (!sessionId) {
+        console.error("agentbox host: a session id is required");
+        return 2;
+      }
+      const flag = argv.indexOf("--first-message");
+      const firstMessage = flag === -1 ? null : (argv[flag + 1] ?? null);
+      ensureDirs();
+      const { runHost } = await import("../core/host");
+      return await runHost(sessionId, firstMessage);
     }
 
     default:

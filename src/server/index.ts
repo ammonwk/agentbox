@@ -1,7 +1,9 @@
 /** The agentbox HTTP + WebSocket server.
  *
- * One process owns every omp session; the web UI and the MCP server are both
- * clients of this API. Two rules shape the whole file:
+ * This process does NOT own the agents. Each live session runs in its own
+ * `agentbox host` process, and the server is a client of those over unix
+ * sockets — it can be restarted, and they carry on. The web UI and the MCP
+ * server are in turn clients of this API. Two rules shape the whole file:
  *
  *   1. `gh` never runs on a broadcast path. State is split into `hot`
  *      (sessions, cheap, pushed on change) and `cold` (repos/prs/skills/
@@ -28,6 +30,7 @@ import {
   eventsOf,
   interruptSession,
   reconcile,
+  detachHosts,
   replyPermission,
   resumeSession,
   sendMessage,
@@ -258,7 +261,7 @@ export const router = new Router(mapCoreError)
 
   .add("POST", "/api/sessions/:id/message", async ({ req, params }) => {
     const body = await readBody(req);
-    return json(await sendMessage(params.id!, requireString(body, "text"), "human"));
+    return json(await sendMessage(params.id!, requireString(body, "text")));
   })
 
   .add("POST", "/api/sessions/:id/interrupt", async ({ params }) =>
@@ -371,12 +374,24 @@ export const router = new Router(mapCoreError)
 
 // ----------------------------------------------------------------- boot
 
-export function startServer(): void {
-  // Processes do not survive a restart; mark the orphans dead once, at boot,
-  // so they show up as resumable instead of pretending to still be running.
-  reconcile();
+export async function startServer(): Promise<void> {
+  // Reattach to the agents that were already running before this process
+  // existed, and mark dead only the ones that really are. Awaited, because
+  // serving a board that says every session died — a second before reconnecting
+  // to them — is worse than starting a moment later.
+  await reconcile();
   // The only place `gh` and the skills filesystem walk are allowed to run.
   startColdRefresh();
+
+  // Agents are not ours to take with us. Without this the sockets close hard
+  // on exit and every host logs a control-channel error on its way to
+  // discovering it does not matter.
+  const letGo = () => {
+    detachHosts();
+    process.exit(0);
+  };
+  process.on("SIGINT", letGo);
+  process.on("SIGTERM", letGo);
 
   sessionEvents.on("hot", scheduleHot);
   sessionEvents.on("events", onSessionEvents);
@@ -425,4 +440,4 @@ export function startServer(): void {
   console.log(`agentbox listening on http://${HOST}:${PORT}`);
 }
 
-if (import.meta.main) startServer();
+if (import.meta.main) await startServer();
