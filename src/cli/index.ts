@@ -217,12 +217,13 @@ function doctor(): number {
 
 // --------------------------------------------------------------------- main
 
-const USAGE = `usage: agentbox [serve|doctor|install|uninstall|mcp|version]
+const USAGE = `usage: agentbox [serve|doctor|install|uninstall|mcp|subagent-mcp|version]
   serve       start the server on port ${DEFAULT_PORT} (default)
   doctor      check that everything agentbox needs is present and configured
   install     register the MCP server with opencode
   uninstall   remove that registration
-  mcp         run the MCP server on stdio (opencode invokes this)
+  mcp         run the board MCP server on stdio (opencode invokes this)
+  subagent-mcp  run the subagent MCP server on stdio (Claude Code invokes this)
   host        run one session's agent (the server spawns these; not for hand use)
   version     print the version`;
 
@@ -253,6 +254,16 @@ export async function main(argv: string[]): Promise<number | null> {
 
     case "mcp":
       await import("../mcp/index");
+      return null;
+
+    /**
+     * The subagent MCP server — a different surface from `mcp`, not a second
+     * copy of it. `mcp` hands a conductor the board; this hands any MCP client
+     * agents it calls like functions, in its own cwd, off the board entirely.
+     */
+    case "subagent-mcp":
+      ensureDirs();
+      await import("../mcp/subagent");
       return null;
 
     case "install":

@@ -5,6 +5,7 @@ import { AcpRunner, messageOf, type PermissionInfo } from "./acp";
 import { serveHost, PROTOCOL_VERSION, type HostServer, type HostStatus } from "./hostproto";
 import { frameSupervisorMessage, writeSessionPrompt, writeWatchdog } from "./prompts";
 import { onToolCall, supervisorEvents } from "./supervisor";
+import { isProviderError } from "./provider-error";
 import {
   EXPECTS_A_PROCESS,
   appendEvent,
@@ -29,6 +30,55 @@ import type { Session, SupervisorVerdict, ToolCall } from "./types";
  * a reader of the same database and the same event log — see hostproto.ts for
  * why the wire carries commands only.
  */
+
+/**
+ * How long `omp acp` gets to start and negotiate before the session is failed.
+ *
+ * Nothing else in this path has a deadline. `AcpRunner.launch` resolves on
+ * success and rejects on failure, but never on time, and the ACP SDK has no
+ * request timeout of its own — so an omp that starts, holds its stdio open and
+ * simply never answers `initialize` parks this await forever.
+ *
+ * Nothing downstream notices, which is what makes it worth a timer rather than
+ * a comment. `HOST_READY_MS` times the control socket appearing, and this host
+ * bound that before it got here. `reconcile` asks the socket whether the host
+ * is alive, and it answers cheerfully. The supervisor runs off tool calls, and
+ * there are none. So the session sits in `spawning` with a "Starting…" row,
+ * across restarts, until somebody closes it by hand.
+ *
+ * Generous, because a cold start that fetches a model config is legitimately
+ * slow and a false failure here costs a real session. Finite, because "wedged
+ * forever with no error" is not a state a user can act on.
+ */
+const LAUNCH_TIMEOUT_MS = 120_000;
+
+/** Fail a launch that never finishes, rather than awaiting it forever. */
+async function withLaunchDeadline<T>(launch: Promise<T>, model: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      launch,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `omp did not finish starting within ${LAUNCH_TIMEOUT_MS / 1000}s ` +
+                  `(model ${model}). Check that \`omp acp\` runs by hand and that its ` +
+                  `model is configured.`,
+              ),
+            ),
+          LAUNCH_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    // The losing promise stays live; an unhandled rejection from a launch that
+    // fails after we stopped waiting would take the host down.
+    launch.catch(() => {});
+  }
+}
 
 /** Floor on how often one session may shell out to `gh` looking for its PR. */
 const PR_CHECK_MS = 30_000;
@@ -65,28 +115,51 @@ function makeRunner(id: string): AcpRunner {
       onToolStart: (sid, call) => {
         const s = getSession(sid);
         if (s) updateSession(sid, { toolCalls: s.toolCalls + 1 });
+        // The dispatch call's own start event lands below; the board row reads
+        // the session's snapshot, so it is updated alongside.
+        if (call.subs) updateSession(sid, { subs: call.subs });
         appendEvent(sid, { type: "tool", call });
       },
 
       // Same `call.id` as the start event: consumers upsert on it rather than
       // rendering the call twice.
       onToolEnd: (sid, call, raw) => {
+        if (call.subs) {
+          updateSession(sid, { subs: call.subs });
+          subsForwarded.delete(subsKey(sid, call.id));
+        }
         appendEvent(sid, { type: "tool", call }, raw);
         supervise(sid, call);
       },
 
+      // Live subagent progress, throttled: omp emits a snapshot per subagent
+      // tool execution, which on a wide fan-out is many per minute. The
+      // transcript needs the rhythm of the fan-out, not every heartbeat —
+      // but a changed snapshot always lands eventually, because the next one
+      // after the quiet window carries it.
+      onToolUpdate: (sid, call) => forwardSubs(sid, call),
+
       onAdvisory: (sid, severity, text) => appendEvent(sid, { type: "advisory", severity, text }),
 
-      onTurnEnd: (sid, stopReason, tokens) => {
-        endStreamTurn(sid);
+      onTurnEnd: (sid, stopReason) => {
+        // The tail of what the agent just said — a provider error is the
+        // turn's assistant message by the time `end_turn` arrives, so this
+        // is where an interrupted turn is recognisable.
+        const turnText = endStreamTurn(sid);
         appendEvent(sid, { type: "turn", stopReason });
         const s = getSession(sid);
-        // omp reports tokens per turn, so the session total is a running sum.
-        if (s && tokens > 0) updateSession(sid, { tokens: (s.tokens ?? 0) + tokens });
         // A supervisor flag raised during the turn outranks "the turn ended".
         if (s && s.status !== "flagged") updateSession(sid, { status: "waiting", blocked: false });
+        onTurnSettled(sid, stopReason, turnText);
         maybeLinkPr(sid);
         changed();
+      },
+
+      // Context occupancy, not work done: `used` is what is in the window right
+      // now, so it is set rather than added, and it falls after a resume into a
+      // new process as soon as omp reports again.
+      onContext: (sid, used) => {
+        if (used > 0) updateSession(sid, { tokens: used });
       },
 
       // Already cumulative for the session, and it keeps climbing across a
@@ -110,6 +183,7 @@ function makeRunner(id: string): AcpRunner {
       onError: (sid, message) => appendEvent(sid, { type: "error", message }),
 
       onExit: (sid, code) => {
+        cancelAutoContinue(sid);
         const s = getSession(sid);
         if (s) {
           updateSession(sid, {
@@ -144,6 +218,34 @@ function changed() {
   control?.broadcastChanged();
 }
 
+// ------------------------------------------------------------- subagents
+
+/** How often one call's live subagent snapshot may reach the transcript. */
+const SUBS_MIN_INTERVAL_MS = 2_000;
+/** Per call, the snapshot last appended and when — the throttle's memory. */
+const subsForwarded = new Map<string, { sig: string; at: number }>();
+
+function subsKey(sessionId: string, callId: string): string {
+  return `${sessionId}:${callId}`;
+}
+
+/**
+ * Append a still-running call's subagent snapshot, at most one per
+ * `SUBS_MIN_INTERVAL_MS` and only when it actually changed. The session row
+ * is updated with it, so the board's subagent line moves with the same
+ * rhythm as the transcript.
+ */
+function forwardSubs(sessionId: string, call: ToolCall) {
+  if (!call.subs) return;
+  const key = subsKey(sessionId, call.id);
+  const sig = JSON.stringify(call.subs);
+  const last = subsForwarded.get(key);
+  if (last && (last.sig === sig || Date.now() - last.at < SUBS_MIN_INTERVAL_MS)) return;
+  subsForwarded.set(key, { sig, at: Date.now() });
+  updateSession(sessionId, { subs: call.subs });
+  appendEvent(sessionId, { type: "tool", call });
+}
+
 // ------------------------------------------------------------- supervisor
 
 function supervise(id: string, call: ToolCall) {
@@ -160,6 +262,11 @@ function supervise(id: string, call: ToolCall) {
 /**
  * The supervisor's verdicts, acted on locally.
  *
+ * Every verdict the judge can produce keeps the run going: `ok` does nothing,
+ * `nudge` sends one corrective message. There used to be a third state that
+ * interrupted the agent and flagged the session for a human; it is gone —
+ * the watcher's only lever now is a message, so it can steer but never stop.
+ *
  * This listener used to live in the server and reach for the session API to
  * steer or halt an agent. In the host there is no indirection to go through:
  * the runner is right here, and routing a nudge back out through a socket to
@@ -170,13 +277,7 @@ supervisorEvents.on("verdict", (sessionId: string, verdict: SupervisorVerdict) =
   try {
     appendEvent(sessionId, { type: "supervisor", verdict });
     if (verdict.state === "ok") return;
-    if (verdict.state === "adrift") {
-      deliver(sessionId, frameSupervisorMessage(verdict.nudge ?? verdict.reason), "supervisor");
-      return;
-    }
-    runner?.interrupt();
-    updateSession(sessionId, { status: "flagged", flagReason: verdict.reason, blocked: false });
-    changed();
+    deliver(sessionId, frameSupervisorMessage(verdict.nudge ?? verdict.reason), "supervisor");
   } catch (err) {
     console.error(`[agentbox host] verdict handling failed for ${sessionId}: ${messageOf(err)}`);
   }
@@ -237,7 +338,10 @@ function maybeLinkPr(id: string) {
  * handing out sequence numbers from a counter the host knows nothing about,
  * and one of the two events would silently take the other's place.
  */
-function deliver(id: string, text: string, from: "human" | "supervisor"): void {
+function deliver(id: string, text: string, from: "human" | "supervisor" | "auto"): void {
+  // A human message is the human taking over; a scheduled continue would only
+  // double-steer five minutes later.
+  if (from === "human") cancelAutoContinue(id);
   appendEvent(id, { type: "user", text, from });
   if (from === "human") {
     const s = getSession(id);
@@ -246,6 +350,117 @@ function deliver(id: string, text: string, from: "human" | "supervisor"): void {
   if (!runner?.alive) throw new Error("the agent is not connected");
   runner.send(text);
   updateSession(id, { status: "running", blocked: false });
+  changed();
+}
+
+// ------------------------------------------------------------ auto-continue
+
+/**
+ * A provider error (rate limit, 429, overloaded) ends an omp turn as a normal
+ * `end_turn` — the error text is the turn's assistant message — so the session
+ * lands on `waiting` looking finished when it died mid-task. Left alone it sits
+ * there until a human notices and types "Continue", which the logs show
+ * happening again and again. This is that "Continue", on a delay: long enough
+ * for a rate-limit window to cool off, short enough that the session is not
+ * abandoned for the night.
+ */
+const CONTINUE_DELAY_MS = 5 * 60_000;
+/** Consecutive interrupted turns auto-continued before giving up and saying
+ *  so. A provider that stays down must not be polled forever. */
+const MAX_AUTO_CONTINUES = 5;
+
+// The one definition lives in its own module: the web client imports the same
+// function to decide when a prompt gets a Retry button, and importing host.ts
+// from the browser bundle would drag the server's database with it.
+export { isProviderError } from "./provider-error";
+
+interface ContinueState {
+  /** Pending timer, when a continue is scheduled. */
+  timer: ReturnType<typeof setTimeout> | null;
+  /** Interrupted turns continued in a row; reset by any genuine turn end or a
+   *  human message. */
+  streak: number;
+}
+
+const continues = new Map<string, ContinueState>();
+
+function continueStateFor(id: string): ContinueState {
+  let st = continues.get(id);
+  if (!st) {
+    st = { timer: null, streak: 0 };
+    continues.set(id, st);
+  }
+  return st;
+}
+
+function cancelAutoContinue(id: string): void {
+  const st = continues.get(id);
+  if (st?.timer) clearTimeout(st.timer);
+  continues.delete(id);
+}
+
+/**
+ * A turn ended. If it was cut short by a provider error, schedule one
+ * "Continue." after the cooldown; anything else — a genuine end, a human
+ * taking over — tears the watch down and starts the streak over.
+ */
+function onTurnSettled(id: string, stopReason: string, turnText: string): void {
+  const interrupted = stopReason === "error" || isProviderError(turnText);
+  const s = getSession(id);
+  if (!interrupted || !s || s.closedAt !== null || s.status !== "waiting") {
+    cancelAutoContinue(id);
+    return;
+  }
+
+  const st = continueStateFor(id);
+  if (st.timer) clearTimeout(st.timer);
+  if (st.streak >= MAX_AUTO_CONTINUES) {
+    appendEvent(id, {
+      type: "error",
+      message:
+        `Interrupted by a provider error ${st.streak} times in a row and auto-continued ` +
+        `each time; not continuing again on its own. Send it a message when you are ready.`,
+    });
+    continues.delete(id);
+    return;
+  }
+  st.timer = setTimeout(() => {
+    st.timer = null;
+    fireAutoContinue(id);
+  }, CONTINUE_DELAY_MS);
+  st.timer.unref?.();
+}
+
+function fireAutoContinue(id: string): void {
+  const st = continues.get(id);
+  if (!st) return;
+  const s = getSession(id);
+  // The five minutes are a window, not a claim: the human may have steered,
+  // resumed or closed the session, or another turn may have started and
+  // genuinely finished. Only an untouched `waiting` session is still the one
+  // that was interrupted.
+  if (!s || s.closedAt !== null || s.status !== "waiting" || s.blocked) {
+    continues.delete(id);
+    return;
+  }
+  if (!runner?.alive) {
+    continues.delete(id);
+    return;
+  }
+  st.streak += 1;
+  try {
+    deliver(id, "Continue.", "auto");
+  } catch (err) {
+    appendEvent(id, { type: "error", message: `auto-continue failed: ${messageOf(err)}` });
+    continues.delete(id);
+    return;
+  }
+  appendEvent(id, {
+    type: "error",
+    message:
+      `Its last turn was cut short by a provider error; "Continue." was sent ` +
+      `automatically after a 5-minute cooldown (attempt ${st.streak} of ${MAX_AUTO_CONTINUES}).`,
+  });
   changed();
 }
 
@@ -343,13 +558,16 @@ export async function runHost(sessionId: string, firstMessagePath: string | null
     const promptFile = writeSessionPrompt(s, repo, settings);
     if (settings.advisor.enabled) writeWatchdog(s, settings);
 
-    const ompSessionId = await acp.launch({
-      worktree: s.worktree,
-      model: s.model,
-      promptFile,
-      advisor: settings.advisor.enabled,
-      resumeSessionId: s.ompSessionId,
-    });
+    const ompSessionId = await withLaunchDeadline(
+      acp.launch({
+        worktree: s.worktree,
+        model: s.model,
+        promptFile,
+        advisor: settings.advisor.enabled,
+        resumeSessionId: s.ompSessionId,
+      }),
+      s.model,
+    );
     updateSession(sessionId, {
       ompSessionId,
       pid: acp.pid,

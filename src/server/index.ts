@@ -46,6 +46,19 @@ import {
 } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import {
+  demoteSkill,
+  listSkills,
+  promoteSkill,
+  readSkillBody,
+  writeSkillBody,
+} from "../core/skills";
+import {
+  containedIn,
+  looksLikeSkillFile,
+  skillMdPath,
+  skillRootDirs,
+} from "./guard";
+import {
   addRepo,
   deleteRepo,
   getRepoById,
@@ -66,6 +79,8 @@ import type {
 } from "../core/types";
 import { HttpError, Router, fail, json, readBody } from "./router";
 import {
+  beforeParam,
+  limitParam,
   optionalString,
   parseSettingsPatch,
   requireBoolean,
@@ -84,8 +99,8 @@ const HOT_COALESCE_MS = 250;
 /**
  * Most events a `watch` backfill will send in one frame. A long run can hold
  * tens of thousands; the newest few hundred are what a person opening the
- * transcript is looking at, and the client can always widen with
- * `GET /api/sessions/:id/events?since=`.
+ * transcript is looking at, and the client pages further back with
+ * `GET /api/sessions/:id/events?before=&limit=` as the reader scrolls up.
  */
 const MAX_BACKFILL = 500;
 
@@ -284,7 +299,12 @@ export const router = new Router(mapCoreError)
   })
 
   .add("GET", "/api/sessions/:id/events", ({ params, url }) =>
-    json(eventsOf(sessionOr404(params.id!).id, sinceParam(url))),
+    json(
+      eventsOf(sessionOr404(params.id!).id, sinceParam(url), {
+        before: beforeParam(url),
+        limit: limitParam(url),
+      }),
+    ),
   )
 
   // `diffOf` resolves its own base from the session's repo (data's `baseFor`).
@@ -352,6 +372,64 @@ export const router = new Router(mapCoreError)
 
   .add("GET", "/api/settings", () => json(getSettings()))
 
+  // ── Skills ───────────────────────────────────────────────────────────────
+  // The list itself travels in cold state; these routes are the mutations and
+  // the body. Every path is caller-supplied, so it is confined to the known
+  // skill roots and required to look like a skill file.
+
+  /**
+   * Read a skill file's body.
+   *
+   * The path is the skill *directory* (as listed in cold state); this resolves
+   * SKILL.md inside it. Without the containment check this is an
+   * arbitrary-file-read primitive.
+   */
+  .add("GET", "/api/skill/body", ({ url }) => {
+    const raw = url.searchParams.get("path");
+    if (!raw) throw new HttpError(400, "path required");
+    const confined = containedIn(raw, skillRootDirs());
+    const md = confined ? skillMdPath(confined) : null;
+    if (!confined || !md || !looksLikeSkillFile(md)) {
+      throw new HttpError(403, "path is not inside a skills directory");
+    }
+    return json({ body: readSkillBody(md) });
+  })
+
+  /** Same confinement, and rather more important: this one writes. */
+  .add("POST", "/api/skill/body", async ({ req }) => {
+    const b = await readBody(req);
+    const raw = requireString(b, "path");
+    const confined = containedIn(raw, skillRootDirs());
+    const md = confined ? skillMdPath(confined) : null;
+    if (!confined || !md || !looksLikeSkillFile(md)) {
+      throw new HttpError(403, "path is not inside a skills directory");
+    }
+    const body = b.body;
+    if (typeof body !== "string") throw new HttpError(400, "body must be a string");
+    const ok = writeSkillBody(md, body);
+    // The body may have changed name/description/lines, so the inventory is
+    // stale until the cold refresh re-reads it.
+    refreshCold(true);
+    return json({ ok });
+  })
+
+  .add("POST", "/api/skill/promote", async ({ req }) => {
+    const b = await readBody(req);
+    const name = requireString(b, "name");
+    const skill = listSkills().skills.find((s) => s.name === name && s.source === "project");
+    if (!skill) throw new HttpError(404, `no such project skill: ${name}`);
+    const r = promoteSkill(skill);
+    refreshCold(true);
+    return json(r, r.ok ? 200 : 409);
+  })
+
+  .add("POST", "/api/skill/demote", async ({ req }) => {
+    const b = await readBody(req);
+    const r = demoteSkill(requireString(b, "name"));
+    refreshCold(true);
+    return json(r, r.ok ? 200 : 409);
+  })
+
   .add("PUT", "/api/settings", async ({ req }) => {
     const next = mergeSettings(getSettings(), parseSettingsPatch(await readBody(req)));
     saveSettings(next);
@@ -404,6 +482,10 @@ export async function startServer(): Promise<void> {
   Bun.serve<SocketState>({
     port: PORT,
     hostname: HOST,
+    // Bun's default is 10s. `resume` waits for the agent host to come up —
+    // up to HOST_READY_MS, and longer in practice on a cold cache — so a
+    // successful resume was being reported to the caller as a timeout.
+    idleTimeout: 60,
     websocket: {
       open(ws) {
         clients.add(ws);

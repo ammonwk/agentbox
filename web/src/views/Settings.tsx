@@ -4,7 +4,6 @@ import type {
   AppState,
   ReclaimResult,
   Repo,
-  SkillInfo,
   WorktreeScan,
 } from "../../../src/core/types";
 import { api, fmtBytes, type DepState, type Health } from "../api";
@@ -21,7 +20,7 @@ import {
 import "./settings.css";
 
 export function Settings({ state }: { state: AppState }) {
-  const { settings, repos, skills, warnings, sessions } = state;
+  const { settings, repos, warnings, sessions } = state;
   const { save, saveStateOf } = useSettingsSave();
   const section = { settings, save, saveStateOf };
 
@@ -32,7 +31,6 @@ export function Settings({ state }: { state: AppState }) {
       <Supervision {...section} />
       <Repositories repos={repos} sessions={sessions} />
       <Disk />
-      <Skills skills={skills} />
       <Diagnostics warnings={warnings} />
     </div>
   );
@@ -645,43 +643,6 @@ function Disk() {
             void reclaim("nuke", removable.map((w) => w.path), true);
           }}
         />
-      )}
-    </section>
-  );
-}
-
-function Skills({ skills }: { skills: SkillInfo[] }) {
-  return (
-    <section className="card">
-      <h3>Skills</h3>
-      <p className="hint">
-        Every <code>SKILL.md</code> the agents can reach. Scanned from{" "}
-        <code>.claude/skills</code> under the directory agentbox was started
-        from, then <code>~/.claude/skills</code>, then{" "}
-        <code>~/.agents/skills</code> — in that order, because that is the
-        order omp resolves them in. A name found in an earlier root wins, and
-        the later copies are not listed: one entry here is one skill an agent
-        can actually load. Read-only — add one by putting a folder with a{" "}
-        <code>SKILL.md</code> in it into any of the three roots.
-      </p>
-      {skills.length === 0 ? (
-        <Empty title="No skills found">
-          None of the three roots hold a folder with a <code>SKILL.md</code> in
-          it. Agents still run; they just have no skills to draw on.
-        </Empty>
-      ) : (
-        <ul className="skill-list">
-          {skills.map((s) => (
-            <li key={s.path}>
-              <span className={`src ${s.source}`}>{s.source}</span>
-              <span className="name">{s.name}</span>
-              <span className="desc">
-                {s.description || "No description in its frontmatter."}
-              </span>
-              <span className="mono path">{s.path}</span>
-            </li>
-          ))}
-        </ul>
       )}
     </section>
   );

@@ -183,15 +183,26 @@ export class EventLog {
     return event;
   }
 
-  /** Everything with `seq > since`. Reads the file only when the request
-   *  reaches back past the ring. */
-  since(since: number): TranscriptEvent[] {
+  /**
+   * Everything with `since < seq < before`, newest `limit` events last when
+   * `limit` is given. Reads the file only when the request reaches back past
+   * the ring.
+   *
+   * `before`/`limit` exist for paging: the websocket backfill caps a frame at
+   * the newest few hundred, and a reader scrolling towards the beginning needs
+   * the window *below* what it already holds without pulling tens of thousands
+   * of events in one response.
+   */
+  since(since: number, opts: { before?: number; limit?: number } = {}): TranscriptEvent[] {
     this.refresh();
+    const { before, limit } = opts;
+    const inWindow = (e: TranscriptEvent): boolean =>
+      e.seq > since && (before === undefined || e.seq < before);
     const first = this.ring[0];
-    if (!first || first.seq <= since + 1) {
-      return since <= 0 ? [...this.ring] : this.ring.filter((e) => e.seq > since);
-    }
-    return readLog(this.path).events.filter((e) => e.seq > since);
+    const events = !first || first.seq <= since + 1
+      ? this.ring.filter(inWindow)
+      : readLog(this.path).events.filter(inWindow);
+    return limit === undefined || events.length <= limit ? events : events.slice(-limit);
   }
 
   get lastSeq(): number {
@@ -294,10 +305,17 @@ class SessionStream {
     return event;
   }
 
-  /** Turn boundary: the assistant message is complete. */
-  endTurn() {
+  /**
+   * Turn boundary: the assistant message is complete. Returns the tail of
+   * what the agent said this turn, so the host can tell a provider error
+   * wearing an `end_turn` apart from the agent actually finishing — the
+   * error text is assistant content by the time the turn ends.
+   */
+  endTurn(): string {
     this.flushText();
+    const tail = this.liveText;
     this.liveText = "";
+    return tail;
   }
 
   flushText() {
@@ -358,9 +376,9 @@ export function streamText(id: string, text: string): void {
   streamOf(id).text(text);
 }
 
-/** The assistant's message is complete. Host-side. */
-export function endStreamTurn(id: string): void {
-  streamOf(id).endTurn();
+/** The assistant's message is complete. Host-side. Returns its text tail. */
+export function endStreamTurn(id: string): string {
+  return streamOf(id).endTurn();
 }
 
 /** Push anything held in the batch window to disk and to listeners. Host-side,
@@ -375,11 +393,16 @@ export function lastSeqOf(id: string): number {
   return streamOf(id).log.lastSeq;
 }
 
-/** Everything this session recorded after `since`. */
-export function eventsOf(id: string, since = 0): TranscriptEvent[] {
+/** Events this session recorded after `since`, bounded to `seq < before` and
+ *  to the newest `limit` of that window when given. */
+export function eventsOf(
+  id: string,
+  since = 0,
+  opts: { before?: number; limit?: number } = {},
+): TranscriptEvent[] {
   const s = streamOf(id);
   s.flushText(); // a reader should not be short of what has already been said
-  return s.log.since(since);
+  return s.log.since(since, opts);
 }
 
 // ------------------------------------------------------------- run state
@@ -493,17 +516,45 @@ async function connectHost(id: string): Promise<HostClient | null> {
 /**
  * Spawn a host for a session and deliver `message` as its first turn.
  *
- * The host is deliberately severed from this process: `setsid` puts it in its
- * own session and process group, and its output goes to a file rather than a
- * pipe. Both matter. A child sharing our process group takes the terminal's
- * SIGHUP with us, and a child writing into an inherited pipe dies of SIGPIPE
- * the moment the reader goes away — which is precisely the "restarting
- * agentbox kills every agent" behaviour this is meant to end.
+ * The host is deliberately severed from this process. Its output goes to a
+ * file rather than a pipe, so it cannot die of SIGPIPE when our reader goes
+ * away; and on Linux it runs under `systemd-run --user --scope` where that is
+ * available, because detachment at the session level is not enough. A `setsid`
+ * host still sits in the cgroup of whatever terminal launched the server, and
+ * when that terminal closes systemd tears the whole scope down — taking every
+ * running agent with it in one SIGKILL sweep, which is precisely how a server
+ * restart once killed twelve agents mid-run despite `setsid`. A scoped host
+ * gets a cgroup of its own and outlives the terminal, the server and this
+ * process alike.
  *
  * Every failure path lands on the session record: a session that never started
  * is `failed`, one whose conversation still exists on omp's side is `dead` and
  * can be resumed.
  */
+
+/**
+ * Whether `systemd-run --user` is usable here; null until first checked.
+ */
+let sandboxed: boolean | null = null;
+
+function hostSandbox(id: string): string[] {
+  if (sandboxed === null) {
+    const bus = join(process.env.XDG_RUNTIME_DIR ?? "", "bus");
+    sandboxed =
+      process.platform === "linux" && Bun.which("systemd-run") !== null && existsSync(bus);
+  }
+  return sandboxed
+    ? [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--collect",
+        `--unit=agentbox-host-${id.slice(0, 8)}`,
+        "setsid",
+      ]
+    : ["setsid"];
+}
+
 async function startHost(id: string, message: string): Promise<void> {
   const s = getSession(id);
   if (!s) throw new NotFound(`no session ${id}`);
@@ -523,7 +574,15 @@ async function startHost(id: string, message: string): Promise<void> {
 
     logFd = openSync(hostLogPathFor(id), "a");
     const child = Bun.spawn(
-      ["setsid", process.execPath, agentboxBin(), "host", id, "--first-message", messageFile],
+      [
+        ...hostSandbox(id),
+        process.execPath,
+        agentboxBin(),
+        "host",
+        id,
+        "--first-message",
+        messageFile,
+      ],
       {
         cwd: s.worktree,
         stdin: "ignore",
@@ -606,6 +665,7 @@ export function spawnSession(repo: Repo, prompt: string, opts: SpawnOptions = {}
     blocked: false,
     flagReason: null,
     ompSessionId: null,
+    subs: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     startedAt: null,

@@ -4,6 +4,7 @@
 export type Route =
   | { page: "inbox" }
   | { page: "sessions"; sessionId: string | null }
+  | { page: "skills" }
   | { page: "settings" };
 
 export type PageId = Route["page"];
@@ -22,6 +23,7 @@ export function parseHash(hash: string): Route {
       }
     });
   if (parts[0] === "sessions") return { page: "sessions", sessionId: parts[1] ?? null };
+  if (parts[0] === "skills") return { page: "skills" };
   if (parts[0] === "settings") return { page: "settings" };
   return { page: "inbox" };
 }

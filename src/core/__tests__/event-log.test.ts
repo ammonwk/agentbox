@@ -62,6 +62,47 @@ describe("EventLog since", () => {
   });
 });
 
+describe("EventLog since window (before/limit)", () => {
+  const fill = (log: EventLog, n: number) => {
+    for (let i = 1; i <= n; i++) log.append({ type: "assistant", text: `m${i}` });
+  };
+
+  test("`before` is an exclusive upper bound", () => {
+    const log = new EventLog(logPath());
+    fill(log, 5);
+    expect(log.since(0, { before: 3 }).map((e) => e.seq)).toEqual([1, 2]);
+    expect(log.since(0, { before: 1 })).toEqual([]);
+  });
+
+  test("`limit` keeps the newest of the window, never the oldest", () => {
+    const log = new EventLog(logPath());
+    fill(log, 10);
+    expect(log.since(0, { limit: 3 }).map((e) => e.seq)).toEqual([8, 9, 10]);
+    expect(log.since(0, { before: 5, limit: 2 }).map((e) => e.seq)).toEqual([3, 4]);
+    expect(log.since(0, { limit: 99 }).length).toBe(10);
+  });
+
+  test("paging walks backwards to the beginning without overlap", () => {
+    const log = new EventLog(logPath());
+    fill(log, 12);
+    const page = (before: number) => log.since(0, { before, limit: 5 }).map((e) => e.seq);
+    const p1 = page(13);
+    expect(p1).toEqual([8, 9, 10, 11, 12]);
+    const p2 = page(p1[0]!);
+    expect(p2).toEqual([3, 4, 5, 6, 7]);
+    const p3 = page(p2[0]!);
+    expect(p3).toEqual([1, 2]);
+    expect(page(p3[0]!)).toEqual([]);
+  });
+
+  test("the window reaches below the ring by re-reading the file", () => {
+    const log = new EventLog(logPath());
+    fill(log, 2_500); // deliberately past RING_SIZE
+    const page = log.since(0, { before: 101, limit: 5 });
+    expect(page.map((e) => e.seq)).toEqual([96, 97, 98, 99, 100]);
+  });
+});
+
 describe("EventLog persistence", () => {
   test("a reopened log keeps counting where the file left off", () => {
     const path = logPath();

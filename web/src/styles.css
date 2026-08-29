@@ -199,6 +199,30 @@ code {
   line-height: 1.55;
 }
 
+/* Provenance tag: where a thing came from. Repos use local/github; skills use
+ * global/agents/project. More than one page shows it, so it is shared here. */
+.src {
+  font-size: 10.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+.src.local,
+.src.project {
+  color: var(--success);
+}
+.src.github,
+.src.agents {
+  color: var(--info);
+}
+.src.global {
+  color: var(--accent);
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--border);

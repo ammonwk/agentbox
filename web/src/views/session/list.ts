@@ -48,10 +48,12 @@ const SECTION_LABEL: Record<SectionId, string> = {
 
 /**
  * Bucket for scanning. Sections are always in the same order so the list does
- * not reshuffle under the cursor, and empty ones are dropped.
+ * not reshuffle under the cursor, and empty ones are dropped. Closed sessions
+ * never appear — the detail pane still renders one reached by deep link, but
+ * the board is for live work.
  */
-export function sectionsFor(sessions: SessionRow[], showClosed: boolean): Section[] {
-  const visible = sessions.filter((s) => showClosed || s.closedAt == null);
+export function sectionsFor(sessions: SessionRow[]): Section[] {
+  const visible = sessions.filter((s) => s.closedAt == null);
   const sorted = sortSessions(visible);
   const order: SectionId[] = ["attention", "working", "idle", "quiet"];
   return order

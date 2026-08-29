@@ -7,6 +7,7 @@ import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { Steer } from "./Steer";
 import { canInterrupt, canResume, RESUME_HINT, shortModel } from "./format";
+import { Markdown } from "./Markdown";
 import { useAction } from "./useAction";
 
 type Tab = "activity" | "diff" | "task" | "load";
@@ -101,7 +102,7 @@ export function SessionDetail({
           <span>{shortModel(session.model)}</span>
           <span>{elapsed} elapsed</span>
           <span>
-            {fmtCost(session.costUsd)} · {fmtTokens(session.tokens)} tok
+            {fmtCost(session.costUsd)} · {fmtTokens(session.tokens)} ctx
           </span>
           <span>
             {session.toolCalls} tool call{session.toolCalls === 1 ? "" : "s"}
@@ -207,7 +208,7 @@ function TaskPanel({ session }: { session: Session }) {
       <div className="sx-task-prompt">{session.prompt}</div>
 
       {session.flagReason && (
-        <div className="sx-block verdict-spiraling" style={{ marginTop: 12 }}>
+        <div className="sx-block error" style={{ marginTop: 12 }}>
           <div className="sx-block-head">Flagged</div>
           <div className="sx-block-body">{session.flagReason}</div>
         </div>
@@ -216,7 +217,7 @@ function TaskPanel({ session }: { session: Session }) {
       {session.lastMessage && (
         <div style={{ marginTop: 12 }}>
           <div className="sx-block-head">Last thing it said</div>
-          <div className="sx-assistant">{session.lastMessage}</div>
+          <Markdown text={session.lastMessage} />
         </div>
       )}
     </div>

@@ -85,6 +85,12 @@ export function readJudgePrompt(): string {
   return readPrompt("judge.md");
 }
 
+/** The contract handed to an MCP subagent: that its final message is its whole
+ *  return value, and that it is standing in the caller's real working tree. */
+export function readSubagentPrompt(): string {
+  return readPrompt("subagent.md");
+}
+
 /** `{{key}}` substitution. Unknown placeholders are left alone so a typo in a
  *  prompt file is visible in the output rather than silently blank. */
 function render(template: string, vars: Record<string, string>): string {

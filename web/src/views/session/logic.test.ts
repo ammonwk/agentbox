@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { Attention, Session, ToolCall, ToolStatus, TranscriptEvent } from "../../../../src/core/types";
-import { isPinnedToBottom, shouldAutoScroll, distanceFromBottom } from "./scroll";
-import { activityEmptyReason, collapseRun, groupEvents, runSummary, type ToolEntry } from "./transcript";
+import { isPinnedToBottom, shouldAutoScroll, distanceFromBottom, isAtTop, anchoredScrollTop } from "./scroll";
+import {
+  activityEmptyReason, collapseRun, failedPromptSeqs, groupEvents, rosterCounts, runSummary,
+  subagentDetail, subagentRoster, type ToolEntry,
+} from "./transcript";
 import type { SessionRow } from "../../api";
 import { neighbourId, sectionsFor, sortSessions } from "./list";
-import { callDurationMs, canResume, canSteer, steerPlaceholder, toolSummary } from "./format";
+import { callDurationMs, canResume, canSteer, prBaseOf, splitPRRefs, steerPlaceholder, subagentCallOf, subagentStepLabel, toolSummary } from "./format";
 import { looksTruncated, parsePatch, patchStats } from "./diff";
 
 // ------------------------------------------------------------- fixtures
@@ -56,6 +59,7 @@ function session(over: Partial<SessionRow> & { id: string; attention: Attention 
     blocked: false,
     flagReason: null,
     ompSessionId: null,
+    subs: null,
     createdAt: 0,
     updatedAt: 0,
     startedAt: null,
@@ -96,6 +100,30 @@ describe("auto-scroll pinning", () => {
     expect(shouldAutoScroll({ wasPinned: true, grew: false, initial: false })).toBe(false);
     // Switching sessions lands at the tail even though nothing "grew".
     expect(shouldAutoScroll({ wasPinned: false, grew: false, initial: true })).toBe(true);
+  });
+});
+
+describe("load-older on scroll", () => {
+  test("near the top counts as at the top", () => {
+    expect(isAtTop({ scrollTop: 0, scrollHeight: 5000, clientHeight: 400 })).toBe(true);
+    expect(isAtTop({ scrollTop: 100, scrollHeight: 5000, clientHeight: 400 })).toBe(true);
+    expect(isAtTop({ scrollTop: 300, scrollHeight: 5000, clientHeight: 400 })).toBe(false);
+    // The slack is overridable, like the bottom's.
+    expect(isAtTop({ scrollTop: 100, scrollHeight: 5000, clientHeight: 400 }, 10)).toBe(false);
+  });
+
+  test("prepending history keeps the viewport anchored on the same content", () => {
+    // 2000px of content, reader 300px from the top; 1500px of older events
+    // land above. The same rows must stay under the viewport.
+    const prev = { scrollTop: 300, scrollHeight: 2000 };
+    expect(anchoredScrollTop(prev, { scrollHeight: 3500 })).toBe(1800);
+  });
+
+  test("anchoring is exact when the reader sits at the very top", () => {
+    const prev = { scrollTop: 0, scrollHeight: 2000 };
+    expect(anchoredScrollTop(prev, { scrollHeight: 4000 })).toBe(2000);
+    // ...which puts the new head exactly where the old head was, so the next
+    // scroll-up reaches the next page rather than re-reading this one.
   });
 });
 
@@ -253,7 +281,7 @@ describe("list ordering", () => {
     expect(sortSessions(list).map((s) => s.id)).toEqual(["new-urgent", "old-urgent", "fresh-calm"]);
   });
 
-  test("sections bucket by attention then activity, and hide closed by default", () => {
+  test("sections bucket by attention then activity, and never show closed", () => {
     const list = [
       session({ id: "needs", attention: { kind: "flagged", rank: 1, label: "halted" } }),
       session({ id: "busy", attention: none, status: "running" }),
@@ -263,15 +291,11 @@ describe("list ordering", () => {
       session({ id: "idle", attention: none, status: "done" }),
       session({ id: "gone", attention: none, status: "done", closedAt: 5 }),
     ];
-    expect(sectionsFor(list, false).map((s) => [s.id, s.sessions.map((x) => x.id)])).toEqual([
+    expect(sectionsFor(list).map((s) => [s.id, s.sessions.map((x) => x.id)])).toEqual([
       ["attention", ["needs"]],
       ["working", ["busy"]],
       ["idle", ["resting"]],
       ["quiet", ["idle"]],
-    ]);
-    expect(sectionsFor(list, true).find((s) => s.id === "quiet")!.sessions.map((s) => s.id)).toEqual([
-      "idle",
-      "gone",
     ]);
   });
 
@@ -373,6 +397,19 @@ describe("formatting", () => {
     expect(callDurationMs(call("2", "running", { startedAt: 1000, endedAt: null }))).toBeNull();
   });
 
+  test("PR references split out of plain text; single digits stay prose", () => {
+    expect(prBaseOf("widget-dev/widget-platform")).toBe("https://github.com/widget-dev/widget-platform/pull/");
+    expect(prBaseOf(null)).toBeNull();
+    expect(splitPRRefs("Target PR #4144, then #4125 failed. See #7 later.")).toEqual([
+      { text: "Target PR ", pr: null },
+      { text: "#4144", pr: 4144 },
+      { text: ", then ", pr: null },
+      { text: "#4125", pr: 4125 },
+      { text: " failed. See #7 later.", pr: null },
+    ]);
+    expect(splitPRRefs("no refs here")).toEqual([{ text: "no refs here", pr: null }]);
+  });
+
   test("the steer placeholder distinguishes queued from immediate delivery", () => {
     expect(steerPlaceholder("running")).toContain("queued");
     expect(steerPlaceholder("waiting")).toContain("immediately");
@@ -447,5 +484,274 @@ describe("formatting", () => {
     // A blank string is not a summary — fall through rather than render "".
     expect(toolSummary(call("5", "ok", { kind: "execute", input: { command: "  " } }))).toBeNull();
     expect(toolSummary(call("6", "ok", { kind: "think", input: { thought: "hm" } }))).toBeNull();
+  });
+});
+
+// -------------------------------------------------------------- subagents
+
+/** Shapes captured from a live omp fan-out (session 0c40c014). */
+describe("subagent call classification", () => {
+  test("a dispatch carries a tasks array", () => {
+    const dispatch = call("1", "ok", {
+      kind: "other",
+      title: "Audit PR1 worker reliability plan",
+      input: {
+        context: "You are adversarially auditing…",
+        tasks: [
+          { name: "AuditPR1", agent: "reviewer", task: "Attack local://plan-pr1…" },
+          { name: "AuditPR2", agent: "reviewer", task: "Attack local://plan-pr2…" },
+        ],
+      },
+    });
+    expect(subagentCallOf(dispatch)).toEqual({
+      kind: "dispatch",
+      tasks: [
+        { name: "AuditPR1", agent: "reviewer", task: "Attack local://plan-pr1…" },
+        { name: "AuditPR2", agent: "reviewer", task: "Attack local://plan-pr2…" },
+      ],
+    });
+  });
+
+  test("a wait is the op, and may carry a DM to one subagent", () => {
+    expect(subagentCallOf(call("1", "ok", { kind: "other", input: { op: "wait", timeoutMs: 600000 } }))).toEqual({
+      kind: "wait", to: null, message: null,
+    });
+    expect(
+      subagentCallOf(call("2", "ok", {
+        kind: "other",
+        input: { op: "wait", timeoutMs: 600000, to: "Batch09", message: "send the findings array" },
+      })),
+    ).toEqual({ kind: "wait", to: "Batch09", message: "send the findings array" });
+  });
+
+  test("a collect is an agent:// read, query strings stripped", () => {
+    expect(subagentCallOf(call("1", "ok", { kind: "read", input: { path: "agent://Batch10" } }))).toEqual({
+      kind: "collect", name: "Batch10",
+    });
+    expect(subagentCallOf(call("2", "ok", { kind: "read", input: { path: "agent://Batch7?q=summary" } }))).toEqual({
+      kind: "collect", name: "Batch7",
+    });
+  });
+
+  test("ordinary calls classify as nothing", () => {
+    expect(subagentCallOf(call("1", "ok", { kind: "execute", input: { command: "ls" } }))).toBeNull();
+    expect(subagentCallOf(call("2", "ok", { kind: "read", input: { path: "apps/api/src/x.ts" } }))).toBeNull();
+    expect(subagentCallOf(call("3", "ok", { kind: "other", input: { op: "done", phase: "Recon" } }))).toBeNull();
+    expect(subagentCallOf(call("4", "ok", { kind: "other", input: { context: "no tasks key" } }))).toBeNull();
+    expect(subagentCallOf(call("5", "ok", { kind: "other", input: { tasks: [] } }))).toBeNull();
+  });
+});
+
+describe("subagent roster", () => {
+  const dispatch: TranscriptEvent = {
+    seq: 1, ts: 100, type: "tool",
+    call: call("d", "ok", {
+      kind: "other",
+      input: {
+        tasks: [
+          { name: "AuditPR1", agent: "reviewer", task: "Attack plan 1" },
+          { name: "AuditPR2", agent: "reviewer", task: "Attack plan 2" },
+        ],
+      },
+    }),
+  };
+  const snapshot = (seq: number, ts: number, id: string, status: string, durationMs: number): TranscriptEvent => ({
+    seq, ts, type: "tool",
+    call: call(`w${seq}`, "running", {
+      kind: "other",
+      input: { op: "wait", timeoutMs: 600000 },
+      endedAt: null,
+      subs: [{ id, agent: "reviewer", status: status as "running", task: "", toolCount: 4, tokens: 900, cost: 0.02, durationMs }],
+    }),
+  });
+
+  test("dispatches name the roster; snapshots update it; later events win", () => {
+    const roster = subagentRoster([
+      dispatch,
+      snapshot(2, 200, "AuditPR1", "running", 60_000),
+      snapshot(3, 300, "AuditPR1", "completed", 120_000),
+      { seq: 4, ts: 400, type: "tool", call: call("c", "ok", { kind: "read", input: { path: "agent://AuditPR1" } }) },
+    ]);
+    expect(roster.map((e) => e.name)).toEqual(["AuditPR1", "AuditPR2"]);
+    expect(roster[0]).toMatchObject({
+      status: "completed", durationMs: 120_000, toolCount: 4, collected: true, agent: "reviewer",
+    });
+    expect(roster[1]).toMatchObject({ status: "pending", collected: false, task: "Attack plan 2" });
+    // `pending` is "dispatched, nothing heard" — not counted as running.
+    expect(rosterCounts(roster)).toEqual({ total: 2, running: 0, failed: 0, done: 1 });
+  });
+
+  test("a failed subagent shows in the counts", () => {
+    const roster = subagentRoster([
+      dispatch,
+      snapshot(2, 200, "AuditPR1", "failed", 5_000),
+      snapshot(3, 300, "AuditPR2", "running", 60_000),
+    ]);
+    expect(rosterCounts(roster)).toEqual({ total: 2, running: 1, failed: 1, done: 0 });
+  });
+});
+
+describe("subagent drilldown", () => {
+  const dispatch: TranscriptEvent = {
+    seq: 1, ts: 100, type: "tool",
+    call: call("d", "ok", {
+      kind: "other",
+      input: {
+        tasks: [
+          { name: "AuditPR1", agent: "reviewer", task: "Attack plan 1" },
+          { name: "AuditPR2", agent: "reviewer", task: "Attack plan 2" },
+        ],
+      },
+    }),
+  };
+  const snap = (
+    seq: number,
+    ts: number,
+    id: string,
+    toolCount: number,
+    recentTools: string[],
+    status = "running",
+  ): TranscriptEvent => ({
+    seq, ts, type: "tool",
+    call: call(`w${seq}`, "running", {
+      kind: "other",
+      input: { op: "wait", timeoutMs: 600000 },
+      endedAt: null,
+      subs: [{
+        id, agent: "reviewer", status: status as "running", task: "",
+        toolCount, tokens: 900, cost: 0.02, durationMs: ts - 100,
+        recentTools: recentTools.map((tool) => ({ tool })),
+      }],
+    }),
+  });
+
+  test("rebuilds the tool timeline from snapshot deltas, oldest first", () => {
+    const detail = subagentDetail([
+      dispatch,
+      snap(2, 200, "AuditPR1", 2, ["Grep", "Read"]),
+      snap(3, 300, "AuditPR1", 4, ["Edit", "Bash", "Grep", "Read"]),
+    ], "AuditPR1")!;
+    expect(detail.status).toBe("running");
+    expect(detail.task).toBe("Attack plan 1");
+    expect(detail.toolCount).toBe(4);
+    expect(detail.steps.map((s) => s.tool)).toEqual(["Read", "Grep", "Bash", "Edit"]);
+    expect(detail.steps[0].ts).toBe(200);
+    expect(detail.steps[3].ts).toBe(300);
+  });
+
+  test("an interleaved stale snapshot does not double-count tools", () => {
+    const detail = subagentDetail([
+      dispatch,
+      snap(2, 200, "AuditPR1", 2, ["Grep", "Read"]),
+      snap(3, 250, "AuditPR1", 4, ["Edit", "Bash", "Grep", "Read"]),
+      // A second parent call still streaming an older view of the same sub.
+      snap(4, 260, "AuditPR1", 2, ["Grep", "Read"]),
+    ], "AuditPR1")!;
+    expect(detail.steps.map((s) => s.tool)).toEqual(["Read", "Grep", "Bash", "Edit"]);
+    expect(detail.toolCount).toBe(4);
+  });
+
+  test("the collect call's output is the result", () => {
+    const detail = subagentDetail([
+      dispatch,
+      snap(2, 200, "AuditPR1", 1, ["Read"], "completed"),
+      {
+        seq: 3, ts: 300, type: "tool",
+        call: call("c", "ok", { kind: "read", input: { path: "agent://AuditPR1" }, output: "3 findings, 1 blocker" }),
+      },
+    ], "AuditPR1")!;
+    expect(detail.result).toBe("3 findings, 1 blocker");
+    expect(detail.resultError).toBe(false);
+    expect(detail.status).toBe("completed");
+  });
+
+  test("an unknown name has no detail", () => {
+    expect(subagentDetail([dispatch], "Nobody")).toBeNull();
+  });
+});
+
+describe("folding keeps subagent structure visible", () => {
+  test("a dispatch in the middle of a long run is never folded away", () => {
+    const entries = Array.from({ length: 12 }, (_, i) => entry(String(i + 1)));
+    const withDispatch = [...entries];
+    withDispatch[6] = {
+      seq: 7, ts: 70,
+      call: call("7", "ok", { kind: "other", input: { tasks: [{ name: "A", agent: "scout", task: "t" }] } }),
+    };
+    const { visible } = collapseRun(withDispatch);
+    expect(visible.map((v) => v.entry.seq)).toContain(7);
+  });
+});
+
+describe("subagentStepLabel", () => {
+  test("a hub step with no reported arguments says what the tool is for", () => {
+    expect(subagentStepLabel({ tool: "hub", args: "" })).toBe("hub — background jobs");
+    expect(subagentStepLabel({ tool: "hub", args: null })).toBe("hub — background jobs");
+  });
+
+  test("everything else passes through untouched", () => {
+    expect(subagentStepLabel({ tool: "bash", args: "git status" })).toBe("bash");
+    expect(subagentStepLabel({ tool: "hub", args: '{"op":"wait"}' })).toBe("hub");
+  });
+});
+
+describe("failedPromptSeqs", () => {
+  const user = (seq: number, text: string, from: "human" | "auto" = "human"): TranscriptEvent =>
+    ({ seq, ts: seq * 10, type: "user", text, from });
+  const assistant = (seq: number, text: string): TranscriptEvent =>
+    ({ seq, ts: seq * 10, type: "assistant", text });
+  const turn = (seq: number, stopReason: string): TranscriptEvent =>
+    ({ seq, ts: seq * 10, type: "turn", stopReason });
+  const error = (seq: number, message: string): TranscriptEvent =>
+    ({ seq, ts: seq * 10, type: "error", message });
+
+  test("a prompt the provider ate with a 404-as-completion is retriable", () => {
+    const failed = failedPromptSeqs([
+      user(1, "Do it"),
+      assistant(2, "404 Thank you for participating in the Stealth Ox Alpha testing period."),
+      turn(3, "end_turn"),
+    ]);
+    expect(failed.has(1)).toBe(true);
+  });
+
+  test("a turn that ended error is retriable", () => {
+    const failed = failedPromptSeqs([user(1, "Do it"), turn(2, "error")]);
+    expect(failed.has(1)).toBe(true);
+  });
+
+  test("a stderr error before any work marks the prompt retriable", () => {
+    const failed = failedPromptSeqs([user(1, "Do it"), error(2, "provider unreachable"), turn(3, "end_turn")]);
+    expect(failed.has(1)).toBe(true);
+  });
+
+  test("a answered prompt is not retriable, even with a later stray error", () => {
+    const failed = failedPromptSeqs([
+      user(1, "Do it"),
+      assistant(2, "Done — all checks green."),
+      turn(3, "end_turn"),
+      error(4, "stderr noise after the fact"),
+    ]);
+    expect(failed.size).toBe(0);
+  });
+
+  test("a prompt the agent actually worked on is not retriable", () => {
+    const failed = failedPromptSeqs([
+      user(1, "Do it"),
+      { seq: 2, ts: 20, type: "tool", call: call("2") },
+      assistant(3, "Halfway there."),
+      turn(4, "end_turn"),
+    ]);
+    expect(failed.size).toBe(0);
+  });
+
+  test("the span closes at the next prompt, of any kind", () => {
+    const failed = failedPromptSeqs([
+      user(1, "Do it"),
+      turn(2, "end_turn"),
+      user(3, "Continue", "auto"),
+      assistant(4, "Done."),
+      turn(5, "end_turn"),
+    ]);
+    expect(failed.size).toBe(0);
   });
 });

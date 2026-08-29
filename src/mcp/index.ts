@@ -95,7 +95,8 @@ function sessionView(s: BoardSession | Session) {
     followUps: s.followUps,
     lastMessage: s.lastMessage,
     costUsd: s.costUsd,
-    tokens: s.tokens,
+    // Live context occupancy, not cumulative billing.
+    contextTokens: s.tokens,
     prNumber: s.prNumber ?? undefined,
     updatedAt: new Date(s.updatedAt).toISOString(),
   };

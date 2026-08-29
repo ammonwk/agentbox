@@ -37,6 +37,7 @@ function session(patch: Partial<Session> = {}): Session {
     blocked: false,
     flagReason: null,
     ompSessionId: null,
+    subs: null,
     createdAt: 0,
     updatedAt: 0,
     startedAt: 0,

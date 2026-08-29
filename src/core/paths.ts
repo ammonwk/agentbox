@@ -29,6 +29,23 @@ export const sessionDir = (): string => join(agentboxHome(), "sessions");
 export const repoRoot = (): string => join(agentboxHome(), "repos");
 export const dbPath = (): string => join(agentboxHome(), "agentbox.db");
 
+/** Scratch for MCP subagents: one directory per agent, holding the system
+ *  prompt file omp is launched with and that agent's transcript. Separate from
+ *  `sessions/` because a subagent is not a board session and must never appear
+ *  as one. */
+export const subagentRoot = (): string => join(agentboxHome(), "subagents");
+
+/**
+ * Pre-rendered status lines for calls that are still in flight, one file per
+ * blocked tool call, deleted when it answers.
+ *
+ * A file rather than a socket or a query against the running server, because
+ * the only consumer that matters is a shell script re-run every few seconds by
+ * a terminal, and it must cost approximately nothing. Reading a file is a bash
+ * builtin; anything else is a fork.
+ */
+export const liveRoot = (): string => join(agentboxHome(), "live");
+
 /**
  * The installed package's own root, resolved from this module's location
  * (`<root>/src/core/paths.ts`).
@@ -42,7 +59,7 @@ const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const webDist = join(packageRoot, "web", "dist");
 
 export const DEFAULT_PORT = 4479;
-export const DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
+export const DEFAULT_MODEL = "opencode-go/glm-5.3-flash";
 
 export function ensureDirs() {
   for (const d of [dataDir(), worktreeRoot(), sessionDir(), logDir(), repoRoot()]) {
@@ -52,6 +69,10 @@ export function ensureDirs() {
 
 export function sessionDirFor(id: string): string {
   return join(sessionDir(), id);
+}
+
+export function subagentDirFor(id: string): string {
+  return join(subagentRoot(), id);
 }
 
 export function logPathFor(id: string): string {

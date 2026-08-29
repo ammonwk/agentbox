@@ -110,7 +110,6 @@
 
 .repo-list,
 .worktree-list,
-.skill-list,
 .diag-list,
 .diag-warnings {
   list-style: none;
@@ -152,28 +151,6 @@
   margin-left: auto;
 }
 
-/* Provenance tag, shared by repos (local/github) and skills (global/agents/project). */
-.src {
-  font-size: 10.5px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 2px 7px;
-  border-radius: 999px;
-  flex-shrink: 0;
-  background: color-mix(in srgb, currentColor 14%, transparent);
-}
-.src.local,
-.src.project {
-  color: var(--success);
-}
-.src.github,
-.src.agents {
-  color: var(--info);
-}
-.src.global {
-  color: var(--accent);
-}
 /* Reclaim verdict. `keep` is the cautious answer and by far the more common
    one, so it reads as neutral rather than as an error. */
 .src.safe {
@@ -226,31 +203,6 @@
 }
 .worktree-row .reason {
   flex: 1 1 100%;
-}
-
-.skill-list li {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  align-items: baseline;
-  gap: 4px 10px;
-  padding: 10px 0;
-}
-.skill-list li + li {
-  border-top: 1px solid var(--border);
-}
-.skill-list .name {
-  font-weight: 600;
-  font-size: 13px;
-}
-.skill-list .desc {
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-.skill-list .path {
-  grid-column: 1 / -1;
-  font-size: 11px;
-  color: var(--faint);
 }
 
 .diag-head {
@@ -323,8 +275,7 @@
   .repo-add .input {
     width: 100%;
   }
-  .diag-list li,
-  .skill-list li {
+  .diag-list li {
     grid-template-columns: 1fr;
   }
 }

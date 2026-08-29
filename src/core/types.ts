@@ -75,6 +75,8 @@ export interface Session {
   prNumber: number | null;
   repoFullName: string | null;
   costUsd: number | null;
+  /** Live context occupancy in tokens — the last ACP `usage_update` `used`,
+   *  set rather than accumulated. Null until omp has reported once. */
   tokens: number | null;
 
   /** The agent asked for permission and is parked until answered. */
@@ -100,6 +102,13 @@ export interface Session {
    * holds the promise that answers it; this is the copy the UI reads.
    */
   permission: PermissionRequest | null;
+
+  /**
+   * The latest subagent progress snapshot any tool call of this session has
+   * carried, for the board row's "N subs · M running" line. Null until a run
+   * dispatches subagents; replaced whole, never merged.
+   */
+  subs: SubagentProgress[] | null;
 }
 
 export interface PermissionRequest {
@@ -146,6 +155,35 @@ export type ToolKind =
   | "think"
   | "other";
 
+/**
+ * One dispatched subagent, as omp reports it in a task tool call's streamed
+ * progress (`rawOutput.details.progress[]`).
+ *
+ * omp runs background subagents in-process — they are NOT separate ACP
+ * sessions — so this snapshot riding the parent's tool_call_update stream is
+ * the only visibility into them the protocol offers. Fields are omp's own
+ * progress entry, compacted to what a human scans; `recentTools` keeps the
+ * most recent first, as omp sends it.
+ */
+export interface SubagentProgress {
+  id: string;
+  /** The subagent type omp ran this one as ("scout", "reviewer", …). */
+  agent: string;
+  status: "pending" | "running" | "completed" | "failed";
+  /** The task text the subagent was dispatched with. */
+  task: string;
+  /** The tool the subagent is inside right now, when one is. */
+  currentTool?: string;
+  currentToolArgs?: string;
+  /** omp's intent string for the current or last tool call. */
+  lastIntent?: string;
+  toolCount: number;
+  tokens: number;
+  cost: number;
+  durationMs: number;
+  recentTools?: { tool: string; args?: string }[];
+}
+
 export type ToolStatus = "pending" | "running" | "ok" | "error";
 
 /**
@@ -167,6 +205,12 @@ export interface ToolCall {
   locations: string[];
   /** Compacted text of ACP `rawOutput`. Truncated; the log keeps it all. */
   output: string | null;
+  /**
+   * Subagent progress snapshot, when this call is one of omp's subagent
+   * tools (dispatch / wait / hub) and omp streamed one. Replaced whole on
+   * every update — it is a snapshot, not a delta.
+   */
+  subs?: SubagentProgress[];
   startedAt: number;
   endedAt: number | null;
 }
@@ -178,7 +222,7 @@ export type AdvisorySeverity = "nit" | "concern" | "blocker";
  * the UI uses to request only what it has not seen.
  */
 export type TranscriptEvent = { seq: number; ts: number } & (
-  | { type: "user"; text: string; from: "human" | "supervisor" }
+  | { type: "user"; text: string; from: "human" | "supervisor" | "auto" }
   | { type: "assistant"; text: string }
   | { type: "tool"; call: ToolCall }
   | { type: "advisory"; severity: AdvisorySeverity; text: string }
@@ -190,13 +234,21 @@ export type TranscriptEvent = { seq: number; ts: number } & (
 
 // ------------------------------------------------------------- supervisor
 
-export type SupervisorState = "ok" | "adrift" | "spiraling";
+/**
+ * What the judge can decide. Neither verdict disturbs the run: `ok` does
+ * nothing, `nudge` sends the agent one corrective message it can argue with.
+ * There used to be a third state that halted the session for a human; it is
+ * gone — a watcher that cuts a run off mid-stride does more damage than the
+ * loops it catches, and a nudge naming the loop does the same job without
+ * the guillotine.
+ */
+export type SupervisorState = "ok" | "nudge";
 
 export interface SupervisorVerdict {
   state: SupervisorState;
   /** One sentence, shown verbatim in the UI. */
   reason: string;
-  /** Sent to the agent when state === "adrift". */
+  /** Sent to the agent when state === "nudge". */
   nudge?: string;
   /**
    * What *initiated* this check, not what decided it — heuristics escalate to
@@ -264,7 +316,20 @@ export interface SkillInfo {
   name: string;
   description: string;
   source: "global" | "agents" | "project";
+  /** The skill directory — the folder that contains SKILL.md. */
   path: string;
+  /** Length of SKILL.md, for the "size" column. */
+  lines: number;
+  allowedTools?: string;
+  /** `disable-model-invocation: true` means slash-command only — never fires on its own. */
+  modelInvocable: boolean;
+}
+
+export interface SkillResult {
+  ok: boolean;
+  from: string;
+  to: string;
+  error?: string;
 }
 
 // -------------------------------------------------------------- settings

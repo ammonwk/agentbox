@@ -28,6 +28,7 @@ import { hrefOf, parseHash, type PageId, type Route } from "./route";
 import { SystemBar } from "./SystemBar";
 import { Inbox } from "./views/Inbox";
 import { Sessions } from "./views/Sessions";
+import { Skills } from "./views/Skills";
 import { Settings } from "./views/Settings";
 
 // ----------------------------------------------------------------- routing
@@ -65,6 +66,7 @@ function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
 const NAV: { id: PageId; label: string; icon: IconComponent }[] = [
   { id: "inbox", label: "Inbox", icon: Icon.inbox },
   { id: "sessions", label: "Sessions", icon: Icon.sessions },
+  { id: "skills", label: "Skills", icon: Icon.folder },
   { id: "settings", label: "Settings", icon: Icon.settings },
 ];
 
@@ -135,7 +137,15 @@ export function App() {
 
       <div className="main">
         <header className="topbar">
-          <h1>{route.page === "inbox" ? "Inbox" : route.page === "sessions" ? "Sessions" : "Settings"}</h1>
+          <h1>
+            {route.page === "inbox"
+              ? "Inbox"
+              : route.page === "sessions"
+                ? "Sessions"
+                : route.page === "skills"
+                  ? "Skills"
+                  : "Settings"}
+          </h1>
         </header>
 
         <StaleBanner />
@@ -150,10 +160,11 @@ export function App() {
           </Banner>
         ))}
 
-        {/* The Sessions board is its own height-constrained grid with internal
-            scrollers, so the shell must not pad it or scroll around it. */}
+        {/* The Sessions board and the Skills page are their own height-constrained
+            grids with internal scrollers, so the shell must not pad them or scroll
+            around them. */}
         <main
-          className={`content ${route.page === "sessions" && state ? "flush" : ""}`}
+          className={`content ${(route.page === "sessions" || route.page === "skills") && state ? "flush" : ""}`}
           id="content"
           ref={contentRef}
           tabIndex={-1}
@@ -168,6 +179,8 @@ export function App() {
               selectedId={route.sessionId}
               onSelect={selectSession}
             />
+          ) : route.page === "skills" ? (
+            <Skills skills={state.skills} />
           ) : (
             <Settings state={state} />
           )}
@@ -186,7 +199,7 @@ export function App() {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<PageId, number> {
-  if (!state) return { inbox: 0, sessions: 0, settings: 0 };
+  if (!state) return { inbox: 0, sessions: 0, skills: 0, settings: 0 };
   return {
     // The badge counts the rows the Inbox renders, by calling the function that
     // renders them. An earlier version reimplemented the filter here and the
@@ -197,6 +210,7 @@ function countsOf(state: AppState | null): Record<PageId, number> {
     // `WHERE archived_at IS NULL`. Filtering again would read as a guard and
     // hide that closed sessions never reach the client at all.
     sessions: state.sessions.filter((s) => s.status === "running" || s.status === "spawning").length,
+    skills: 0,
     settings: 0,
   };
 }

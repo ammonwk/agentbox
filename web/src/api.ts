@@ -20,6 +20,7 @@ import type {
   ServerMessage,
   Session,
   SessionDiff,
+  SkillResult,
   TranscriptEvent,
   WorktreeScan,
 } from "../../src/core/types";
@@ -49,6 +50,7 @@ export type {
   SessionDiff,
   SessionStatus,
   SkillInfo,
+  SkillResult,
   SupervisorSettings,
   SupervisorVerdict,
   SystemState,
@@ -136,9 +138,15 @@ export const api = {
   replyPermission: (id: string, approved: boolean) =>
     post<Session>(`/api/sessions/${id}/permission`, { approved }),
   closeSession: (id: string) => post<Session>(`/api/sessions/${id}/close`),
-  /** Backlog fetch. The live transcript comes over the socket — never poll this. */
-  events: (id: string, since = 0) =>
-    request<TranscriptEvent[]>(`/api/sessions/${id}/events?since=${since}`),
+  /** Backlog fetch, optionally windowed: only `seq < before`, capped to the
+   *  newest `limit` of that window — how the transcript pages backwards. The
+   *  live transcript comes over the socket — never poll this. */
+  events: (id: string, since = 0, opts: { before?: number; limit?: number } = {}) => {
+    const q = new URLSearchParams({ since: String(since) });
+    if (opts.before !== undefined) q.set("before", String(opts.before));
+    if (opts.limit !== undefined) q.set("limit", String(opts.limit));
+    return request<TranscriptEvent[]>(`/api/sessions/${id}/events?${q}`);
+  },
   diff: (id: string) => request<SessionDiff>(`/api/sessions/${id}/diff`),
   /** The per-process drilldown. Expensive server-side (smaps walks the whole
    *  subtree) — only ever behind an opened panel, never on the board. */
@@ -160,6 +168,12 @@ export const api = {
   /** Deep-merges server-side, so a partial is a patch, not a replacement. */
   saveSettings: (patch: DeepPartial<AgentSettings>) =>
     request<AgentSettings>("/api/settings", { method: "PUT", body: JSON.stringify(patch) }),
+
+  /** Skill body. `path` is the skill *directory* as listed in cold state. */
+  skillBody: (path: string) => request<{ body: string }>(`/api/skill/body?path=${encodeURIComponent(path)}`),
+  saveSkillBody: (path: string, body: string) => post<{ ok: boolean }>("/api/skill/body", { path, body }),
+  promoteSkill: (name: string) => post<SkillResult>("/api/skill/promote", { name }),
+  demoteSkill: (name: string) => post<SkillResult>("/api/skill/demote", { name }),
 };
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -409,17 +423,40 @@ export function mergeEventsBySeq(
   return [...held.values()].sort((a, b) => a.seq - b.seq);
 }
 
+/** Events fetched per `loadOlder()` page. Matches the server's watch backfill
+ *  cap: one page is one screenful of history, not the whole log. */
+const OLDER_PAGE = 500;
+
+/** State of the unread-for-history side of a transcript subscription. */
+export interface OlderEvents {
+  /** A page fetch is in flight — the UI shows it and holds further requests. */
+  loading: boolean;
+  /** Everything below the lowest held seq has been fetched (or there is
+   *  nothing held); no point asking again. */
+  exhausted: boolean;
+}
+
 export function useSessionEvents(sessionId: string | null): {
   events: TranscriptEvent[];
   live: boolean;
+  older: OlderEvents;
+  /** Fetch the next page of history below what is held. No-op while a fetch
+   *  is in flight, when exhausted, or when the beginning is already held. */
+  loadOlder: () => void;
 } {
   const [events, setEvents] = useState<TranscriptEvent[]>([]);
+  const [older, setOlder] = useState<OlderEvents>({ loading: false, exhausted: false });
   const bySeq = useRef(new Map<number, TranscriptEvent>());
+  const loadingRef = useRef(false);
+  const exhaustedRef = useRef(false);
   const { connected } = useConnection();
 
   useEffect(() => {
     bySeq.current = new Map();
+    loadingRef.current = false;
+    exhaustedRef.current = false;
     setEvents([]);
+    setOlder({ loading: false, exhausted: false });
     if (!sessionId) {
       wire.watch(null, 0);
       return;
@@ -439,7 +476,44 @@ export function useSessionEvents(sessionId: string | null): {
     };
   }, [sessionId]);
 
-  return { events, live: connected && wire.watchingId() === sessionId && sessionId !== null };
+  const loadOlder = useCallback(() => {
+    if (!sessionId || loadingRef.current || exhaustedRef.current) return;
+    let lowest = Infinity;
+    for (const seq of bySeq.current.keys()) if (seq < lowest) lowest = seq;
+    if (lowest === Infinity) {
+      exhaustedRef.current = true;
+      setOlder({ loading: false, exhausted: true });
+      return;
+    }
+    if (lowest <= 1) {
+      // Seq 1 is the start of the log — nothing older exists, but say so once.
+      exhaustedRef.current = true;
+      setOlder({ loading: false, exhausted: true });
+      return;
+    }
+
+    loadingRef.current = true;
+    setOlder({ loading: true, exhausted: false });
+    api
+      .events(sessionId, 0, { before: lowest, limit: OLDER_PAGE })
+      .then((page) => {
+        // A short page means the window below `lowest` is drained. An empty
+        // one means the log lost its head (or the session was resumed onto a
+        // fresh log) — either way there is nothing further to ask for.
+        if (page.length < OLDER_PAGE) exhaustedRef.current = true;
+        const next = mergeEventsBySeq(bySeq.current, page);
+        if (next) setEvents(next);
+      })
+      .catch(() => {
+        // Leave exhausted false: the next scroll-up retries.
+      })
+      .finally(() => {
+        loadingRef.current = false;
+        setOlder({ loading: false, exhausted: exhaustedRef.current });
+      });
+  }, [sessionId]);
+
+  return { events, live: connected && wire.watchingId() === sessionId && sessionId !== null, older, loadOlder };
 }
 
 // -------------------------------------------------------- shared 1s ticker
@@ -484,6 +558,15 @@ export function ago(ts: number | string, at: number = Date.now()): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86_400)}d ago`;
+}
+
+/** Time of day, for transcript tooltips: when a message actually landed. */
+export function fmtClock(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 /** Elapsed as a duration, for "running for 4m 12s". */

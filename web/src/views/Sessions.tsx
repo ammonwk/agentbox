@@ -24,7 +24,6 @@ export function Sessions({
   onSelect: (id: string | null) => void;
 }) {
   const [showNew, setShowNew] = useState(false);
-  const [showClosed, setShowClosed] = useState(false);
 
   const narrow = useIsNarrow();
   const sessions: SessionRow[] = state.sessions;
@@ -41,11 +40,6 @@ export function Sessions({
     if (!narrow && !selected && fallback) onSelect(fallback.id);
   }, [narrow, selected, fallback, onSelect]);
 
-  // An closed session reached by deep link must still be visible in the list.
-  useEffect(() => {
-    if (selected?.closedAt != null) setShowClosed(true);
-  }, [selected]);
-
   // Narrow: one pane at a time. Splitting 720px of height between a list and a
   // detail leaves the detail ~70px of transcript under its own header, tabs and
   // composer — a pane too small to use, not a tight one.
@@ -60,8 +54,6 @@ export function Sessions({
           selectedId={selected?.id ?? null}
           onSelect={onSelect}
           onNew={() => setShowNew(true)}
-          showClosed={showClosed}
-          onToggleClosed={setShowClosed}
         />
       )}
 
@@ -96,6 +88,7 @@ export function Sessions({
         <NewSession
           repos={state.repos}
           settings={state.settings}
+          skills={state.skills}
           onClose={() => setShowNew(false)}
           onCreated={(session) => {
             setShowNew(false);

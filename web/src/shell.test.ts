@@ -4,17 +4,22 @@ import { ago, fmtCost, fmtTokens, mergeEventsBySeq } from "./api";
 import type { TranscriptEvent } from "../../src/core/types";
 
 describe("routing", () => {
-  test("reads the three pages and a session deep link", () => {
+  test("reads the four pages and a session deep link", () => {
     expect(parseHash("#/inbox")).toEqual({ page: "inbox" });
+    expect(parseHash("#/skills")).toEqual({ page: "skills" });
     expect(parseHash("#/settings")).toEqual({ page: "settings" });
     expect(parseHash("#/sessions")).toEqual({ page: "sessions", sessionId: null });
     expect(parseHash("#/sessions/abc123")).toEqual({ page: "sessions", sessionId: "abc123" });
   });
 
   test("anything unrecognised lands on the inbox rather than a blank screen", () => {
-    for (const hash of ["", "#", "#/", "#/nope", "#/prs", "#/skills/x"]) {
+    for (const hash of ["", "#", "#/", "#/nope", "#/prs"]) {
       expect(parseHash(hash).page).toBe("inbox");
     }
+  });
+
+  test("a skills deep link ignores trailing segments", () => {
+    expect(parseHash("#/skills/whatever").page).toBe("skills");
   });
 
   test("round-trips every route, including ids needing escaping", () => {

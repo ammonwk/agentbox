@@ -59,6 +59,29 @@ export function sinceParam(url: URL): number | undefined {
   return n;
 }
 
+/** `?before=` on the events route — exclusive upper seq bound, for paging
+ *  backwards through a transcript. */
+export function beforeParam(url: URL): number | undefined {
+  const raw = url.searchParams.get("before");
+  if (raw === null || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new HttpError(400, "before must be a positive integer seq");
+  return n;
+}
+
+/** `?limit=` on the events route — keep at most this many of the window, from
+ *  its newest end. Capped: a typo'd limit must not ask the server to serialize
+ *  the whole log. */
+export function limitParam(url: URL, max = 5000): number | undefined {
+  const raw = url.searchParams.get("limit");
+  if (raw === null || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > max) {
+    throw new HttpError(400, `limit must be an integer between 1 and ${max}`);
+  }
+  return n;
+}
+
 /**
  * Validate a settings PUT body into a `SettingsPatch`.
  *

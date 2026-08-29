@@ -9,7 +9,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk";
-import type { AdvisorySeverity, ToolCall, ToolKind, ToolStatus } from "./types";
+import type { AdvisorySeverity, SubagentProgress, ToolCall, ToolKind, ToolStatus } from "./types";
 
 /** Upper bound on the tool output we put in a transcript event. The full
  *  `rawOutput` object still goes to the session's JSONL log. */
@@ -31,16 +31,28 @@ export interface AcpEvents {
   onText: (sessionId: string, text: string) => void;
   /** A tool call was announced. `call.status` is pending or running. */
   onToolStart: (sessionId: string, call: ToolCall) => void;
+  /**
+   * A still-running tool call moved, and the move is worth a transcript
+   * event — today only subagent progress snapshots qualify. Ordinary tool
+   * chatter stays off the wire; only the terminal update is recorded.
+   */
+  onToolUpdate: (sessionId: string, call: ToolCall) => void;
   /** A tool call reached a terminal status. `raw` is ACP's whole rawOutput. */
   onToolEnd: (sessionId: string, call: ToolCall, raw: unknown) => void;
   /** An advisor note, parsed out of a user_message_chunk. */
   onAdvisory: (sessionId: string, severity: AdvisorySeverity, text: string) => void;
   /**
-   * A turn finished. stopReason is one of end_turn/max_tokens/refusal/cancelled.
-   * `tokens` is what this turn billed (`PromptResponse.usage.totalTokens`,
-   * input + output + cache reads) — per turn, so the caller accumulates.
+   * A turn finished. stopReason is one of ACP's end_turn/max_tokens/refusal/
+   * cancelled — plus `error`, which is agentbox's own and means the prompt
+   * request itself failed rather than the model finishing.
    */
-  onTurnEnd: (sessionId: string, stopReason: string, tokens: number) => void;
+  onTurnEnd: (sessionId: string, stopReason: string) => void;
+  /**
+   * Live context occupancy, from ACP's `usage_update`: `used` is the tokens
+   * currently in context and `size` the window. Set, never accumulated —
+   * each report replaces the last.
+   */
+  onContext: (sessionId: string, used: number, size: number) => void;
   /** Cumulative session cost in USD. omp reports it as a running total, and it
    *  survives a resume into a new process, so it is set rather than added. */
   onUsage: (sessionId: string, costUsd: number) => void;
@@ -92,6 +104,77 @@ function toolStatusOf(raw: unknown, fallback: ToolStatus): ToolStatus {
 
 function isTerminal(s: ToolStatus): boolean {
   return s === "ok" || s === "error";
+}
+
+// ------------------------------------------------------------- subagents
+
+function num(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+function subagentStatusOf(raw: unknown): SubagentProgress["status"] {
+  return raw === "completed" || raw === "failed" || raw === "running" || raw === "pending"
+    ? raw
+    : "pending";
+}
+
+function recentToolsOf(raw: unknown): SubagentProgress["recentTools"] {
+  if (!Array.isArray(raw)) return undefined;
+  const out: { tool: string; args?: string }[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.tool !== "string" || !e.tool) continue;
+    out.push({ tool: e.tool, args: typeof e.args === "string" ? e.args : undefined });
+  }
+  return out.length ? out : undefined;
+}
+
+/**
+ * Pull omp's subagent progress snapshot out of a task/hub tool call's
+ * `rawOutput`.
+ *
+ * omp runs background subagents in-process — they are not separate ACP
+ * sessions — and streams their progress as `details.progress[]` on the
+ * parent call's partial results. That stream is the only visibility the
+ * protocol gives into them, so anything shaped like it is kept whole.
+ * Returns undefined when the payload carries no snapshot, which is the
+ * common case for every non-subagent tool.
+ */
+export function subagentsOf(rawOutput: unknown): SubagentProgress[] | undefined {
+  if (!rawOutput || typeof rawOutput !== "object") return undefined;
+  const details = (rawOutput as Record<string, unknown>).details;
+  if (!details || typeof details !== "object") return undefined;
+  const progress = (details as Record<string, unknown>).progress;
+  if (!Array.isArray(progress) || progress.length === 0) return undefined;
+
+  const subs: SubagentProgress[] = [];
+  for (const entry of progress) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    const id = typeof e.id === "string" ? e.id : null;
+    if (!id) continue;
+    subs.push({
+      id,
+      agent: typeof e.agent === "string" && e.agent ? e.agent : "task",
+      status: subagentStatusOf(e.status),
+      task:
+        typeof e.task === "string"
+          ? e.task
+          : typeof e.assignment === "string"
+            ? e.assignment
+            : "",
+      currentTool: typeof e.currentTool === "string" ? e.currentTool : undefined,
+      currentToolArgs: typeof e.currentToolArgs === "string" ? e.currentToolArgs : undefined,
+      lastIntent: typeof e.lastIntent === "string" ? e.lastIntent : undefined,
+      toolCount: num(e.toolCount),
+      tokens: num(e.tokens),
+      cost: num(e.cost),
+      durationMs: num(e.durationMs),
+      recentTools: recentToolsOf(e.recentTools),
+    });
+  }
+  return subs.length ? subs : undefined;
 }
 
 function locationsOf(raw: unknown): string[] {
@@ -194,6 +277,7 @@ export class ToolCallTracker {
       // puts the command echo there ("$ ls -1 src"), which is the input wearing
       // the output's clothes.
       output: null,
+      subs: subagentsOf(payload.rawOutput),
       startedAt: now,
       endedAt: null,
     };
@@ -230,6 +314,7 @@ export class ToolCallTracker {
     const status = toolStatusOf(payload.status, prev.status);
     const output = summarizeToolOutput(payload.rawOutput, payload.content);
     const locations = locationsOf(payload.locations);
+    const subs = subagentsOf(payload.rawOutput);
     const call: ToolCall = {
       ...prev,
       kind: payload.kind === undefined || payload.kind === null ? prev.kind : toolKindOf(payload.kind),
@@ -238,6 +323,9 @@ export class ToolCallTracker {
       status,
       locations: locations.length ? locations : prev.locations,
       output: output ?? prev.output,
+      // A snapshot replaces the last one whole; an update without one leaves
+      // the previous snapshot standing rather than erasing the roster.
+      subs: subs ?? prev.subs,
       endedAt: isTerminal(status) ? (prev.endedAt ?? now) : prev.endedAt,
     };
     this.remember(id, call);
@@ -529,11 +617,17 @@ export class AcpRunner {
       case "tool_call_update": {
         const res = this.tools.update(update as unknown as Record<string, unknown>);
         if (res?.finished) this.events.onToolEnd(this.id, res.call, update.rawOutput);
+        // A mid-flight move that carries a subagent snapshot is the one kind
+        // of progress worth a transcript event — it is how a human watches a
+        // fan-out live. Everything else waits for its terminal update.
+        else if (res && res.call.subs) this.events.onToolUpdate(this.id, res.call);
         break;
       }
       case "usage_update": {
-        // `used`/`size` are context occupancy, not work done — the session's
-        // token count comes from each turn's PromptResponse instead.
+        // `used` is the tokens currently in context and `size` the window —
+        // exactly what a context meter should show, unlike the turn's billed
+        // totals. Cost stays cumulative.
+        this.events.onContext(this.id, update.used, update.size);
         if (update.cost) this.events.onUsage(this.id, update.cost.amount);
         break;
       }
@@ -563,12 +657,17 @@ export class AcpRunner {
       .then((res) => {
         // The turn is done. stopReason is authoritative even when updates raced ahead.
         this.busy = false;
-        this.events.onTurnEnd(this.id, res.stopReason, res.usage?.totalTokens ?? 0);
+        this.events.onTurnEnd(this.id, res.stopReason);
         this.pump();
       })
       .catch((err: unknown) => {
         this.busy = false;
         this.events.onError(this.id, messageOf(err));
+        // A rejected prompt request is still a turn boundary. Without this the
+        // session row stays `running` forever — busy is false, the runner is
+        // idle, and nothing ever says the turn is over. `error` is not an ACP
+        // stopReason; it is ours, and consumers treat it as an abnormal end.
+        this.events.onTurnEnd(this.id, "error");
         this.pump();
       });
   }

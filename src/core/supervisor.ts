@@ -38,8 +38,11 @@ const REPEAT_COMMAND = 3;
 const ERROR_STREAK = 4;
 /** Edits to one path before it counts as thrashing. */
 const EDIT_SAME_FILE = 6;
-/** Evidence lines handed to the judge. */
-const WINDOW = 40;
+/** Evidence lines kept by the in-module fallback window — used only when the
+ *  engine's transcript is not reachable. The judge itself reads the whole
+ *  conversation; culling it here was why a judge could decide a long run was
+ *  off task from its last forty calls alone. */
+const FALLBACK_WINDOW = 40;
 /** A cheap model reading a cheap model; it should not need longer than this. */
 const JUDGE_TIMEOUT_MS = 60_000;
 /** Sessions untouched for this long are forgotten by the periodic sweep. */
@@ -57,7 +60,7 @@ const MAX_KEYS = 256;
  * the single most load-bearing field here. Measured against the real judge on
  * an identical seven-round edit-then-test loop: without it the verdict is
  * `ok` ("each run is preceded by an edit, so it is iterating"); with it the
- * verdict is `spiraling` ("each edit reproduces the identical failure"). The
+ * verdict is `nudge` ("each edit reproduces the identical failure"). The
  * same fixture with *differing* error text still comes back `ok`, so this buys
  * the detection without costing a false positive — the error text is what
  * separates debugging from thrashing, and nothing else in the line does.
@@ -129,18 +132,43 @@ function evidenceOfCall(call: ToolCall): Evidence {
     summary: summarizeCall(call),
     status: call.status,
   };
-  // Only on failures: a successful call's output is bulk, and the judge is
-  // reading a compact window. See the note on Evidence for why this matters.
-  if (call.status === "error" && call.output) ev.detail = clip(call.output, 200);
+  // A subagent call's evidence line is the tally — "4 subagents: 3 completed,
+  // 1 failed (AuditPR2)". Without it the judge sees a ten-minute opaque call
+  // and cannot tell a healthy fan-out from a stuck one; with it, a subagent
+  // that failed or never finished is visible exactly where the failure is.
+  if (call.subs?.length) {
+    ev.detail = clip(subagentTally(call.subs), 200);
+  } else if (call.status === "error" && call.output) {
+    // Only on failures: a successful call's output is bulk, and the judge is
+    // reading a compact window. See the note on Evidence for why this matters.
+    ev.detail = clip(call.output, 200);
+  }
   return ev;
 }
 
-/** Compact a transcript into the window the judge reads. Tool calls carry the
- *  behaviour; assistant text carries the intent, and without it a judge cannot
- *  tell exploration from thrashing. */
+/** One bounded line describing where a fan-out got to. */
+function subagentTally(subs: NonNullable<ToolCall["subs"]>): string {
+  const by = (s: string) => subs.filter((x) => x.status === s);
+  const failed = by("failed");
+  const parts = [
+    `${subs.length} subagents`,
+    `${by("completed").length} completed`,
+    `${by("running").length} running`,
+  ];
+  if (failed.length) parts.push(`${failed.length} failed (${failed.map((f) => f.id).join(", ")})`);
+  const pending = by("pending").length;
+  if (pending) parts.push(`${pending} pending`);
+  return parts.join(", ");
+}
+
+/** Compact the whole transcript into the evidence the judge reads. Tool calls
+ *  carry the behaviour; assistant text carries the intent, and without it a
+ *  judge cannot tell exploration from thrashing. The full history goes in, not
+ *  a trailing window — whether an agent is doing a subset of its task is a
+ *  question about the whole run, and a judge reading only the tail keeps
+ *  answering it wrong. */
 export function evidenceFromEvents(
   events: TranscriptEvent[],
-  limit = WINDOW,
 ): Evidence[] {
   const out: Evidence[] = [];
   for (const e of events) {
@@ -149,7 +177,7 @@ export function evidenceFromEvents(
       out.push({ t: "text", text: clip(e.text, 300) });
     }
   }
-  return out.slice(-limit);
+  return out;
 }
 
 export function renderEvidence(evidence: Evidence[]): string {
@@ -246,7 +274,7 @@ export function foldCall(st: HeuristicState, call: ToolCall): void {
     }
 
     st.recent.push({ id: call.id, ev: evidenceOfCall(call) });
-    if (st.recent.length > WINDOW) st.recent.shift();
+    if (st.recent.length > FALLBACK_WINDOW) st.recent.shift();
   } else {
     // The completion update is where the status and the output finally arrive,
     // so replace the line rather than patching the status onto a stale one —
@@ -297,8 +325,7 @@ export function checkHeuristics(st: HeuristicState): string | null {
 
 const STATES: ReadonlySet<string> = new Set<SupervisorState>([
   "ok",
-  "adrift",
-  "spiraling",
+  "nudge",
 ]);
 
 /** Everything between the first `{` and the last `}`, so a model that wrapped
@@ -340,9 +367,9 @@ export function parseVerdict(
   const nudge =
     typeof o.nudge === "string" && o.nudge.trim() ? clip(o.nudge, 600) : undefined;
 
-  // An "adrift" verdict with nothing to say cannot be acted on — the action is
+  // A "nudge" verdict with nothing to say cannot be acted on — the action is
   // literally "send the nudge" — so it is an "ok" with extra steps.
-  if (state === "adrift" && !nudge) {
+  if (state === "nudge" && !nudge) {
     return { state: "ok", reason, source, atToolCall };
   }
 
@@ -594,10 +621,10 @@ async function judge(
     verdict = okVerdict(at, "model", "The supervisor errored; assuming ok.");
   }
 
-  if (verdict.state === "spiraling") {
-    // The engine is about to interrupt and flag. When a human resumes, the
-    // counters that fired must be gone, or the first tool call of the resumed
-    // run re-trips the same heuristic and flags it straight back.
+  if (verdict.state === "nudge") {
+    // The counters that fired are spent: the correction is on its way, and a
+    // watch that re-trips the same signature on the very next call would nudge
+    // the agent into every turn for the rest of the run. Start the watch fresh.
     st.heur = newHeuristicState();
     st.lastJudgeAt = session.toolCalls;
   }

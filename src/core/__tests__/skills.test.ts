@@ -1,11 +1,23 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  demoteSkill,
   listSkills,
   parseFrontmatterForTest as parseFrontmatter,
+  promoteSkill,
+  readSkillBody,
   skillRoots,
+  writeSkillBody,
   type SkillRoot,
 } from "../skills";
 
@@ -253,5 +265,145 @@ describe("skillRoots precedence", () => {
     // The project root tracks the working directory rather than being frozen at
     // import — that freezing is what pinned it to the server's launch dir.
     expect(dirs.project.startsWith(process.cwd())).toBe(true);
+  });
+});
+
+/**
+ * The fields the Skills page shows beyond name/description — line count, the
+ * tool allow-list, and whether the model can invoke the skill at all.
+ * `allowed-tools` and `disable-model-invocation` came in with the page port;
+ * before that the scan carried only what the read-only Settings card showed.
+ */
+describe("SkillInfo fields", () => {
+  const wrap = (body: string) => `---\n${body}\n---\nbody text here`;
+
+  test("allowed-tools is parsed", () => {
+    const fm = parseFrontmatter(wrap("name: x\nallowed-tools: Bash, Edit, Read"));
+    expect(fm.allowedTools).toBe("Bash, Edit, Read");
+  });
+
+  test("disable-model-invocation: true makes the skill non-model-invocable", () => {
+    const fm = parseFrontmatter(wrap("disable-model-invocation: true"));
+    expect(fm.disableModelInvocation).toBe("true");
+  });
+
+  test("lines counts SKILL.md including the body", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agentbox-skills-fields-"));
+    try {
+      const dir = join(tmp, ".claude", "skills", "counted");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), `---\nname: counted\ndescription: d\n---\nbody\nmore\n`);
+      const found = listSkills([{ source: "global", dir: join(tmp, ".claude", "skills") }]).skills[0];
+      expect(found.lines).toBe(7);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("an unset disable-model-invocation leaves the skill model-invocable", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agentbox-skills-fields-"));
+    try {
+      const dir = join(tmp, ".claude", "skills", "plain");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), "---\nname: plain\n---\nbody\n");
+      const found = listSkills([{ source: "global", dir: join(tmp, ".claude", "skills") }]).skills[0];
+      expect(found.modelInvocable).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Promote / demote / read / write. These write to `~/.claude/skills`, so HOME
+ * is redirected to a throwaway directory for the life of each test — the same
+ * `home()` discipline the rest of the module follows.
+ */
+describe("promote / demote", () => {
+  const realHome = process.env.HOME;
+  const home = mkdtempSync(join(tmpdir(), "agentbox-skills-home-"));
+  const projectRoot = join(home, "repo", ".claude", "skills");
+  const globalRoot = join(home, ".claude", "skills");
+
+  function skill(name: string, extra = ""): void {
+    mkdirSync(join(projectRoot, name), { recursive: true });
+    writeFileSync(
+      join(projectRoot, name, "SKILL.md"),
+      `---\nname: ${name}\ndescription: d\n${extra}---\nbody\n`
+    );
+  }
+
+  const asProject = (name: string) => ({
+    name,
+    description: "d",
+    source: "project" as const,
+    path: join(projectRoot, name),
+    lines: 6,
+    modelInvocable: true,
+  });
+
+  afterAll(() => {
+    if (realHome === undefined) delete process.env.HOME;
+    else process.env.HOME = realHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("promote copies the project skill into the global root", () => {
+    process.env.HOME = home;
+    skill("promotable");
+    const r = promoteSkill(asProject("promotable"));
+    expect(r.ok).toBe(true);
+    expect(existsSync(join(globalRoot, "promotable", "SKILL.md"))).toBe(true);
+    // Copy, not move: the repo's copy survives so teammates and CI keep working.
+    expect(existsSync(join(projectRoot, "promotable", "SKILL.md"))).toBe(true);
+  });
+
+  test("promote refuses to clobber an existing global skill", () => {
+    process.env.HOME = home;
+    skill("twice");
+    mkdirSync(join(globalRoot, "twice"), { recursive: true });
+    writeFileSync(join(globalRoot, "twice", "SKILL.md"), "already here");
+    const r = promoteSkill(asProject("twice"));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("already exists");
+  });
+
+  test("demote removes the global skill", () => {
+    process.env.HOME = home;
+    mkdirSync(join(globalRoot, "cleanup"), { recursive: true });
+    writeFileSync(join(globalRoot, "cleanup", "SKILL.md"), "body");
+    const r = demoteSkill("cleanup");
+    expect(r.ok).toBe(true);
+    expect(existsSync(join(globalRoot, "cleanup"))).toBe(false);
+  });
+
+  test("demote of a skill that is not global says so", () => {
+    process.env.HOME = home;
+    const r = demoteSkill("never-was-global");
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("not found");
+  });
+});
+
+describe("skill body read / write", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "agentbox-skills-body-"));
+
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  test("readSkillBody returns the file, or empty for a missing one", () => {
+    const dir = join(tmp, "s");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "hello\n");
+    expect(readSkillBody(join(dir, "SKILL.md"))).toBe("hello\n");
+    expect(readSkillBody(join(dir, "nope.md"))).toBe("");
+  });
+
+  test("writeSkillBody round-trips", () => {
+    const dir = join(tmp, "w");
+    mkdirSync(dir, { recursive: true });
+    const md = join(dir, "SKILL.md");
+    writeFileSync(md, "old");
+    expect(writeSkillBody(md, "new body")).toBe(true);
+    expect(readFileSync(md, "utf8")).toBe("new body");
   });
 });

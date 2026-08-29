@@ -105,6 +105,133 @@ export function formatInput(input: unknown): string {
   }
 }
 
+// -------------------------------------------------------------- subagents
+
+/** One entry of a dispatch call's `tasks` array. */
+export interface DispatchedSub {
+  name: string;
+  agent: string;
+  task: string;
+}
+
+/**
+ * omp's subagent surface, classified from the shape of `rawInput`.
+ *
+ * omp does not put tool names on the wire (see `ToolCall`), and its subagent
+ * tools arrive as `kind: "other"` / `kind: "read"` rows indistinguishable
+ * from any other call. Three shapes cover the whole surface, confirmed
+ * against a live fan-out:
+ *
+ * - dispatch — `{tasks: [{name, agent, task}], context}`; returns as soon as
+ *   the subagents are started ("Spawned 4 background agents…").
+ * - wait — `{op: "wait", timeoutMs, to?, message?}`; the long-running poll
+ *   where wall-clock time actually passes, optionally carrying a DM to one
+ *   named subagent.
+ * - collect — `{path: "agent://<id>"}`; reading one subagent's final result.
+ */
+export type SubagentCall =
+  | { kind: "dispatch"; tasks: DispatchedSub[] }
+  | { kind: "wait"; to: string | null; message: string | null }
+  | { kind: "collect"; name: string };
+
+export function subagentCallOf(call: ToolCall): SubagentCall | null {
+  const input = call.input;
+  if (typeof input !== "object" || input === null) return null;
+  const o = input as Record<string, unknown>;
+
+  if (Array.isArray(o.tasks)) {
+    const tasks: DispatchedSub[] = [];
+    for (const entry of o.tasks) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as Record<string, unknown>;
+      if (typeof e.name !== "string" || !e.name) continue;
+      tasks.push({
+        name: e.name,
+        agent: typeof e.agent === "string" && e.agent ? e.agent : "task",
+        task: typeof e.task === "string" ? e.task : "",
+      });
+    }
+    return tasks.length ? { kind: "dispatch", tasks } : null;
+  }
+
+  if (o.op === "wait") {
+    return {
+      kind: "wait",
+      to: typeof o.to === "string" && o.to ? o.to : null,
+      message: typeof o.message === "string" && o.message ? o.message : null,
+    };
+  }
+
+  const path = typeof o.path === "string" ? o.path : null;
+  if (path?.startsWith("agent://")) {
+    // omp allows `agent://<id>?q=…` extraction queries; the id is the path part.
+    const name = path.slice("agent://".length).split("?")[0]?.trim();
+    return { kind: "collect", name: name || "subagent" };
+  }
+
+  return null;
+}
+
+export const SUBAGENT_KIND_LABEL: Record<SubagentCall["kind"], string> = {
+  dispatch: "Subagents",
+  wait: "Wait",
+  collect: "Subagent result",
+};
+
+// ------------------------------------------------------- subagent drilldown
+
+/**
+ * Snapshot `recentTools` carry a bare tool name, and for omp's `hub` tool no
+ * arguments at all — every spawned agent gets `hub` (its background-job
+ * surface: dispatch, wait, jobs, send) and uses it constantly, so an
+ * unlabeled row would read as noise repeating every few minutes. Name what
+ * the tool is for; the specific op is not on the wire.
+ */
+export function subagentStepLabel(step: { tool: string; args: string | null }): string {
+  if (step.tool === "hub" && !step.args) return "hub — background jobs";
+  return step.tool;
+}
+
+/** Row tooltip for a `hub` step with no reported arguments. */
+export const HUB_STEP_HINT =
+  "omp's background-job tool — the agent dispatched, polled, or blocked on one of " +
+  "its own background jobs (often a PR-monitor wait, which can hold for minutes). " +
+  "omp reports no arguments for these calls, so the specific op is unknown.";
+
+// ---------------------------------------------------------------- PR links
+
+const PR_REF = /#\d{2,7}/g;
+
+/** Base URL for PR links, or null when the repo has no GitHub slug. */
+export function prBaseOf(repoFullName: string | null | undefined): string | null {
+  return repoFullName ? `https://github.com/${repoFullName}/pull/` : null;
+}
+
+export interface PRSegment {
+  text: string;
+  /** The PR number when this segment is a `#1234` reference, else null. */
+  pr: number | null;
+}
+
+/**
+ * Split text into plain runs and PR references. Two digits minimum, so
+ * "#1"-style enumerations stay prose; everything else links, false
+ * positives and all — a mislinked number costs a click, a missing link
+ * costs a search.
+ */
+export function splitPRRefs(text: string): PRSegment[] {
+  const out: PRSegment[] = [];
+  let last = 0;
+  for (const m of text.matchAll(PR_REF)) {
+    const idx = m.index ?? 0;
+    if (idx > last) out.push({ text: text.slice(last, idx), pr: null });
+    out.push({ text: m[0], pr: Number(m[0].slice(1)) });
+    last = idx + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), pr: null });
+  return out;
+}
+
 // ---------------------------------------------------------------- session
 
 export function canInterrupt(s: Session): boolean {

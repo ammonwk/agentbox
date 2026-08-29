@@ -1,7 +1,15 @@
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import {
+  readFileSync,
+  existsSync,
+  readdirSync,
+  mkdirSync,
+  rmSync,
+  copyFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { SkillInfo } from "./types";
+import type { SkillInfo, SkillResult } from "./types";
 
 /**
  * Where we look for skills, in **precedence** order — first root to supply a
@@ -52,8 +60,8 @@ export function skillRoots(): SkillRoot[] {
 }
 
 /**
- * Parse the leading YAML frontmatter of a SKILL.md — just the two keys we
- * display; the body is not read, because nothing renders it.
+ * Parse the leading YAML frontmatter of a SKILL.md — the keys the UI displays
+ * or acts on; the body is not read, because nothing renders it.
  *
  * Block scalars are the point of this function. A long `description:` is
  * conventionally written folded, and reading only the rest of the key's line
@@ -62,20 +70,29 @@ export function skillRoots(): SkillRoot[] {
  * discarded. A real YAML parser is far more surface than one field needs, so
  * this handles the subset that actually appears and nothing else.
  */
-function parseFrontmatter(text: string): { name?: string; description?: string } {
+function parseFrontmatter(text: string): {
+  name?: string;
+  description?: string;
+  allowedTools?: string;
+  disableModelInvocation?: string;
+} {
   // Normalise line endings once, up front. `\r` is a line terminator to a JS
   // regex, so `.` never matches it — a CRLF file's `\r` survived into the
   // block-scalar body and came back out inside the description. Handling it at
   // each match site instead means every future regex here has to remember.
   const m = text.replace(/\r\n?/g, "\n").match(/^---\n([\s\S]*?)\n---/);
   if (!m) return {};
-  const fm: { name?: string; description?: string } = {};
+  const fm: { name?: string; description?: string; allowedTools?: string; disableModelInvocation?: string } = {};
   const lines = m[1].split("\n");
 
   for (let i = 0; i < lines.length; i++) {
-    const kv = lines[i].match(/^(name|description):\s*(.*?)\s*$/);
+    const kv = lines[i].match(/^(name|description|allowed-tools|disable-model-invocation):\s*(.*?)\s*$/);
     if (!kv) continue;
-    const key = kv[1] as "name" | "description";
+    // Frontmatter keys are hyphenated; the object fields are camelCase.
+    const field = { "allowed-tools": "allowedTools", "disable-model-invocation": "disableModelInvocation" }[
+      kv[1]
+    ] ?? kv[1];
+    const key = field as keyof typeof fm;
     const inline = kv[2];
 
     // `|`, `>` and their chomping/indentation variants (`|-`, `>+`, `|2`).
@@ -161,6 +178,11 @@ export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
         description: fm.description ?? "",
         source,
         path: skillDir,
+        lines: raw.split("\n").length,
+        allowedTools: fm.allowedTools,
+        // `disable-model-invocation: true` means slash-command only — a
+        // meaningful distinction, because those never fire on their own.
+        modelInvocable: fm.disableModelInvocation !== "true",
       });
     }
   }
@@ -181,4 +203,77 @@ export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
 
   const unique = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
   return { skills: unique, warnings };
+}
+
+// ─── Read / write / promote / demote ────────────────────────────────────────
+
+/** The skill directory a name resolves to in the global root. */
+function globalSkillDir(name: string): string {
+  return join(home(), ".claude", "skills", name);
+}
+
+/** Read a skill file. The caller confines the path before it reaches us. */
+export function readSkillBody(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+export function writeSkillBody(path: string, body: string): boolean {
+  try {
+    writeFileSync(path, body);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Copy a project skill to the global directory.
+ *
+ * Copy, never move. The repo's copy stays where it is so that teammates and CI
+ * keep working, and so an over-eager promotion is a no-op to undo rather than a
+ * commit to revert. Refuses to clobber an existing global skill of the same name.
+ */
+export function promoteSkill(skill: SkillInfo): SkillResult {
+  const destDir = globalSkillDir(skill.name);
+  const result: SkillResult = { ok: false, from: skill.path, to: destDir };
+  if (existsSync(destDir)) {
+    return { ...result, error: `a global skill named "${skill.name}" already exists` };
+  }
+  try {
+    copyDir(skill.path, destDir);
+    return { ...result, ok: true };
+  } catch (e) {
+    return { ...result, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export function demoteSkill(name: string): SkillResult {
+  const dir = globalSkillDir(name);
+  const result: SkillResult = { ok: false, from: dir, to: "" };
+  if (!existsSync(dir)) return { ...result, error: "not found" };
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return { ...result, ok: true };
+  } catch (e) {
+    return { ...result, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function copyDir(src: string, dest: string): void {
+  mkdirSync(dest, { recursive: true });
+  for (const e of readdirSync(src, { withFileTypes: true })) {
+    const from = join(src, e.name);
+    const to = join(dest, e.name);
+    if (e.isDirectory()) {
+      // Skip scratch output — a skill's working files are not part of the skill.
+      if (e.name === "scratchpad" || e.name === "node_modules") continue;
+      copyDir(from, to);
+    } else {
+      copyFileSync(from, to);
+    }
+  }
 }

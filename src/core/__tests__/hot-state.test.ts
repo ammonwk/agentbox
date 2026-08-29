@@ -20,7 +20,7 @@ function session(patch: Partial<Session>): Session {
     toolCalls: 0, exitCode: null, pid: null, hostPid: null, permission: null,
     prNumber: null, repoFullName: null,
     costUsd: null, tokens: null, blocked: false, flagReason: null,
-    ompSessionId: null, createdAt: 1, updatedAt: 1, startedAt: null,
+    ompSessionId: null, subs: null, createdAt: 1, updatedAt: 1, startedAt: null,
     closedAt: null, ...patch,
   };
 }

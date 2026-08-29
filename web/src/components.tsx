@@ -63,6 +63,7 @@ export const Icon = {
   check: I("M5 13l4 4L19 7"),
   x: I("M6 6l12 12M18 6L6 18"),
   chevronRight: I("M9 5l7 7-7 7"),
+  chevronLeft: I("M15 5l-7 7 7 7"),
   chevronDown: I("M5 9l7 7 7-7"),
   arrowDown: I("M12 4v15M6 13l6 6 6-6"),
   external: I("M14 4h6v6", "M20 4L11 13M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"),

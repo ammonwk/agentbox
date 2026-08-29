@@ -253,7 +253,7 @@ describe("the shapes that decide whether the judge can see a spiral", () => {
     // omp puts the command itself in `content` while a call is pending, so a
     // summariser that read it early would show a command as its own result and
     // make every repeat look like it produced identical output — a false
-    // `spiraling`. `detail` is gated on status "error", which is terminal, so
+    // `nudge`. `detail` is gated on status "error", which is terminal, so
     // the echo cannot get in.
     const st = newHeuristicState();
     foldCall(st, { ...exec("bun test", "pending"), output: "bun test" });
@@ -294,10 +294,11 @@ describe("the shapes that decide whether the judge can see a spiral", () => {
 
 describe("parseVerdict", () => {
   test("parses a clean object", () => {
-    const v = parseVerdict('{"state":"spiraling","reason":"loops on bun test"}', 25, "model");
+    const v = parseVerdict('{"state":"nudge","reason":"loops on bun test","nudge":"Fix the test."}', 25, "model");
     expect(v).toEqual({
-      state: "spiraling",
+      state: "nudge",
       reason: "loops on bun test",
+      nudge: "Fix the test.",
       source: "model",
       atToolCall: 25,
     });
@@ -308,19 +309,19 @@ describe("parseVerdict", () => {
     expect(parseVerdict(raw, 1, "heuristic")?.state).toBe("ok");
   });
 
-  test("keeps the nudge on adrift", () => {
+  test("keeps the nudge text on nudge", () => {
     const v = parseVerdict(
-      '{"state":"adrift","reason":"stubbed the parser","nudge":"Implement parse() for real."}',
+      '{"state":"nudge","reason":"stubbed the parser","nudge":"Implement parse() for real."}',
       7,
       "heuristic",
     );
-    expect(v?.state).toBe("adrift");
+    expect(v?.state).toBe("nudge");
     expect(v?.nudge).toBe("Implement parse() for real.");
     expect(v?.source).toBe("heuristic");
   });
 
-  test("adrift with no nudge downgrades to ok — there is nothing to send", () => {
-    const v = parseVerdict('{"state":"adrift","reason":"seems off"}', 3, "model");
+  test("nudge with no nudge text downgrades to ok — there is nothing to send", () => {
+    const v = parseVerdict('{"state":"nudge","reason":"seems off"}', 3, "model");
     expect(v?.state).toBe("ok");
     expect(v?.nudge).toBeUndefined();
   });
@@ -341,8 +342,8 @@ describe("parseVerdict", () => {
   }
 
   test("a missing reason still yields a usable verdict", () => {
-    const v = parseVerdict('{"state":"spiraling"}', 0, "model");
-    expect(v?.state).toBe("spiraling");
+    const v = parseVerdict('{"state":"nudge","nudge":"try again"}', 0, "model");
+    expect(v?.state).toBe("nudge");
     expect(v?.reason.length).toBeGreaterThan(0);
   });
 
@@ -366,14 +367,14 @@ describe("evidence", () => {
     expect(ev[1]).toMatchObject({ t: "tool", kind: "execute", status: "error" });
   });
 
-  test("is capped at the window", () => {
+  test("keeps the whole conversation — a long run is judged on all of it", () => {
     const events: TranscriptEvent[] = Array.from({ length: 200 }, (_, i) => ({
       seq: i,
       ts: 0,
       type: "tool" as const,
       call: exec(`cmd${i}`),
     }));
-    expect(evidenceFromEvents(events)).toHaveLength(40);
+    expect(evidenceFromEvents(events)).toHaveLength(200);
   });
 
   test("the fallback window tracks the outcome of an already-seen call", () => {

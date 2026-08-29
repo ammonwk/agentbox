@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { DEFAULT_MODEL, dbPath, ensureDirs } from "./paths";
 import { isGitRepo, resolveDefaultBranch, repoFullNameOf, run } from "./git";
-import type { Session, SessionStatus, Repo, AgentSettings, PermissionRequest } from "./types";
+import type { Session, SessionStatus, Repo, AgentSettings, PermissionRequest, SubagentProgress } from "./types";
 
 let db: Database | null = null;
 let openedAt = "";
@@ -57,6 +57,7 @@ const SESSIONS_DDL = `
     blocked        INTEGER NOT NULL DEFAULT 0,
     flag_reason    TEXT,
     omp_session_id TEXT,
+    subs           TEXT,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL,
     started_at     INTEGER,
@@ -112,6 +113,7 @@ function migrateSessions(d: Database) {
     if (!cols.includes("started_at")) d.exec("ALTER TABLE sessions ADD COLUMN started_at INTEGER");
     if (!cols.includes("host_pid")) d.exec("ALTER TABLE sessions ADD COLUMN host_pid INTEGER");
     if (!cols.includes("permission")) d.exec("ALTER TABLE sessions ADD COLUMN permission TEXT");
+    if (!cols.includes("subs")) d.exec("ALTER TABLE sessions ADD COLUMN subs TEXT");
     return;
   }
 
@@ -171,6 +173,7 @@ type SessionRow = {
   permission: string | null; pr_number: number | null;
   repo_full_name: string | null; cost_usd: number | null; tokens: number | null;
   blocked: number; flag_reason: string | null; omp_session_id: string | null;
+  subs: string | null;
   created_at: number; updated_at: number; started_at: number | null;
   archived_at: number | null;
 };
@@ -208,6 +211,7 @@ const SESSION_COLUMNS = {
   blocked: "blocked",
   flagReason: "flag_reason",
   ompSessionId: "omp_session_id",
+  subs: "subs",
   createdAt: "created_at",
   updatedAt: "updated_at",
   startedAt: "started_at",
@@ -220,10 +224,11 @@ type PersistedKey = keyof typeof SESSION_COLUMNS;
 function toSql(key: PersistedKey, value: unknown): string | number | null {
   if (key === "blocked") return value ? 1 : 0;
   if (value === undefined || value === null) return null;
-  // The only structured column. Stored as JSON rather than spread across four
-  // more columns because nothing queries into it — it is written whole by the
-  // host and read whole by the UI.
+  // Structured columns. Stored as JSON rather than spread across more columns
+  // because nothing queries into them — they are written whole by the host and
+  // read whole by the UI.
   if (key === "permission") return JSON.stringify(value);
+  if (key === "subs") return JSON.stringify(value);
   if (typeof value === "boolean") return value ? 1 : 0;
   return value as string | number;
 }
@@ -240,6 +245,16 @@ function permissionFromSql(raw: string | null): PermissionRequest | null {
   }
 }
 
+function subsFromSql(raw: string | null): SubagentProgress[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as SubagentProgress[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 function rowToSession(r: SessionRow): Session {
   return {
     id: r.id, title: r.title, prompt: r.prompt, status: r.status as SessionStatus,
@@ -249,6 +264,7 @@ function rowToSession(r: SessionRow): Session {
     permission: permissionFromSql(r.permission), prNumber: r.pr_number,
     repoFullName: r.repo_full_name, costUsd: r.cost_usd, tokens: r.tokens,
     blocked: !!r.blocked, flagReason: r.flag_reason, ompSessionId: r.omp_session_id,
+    subs: subsFromSql(r.subs),
     createdAt: r.created_at, updatedAt: r.updated_at, startedAt: r.started_at,
     closedAt: r.archived_at,
   };

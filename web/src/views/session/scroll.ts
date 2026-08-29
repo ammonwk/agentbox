@@ -41,3 +41,28 @@ export function shouldAutoScroll(args: {
   if (args.initial) return true;
   return args.grew && args.wasPinned;
 }
+
+/** Pixels from the top that still count as "at the top" for loading older
+ *  history. Generous, so the fetch is underway before the reader hits the
+ *  hard ceiling of what is loaded. */
+export const TOP_SLACK = 120;
+
+export function isAtTop(box: ScrollBox, slack: number = TOP_SLACK): boolean {
+  return box.scrollTop <= slack;
+}
+
+/**
+ * Where `scrollTop` must go when older events are prepended above the reader.
+ *
+ * Prepending shifts every row down by the height of the new content, which
+ * would otherwise yank the viewport off what the reader was looking at — the
+ * same rudeness auto-scroll exists to prevent, mirrored. Anchoring keeps the
+ * pixel offset from the *bottom* constant, so the rows under the viewport
+ * stay under it.
+ */
+export function anchoredScrollTop(
+  prev: { scrollTop: number; scrollHeight: number },
+  next: { scrollHeight: number },
+): number {
+  return next.scrollHeight - prev.scrollHeight + prev.scrollTop;
+}
