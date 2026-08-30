@@ -29,6 +29,7 @@ import { SystemBar } from "./SystemBar";
 import { Inbox } from "./views/Inbox";
 import { Sessions } from "./views/Sessions";
 import { Skills } from "./views/Skills";
+import { Agents } from "./views/Agents";
 import { Settings } from "./views/Settings";
 
 // ----------------------------------------------------------------- routing
@@ -66,9 +67,19 @@ function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
 const NAV: { id: PageId; label: string; icon: IconComponent }[] = [
   { id: "inbox", label: "Inbox", icon: Icon.inbox },
   { id: "sessions", label: "Sessions", icon: Icon.sessions },
+  { id: "agents", label: "Agents", icon: Icon.play },
   { id: "skills", label: "Skills", icon: Icon.folder },
   { id: "settings", label: "Settings", icon: Icon.settings },
 ];
+
+/** The two pages that carry a selection need it spelled out; the rest are
+ *  just their page id. Written as a function because a ternary chain inside
+ *  JSX stopped being readable at two. */
+function navTarget(id: PageId): Route {
+  if (id === "sessions") return { page: "sessions", sessionId: null };
+  if (id === "agents") return { page: "agents", agentId: null };
+  return { page: id };
+}
 
 export function App() {
   const { state, warnings } = useAppState();
@@ -115,7 +126,7 @@ export function App() {
               <a
                 key={id}
                 className={`nav-item ${active ? "active" : ""}`}
-                href={hrefOf(id === "sessions" ? { page: "sessions", sessionId: null } : { page: id })}
+                href={hrefOf(navTarget(id))}
                 aria-current={active ? "page" : undefined}
               >
                 <IconCmp />
@@ -142,9 +153,11 @@ export function App() {
               ? "Inbox"
               : route.page === "sessions"
                 ? "Sessions"
-                : route.page === "skills"
-                  ? "Skills"
-                  : "Settings"}
+                : route.page === "agents"
+                  ? "Subagents"
+                  : route.page === "skills"
+                    ? "Skills"
+                    : "Settings"}
           </h1>
         </header>
 
@@ -164,7 +177,7 @@ export function App() {
             grids with internal scrollers, so the shell must not pad them or scroll
             around them. */}
         <main
-          className={`content ${(route.page === "sessions" || route.page === "skills") && state ? "flush" : ""}`}
+          className={`content ${(route.page === "sessions" || route.page === "skills" || route.page === "agents") && state ? "flush" : ""}`}
           id="content"
           ref={contentRef}
           tabIndex={-1}
@@ -178,6 +191,11 @@ export function App() {
               state={state}
               selectedId={route.sessionId}
               onSelect={selectSession}
+            />
+          ) : route.page === "agents" ? (
+            <Agents
+              agentId={route.agentId}
+              onSelect={(id) => navigate({ page: "agents", agentId: id })}
             />
           ) : route.page === "skills" ? (
             <Skills skills={state.skills} />
@@ -199,7 +217,7 @@ export function App() {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<PageId, number> {
-  if (!state) return { inbox: 0, sessions: 0, skills: 0, settings: 0 };
+  if (!state) return { inbox: 0, sessions: 0, agents: 0, skills: 0, settings: 0 };
   return {
     // The badge counts the rows the Inbox renders, by calling the function that
     // renders them. An earlier version reimplemented the filter here and the
@@ -210,6 +228,10 @@ function countsOf(state: AppState | null): Record<PageId, number> {
     // `WHERE archived_at IS NULL`. Filtering again would read as a guard and
     // hide that closed sessions never reach the client at all.
     sessions: state.sessions.filter((s) => s.status === "running" || s.status === "spawning").length,
+    // Subagents are not in `state` -- they are read from disk by the page
+    // itself -- so there is nothing to badge without a second poll for a
+    // number nobody navigates by.
+    agents: 0,
     skills: 0,
     settings: 0,
   };

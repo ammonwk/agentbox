@@ -217,8 +217,10 @@ function doctor(): number {
 
 // --------------------------------------------------------------------- main
 
-const USAGE = `usage: agentbox [serve|doctor|install|uninstall|mcp|subagent-mcp|version]
+const USAGE = `usage: agentbox [serve|watch|doctor|install|uninstall|mcp|subagent-mcp|version]
   serve       start the server on port ${DEFAULT_PORT} (default)
+  watch       live roster of running subagents; \`watch <name>\` for one in full
+              (--once prints a frame and exits; --interrupt/--stop act on one)
   doctor      check that everything agentbox needs is present and configured
   install     register the MCP server with opencode
   uninstall   remove that registration
@@ -255,6 +257,19 @@ export async function main(argv: string[]): Promise<number | null> {
     case "mcp":
       await import("../mcp/index");
       return null;
+
+    /**
+     * Watch the subagents, from outside the process that owns them.
+     *
+     * Reads the record on disk and talks to nothing, which is the only design
+     * that can work: an agent's owner is an MCP server on somebody else's
+     * stdio, with no address and a lifetime measured in one client session.
+     */
+    case "watch": {
+      ensureDirs();
+      const { watch } = await import("./watch");
+      return watch(argv.slice(1));
+    }
 
     /**
      * The subagent MCP server — a different surface from `mcp`, not a second

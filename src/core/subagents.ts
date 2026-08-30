@@ -33,8 +33,16 @@ import {
   type Place,
 } from "./place";
 import * as live from "./live";
+import { takeCommand, writeMeta, writeState } from "./record";
 import { subagentDirFor, subagentRoot } from "./paths";
 import { isProviderError } from "./provider-error";
+import {
+  budget,
+  renderBudget,
+  verdict,
+  type AgentSnapshot,
+  type Verdict,
+} from "./health";
 import { readSubagentPrompt } from "./prompts";
 import { DEFAULT_MODEL } from "./paths";
 import type { ToolCall } from "./types";
@@ -164,6 +172,9 @@ export interface TurnReport {
   report: string;
   /** ACP's end_turn/max_tokens/refusal/cancelled, or agentbox's own `error`. */
   stopReason: string;
+  /** The model's context window, when omp reported it. With `contextTokens`
+   *  beside it this is a budget rather than a bare number. */
+  contextSize: number | null;
   /** Tool calls in this turn — the cheapest signal that it did real work. */
   toolCalls: number;
   durationMs: number;
@@ -198,6 +209,10 @@ export interface ToolRecord {
   kind: string;
   title: string;
   status: string;
+  /** Our own wall clock for when this call was first seen. omp's timestamps
+   *  are its own; this one is comparable with everything else a reader has,
+   *  and it is what says how long an unfinished call has been unfinished. */
+  startedAtMs: number;
   ms: number | null;
   input: string | null;
   output: string | null;
@@ -426,8 +441,11 @@ export class Subagent {
    *  status line and the uncollected notice both want "finished how long ago",
    *  which is the number that makes an unread answer look like a mistake. */
   private lastAnsweredAt = 0;
+  /** Why this agent died, once it has. Null while it is alive. */
+  private endReason: string | null = null;
   private cost: number | null = null;
   private tokens: number | null = null;
+  private window: number | null = null;
   private totalTools = 0;
   private turns = 0;
 
@@ -480,8 +498,12 @@ export class Subagent {
         onToolEnd: (_id, call) => this.recordTool(call),
         onAdvisory: () => {},
         onTurnEnd: (_id, stopReason) => this.finishTurn(stopReason),
-        onContext: (_id, used) => {
+        // Both halves. `used` alone is a number nobody can act on; with the
+        // window beside it, it becomes the one budget an agent has that can
+        // spoil a turn without warning.
+        onContext: (_id, used, size) => {
           if (used > 0) this.tokens = used;
+          if (size > 0) this.window = size;
         },
         onUsage: (_id, costUsd) => {
           this.cost = costUsd;
@@ -544,6 +566,45 @@ export class Subagent {
    *  a runaway turn is only visible while it is still running. */
   get costUsd(): number | null {
     return this.cost;
+  }
+
+  /**
+   * Everything a reader needs about this agent right now, in the shape every
+   * reader shares.
+   *
+   * The point of the shape is that the same judgement runs over a live agent
+   * here and over one reconstructed from disk by a process that has never seen
+   * this object -- `agentbox watch`, the web view. Anything computed from it
+   * must therefore live in `health.ts` and not in here.
+   */
+  snapshot(now = Date.now()): AgentSnapshot {
+    const unfinished = this.tools.filter((t) => t.ms === null);
+    const oldest = unfinished.length
+      ? Math.min(...unfinished.map((t) => t.startedAtMs))
+      : null;
+    return {
+      name: this.name,
+      cwd: this.cwd,
+      branch: this.place.branch,
+      model: this.model,
+      readOnly: this.readOnly,
+      state: this._state,
+      startedAt: this.createdAt,
+      turnStartedAt: this._state === "running" ? this.turnStartedAt : 0,
+      lastEventAt: this.lastActivityAt,
+      lastAction: this.lastAction,
+      turnToolCalls: this.turnTools,
+      totalToolCalls: this.totalTools,
+      uncollected: this.uncollected,
+      contextUsed: this.tokens,
+      contextSize: this.window,
+      costUsd: this.cost,
+      maxTurnMs: this.maxTurnMs,
+      recent: this.tools.slice(-20),
+      inFlightToolMs: oldest === null ? null : Math.max(0, now - oldest),
+      endedReason: this.endReason,
+      partial: this.partial(400),
+    };
   }
 
   /** Where this agent runs. Cheap after the first call. */
@@ -636,6 +697,19 @@ export class Subagent {
     const promptFile = join(this.dir, "system.md");
     const place = describePlace(this.cwd, { dirty: true });
     this.placeCache = place;
+    // Identity, written before anything can go wrong with the launch. An agent
+    // whose omp never started is exactly the one somebody will want to look up.
+    writeMeta(this.dir, {
+      name: this.name,
+      cwd: this.cwd,
+      branch: place.branch,
+      model: this.model,
+      readOnly: this.readOnly,
+      startedAt: this.createdAt,
+      pid: process.pid,
+      owner: live.owner(),
+      prompt,
+    });
     const parts = [readSubagentPrompt(), placeSection(place, this.readOnly)];
     if (this.readOnly) {
       parts.push(
@@ -776,7 +850,7 @@ export class Subagent {
     this.runner.kill();
     // `die` clears the pending waits; without it a backoff would outlive the
     // agent and hold the event loop open past `stopAll()`.
-    this.die("stopped by the caller");
+    this.die(STOPPED_BY_CALLER);
   }
 
   // ------------------------------------------------------------- internals
@@ -798,7 +872,7 @@ export class Subagent {
     const existing = this.byId.get(call.id);
     const rec: ToolRecord = existing
       ? Object.assign(existing, fields)
-      : { seq: ++this.seq, ...fields };
+      : { seq: ++this.seq, startedAtMs: Date.now(), ...fields };
     if (!existing) {
       // Counted here rather than in onToolStart: a call can reach us only as
       // a terminal update (its start was never announced), and the count must
@@ -980,6 +1054,7 @@ export class Subagent {
       durationMs: this.turnStartedAt ? Date.now() - this.turnStartedAt : 0,
       costUsd: this.cost,
       contextTokens: this.tokens,
+      contextSize: this.window,
       errors: this.errors.splice(0),
     };
     this.turns++;
@@ -1065,6 +1140,7 @@ export class Subagent {
 
   private die(reason: string) {
     if (this._state === "dead") return;
+    this.endReason = reason;
     this.clearTurnClock();
     const held = this.clearPending();
     const owed = this.owed;
@@ -1096,6 +1172,7 @@ export class Subagent {
         durationMs: i === 0 && this.turnStartedAt ? Date.now() - this.turnStartedAt : 0,
         costUsd: this.cost,
         contextTokens: this.tokens,
+        contextSize: this.window,
         errors: i === 0 ? errors : [reason],
       });
     }
@@ -1121,6 +1198,17 @@ export class Subagent {
   }
 }
 
+/**
+ * Why an agent is gone, when the answer is "because we were finished with it".
+ *
+ * Every agent ends up dead -- the caller stops it, or the server shuts down --
+ * so `dead` alone says almost nothing, and a viewer that renders a clean
+ * finish and a crashed process identically is hiding the only part anyone
+ * cares about. Recorded rather than inferred, because the process that killed
+ * it is the only thing that actually knows.
+ */
+export const STOPPED_BY_CALLER = "stopped by the caller";
+
 /** Rough elapsed time, for a status line and a nag. Two significant figures
  *  at most: the point is "minutes or hours", not the minutes. */
 export function ago(ms: number): string {
@@ -1139,20 +1227,24 @@ export function ago(ms: number): string {
  * process, and a status line that lists those teaches the reader to stop
  * reading it.
  */
-export function renderAgentLine(a: Subagent): string | null {
+export function renderAgentLine(a: Subagent, now = Date.now()): string | null {
   const where = shortPlace(a.place);
-  const cost = a.costUsd === null ? "" : ` · $${a.costUsd.toFixed(2)}`;
   if (a.state === "running") {
-    const act = a.activity();
-    const idle = act.idleMs >= 5000 ? ` ${Math.round(act.idleMs / 1000)}s` : "";
-    const action = act.action.length > 40 ? `${act.action.slice(0, 39)}…` : act.action;
-    return (
-      `${a.name} ${where} · ${Math.round(act.turnMs / 1000)}s · ${act.toolCalls} tool` +
-      `${act.toolCalls === 1 ? "" : "s"}${cost} → ${action}${idle}`
-    );
+    const snap = a.snapshot(now);
+    const v = verdict(snap, now);
+    const b = budget(snap, now);
+    const action = snap.lastAction.length > 40
+      ? `${snap.lastAction.slice(0, 39)}…`
+      : snap.lastAction;
+    // The verdict word first when there is one. A reader scanning a row of
+    // these is looking for the one that is wrong, and "looping" earns its
+    // place at the front of the line in a way that an elapsed clock does not.
+    const flag = v.concern === null ? "" : ` [${v.concern.toUpperCase()}]`;
+    return `${a.name} ${where}${flag} · ${renderBudget(b)} → ${action}`;
   }
   if (a.uncollected > 0) {
-    const when = a.answeredAt ? ` ${ago(Date.now() - a.answeredAt)}` : "";
+    const when = a.answeredAt ? ` ${ago(now - a.answeredAt)}` : "";
+    const cost = a.costUsd === null ? "" : ` · $${a.costUsd.toFixed(2)}`;
     return (
       `${a.name} ${where} · finished${when}, ${a.uncollected} answer` +
       `${a.uncollected === 1 ? "" : "s"} UNCOLLECTED${cost}`
@@ -1178,6 +1270,73 @@ function foreignPromptError(foreign: ForeignPath[], cwd: string): string {
     `Pass \`cwd\` for the checkout this task is about. If the task genuinely spans ` +
     `repositories, set \`allow_outside_cwd\`.`
   );
+}
+
+/**
+ * Never end a wait early before the client has had a chance to background it.
+ *
+ * Under two minutes the caller is still sitting on the call, so returning
+ * costs it the completion notification and buys nothing: it was not going to
+ * do anything else in that window anyway.
+ */
+const ESCALATE_AFTER_MS = 120_000;
+
+/** How often the wait looks up from the turn to check on the agent. */
+const ESCALATE_POLL_MS = 15_000;
+
+/** Consecutive checks that must agree before a wait is broken. One bad look is
+ *  a pause between tool calls; two, thirty seconds apart, is a pattern. */
+const ESCALATE_CONFIRMS = 2;
+
+/**
+ * Wait for a turn, but do not wait through an agent that has stopped working.
+ *
+ * There is no way to push into a calling model's context -- the only channel
+ * is the answer to a question it asked. This blocked call *is* that channel,
+ * held open, and until now it was spent entirely on waiting: an agent could
+ * repeat the same failing command for the rest of its four-hour clock and the
+ * caller would learn about it at the end.
+ *
+ * So the wait polls. Nearly always it hands back a turn and nothing else
+ * happens. When the agent looks genuinely stuck -- and `escalate` is
+ * deliberately only the unambiguous cases -- the wait ends early and says why,
+ * because a caller that can interrupt in minute five is worth more than one
+ * told the truth in hour four.
+ *
+ * Polling rather than racing a watchdog against `settle` is not stylistic: an
+ * abandoned `settle` keeps its waiter registered, and the turn would be
+ * delivered into a promise nobody is holding. A short `settle` that times out
+ * cleanly removes itself, so looping over short waits cannot lose a report.
+ */
+export async function waitForTurn(
+  agent: Subagent,
+  turn: number | undefined,
+  totalMs: number,
+  // Overridable so a test can provoke the escalation without waiting out two
+  // real minutes; nothing in production passes them.
+  opts: { afterMs?: number; pollMs?: number; confirms?: number } = {},
+): Promise<TurnReport | { stuck: Verdict }> {
+  const afterMs = opts.afterMs ?? ESCALATE_AFTER_MS;
+  const pollMs = opts.pollMs ?? ESCALATE_POLL_MS;
+  const needed = opts.confirms ?? ESCALATE_CONFIRMS;
+  const deadline = Date.now() + totalMs;
+  let confirms = 0;
+  for (;;) {
+    const left = deadline - Date.now();
+    if (left <= 0) return { stuck: verdict(agent.snapshot()) };
+    const report = await agent.settle(Math.min(left, pollMs), turn);
+    if (report) return report;
+    // Nothing is running and nothing is owed: waiting out the rest of the hour
+    // would be waiting for a turn that can no longer arrive.
+    if (agent.state !== "running") return { stuck: verdict(agent.snapshot()) };
+    const snap = agent.snapshot();
+    const v = verdict(snap);
+    if (v.escalate && budget(snap).turnMs > afterMs) {
+      if (++confirms >= needed) return { stuck: v };
+    } else {
+      confirms = 0;
+    }
+  }
 }
 
 /** How long a finished agent's transcript is kept. */
@@ -1295,14 +1454,18 @@ export class SubagentPool {
       if (this.agents.get(name) === agent) this.agents.delete(name);
       throw new Error(`could not start omp: ${messageOf(err)}`);
     }
-    if (!agent.quiet) this.startTicking();
+    // Every agent, quiet or not: the tick maintains the record, and only the
+    // status line cares about `quiet`.
+    this.startTicking();
     return agent;
   }
 
   /** Forget a stopped agent, freeing its name. */
   remove(name: string): void {
-    this.agents.get(name)?.stop();
+    const agent = this.agents.get(name);
+    agent?.stop();
     this.agents.delete(name);
+    if (agent) this.seal(agent);
     this.retract(name);
     if (this.agents.size === 0) this.stopTicking();
   }
@@ -1310,10 +1473,27 @@ export class SubagentPool {
   stopAll(): void {
     for (const a of this.agents.values()) {
       a.stop();
+      this.seal(a);
       this.retract(a.name);
     }
     this.agents.clear();
     this.stopTicking();
+  }
+
+  /**
+   * The last snapshot, written as the agent stops.
+   *
+   * Without it the newest state on disk is whatever the ticker managed up to
+   * two seconds before the end -- which says "running", and goes stale, and a
+   * reader cannot tell an agent that finished cleanly from one whose process
+   * was killed. Those are opposite facts and they were rendering identically.
+   */
+  private seal(agent: Subagent): void {
+    try {
+      writeState(agent.dir, agent.snapshot());
+    } catch {
+      // Bookkeeping must never take down the agent it describes.
+    }
   }
 
   // ------------------------------------------------------- live status lines
@@ -1343,9 +1523,20 @@ export class SubagentPool {
   }
 
   private tick(): void {
+    const now = Date.now();
     for (const a of this.agents.values()) {
+      // The record is kept for every agent, including the quiet ones. `quiet`
+      // means "do not take a row in a one-line status bar", which is a claim
+      // about the status line and not about whether the agent is worth
+      // watching -- a twelve-agent fan-out is the thing you most want to see.
+      try {
+        writeState(a.dir, a.snapshot(now));
+      } catch {
+        // Never let bookkeeping take down the agent it describes.
+      }
+      this.obey(a);
       if (a.quiet) continue;
-      const line = renderAgentLine(a);
+      const line = renderAgentLine(a, now);
       if (line === null) {
         this.retract(a.name);
         continue;
@@ -1354,6 +1545,31 @@ export class SubagentPool {
       this.published.add(id);
       live.publish(id, a.cwd, line);
     }
+  }
+
+  /**
+   * Act on anything a watcher asked for.
+   *
+   * The watcher is in another process with no way to reach this one, so it
+   * leaves a file and we sweep for it on the beat we are already keeping. A
+   * command nobody is running to collect simply never happens, which is the
+   * honest behaviour.
+   */
+  private obey(a: Subagent): void {
+    let command;
+    try {
+      command = takeCommand(a.dir);
+    } catch {
+      return;
+    }
+    if (command === null) return;
+    if (command === "interrupt") {
+      a.interrupt();
+      return;
+    }
+    // A stop from a watcher is a person deciding, so it overrides the
+    // uncollected-mail guard the MCP tool applies to a model.
+    this.remove(a.name);
   }
 
   private startTicking(): void {

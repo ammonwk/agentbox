@@ -94,6 +94,8 @@ export interface Health {
   version: string;
 }
 
+import type { SubagentDetail, SubagentRow } from "../../src/server/subagents";
+
 // ------------------------------------------------------------------- http
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -126,6 +128,14 @@ const post = <T,>(path: string, body?: unknown) =>
 
 export const api = {
   state: () => request<AppState>("/api/state"),
+
+  // Subagents are not on the board and have no session row, so they are not in
+  // `state` and do not arrive over the socket. This view polls; a couple of
+  // seconds is the same beat the records are written on.
+  subagents: () => request<SubagentRow[]>("/api/subagents"),
+  subagent: (id: string) => request<SubagentDetail>(`/api/subagents/${encodeURIComponent(id)}`),
+  commandSubagent: (id: string, command: "interrupt" | "stop") =>
+    post<{ requested: string }>(`/api/subagents/${encodeURIComponent(id)}/${command}`),
   /** `refresh` forces a re-probe past the server's ~60s cache — for a Re-check
    *  button, whose presser has usually just fixed the thing being probed. */
   health: (refresh = false) => request<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
@@ -606,3 +616,5 @@ export function repoShort(ref: string): string {
   const parts = ref.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || ref;
 }
+
+export type { SubagentDetail, SubagentRow };

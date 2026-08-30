@@ -81,3 +81,50 @@ all of that, plus the two scans — `foreignRepoPaths`, which refuses a spawn
 whose prompt names files in another git work tree, and `outsidePaths`, which
 flags a finished turn's writes that landed outside. Read-only agents are exempt
 from the refusal; they cannot change anything.
+
+## Watching a subagent
+
+Three files per agent under `~/.local/share/agentbox/subagents/<id>/`, and
+every reader works from them rather than from the object:
+
+- `meta.json` — identity, written once at spawn: name, directory, branch,
+  model, and the brief.
+- `state.json` — the live snapshot, rewritten on the pool's two-second tick and
+  sealed once more when the agent stops.
+- `transcript.jsonl` — the event log, appended forever.
+
+`state.json` is a republished snapshot rather than something a reader folds out
+of the event log, and that is load-bearing. The log says what happened, not
+what is *still* happening, so folding it cannot tell a finished agent from one
+whose process was killed mid-turn. A snapshot with a timestamp can: if nobody
+has refreshed it inside `STALE_AFTER_MS`, nobody is there, and readers render
+that as `abandoned`. Sealing on stop is the other half — without it every
+agent's last published state says "running" and then goes stale, so a clean
+finish and a crash look identical.
+
+`src/core/health.ts` holds the judgement, once, for all of them. `verdict()`
+answers "is something wrong" in sentences (`looping`, `quiet`, `slow-tool`,
+`silent`, `context`, `overrunning`); `budget()` answers "how much is left" and
+refuses to guess — there is no honest denominator for task completion, so it
+reports consumption against the three real ceilings instead: context window,
+wall clock, money. If you are tempted to add a percentage-done, that is the
+thing this file exists to not do.
+
+Two distinctions in there are worth not breaking. Silence inside a running tool
+call is `slow-tool` and silence outside one is `quiet`, because a clock alone
+cannot tell a wedged agent from one running your test suite. And `escalate` is
+deliberately only `looping` and `quiet`: it is what lets `waitForTurn` end a
+caller's blocked call early, which costs that caller its completion
+notification, so it must be reserved for "this is not working".
+
+The readers: `renderAgentLine` (status line), `agentbox watch` (terminal,
+`--once`, `--interrupt`, `--stop`), `list_agents` (the calling model), and
+`/api/subagents` behind the web view. Adding a fifth should mean writing a
+renderer, not new state.
+
+Control crosses processes through the record. A watcher cannot reach an agent's
+owner — it is an MCP server on somebody's stdio with no address — so
+`requestCommand` leaves a file and the pool's tick calls `takeCommand`. It
+degrades honestly: if nobody is there to sweep, nothing happens, which is
+exactly what "nobody is there" should mean. Never make these controls claim
+success they cannot verify.

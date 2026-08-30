@@ -9,6 +9,7 @@ import {
   pruneTranscripts,
   renderAgentLine,
   resolveModel,
+  waitForTurn,
   type Runner,
   type RunnerFactory,
 } from "../subagents";
@@ -1163,5 +1164,50 @@ describe("a failure wearing the costume of an answer", () => {
     only().endTurn();
     const r = await agent.settle(1000, 1);
     expect(r!.errors).toEqual([]);
+  });
+});
+
+/**
+ * The only channel into a calling model's context is the answer to a question
+ * it asked. A blocked call is that channel held open, and spending all of it
+ * on waiting means an agent can repeat one failing command for four hours
+ * while the caller learns nothing until the end.
+ */
+describe("a wait that gives up on a stuck agent", () => {
+  test("hands back the turn when there is one", async () => {
+    const agent = await pool.spawn({ prompt: "p", cwd: home });
+    only().say("the answer");
+    only().endTurn();
+    const r = await waitForTurn(agent, 1, 2000, { afterMs: 0, pollMs: 20 });
+    expect("stuck" in r).toBe(false);
+    expect((r as { report: string }).report).toBe("the answer");
+  });
+
+  test("ends early when the agent is going round in circles, and loses nothing", async () => {
+    const agent = await pool.spawn({ prompt: "p", cwd: home });
+    for (const id of ["t1", "t2", "t3"]) {
+      only().tool(id, "Bash", true, "execute", { command: "bun test" });
+    }
+    const r = await waitForTurn(agent, 1, 5000, { afterMs: 0, pollMs: 10, confirms: 2 });
+    expect("stuck" in r).toBe(true);
+    expect((r as { stuck: { concern: string } }).stuck.concern).toBe("looping");
+    // The agent is untouched and its answer still arrives, into the mailbox
+    // this time. Breaking the wait must never be the same as losing the turn.
+    expect(agent.state).toBe("running");
+    only().say("done eventually");
+    only().endTurn();
+    await Bun.sleep(5);
+    expect(agent.uncollected).toBe(1);
+    expect((await agent.settle(500, 1))!.report).toBe("done eventually");
+  });
+
+  test("an agent merely being slow is waited for, not abandoned", async () => {
+    const agent = await pool.spawn({ prompt: "p", cwd: home });
+    only().tool("t1", "Bash", false, "execute", { command: "bun test" });
+    const r = await waitForTurn(agent, 1, 300, { afterMs: 0, pollMs: 10, confirms: 2 });
+    // Ran out of the (short) total wait rather than escalating: a long tool
+    // call is working, not stuck.
+    expect("stuck" in r).toBe(true);
+    expect((r as { stuck: { escalate: boolean } }).stuck.escalate).toBe(false);
   });
 });

@@ -21,10 +21,12 @@ import {
   SubagentPool,
   ago,
   pruneTranscripts,
+  waitForTurn,
   type Subagent,
   type TurnReport,
 } from "../core/subagents";
 import { describePlace, renderPlace } from "../core/place";
+import { budget, healthWord, renderBudget, verdict, type Verdict } from "../core/health";
 import * as live from "../core/live";
 import {
   runWorkflow,
@@ -293,6 +295,15 @@ function renderTurn(r: TurnReport): string {
   }
   parts.push(r.report || "[the agent finished its turn without saying anything]");
 
+  const ctx =
+    r.contextTokens === null
+      ? []
+      : [
+          r.contextSize === null || r.contextSize <= 0
+            ? tokens(r.contextTokens)
+            : `${tokens(r.contextTokens)} of ${Math.round(r.contextSize / 1000)}k ` +
+              `(${Math.round((r.contextTokens / r.contextSize) * 100)}%)`,
+        ];
   const stats = [
     r.name,
     renderPlace(describePlace(r.cwd)),
@@ -304,7 +315,7 @@ function renderTurn(r: TurnReport): string {
     // em-dashes in every report teaches the reader to skip the whole line,
     // which is the line that says whether the agent did any work at all.
     ...(r.costUsd === null ? [] : [`$${r.costUsd.toFixed(4)} total`]),
-    ...(r.contextTokens === null ? [] : [tokens(r.contextTokens)]),
+    ...ctx,
   ].join(" · ");
   parts.push(`\n---\n${stats}`);
 
@@ -329,32 +340,68 @@ function renderTurn(r: TurnReport): string {
   return parts.join("\n");
 }
 
-/** Render a call that hit its timeout. Nothing is lost — say so, precisely,
- *  because "timed out" reads as failure and this is not one. */
-function renderPending(agent: Subagent, alsoWaiting = 0): string {
+/**
+ * Render a wait that ended without a turn.
+ *
+ * Two cases and one shape. The ordinary one is a call that ran out of clock
+ * while the agent worked, which is not a failure and must not read as one. The
+ * other is a wait broken early because the agent stopped making progress, and
+ * that one leads with what is wrong -- the reason the wait was broken at all
+ * is to put a sentence the caller can act on in front of it.
+ *
+ * Both end in the same place: the answer is still coming and is held for you.
+ */
+function renderWaiting(agent: Subagent, v: Verdict, alsoWaiting = 0): string {
   const s = agent.summary();
-  const out: string[] = [
-    `"${s.name}" is still working — this is not a failure and nothing was lost.`,
-    `Working in ${renderPlace(agent.place)}.`,
+  const snap = agent.snapshot();
+  const out: string[] = [];
+
+  if (v.escalate && v.note !== null) {
+    out.push(
+      `"${s.name}" is still running, but it does not look like it is getting anywhere:`,
+      ``,
+      `  ${v.concern}: ${v.note}`,
+      ``,
+      `This wait was ended early to tell you. Nothing was lost -- the agent is still going ` +
+        `and its answer will be held for you either way.`,
+    );
+  } else {
+    out.push(`"${s.name}" is still working -- this is not a failure and nothing was lost.`);
+  }
+
+  out.push(
     ``,
-    [
-      `${s.toolCalls} tool call${s.toolCalls === 1 ? "" : "s"} so far`,
-      `${Math.round(s.ageSeconds)}s`,
-      ...(s.contextTokens === null ? [] : [tokens(s.contextTokens)]),
-    ].join(" · "),
-  ];
+    `Working in ${renderPlace(agent.place)}.`,
+    `${renderBudget(budget(snap))} - ${snap.turnToolCalls} tool call` +
+      `${snap.turnToolCalls === 1 ? "" : "s"} this turn - now: ${snap.lastAction || "starting"}`,
+  );
+
+  // Everything else worth knowing, once the headline is out of the way. A
+  // caller deciding whether to interrupt wants the whole picture, not just the
+  // worst part of it.
+  const rest = v.findings.filter((f) => f.concern !== v.concern);
+  if (rest.length > 0) {
+    out.push(``, `Also:`, ...rest.map((f) => `  ${f.concern}: ${f.note}`));
+  }
+
   // What it has said so far. `transcript` shows the tool calls, but prose is
-  // where the agent says what it is concluding — and a half-written report is
+  // where the agent says what it is concluding -- and a half-written report is
   // usually enough to tell "on the right track" from "answering the wrong
   // question", which is the decision the caller is actually facing here.
   const partial = agent.partial();
   if (partial) out.push(``, `What it has said so far:`, ``, partial);
+
   out.push(
     ``,
-    `Call \`collect\` with name "${s.name}" to keep waiting; its answer is held for you ` +
-      `whether or not anyone is waiting when the turn ends. \`transcript\` shows the tool ` +
-      `calls behind the prose, and \`interrupt\` stops the turn if it is going nowhere.`,
+    v.escalate
+      ? `\`interrupt\` it and \`send_message\` a correction if you agree it is stuck; ` +
+        `\`transcript\` shows the calls behind this; \`collect\` picks up the answer if you ` +
+        `would rather let it finish.`
+      : `Call \`collect\` with name "${s.name}" to keep waiting; its answer is held for you ` +
+        `whether or not anyone is waiting when the turn ends. \`transcript\` shows the tool ` +
+        `calls behind the prose, and \`interrupt\` stops the turn if it is going nowhere.`,
   );
+
   // A caller cannot see its own backlog: every one of these calls looks the
   // same from the outside, and only one of them will be handed the turn.
   if (alsoWaiting > 0) {
@@ -363,7 +410,7 @@ function renderPending(agent: Subagent, alsoWaiting = 0): string {
       `Note: ${alsoWaiting} other \`collect\` call${alsoWaiting === 1 ? "" : "s"} on ` +
         `"${s.name}" ${alsoWaiting === 1 ? "is" : "are"} still blocked right now, probably ` +
         `yours. The turn goes to exactly one of them, so the rest will come back like this ` +
-        `one having learned nothing. Stop collecting and do other work — the answer is kept ` +
+        `one having learned nothing. Stop collecting and do other work -- the answer is kept ` +
         `for you and one call is enough to get it.`,
     );
   }
@@ -429,9 +476,11 @@ server.registerTool(
       "and name the path.\n\n" +
       "Just call it and let it finish. After about two minutes your client moves the call to " +
       "the background, tells you it has, and delivers the answer to you as a notification " +
-      "whenever it lands — you keep working in the meantime and there is nothing to poll. " +
-      "Reach for `collect`, `transcript` or `interrupt` when something looks wrong, not as a " +
-      "matter of routine.",
+      "whenever it lands — you keep working in the meantime.\n\n" +
+      "You do not have to wonder how it is going. `list_agents` is one small result and no " +
+      "waiting, and once the call is backgrounded you are free to make it. This call also " +
+      "watches on your behalf: if the agent starts repeating itself or goes quiet, the wait " +
+      "ends early and says so, rather than spending the rest of the clock on it.",
     inputSchema: {
       prompt: z.string().min(1).describe("The full brief, written per this description."),
       name: z
@@ -489,8 +538,8 @@ server.registerTool(
     const stop = watch(agent, out.send);
     try {
       // The spawn's own prompt is turn 1; wait for that answer specifically.
-      const r = await agent.settle(DEFAULT_TIMEOUT_S * 1000, 1);
-      return text(r ? renderTurn(r) : renderPending(agent));
+      const r = await waitForTurn(agent, 1, DEFAULT_TIMEOUT_S * 1000);
+      return text("stuck" in r ? renderWaiting(agent, r.stuck) : renderTurn(r));
     } finally {
       stop();
       out.done();
@@ -512,7 +561,7 @@ server.registerTool(
       "answer again.\n\n" +
       "Like `agent`, it blocks for the reply and you do not need to manage that: a long one " +
       "is backgrounded by your client after about two minutes and delivered to you as a " +
-      "notification.\n\n" +
+      "notification, and the wait ends early if the agent stops making progress.\n\n" +
       "It keeps working wherever the agent already was; you cannot move an agent between " +
       "directories, so start a new one if the next job is in a different tree.\n\n" +
       "If it is mid-turn the message is queued and delivered when that turn ends; `interrupt` " +
@@ -532,8 +581,8 @@ server.registerTool(
     const out = publisher("agent", false, extra);
     const stop = watch(agent, out.send);
     try {
-      const r = await agent.settle(DEFAULT_TIMEOUT_S * 1000, turn);
-      return text(r ? renderTurn(r) : renderPending(agent));
+      const r = await waitForTurn(agent, turn, DEFAULT_TIMEOUT_S * 1000);
+      return text("stuck" in r ? renderWaiting(agent, r.stuck) : renderTurn(r));
     } finally {
       stop();
       out.done();
@@ -604,26 +653,59 @@ server.registerTool(
     }
     // Read after settling, not before: our own waiter has been dropped by
     // then, so this counts the callers genuinely still queued behind us.
-    return text(renderPending(agent, agent.queuedCollectors));
+    return text(renderWaiting(agent, verdict(agent.snapshot()), agent.queuedCollectors));
   },
 );
 
 server.registerTool(
   "list_agents",
   {
-    title: "Every subagent you have running",
+    title: "How every subagent is getting on",
     description:
-      "The agents you can address, with what each has cost and whether it is working. Read it " +
-      "when you have lost track of a name, or before starting a new agent for a job one of " +
-      "these already has the context for.\n\n" +
-      "`uncollected` above zero means an agent finished a turn you never picked up — `collect` " +
-      "it, that answer was paid for.",
+      "One cheap call that answers \"is anything wrong\". For each agent: where it is running, " +
+      "what it is doing right now, what it has spent, and a plain-language verdict when " +
+      "something looks off -- repeating itself, gone quiet, running out of context or clock, " +
+      "or answering without having read anything.\n\n" +
+      "Checking is cheap and you are welcome to do it. Once a blocked `agent` call has been " +
+      "in flight about two minutes your client backgrounds it and hands you back the floor, " +
+      "so calling this while agents run costs you one small result and no waiting. It is the " +
+      "right thing to reach for when a fan-out has been going a while and you want to know " +
+      "whether to let it run.\n\n" +
+      "Budgets rather than progress bars, deliberately: there is no honest estimate of how " +
+      "much of a task is left, but context, clock and money are real ceilings, and " +
+      "consumption against them is what decides let-it-run from kill-it. `uncollected` above " +
+      "zero means an agent finished a turn you never picked up.",
     inputSchema: {},
   },
   async () => {
     const agents = pool.list();
     if (agents.length === 0) return text("No subagents running.");
-    return text(JSON.stringify(agents.map((a) => a.summary()), null, 2));
+    const now = Date.now();
+    const blocks = agents.map((a) => {
+      const snap = a.snapshot(now);
+      const v = verdict(snap, now);
+      const head =
+        `${snap.name}  ${renderPlace(a.place)}  [${healthWord(v, snap).toUpperCase()}]` +
+        (snap.readOnly ? "  read-only" : "") +
+        (snap.uncollected > 0 ? `  ${snap.uncollected} UNCOLLECTED` : "");
+      const lines = [head];
+      if (snap.state === "running") {
+        lines.push(
+          `  ${renderBudget(budget(snap, now))} - ${snap.turnToolCalls} tool call` +
+            `${snap.turnToolCalls === 1 ? "" : "s"} this turn`,
+          `  now: ${snap.lastAction || "starting"}`,
+        );
+      } else {
+        lines.push(
+          `  ${snap.totalToolCalls} tool call${snap.totalToolCalls === 1 ? "" : "s"} in all` +
+            (snap.costUsd === null ? "" : ` - $${snap.costUsd.toFixed(2)}`) +
+            (a.answeredAt ? ` - last answered ${ago(now - a.answeredAt)}` : ""),
+        );
+      }
+      for (const f of v.findings) lines.push(`  ${f.concern}: ${f.note}`);
+      return lines.join("\n");
+    });
+    return text(blocks.join("\n\n"));
   },
 );
 

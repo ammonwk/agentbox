@@ -87,6 +87,7 @@ import {
   requireString,
   sinceParam,
 } from "./validate";
+import { commandSubagent, listSubagents, subagentDetail } from "./subagents";
 import { parseClientMessage } from "./protocol";
 import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 
@@ -324,6 +325,31 @@ export const router = new Router(mapCoreError)
   .add("GET", "/api/sessions/:id/load", async ({ params }) => {
     const s = sessionOr404(params.id!);
     return json({ procs: s.pid === null ? [] : await procDetail(s.pid) });
+  })
+
+  // Subagents are off the board by design -- no rows, no worktrees, no
+  // supervisor -- so these read the record on disk rather than any session
+  // state, and show agents from every client session on the machine.
+  .add("GET", "/api/subagents", () => json(listSubagents()))
+
+  .add("GET", "/api/subagents/:id", ({ params }) => {
+    const detail = subagentDetail(params.id!);
+    if (!detail) throw new HttpError(404, `no subagent record: ${params.id}`);
+    return json(detail);
+  })
+
+  .add("POST", "/api/subagents/:id/:command", ({ params }) => {
+    const command = params.command;
+    if (command !== "interrupt" && command !== "stop") {
+      throw new HttpError(400, `unknown command: ${command}`);
+    }
+    if (!commandSubagent(params.id!, command)) {
+      throw new HttpError(404, `no subagent record: ${params.id}`);
+    }
+    // Deliberately not "stopped": the owner sweeps for this on its own beat
+    // and may have exited. A control that reports success it cannot verify is
+    // worse than one that says what it actually did.
+    return json({ requested: command });
   })
 
   .add("GET", "/api/repos", () => json(listRepos()))
