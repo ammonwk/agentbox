@@ -195,7 +195,7 @@ describe("model resolution", () => {
     expect(resolveModel("explicit/model")).toBe("explicit/model");
     expect(resolveModel()).toBe("env/model");
     delete process.env.AGENTBOX_SUBAGENT_MODEL;
-    expect(resolveModel()).toBe("opencode-go/glm-5.3-flash");
+    expect(resolveModel()).toBe("opencode-go/deepseek-v4-flash");
   });
 });
 

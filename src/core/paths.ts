@@ -59,7 +59,7 @@ const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const webDist = join(packageRoot, "web", "dist");
 
 export const DEFAULT_PORT = 4479;
-export const DEFAULT_MODEL = "opencode-go/glm-5.3-flash";
+export const DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
 
 export function ensureDirs() {
   for (const d of [dataDir(), worktreeRoot(), sessionDir(), logDir(), repoRoot()]) {
