@@ -453,7 +453,13 @@ export class AcpRunner {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      // AGENTBOX_OMP_SESSION is the conversation id opencode.ai asks for on
+      // every request (`x-opencode-session`). agentbox never speaks to them —
+      // omp holds the HTTP client — so the id rides in on the environment and
+      // ~/.omp/agent/models.yml maps it onto the header for the opencode
+      // providers. `this.id` is the agentbox session, which is stable across a
+      // relaunch and a resume, so one conversation keeps one id for its life.
+      env: { ...process.env, AGENTBOX_OMP_SESSION: this.id },
     });
     this.proc = proc;
 
