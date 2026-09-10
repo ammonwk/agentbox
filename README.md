@@ -16,7 +16,9 @@ cheaply**.
   and result, streamed live. Not just what it says it did.
 - **Review** the work as a diff, in the app, before it ever reaches a PR.
 - **Steer** it mid-run. A message to a waiting agent lands immediately; a
-  message to a running one is queued until its current turn ends.
+  message to a running one reaches it after its current tool call, without
+  interrupting the turn — a wait on subagents is cut short for it, and the
+  subagents keep running.
 - **Supervise** it automatically. agentbox watches tool calls for the ways a
   cheap model fails — repeating a failing command, thrashing one file, taking
   the easy path instead of the right one — and when it sees one, it sends the

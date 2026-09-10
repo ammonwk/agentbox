@@ -717,9 +717,9 @@ function failSetup(id: string, err: unknown) {
 }
 
 /**
- * Steer a session. Delivered now if it is idle, queued until the turn ends if
- * it is mid-turn; either way the conversation is restarted first if the
- * process died.
+ * Steer a session. Delivered now if it is idle, and at the agent's next tool
+ * call if it is mid-turn (host.ts `deliver`); either way the conversation is
+ * restarted first if the process died.
  *
  * This used to take a `from` discriminating human steering from supervisor
  * nudges. The supervisor runs inside the host now and nudges its own agent

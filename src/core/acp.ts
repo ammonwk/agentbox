@@ -10,6 +10,7 @@ import {
   type SessionUpdate,
 } from "@agentclientprotocol/sdk";
 import type { AdvisorySeverity, SubagentProgress, ToolCall, ToolKind, ToolStatus } from "./types";
+import { STEER_EXTENSION, SteerLink, type SteerOutcome } from "./steer-link";
 
 /** Upper bound on the tool output we put in a transcript event. The full
  *  `rawOutput` object still goes to the session's JSONL log. */
@@ -48,6 +49,12 @@ export interface AcpEvents {
    */
   onTurnEnd: (sessionId: string, stopReason: string) => void;
   /**
+   * Messages put with `steer` while a turn was running are now in the agent's
+   * context. `refs` are what `steer` was handed. Only a caller that steers
+   * needs this, hence optional.
+   */
+  onDelivered?: (sessionId: string, refs: number[]) => void;
+  /**
    * Live context occupancy, from ACP's `usage_update`: `used` is the tokens
    * currently in context and `size` the window. Set, never accumulated —
    * each report replaces the last.
@@ -79,6 +86,12 @@ export interface LaunchOptions {
   advisor: boolean;
   /** Resume this omp conversation instead of opening a new one. */
   resumeSessionId: string | null;
+  /**
+   * Where the steer extension (src/omp/steer.ts) connects. With it, a message
+   * `steer`ed mid-turn reaches the agent at its next tool call; without it,
+   * when the turn ends.
+   */
+  steerSocket?: string;
 }
 
 // ------------------------------------------------------------ tool calls
@@ -370,6 +383,30 @@ export function parseAdvisories(text: string): { severity: AdvisorySeverity; tex
 
 // ------------------------------------------------------------------ runner
 
+/** A message waiting for the agent's next turn. */
+export interface Outgoing {
+  text: string;
+  /** `steer` refs, reported delivered when this goes out. */
+  refs: number[];
+  /** From `steer`: may share a prompt with the steers beside it. */
+  steer: boolean;
+}
+
+/**
+ * Take the next prompt off the queue: one `send`, or every steer at the head
+ * merged into one. Three corrections typed during a long turn are one read's
+ * worth; as three turns, the agent would answer the first, stale one before
+ * it ever saw the last. A `send` is always a turn of its own — the subagent
+ * pool counts one turn per message.
+ */
+export function nextPrompt(queue: Outgoing[]): { text: string; refs: number[] } | null {
+  const first = queue.shift();
+  if (!first) return null;
+  const batch = [first];
+  while (first.steer && queue[0]?.steer) batch.push(queue.shift()!);
+  return { text: batch.map((m) => m.text).join("\n\n"), refs: batch.flatMap((m) => m.refs) };
+}
+
 function approveOption(options: { id: string; name: string }[]) {
   const match = options.find(
     (o) => /allow|approve|accept|yes/i.test(o.name) || /allow|approve/i.test(o.id)
@@ -385,8 +422,9 @@ interface PendingPermission {
 /**
  * One persistent, interactive omp ACP session.
  *
- * A single `omp acp` process serves the whole agentbox session: messages are
- * queued and delivered one turn at a time, the agent can ask for permission
+ * A single `omp acp` process serves the whole agentbox session: prompts are
+ * delivered one turn at a time, a message steered mid-turn goes onto omp's
+ * own steering queue (see `steer`), the agent can ask for permission
  * (blocking until answered), and turns can be interrupted. The process stays
  * alive between turns, so "waiting" is real.
  */
@@ -397,7 +435,13 @@ export class AcpRunner {
   private ctx: ClientContext | null = null;
   private ompSessionId: string | null = null;
   private busy = false;
-  private queue: string[] = [];
+  private queue: Outgoing[] = [];
+  /** The steer extension's socket, when launched with one. */
+  private link: SteerLink | null = null;
+  /** Mid-turn messages handed to the extension, by request id; `queued` once
+   *  it has them on omp's steering queue. */
+  private steers = new Map<number, { text: string; ref: number; queued: boolean }>();
+  private steerIds = 0;
   private pendingPerm: PendingPermission | null = null;
   private autoApprove: () => boolean;
   private closed = false;
@@ -427,6 +471,11 @@ export class AcpRunner {
     return this.ompSessionId;
   }
 
+  /** A prompt is in flight: a message now is a steer, not the next turn. */
+  get midTurn(): boolean {
+    return this.busy;
+  }
+
   /** Launch `omp acp` and open (or resume) an ACP session. Returns its id. */
   async launch(opts: LaunchOptions): Promise<string> {
     if (this.closed) throw new Error("runner closed");
@@ -445,6 +494,23 @@ export class AcpRunner {
     ];
     if (opts.advisor) argv.push("--advisor");
 
+    const env: Record<string, string | undefined> = { ...process.env, AGENTBOX_OMP_SESSION: this.id };
+    if (opts.steerSocket) {
+      try {
+        this.link = new SteerLink(
+          opts.steerSocket,
+          (r) => this.onSteerOutcome(r),
+          (session) => this.onSteerDrop(session),
+        );
+        argv.push("--extension", STEER_EXTENSION);
+        env.AGENTBOX_STEER_SOCKET = opts.steerSocket;
+      } catch (err) {
+        // Mid-turn messages fall back to waiting for the turn to end. Worse,
+        // not broken — no reason to fail the launch over it.
+        this.events.onError(this.id, `mid-turn steering is unavailable: ${messageOf(err)}`);
+      }
+    }
+
     const proc = Bun.spawn(argv, {
       // NOTE: no --session-dir here. omp's ACP session list/resume look up
       // sessions in the default cwd-derived store (~/.omp/agent/sessions/<cwd>/),
@@ -459,7 +525,7 @@ export class AcpRunner {
       // ~/.omp/agent/models.yml maps it onto the header for the opencode
       // providers. `this.id` is the agentbox session, which is stable across a
       // relaunch and a resume, so one conversation keeps one id for its life.
-      env: { ...process.env, AGENTBOX_OMP_SESSION: this.id },
+      env,
     });
     this.proc = proc;
 
@@ -643,22 +709,84 @@ export class AcpRunner {
     }
   }
 
-  /** Queue a message. Delivered immediately when idle, else at the next turn. */
+  /** Queue a prompt. Delivered immediately when idle, else as the next turn —
+   *  one turn per message. */
   send(text: string) {
     if (this.closed || !this.ctx || !this.ompSessionId) throw new Error("session is not connected");
-    this.queue.push(text);
+    this.queue.push({ text, refs: [], steer: false });
+    this.pump();
+  }
+
+  /**
+   * Put a message to the agent without costing it its turn.
+   *
+   * Idle, it is a prompt, now. Mid-turn it goes to the steer extension, which
+   * puts it on omp's steering queue: the agent reads it after its current
+   * tool call, and a `hub wait` is cut short for it — nothing is cancelled,
+   * and the subagents the wait was watching keep running. `session/prompt`
+   * cannot do this: omp cancels a running turn to make room for one.
+   *
+   * Without the extension, or when the run ends before it can carry the
+   * message, it waits for the turn to end, merged with whatever else is
+   * waiting. `ref` comes back through `onDelivered` once the message is in
+   * the agent's context; one delivered on the spot is not reported.
+   */
+  steer(text: string, ref: number) {
+    if (this.closed || !this.ctx || !this.ompSessionId) throw new Error("session is not connected");
+    if (!this.busy) {
+      this.queue.push({ text, refs: [], steer: true });
+      this.pump();
+      return;
+    }
+    const id = ++this.steerIds;
+    if (this.link?.send(this.ompSessionId, { t: "steer", id, text })) {
+      this.steers.set(id, { text, ref, queued: false });
+      return;
+    }
+    this.queue.push({ text, refs: [ref], steer: true });
+  }
+
+  private onSteerOutcome(r: SteerOutcome) {
+    const s = this.steers.get(r.id);
+    if (!s) return;
+    if (r.t === "queued") {
+      s.queued = true;
+      return;
+    }
+    this.steers.delete(r.id);
+    if (r.t === "delivered") {
+      this.events.onDelivered?.(this.id, [s.ref]);
+      return;
+    }
+    // `idle`: the run ended before a tool call could carry it. The turn is
+    // over or about to be, and the message goes as the next prompt.
+    this.queue.push({ text: s.text, refs: [s.ref], steer: true });
+    this.pump();
+  }
+
+  /**
+   * The extension's connection closed. What it had not taken goes back to
+   * waiting for the turn; what it had queued is omp's now, and reaches the
+   * agent unreported — sending it again would make it arrive twice.
+   */
+  private onSteerDrop(session: string) {
+    if (session !== this.ompSessionId) return;
+    for (const [id, s] of this.steers) {
+      this.steers.delete(id);
+      if (!s.queued) this.queue.push({ text: s.text, refs: [s.ref], steer: true });
+    }
     this.pump();
   }
 
   private pump() {
     if (this.busy || this.closed || !this.ctx || !this.ompSessionId) return;
-    const text = this.queue.shift();
-    if (text === undefined) return;
+    const next = nextPrompt(this.queue);
+    if (!next) return;
     this.busy = true;
     this.ctx
       .request("session/prompt", {
         sessionId: this.ompSessionId,
-        prompt: [{ type: "text", text }],
+        prompt: [{ type: "text", text: next.text }],
       })
       .then((res) => {
         // The turn is done. stopReason is authoritative even when updates raced ahead.
@@ -676,6 +804,8 @@ export class AcpRunner {
         this.events.onTurnEnd(this.id, "error");
         this.pump();
       });
+    // Handed over with the prompt: the agent reads them as this turn opens.
+    if (next.refs.length) this.events.onDelivered?.(this.id, next.refs);
   }
 
   /** Interrupt the current turn. Queue survives; the turn stops with `cancelled`. */
@@ -711,6 +841,8 @@ export class AcpRunner {
   private reportExit(code: number) {
     if (this.exitReported) return;
     this.exitReported = true;
+    this.link?.close();
+    this.link = null;
     this.events.onExit(this.id, code);
   }
 

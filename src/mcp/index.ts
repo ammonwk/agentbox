@@ -113,7 +113,7 @@ function eventView(e: TranscriptEvent): Record<string, unknown> {
   const base = { seq: e.seq, at: new Date(e.ts).toISOString() };
   switch (e.type) {
     case "user":
-      return { ...base, type: `user:${e.from}`, text: clip(e.text) };
+      return { ...base, type: `user:${e.from}`, text: clip(e.text), ...(e.queued ? { queued: true } : {}) };
     case "assistant":
       return { ...base, type: "assistant", text: clip(e.text) };
     case "tool":
@@ -143,6 +143,8 @@ function eventView(e: TranscriptEvent): Record<string, unknown> {
       return { ...base, type: "turn", stopReason: e.stopReason };
     case "error":
       return { ...base, type: "error", message: clip(e.message) };
+    case "delivered":
+      return { ...base, type: "delivered", refs: e.refs };
   }
 }
 
@@ -394,12 +396,14 @@ server.registerTool(
     title: "Steer a running or waiting session",
     description:
       "Send the agent a correction, an answer, or the next step. If it is mid-turn the message " +
-      "is queued and delivered when the turn ends; if it is waiting it lands now.\n\n" +
+      "reaches it after its current tool call — a wait on its subagents is cut short for it, " +
+      "and nothing is cancelled; if it is waiting it lands now. Its `user` event carries " +
+      "`queued: true` until a `delivered` event names it.\n\n" +
       "Correct early and specifically — a cheap model recovers from \"you edited the wrong file, " +
       "the router is in src/server/router.ts\" and does not recover from \"that's not right\". " +
       "Quote what you saw in the events or the diff.\n\n" +
-      "If it is spiraling and you need it to stop *now*, `interrupt` first: a queued message " +
-      "will not reach it until the current turn ends, which may be a long way off.",
+      "If it is spiraling and you need it to stop *now*, `interrupt` first: a message waits " +
+      "for the tool call in progress, and a long command is a long wait.",
     inputSchema: {
       session_id: z.string(),
       text: z.string().describe("The correction or instruction. Specific beats polite."),

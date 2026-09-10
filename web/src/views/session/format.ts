@@ -269,13 +269,14 @@ export const RESUME_HINT = "Resume runs it again from the original task.";
 /**
  * What the steer composer promises. The two cases genuinely differ and the
  * difference is the whole reason the placeholder exists: a message to a
- * running agent waits for the current agentic turn to end, which can be long.
+ * running agent reaches it only after its current step — a tool call, which
+ * can be a long command — while a waiting agent reads it now.
  */
 export function steerPlaceholder(status: SessionStatus): string {
   switch (status) {
     case "running":
     case "spawning":
-      return "Steer the agent — queued, delivered when the current turn ends";
+      return "Steer the agent — it reads this after its current step";
     case "waiting":
     case "done":
       return "Tell the agent what's next — delivered immediately";

@@ -17,6 +17,7 @@ import {
   collapseRun,
   failedPromptSeqs,
   groupEvents,
+  queuedPromptSeqs,
   rosterCounts,
   runSummary,
   subagentDetail,
@@ -33,6 +34,7 @@ export function Activity({ session }: { session: Session }) {
   const rows = useMemo(() => groupEvents(events), [events]);
   const roster = useMemo(() => subagentRoster(events), [events]);
   const failedPrompts = useMemo(() => failedPromptSeqs(events), [events]);
+  const queuedPrompts = useMemo(() => queuedPromptSeqs(events), [events]);
   // PR references link into the session's own GitHub repo; null (no slug)
   // means the plain text stays plain.
   const prBase = prBaseOf(session.repoFullName);
@@ -123,7 +125,13 @@ export function Activity({ session }: { session: Session }) {
               ) : row.kind === "prose" ? (
                 <Markdown text={row.text} prBase={prBase} />
               ) : (
-                <EventRow event={row.event} prBase={prBase} session={session} failedPrompts={failedPrompts} />
+                <EventRow
+                  event={row.event}
+                  prBase={prBase}
+                  session={session}
+                  failedPrompts={failedPrompts}
+                  queuedPrompts={queuedPrompts}
+                />
               );
             return (
               <div key={row.key} className="sx-row" title={`${fmtClock(ts)} · ${ago(ts)}`}>
@@ -704,11 +712,13 @@ function EventRow({
   prBase,
   session,
   failedPrompts,
+  queuedPrompts,
 }: {
   event: TranscriptEvent;
   prBase: string | null;
   session: Session;
   failedPrompts: Set<number>;
+  queuedPrompts: Set<number>;
 }) {
   switch (event.type) {
     case "assistant":
@@ -725,6 +735,14 @@ function EventRow({
         <div className={`sx-block ${event.from === "human" ? "human" : "supervisor-msg"}`}>
           <div className="sx-block-head">
             <span>{event.from === "human" ? "You" : event.from === "auto" ? "Auto-continue" : "Supervisor nudge"}</span>
+            {queuedPrompts.has(event.seq) && (
+              <span
+                className="sx-queued"
+                title="Sent while the agent was mid-turn. It reaches the agent after its current tool call, or when its turn ends."
+              >
+                queued · not seen yet
+              </span>
+            )}
             {retry && <RetryPrompt session={session} text={event.text} />}
           </div>
           <div className="sx-block-body"><PRText text={event.text} prBase={prBase} /></div>
@@ -767,6 +785,10 @@ function EventRow({
 
     case "tool":
       // Grouped into runs by groupEvents; never reaches here.
+      return null;
+
+    case "delivered":
+      // Read by the `user` row it names; groupEvents drops it.
       return null;
   }
 }

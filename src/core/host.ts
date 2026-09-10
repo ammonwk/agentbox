@@ -2,7 +2,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { getRepo, getSession, getSettings, updateSession } from "./db";
 import { currentBranch, findOpenPr, repoFullNameOf } from "./git";
 import { AcpRunner, messageOf, type PermissionInfo } from "./acp";
-import { serveHost, PROTOCOL_VERSION, type HostServer, type HostStatus } from "./hostproto";
+import { serveHost, steerSocketPath, PROTOCOL_VERSION, type HostServer, type HostStatus } from "./hostproto";
 import { frameSupervisorMessage, writeSessionPrompt, writeWatchdog } from "./prompts";
 import { onToolCall, supervisorEvents } from "./supervisor";
 import { isProviderError } from "./provider-error";
@@ -152,6 +152,13 @@ function makeRunner(id: string): AcpRunner {
         if (s && s.status !== "flagged") updateSession(sid, { status: "waiting", blocked: false });
         onTurnSettled(sid, stopReason, turnText);
         maybeLinkPr(sid);
+        changed();
+      },
+
+      // A message sent mid-turn has reached the agent; the transcript showed
+      // it as queued until now.
+      onDelivered: (sid, refs) => {
+        appendEvent(sid, { type: "delivered", refs });
         changed();
       },
 
@@ -337,18 +344,24 @@ function maybeLinkPr(id: string) {
  * event log's only writer: a server that appended its own "user" line would be
  * handing out sequence numbers from a counter the host knows nothing about,
  * and one of the two events would silently take the other's place.
+ *
+ * Mid-turn the message is not in the agent's context yet: it arrives at the
+ * agent's next tool call (`AcpRunner.steer`), and the event says it is queued
+ * until the runner reports it delivered. Without that, a message the agent
+ * has not seen reads exactly like one it saw and ignored.
  */
 function deliver(id: string, text: string, from: "human" | "supervisor" | "auto"): void {
   // A human message is the human taking over; a scheduled continue would only
   // double-steer five minutes later.
   if (from === "human") cancelAutoContinue(id);
-  appendEvent(id, { type: "user", text, from });
+  const queued = !!runner?.midTurn;
+  const event = appendEvent(id, { type: "user", text, from, ...(queued ? { queued } : {}) });
   if (from === "human") {
     const s = getSession(id);
     if (s) updateSession(id, { followUps: s.followUps + 1 });
   }
   if (!runner?.alive) throw new Error("the agent is not connected");
-  runner.send(text);
+  runner.steer(text, event.seq);
   updateSession(id, { status: "running", blocked: false });
   changed();
 }
@@ -565,6 +578,7 @@ export async function runHost(sessionId: string, firstMessagePath: string | null
         promptFile,
         advisor: settings.advisor.enabled,
         resumeSessionId: s.ompSessionId,
+        steerSocket: steerSocketPath(sessionId),
       }),
       s.model,
     );

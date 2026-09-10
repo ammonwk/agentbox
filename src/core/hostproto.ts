@@ -48,6 +48,12 @@ export function hostSocketPath(sessionId: string): string {
   return join(sessionDirFor(sessionId), "ctl.sock");
 }
 
+/** Where the session's omp steer extension connects (steer-link.ts). Beside
+ *  the control socket, for the same reasons. */
+export function steerSocketPath(sessionId: string): string {
+  return join(sessionDirFor(sessionId), "steer.sock");
+}
+
 export type HostRequest =
   | { op: "status" }
   | { op: "send"; text: string }

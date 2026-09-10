@@ -8,11 +8,11 @@ import { useAction } from "./useAction";
 /**
  * The always-visible composer, or the permission prompt that replaces it.
  *
- * The placeholder is load-bearing: a message to a running agent is queued
- * until its current turn ends (omp returns from `session/prompt` only at the
- * end of a whole agentic loop), while a waiting agent gets it immediately.
- * Someone who does not know which case they are in cannot tell whether their
- * correction landed.
+ * The placeholder is load-bearing: a message to a running agent reaches it
+ * only after its current step (host.ts `deliver`), while a waiting agent gets
+ * it immediately. Someone who does not know which case they are in cannot
+ * tell whether their correction landed — the transcript marks the first kind
+ * queued until it has.
  */
 export function Steer({ session }: { session: Session }) {
   if (session.blocked) return <PermissionPrompt session={session} />;

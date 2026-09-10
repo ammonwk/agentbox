@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Attention, Session, ToolCall, ToolStatus, TranscriptEvent } from "../../../../src/core/types";
 import { isPinnedToBottom, shouldAutoScroll, distanceFromBottom, isAtTop, anchoredScrollTop } from "./scroll";
 import {
-  activityEmptyReason, collapseRun, failedPromptSeqs, groupEvents, rosterCounts, runSummary,
+  activityEmptyReason, collapseRun, failedPromptSeqs, groupEvents, queuedPromptSeqs, rosterCounts, runSummary,
   subagentDetail, subagentRoster, type ToolEntry,
 } from "./transcript";
 import type { SessionRow } from "../../api";
@@ -410,8 +410,8 @@ describe("formatting", () => {
     expect(splitPRRefs("no refs here")).toEqual([{ text: "no refs here", pr: null }]);
   });
 
-  test("the steer placeholder distinguishes queued from immediate delivery", () => {
-    expect(steerPlaceholder("running")).toContain("queued");
+  test("the steer placeholder distinguishes next-step from immediate delivery", () => {
+    expect(steerPlaceholder("running")).toContain("after its current step");
     expect(steerPlaceholder("waiting")).toContain("immediately");
   });
 
@@ -753,5 +753,28 @@ describe("failedPromptSeqs", () => {
       turn(5, "end_turn"),
     ]);
     expect(failed.size).toBe(0);
+  });
+});
+
+describe("queuedPromptSeqs", () => {
+  const user = (seq: number, queued?: boolean): TranscriptEvent =>
+    ({ seq, ts: seq * 10, type: "user", text: `m${seq}`, from: "human", ...(queued ? { queued } : {}) });
+  const delivered = (seq: number, refs: number[]): TranscriptEvent =>
+    ({ seq, ts: seq * 10, type: "delivered", refs });
+
+  test("a message sent mid-turn reads as queued until the agent has it", () => {
+    expect([...queuedPromptSeqs([user(1, true), user(2, true)])]).toEqual([1, 2]);
+    expect([...queuedPromptSeqs([user(1, true), user(2, true), delivered(3, [1])])]).toEqual([2]);
+    expect(queuedPromptSeqs([user(1, true), user(2, true), delivered(3, [1, 2])]).size).toBe(0);
+  });
+
+  test("a message delivered on the spot was never queued", () => {
+    expect(queuedPromptSeqs([user(1)]).size).toBe(0);
+  });
+
+  test("a delivery landing inside a tool run does not split it", () => {
+    const rows = groupEvents([toolEvent(1), delivered(2, [0]), toolEvent(3)]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("toolRun");
   });
 });

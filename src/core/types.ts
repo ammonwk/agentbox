@@ -222,7 +222,13 @@ export type AdvisorySeverity = "nit" | "concern" | "blocker";
  * the UI uses to request only what it has not seen.
  */
 export type TranscriptEvent = { seq: number; ts: number } & (
-  | { type: "user"; text: string; from: "human" | "supervisor" | "auto" }
+  | {
+      type: "user";
+      text: string;
+      from: "human" | "supervisor" | "auto";
+      /** Sent mid-turn: not in the agent's context until a `delivered` event names it. */
+      queued?: boolean;
+    }
   | { type: "assistant"; text: string }
   | { type: "tool"; call: ToolCall }
   | { type: "advisory"; severity: AdvisorySeverity; text: string }
@@ -230,6 +236,8 @@ export type TranscriptEvent = { seq: number; ts: number } & (
   | { type: "supervisor"; verdict: SupervisorVerdict }
   | { type: "turn"; stopReason: string }
   | { type: "error"; message: string }
+  /** The queued `user` events with these seqs are now in the agent's context. */
+  | { type: "delivered"; refs: number[] }
 );
 
 // ------------------------------------------------------------- supervisor

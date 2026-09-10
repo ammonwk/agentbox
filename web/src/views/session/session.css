@@ -372,6 +372,9 @@
 
 .sx-block-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* A message the agent has not seen yet (Activity.tsx, `queuedPromptSeqs`). */
+.sx-queued { color: var(--warning); }
+
 .sx-block.human { border-left-color: var(--accent); }
 .sx-block.supervisor-msg { border-left-color: var(--info); }
 .sx-block.advisory-nit { border-left-color: var(--faint); }

@@ -86,6 +86,10 @@ export function groupEvents(events: TranscriptEvent[]): Row[] {
       continue;
     }
 
+    // Bookkeeping for the `user` row it names, which reads it from there. As a
+    // row of its own it would split the tool run or the prose it lands in.
+    if (event.type === "delivered") continue;
+
     run = null;
     prose = null;
     rows.push({ kind: "event", key: `e-${event.seq}`, event });
@@ -255,6 +259,23 @@ export function failedPromptSeqs(events: TranscriptEvent[]): Set<number> {
     }
   }
   return failed;
+}
+
+/**
+ * Messages sent mid-turn that have not reached the agent yet.
+ *
+ * A `user` event is written when the message is sent, which mid-turn is before
+ * the agent can see it; a `delivered` event names it once it can. Drawn
+ * without the difference, a queued message reads exactly like one the agent
+ * saw and ignored.
+ */
+export function queuedPromptSeqs(events: TranscriptEvent[]): Set<number> {
+  const queued = new Set<number>();
+  for (const ev of events) {
+    if (ev.type === "user" && ev.queued) queued.add(ev.seq);
+    else if (ev.type === "delivered") for (const ref of ev.refs) queued.delete(ref);
+  }
+  return queued;
 }
 
 // -------------------------------------------------------------- subagents
