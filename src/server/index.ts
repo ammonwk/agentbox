@@ -68,6 +68,7 @@ import {
   mergeSettings,
   saveSettings,
 } from "../core/db";
+import { modelCatalog } from "../core/models";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import type {
@@ -262,6 +263,11 @@ export const router = new Router(mapCoreError)
       version: VERSION,
     });
   })
+
+  // The Model dropdowns' options. core/models.ts caches the fetch from
+  // opencode.ai, so opening a dialog reaches the network at most once per ten
+  // minutes. Never on a broadcast path.
+  .add("GET", "/api/models", async () => json(await modelCatalog()))
 
   .add("POST", "/api/sessions", async ({ req }) => {
     const body = await readBody(req);

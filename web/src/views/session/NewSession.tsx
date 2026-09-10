@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AgentSettings, Repo, Session, SkillInfo } from "../../../../src/core/types";
 import { api } from "../../api";
-import { Button, Field, Icon, Modal } from "../../components";
+import { Button, Field, Icon, Modal, ModelPicker } from "../../components";
 import { useAction } from "./useAction";
 
 /** The `/token` under the caret, if the menu should be open for it. */
@@ -168,8 +168,8 @@ export function NewSession({
           </div>
         </Field>
 
-        <Field label="Model" hint={`Blank uses the default, ${settings.model}.`}>
-          <input value={model} onChange={(e) => setModel(e.target.value)} spellCheck={false} />
+        <Field label="Model" hint={`Starts on the default from Settings, ${settings.model}.`}>
+          {(id) => <ModelPicker id={id} value={model} onChange={setModel} live />}
         </Field>
 
         <Field

@@ -14,6 +14,7 @@ import {
   Empty,
   Field,
   Icon,
+  ModelPicker,
   RelativeTime,
   Toggle,
 } from "../components";
@@ -80,12 +81,7 @@ function RunDefaults({ settings, save, saveStateOf }: SectionProps) {
         hint="The omp model id new sessions run on. A session can be given a different one when you spawn it."
       >
         {(id) => (
-          <CommitInput
-            id={id}
-            value={settings.model}
-            placeholder="provider/model"
-            onCommit={(v) => save("model", { model: v.trim() })}
-          />
+          <ModelPicker id={id} value={settings.model} onChange={(v) => save("model", { model: v })} />
         )}
       </Field>
       <SaveMark state={saveStateOf("model")} />

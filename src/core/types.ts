@@ -358,6 +358,25 @@ export interface AgentSettings {
   advisor: AdvisorSettings;
 }
 
+// ------------------------------------------------------------------ models
+
+/** One entry in a Model dropdown. `id` is the omp selector, `provider/model`. */
+export interface ModelOption {
+  id: string;
+  /** A human name, for an id that does not say what the model is. */
+  label?: string;
+}
+
+/** `GET /api/models`. Built in src/core/models.ts. */
+export interface ModelCatalog {
+  /** agentbox's short list. Always present: it does not depend on the fetch. */
+  recommended: ModelOption[];
+  /** Everything else OpenCode Go lists, sorted. Empty until it has loaded once. */
+  go: ModelOption[];
+  /** Why Go's list could not be fetched this time, or null. */
+  goError: string | null;
+}
+
 // ----------------------------------------------------------------- metrics
 
 export interface TempReading {

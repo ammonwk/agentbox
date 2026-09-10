@@ -14,6 +14,7 @@ import type {
   ColdState,
   HotState,
   MetricsState,
+  ModelCatalog,
   ProcDetail,
   ReclaimResult,
   Repo,
@@ -41,6 +42,8 @@ export type {
   HotState,
   LoadSample,
   MetricsState,
+  ModelCatalog,
+  ModelOption,
   PermissionRequest,
   ProcDetail,
   ProcRole,
@@ -139,6 +142,9 @@ export const api = {
   /** `refresh` forces a re-probe past the server's ~60s cache — for a Re-check
    *  button, whose presser has usually just fixed the thing being probed. */
   health: (refresh = false) => request<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
+
+  /** The Model dropdowns' options. Read it through `useModelCatalog`. */
+  models: () => request<ModelCatalog>("/api/models"),
 
   spawnSession: (input: { repoId: string; prompt: string; model?: string; branch?: string }) =>
     post<Session>("/api/sessions", input),
@@ -401,6 +407,35 @@ export function useMetrics(): { metrics: MetricsState | null; stale: boolean } {
   );
 
   return { metrics, stale: !connected };
+}
+
+// ------------------------------------------------------------------ models
+
+/**
+ * The Model dropdowns' options, asked for on every mount. The server caches what
+ * it fetches from OpenCode Go, so this is a local round trip and holding a copy
+ * here would only add a second staleness to reason about.
+ */
+export function useModelCatalog(): { catalog: ModelCatalog | null; error: string | null } {
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.models().then(
+      (c) => {
+        if (!cancelled) setCatalog(c);
+      },
+      (e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { catalog, error };
 }
 
 // -------------------------------------------------------------- transcript

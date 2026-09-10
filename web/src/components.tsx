@@ -15,8 +15,8 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { ago, clockNow, subscribeToClock } from "./api";
-import type { Attention, AttentionKind, SessionStatus } from "../../src/core/types";
+import { ago, clockNow, subscribeToClock, useModelCatalog } from "./api";
+import type { Attention, AttentionKind, ModelOption, SessionStatus } from "../../src/core/types";
 
 // ------------------------------------------------------------------ icons
 
@@ -598,6 +598,110 @@ export function CommitInput({
           Unsaved — {multiline ? "⌘/Ctrl+Enter" : "Enter"} or click away to save, Esc to revert
         </span>
       ) : null}
+    </div>
+  );
+}
+
+/** The select value for "type an id instead". It has no slash, so it can never
+ *  be an omp selector. */
+const OTHER_MODEL = "__other__";
+
+const modelText = (m: ModelOption) => (m.label ? `${m.label} (${m.id})` : m.id);
+
+/**
+ * A Model dropdown: the recommended models, then everything OpenCode Go offers,
+ * then "Other model id…" for any omp selector typed by hand.
+ *
+ * A value on neither list (a setting saved before this existed, another
+ * provider's model) is shown as it is. A `<select>` with no matching option
+ * displays its first one, which would read as the setting having changed.
+ *
+ * `live` is for a form that reads the value on submit: a typed id reaches
+ * `onChange` on every keystroke, so Ctrl+Enter spawns with what is in the box.
+ * Without it the typed id commits on Enter or blur, which is what a control
+ * that saves on change needs.
+ */
+export function ModelPicker({
+  id,
+  value,
+  onChange,
+  live,
+}: {
+  id?: string;
+  value: string;
+  onChange: (next: string) => void;
+  live?: boolean;
+}) {
+  const { catalog, error } = useModelCatalog();
+  const [typing, setTyping] = useState(false);
+  const recommended = catalog?.recommended ?? [];
+  const go = catalog?.go ?? [];
+  const listed = [...recommended, ...go].some((m) => m.id === value);
+  const problem = error
+    ? `Could not load the model list: ${error}`
+    : catalog?.goError
+      ? `Could not refresh OpenCode Go's model list: ${catalog.goError}`
+      : null;
+
+  return (
+    <div className="model-picker">
+      <select
+        id={id}
+        value={typing ? OTHER_MODEL : value}
+        onChange={(e) => {
+          const next = e.target.value;
+          setTyping(next === OTHER_MODEL);
+          if (next !== OTHER_MODEL) onChange(next);
+        }}
+      >
+        {!listed && (
+          <optgroup label="Current">
+            <option value={value}>{value || "none set"}</option>
+          </optgroup>
+        )}
+        {recommended.length > 0 && (
+          <optgroup label="Recommended">
+            {recommended.map((m) => (
+              <option key={m.id} value={m.id}>
+                {modelText(m)}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        {go.length > 0 && (
+          <optgroup label="OpenCode Go">
+            {go.map((m) => (
+              <option key={m.id} value={m.id}>
+                {modelText(m)}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <option value={OTHER_MODEL}>Other model id…</option>
+      </select>
+      {typing &&
+        (live ? (
+          <input
+            className="input mono"
+            aria-label="Model id"
+            placeholder="provider/model"
+            spellCheck={false}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        ) : (
+          <CommitInput
+            aria-label="Model id"
+            mono
+            placeholder="provider/model"
+            value={value}
+            onCommit={(v) => {
+              setTyping(false);
+              if (v.trim()) onChange(v.trim());
+            }}
+          />
+        ))}
+      {problem && <span className="field-hint">{problem}</span>}
     </div>
   );
 }
