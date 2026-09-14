@@ -22,6 +22,7 @@ import {
   ago,
   pruneTranscripts,
   waitForTurn,
+  type ConversationTurn,
   type Subagent,
   type TurnReport,
 } from "../core/subagents";
@@ -262,6 +263,35 @@ function watch(agent: Subagent, send: (m: string, p: number, t?: number) => void
   const timer = setInterval(tick, HEARTBEAT_MS);
   (timer as { unref?: () => void }).unref?.();
   return () => clearInterval(timer);
+}
+
+/**
+ * Where each message to an agent stands, one line apiece.
+ *
+ * "Did my follow-up land" has three honest answers — waiting behind another
+ * turn, running, answered — and a caller that cannot tell them apart resends,
+ * which pays for the same work twice. `handed back` is the most this side can
+ * know: it says the answer left here, not that it reached the caller's context,
+ * which is why the line for it points at re-reading.
+ */
+function renderConversation(turns: ConversationTurn[], now = Date.now()): string[] {
+  return turns.map((t) => {
+    const oneLine = t.message.replace(/\s+/g, " ").trim();
+    const preview = oneLine.length > 80 ? `${oneLine.slice(0, 79)}…` : oneLine;
+    let status: string;
+    if (t.status === "queued") {
+      status = `queued behind turn ${t.turn - 1}, sent ${ago(now - t.sentAt)}`;
+    } else if (t.status === "running") {
+      status = `running, sent ${ago(now - t.sentAt)}`;
+    } else {
+      status =
+        `answered ${t.answeredAt === null ? "" : ago(now - t.answeredAt)}` +
+        (t.handedBackAt === null ? ", UNCOLLECTED" : ", handed back") +
+        (t.toolCalls === null ? "" : `, ${t.toolCalls} tool call${t.toolCalls === 1 ? "" : "s"}`) +
+        (t.stopReason === null || t.stopReason === "end_turn" ? "" : `, ended ${t.stopReason}`);
+    }
+    return `  turn ${t.turn} ${status}: "${preview}"`;
+  });
 }
 
 function tokens(n: number): string {
@@ -538,7 +568,7 @@ server.registerTool(
     const stop = watch(agent, out.send);
     try {
       // The spawn's own prompt is turn 1; wait for that answer specifically.
-      const r = await waitForTurn(agent, 1, DEFAULT_TIMEOUT_S * 1000);
+      const r = await waitForTurn(agent, 1, DEFAULT_TIMEOUT_S * 1000, { signal: extra.signal });
       return text("stuck" in r ? renderWaiting(agent, r.stuck) : renderTurn(r));
     } finally {
       stop();
@@ -565,7 +595,11 @@ server.registerTool(
       "It keeps working wherever the agent already was; you cannot move an agent between " +
       "directories, so start a new one if the next job is in a different tree.\n\n" +
       "If it is mid-turn the message is queued and delivered when that turn ends; `interrupt` " +
-      "first if you need it to stop now.",
+      "first if you need it to stop now.\n\n" +
+      "If this call errors or its result goes missing, do NOT resend — that pays for the " +
+      "same work twice. `list_agents` shows every message and whether it is queued, running " +
+      "or answered, and `collect` with its `turn` number returns the answer, even one that " +
+      "was already handed back.",
     inputSchema: {
       to: z.string().describe("The agent's name, as `agent` or `list_agents` reported it."),
       message: z.string().min(1),
@@ -581,7 +615,7 @@ server.registerTool(
     const out = publisher("agent", false, extra);
     const stop = watch(agent, out.send);
     try {
-      const r = await waitForTurn(agent, turn, DEFAULT_TIMEOUT_S * 1000);
+      const r = await waitForTurn(agent, turn, DEFAULT_TIMEOUT_S * 1000, { signal: extra.signal });
       return text("stuck" in r ? renderWaiting(agent, r.stuck) : renderTurn(r));
     } finally {
       stop();
@@ -610,9 +644,20 @@ server.registerTool(
       "Answers come back oldest first, and each is stamped with the turn it answers — turn 1 " +
       "is the task you spawned it with, turn 2 the first `send_message`, and so on. If you " +
       "fired off several messages, match them up by that number rather than assuming the next " +
-      "report is the one you are thinking of.",
+      "report is the one you are thinking of.\n\n" +
+      "Pass `turn` to ask for one answer by number. That also works for an answer already " +
+      "handed back — the way to recover a result that went missing on your side.",
     inputSchema: {
       name: z.string(),
+      turn: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe(
+          "Which answer: 1 is the spawning task, 2 the first `send_message`, and so on. Returns " +
+            "it even if it was handed back before; waits for it if it is still coming.",
+        ),
       timeout_seconds: z
         .number()
         .int()
@@ -627,13 +672,36 @@ server.registerTool(
         ),
     },
   },
-  async ({ name, timeout_seconds }, extra) => {
+  async ({ name, turn, timeout_seconds }, extra) => {
     const agent = pool.get(name);
+    if (turn !== undefined) {
+      const status = agent.conversation().find((t) => t.turn === turn)?.status;
+      const kept = agent.reread(turn);
+      const handed = agent.handedBackAt(turn);
+      // Already handed back: repeat it. Still in the mailbox falls through to
+      // `settle` below, which takes it the ordinary way.
+      if (kept && handed !== null) {
+        return text(
+          `Turn ${turn} of "${name}" was already handed back ${ago(Date.now() - handed)}; ` +
+            `repeating it.\n\n${renderTurn(kept)}`,
+        );
+      }
+      if (!kept && (status === undefined || status === "answered")) {
+        const sent = agent.conversation().at(-1)?.turn ?? 0;
+        return text(
+          turn > sent
+            ? `"${name}" has no turn ${turn} — it has been sent ${sent} message` +
+                `${sent === 1 ? "" : "s"}.`
+            : `Turn ${turn} of "${name}" is older than the answers kept in memory. The full ` +
+                `text is in ${agent.dir}/transcript.jsonl.`,
+        );
+      }
+    }
     const out = publisher("agent", false, extra);
     const stop = watch(agent, out.send);
     let r: TurnReport | null;
     try {
-      r = await agent.settle((timeout_seconds ?? COLLECT_TIMEOUT_S) * 1000);
+      r = await agent.settle((timeout_seconds ?? COLLECT_TIMEOUT_S) * 1000, turn, extra.signal);
     } finally {
       stop();
       out.done();
@@ -646,10 +714,18 @@ server.registerTool(
       );
     }
     if (agent.state === "idle") {
-      return text(
-        `"${name}" is idle and owes you nothing — you have already collected its last turn. ` +
-          `Send it a message to give it more work.`,
-      );
+      // Nothing new, but "you already have it" is exactly what a caller whose
+      // result went missing cannot act on. Repeat the last answer instead.
+      const last = agent.reread();
+      const handed = last === null ? null : agent.handedBackAt(last.turn);
+      if (last !== null && handed !== null) {
+        return text(
+          `"${name}" is idle with nothing new. Its last answer, turn ${last.turn}, was handed ` +
+            `back ${ago(Date.now() - handed)}; repeating it in case it never reached you.\n\n` +
+            renderTurn(last),
+        );
+      }
+      return text(`"${name}" is idle and owes you nothing. Send it a message to give it more work.`);
     }
     // Read after settling, not before: our own waiter has been dropped by
     // then, so this counts the callers genuinely still queued behind us.
@@ -674,7 +750,10 @@ server.registerTool(
       "Budgets rather than progress bars, deliberately: there is no honest estimate of how " +
       "much of a task is left, but context, clock and money are real ceilings, and " +
       "consumption against them is what decides let-it-run from kill-it. `uncollected` above " +
-      "zero means an agent finished a turn you never picked up.",
+      "zero means an agent finished a turn you never picked up.\n\n" +
+      "Each agent also lists its unanswered messages and its latest answer, by turn number: " +
+      "queued, running, or answered. That is how you tell whether a `send_message` whose " +
+      "result you never saw actually landed.",
     inputSchema: {},
   },
   async () => {
@@ -703,6 +782,16 @@ server.registerTool(
         );
       }
       for (const f of v.findings) lines.push(`  ${f.concern}: ${f.note}`);
+      // Everything not yet answered, plus the latest answer: enough to say
+      // whether a follow-up landed, without replaying a long conversation.
+      const turns = a.conversation();
+      const lastAnswered = turns.filter((t) => t.status === "answered").at(-1);
+      lines.push(
+        ...renderConversation(
+          turns.filter((t) => t === lastAnswered || t.status !== "answered"),
+          now,
+        ),
+      );
       return lines.join("\n");
     });
     return text(blocks.join("\n\n"));
@@ -715,7 +804,8 @@ server.registerTool(
     title: "What a subagent actually did",
     description:
       "The agent's recent tool calls: what it read, ran and edited, with results. Its report " +
-      "is a claim; this is the evidence.\n\n" +
+      "is a claim; this is the evidence. It opens with every message the agent was sent and " +
+      "where each stands.\n\n" +
       "Reach for it when a report is surprising, thinner than the task deserved, or arrived " +
       "with a suspiciously low tool-call count — and while a long agent is still running, to " +
       "see whether it is making progress or repeating itself. Costs you context, so read it " +
@@ -728,8 +818,9 @@ server.registerTool(
   async ({ name, limit }) => {
     const agent = pool.get(name);
     const calls = agent.transcript(limit ?? 40);
-    if (calls.length === 0) return text(`"${name}" has made no tool calls.`);
-    return text(JSON.stringify(calls, null, 2));
+    const head = [`"${name}" is ${agent.state}. Messages:`, ...renderConversation(agent.conversation())];
+    if (calls.length === 0) return text(`${head.join("\n")}\n\nNo tool calls yet.`);
+    return text(`${head.join("\n")}\n\nTool calls, most recent ${calls.length}:\n${JSON.stringify(calls, null, 2)}`);
   },
 );
 

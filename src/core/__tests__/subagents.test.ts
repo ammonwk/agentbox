@@ -1210,4 +1210,63 @@ describe("a wait that gives up on a stuck agent", () => {
     expect("stuck" in r).toBe(true);
     expect((r as { stuck: { escalate: boolean } }).stuck.escalate).toBe(false);
   });
+
+  /** A cancelled call has nobody left to hand a report to. Taking the turn
+   *  anyway would lose it; leaving it in the mailbox keeps it for `collect`. */
+  test("a caller that hangs up leaves the turn in the mailbox", async () => {
+    const agent = await pool.spawn({ prompt: "p", cwd: home });
+    const hangUp = new AbortController();
+    const waiting = waitForTurn(agent, 1, 5000, { pollMs: 1000, signal: hangUp.signal });
+    await Bun.sleep(5);
+    hangUp.abort();
+    expect("stuck" in (await waiting)).toBe(true);
+    only().say("nobody was listening");
+    only().endTurn();
+    expect(agent.uncollected).toBe(1);
+  });
+});
+
+describe("did my message land", () => {
+  /** An answer handed to a call can still go missing on the caller's side.
+   *  Re-reading must work after delivery, and must not count as collecting. */
+  test("an answer already handed back can be read again", async () => {
+    const agent = await pool.spawn({ prompt: "one", cwd: home });
+    only().say("first answer");
+    only().endTurn();
+    expect((await agent.settle(50, 1))!.report).toBe("first answer");
+    expect(agent.handedBackAt(1)).not.toBeNull();
+    expect(agent.reread(1)!.report).toBe("first answer");
+    expect(agent.reread()!.turn).toBe(1);
+
+    agent.send("two");
+    only().say("second answer");
+    only().endTurn();
+    expect(agent.reread(2)!.report).toBe("second answer");
+    expect(agent.handedBackAt(2)).toBeNull();
+    expect(agent.uncollected).toBe(1);
+  });
+
+  test("each message says whether it is queued, running or answered", async () => {
+    const agent = await pool.spawn({ prompt: "one", cwd: home });
+    agent.send("two");
+    agent.send("three");
+    expect(agent.conversation().map((t) => t.status)).toEqual(["running", "queued", "queued"]);
+
+    only().tool("t1", "reading");
+    only().say("done one");
+    only().endTurn();
+    await agent.settle(50, 1);
+    const turns = agent.conversation();
+    expect(turns.map((t) => t.status)).toEqual(["answered", "running", "queued"]);
+    expect(turns[0]!.handedBackAt).not.toBeNull();
+    expect(turns[0]!.toolCalls).toBe(1);
+    expect(turns[1]!.message).toBe("two");
+
+    only().endTurn();
+    only().endTurn();
+    const last = agent.conversation();
+    expect(last.map((t) => t.status)).toEqual(["answered", "answered", "answered"]);
+    // Answered but never picked up.
+    expect(last[2]!.handedBackAt).toBeNull();
+  });
 });

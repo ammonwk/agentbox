@@ -197,6 +197,40 @@ interface PendingTurn {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * Answered turns kept for re-reading, per agent.
+ *
+ * Handing a report to a waiting call is not the same as the caller reading it.
+ * The call's result can still be lost on the far side — a client that
+ * backgrounded the call and then dropped the notification, a caller that
+ * cancelled — and until this existed the answer was gone from everywhere but
+ * a JSONL nobody's model can reach. Reports are already clipped, so twenty
+ * costs at most a few hundred kilobytes.
+ */
+const HISTORY = 20;
+
+/** Messages remembered per agent, for saying which ones are queued, running or
+ *  answered. Bounded for the same reason as the tool ring. */
+const MESSAGE_LOG = 50;
+
+/** Where one message stands. `queued` is behind a turn still running. */
+export type TurnStatus = "queued" | "running" | "answered";
+
+/** One message and what became of it: the answer to "did my follow-up land". */
+export interface ConversationTurn {
+  turn: number;
+  /** The message as sent, clipped. */
+  message: string;
+  sentAt: number;
+  status: TurnStatus;
+  /** When the report was produced, for an answered turn. */
+  answeredAt: number | null;
+  /** When a caller was handed it. Null while it sits in the mailbox. */
+  handedBackAt: number | null;
+  stopReason: string | null;
+  toolCalls: number | null;
+}
+
 /** Somebody blocked in `settle`. `turn` pins them to one specific answer;
  *  undefined means "whatever comes next", which is what `collect` wants. */
 interface Waiter {
@@ -406,6 +440,13 @@ export class Subagent {
    */
   private mailbox: TurnReport[] = [];
   private waiters: Waiter[] = [];
+  /** Every recent report, handed back or not, for `reread`. */
+  private history: TurnReport[] = [];
+  /** When each report produced it; keyed by turn. */
+  private producedAt = new Map<number, number>();
+  /** When each report went to a caller; keyed by turn. */
+  private handedBack = new Map<number, number>();
+  private messages: { turn: number; text: string; sentAt: number }[] = [];
 
   private turnStartedAt = 0;
   private turnTools = 0;
@@ -783,6 +824,8 @@ export class Subagent {
     this.armTurnClock();
     this.continues = 0;
     const turn = ++this.sentTurns;
+    this.messages.push({ turn, text: clip(text, 300), sentAt: Date.now() });
+    if (this.messages.length > MESSAGE_LOG) this.messages.shift();
     this.log({ type: "message", turn, text });
     this.runner.send(text);
     return turn;
@@ -792,40 +835,99 @@ export class Subagent {
    * Wait for the next turn this agent has not yet handed back.
    *
    * Returns null on timeout, which is not a verdict: the agent is still
-   * working and its turn will land in the mailbox regardless.
+   * working and its turn will land in the mailbox regardless. An aborted
+   * `signal` ends the wait the same way, and the turn stays in the mailbox
+   * rather than being handed to a caller who has already left.
    */
-  settle(timeoutMs: number, forTurn?: number): Promise<TurnReport | null> {
+  settle(timeoutMs: number, forTurn?: number, signal?: AbortSignal): Promise<TurnReport | null> {
     // Waiting for a specific turn: anything older in the mailbox is somebody
     // else's answer and stays there. Without this, a caller who sent a second
     // message would be handed the first message's report as its reply.
     if (forTurn !== undefined) {
       const at = this.mailbox.findIndex((r) => r.turn === forTurn);
-      if (at !== -1) return Promise.resolve(this.mailbox.splice(at, 1)[0]!);
+      if (at !== -1) return Promise.resolve(this.handOver(this.mailbox.splice(at, 1)[0]!));
       if (this.answeredTurns >= forTurn) {
         // Already handed back to someone else; it is not coming again.
         return Promise.resolve(null);
       }
     }
     const taken = forTurn === undefined ? this.mailbox.shift() : undefined;
-    if (taken) return Promise.resolve(taken);
-    if (this._state !== "running") {
+    if (taken) return Promise.resolve(this.handOver(taken));
+    if (this._state !== "running" || signal?.aborted) {
       // Idle or dead: nothing is running and nothing is owed. Waiting here
       // would burn the whole timeout on a turn that can never arrive.
       return Promise.resolve(null);
     }
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const leave = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", leave);
         this.waiters = this.waiters.filter((w) => w !== entry);
         resolve(null);
-      }, timeoutMs);
+      };
+      const timer = setTimeout(leave, timeoutMs);
       const entry: Waiter = {
         turn: forTurn,
         deliver: (r) => {
           clearTimeout(timer);
-          resolve(r);
+          signal?.removeEventListener("abort", leave);
+          resolve(this.handOver(r));
         },
       };
+      signal?.addEventListener("abort", leave, { once: true });
       this.waiters.push(entry);
+    });
+  }
+
+  private handOver(r: TurnReport): TurnReport {
+    this.handedBack.set(r.turn, Date.now());
+    return r;
+  }
+
+  /**
+   * A report again, whether or not it was already handed back.
+   *
+   * For the caller whose answer went missing after this side delivered it.
+   * Does not touch the mailbox: an uncollected turn is still uncollected
+   * afterwards, because re-reading is not the same as picking it up. Null
+   * when the turn has not been answered, or is older than the history.
+   */
+  reread(turn?: number): TurnReport | null {
+    if (turn === undefined) return this.history.at(-1) ?? null;
+    return this.history.find((r) => r.turn === turn) ?? null;
+  }
+
+  /** When a turn's report was handed to a caller, or null if it never was. */
+  handedBackAt(turn: number): number | null {
+    return this.handedBack.get(turn) ?? null;
+  }
+
+  /**
+   * Every remembered message and where it stands.
+   *
+   * Turns are answered strictly in order, so status falls out of the two
+   * counters: at or below `answeredTurns` is answered, the next one is running
+   * if anything is, and the rest are queued behind it.
+   */
+  conversation(): ConversationTurn[] {
+    return this.messages.map((m) => {
+      const report = this.history.find((r) => r.turn === m.turn) ?? null;
+      const status: TurnStatus =
+        m.turn <= this.answeredTurns
+          ? "answered"
+          : m.turn === this.answeredTurns + 1 && this._state === "running"
+            ? "running"
+            : "queued";
+      return {
+        turn: m.turn,
+        message: m.text,
+        sentAt: m.sentAt,
+        status,
+        answeredAt: this.producedAt.get(m.turn) ?? null,
+        handedBackAt: this.handedBack.get(m.turn) ?? null,
+        stopReason: report?.stopReason ?? null,
+        toolCalls: report?.toolCalls ?? null,
+      };
     });
   }
 
@@ -1179,6 +1281,14 @@ export class Subagent {
   }
 
   private deliver(report: TurnReport) {
+    this.history.push(report);
+    if (this.history.length > HISTORY) this.history.shift();
+    this.producedAt.set(report.turn, Date.now());
+    for (const t of this.producedAt.keys()) {
+      if (t > report.turn - MESSAGE_LOG) break;
+      this.producedAt.delete(t);
+      this.handedBack.delete(t);
+    }
     const pinned = this.waiters.findIndex((w) => w.turn === report.turn);
     const at = pinned !== -1 ? pinned : this.waiters.findIndex((w) => w.turn === undefined);
     if (at === -1) {
@@ -1312,9 +1422,11 @@ export async function waitForTurn(
   agent: Subagent,
   turn: number | undefined,
   totalMs: number,
-  // Overridable so a test can provoke the escalation without waiting out two
-  // real minutes; nothing in production passes them.
-  opts: { afterMs?: number; pollMs?: number; confirms?: number } = {},
+  // The timings are overridable so a test can provoke the escalation without
+  // waiting out two real minutes; nothing in production passes them. `signal`
+  // is the caller hanging up: a report taken after that is delivered to nobody,
+  // so the wait stops and the turn stays in the mailbox for `collect`.
+  opts: { afterMs?: number; pollMs?: number; confirms?: number; signal?: AbortSignal } = {},
 ): Promise<TurnReport | { stuck: Verdict }> {
   const afterMs = opts.afterMs ?? ESCALATE_AFTER_MS;
   const pollMs = opts.pollMs ?? ESCALATE_POLL_MS;
@@ -1323,8 +1435,8 @@ export async function waitForTurn(
   let confirms = 0;
   for (;;) {
     const left = deadline - Date.now();
-    if (left <= 0) return { stuck: verdict(agent.snapshot()) };
-    const report = await agent.settle(Math.min(left, pollMs), turn);
+    if (left <= 0 || opts.signal?.aborted) return { stuck: verdict(agent.snapshot()) };
+    const report = await agent.settle(Math.min(left, pollMs), turn, opts.signal);
     if (report) return report;
     // Nothing is running and nothing is owed: waiting out the rest of the hour
     // would be waiting for a turn that can no longer arrive.
