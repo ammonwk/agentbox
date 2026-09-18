@@ -237,10 +237,36 @@ function readFrom(path: string, from: number, to: number): string {
   }
 }
 
+/**
+ * Most of a log this module will read into memory at once.
+ *
+ * Reading a transcript whole is the fallback path — it runs when a reader
+ * asks for events older than the in-memory ring holds. That was fine until a
+ * single fan-out wrote 800 MB of subagent heartbeats, at which point scrolling
+ * up in that session read the whole file into a string and parsed every line
+ * of it, per request. Heartbeats no longer go to the log and `compactLog`
+ * removes the ones already there, but a reader must not depend on either
+ * having happened.
+ *
+ * Bounded from the tail, because a reader that has run out of ring is reading
+ * backwards from the present. The oldest events of an enormous log are the
+ * ones it cannot show, and saying so beats stalling the server.
+ */
+const MAX_LOG_READ_BYTES = 64 * 1024 * 1024;
+
 function readLog(path: string): ReadResult {
   let text: string;
   try {
-    text = readFileSync(path, "utf8");
+    const size = statSync(path).size;
+    if (size <= MAX_LOG_READ_BYTES) {
+      text = readFileSync(path, "utf8");
+    } else {
+      // Start after the first newline in the window, so the read begins at a
+      // line boundary rather than halfway through a JSON object.
+      const window = readFrom(path, size - MAX_LOG_READ_BYTES, size);
+      const firstBreak = window.indexOf("\n");
+      text = firstBreak === -1 ? "" : window.slice(firstBreak + 1);
+    }
   } catch (err) {
     console.error(`[agentbox] event log read failed (${path}): ${messageOf(err)}`);
     return { events: [], skipped: 0 };
@@ -670,6 +696,7 @@ export function spawnSession(repo: Repo, prompt: string, opts: SpawnOptions = {}
     updatedAt: Date.now(),
     startedAt: null,
     closedAt: null,
+    parkedAt: null,
   };
   insertSession(session);
 
@@ -745,15 +772,30 @@ export async function sendMessage(id: string, text: string): Promise<Session> {
       // same omp conversation rather than losing it.
       appendEvent(id, { type: "error", message: `relaunching after send failed: ${messageOf(err)}` });
       await stopHost(id);
+      countRelaunchedFollowUp(s);
       await startHost(id, body);
     }
   } else {
+    // No host: the session was parked for sitting idle, or its process died.
+    // Either way the conversation is on disk and the new host resumes it.
     if (!s.worktree || !existsSync(s.worktree)) throw new Conflict("this session's worktree is gone");
     hosts.delete(id);
+    countRelaunchedFollowUp(s);
     await startHost(id, body);
   }
   broadcast();
   return getSession(id)!;
+}
+
+/**
+ * A live host counts a follow-up as it delivers one (host.ts `deliver`). A host
+ * started to carry the message delivers it as its opening turn, which is not
+ * counted, so without this every message that woke a parked session would go
+ * missing from `followUps`. Only once a conversation exists: before that the
+ * message is the task, not a follow-up to it.
+ */
+function countRelaunchedFollowUp(s: Session) {
+  if (s.ompSessionId) updateSession(s.id, { followUps: s.followUps + 1 });
 }
 
 /**
@@ -902,6 +944,8 @@ export function closeSession(id: string): Session | null {
 
   updateSession(id, {
     closedAt: Date.now(),
+    // Closing supersedes parking; Resume clears both.
+    parkedAt: null,
     blocked: false,
     permission: null,
     pid: null,
@@ -940,7 +984,9 @@ export async function reconcile(): Promise<void> {
   }
 
   for (const s of orphans) {
-    if (EXPECTS_A_PROCESS.has(s.status)) {
+    // A parked session has no host on purpose. Its `waiting` or `done` is
+    // still true, and marking it `dead` would show a crash where there was none.
+    if (EXPECTS_A_PROCESS.has(s.status) && s.parkedAt === null) {
       updateSession(s.id, {
         status: "dead",
         pid: null,
@@ -956,6 +1002,18 @@ export async function reconcile(): Promise<void> {
     }
   }
   broadcast();
+}
+
+/**
+ * Whether this server currently holds a connection to the session's host.
+ *
+ * The question readers actually ask is "is anybody else writing this
+ * session's row right now", and this answers exactly that — the connection,
+ * not `hostPid`, which outlives the process that owned it and can be reissued
+ * to something unrelated.
+ */
+export function hasHost(id: string): boolean {
+  return hosts.has(id);
 }
 
 /** Let go of every host without disturbing it. Called when the server is

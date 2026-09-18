@@ -6,6 +6,10 @@ import { serveHost, steerSocketPath, PROTOCOL_VERSION, type HostServer, type Hos
 import { frameSupervisorMessage, writeSessionPrompt, writeWatchdog } from "./prompts";
 import { onToolCall, supervisorEvents } from "./supervisor";
 import { isProviderError } from "./provider-error";
+import { compactLog, logSizeOf } from "./compact";
+import { ompSessionDir, scanHubAgents } from "./ompsession";
+import { Roster, type RosterChange } from "./roster";
+import { subagentCallOf } from "./subagentcalls";
 import {
   EXPECTS_A_PROCESS,
   appendEvent,
@@ -83,12 +87,41 @@ async function withLaunchDeadline<T>(launch: Promise<T>, model: string): Promise
 /** Floor on how often one session may shell out to `gh` looking for its PR. */
 const PR_CHECK_MS = 30_000;
 
+/**
+ * How long a session may sit between turns before its omp process is stopped.
+ *
+ * An idle omp is not a pipe. It is a whole agent runtime, around 300 MB when
+ * fresh and a gigabyte or two after a long run, because a JS heap rarely gives
+ * memory back. Nothing used to stop one short of closing the session, and a
+ * board left alone was measured holding 25 hosts idle for up to two weeks.
+ *
+ * Stopping one loses nothing a message cannot restore: the conversation is on
+ * omp's disk, and `sendMessage` resumes it into a new host. That costs a few
+ * seconds of startup, after hours in which the provider's prompt cache has
+ * expired anyway.
+ */
+export const IDLE_PARK_MS = 4 * 60 * 60 * 1000;
+/** How often the host asks whether it has gone idle. */
+const PARK_CHECK_MS = 60_000;
+
 let lastPrCheck = 0;
 /** Last PR-lookup failure, so a permanently broken `gh` is reported once
  *  rather than at every turn boundary. */
 let lastPrError: string | null = null;
 
 let runner: AcpRunner | null = null;
+/** Last time anything happened here: a message in, or the agent doing
+ *  something. The park clock reads it. */
+let lastActivityAt = Date.now();
+/** Set once this host has decided to park. The exit that follows is then not
+ *  read as the agent dying, and a message racing it is refused, so the server
+ *  relaunches rather than handing it to a process on its way out. */
+let parking = false;
+let parkTimer: ReturnType<typeof setInterval> | null = null;
+
+function touch() {
+  lastActivityAt = Date.now();
+}
 let control: HostServer | null = null;
 /** Resolves when omp has exited and the host may leave. */
 let done: (() => void) | null = null;
@@ -110,38 +143,43 @@ function makeRunner(id: string): AcpRunner {
   return new AcpRunner(
     id,
     {
-      onText: (sid, text) => streamText(sid, text),
+      onText: (sid, text) => {
+        touch();
+        streamText(sid, text);
+      },
 
       onToolStart: (sid, call) => {
+        touch();
         const s = getSession(sid);
         if (s) updateSession(sid, { toolCalls: s.toolCalls + 1 });
-        // The dispatch call's own start event lands below; the board row reads
-        // the session's snapshot, so it is updated alongside.
-        if (call.subs) updateSession(sid, { subs: call.subs });
+        observeSubs(sid, call);
         appendEvent(sid, { type: "tool", call });
       },
 
       // Same `call.id` as the start event: consumers upsert on it rather than
       // rendering the call twice.
       onToolEnd: (sid, call, raw) => {
-        if (call.subs) {
-          updateSession(sid, { subs: call.subs });
-          subsForwarded.delete(subsKey(sid, call.id));
-        }
+        touch();
+        observeSubs(sid, call);
         appendEvent(sid, { type: "tool", call }, raw);
         supervise(sid, call);
       },
 
-      // Live subagent progress, throttled: omp emits a snapshot per subagent
-      // tool execution, which on a wide fan-out is many per minute. The
-      // transcript needs the rhythm of the fan-out, not every heartbeat —
-      // but a changed snapshot always lands eventually, because the next one
-      // after the quiet window carries it.
-      onToolUpdate: (sid, call) => forwardSubs(sid, call),
+      // Live subagent progress. omp emits a snapshot per subagent tool
+      // execution, which on a wide fan-out is many per minute, and each one
+      // used to be appended to the transcript as a fresh copy of the whole
+      // parent call — dispatch arguments, every assignment, all of it. That is
+      // how one session's log reached 800 MB. Progress is state: it goes to
+      // the roster, and only the transitions the roster notices are history.
+      onToolUpdate: (sid, call) => {
+        touch();
+        observeSubs(sid, call);
+      },
 
       onAdvisory: (sid, severity, text) => appendEvent(sid, { type: "advisory", severity, text }),
 
       onTurnEnd: (sid, stopReason) => {
+        touch();
         // The tail of what the agent just said — a provider error is the
         // turn's assistant message by the time `end_turn` arrives, so this
         // is where an interrupted turn is recognisable.
@@ -150,6 +188,10 @@ function makeRunner(id: string): AcpRunner {
         const s = getSession(sid);
         // A supervisor flag raised during the turn outranks "the turn ended".
         if (s && s.status !== "flagged") updateSession(sid, { status: "waiting", blocked: false });
+        // The turn ending is the moment the progress stream stops. Everything
+        // the roster still believes about a running subagent is from now on a
+        // memory, so this is exactly when to go and look at what omp wrote.
+        reconcileSubs(sid);
         onTurnSettled(sid, stopReason, turnText);
         maybeLinkPr(sid);
         changed();
@@ -158,6 +200,7 @@ function makeRunner(id: string): AcpRunner {
       // A message sent mid-turn has reached the agent; the transcript showed
       // it as queued until now.
       onDelivered: (sid, refs) => {
+        touch();
         appendEvent(sid, { type: "delivered", refs });
         changed();
       },
@@ -177,6 +220,7 @@ function makeRunner(id: string): AcpRunner {
       },
 
       onPermission: (sid, info) => {
+        touch();
         appendEvent(sid, { type: "permission", title: info.title, approved: null });
         // The prompt is persisted, not just held on the connection. A server
         // restarted while an agent sits on an approval must be able to show
@@ -191,8 +235,21 @@ function makeRunner(id: string): AcpRunner {
 
       onExit: (sid, code) => {
         cancelAutoContinue(sid);
+        // omp's subagents die with it, so this is the last chance to record
+        // what became of them — and the only chance at all for a host that is
+        // parking, which exits with a fan-out that may have finished since the
+        // last turn ended.
+        reconcileSubs(sid);
         const s = getSession(sid);
-        if (s) {
+        if (s && parking) {
+          // We stopped it. The status still describes the conversation, and an
+          // exit code from our own SIGTERM would only read as a failure.
+          // `updatedAt` is kept because the board sorts on it, and a session
+          // must not jump to the top for having done nothing.
+          updateSession(sid, {
+            pid: null, hostPid: null, blocked: false, permission: null, updatedAt: s.updatedAt,
+          });
+        } else if (s) {
           updateSession(sid, {
             pid: null,
             hostPid: null,
@@ -227,30 +284,115 @@ function changed() {
 
 // ------------------------------------------------------------- subagents
 
-/** How often one call's live subagent snapshot may reach the transcript. */
+/**
+ * This session's subagent roster, held here rather than rebuilt by readers.
+ *
+ * The host is the only process that sees omp's progress stream, and the stream
+ * is the only thing that can describe a subagent while it runs — so the merged
+ * answer has to be assembled here and written down. It is persisted on the
+ * session row, which is what makes it survive the turn ending, this process
+ * exiting and the server being restarted, none of which the stream survives.
+ */
+let roster: Roster | null = null;
+/** omp's session directory for this run, resolved once it has an omp session
+ *  id. Null while starting, or when omp's record cannot be found. */
+let ompDir: string | null = null;
+/** Floor on how often live progress is written back to the database. A status
+ *  change ignores it — that is news, and the board should not sit on it. */
 const SUBS_MIN_INTERVAL_MS = 2_000;
-/** Per call, the snapshot last appended and when — the throttle's memory. */
-const subsForwarded = new Map<string, { sig: string; at: number }>();
+let subsWrittenAt = 0;
 
-function subsKey(sessionId: string, callId: string): string {
-  return `${sessionId}:${callId}`;
+function rosterOf(sessionId: string): Roster {
+  if (!roster) roster = new Roster(getSession(sessionId)?.subs ?? null);
+  return roster;
 }
 
 /**
- * Append a still-running call's subagent snapshot, at most one per
- * `SUBS_MIN_INTERVAL_MS` and only when it actually changed. The session row
- * is updated with it, so the board's subagent line moves with the same
- * rhythm as the transcript.
+ * Fold a tool call's subagent snapshot into the roster, and record what
+ * changed.
+ *
+ * Every snapshot omp sends passes through here — on the call's start, its
+ * updates and its end — and almost all of them say nothing new. What reaches
+ * the transcript is one event per transition: dispatched, started, finished,
+ * failed. A fifty-way fan-out writes about a hundred of those where it used
+ * to write fourteen thousand copies of the dispatch call.
  */
-function forwardSubs(sessionId: string, call: ToolCall) {
-  if (!call.subs) return;
-  const key = subsKey(sessionId, call.id);
-  const sig = JSON.stringify(call.subs);
-  const last = subsForwarded.get(key);
-  if (last && (last.sig === sig || Date.now() - last.at < SUBS_MIN_INTERVAL_MS)) return;
-  subsForwarded.set(key, { sig, at: Date.now() });
-  updateSession(sessionId, { subs: call.subs });
-  appendEvent(sessionId, { type: "tool", call });
+function observeSubs(sessionId: string, call: ToolCall) {
+  const collected = subagentCallOf(call);
+  // Only a read that succeeded collected anything; a failed one leaves the
+  // subagent's result exactly where it was.
+  if (collected?.kind === "collect" && call.status === "ok") {
+    rosterOf(sessionId).markCollected(collected.name, Date.now());
+    writeSubs(sessionId, true);
+  }
+  if (!call.subs?.length) return;
+  const changes = rosterOf(sessionId).mergeSnapshot(call.subs, Date.now());
+  for (const change of changes) appendSubagentEvent(sessionId, change);
+  writeSubs(sessionId, changes.length > 0);
+}
+
+/**
+ * Ask omp's session directory what became of the fan-out.
+ *
+ * This is the pass that closes a run out, and without it every long fan-out
+ * ends frozen: omp streams progress only while the parent's turn is running,
+ * and subagents routinely work for hours after it ends. One fifty-way fan-out
+ * was still drawn as "32 running" eleven hours after all fifty had finished,
+ * because that was the last frame the turn carried.
+ *
+ * Cheap enough for a turn boundary — two stats and two short reads per
+ * subagent — and it is the only place a subagent omp never mentioned to us
+ * (the ones a subagent dispatched itself) can enter the roster at all.
+ */
+function reconcileSubs(sessionId: string) {
+  const r = rosterOf(sessionId);
+  if (r.size === 0 && ompDir === null) return; // nothing has ever fanned out
+  // Deep: this runs once per turn, and it is the only chance to count what a
+  // subagent did after the progress stream stopped describing it. A quarter of
+  // a second for a fifty-way fan-out, and nothing at all for a session that
+  // never dispatched one.
+  const agents = scanHubAgents(ompDir, { deep: true });
+  if (agents.length === 0) return;
+  const changes = r.mergeDisk(agents, Date.now());
+  for (const change of changes) appendSubagentEvent(sessionId, change);
+  writeSubs(sessionId, true);
+}
+
+/** Resolve omp's directory for this run. Called once the session id is known;
+ *  the lookup is a `readdir`, and the answer does not change afterwards. */
+function findOmpDir(sessionId: string) {
+  const s = getSession(sessionId);
+  ompDir = ompSessionDir(s?.worktree ?? null, s?.ompSessionId ?? null);
+}
+
+/** Persist the roster. `force` is for news — a status change or a collected
+ *  result — which must not wait out the throttle. */
+function writeSubs(sessionId: string, force: boolean) {
+  if (!roster || roster.size === 0) return;
+  const now = Date.now();
+  if (!force && now - subsWrittenAt < SUBS_MIN_INTERVAL_MS) return;
+  subsWrittenAt = now;
+  updateSession(sessionId, { subs: roster.list() });
+  if (force) changed();
+}
+
+function appendSubagentEvent(sessionId: string, change: RosterChange) {
+  const e = change.entry;
+  appendEvent(sessionId, {
+    type: "subagent",
+    name: e.id,
+    agent: e.agent || null,
+    status: change.to,
+    // The assignment is news exactly once, on the event that introduces the
+    // subagent. Repeating it on every transition would put a paragraph of
+    // prompt in the transcript four times per agent.
+    ...(change.from === null && e.task ? { task: e.task } : {}),
+    ...(e.toolCount ? { toolCount: e.toolCount } : {}),
+    ...(e.tokens ? { tokens: e.tokens } : {}),
+    ...(e.cost ? { cost: e.cost } : {}),
+    ...(e.durationMs ? { durationMs: e.durationMs } : {}),
+    source: e.source ?? "stream",
+  });
 }
 
 // ------------------------------------------------------------- supervisor
@@ -354,13 +496,17 @@ function deliver(id: string, text: string, from: "human" | "supervisor" | "auto"
   // A human message is the human taking over; a scheduled continue would only
   // double-steer five minutes later.
   if (from === "human") cancelAutoContinue(id);
-  const queued = !!runner?.midTurn;
+  // Refused before anything is recorded. The server answers a refusal by
+  // starting a new host onto the same conversation, and that host records the
+  // message as it delivers it, so recording it here as well wrote it twice.
+  if (!runner?.alive || parking) throw new Error("the agent is not connected");
+  touch();
+  const queued = !!runner.midTurn;
   const event = appendEvent(id, { type: "user", text, from, ...(queued ? { queued } : {}) });
   if (from === "human") {
     const s = getSession(id);
     if (s) updateSession(id, { followUps: s.followUps + 1 });
   }
-  if (!runner?.alive) throw new Error("the agent is not connected");
   runner.steer(text, event.seq);
   updateSession(id, { status: "running", blocked: false });
   changed();
@@ -477,6 +623,70 @@ function fireAutoContinue(id: string): void {
   changed();
 }
 
+// ------------------------------------------------------------------ parking
+
+export interface ParkInput {
+  session: Session | null;
+  now: number;
+  lastActivityAt: number;
+  alive: boolean;
+  midTurn: boolean;
+  pendingPermission: boolean;
+  continuePending: boolean;
+}
+
+/**
+ * Whether an idle session's process may be stopped.
+ *
+ * Only when nothing is in flight. A running turn would be cut off, a
+ * permission prompt would lose the promise that answers it, and a scheduled
+ * auto-continue would fire at nobody. `waiting` and `done` are the statuses in
+ * which the agent itself has said its turn is over.
+ */
+export function shouldPark(p: ParkInput): boolean {
+  const s = p.session;
+  if (!s || s.closedAt !== null || s.parkedAt !== null) return false;
+  if (s.status !== "waiting" && s.status !== "done") return false;
+  if (s.blocked || p.pendingPermission) return false;
+  if (!p.alive || p.midTurn || p.continuePending) return false;
+  return p.now - p.lastActivityAt >= IDLE_PARK_MS;
+}
+
+/** Stop omp if this session has gone idle. The host follows it out. */
+function maybePark(id: string) {
+  try {
+    const acp = runner;
+    if (parking || !acp) return;
+    const session = getSession(id);
+    const idle = shouldPark({
+      session,
+      now: Date.now(),
+      lastActivityAt,
+      alive: acp.alive,
+      midTurn: acp.midTurn,
+      pendingPermission: acp.hasPendingPermission,
+      continuePending: !!continues.get(id)?.timer,
+    });
+    if (!idle || !session) return;
+
+    parking = true;
+    // Written before the kill, so a host that dies partway through stopping
+    // still leaves a parked session for `reconcile` to find, not a vanished one.
+    // `updatedAt` is kept: parking is not activity, and the board sorts on it.
+    updateSession(id, { parkedAt: Date.now(), pid: null, hostPid: null, updatedAt: session.updatedAt });
+    console.error(
+      `[agentbox host] parking ${id} after ${Math.round((Date.now() - lastActivityAt) / 60_000)} idle minutes`,
+    );
+    acp.kill();
+    // omp's exit lands on `onExit`, which releases the host. An omp that will
+    // not die must not keep a host answering its socket on the agent's behalf.
+    setTimeout(() => done?.(), 5000).unref();
+  } catch (err) {
+    // A failed check leaves the session running, which is where it already was.
+    console.error(`[agentbox host] park check failed for ${id}: ${messageOf(err)}`);
+  }
+}
+
 // -------------------------------------------------------------------- main
 
 /**
@@ -506,6 +716,8 @@ export async function runHost(sessionId: string, firstMessagePath: string | null
   // perfectly healthy agent dead underneath itself.
   updateSession(sessionId, {
     hostPid: process.pid,
+    // A host picking a parked session back up is what wakes it.
+    parkedAt: null,
     status: "spawning",
     blocked: false,
     permission: null,
@@ -525,11 +737,13 @@ export async function runHost(sessionId: string, firstMessagePath: string | null
       }),
       send: (text) => deliver(sessionId, text, "human"),
       interrupt: () => {
+        touch();
         acp.interrupt();
         updateSession(sessionId, { blocked: false, permission: null });
         changed();
       },
       permission: (permId, approved) => {
+        touch();
         const info: PermissionInfo | null = acp.permission;
         if (!info || info.id !== permId) throw new Error("that permission is no longer pending");
         acp.replyPermission(permId, approved);
@@ -588,6 +802,14 @@ export async function runHost(sessionId: string, firstMessagePath: string | null
       status: "running",
       startedAt: s.startedAt ?? Date.now(),
     });
+    // omp names its own directory after this id, and everything the roster
+    // learns from disk is read out of it. Resolved once, here, because it is
+    // the first moment the id exists and it does not change afterwards.
+    findOmpDir(sessionId);
+    // A resumed session inherits a roster from the run before it. Its
+    // subagents are omp's, and omp has been running them without us watching,
+    // so ask the directory rather than replaying a snapshot from last time.
+    reconcileSubs(sessionId);
     changed();
 
     const first = takeFirstMessage(firstMessagePath);
@@ -598,6 +820,9 @@ export async function runHost(sessionId: string, firstMessagePath: string | null
       appendEvent(sessionId, { type: "user", text: first, from: "human" });
       acp.send(first);
     }
+    touch();
+    parkTimer = setInterval(() => maybePark(sessionId), PARK_CHECK_MS);
+    parkTimer.unref?.();
   } catch (err) {
     const detail = messageOf(err);
     note(sessionId, `failed to start omp: ${detail}`);
@@ -619,14 +844,53 @@ export async function runHost(sessionId: string, firstMessagePath: string | null
 }
 
 function shutdown(sessionId: string) {
+  if (parkTimer) clearInterval(parkTimer);
+  parkTimer = null;
   // Anything the stream was holding back belongs in the log before we go.
   try {
     flushStream(sessionId);
   } catch {
     // Nothing left to save it for.
   }
+  compactOwnLog(sessionId);
   control?.shutdown();
   control = null;
+}
+
+/**
+ * Size an oversized transcript back down on the way out.
+ *
+ * Here rather than anywhere else because this process is the log's only
+ * writer, and it has just stopped writing: no other moment in a session's life
+ * can rewrite the file without racing an append. Below the threshold nothing
+ * happens at all — compaction has to read the whole file to find out whether
+ * there is anything to drop, and that is not worth doing to a log the size of
+ * a photograph.
+ */
+function compactOwnLog(sessionId: string) {
+  try {
+    const size = logSizeOf(sessionId);
+    if (!size || size.bytes < COMPACT_THRESHOLD_BYTES) return;
+    const result = compactLog(size.path);
+    if (result.dropped > 0) {
+      console.log(
+        `[agentbox host] compacted transcript: dropped ${result.dropped} superseded ` +
+          `subagent snapshots, ${mb(result.bytesBefore)} → ${mb(result.bytesAfter)}`,
+      );
+    }
+  } catch (err) {
+    // The transcript is intact either way — compaction commits with a rename
+    // and a failure leaves the original in place. Never worth a bad exit.
+    console.error(`[agentbox host] could not compact transcript: ${messageOf(err)}`);
+  }
+}
+
+/** Logs smaller than this are left alone. A run that never fanned out does
+ *  not reach it; the ones that do are the reason this exists. */
+const COMPACT_THRESHOLD_BYTES = 8 * 1024 * 1024;
+
+function mb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Read the opening message and remove it, so a resumed session does not

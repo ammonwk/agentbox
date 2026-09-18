@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   Session,
   SubagentProgress,
@@ -8,7 +8,8 @@ import type {
   TranscriptEvent,
 } from "../../../../src/core/types";
 import { Button, Empty, Icon, type IconComponent } from "../../components";
-import { ago, api, clockNow, fmtClock, fmtCost, fmtDuration, fmtTokens, subscribeToClock, useSessionEvents } from "../../api";
+import { ago, api, clockNow, fmtClock, fmtCost, fmtDuration, fmtTokens, subscribeToClock, useSessionEvents, type FanoutView, type HubAgentDetail } from "../../api";
+import { rosterIsLive } from "../../../../src/core/roster";
 import { callDurationMs, canSteer, formatInput, HUB_STEP_HINT, KIND_LABEL, prBaseOf, splitPRRefs, SUBAGENT_KIND_LABEL, subagentCallOf, subagentStepLabel, toolSummary } from "./format";
 import { useAction } from "./useAction";
 import { Markdown } from "./Markdown";
@@ -19,10 +20,12 @@ import {
   groupEvents,
   queuedPromptSeqs,
   rosterCounts,
+  rosterFromSubs,
   runSummary,
   subagentDetail,
   subagentRoster,
   type RosterEntry,
+  type SubagentEvent,
   type SubagentDetail,
   type ToolEntry,
 } from "./transcript";
@@ -32,7 +35,11 @@ export function Activity({ session }: { session: Session }) {
   const sessionId = session.id;
   const { events, live, older, loadOlder } = useSessionEvents(sessionId);
   const rows = useMemo(() => groupEvents(events), [events]);
-  const roster = useMemo(() => subagentRoster(events), [events]);
+  const fanout = useFanout(session);
+  const roster = useMemo(
+    () => rosterOf(session, fanout.view, events),
+    [session, fanout.view, events],
+  );
   const failedPrompts = useMemo(() => failedPromptSeqs(events), [events]);
   const queuedPrompts = useMemo(() => queuedPromptSeqs(events), [events]);
   // PR references link into the session's own GitHub repo; null (no slug)
@@ -100,7 +107,15 @@ export function Activity({ session }: { session: Session }) {
   // strip. Inside, it would scroll away exactly when the run is busiest.
   return (
     <div className="sx-activity">
-      {roster.length > 0 && <SubagentStrip roster={roster} events={events} prBase={prBase} />}
+      {roster.length > 0 && (
+        <SubagentStrip
+          session={session}
+          roster={roster}
+          fanout={fanout.view}
+          events={events}
+          prBase={prBase}
+        />
+      )}
 
       <div
         className="sx-panel"
@@ -118,12 +133,19 @@ export function Activity({ session }: { session: Session }) {
             // Every row carries its first event's time as a hover tooltip —
             // the one question a long transcript cannot answer on sight is
             // "when did this actually happen".
-            const ts = row.kind === "toolRun" ? row.entries[0].ts : row.kind === "prose" ? row.ts : row.event.ts;
+            const ts =
+              row.kind === "toolRun"
+                ? row.entries[0].ts
+                : row.kind === "prose" || row.kind === "subagents"
+                  ? row.ts
+                  : row.event.ts;
             const inner =
               row.kind === "toolRun" ? (
                 <ToolRun entries={row.entries} prBase={prBase} />
               ) : row.kind === "prose" ? (
                 <Markdown text={row.text} prBase={prBase} />
+              ) : row.kind === "subagents" ? (
+                <SubagentTransitions events={row.events} />
               ) : (
                 <EventRow
                   event={row.event}
@@ -158,6 +180,116 @@ export function Activity({ session }: { session: Session }) {
       </div>
     </div>
   );
+}
+
+/**
+ * Subagents starting and finishing, as a line in the stream.
+ *
+ * This is what a fan-out leaves in the transcript now: one event per
+ * transition instead of a snapshot every two seconds. The value of it is the
+ * timestamp — "these nine came back at 09:47" is a thing a person reading a
+ * ten-hour run afterwards genuinely wants, and it is exactly what the old
+ * heartbeat rows buried under fourteen thousand copies of the dispatch call.
+ */
+function SubagentTransitions({ events }: { events: SubagentEvent[] }) {
+  return (
+    <div className="sx-sub-events">
+      {events.map((e) => (
+        <span key={e.seq} className={`sx-sub-event ${e.status}`}>
+          <span className={`sx-sub-dot ${e.status}`} />
+          <code>{e.name}</code>
+          <span className="sx-sub-event-what">{transitionWord(e)}</span>
+          {e.durationMs ? <span className="sx-sub-event-meta">{fmtDuration(e.durationMs)}</span> : null}
+          {e.toolCount ? <span className="sx-sub-event-meta">{e.toolCount} tools</span> : null}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function transitionWord(e: SubagentEvent): string {
+  // "recorded" rather than "finished" when the news came from omp's directory
+  // after the fact: the ending is real, the moment is when we noticed.
+  const late = e.source === "disk" ? " (recorded later)" : "";
+  switch (e.status) {
+    case "pending":
+      return "dispatched";
+    case "running":
+      return "started";
+    case "completed":
+      return `finished${late}`;
+    case "failed":
+      return `failed${late}`;
+  }
+}
+
+/**
+ * The session's fan-out, reconciled against omp's record on disk.
+ *
+ * Fetched, not pushed, because reading omp's session directory is a disk scan
+ * and the board's hot state must stay cheap. The fetch is also not needed
+ * while the session is running: the host is merging the live progress stream
+ * into the session row and pushing it, which is fresher than anything a file
+ * can say. What the disk is for is the rest of a fan-out's life — after the
+ * turn ends, after the agent is parked or stopped, after the server restarts —
+ * and none of those are moments where one request costs anything.
+ */
+function useFanout(session: Session): { view: FanoutView | null; error: string | null } {
+  const [view, setView] = useState<FanoutView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const sessionId = session.id;
+  const hasSubs = (session.subs?.length ?? 0) > 0;
+  // Re-asked when the session moves, which after a turn ends is exactly once.
+  const at = session.updatedAt;
+
+  useEffect(() => {
+    setView(null);
+    setError(null);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!hasSubs) return;
+    let cancelled = false;
+    api
+      .fanout(sessionId)
+      .then((v) => {
+        if (!cancelled) setView(v);
+      })
+      .catch((e: Error) => {
+        // A roster that cannot be reconciled is not a broken page: the session
+        // row still has the last thing the stream said, and the strip will
+        // label it as what it is.
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, hasSubs, at]);
+
+  return { view, error };
+}
+
+/**
+ * Which description of the fan-out to draw.
+ *
+ * Three sources, in the order they are worth believing:
+ *
+ *  1. While the session is running, the session row. The host is merging omp's
+ *     live progress stream into it and pushing every change, so it is the only
+ *     one that can be current.
+ *  2. Otherwise the reconciled view, which is that same roster plus whatever
+ *     omp's session directory knows about how it ended.
+ *  3. Failing both, whatever the transcript in hand can be folded into — for
+ *     sessions recorded before any roster was kept.
+ */
+function rosterOf(
+  session: Session,
+  view: FanoutView | null,
+  events: TranscriptEvent[],
+): RosterEntry[] {
+  const preferred = rosterIsLive(session.status) ? session.subs ?? view?.subs : view?.subs ?? session.subs;
+  if (preferred?.length) return rosterFromSubs(preferred);
+  return subagentRoster(events);
 }
 
 function EmptyActivity({ session, live }: { session: Session; live: boolean }) {
@@ -473,21 +605,40 @@ function ToolRow({ call, prBase }: { call: ToolCall; prBase: string | null }) {
  * subagent — its task, its collected result and the tool timeline rebuilt
  * from the progress snapshots the parent streamed.
  */
-function SubagentStrip({ roster, events, prBase }: { roster: RosterEntry[]; events: TranscriptEvent[]; prBase: string | null }) {
+function SubagentStrip({
+  session,
+  roster,
+  fanout,
+  events,
+  prBase,
+}: {
+  session: Session;
+  roster: RosterEntry[];
+  fanout: FanoutView | null;
+  events: TranscriptEvent[];
+  prBase: string | null;
+}) {
   const counts = rosterCounts(roster);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  // Only subscribe while something is actually running — a finished run's
-  // strip is a static summary and should not tick.
-  const now = useTicker(counts.running > 0);
-  const detail = useMemo(
-    () => (selected ? subagentDetail(events, selected) : null),
-    [events, selected],
-  );
+
+  // Whether the roster can still be moving. omp streams subagent progress only
+  // while the parent's turn is running, so a session that is not running has a
+  // roster that is a memory — however recently it was written down. Everything
+  // below hangs off this: the clock, the counts, and whether an unfinished
+  // subagent is described as running or as last seen running.
+  const live = rosterIsLive(session.status) && (fanout?.live ?? true);
+  const now = useTicker(live && counts.running > 0);
+  const unfinished = counts.running + counts.pending;
+  const asOf = newestObservation(roster);
 
   const liveMs = (e: RosterEntry): number | null => {
     if (e.durationMs == null) return null;
-    if (e.status !== "running" && e.status !== "pending") return e.durationMs;
+    // Extrapolating "duration so far" from a snapshot's age is right for an
+    // agent that is still working and a lie for one nobody has heard from
+    // since the turn ended — which would tick a finished ten-hour fan-out
+    // upwards forever.
+    if (!live || (e.status !== "running" && e.status !== "pending")) return e.durationMs;
     return e.durationMs + Math.max(0, now - e.at);
   };
 
@@ -502,9 +653,20 @@ function SubagentStrip({ roster, events, prBase }: { roster: RosterEntry[]; even
         <Icon.branch size={12} />
         <span className="sx-subs-label">
           {counts.total} subagent{counts.total === 1 ? "" : "s"}
-          {counts.running > 0 && (
-            <span className="sx-subs-running"> · {counts.running} running</span>
-          )}
+          {counts.running > 0 &&
+            (live ? (
+              <span className="sx-subs-running"> · {counts.running} running</span>
+            ) : (
+              // The whole bug this replaced: a fan-out that finished overnight
+              // drawn as "32 running" the next morning, because that was the
+              // last frame the turn carried. Say when instead of pretending.
+              <span className="sx-subs-stale" title={staleTitle(fanout)}>
+                {" "}
+                · {counts.running} last seen running
+                {asOf !== null && ` at ${fmtClock(asOf)}`}
+              </span>
+            ))}
+          {counts.done > 0 && <span className="sx-subs-done"> · {counts.done} done</span>}
           {counts.failed > 0 && <span className="sx-subs-failed"> · {counts.failed} failed</span>}
         </span>
         <span className="sx-subs-chips">
@@ -518,7 +680,7 @@ function SubagentStrip({ roster, events, prBase }: { roster: RosterEntry[]; even
                 pick(e.name);
               }}
             >
-              <span className={`sx-sub-dot ${e.status}`} />
+              <span className={`sx-sub-dot ${e.status}${live ? "" : " idle"}`} />
               {e.name}
             </button>
           ))}
@@ -529,6 +691,9 @@ function SubagentStrip({ roster, events, prBase }: { roster: RosterEntry[]; even
 
       {open && (
         <div className="sx-subs-body">
+          {!live && unfinished > 0 && (
+            <div className="sx-subs-note">{unfinishedNote(unfinished, fanout, asOf)}</div>
+          )}
           {roster.map((e) => (
             <Fragment key={e.name}>
               <button
@@ -537,18 +702,15 @@ function SubagentStrip({ roster, events, prBase }: { roster: RosterEntry[]; even
                 onClick={() => setSelected((cur) => (cur === e.name ? null : e.name))}
                 title={e.task ?? e.name}
               >
-                <span className={`sx-sub-dot ${e.status}`} />
+                <span className={`sx-sub-dot ${e.status}${live ? "" : " idle"}`} />
                 <code className="sx-subs-name">{e.name}</code>
+                {e.parent && (
+                  <span className="sx-subs-agent" title={`dispatched by ${e.parent}, not by this session's agent`}>
+                    via {e.parent}
+                  </span>
+                )}
                 {e.agent && <span className="sx-subs-agent">{e.agent}</span>}
-                <span className="sx-subs-status">
-                  {e.status === "running" && e.currentTool
-                    ? `${e.currentTool}${e.lastIntent ? ` — ${clipText(e.lastIntent, 60)}` : ""}`
-                    : e.status === "completed" && e.collected
-                      ? "completed · result collected"
-                      : e.status === "pending"
-                        ? "spawned"
-                        : e.status}
-                </span>
+                <span className="sx-subs-status">{statusLine(e, live)}</span>
                 <span className="sx-subs-meta">
                   {liveMs(e) != null && <span>{fmtDuration(liveMs(e)!)}</span>}
                   {e.toolCount != null && e.toolCount > 0 && <span>{e.toolCount} tools</span>}
@@ -557,11 +719,233 @@ function SubagentStrip({ roster, events, prBase }: { roster: RosterEntry[]; even
                 </span>
                 {e.task && <div className="sx-subs-task"><PRText text={clipText(e.task, 200)} prBase={prBase} /></div>}
               </button>
-              {selected === e.name && detail && <SubagentDetailView detail={detail} now={now} prBase={prBase} />}
+              {selected === e.name && (
+                <SubagentDrilldown
+                  sessionId={session.id}
+                  name={e.name}
+                  events={events}
+                  now={now}
+                  live={live}
+                  prBase={prBase}
+                />
+              )}
             </Fragment>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The newest moment anything described this roster, or null when nothing in
+ *  it carries an observation time — a roster recorded before they existed. */
+function newestObservation(roster: RosterEntry[]): number | null {
+  let newest = 0;
+  for (const e of roster) if (e.at > newest) newest = e.at;
+  return newest > 0 ? newest : null;
+}
+
+/** What one row says about itself, given whether anyone is still listening. */
+function statusLine(e: RosterEntry, live: boolean): string {
+  if (e.status === "running") {
+    if (!live) return "last seen running";
+    return e.currentTool
+      ? `${e.currentTool}${e.lastIntent ? ` — ${clipText(e.lastIntent, 60)}` : ""}`
+      : "running";
+  }
+  if (e.status === "pending") return live ? "spawned" : "spawned, never started";
+  if (e.status === "completed") {
+    // A subagent omp disposed of before it wrote a report did not answer, and
+    // saying "completed" for that is how three parked agents went unnoticed
+    // for a day in a fifty-way run.
+    if (e.hasResult === false) return "ended without reporting";
+    return e.collected ? "completed · result collected" : "completed";
+  }
+  return e.status;
+}
+
+function staleTitle(fanout: FanoutView | null): string {
+  return fanout?.recorded
+    ? "The turn that dispatched these has ended, so omp is no longer reporting progress. " +
+        "These are the ones omp's own log has no ending for."
+    : "The turn that dispatched these has ended, so omp is no longer reporting progress, " +
+        "and omp's log for this run could not be found to check how they finished.";
+}
+
+function unfinishedNote(unfinished: number, fanout: FanoutView | null, asOf: number | null): string {
+  const when = asOf === null ? "when the turn ended" : `at ${fmtClock(asOf)}`;
+  return fanout?.recorded
+    ? `${unfinished} subagent${unfinished === 1 ? " was" : "s were"} still working ${when}, and omp's ` +
+        `log records no ending for ${unfinished === 1 ? "it" : "them"} — ${unfinished === 1 ? "it was" : "they were"} ` +
+        `most likely stopped along with the agent that dispatched ${unfinished === 1 ? "it" : "them"}.`
+    : `${unfinished} subagent${unfinished === 1 ? " was" : "s were"} still working ${when}. omp's record of ` +
+        `this run is not on disk, so there is no way to say what became of ${unfinished === 1 ? "it" : "them"}.`;
+}
+
+/**
+ * One subagent in full: what it was asked, everything it did, what it returned.
+ *
+ * Asks omp for its log first. That is the primary source — omp writes one file
+ * per subagent with every call, its arguments and its result — and the answer
+ * is a transcript rather than an outline. The reconstruction from the parent's
+ * progress snapshots is the fallback for when there is no log to read, and it
+ * says so on the row rather than passing itself off as the same thing.
+ */
+function SubagentDrilldown({
+  sessionId,
+  name,
+  events,
+  now,
+  live,
+  prBase,
+}: {
+  sessionId: string;
+  name: string;
+  events: TranscriptEvent[];
+  now: number;
+  live: boolean;
+  prBase: string | null;
+}) {
+  const [record, setRecord] = useState<HubAgentDetail | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "unrecorded">("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    setState("loading");
+    setRecord(null);
+    api
+      .fanoutAgent(sessionId, name)
+      .then((r) => {
+        if (cancelled) return;
+        setRecord(r);
+        setState("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setState("unrecorded");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, name]);
+
+  const fallback = useMemo(() => subagentDetail(events, name), [events, name]);
+
+  if (state === "loading") {
+    return <div className="sx-subs-detail sx-history">Reading omp's log for {name}…</div>;
+  }
+  if (state === "ready" && record) {
+    return <SubagentRecordView record={record} now={now} live={live} prBase={prBase} />;
+  }
+  if (!fallback) {
+    return (
+      <div className="sx-subs-detail sx-history">
+        omp has no log for {name}, and this transcript does not describe it either.
+      </div>
+    );
+  }
+  return <SubagentDetailView detail={fallback} now={now} prBase={prBase} />;
+}
+
+/**
+ * A subagent as omp recorded it.
+ *
+ * Every row here is something omp wrote down — not a reconstruction — so the
+ * tool calls carry their real arguments and their real results, and the report
+ * is the file the subagent finished with rather than a copy the parent
+ * happened to read back.
+ */
+function SubagentRecordView({
+  record,
+  now,
+  live,
+  prBase,
+}: {
+  record: HubAgentDetail;
+  now: number;
+  live: boolean;
+  prBase: string | null;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const running = record.status === "running";
+  const elapsed =
+    record.endedAt !== null && record.startedAt !== null
+      ? record.endedAt - record.startedAt
+      : record.startedAt !== null && live && running
+        ? Math.max(0, now - record.startedAt)
+        : null;
+  // A long agent's newest work is what a reader opening it wants; the rest is
+  // one click away rather than three thousand rows down the page.
+  const steps = showAll ? record.steps : record.steps.slice(-40);
+  const hidden = record.steps.length - steps.length;
+
+  return (
+    <div className="sx-subs-detail">
+      <div className="sx-subs-detail-head">
+        <code>{record.name}</code>
+        {record.model && <span className="sx-subs-agent">{record.model}</span>}
+        <span className={`sx-sub-dot ${record.status}${live ? "" : " idle"}`} />
+        <span className="sx-subs-detail-status">
+          {running && !live ? "last seen running" : record.status}
+          {elapsed !== null && ` · ${fmtDuration(elapsed)}`}
+          {record.toolCount > 0 && ` · ${record.toolCount} tools`}
+          {record.tokens > 0 && ` · ${fmtTokens(record.tokens)} tok`}
+          {record.cost > 0 && ` · ${fmtCost(record.cost)}`}
+          {record.endedAt !== null && ` · ended ${fmtClock(record.endedAt)}`}
+        </span>
+      </div>
+
+      {record.task && (
+        <div className="sx-subs-detail-task">
+          <PRText text={record.task} prBase={prBase} />
+        </div>
+      )}
+
+      {record.result !== null ? (
+        <div>
+          <h4>{record.status === "failed" ? "Report (ended abnormally)" : "Report"}</h4>
+          <pre className="sx-pre">{record.result || "(empty report)"}</pre>
+        </div>
+      ) : (
+        !running && (
+          <div className="sx-subs-note">
+            This subagent ended without writing a report — omp disposed of it before it answered.
+          </div>
+        )
+      )}
+
+      <div>
+        <h4>
+          Activity — {record.steps.length} step{record.steps.length === 1 ? "" : "s"} from omp's log
+          {record.truncated && " (clipped)"}
+        </h4>
+        {hidden > 0 && (
+          <button className="sx-history sx-subs-more" onClick={() => setShowAll(true)}>
+            Show {hidden} earlier step{hidden === 1 ? "" : "s"}
+          </button>
+        )}
+        {steps.map((step, i) => (
+          <div key={`${step.ts}-${i}`} className={`sx-sub-step ${step.kind}`}>
+            <span className="sx-sub-step-t">{fmtClock(step.ts)}</span>
+            {step.kind === "tool" ? (
+              <>
+                <span className="sx-sub-step-tool">{step.tool}</span>
+                <span className="sx-sub-step-args">
+                  {step.intent ?? step.args ?? ""}
+                  {step.intent && step.args ? ` — ${step.args}` : ""}
+                </span>
+                {step.output && <div className="sx-sub-step-out">{step.output}</div>}
+              </>
+            ) : (
+              <span className="sx-sub-step-said">
+                <PRText text={step.text ?? ""} prBase={prBase} />
+              </span>
+            )}
+          </div>
+        ))}
+        {record.steps.length === 0 && (
+          <div className="sx-history">omp's log for this subagent records no steps yet.</div>
+        )}
+      </div>
     </div>
   );
 }

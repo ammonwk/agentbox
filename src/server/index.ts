@@ -89,6 +89,8 @@ import {
   sinceParam,
 } from "./validate";
 import { commandSubagent, listSubagents, subagentDetail } from "./subagents";
+import { fanoutAgentOf, fanoutOf } from "./fanout";
+import { compactTranscripts, scanTranscripts } from "./transcripts";
 import { parseClientMessage } from "./protocol";
 import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 
@@ -333,6 +335,29 @@ export const router = new Router(mapCoreError)
     return json({ procs: s.pid === null ? [] : await procDetail(s.pid) });
   })
 
+  /**
+   * One session's fan-out: the subagents ITS agent dispatched through omp.
+   *
+   * Distinct from `/api/subagents` below, which is the pool a *calling* agent
+   * owns over MCP. Two different systems that both produce something called a
+   * subagent; see docs/architecture.md for which is which and why both exist.
+   *
+   * Requested rather than pushed, because it goes to omp's session directory
+   * on disk. That read is what makes a finished fan-out readable at all once
+   * the turn that dispatched it has ended.
+   */
+  .add("GET", "/api/sessions/:id/subagents", ({ params }) =>
+    json(fanoutOf(sessionOr404(params.id!))),
+  )
+
+  .add("GET", "/api/sessions/:id/subagents/:name", ({ params }) => {
+    const detail = fanoutAgentOf(sessionOr404(params.id!), params.name!);
+    if (!detail) {
+      throw new HttpError(404, `omp has no record of subagent ${params.name} in this session`);
+    }
+    return json(detail);
+  })
+
   // Subagents are off the board by design -- no rows, no worktrees, no
   // supervisor -- so these read the record on disk rather than any session
   // state, and show agents from every client session on the machine.
@@ -400,6 +425,21 @@ export const router = new Router(mapCoreError)
     // board has to hear about it.
     broadcast({ type: "hot", state: getHotState() });
     return json(result);
+  })
+
+  // Transcripts are the other thing on disk that grows without being asked to.
+  // Same contract as the worktree sweep above: a scan the human reads, then an
+  // explicit act naming exactly what to rewrite.
+  .add("GET", "/api/transcripts", () => json(scanTranscripts()))
+
+  .add("POST", "/api/transcripts/compact", async ({ req }) => {
+    const body = await readBody(req);
+    const ids = body.sessionIds;
+    if (!Array.isArray(ids) || ids.some((i) => typeof i !== "string")) {
+      throw new HttpError(400, "sessionIds must be an array of strings");
+    }
+    if (ids.length === 0) throw new HttpError(400, "sessionIds is empty — nothing to compact");
+    return json(compactTranscripts(ids as string[]));
   })
 
   .add("GET", "/api/settings", () => json(getSettings()))

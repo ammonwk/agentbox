@@ -37,7 +37,7 @@ function makeSession(over: Partial<Session> = {}): Session {
     repo: "/repo",
     branch: "agentbox/json-flag",
     worktree,
-    model: "deepseek-v4-flash",
+    model: "opencode-zen-responses/muse-spark-1.3-contributor-free",
     followUps: 0,
     lastMessage: null,
     toolCalls: 0,
@@ -57,6 +57,7 @@ function makeSession(over: Partial<Session> = {}): Session {
     updatedAt: 0,
     startedAt: null,
     closedAt: null,
+    parkedAt: null,
     ...over,
   };
 }
@@ -77,11 +78,11 @@ function makeRepo(over: Partial<Repo> = {}): Repo {
 function makeSettings(over: Partial<AgentSettings> = {}): AgentSettings {
   return {
     theme: "system",
-    model: "deepseek-v4-flash",
+    model: "opencode-zen-responses/muse-spark-1.3-contributor-free",
     autoApprove: false,
     systemPrompt: "",
-    supervisor: { enabled: true, everyToolCalls: 25, model: "deepseek-v4-flash" },
-    advisor: { enabled: false, model: "deepseek-v4-flash" },
+    supervisor: { enabled: true, everyToolCalls: 25, model: "opencode-zen-responses/muse-spark-1.3-contributor-free" },
+    advisor: { enabled: false, model: "opencode-zen-responses/muse-spark-1.3-contributor-free" },
     ...over,
   };
 }

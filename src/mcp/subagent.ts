@@ -855,9 +855,8 @@ server.registerTool(
     description:
       "Kills the agent's process and frees its name. Its context is gone for good — anything " +
       "it knew and did not put in a report is lost, so read its last answer first.\n\n" +
-      "Stop agents as you finish with them. An idle agent holds a live process and its whole " +
-      "context window open, which is a real cost for something you are not going to ask " +
-      "anything else.",
+      "Stop agents as you finish with them, so the name is free again and nothing is kept " +
+      "around for a question you are not going to ask.",
     inputSchema: { name: z.string() },
   },
   async ({ name }) => {

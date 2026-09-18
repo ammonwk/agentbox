@@ -217,11 +217,13 @@ function doctor(): number {
 
 // --------------------------------------------------------------------- main
 
-const USAGE = `usage: agentbox [serve|watch|doctor|install|uninstall|mcp|subagent-mcp|version]
+const USAGE = `usage: agentbox [serve|watch|doctor|compact|install|uninstall|mcp|subagent-mcp|version]
   serve       start the server on port ${DEFAULT_PORT} (default)
   watch       live roster of running subagents; \`watch <name>\` for one in full
               (--once prints a frame and exits; --interrupt/--stop act on one)
   doctor      check that everything agentbox needs is present and configured
+  compact     list oversized transcripts; \`compact --apply\` rewrites them without
+              the subagent progress heartbeats that made them oversized
   install     register the MCP server with opencode
   uninstall   remove that registration
   mcp         run the board MCP server on stdio (opencode invokes this)
@@ -280,6 +282,16 @@ export async function main(argv: string[]): Promise<number | null> {
       ensureDirs();
       await import("../mcp/subagent");
       return null;
+
+    /**
+     * Reclaim the disk a fan-out's progress heartbeats took, from transcripts
+     * written before they stopped going to the log.
+     */
+    case "compact": {
+      ensureDirs();
+      const { compact } = await import("./compact");
+      return compact(argv.slice(1));
+    }
 
     case "install":
       ensureDirs();

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { Attention, Session, ToolCall, ToolStatus, TranscriptEvent } from "../../../../src/core/types";
 import { isPinnedToBottom, shouldAutoScroll, distanceFromBottom, isAtTop, anchoredScrollTop } from "./scroll";
 import {
-  activityEmptyReason, collapseRun, failedPromptSeqs, groupEvents, queuedPromptSeqs, rosterCounts, runSummary,
-  subagentDetail, subagentRoster, type ToolEntry,
+  activityEmptyReason, collapseRun, failedPromptSeqs, groupEvents, queuedPromptSeqs, rosterCounts,
+  rosterFromSubs, runSummary, subagentDetail, subagentRoster, type ToolEntry,
 } from "./transcript";
 import type { SessionRow } from "../../api";
 import { neighbourId, sectionsFor, sortSessions } from "./list";
@@ -64,6 +64,7 @@ function session(over: Partial<SessionRow> & { id: string; attention: Attention 
     updatedAt: 0,
     startedAt: null,
     closedAt: null,
+    parkedAt: null,
   };
   return { ...base, ...over };
 }
@@ -578,7 +579,7 @@ describe("subagent roster", () => {
     });
     expect(roster[1]).toMatchObject({ status: "pending", collected: false, task: "Attack plan 2" });
     // `pending` is "dispatched, nothing heard" — not counted as running.
-    expect(rosterCounts(roster)).toEqual({ total: 2, running: 0, failed: 0, done: 1 });
+    expect(rosterCounts(roster)).toEqual({ total: 2, pending: 1, running: 0, failed: 0, done: 1 });
   });
 
   test("a failed subagent shows in the counts", () => {
@@ -587,7 +588,7 @@ describe("subagent roster", () => {
       snapshot(2, 200, "AuditPR1", "failed", 5_000),
       snapshot(3, 300, "AuditPR2", "running", 60_000),
     ]);
-    expect(rosterCounts(roster)).toEqual({ total: 2, running: 1, failed: 1, done: 0 });
+    expect(rosterCounts(roster)).toEqual({ total: 2, pending: 0, running: 1, failed: 1, done: 0 });
   });
 });
 
@@ -776,5 +777,89 @@ describe("queuedPromptSeqs", () => {
     const rows = groupEvents([toolEvent(1), delivered(2, [0]), toolEvent(3)]);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.kind).toBe("toolRun");
+  });
+});
+
+// ------------------------------------------------- the roster as state
+
+/**
+ * The roster the strip actually draws comes from the session row, which the
+ * host merges and persists. These are the two things that has to get right:
+ * carrying the fields the old fold could not know, and staying readable when
+ * the row is all there is.
+ */
+describe("the roster the session row carries", () => {
+  test("reads as the strip's rows, keeping what only the record knows", () => {
+    const entries = rosterFromSubs([
+      {
+        id: "Gnc5199", agent: "task", status: "completed", task: "Take PR 5199 to merge-ready",
+        toolCount: 34, tokens: 91_011, cost: 0, durationMs: 634_000,
+        observedAt: 5_000, source: "disk", endedAt: 9_000, collected: true, hasResult: true,
+      },
+      {
+        id: "DiffAudit", agent: "task", status: "completed", task: "", toolCount: 3,
+        tokens: 900, cost: 0, durationMs: 4_000, observedAt: 5_000, source: "disk",
+        hasResult: false, parent: "Gnc5199",
+      },
+    ]);
+    expect(entries[0]).toMatchObject({
+      name: "Gnc5199", status: "completed", collected: true, hasResult: true, at: 5_000,
+    });
+    // A subagent a subagent dispatched: omp reports it to nobody, so it can
+    // only come from the record, and the row says whose it is.
+    expect(entries[1]).toMatchObject({ name: "DiffAudit", parent: "Gnc5199", hasResult: false });
+  });
+
+  test("an entry nothing has timestamped reads as unknown, not as now", () => {
+    const entries = rosterFromSubs([
+      { id: "A", agent: "task", status: "running", task: "", toolCount: 0, tokens: 0, cost: 0, durationMs: 0 },
+    ]);
+    expect(entries[0]!.at).toBe(0);
+  });
+});
+
+describe("subagent transitions in the transcript", () => {
+  const started: TranscriptEvent = {
+    seq: 1, ts: 100, type: "subagent", name: "Gnc5199", agent: "task",
+    status: "running", task: "Take PR 5199 to merge-ready", source: "stream",
+  };
+  const finished: TranscriptEvent = {
+    seq: 2, ts: 9_000, type: "subagent", name: "Gnc5199", agent: "task",
+    status: "completed", toolCount: 34, durationMs: 8_900, source: "disk",
+  };
+
+  test("fold into a roster, which is how a transcript alone still describes a fan-out", () => {
+    const roster = subagentRoster([started, finished]);
+    expect(roster).toHaveLength(1);
+    expect(roster[0]).toMatchObject({
+      name: "Gnc5199", status: "completed", toolCount: 34, task: "Take PR 5199 to merge-ready",
+    });
+  });
+
+  test("group into one row instead of one row each", () => {
+    // Nine agents coming back inside a minute is ordinary. A row each would
+    // bury the parent's own work — which is exactly what the heartbeats did.
+    const rows = groupEvents([
+      started,
+      finished,
+      { seq: 3, ts: 9_100, type: "subagent", name: "Gnc5194", agent: "task", status: "failed", source: "disk" },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.kind).toBe("subagents");
+    expect(rows[0]!.kind === "subagents" && rows[0]!.events).toHaveLength(3);
+  });
+
+  test("do not swallow the prose or tool calls around them", () => {
+    const rows = groupEvents([
+      { seq: 1, ts: 10, type: "assistant", text: "dispatching now" },
+      started,
+      { seq: 3, ts: 30, type: "assistant", text: "all done" },
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["prose", "subagents", "prose"]);
+  });
+
+  test("feed the drilldown when omp has no log left to read", () => {
+    const detail = subagentDetail([started, finished], "Gnc5199");
+    expect(detail).toMatchObject({ status: "completed", toolCount: 34, durationMs: 8_900 });
   });
 });

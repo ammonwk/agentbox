@@ -42,6 +42,7 @@ function session(patch: Partial<Session> = {}): Session {
     updatedAt: 0,
     startedAt: 0,
     closedAt: null,
+    parkedAt: null,
     ...patch,
   };
 }

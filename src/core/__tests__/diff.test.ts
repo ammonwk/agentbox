@@ -35,6 +35,7 @@ function session(worktree: string | null): Session {
     prNumber: null, repoFullName: null,
     costUsd: null, tokens: null, blocked: false, flagReason: null,
     ompSessionId: null, subs: null, createdAt: 0, updatedAt: 0, startedAt: null, closedAt: null,
+    parkedAt: null,
   };
 }
 

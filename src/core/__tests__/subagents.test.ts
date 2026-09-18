@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync, utimesSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  IDLE_PARK_MS,
   SubagentPool,
   ago,
   normalizeName,
@@ -1268,5 +1269,126 @@ describe("did my message land", () => {
     expect(last.map((t) => t.status)).toEqual(["answered", "answered", "answered"]);
     // Answered but never picked up.
     expect(last[2]!.handedBackAt).toBeNull();
+  });
+});
+
+describe("parking an idle agent", () => {
+  /** Far enough past the last answer that any idle agent qualifies. */
+  const later = () => Date.now() + IDLE_PARK_MS + 1;
+
+  async function answered(name = "scout") {
+    const agent = await pool.spawn({ prompt: "look around", name });
+    const first = only();
+    first.say("found it");
+    first.endTurn();
+    expect((await agent.settle(50, 1))?.report).toBe("found it");
+    return { agent, first };
+  }
+
+  /** Let a wake's launch resolve. */
+  const launchSettles = () => Bun.sleep(5);
+
+  test("stops omp once the idle window has passed, and not before", async () => {
+    const { agent, first } = await answered();
+    expect(agent.maybePark(Date.now() + IDLE_PARK_MS - 1_000)).toBe(false);
+    expect(first.killed).toBe(0);
+
+    expect(agent.maybePark(later())).toBe(true);
+    expect(first.killed).toBe(1);
+    expect(agent.state).toBe("idle");
+    expect(agent.alive).toBe(true);
+  });
+
+  test("the stopped process's exit does not kill the agent", async () => {
+    const { agent, first } = await answered();
+    agent.maybePark(later());
+    first.events.onError(first.id, "ACP connection closed");
+    first.events.onExit(first.id, 143);
+    await Bun.sleep(1);
+    expect(agent.state).toBe("idle");
+    expect(agent.snapshot().endedReason).toBeNull();
+  });
+
+  test("a message resumes the same conversation in a new process", async () => {
+    const { agent, first } = await answered();
+    agent.maybePark(later());
+
+    const turn = agent.send("and then?");
+    expect(turn).toBe(2);
+    expect(agent.state).toBe("running");
+    await launchSettles();
+
+    const second = only();
+    expect(second).not.toBe(first);
+    expect(second.launched?.resumeSessionId).toBe("omp-session-1");
+    expect(second.sent).toEqual(["and then?"]);
+    expect(first.sent).toEqual(["look around"]);
+
+    second.say("more");
+    second.endTurn();
+    const r = await agent.settle(50, 2);
+    expect(r?.report).toBe("more");
+    expect(r?.state).toBe("idle");
+    // What came before the park is still there to re-read.
+    expect(agent.reread(1)?.report).toBe("found it");
+  });
+
+  test("messages sent while omp comes back arrive in order", async () => {
+    const { agent } = await answered();
+    agent.maybePark(later());
+    expect(agent.send("one")).toBe(2);
+    expect(agent.send("two")).toBe(3);
+    await launchSettles();
+    expect(only().sent).toEqual(["one", "two"]);
+  });
+
+  test("parks an agent holding an uncollected answer, and the answer survives", async () => {
+    const agent = await pool.spawn({ prompt: "look around", name: "unread" });
+    only().say("unread answer");
+    only().endTurn();
+    expect(agent.uncollected).toBe(1);
+    expect(agent.maybePark(later())).toBe(true);
+    expect((await agent.settle(50, 1))?.report).toBe("unread answer");
+  });
+
+  test("never parks with a turn in flight", async () => {
+    const agent = await pool.spawn({ prompt: "work", name: "busy" });
+    expect(agent.state).toBe("running");
+    expect(agent.maybePark(later())).toBe(false);
+    expect(only().killed).toBe(0);
+  });
+
+  test("a resume that fails is reported as a death, with the reason", async () => {
+    let launches = 0;
+    pool = new SubagentPool(home, (id, events, autoApprove) => {
+      const f = new FakeRunner(id, events, autoApprove);
+      if (++launches > 1) {
+        f.launch = async () => {
+          throw new Error("no session omp-session-1");
+        };
+      }
+      fakes.push(f);
+      return f;
+    });
+    const { agent } = await answered("fragile");
+    agent.maybePark(later());
+    agent.send("still there?");
+    const r = await agent.settle(1_000, 2);
+    expect(r?.state).toBe("dead");
+    expect(r?.stopReason).toBe("died");
+    expect(r?.errors.join("\n")).toContain("no session omp-session-1");
+    expect(agent.state).toBe("dead");
+  });
+
+  test("interrupting while omp comes back cancels the message instead of sending it", async () => {
+    const { agent } = await answered();
+    agent.maybePark(later());
+    agent.send("never mind this");
+    expect(agent.interrupt()).toBe(true);
+    const r = await agent.settle(50, 2);
+    expect(r?.stopReason).toBe("cancelled");
+    expect(agent.state).toBe("idle");
+    await launchSettles();
+    expect(only().sent).toEqual([]);
   });
 });

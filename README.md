@@ -15,6 +15,12 @@ cheaply**.
 - **Watch** what the agent actually does — every tool call, with its arguments
   and result, streamed live. Not just what it says it did.
 - **Review** the work as a diff, in the app, before it ever reaches a PR.
+- **Follow a fan-out.** When a session's agent farms work out to subagents of
+  its own, the strip above the transcript shows every one of them — what it was
+  asked, where it is, and what it came back with, read from omp's own log for
+  that subagent rather than reconstructed. When the turn that dispatched them
+  ends, omp stops reporting progress, so the roster stops claiming to be live
+  and says when it last heard from each one instead.
 - **Steer** it mid-run. A message to a waiting agent lands immediately; a
   message to a running one reaches it after its current tool call, without
   interrupting the turn — a wait on subagents is cut short for it, and the
@@ -33,7 +39,9 @@ cheaply**.
   gigabyte apiece on a large repo, so agentbox scans every worktree of every
   registered repo (not only its own), says which have nothing to lose — clean,
   or with a merged or closed PR — and removes them on request. Branches are
-  always kept.
+  always kept. Settings → Transcripts does the same for session logs that a
+  fan-out inflated, dropping superseded progress snapshots and nothing else
+  (`bun bin/agentbox compact` from the command line).
 
 ## The pages
 

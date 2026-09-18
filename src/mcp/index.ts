@@ -129,6 +129,16 @@ function eventView(e: TranscriptEvent): Record<string, unknown> {
       };
     case "advisory":
       return { ...base, type: "advisory", severity: e.severity, text: clip(e.text) };
+    case "subagent":
+      return {
+        ...base,
+        type: "subagent",
+        name: e.name,
+        agent: e.agent,
+        status: e.status,
+        ...(e.task ? { task: clip(e.task, 300) } : {}),
+        ...(e.toolCount ? { toolCount: e.toolCount } : {}),
+      };
     case "permission":
       return { ...base, type: "permission", title: e.title, approved: e.approved };
     case "supervisor":

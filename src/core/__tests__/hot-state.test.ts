@@ -21,7 +21,7 @@ function session(patch: Partial<Session>): Session {
     prNumber: null, repoFullName: null,
     costUsd: null, tokens: null, blocked: false, flagReason: null,
     ompSessionId: null, subs: null, createdAt: 1, updatedAt: 1, startedAt: null,
-    closedAt: null, ...patch,
+    closedAt: null, parkedAt: null, ...patch,
   };
 }
 

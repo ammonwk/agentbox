@@ -753,6 +753,10 @@
 .sx-subs-label { flex: none; font-weight: 550; white-space: nowrap; }
 .sx-subs-running { color: var(--warning); }
 .sx-subs-failed { color: var(--danger); }
+.sx-subs-done { color: var(--success); }
+/* "last seen running": the same fact the live count states, minus the claim
+   that anyone is still watching. Deliberately not the live amber. */
+.sx-subs-stale { color: var(--faint); }
 
 .sx-subs-chips {
   display: flex;
@@ -797,6 +801,11 @@
   flex: none;
 }
 .sx-sub-dot.running { background: var(--warning); animation: sx-pulse 1.6s ease-in-out infinite; }
+/* Nothing is streaming, so nothing pulses: a dot that throbs for an agent
+   nobody has heard from since yesterday is the animation telling a lie. */
+.sx-sub-dot.idle { animation: none; background: var(--faint); }
+.sx-sub-dot.completed.idle { background: var(--success); }
+.sx-sub-dot.failed.idle { background: var(--danger); }
 .sx-sub-dot.completed { background: var(--success); }
 .sx-sub-dot.failed { background: var(--danger); }
 @media (prefers-reduced-motion: reduce) {
@@ -895,6 +904,27 @@
 }
 .sx-subs-detail-note { color: var(--faint); font-size: 11.5px; margin: 0; }
 
+/* Said once, at the top of the roster, when the run is over and some of its
+   subagents never reported an ending. */
+.sx-subs-note {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  margin: 2px 0 6px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--panel);
+}
+.sx-subs-more {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px 0 6px;
+}
+
 .sx-sub-steps {
   display: flex;
   flex-direction: column;
@@ -925,6 +955,34 @@
   flex: 1;
 }
 .sx-sub-step.live .sx-sub-step-tool { color: var(--warning); }
+/* A step read from omp's own log carries its result; the reconstruction from
+   progress snapshots never could. */
+.sx-sub-step { flex-wrap: wrap; }
+.sx-sub-step-out {
+  flex-basis: 100%;
+  color: var(--faint);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 84px;
+  overflow-y: auto;
+  padding: 2px 0 2px 66px;
+}
+.sx-sub-step.text .sx-sub-step-said { color: var(--text); flex: 1; min-width: 0; }
+.sx-sub-step.text { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+
+/* Subagents starting and finishing, in the stream itself. */
+.sx-sub-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 4px 2px;
+  font-size: 11.5px;
+}
+.sx-sub-event { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.sx-sub-event > code { font-family: var(--mono); font-weight: 600; color: var(--text); }
+.sx-sub-event.failed > code { color: var(--danger); }
+.sx-sub-event-what { color: var(--faint); }
+.sx-sub-event-meta { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
 
 /* Subagent tool rows inside the stream — structure, not plumbing. */
 .sx-tool-subagent .sx-tool-glyph { color: var(--accent); }
@@ -948,6 +1006,7 @@
 /* Board row: "4 subs · 2 running", from the session's latest snapshot. */
 .sx-row-subs { color: var(--accent); overflow: hidden; text-overflow: ellipsis; }
 .sx-row-subs.failed { color: var(--danger); }
+.sx-row-subs-stale { color: var(--faint); }
 
 /* ---------------------------------------------------------------- task */
 

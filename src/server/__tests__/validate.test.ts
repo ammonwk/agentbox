@@ -54,7 +54,7 @@ describe("settings patches the UI actually sends", () => {
   });
 
   test("a complete nested object", () => {
-    const body = { supervisor: { enabled: true, everyToolCalls: 5, model: "opencode-go/deepseek-v4-flash" } };
+    const body = { supervisor: { enabled: true, everyToolCalls: 5, model: "opencode-zen-responses/muse-spark-1.3-contributor-free" } };
     expect(parseSettingsPatch(body)).toEqual(body);
   });
 

@@ -28,6 +28,13 @@ import type {
 // The health tri-state, imported rather than redeclared: a second copy of
 // `"ok" | "unusable" | "missing"` is a copy that can drift from the probe.
 import type { DepState } from "../../src/deps";
+import type { FanoutView } from "../../src/server/fanout";
+import type { HubAgentDetail } from "../../src/core/ompsession";
+import type { CompactReport, TranscriptScan } from "../../src/server/transcripts";
+
+export type { FanoutView } from "../../src/server/fanout";
+export type { HubAgentDetail, HubStep } from "../../src/core/ompsession";
+export type { CompactReport, TranscriptInfo, TranscriptScan } from "../../src/server/transcripts";
 
 export type { DepState } from "../../src/deps";
 
@@ -164,6 +171,21 @@ export const api = {
     return request<TranscriptEvent[]>(`/api/sessions/${id}/events?${q}`);
   },
   diff: (id: string) => request<SessionDiff>(`/api/sessions/${id}/diff`),
+
+  /**
+   * One session's fan-out, reconciled against omp's own session directory.
+   *
+   * Fetched rather than folded out of the transcript the browser happens to
+   * hold. A roster built from a window of events is wrong at the window's
+   * edges — a dispatch that has scrolled out of the page takes its subagents'
+   * assignments with it — and it cannot see anything that happened after the
+   * turn ended, which for a fan-out is most of its life.
+   */
+  fanout: (id: string) => request<FanoutView>(`/api/sessions/${id}/subagents`),
+  /** One subagent's history, read from omp's log rather than reconstructed
+   *  from the progress snapshots the parent happened to stream. */
+  fanoutAgent: (id: string, name: string) =>
+    request<HubAgentDetail>(`/api/sessions/${id}/subagents/${encodeURIComponent(name)}`),
   /** The per-process drilldown. Expensive server-side (smaps walks the whole
    *  subtree) — only ever behind an opened panel, never on the board. */
   load: (id: string) => request<{ procs: ProcDetail[] }>(`/api/sessions/${id}/load`),
@@ -179,6 +201,13 @@ export const api = {
    *  worktree a session is live in are refused regardless. */
   reclaimWorktrees: (paths: string[], force = false) =>
     post<ReclaimResult>("/api/worktrees/reclaim", { paths, force }),
+
+  /** Transcripts big enough to be worth rewriting, and the rewrite. Reading
+   *  is a stat per session; compacting reads and rewrites whole files, so it
+   *  only ever happens on a button. */
+  transcripts: () => request<TranscriptScan>("/api/transcripts"),
+  compactTranscripts: (sessionIds: string[]) =>
+    post<CompactReport>("/api/transcripts/compact", { sessionIds }),
 
   settings: () => request<AgentSettings>("/api/settings"),
   /** Deep-merges server-side, so a partial is a patch, not a replacement. */

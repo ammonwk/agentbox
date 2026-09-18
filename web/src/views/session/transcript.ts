@@ -20,7 +20,13 @@ export interface ToolEntry {
 export type Row =
   | { kind: "event"; key: string; event: TranscriptEvent }
   | { kind: "toolRun"; key: string; entries: ToolEntry[] }
-  | { kind: "prose"; key: string; seq: number; ts: number; text: string };
+  | { kind: "prose"; key: string; seq: number; ts: number; text: string }
+  /** Consecutive subagent transitions, gathered. A fan-out finishes in bursts
+   *  — nine agents coming back inside a minute is normal — and one row each
+   *  would bury the parent's own work under a wall of near-identical lines. */
+  | { kind: "subagents"; key: string; ts: number; events: SubagentEvent[] };
+
+export type SubagentEvent = Extract<TranscriptEvent, { type: "subagent" }>;
 
 /**
  * Group the stream into what actually gets rendered: one row per tool call,
@@ -54,16 +60,31 @@ export function groupEvents(events: TranscriptEvent[]): Row[] {
 
   const rows: Row[] = [];
   let run: ToolEntry[] | null = null;
+  let subs: Extract<Row, { kind: "subagents" }> | null = null;
   // The open prose row, mutated as more deltas arrive. Its key is the FIRST
   // seq, so a growing message keeps its identity across renders and React
   // updates the text in place instead of remounting the block mid-stream.
   let prose: Extract<Row, { kind: "prose" }> | null = null;
 
   for (const event of events) {
+    if (event.type === "subagent") {
+      run = null;
+      prose = null;
+      if (subs) {
+        subs.events.push(event);
+        subs.ts = event.ts;
+      } else {
+        subs = { kind: "subagents", key: `s-${event.seq}`, ts: event.ts, events: [event] };
+        rows.push(subs);
+      }
+      continue;
+    }
+
     if (event.type === "tool") {
       // A deduplicated update is not rendered, so it interrupts nothing.
       if (firstSeqOf.get(event.call.id) !== event.seq) continue;
       prose = null;
+      subs = null;
       const entry = { seq: event.seq, ts: event.ts, call: latestOf.get(event.call.id) ?? event.call };
       if (run) {
         run.push(entry);
@@ -76,6 +97,7 @@ export function groupEvents(events: TranscriptEvent[]): Row[] {
 
     if (event.type === "assistant") {
       run = null;
+      subs = null;
       if (prose) {
         prose.text += event.text;
         prose.ts = event.ts;
@@ -92,6 +114,7 @@ export function groupEvents(events: TranscriptEvent[]): Row[] {
 
     run = null;
     prose = null;
+    subs = null;
     rows.push({ kind: "event", key: `e-${event.seq}`, event });
   }
 
@@ -299,15 +322,52 @@ export interface RosterEntry {
   collected: boolean;
   /** ts of the event that last described this subagent — elapsed extrapolates from it. */
   at: number;
+  /** omp wrote a report file for it. `false` on a finished subagent means it
+   *  was disposed of before it answered, which is worth saying out loud. */
+  hasResult?: boolean;
+  /** The subagent that dispatched this one, when it was not the board's agent. */
+  parent?: string;
 }
 
 /**
- * The subagent roster of a run, merged out of the transcript.
+ * The roster as the session row holds it.
  *
- * Dispatches name the subagents and carry their task text; progress
- * snapshots describe them live; collects mark results as read. Later events
- * win, so the roster answers "where is the fan-out now", not "what happened
- * in full" — the per-subagent history stays in the transcript rows.
+ * This is the path that matters: the host merges every snapshot into one
+ * roster, keyed by subagent, and reconciles it against omp's session directory
+ * when the turn ends. Reading it here is a rename — `id` is the subagent's
+ * name — and not a reconstruction of anything.
+ */
+export function rosterFromSubs(subs: readonly SubagentProgress[]): RosterEntry[] {
+  return subs.map((s) => ({
+    name: s.id,
+    agent: s.agent || null,
+    task: s.task || null,
+    status: s.status,
+    durationMs: s.durationMs || null,
+    toolCount: s.toolCount,
+    tokens: s.tokens,
+    cost: s.cost,
+    currentTool: s.currentTool ?? null,
+    lastIntent: s.lastIntent ?? null,
+    collected: s.collected ?? false,
+    at: s.observedAt ?? 0,
+    hasResult: s.hasResult,
+    parent: s.parent,
+  }));
+}
+
+/**
+ * The roster of a run, folded out of its transcript.
+ *
+ * The fallback, for a session whose row has no roster: one recorded before the
+ * host kept one, or one whose events are all this page can see. It reads both
+ * of the things a transcript can carry — the `subagent` transition events the
+ * host writes now, and the progress snapshots older logs carry on their tool
+ * calls — and later news wins.
+ *
+ * It is a fallback rather than the source because it can only ever describe
+ * the events in hand, and the browser holds a window of the newest few
+ * hundred. A fan-out outgrows that in its first minute.
  */
 export function subagentRoster(events: TranscriptEvent[]): RosterEntry[] {
   const byName = new Map<string, RosterEntry>();
@@ -328,6 +388,18 @@ export function subagentRoster(events: TranscriptEvent[]): RosterEntry[] {
   };
 
   for (const event of events) {
+    if (event.type === "subagent") {
+      const e = upsert(event.name);
+      if (event.agent) e.agent = event.agent;
+      if (!e.task && event.task) e.task = event.task;
+      e.status = event.status;
+      if (event.toolCount !== undefined) e.toolCount = event.toolCount;
+      if (event.tokens !== undefined) e.tokens = event.tokens;
+      if (event.cost !== undefined) e.cost = event.cost;
+      if (event.durationMs !== undefined) e.durationMs = event.durationMs;
+      e.at = event.ts;
+      continue;
+    }
     if (event.type !== "tool") continue;
     const call = event.call;
     const sa = subagentCallOf(call);
@@ -373,16 +445,22 @@ export interface SubagentStep {
 }
 
 /**
- * Everything the transcript can say about one subagent, assembled for the
- * strip's drilldown view.
+ * Everything the TRANSCRIPT can say about one subagent — the fallback for the
+ * drilldown, used when omp's own log for that subagent cannot be read.
  *
- * omp runs subagents in-process, so there is no per-subagent event log to
- * read — but every progress snapshot the parent streamed is a data point, and
- * each carries `recentTools` (newest first) plus a cumulative `toolCount`.
- * When `toolCount` jumps by k between snapshots, the k newest `recentTools`
- * entries are exactly the calls that completed in between; reversing them
- * rebuilds the subagent's tool history in order. The one genuine primary
- * source is the collect call, whose output is the subagent's final result.
+ * What it does is reconstruction, and it is worth being honest about the
+ * quality: every progress snapshot the parent streamed carries `recentTools`
+ * (newest first) and a cumulative `toolCount`, so when `toolCount` jumps by k
+ * between two snapshots, the k newest `recentTools` entries are the calls that
+ * completed in between. That rebuilds an approximate history — approximate
+ * because a snapshot only names the last few tools, so anything that happened
+ * and was superseded between two frames is simply gone, and half the entries
+ * arrive with no arguments at all.
+ *
+ * omp writes the real thing: one log per subagent, every call with its
+ * arguments and its result, next to the session it belongs to. `api.fanoutAgent`
+ * reads that, and the strip asks for it first. This is what is left when there
+ * is no record to read — an old session, or one omp has since pruned.
  */
 export interface SubagentDetail {
   name: string;
@@ -449,6 +527,22 @@ export function subagentDetail(events: TranscriptEvent[], name: string): Subagen
   };
 
   for (const event of events) {
+    if (event.type === "subagent") {
+      if (event.name !== name) continue;
+      if (!seen) {
+        seen = true;
+        detail.startedTs = event.ts;
+      }
+      detail.lastTs = event.ts;
+      detail.status = event.status;
+      if (event.agent) detail.agent = event.agent;
+      if (!detail.task && event.task) detail.task = event.task;
+      detail.toolCount = Math.max(detail.toolCount, event.toolCount ?? 0);
+      detail.tokens = Math.max(detail.tokens, event.tokens ?? 0);
+      detail.cost = Math.max(detail.cost, event.cost ?? 0);
+      detail.durationMs = Math.max(detail.durationMs, event.durationMs ?? 0);
+      continue;
+    }
     if (event.type !== "tool") continue;
     const call = event.call;
     const sa = subagentCallOf(call);
@@ -478,19 +572,20 @@ export function subagentDetail(events: TranscriptEvent[], name: string): Subagen
 
 /** Tally for the strip's header line and the board row.
  *
- * `pending` — dispatched, no progress snapshot seen yet — is deliberately not
- * counted as running: a transcript from before snapshots existed (or the gap
- * between dispatch and omp's first snapshot) would otherwise read as a fan-out
- * that is busy when we simply have not heard from it.
+ * `pending` — dispatched, nothing heard since — is counted separately rather
+ * than folded into running. The distinction is the difference between "it is
+ * working" and "we have never heard from it", and a strip that shows the
+ * second as the first is how a fan-out that failed to start reads as busy.
  */
 export function rosterCounts(roster: RosterEntry[]): {
-  total: number; running: number; failed: number; done: number;
+  total: number; pending: number; running: number; failed: number; done: number;
 } {
-  let running = 0, failed = 0, done = 0;
+  let pending = 0, running = 0, failed = 0, done = 0;
   for (const e of roster) {
     if (e.status === "running") running++;
+    else if (e.status === "pending") pending++;
     else if (e.status === "failed") failed++;
     else if (e.status === "completed") done++;
   }
-  return { total: roster.length, running, failed, done };
+  return { total: roster.length, pending, running, failed, done };
 }

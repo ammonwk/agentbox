@@ -61,7 +61,8 @@ const SESSIONS_DDL = `
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL,
     started_at     INTEGER,
-    archived_at    INTEGER
+    archived_at    INTEGER,
+    parked_at      INTEGER
   );
 `;
 
@@ -114,6 +115,7 @@ function migrateSessions(d: Database) {
     if (!cols.includes("host_pid")) d.exec("ALTER TABLE sessions ADD COLUMN host_pid INTEGER");
     if (!cols.includes("permission")) d.exec("ALTER TABLE sessions ADD COLUMN permission TEXT");
     if (!cols.includes("subs")) d.exec("ALTER TABLE sessions ADD COLUMN subs TEXT");
+    if (!cols.includes("parked_at")) d.exec("ALTER TABLE sessions ADD COLUMN parked_at INTEGER");
     return;
   }
 
@@ -175,7 +177,7 @@ type SessionRow = {
   blocked: number; flag_reason: string | null; omp_session_id: string | null;
   subs: string | null;
   created_at: number; updated_at: number; started_at: number | null;
-  archived_at: number | null;
+  archived_at: number | null; parked_at: number | null;
 };
 
 /**
@@ -216,6 +218,7 @@ const SESSION_COLUMNS = {
   updatedAt: "updated_at",
   startedAt: "started_at",
   closedAt: "archived_at",
+  parkedAt: "parked_at",
 } as const satisfies Partial<Record<keyof Session, string>>;
 
 type PersistedKey = keyof typeof SESSION_COLUMNS;
@@ -266,7 +269,7 @@ function rowToSession(r: SessionRow): Session {
     blocked: !!r.blocked, flagReason: r.flag_reason, ompSessionId: r.omp_session_id,
     subs: subsFromSql(r.subs),
     createdAt: r.created_at, updatedAt: r.updated_at, startedAt: r.started_at,
-    closedAt: r.archived_at,
+    closedAt: r.archived_at, parkedAt: r.parked_at,
   };
 }
 

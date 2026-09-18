@@ -91,6 +91,18 @@ export interface Session {
   /** First moment a turn started running — for elapsed time. */
   startedAt: number | null;
   closedAt: number | null;
+  /**
+   * When the host stopped this session's omp process for sitting idle, or null.
+   *
+   * Orthogonal to `status`, like `closedAt`. A parked session is still
+   * `waiting` or `done`, because both already mean "the turn is over and a
+   * message continues it", and that stays true with no process behind it:
+   * `sendMessage` finds no host and starts one onto the same omp conversation.
+   * What this field buys is the one place that has to tell a deliberate stop
+   * from a crash, `reconcile`, which would otherwise mark it `dead`.
+   * Cleared by the host that picks the session back up.
+   */
+  parkedAt: number | null;
 
   /**
    * The permission prompt the agent is parked on, set iff `blocked`.
@@ -104,9 +116,18 @@ export interface Session {
   permission: PermissionRequest | null;
 
   /**
-   * The latest subagent progress snapshot any tool call of this session has
-   * carried, for the board row's "N subs · M running" line. Null until a run
-   * dispatches subagents; replaced whole, never merged.
+   * This session's subagent roster: one entry per subagent the run has
+   * dispatched, merged across every tool call that mentioned it and across
+   * every turn.
+   *
+   * It used to be "the latest snapshot any tool call carried", replaced whole.
+   * That was wrong in two ways at once. A run that dispatched in two batches
+   * showed only whichever batch reported last, because the second snapshot
+   * overwrote the first; and every entry kept the status of the last frame the
+   * parent's turn happened to carry, so a fan-out that finished overnight was
+   * still drawn as running the next morning. Entries are merged by name now,
+   * and `observedAt` says when each was last actually described — see
+   * `roster.ts`.
    */
   subs: SubagentProgress[] | null;
 }
@@ -155,21 +176,23 @@ export type ToolKind =
   | "think"
   | "other";
 
+export type SubagentStatus = "pending" | "running" | "completed" | "failed";
+
 /**
- * One dispatched subagent, as omp reports it in a task tool call's streamed
- * progress (`rawOutput.details.progress[]`).
+ * One dispatched subagent, as the roster holds it.
  *
- * omp runs background subagents in-process — they are NOT separate ACP
- * sessions — so this snapshot riding the parent's tool_call_update stream is
- * the only visibility into them the protocol offers. Fields are omp's own
- * progress entry, compacted to what a human scans; `recentTools` keeps the
- * most recent first, as omp sends it.
+ * The live half of this is omp's own progress entry
+ * (`rawOutput.details.progress[]` on a task call's updates), which is the only
+ * visibility the protocol offers while a turn is running — omp runs these
+ * in-process, not as ACP sessions of their own. The durable half comes from
+ * omp's session directory on disk, which is what still answers after the turn
+ * ends. `source` says which described this entry last, and `observedAt` when.
  */
 export interface SubagentProgress {
   id: string;
   /** The subagent type omp ran this one as ("scout", "reviewer", …). */
   agent: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: SubagentStatus;
   /** The task text the subagent was dispatched with. */
   task: string;
   /** The tool the subagent is inside right now, when one is. */
@@ -182,6 +205,27 @@ export interface SubagentProgress {
   cost: number;
   durationMs: number;
   recentTools?: { tool: string; args?: string }[];
+
+  /**
+   * When this entry was last described by anything. A roster without it
+   * cannot tell "running" from "was running when we last heard", which is the
+   * one distinction a reader of a finished run needs.
+   */
+  observedAt?: number;
+  /** What described it last: omp's live progress stream, or its session
+   *  directory on disk. */
+  source?: "stream" | "disk";
+  /** When it ended, once something observed an end. */
+  endedAt?: number;
+  /** The parent's `agent://<name>` read has taken the result into the
+   *  conversation. */
+  collected?: boolean;
+  /** omp wrote a report file for it. A subagent that ended without one was
+   *  disposed of before it answered, which is not the same as succeeding. */
+  hasResult?: boolean;
+  /** The subagent that dispatched this one, when omp nested it a level
+   *  deeper than the board's own agent. */
+  parent?: string;
 }
 
 export type ToolStatus = "pending" | "running" | "ok" | "error";
@@ -209,6 +253,13 @@ export interface ToolCall {
    * Subagent progress snapshot, when this call is one of omp's subagent
    * tools (dispatch / wait / hub) and omp streamed one. Replaced whole on
    * every update — it is a snapshot, not a delta.
+   *
+   * Only the call's own start and end events carry this to the transcript.
+   * The snapshots in between are a heartbeat every couple of seconds, and
+   * appending each one re-wrote the whole call — including the dispatch
+   * arguments, which hold every subagent's assignment — to the log. One
+   * fifty-way fan-out wrote 800 MB that way. Live progress goes to the
+   * session's roster, which is state; the transcript keeps the transitions.
    */
   subs?: SubagentProgress[];
   startedAt: number;
@@ -232,6 +283,28 @@ export type TranscriptEvent = { seq: number; ts: number } & (
   | { type: "assistant"; text: string }
   | { type: "tool"; call: ToolCall }
   | { type: "advisory"; severity: AdvisorySeverity; text: string }
+  /**
+   * A subagent changed state: dispatched, started, finished, failed.
+   *
+   * One event per transition, not per heartbeat. A fifty-way fan-out that
+   * used to write fourteen thousand near-identical tool rows writes about a
+   * hundred of these, and they are the part a person reading the history
+   * afterwards actually wants: when each agent started and when it came back.
+   */
+  | {
+      type: "subagent";
+      name: string;
+      agent: string | null;
+      status: SubagentStatus;
+      /** Only on the first event for a subagent, where it is news. */
+      task?: string;
+      toolCount?: number;
+      tokens?: number;
+      cost?: number;
+      durationMs?: number;
+      /** Whether the live stream or omp's session directory said so. */
+      source: "stream" | "disk";
+    }
   | { type: "permission"; title: string; approved: boolean | null }
   | { type: "supervisor"; verdict: SupervisorVerdict }
   | { type: "turn"; stopReason: string }

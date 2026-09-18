@@ -129,6 +129,22 @@ const CONTINUE_BACKOFF_MS = [1_000, 4_000, 10_000];
  */
 const MAX_TURN_MS = 4 * 60 * 60 * 1000;
 
+/**
+ * How long an agent may sit idle before its omp process is stopped.
+ *
+ * An idle agent is not free. `omp acp` is a whole runtime, a few hundred
+ * megabytes at rest, and callers rarely stop the agents they are done with:
+ * twenty-two were once found alive under one machine's Claude sessions,
+ * nineteen of them idle for over an hour and some for days. Everything a
+ * caller reads back — the mailbox, the history, the transcript ring — lives on
+ * this object and not in omp, so stopping it costs nothing until the next
+ * `send`, which resumes the same omp conversation in a new process.
+ *
+ * Not immediate, because a report is so often followed straight away by a
+ * question about it, and every resume is seconds of startup the caller pays.
+ */
+export const IDLE_PARK_MS = 15 * 60 * 1000;
+
 const CONTINUE_MESSAGE =
   "Continue from exactly where you stopped. Your previous response was cut off " +
   "by a transient provider error, not by anything you did wrong and not by any " +
@@ -421,6 +437,18 @@ export class Subagent {
   readonly createdAt = Date.now();
 
   private runner: Runner;
+  private readonly makeRunner: RunnerFactory;
+  /** Which runner's events count; see `newRunner`. */
+  private generation = 0;
+  /** omp's id for this conversation, so a new process can pick it back up. */
+  private ompSessionId: string | null = null;
+  /** The system prompt as launched, in case a resume finds its file gone. */
+  private systemPrompt = "";
+  /** When omp was stopped for sitting idle. Null while omp is running. */
+  private parkedAt: number | null = null;
+  /** Messages sent to a parked agent while its omp comes back, in order. Null
+   *  when no wake is in flight. */
+  private waking: string[] | null = null;
   private launched = false;
   /** Assistant prose of the turn in flight. */
   private buf: string[] = [];
@@ -527,27 +555,50 @@ export class Subagent {
     this.readOnly = readOnly;
     this.maxTurnMs = maxTurnMs;
     this.quiet = quiet;
-    this.runner = makeRunner(
-      name,
+    this.makeRunner = makeRunner;
+    this.runner = this.newRunner();
+  }
+
+  /**
+   * A runner wired to this agent, replacing whichever came before.
+   *
+   * Events count only from the newest one. A parked agent's omp is stopped on
+   * purpose, and its exit — arriving whenever it arrives, possibly after a new
+   * process has already picked the conversation up — would otherwise read as
+   * the agent dying.
+   */
+  private newRunner(): Runner {
+    const generation = ++this.generation;
+    const current = () => generation === this.generation;
+    return this.makeRunner(
+      this.name,
       {
         onText: (_id, text) => {
+          if (!current()) return;
           this.buf.push(text);
           this.mark("writing");
         },
-        onToolStart: (_id, call) => this.recordTool(call),
+        onToolStart: (_id, call) => {
+          if (current()) this.recordTool(call);
+        },
         onToolUpdate: () => {},
-        onToolEnd: (_id, call) => this.recordTool(call),
+        onToolEnd: (_id, call) => {
+          if (current()) this.recordTool(call);
+        },
         onAdvisory: () => {},
-        onTurnEnd: (_id, stopReason) => this.finishTurn(stopReason),
+        onTurnEnd: (_id, stopReason) => {
+          if (current()) this.finishTurn(stopReason);
+        },
         // Both halves. `used` alone is a number nobody can act on; with the
         // window beside it, it becomes the one budget an agent has that can
         // spoil a turn without warning.
         onContext: (_id, used, size) => {
+          if (!current()) return;
           if (used > 0) this.tokens = used;
           if (size > 0) this.window = size;
         },
         onUsage: (_id, costUsd) => {
-          this.cost = costUsd;
+          if (current()) this.cost = costUsd;
         },
         // Nobody is here to answer a permission prompt — the caller is an
         // agent blocked inside a tool call, not a human at a board — so every
@@ -557,6 +608,7 @@ export class Subagent {
         // not a hang: omp is told no and the turn continues, so the agent can
         // report what it was not allowed to do.
         onPermission: (_id, info) => {
+          if (!current()) return;
           const allowed = !this.readOnly || READ_ONLY_KINDS.has(info.tool);
           if (!allowed) {
             this.errors.push(
@@ -567,10 +619,13 @@ export class Subagent {
           this.runner.replyPermission(info.id, allowed);
         },
         onError: (_id, message) => {
+          if (!current()) return;
           this.errors.push(message);
           this.log({ type: "error", message });
         },
-        onExit: (_id, code) => this.die(`omp exited with code ${code}`),
+        onExit: (_id, code) => {
+          if (current()) this.die(`omp exited with code ${code}`);
+        },
       },
       // A read-only agent routes every request through the handler above so
       // it can be judged; anything else approves at the source.
@@ -586,10 +641,10 @@ export class Subagent {
     return this.runner.pid;
   }
 
-  /** Whether omp is still there. The authority on liveness — `state` is a
-   *  summary that can lag it by a tick. */
+  /** Whether omp is still there, or parked and able to come back. The
+   *  authority on liveness — `state` is a summary that can lag it by a tick. */
   get alive(): boolean {
-    return this.runner.alive;
+    return this.parkedAt !== null || this.waking !== null || this.runner.alive;
   }
 
   /** The oldest uncollected turn, without taking it. For a notice that wants
@@ -760,18 +815,34 @@ export class Subagent {
       );
     }
     if (role) parts.push(role.trim());
-    writeFileSync(promptFile, `${parts.join("\n\n---\n\n")}\n`);
+    this.systemPrompt = `${parts.join("\n\n---\n\n")}\n`;
+    writeFileSync(promptFile, this.systemPrompt);
 
+    this.ompSessionId = await this.launchRunner(null);
+    this.launched = true;
+    this.send(prompt);
+  }
+
+  /** Start `this.runner` on a new conversation, or back on this agent's own,
+   *  within `LAUNCH_TIMEOUT_MS`. Resolves with omp's session id. */
+  private async launchRunner(resumeSessionId: string | null): Promise<string> {
+    const promptFile = join(this.dir, "system.md");
+    // Only a launch argument, so if anything has removed it since, write it
+    // again rather than fail the resume over it.
+    if (!existsSync(promptFile)) {
+      mkdirSync(this.dir, { recursive: true });
+      writeFileSync(promptFile, this.systemPrompt);
+    }
     const launch = this.runner.launch({
       worktree: this.cwd,
       model: this.model,
       promptFile,
       advisor: false,
-      resumeSessionId: null,
+      resumeSessionId,
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
+      return await Promise.race([
         launch,
         new Promise<never>((_, reject) => {
           timer = setTimeout(
@@ -792,8 +863,68 @@ export class Subagent {
       // from a launch that fails after we gave up would crash the server.
       launch.catch(() => {});
     }
-    this.launched = true;
-    this.send(prompt);
+  }
+
+  /**
+   * Stop omp if this agent has sat idle for `IDLE_PARK_MS`. Returns whether
+   * it did.
+   *
+   * The caller is not told, because nothing it can observe changes: the agent
+   * stays `idle`, its answers stay collectable, and the next `send` resumes the
+   * conversation. Only an agent with nothing in flight qualifies — no turn, no
+   * turn waiting out a grace window or a resume backoff — and only one whose
+   * conversation omp can find again.
+   */
+  maybePark(now = Date.now()): boolean {
+    if (this._state !== "idle" || this.parkedAt !== null || this.waking !== null) return false;
+    if (!this.launched || this.ompSessionId === null || !this.runner.alive) return false;
+    if (this.owed > 0 || this.pending.length > 0) return false;
+    const since = Math.max(this.lastActivityAt, this.lastAnsweredAt);
+    if (now - since < IDLE_PARK_MS) return false;
+    this.parkedAt = now;
+    const stopping = this.runner;
+    // Retire its events first: the exit that follows is ours, not a death.
+    this.generation++;
+    stopping.kill();
+    this.log({ type: "parked", idleMs: now - since });
+    return true;
+  }
+
+  /**
+   * Bring a parked agent's omp back onto its conversation and deliver what was
+   * sent meanwhile. Messages that arrive during the launch queue behind the
+   * first, in order, as they would behind a turn on a live process.
+   */
+  private wake(text: string) {
+    if (this.waking !== null) {
+      this.waking.push(text);
+      return;
+    }
+    this.waking = [text];
+    const parkedMs = this.parkedAt === null ? 0 : Date.now() - this.parkedAt;
+    const started = Date.now();
+    this.runner = this.newRunner();
+    void this.launchRunner(this.ompSessionId).then(
+      () => {
+        const queued = this.waking ?? [];
+        this.waking = null;
+        this.parkedAt = null;
+        // Stopped by the caller while omp was starting.
+        if (this._state === "dead") {
+          this.runner.kill();
+          return;
+        }
+        this.log({ type: "resumed", ms: Date.now() - started, parkedMs });
+        for (const t of queued) this.runner.send(t);
+      },
+      (err: unknown) => {
+        this.waking = null;
+        this.parkedAt = null;
+        // `die` answers every message that was waiting on this wake.
+        this.die(`could not resume its conversation after being stopped while idle: ${messageOf(err)}`);
+        this.runner.kill();
+      },
+    );
   }
 
   /** Queue a message. omp delivers it now if idle, at the next turn boundary
@@ -827,7 +958,8 @@ export class Subagent {
     this.messages.push({ turn, text: clip(text, 300), sentAt: Date.now() });
     if (this.messages.length > MESSAGE_LOG) this.messages.shift();
     this.log({ type: "message", turn, text });
-    this.runner.send(text);
+    if (this.parkedAt !== null || this.waking !== null) this.wake(text);
+    else this.runner.send(text);
     return turn;
   }
 
@@ -936,6 +1068,14 @@ export class Subagent {
    *  would be a lie it might act on. */
   interrupt(): boolean {
     if (this._state !== "running") return false;
+    // Messages waiting on a parked agent's omp to come back have not reached
+    // omp, so omp cannot cancel them. Answer them here and send nothing.
+    if (this.waking?.length) {
+      const cancelled = this.waking.length;
+      this.waking = [];
+      for (let i = 0; i < cancelled; i++) this.report("cancelled", "");
+      return true;
+    }
     // Two independent things can be in flight, and a caller reaching for
     // `interrupt` means to stop both. A turn waiting out a grace window or a
     // resume backoff is waiting on OUR timer, and passing a cancel to omp
@@ -1127,7 +1267,7 @@ export class Subagent {
       this.deadlineHit = false;
       reason = "deadline";
     }
-    const gone = this._state === "dead" || !this.runner.alive;
+    const gone = this._state === "dead" || !this.alive;
     const whole = this.carried.join("") + text;
     this.carried = [];
     // A turn whose entire output is a provider failure arrives here wearing
@@ -1647,6 +1787,11 @@ export class SubagentPool {
         // Never let bookkeeping take down the agent it describes.
       }
       this.obey(a);
+      try {
+        a.maybePark(now);
+      } catch {
+        // A failed check leaves the agent running, which is where it already was.
+      }
       if (a.quiet) continue;
       const line = renderAgentLine(a, now);
       if (line === null) {

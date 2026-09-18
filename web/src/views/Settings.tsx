@@ -6,7 +6,7 @@ import type {
   Repo,
   WorktreeScan,
 } from "../../../src/core/types";
-import { api, fmtBytes, type DepState, type Health } from "../api";
+import { api, fmtBytes, type CompactReport, type DepState, type Health, type TranscriptScan } from "../api";
 import {
   Button,
   CommitInput,
@@ -32,6 +32,7 @@ export function Settings({ state }: { state: AppState }) {
       <Supervision {...section} />
       <Repositories repos={repos} sessions={sessions} />
       <Disk />
+      <Transcripts />
       <Diagnostics warnings={warnings} />
     </div>
   );
@@ -639,6 +640,122 @@ function Disk() {
             void reclaim("nuke", removable.map((w) => w.path), true);
           }}
         />
+      )}
+    </section>
+  );
+}
+
+// ------------------------------------------------------------- transcripts
+
+/**
+ * The other thing on disk that grows: session transcripts.
+ *
+ * A transcript is normally small — a few megabytes for a long run. The ones
+ * that are not were written while a fan-out was live, when omp's progress
+ * snapshots were appended to the log every couple of seconds, each one a fresh
+ * copy of the dispatching call and every subagent's assignment. One fifty-way
+ * run wrote 800 MB that way. Sessions record progress as state now, so new
+ * transcripts do not grow like this; these are the ones already written.
+ *
+ * Compacting drops the superseded snapshots and nothing else. What the
+ * transcript shows afterwards is the same — same messages, same tool calls,
+ * same roster, same timestamps for every subagent starting and finishing.
+ */
+function Transcripts() {
+  const [scan, setScan] = useState<TranscriptScan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [report, setReport] = useState<CompactReport | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .transcripts()
+      .then((t) => {
+        setScan(t);
+        setError(null);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  // One stat per session — cheap enough to do on mount, unlike the worktree
+  // scan above, which shells out to git and gh per item.
+  useEffect(() => load(), [load]);
+
+  const oversized = scan?.transcripts ?? [];
+  const compactable = oversized.filter((t) => !t.busy);
+  const bytes = compactable.reduce((n, t) => n + t.bytes, 0);
+
+  async function compact() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.compactTranscripts(compactable.map((t) => t.sessionId));
+      setReport(r);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card">
+      <h3>Transcripts</h3>
+      <p className="hint">
+        Every session's history is a file on disk, and it stays after the session
+        is closed — it is the record of what the agent did. Only the ones a
+        fan-out inflated are listed here: compacting drops the superseded
+        subagent progress snapshots, which were never history, and leaves
+        everything a reader can see unchanged.
+      </p>
+
+      {error && <p className="error-text">{error}</p>}
+
+      {scan && (
+        <p className="hint">
+          {fmtBytes(scan.totalBytes)} of transcripts in total.{" "}
+          {oversized.length === 0
+            ? "None is large enough to be worth compacting."
+            : `${oversized.length} ${oversized.length === 1 ? "is" : "are"} over 8 MB.`}
+        </p>
+      )}
+
+      {oversized.length > 0 && (
+        <>
+          <div className="input-row">
+            <Button
+              variant="primary"
+              icon={Icon.trash}
+              loading={busy}
+              disabled={busy || compactable.length === 0}
+              onClick={() => void compact()}
+            >
+              Compact {compactable.length} transcript{compactable.length === 1 ? "" : "s"} ·{" "}
+              {fmtBytes(bytes)}
+            </Button>
+          </div>
+
+          <ul className="disk-list">
+            {oversized.map((t) => (
+              <li key={t.sessionId}>
+                <span className="mono ref">{fmtBytes(t.bytes)}</span>
+                <span className="name">{t.title}</span>
+                <span className="faint reason">
+                  {t.busy ? "its agent is running — skipped while it is writing" : t.status}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {report && (
+        <p className="hint">
+          Reclaimed {fmtBytes(report.reclaimedBytes)} across {report.results.length} transcript
+          {report.results.length === 1 ? "" : "s"}
+          {report.skipped.length > 0 && `, skipped ${report.skipped.length}`}.
+        </p>
       )}
     </section>
   );

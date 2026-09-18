@@ -22,6 +22,20 @@ survive the restart and are re-attached by `reconcile()` at boot, so live agents
 are not disturbed — but a host keeps its old code until its session is resumed,
 so behaviour changes only reach sessions that start or resume afterwards.
 
+## Idle sessions are parked, not closed
+
+A host whose session has sat between turns for `IDLE_PARK_MS` (4 hours, in
+`src/core/host.ts`) stops its omp and exits. The session keeps its `waiting` or
+`done` status and gets a `parkedAt` timestamp, and nothing in the UI changes: a
+message finds no host, and `sendMessage` starts one that resumes the same omp
+conversation (`session/resume`, which does not replay history into the log).
+
+The status is deliberately left alone, because both statuses already mean "the
+turn is over and a message continues it". `parkedAt` exists only for the one
+reader that must tell a deliberate stop from a crash, `reconcile`, which would
+otherwise mark the session `dead`. `shouldPark` refuses whenever anything is in
+flight: a turn, a permission prompt, or a scheduled auto-continue.
+
 ## Live status is a separate channel from MCP progress
 
 `src/core/live.ts` writes one pre-rendered line per in-flight tool call to
@@ -82,6 +96,43 @@ whose prompt names files in another git work tree, and `outsidePaths`, which
 flags a finished turn's writes that landed outside. Read-only agents are exempt
 from the refusal; they cannot change anything.
 
+## A board session's fan-out is not the MCP pool
+
+Two different systems in this repo produce something called a subagent, and
+`docs/architecture.md` is the map. Briefly: a board session's agent dispatches
+its own subagents through omp's `hub` tool, in-process, and agentbox never
+spawns them — that is the path `/babysit` and every wide sweep uses. The pool in
+`src/core/subagents.ts` is the other one: agents an MCP *caller* owns, each its
+own `omp acp` process with a record under `subagents/<id>/`.
+
+For the first kind, omp's own session directory is the record:
+`~/.omp/agent/sessions/<cwd-slug>/<stamp>_<ompSessionId>/`, holding
+`<Name>.jsonl` (every message and tool call) and `<Name>.md` (the report it
+finished with) per subagent, plus a subdirectory per subagent that dispatched
+subagents of its own. `src/core/ompsession.ts` reads it; nothing writes it.
+
+## Subagent progress is state, not history
+
+omp streams a progress snapshot every couple of seconds per dispatched batch,
+on the parent's `tool_call_update`s. Those go to the session's roster
+(`src/core/roster.ts`, persisted on the row), and only *transitions* — a
+subagent starting, finishing, failing — are appended to the transcript as
+`subagent` events. Appending the snapshots themselves is what made one
+session's log 805 MB: each line was a full copy of the dispatching call,
+arguments and all. `src/core/compact.ts` fixes the logs already written; `bun
+bin/agentbox compact --apply` runs it, and Settings → Transcripts is the same
+thing with a button.
+
+The roster merges two sources that disagree by construction. The live stream is
+the only thing that can describe a *running* subagent, and it stops dead when
+the parent's turn ends. omp's directory is the only thing that can say how one
+*ended*, and it is still there hours later. Neither is "the" truth: the stream
+wins while running, the disk wins for anything terminal, and every entry carries
+`observedAt` so a reader can say "last seen running at 07:50" instead of
+drawing an eleven-hour-old frame as if it were live. `rosterIsLive` is the whole
+rule — a session that is not running cannot have a roster that is getting
+fresher.
+
 ## Watching a subagent
 
 Three files per agent under `~/.local/share/agentbox/subagents/<id>/`, and
@@ -101,6 +152,17 @@ has refreshed it inside `STALE_AFTER_MS`, nobody is there, and readers render
 that as `abandoned`. Sealing on stop is the other half — without it every
 agent's last published state says "running" and then goes stale, so a clean
 finish and a crash look identical.
+
+An agent idle for `IDLE_PARK_MS` (15 minutes, in `src/core/subagents.ts`) has
+its omp stopped by the pool's tick, and the caller is never told. Nothing it can
+observe changes: the state stays `idle`, and the mailbox, history and tool ring
+live on the `Subagent`, not in omp. The next `send` starts a new runner resumed
+onto the saved omp session and delivers the message. Two things keep that
+honest. Each runner's events are tagged with a generation, so the exit of the
+omp we stopped cannot kill the agent. And a resume that fails goes through
+`die`, so the waiting caller gets a `dead` report with the reason rather than
+silence. This only lasts as long as the MCP server does; its exit still stops
+every agent for good.
 
 `src/core/health.ts` holds the judgement, once, for all of them. `verdict()`
 answers "is something wrong" in sentences (`looping`, `quiet`, `slow-tool`,
