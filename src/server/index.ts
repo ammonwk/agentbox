@@ -65,8 +65,8 @@ export const fleet = new Fleet({
   adapters: adapters(),
   runtime: tmux,
   usage: {
-    usageOf: (id) => accounts.usageOf(id),
-    ingestRollout: (id, reading) => accounts.ingestRollout(id, reading),
+    usageOf: (id) => accounts.usage.get(id),
+    ingestRollout: (id, reading) => void accounts.ingestRollout(id, reading),
   },
 });
 setMetricsSource(() => fleet.sessions());
@@ -135,7 +135,7 @@ function accountViews(): AccountView[] {
 function coldState(): ColdState {
   return {
     accounts: accountViews(),
-    logins: accounts.logins(),
+    logins: accounts.loginFlows(),
     repos: listRepos(),
     prs: slow.prs,
     skills: slow.skills,
@@ -466,7 +466,7 @@ const router = new Router(mapError)
     return json(null);
   })
   .add("POST", "/api/accounts/:id/login", async ({ params }) => {
-    const flow = await accounts.login(params.id!);
+    const flow = accounts.login(params.id!);
     scheduleCold();
     return json(flow);
   })
@@ -573,7 +573,9 @@ function skillRootDirs(): string[] {
 // ------------------------------------------------------------------ boot
 
 export async function startServer(): Promise<void> {
-  accounts.start();
+  // Default accounts must exist before the first fleet tick, or every
+  // transcript found on it would be filed under no account.
+  await accounts.start();
   fleet.start();
   await fleet.ready;
   void refreshSlow();
