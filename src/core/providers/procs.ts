@@ -110,6 +110,32 @@ export interface ProcMatch {
  * `bun` with the script in argv[1], and comm is truncated to 15 bytes.
  */
 export function findProcesses(test: (argv: string[]) => boolean): ProcMatch[] {
+  return scanOwnProcesses().filter((p) => test(p.argv));
+}
+
+/**
+ * Every process of ours with its argv. Each adapter's `liveProcesses` scans
+ * the whole table (~25ms at 900 processes), so the fleet opens a shared scan
+ * for the length of one pass (`withProcessScan`) and every adapter reads the
+ * same one. Outside a pass every call scans fresh — a cache on a timer would
+ * hand a caller that just started a process a table without it.
+ */
+let shared: ProcMatch[] | null = null;
+
+export function scanOwnProcesses(): ProcMatch[] {
+  return shared ?? scanUncached();
+}
+
+export async function withProcessScan<T>(fn: () => Promise<T>): Promise<T> {
+  shared = scanUncached();
+  try {
+    return await fn();
+  } finally {
+    shared = null;
+  }
+}
+
+function scanUncached(): ProcMatch[] {
   const uid = process.getuid?.();
   const out: ProcMatch[] = [];
   let dirs: string[];
@@ -129,7 +155,7 @@ export function findProcesses(test: (argv: string[]) => boolean): ProcMatch[] {
         if (m && Number(m[1]) !== uid) continue;
       }
       const argv = argvOf(pid);
-      if (!argv || argv.length === 0 || !test(argv)) continue;
+      if (!argv || argv.length === 0) continue;
       const pp = status.match(/^PPid:\s+(\d+)/m);
       out.push({ pid, ppid: pp ? Number(pp[1]) : 0, argv });
     } catch {

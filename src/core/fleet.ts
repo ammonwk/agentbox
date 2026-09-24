@@ -48,7 +48,7 @@ import type {
   TranscriptReader,
   TranscriptRef,
 } from "./providers/types";
-import { isAlive } from "./providers/procs";
+import { isAlive, withProcessScan } from "./providers/procs";
 import { weeklyWindow } from "./balancer";
 import type {
   Account,
@@ -147,7 +147,7 @@ export class Fleet extends EventEmitter {
   private panes = new Map<string, PaneInfo>();
   private deadSince = new Map<string, number>();
   private startedAt = new Map<string, number>();
-  private answered = new Map<string, string>();
+  private answered = new Map<string, { sig: string; at: number; tries: number }>();
   private blocked = new Map<string, string>();
   private tokenSampled = new Map<string, { at: number; costEquiv: number; turnOpen: boolean }>();
   private lastDiscovery = 0;
@@ -213,19 +213,21 @@ export class Fleet extends EventEmitter {
     // Processes.
     this.live.clear();
     this.livePids.clear();
-    for (const adapter of this.adapters.values()) {
-      const accts = accountsOf(adapter.id);
-      let procs: LiveProcess[] = [];
-      try {
-        procs = await adapter.liveProcesses(accts);
-      } catch (e) {
-        console.error(`agentbox: ${adapter.id} process scan failed:`, e);
+    await withProcessScan(async () => {
+      for (const adapter of this.adapters.values()) {
+        const accts = accountsOf(adapter.id);
+        let procs: LiveProcess[] = [];
+        try {
+          procs = await adapter.liveProcesses(accts);
+        } catch (e) {
+          console.error(`agentbox: ${adapter.id} process scan failed:`, e);
+        }
+        for (const p of procs) {
+          this.livePids.set(p.pid, { ...p, provider: adapter.id });
+          if (p.agentSessionId) this.live.set(`${adapter.id}:${p.agentSessionId}`, p);
+        }
       }
-      for (const p of procs) {
-        this.livePids.set(p.pid, { ...p, provider: adapter.id });
-        if (p.agentSessionId) this.live.set(`${adapter.id}:${p.agentSessionId}`, p);
-      }
-    }
+    });
 
     // New transcripts.
     if (now - this.lastDiscovery >= DISCOVERY_MS) {
@@ -269,7 +271,10 @@ export class Fleet extends EventEmitter {
       if (this.ignored.has(path)) continue;
       try {
         const st = statSync(path);
-        if (t.facts && st.mtimeMs === t.ref.mtimeMs && st.size === t.ref.size) continue;
+        // A live session is re-read every tick even when its own file has not
+        // moved: its subagents write elsewhere, and their tokens are its tokens.
+        const live = this.live.has(`${t.ref.provider}:${t.ref.agentSessionId}`);
+        if (t.facts && !live && st.mtimeMs === t.ref.mtimeMs && st.size === t.ref.size) continue;
         t.ref = { ...t.ref, mtimeMs: st.mtimeMs, size: st.size };
       } catch {
         continue;
@@ -568,6 +573,12 @@ export class Fleet extends EventEmitter {
     else {
       const busy = proc?.busy;
       status = (busy ?? f?.turnOpen) ? "running" : "waiting";
+      // Claude says so itself while a permission dialog is up, which is the
+      // only way to know it for a session in some other terminal.
+      if (proc?.waitingOn) {
+        status = "blocked";
+        this.blocked.set(rec.id, proc.waitingOn);
+      }
       if (host === "tmux" && adapter?.blockedOn && pane) {
         const quietFor = now - (f?.lastActivityAt ?? 0);
         // A prompt waiting on you stalls the transcript, so only look at the
@@ -626,10 +637,13 @@ export class Fleet extends EventEmitter {
     if (!screen) return;
     const keys = adapter.autoAnswer(screen);
     if (!keys) return;
-    // The same screen twice means our keys did not take; do not hammer it.
+    // Claude's trust dialog ignores keys for a moment after it opens, so the
+    // same screen again is worth another try — a few, spaced out, then stop:
+    // pressing keys forever into a dialog we misread is worse than leaving it.
     const sig = screen.trim().slice(-400);
-    if (this.answered.get(rec.id) === sig) return;
-    this.answered.set(rec.id, sig);
+    const prev = this.answered.get(rec.id);
+    if (prev && prev.sig === sig && (prev.tries >= 4 || now - prev.at < 1_500)) return;
+    this.answered.set(rec.id, { sig, at: now, tries: prev && prev.sig === sig ? prev.tries + 1 : 1 });
     try {
       this.deps.runtime.sendKeys(pane.name, keys);
     } catch {
