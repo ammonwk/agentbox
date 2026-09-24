@@ -1,0 +1,112 @@
+{
+  "generatedAt": 1790282772718,
+  "reports": [
+    {
+      "provider": "opencode-go",
+      "fetchedAt": 1790282612231,
+      "limits": [
+        {
+          "id": "rolling-5h",
+          "label": "5 Hour limit",
+          "scope": {
+            "provider": "opencode-go",
+            "windowId": "rolling-5h"
+          },
+          "window": {
+            "id": "rolling-5h",
+            "label": "5 Hour",
+            "durationMs": 18000000
+          },
+          "amount": {
+            "used": 0,
+            "limit": 12,
+            "remaining": 12,
+            "usedFraction": 0,
+            "remainingFraction": 1,
+            "unit": "usd"
+          },
+          "status": "ok"
+        },
+        {
+          "id": "weekly",
+          "label": "Weekly limit",
+          "scope": {
+            "provider": "opencode-go",
+            "windowId": "weekly"
+          },
+          "window": {
+            "id": "weekly",
+            "label": "Weekly",
+            "durationMs": 604800000
+          },
+          "amount": {
+            "used": 0,
+            "limit": 30,
+            "remaining": 30,
+            "usedFraction": 0,
+            "remainingFraction": 1,
+            "unit": "usd"
+          },
+          "status": "ok"
+        },
+        {
+          "id": "monthly",
+          "label": "Monthly limit",
+          "scope": {
+            "provider": "opencode-go",
+            "windowId": "monthly"
+          },
+          "window": {
+            "id": "monthly",
+            "label": "Monthly",
+            "durationMs": 2592000000,
+            "resetsAt": 1790301009834
+          },
+          "amount": {
+            "used": 0.502761,
+            "limit": 60,
+            "remaining": 59.497239,
+            "usedFraction": 0.00837935,
+            "remainingFraction": 0.99162065,
+            "unit": "usd"
+          },
+          "status": "ok"
+        }
+      ],
+      "notes": [
+        "OMP-observed spend only; OpenCode usage outside OMP is not included."
+      ],
+      "metadata": {
+        "planType": "OpenCode Go",
+        "source": "omp-observed-request-costs"
+      }
+    }
+  ],
+  "accountsWithoutUsage": [],
+  "disabledCredentials": [],
+  "capacity": {
+    "opencode-go": [
+      {
+        "window": "5h",
+        "durationMs": 18000000,
+        "accounts": 1,
+        "usedAccounts": 0,
+        "remainingAccounts": 1
+      },
+      {
+        "window": "7d",
+        "durationMs": 604800000,
+        "accounts": 1,
+        "usedAccounts": 0,
+        "remainingAccounts": 1
+      },
+      {
+        "window": "30d",
+        "durationMs": 2592000000,
+        "accounts": 1,
+        "usedAccounts": 0.00837935,
+        "remainingAccounts": 0.99162065
+      }
+    ]
+  }
+}
