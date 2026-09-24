@@ -15,8 +15,7 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { ago, clockNow, subscribeToClock, useModelCatalog } from "./api";
-import type { Attention, AttentionKind, ModelOption, SessionStatus } from "../../src/core/types";
+import { ago, clockNow, subscribeToClock } from "./api";
 
 // ------------------------------------------------------------------ icons
 
@@ -96,6 +95,16 @@ export const Icon = {
   robot: I("M6 9h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z", "M12 5v4M9 14v1M15 14v1"),
   dollar: I("M12 3v18", "M16 7.5A3.5 3.5 0 0 0 12.5 5h-1a3 3 0 0 0 0 6h1a3 3 0 0 1 0 6h-1A3.5 3.5 0 0 1 8 16.5"),
   wifiOff: I("M2 2l20 20", "M5 12.5a11 11 0 0 1 4-2.4M15 10.1a11 11 0 0 1 4 2.4M8.5 16a6 6 0 0 1 7 0M12 20h.01"),
+
+  users: I("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M22 21a7 7 0 0 0-4.5-6.5"),
+  sliders: I("M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3", "M1 14h6M9 8h6M17 16h6"),
+  copy: I("M9 9h11v11H9z", "M5 15H4V4h11v1"),
+  key: I("M15 7a4 4 0 1 1-3.9 5H3v3h3v3h3v-3h2.1A4 4 0 0 1 15 7z"),
+  bolt: I("M13 2L4 14h7l-1 8 9-12h-7z"),
+  gauge: I("M12 14l4-4", "M3.5 18a9 9 0 1 1 17 0"),
+  link: I("M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1", "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"),
+  undo: I("M9 14L4 9l5-5", "M4 9h11a5 5 0 0 1 0 10h-3"),
+  keyboard: I("M3 6h18v12H3z", "M7 10h.01M11 10h.01M15 10h.01M7 14h10"),
 };
 
 // ----------------------------------------------------------------- button
@@ -172,58 +181,6 @@ export function Spinner({ size = 14 }: { size?: number }) {
   return <span className="spinner" style={{ width: size, height: size }} aria-hidden="true" />;
 }
 
-// ----------------------------------------------------------------- status
-
-const STATUS_LABEL: Record<SessionStatus, string> = {
-  spawning: "Spawning",
-  running: "Running",
-  waiting: "Waiting",
-  done: "Done",
-  flagged: "Flagged",
-  failed: "Failed",
-  dead: "Lost",
-};
-
-/** What each status means, for people who have not read the state machine. */
-const STATUS_TITLE: Record<SessionStatus, string> = {
-  spawning: "Starting the agent and cutting its worktree",
-  running: "A turn is in progress",
-  waiting: "The turn ended; the conversation is alive and a message resumes it",
-  done: "The branch has an open pull request",
-  flagged: "The supervisor halted this run — resumable",
-  failed: "Never started, or hit a fatal error",
-  dead: "The process vanished — resumable from the saved conversation",
-};
-
-export function StatusPill({ status }: { status: SessionStatus }) {
-  return (
-    <span className={`pill pill-${status}`} title={STATUS_TITLE[status]}>
-      <span className="pill-dot" aria-hidden="true" />
-      {STATUS_LABEL[status]}
-    </span>
-  );
-}
-
-const ATTENTION_ICON: Record<Exclude<AttentionKind, "none">, IconComponent> = {
-  approval: Icon.shield,
-  failed: Icon.alert,
-  flagged: Icon.flag,
-  review: Icon.eye,
-  idle: Icon.clock,
-};
-
-/** Renders nothing when the session wants nothing — `attention.kind === "none"`. */
-export function AttentionBadge({ attention }: { attention: Attention }) {
-  if (attention.kind === "none") return null;
-  const IconCmp = ATTENTION_ICON[attention.kind];
-  return (
-    <span className={`attn attn-${attention.kind}`}>
-      <IconCmp size={13} />
-      {attention.label}
-    </span>
-  );
-}
-
 // ------------------------------------------------------------------ empty
 
 /** Every empty state says what will fill it, and links to the action if there is one. */
@@ -262,11 +219,14 @@ export function Modal({
   hint,
   onClose,
   children,
+  wide,
 }: {
   title: string;
   hint?: string;
   onClose: () => void;
   children: ReactNode;
+  /** The new-session dialog carries a table; it needs the room. */
+  wide?: boolean;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -348,7 +308,7 @@ export function Modal({
       }}
     >
       <div
-        className="modal"
+        className={`modal${wide ? " modal-wide" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -601,111 +561,6 @@ export function CommitInput({
     </div>
   );
 }
-
-/** The select value for "type an id instead". It has no slash, so it can never
- *  be an omp selector. */
-const OTHER_MODEL = "__other__";
-
-const modelText = (m: ModelOption) => (m.label ? `${m.label} (${m.id})` : m.id);
-
-/**
- * A Model dropdown: the recommended models, then everything OpenCode Go offers,
- * then "Other model id…" for any omp selector typed by hand.
- *
- * A value on neither list (a setting saved before this existed, another
- * provider's model) is shown as it is. A `<select>` with no matching option
- * displays its first one, which would read as the setting having changed.
- *
- * `live` is for a form that reads the value on submit: a typed id reaches
- * `onChange` on every keystroke, so Ctrl+Enter spawns with what is in the box.
- * Without it the typed id commits on Enter or blur, which is what a control
- * that saves on change needs.
- */
-export function ModelPicker({
-  id,
-  value,
-  onChange,
-  live,
-}: {
-  id?: string;
-  value: string;
-  onChange: (next: string) => void;
-  live?: boolean;
-}) {
-  const { catalog, error } = useModelCatalog();
-  const [typing, setTyping] = useState(false);
-  const recommended = catalog?.recommended ?? [];
-  const go = catalog?.go ?? [];
-  const listed = [...recommended, ...go].some((m) => m.id === value);
-  const problem = error
-    ? `Could not load the model list: ${error}`
-    : catalog?.goError
-      ? `Could not refresh OpenCode Go's model list: ${catalog.goError}`
-      : null;
-
-  return (
-    <div className="model-picker">
-      <select
-        id={id}
-        value={typing ? OTHER_MODEL : value}
-        onChange={(e) => {
-          const next = e.target.value;
-          setTyping(next === OTHER_MODEL);
-          if (next !== OTHER_MODEL) onChange(next);
-        }}
-      >
-        {!listed && (
-          <optgroup label="Current">
-            <option value={value}>{value || "none set"}</option>
-          </optgroup>
-        )}
-        {recommended.length > 0 && (
-          <optgroup label="Recommended">
-            {recommended.map((m) => (
-              <option key={m.id} value={m.id}>
-                {modelText(m)}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {go.length > 0 && (
-          <optgroup label="OpenCode Go">
-            {go.map((m) => (
-              <option key={m.id} value={m.id}>
-                {modelText(m)}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        <option value={OTHER_MODEL}>Other model id…</option>
-      </select>
-      {typing &&
-        (live ? (
-          <input
-            className="input mono"
-            aria-label="Model id"
-            placeholder="provider/model"
-            spellCheck={false}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-          />
-        ) : (
-          <CommitInput
-            aria-label="Model id"
-            mono
-            placeholder="provider/model"
-            value={value}
-            onCommit={(v) => {
-              setTyping(false);
-              if (v.trim()) onChange(v.trim());
-            }}
-          />
-        ))}
-      {problem && <span className="field-hint">{problem}</span>}
-    </div>
-  );
-}
-
 // --------------------------------------------------------------- relative
 
 /**

@@ -13,7 +13,7 @@ import { cpuText } from "./load";
  * The role split is the useful part — an MCP server holding a gigabyte is a
  * configuration problem you fix once, and a tool call holding a gigabyte is
  * just today's type-check. See `classify` in src/core/proc.ts for how a role is
- * decided, and for why that decision is currently provisional for omp.
+ * decided.
  */
 
 const ROLE_LABEL: Record<ProcRole, string> = {
@@ -42,7 +42,7 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
       try {
         const r = await api.load(sessionId);
         if (!alive) return;
-        setProcs(r.procs);
+        setProcs(r);
         setErr(null);
       } catch (e) {
         if (alive) setErr(e instanceof Error ? e.message : String(e));

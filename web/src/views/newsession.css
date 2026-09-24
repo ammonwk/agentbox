@@ -1,0 +1,188 @@
+/* New-session dialog. `ns-` prefixed; tokens only. */
+
+.ns-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
+  gap: 20px;
+  margin-top: 8px;
+}
+.ns-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.ns-providers {
+  align-self: flex-start;
+  flex-wrap: wrap;
+}
+.ns-pdot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--prov);
+  padding: 0;
+  box-shadow: none;
+}
+.ns-where-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.seg-sm button {
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+.ns-where {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ns-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ns-check input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.ns-check > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ns-big {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.ns-prompt {
+  min-height: 120px;
+}
+.ns-row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.ns-place {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  padding: 4px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  align-self: start;
+}
+.ns-place-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ns-place-head .section-label {
+  margin: 10px 0 0;
+}
+.ns-place-head .spinner {
+  margin-top: 10px;
+}
+.ns-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ns-choice-head {
+  font-weight: 650;
+  font-size: 14px;
+}
+.ns-choice.none .ns-choice-head {
+  color: var(--danger);
+}
+.ns-why {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.ns-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ns-table th {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--faint);
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+.ns-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.ns-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+.ns-table tr[data-chosen] td {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 600;
+}
+.ns-table tr[data-eligible="false"] td {
+  color: var(--faint);
+}
+.ns-t-acct {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ns-t-acct svg {
+  color: var(--accent);
+}
+.ns-t-spacer {
+  width: 12px;
+  display: inline-block;
+}
+.ns-table tr.has-reason td {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.ns-table tr.ns-reason td {
+  font-size: 11px;
+  color: var(--faint);
+  padding: 0 6px 5px 22px;
+}
+.ns-claim {
+  font-size: 11.5px;
+}
+.ns-foot-hint {
+  margin-right: auto;
+  align-self: center;
+  font-size: 11.5px;
+}
+
+@media (max-width: 900px) {
+  .ns-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ns-row2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ns-foot-hint {
+    display: none;
+  }
+}

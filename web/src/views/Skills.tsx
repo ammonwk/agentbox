@@ -12,6 +12,9 @@ import "./skills.css";
  * Ported from Switchyard's skills page. The list itself arrives in cold state;
  * this view only reaches for the HTTP routes when the human acts.
  */
+/** Every root a skill can come from, in the order they shadow each other. */
+const SCOPES = ["all", "global", "agents", "codex", "omp", "project"] as const;
+
 export function Skills({ skills }: { skills: SkillInfo[] }) {
   const [scope, setScope] = useState<"all" | SkillInfo["source"]>("all");
   const [filter, setFilter] = useState("");
@@ -32,7 +35,7 @@ export function Skills({ skills }: { skills: SkillInfo[] }) {
     return skills.filter((s) => {
       if (scope !== "all" && s.source !== scope) return false;
       if (!q) return true;
-      return [s.name, s.description].filter(Boolean).some((x) => x.toLowerCase().includes(q));
+      return [s.name, s.description, s.repo ?? ""].filter(Boolean).some((x) => x.toLowerCase().includes(q));
     });
   }, [skills, scope, filter]);
 
@@ -53,13 +56,14 @@ export function Skills({ skills }: { skills: SkillInfo[] }) {
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="filter…"
+                data-search
                 aria-label="Filter skills"
               />
             </span>
           </div>
 
           <div className="sk-chips" role="group" aria-label="Filter by scope">
-            {(["all", "global", "agents", "project"] as const).map((s) => (
+            {SCOPES.filter((s) => s === "all" || skills.some((k) => k.source === s)).map((s) => (
               <button
                 key={s}
                 className={`chip ${scope === s ? "on" : ""}`}
@@ -98,7 +102,9 @@ export function Skills({ skills }: { skills: SkillInfo[] }) {
                             </span>
                           ) : null}
                         </span>
-                        <span className={`src ${s.source}`}>{s.source}</span>
+                        <span className={`src ${s.source}`} title={s.repo ? `${s.source} · ${s.repo}` : s.source}>
+                          {s.repo ? `${s.repo}` : s.source}
+                        </span>
                       </span>
                       <span className="sk-row-desc">
                         {s.description || <span className="ghost">no description</span>}
@@ -224,7 +230,10 @@ function SkillDetail({
         <dl className="sk-facts">
           <div>
             <dt>scope</dt>
-            <dd>{skill.source}</dd>
+            <dd>
+              {skill.source}
+              {skill.repo ? ` · ${skill.repo}` : ""}
+            </dd>
           </div>
           <div>
             <dt>size</dt>

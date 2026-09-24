@@ -1,102 +1,86 @@
 import { describe, expect, test } from "bun:test";
-import { hrefOf, parseHash, type Route } from "./route";
-import { ago, fmtCost, fmtTokens, mergeEventsBySeq } from "./api";
-import type { TranscriptEvent } from "../../src/core/types";
+import { hrefOf, navOf, parseHash, type Route } from "./route";
+import { healthRows } from "./api";
+import { composerMode } from "./views/session/Composer";
+import { accountHue } from "./bits";
 
 describe("routing", () => {
-  test("reads the four pages and a session deep link", () => {
-    expect(parseHash("#/inbox")).toEqual({ page: "inbox" });
+  test("reads every page and a session deep link", () => {
+    expect(parseHash("#/sessions")).toEqual({ page: "sessions" });
+    expect(parseHash("#/s/abc1")).toEqual({ page: "session", id: "abc1", tab: "terminal" });
+    expect(parseHash("#/s/abc1/timeline")).toEqual({ page: "session", id: "abc1", tab: "timeline" });
+    expect(parseHash("#/accounts")).toEqual({ page: "accounts", sub: "accounts" });
+    expect(parseHash("#/accounts/calibration")).toEqual({ page: "accounts", sub: "calibration" });
     expect(parseHash("#/skills")).toEqual({ page: "skills" });
     expect(parseHash("#/settings")).toEqual({ page: "settings" });
-    expect(parseHash("#/sessions")).toEqual({ page: "sessions", sessionId: null });
-    expect(parseHash("#/sessions/abc123")).toEqual({ page: "sessions", sessionId: "abc123" });
   });
 
-  test("anything unrecognised lands on the inbox rather than a blank screen", () => {
-    for (const hash of ["", "#", "#/", "#/nope", "#/prs"]) {
-      expect(parseHash(hash).page).toBe("inbox");
-    }
+  test("anything unrecognised lands on the board", () => {
+    for (const h of ["", "#", "#/", "#/nope", "#/s", "#/inbox"]) expect(parseHash(h).page).toBe("sessions");
   });
 
-  test("a skills deep link ignores trailing segments", () => {
-    expect(parseHash("#/skills/whatever").page).toBe("skills");
+  test("an unknown tab falls back to the terminal", () => {
+    expect(parseHash("#/s/x/bogus")).toEqual({ page: "session", id: "x", tab: "terminal" });
   });
 
-  test("round-trips every route, including ids needing escaping", () => {
+  test("round-trips, including ids needing escaping", () => {
     const routes: Route[] = [
-      { page: "inbox" },
+      { page: "sessions" },
+      { page: "session", id: "a b/c", tab: "diff" },
+      { page: "session", id: "x", tab: "terminal" },
+      { page: "accounts", sub: "calibration" },
       { page: "settings" },
-      { page: "sessions", sessionId: null },
-      { page: "sessions", sessionId: "s-1" },
-      { page: "sessions", sessionId: "feature/thing #2" },
     ];
     for (const r of routes) expect(parseHash(hrefOf(r))).toEqual(r);
   });
 
   test("a malformed escape does not throw", () => {
-    // Asserting the whole route, not `.sessionId`: only the `sessions` member
-    // of the union carries that field, and reaching for it unnarrowed is the
-    // same type lie the old sidebar's `counts[id as "conductor"]` was.
-    expect(parseHash("#/sessions/%E0%A4%A")).toEqual({
-      page: "sessions",
-      sessionId: "%E0%A4%A",
+    expect(parseHash("#/s/%E0%A4%A")).toEqual({ page: "session", id: "%E0%A4%A", tab: "terminal" });
+  });
+
+  test("a session lights up the Sessions rail entry", () => {
+    expect(navOf({ page: "session", id: "x", tab: "load" })).toBe("sessions");
+  });
+});
+
+describe("composer", () => {
+  test("only a session in our tmux can be typed into; stopped resumes; external adopts", () => {
+    expect(composerMode({ host: "tmux", status: "blocked" }).kind).toBe("send");
+    expect(composerMode({ host: "none", status: "stopped" }).kind).toBe("resume");
+    expect(composerMode({ host: "none", status: "archived" }).kind).toBe("resume");
+    expect(composerMode({ host: "external", status: "running" }).kind).toBe("adopt");
+  });
+});
+
+describe("health", () => {
+  test("reads every dependency-shaped key, including nested providers, and ignores the rest", () => {
+    const rows = healthRows({
+      git: { state: "ok", detail: "2.51" },
+      gh: { state: "unusable", detail: "logged out" },
+      providers: { claude: { state: "missing", detail: null } },
+      at: 123,
+      version: "2.0.0",
     });
+    expect(rows).toEqual([
+      { name: "git", state: "ok", detail: "2.51" },
+      { name: "gh", state: "unusable", detail: "logged out" },
+      { name: "claude", state: "missing", detail: null },
+    ]);
   });
 });
 
-describe("mergeEventsBySeq", () => {
-  const ev = (seq: number): TranscriptEvent => ({ seq, ts: seq * 1000, type: "assistant", text: `#${seq}` });
-
-  test("appends and keeps seq order", () => {
-    const held = new Map<number, TranscriptEvent>();
-    expect(mergeEventsBySeq(held, [ev(1), ev(2)])?.map((e) => e.seq)).toEqual([1, 2]);
-    expect(mergeEventsBySeq(held, [ev(3)])?.map((e) => e.seq)).toEqual([1, 2, 3]);
-  });
-
-  test("a reconnect replay does not duplicate", () => {
-    const held = new Map<number, TranscriptEvent>();
-    mergeEventsBySeq(held, [ev(1), ev(2), ev(3)]);
-    expect(mergeEventsBySeq(held, [ev(2), ev(3)])).toBeNull();
-    expect(held.size).toBe(3);
-  });
-
-  test("out-of-order arrival still sorts", () => {
-    const held = new Map<number, TranscriptEvent>();
-    expect(mergeEventsBySeq(held, [ev(5), ev(2), ev(9)])?.map((e) => e.seq)).toEqual([2, 5, 9]);
-  });
-
-  test("a later version of the same seq replaces the earlier one", () => {
-    const held = new Map<number, TranscriptEvent>();
-    mergeEventsBySeq(held, [ev(1)]);
-    const updated: TranscriptEvent = { seq: 1, ts: 1000, type: "assistant", text: "rewritten" };
-    // Same seq, so nothing is "added" — but the stored copy is the new one.
-    expect(mergeEventsBySeq(held, [updated])).toBeNull();
-    expect(held.get(1)).toBe(updated);
-  });
-});
-
-describe("formatting", () => {
-  test("ago is computed against a passed instant, not Date.now()", () => {
-    const now = 1_000_000_000;
-    expect(ago(now, now)).toBe("just now");
-    expect(ago(now - 30_000, now)).toBe("30s ago");
-    expect(ago(now - 5 * 60_000, now)).toBe("5m ago");
-    expect(ago(now - 3 * 3600_000, now)).toBe("3h ago");
-    expect(ago(now - 2 * 86_400_000, now)).toBe("2d ago");
-    expect(ago(now + 5000, now)).toBe("just now"); // clock skew must not read as the future
-  });
-
-  test("null costs and tokens render as an em dash, not 0", () => {
-    expect(fmtCost(null)).toBe("—");
-    expect(fmtTokens(null)).toBe("—");
-    expect(fmtCost(0)).toBe("$0");
-    expect(fmtTokens(0)).toBe("0");
-  });
-
-  test("sub-cent costs stay legible", () => {
-    expect(fmtCost(0.0042)).toBe("0.42¢");
-    expect(fmtCost(1.5)).toBe("$1.500");
-    expect(fmtTokens(1500)).toBe("1.5k");
-    expect(fmtTokens(2_400_000)).toBe("2.4M");
+describe("account colours", () => {
+  test("slots follow age, so a new account never recolours the old ones", () => {
+    const a = [
+      { id: "new", createdAt: 30 },
+      { id: "old", createdAt: 10 },
+    ];
+    expect(accountHue("old", a)).toBe(0);
+    expect(accountHue("new", a)).toBe(1);
+    expect(accountHue("old", [...a, { id: "newer", createdAt: 40 }])).toBe(0);
+    expect(accountHue(null, a)).toBe(-1);
+    const h = accountHue("ghost", a);
+    expect(h).toBeGreaterThanOrEqual(0);
+    expect(h).toBeLessThan(8);
   });
 });
