@@ -1,7 +1,7 @@
 /* Settings layout. Consumes tokens and primitives from styles.css; defines none. */
 
 .settings {
-  max-width: 760px;
+  max-width: 880px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -278,4 +278,23 @@
   .diag-list li {
     grid-template-columns: 1fr;
   }
+}
+
+.models-grid,
+.balancer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px 18px;
+}
+/* Grow the label+hint so every input in a row sits on the same line. */
+.balancer-grid .field-head,
+.models-grid .field-head {
+  flex: 1;
+}
+.settings .input-row .commit {
+  flex: 0 1 180px;
+}
+.settings h4 {
+  font-size: 12.5px;
+  font-weight: 650;
 }

@@ -44,7 +44,25 @@
   --radius: 10px;
   --radius-sm: 7px;
 
-  --sidebar-w: 228px;
+  /* Providers: text badges in these. Claude's terracotta, Codex's ink-blue,
+   * Devin's teal, omp's violet — distinct from each other and from status. */
+  --p-claude: #b4532a;
+  --p-codex: #3f51d6;
+  --p-devin: #0f7f73;
+  --p-omp: #8a3fd1;
+
+  /* Account slots. Eight hues picked to stay apart from each other in both
+   * themes; an account keeps its slot for life (bits.tsx accountHue). */
+  --acct-0: #2563eb;
+  --acct-1: #c026d3;
+  --acct-2: #0d9488;
+  --acct-3: #d97706;
+  --acct-4: #7c3aed;
+  --acct-5: #db2777;
+  --acct-6: #65a30d;
+  --acct-7: #0891b2;
+
+  --sidebar-w: 204px;
   /* The Sessions master column. Exported so the view and the shell agree. */
   --list-w: 320px;
   --tap: 32px; /* nothing interactive is smaller than this */
@@ -75,6 +93,20 @@
   --warning: #fbbf24;
   --danger: #f87171;
   --info: #7dd3fc;
+
+  --p-claude: #e8875f;
+  --p-codex: #8c9bff;
+  --p-devin: #3cc7b6;
+  --p-omp: #c08cf5;
+
+  --acct-0: #60a5fa;
+  --acct-1: #e879f9;
+  --acct-2: #2dd4bf;
+  --acct-3: #fbbf24;
+  --acct-4: #a78bfa;
+  --acct-5: #f472b6;
+  --acct-6: #a3e635;
+  --acct-7: #22d3ee;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-md: 0 6px 24px rgba(0, 0, 0, 0.5);
@@ -564,7 +596,6 @@ code {
   border-radius: 50%;
   background: currentColor;
 }
-.pill-spawning,
 .pill-running {
   color: var(--info);
 }
@@ -574,44 +605,12 @@ code {
 .pill-waiting {
   color: var(--warning);
 }
-.pill-done {
-  color: var(--success);
-}
-.pill-flagged {
-  color: var(--accent);
-}
-.pill-failed {
+.pill-blocked {
   color: var(--danger);
 }
-.pill-dead {
+.pill-stopped,
+.pill-archived {
   color: var(--faint);
-}
-
-.attn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 550;
-  line-height: 1.3;
-}
-.attn-approval {
-  color: var(--info);
-}
-.attn-failed {
-  color: var(--danger);
-}
-.attn-flagged {
-  color: var(--accent);
-}
-.attn-review {
-  color: var(--success);
-}
-.attn-idle {
-  color: var(--warning);
-}
-.attn > svg {
-  flex-shrink: 0;
 }
 
 /* empty ------------------------------------------------------------------- */
@@ -662,6 +661,9 @@ code {
   overflow: auto;
   padding: 18px 20px 20px;
   box-shadow: var(--shadow-lg);
+}
+.modal-wide {
+  max-width: 880px;
 }
 .modal-head {
   display: flex;
@@ -720,10 +722,9 @@ code {
 }
 
 /* Element selectors, not just classes: a view writing a plain <input> inside a
- * <Field> should get the app's control, not the browser's. */
-input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
-select,
-textarea,
+ * <Field> should get the app's control, not the browser's. Wrapped in
+ * `:where()` so the base costs no specificity and any view can restyle it. */
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), select, textarea),
 .input,
 .select,
 .textarea {
@@ -742,9 +743,7 @@ input::placeholder,
 textarea::placeholder {
   color: var(--faint);
 }
-input:focus,
-select:focus,
-textarea:focus,
+:where(input, select, textarea):focus,
 .input:focus,
 .select:focus,
 .textarea:focus {
@@ -1188,6 +1187,7 @@ textarea,
 
 .load-nums {
   display: flex;
+  white-space: nowrap;
   gap: 8px;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -1344,4 +1344,436 @@ textarea,
   background: var(--border-strong);
   border-radius: 2px;
   z-index: -1;
+}
+
+/* ------------------------------------------------------- domain primitives */
+
+/* Provider: a small uppercase word in the provider's colour. */
+.prov {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: var(--prov);
+  background: color-mix(in srgb, var(--prov) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--prov) 30%, transparent);
+  flex: none;
+}
+.prov-claude { --prov: var(--p-claude); }
+.prov-codex { --prov: var(--p-codex); }
+.prov-devin { --prov: var(--p-devin); }
+.prov-omp { --prov: var(--p-omp); }
+
+/* Account: a dot in the account's slot colour and its label. */
+.acct {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 1.6;
+  color: var(--text);
+  background: color-mix(in srgb, var(--acct, var(--faint)) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--acct, var(--faint)) 28%, transparent);
+  white-space: nowrap;
+  font-family: inherit;
+}
+button.acct {
+  cursor: pointer;
+}
+button.acct:hover {
+  background: color-mix(in srgb, var(--acct, var(--faint)) 20%, transparent);
+}
+.acct-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--acct, var(--faint));
+  flex: none;
+}
+.acct-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acct-detail {
+  color: var(--muted);
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+}
+.acct-none {
+  color: var(--faint);
+  font-style: italic;
+}
+.acct-off .acct-label {
+  text-decoration: line-through;
+  text-decoration-color: var(--faint);
+}
+
+.host {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.host-tmux {
+  color: var(--muted);
+}
+.host-external {
+  color: var(--warning);
+}
+
+.big-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 4px;
+  padding: 0 4px 0 3px;
+  line-height: 1.5;
+  flex: none;
+}
+
+/* Context bar: small and numeric; colour only when it matters. */
+.ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.ctx-track {
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  flex: none;
+}
+.ctx-wide .ctx-track {
+  width: 90px;
+  height: 5px;
+}
+.ctx-track i {
+  display: block;
+  height: 100%;
+  background: var(--faint);
+}
+.ctx[data-tone="warn"] .ctx-track i { background: var(--warning); }
+.ctx[data-tone="bad"] .ctx-track i { background: var(--danger); }
+.ctx[data-tone="warn"] .ctx-num { color: var(--warning); }
+.ctx[data-tone="bad"] .ctx-num { color: var(--danger); font-weight: 650; }
+.ctx-num {
+  min-width: 28px;
+}
+
+/* Usage bar. The short window is a thin info-blue line; weekly is a thicker
+ * bar in the text colour, with claims hatched on top. Colour turns amber and
+ * red on the effective figure, the one the balancer gates on. */
+.ubar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ubar-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.ubar-label {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ubar-scoped .ubar-label {
+  font-weight: 500;
+  color: var(--muted);
+}
+.ubar-pct {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.ubar-claim {
+  color: var(--muted);
+  font-weight: 500;
+}
+.ubar-reset {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 11.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ubar-track {
+  position: relative;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--border);
+  overflow: hidden;
+}
+.ubar-short .ubar-track {
+  height: 5px;
+}
+.ubar-scoped .ubar-track {
+  height: 4px;
+}
+.ubar-used {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in srgb, var(--text) 62%, transparent);
+  border-radius: 3px 0 0 3px;
+}
+.ubar-short .ubar-used {
+  background: var(--info);
+}
+.ubar-scoped .ubar-used {
+  background: color-mix(in srgb, var(--text) 40%, transparent);
+}
+.ubar-claimed {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--accent) 70%, transparent) 0 3px,
+    color-mix(in srgb, var(--accent) 25%, transparent) 3px 6px
+  );
+}
+.ubar[data-tone="warn"] .ubar-used { background: var(--warning); }
+.ubar[data-tone="bad"] .ubar-used { background: var(--danger); }
+.ubar[data-tone="warn"] .ubar-pct { color: var(--warning); }
+.ubar[data-tone="bad"] .ubar-pct { color: var(--danger); }
+.ubar-tick {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.ubar-compact .ubar-head {
+  font-size: 11px;
+}
+.ubar-compact .ubar-reset {
+  font-size: 10.5px;
+}
+
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.copy-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.copy-btn.done {
+  color: var(--success);
+}
+
+/* Filter chips and segmented controls, shared by several pages. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.chip.on {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+.chip .n {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  font-size: 11px;
+}
+
+.seg {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px;
+  gap: 2px;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.seg button:hover:not(:disabled) {
+  color: var(--text);
+}
+.seg button[aria-pressed="true"] {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.seg button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.error-line {
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.src.codex {
+  color: var(--p-codex);
+}
+.src.omp {
+  color: var(--p-omp);
+}
+
+/* ------------------------------------------------------------ shell extras */
+
+.mock-tag {
+  margin-left: auto;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 50%, transparent);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.nav-item .count.count-warn {
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  color: var(--warning);
+}
+.nav-item.active .count.count-warn {
+  background: var(--warning);
+  color: var(--bg);
+}
+.sidebar-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 6px 10px 8px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.sidebar-keys kbd {
+  margin-right: 2px;
+}
+.topbar {
+  min-height: 52px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.topbar-seg {
+  margin-left: 8px;
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.crumbs a {
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 550;
+}
+.crumbs a:hover {
+  color: var(--text);
+}
+.crumbs > svg {
+  color: var(--faint);
+  flex: none;
+}
+.crumb-here {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .sidebar-keys,
+  .mock-tag {
+    display: none;
+  }
+  .topbar-actions .btn {
+    padding: 0 10px;
+  }
 }

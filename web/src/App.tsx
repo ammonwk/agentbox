@@ -1,48 +1,33 @@
-/** The shell: routing, theme, and the two things that must always be true —
- *  you can link to what you are looking at, and you can tell when the data on
- *  screen is stale. */
+/** The shell: routing, theme, global keys, and the two things that must always
+ *  be true — you can link to what you are looking at, and you can tell when
+ *  the data on screen is stale. */
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
-import {
-  api,
-  clockNow,
-  subscribeToClock,
-  useAppState,
-  useConnection,
-  type AgentSettings,
-  type AppState,
-} from "./api";
-// Pure module — it imports only `./types`, type-only, so pulling it into the
-// browser bundle costs one small function and no server code.
-import { inboxItems } from "../../src/core/conductor";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { api, clockNow, MOCK, subscribeToClock, useAppState, useConnection } from "./api";
+import type { AgentSettings, AppState } from "../../src/core/types";
 import { Button, Empty, Icon, type IconComponent } from "./components";
-import { hrefOf, parseHash, type PageId, type Route } from "./route";
+import { needsYou, titleOf } from "./lib/board";
+import { hrefOf, navOf, parseHash, type NavId, type Route } from "./route";
 import { SystemBar } from "./SystemBar";
-import { Inbox } from "./views/Inbox";
-import { Sessions } from "./views/Sessions";
-import { Skills } from "./views/Skills";
-import { Agents } from "./views/Agents";
+import { Board } from "./views/Board";
+import { SessionView } from "./views/session/SessionView";
+import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
+import { Skills } from "./views/Skills";
+
+// Accounts and Calibration are visited, not lived in; keep them out of the
+// first paint. (The terminal is lazy too, inside SessionView — xterm is the
+// heaviest thing in the bundle.)
+const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
 
 // ----------------------------------------------------------------- routing
 
-/** The URL is the only place selection lives, so every view is linkable and
- *  the back button does what a browser's back button does. */
 function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
 
-  // Stable: views put it in effect dependency arrays.
   const navigate = useCallback((to: Route, replace = false) => {
     const href = hrefOf(to);
-    if (href === location.hash) return; // no-op, and no re-render to loop on
+    if (href === location.hash) return;
     if (replace) history.replaceState(null, "", href);
     else location.hash = href;
     setRoute(to);
@@ -51,8 +36,7 @@ function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
   useEffect(() => {
     const onChange = () => setRoute(parseHash(location.hash));
     addEventListener("hashchange", onChange);
-    // Normalise "" and anything unrecognised to a real route, without adding a
-    // history entry the back button would have to walk through.
+    // Normalise "" and anything unrecognised without adding a history entry.
     if (hrefOf(parseHash(location.hash)) !== location.hash) {
       history.replaceState(null, "", hrefOf(parseHash(location.hash)));
     }
@@ -62,49 +46,70 @@ function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
   return [route, navigate];
 }
 
-// -------------------------------------------------------------------- app
-
-const NAV: { id: PageId; label: string; icon: IconComponent }[] = [
-  { id: "inbox", label: "Inbox", icon: Icon.inbox },
-  { id: "sessions", label: "Sessions", icon: Icon.sessions },
-  { id: "agents", label: "Agents", icon: Icon.play },
-  { id: "skills", label: "Skills", icon: Icon.folder },
-  { id: "settings", label: "Settings", icon: Icon.settings },
-];
-
-/** The two pages that carry a selection need it spelled out; the rest are
- *  just their page id. Written as a function because a ternary chain inside
- *  JSX stopped being readable at two. */
-function navTarget(id: PageId): Route {
-  if (id === "sessions") return { page: "sessions", sessionId: null };
-  if (id === "agents") return { page: "agents", agentId: null };
-  return { page: id };
+/** Keys that work anywhere except while typing: `n` new session, `/` search. */
+function isTyping(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  if (!t) return false;
+  if (t.closest(".xterm")) return true; // the terminal owns every key it gets
+  const tag = t.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
 }
 
+// -------------------------------------------------------------------- app
+
+const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
+  { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
+  { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
+  { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
+  { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
+];
+
+const PAGE_TITLE: Record<NavId, string> = {
+  sessions: "Sessions",
+  accounts: "Accounts",
+  skills: "Skills",
+  settings: "Settings",
+};
+
 export function App() {
-  const { state, warnings } = useAppState();
+  const { state } = useAppState();
   const [route, navigate] = useRoute();
   const theme = useTheme(state?.settings.theme);
+  const [newOpen, setNewOpen] = useState(false);
+  const nav = navOf(route);
 
   const counts = useMemo(() => countsOf(state), [state]);
-  const selectSession = useCallback(
-    (id: string | null) => navigate({ page: "sessions", sessionId: id }),
-    [navigate],
-  );
 
-  // A page change starts at the top of that page. Without this the scroller
-  // keeps the offset from the page you left — scroll down Settings, click
-  // Inbox, and you arrive 266px in with its heading above the fold. Keyed on
-  // `page` and not the whole route, so picking another session on the board
-  // (where `.content` does not scroll anyway) is not a scroll event.
   const contentRef = useRef<HTMLElement>(null);
   useEffect(() => {
     contentRef.current?.scrollTo(0, 0);
   }, [route.page]);
 
   useEffect(() => {
-    document.title = counts.inbox > 0 ? `(${counts.inbox}) agentbox` : "agentbox";
-  }, [counts.inbox]);
+    document.title = counts.sessions > 0 ? `(${counts.sessions}) agentbox` : "agentbox";
+  }, [counts.sessions]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
+      if (document.querySelector(".modal-backdrop")) return;
+      if (e.key === "n") {
+        e.preventDefault();
+        setNewOpen(true);
+      } else if (e.key === "/") {
+        const search = document.querySelector<HTMLInputElement>("[data-search]");
+        if (search) {
+          e.preventDefault();
+          search.focus();
+          search.select();
+        }
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
+
+  const flush = route.page === "sessions" || route.page === "session" || route.page === "skills";
 
   return (
     <div className="app">
@@ -116,23 +121,28 @@ export function App() {
         <div className="brand">
           <BrandMark />
           <span>agentbox</span>
+          {MOCK ? (
+            <span className="mock-tag" title="Opened with ?mock=1 — nothing here is real and nothing is sent anywhere">
+              mock
+            </span>
+          ) : null}
         </div>
 
         <nav aria-label="Primary">
-          {NAV.map(({ id, label, icon: IconCmp }) => {
+          {NAV.map(({ id, label, icon: IconCmp, to }) => {
             const count = counts[id];
-            const active = route.page === id;
+            const active = nav === id;
             return (
               <a
                 key={id}
                 className={`nav-item ${active ? "active" : ""}`}
-                href={hrefOf(navTarget(id))}
+                href={hrefOf(to)}
                 aria-current={active ? "page" : undefined}
               >
                 <IconCmp />
                 <span className="nav-label">{label}</span>
                 {count > 0 ? (
-                  <span className="count" title={countTitle(id, count)}>
+                  <span className={`count${id === "accounts" ? " count-warn" : ""}`} title={countTitle(id, count)}>
                     {count}
                   </span>
                 ) : null}
@@ -142,23 +152,51 @@ export function App() {
         </nav>
 
         <div className="spacer" />
+        <div className="sidebar-keys" aria-hidden="true">
+          <span><kbd>n</kbd> new</span>
+          <span><kbd>/</kbd> search</span>
+          <span><kbd>j</kbd><kbd>k</kbd> move</span>
+        </div>
         <ConnectionChip />
         <ThemeControl value={theme.pref} onChange={theme.set} />
       </aside>
 
       <div className="main">
         <header className="topbar">
-          <h1>
-            {route.page === "inbox"
-              ? "Inbox"
-              : route.page === "sessions"
-                ? "Sessions"
-                : route.page === "agents"
-                  ? "Subagents"
-                  : route.page === "skills"
-                    ? "Skills"
-                    : "Settings"}
-          </h1>
+          {route.page === "session" ? (
+            <h1 className="crumbs">
+              <a href={hrefOf({ page: "sessions" })}>Sessions</a>
+              <Icon.chevronRight size={14} />
+              <span className="crumb-here">
+                {state ? titleOfId(state, route.id) : "…"}
+              </span>
+            </h1>
+          ) : (
+            <h1>{PAGE_TITLE[nav]}</h1>
+          )}
+          {route.page === "accounts" ? (
+            <div className="seg topbar-seg" role="group" aria-label="Accounts view">
+              <button
+                type="button"
+                aria-pressed={route.sub === "accounts"}
+                onClick={() => navigate({ page: "accounts", sub: "accounts" })}
+              >
+                Accounts
+              </button>
+              <button
+                type="button"
+                aria-pressed={route.sub === "calibration"}
+                onClick={() => navigate({ page: "accounts", sub: "calibration" })}
+              >
+                Calibration
+              </button>
+            </div>
+          ) : null}
+          <div className="topbar-actions">
+            <Button variant="primary" icon={Icon.plus} onClick={() => setNewOpen(true)} title="New session (n)">
+              New session
+            </Button>
+          </div>
         </header>
 
         <StaleBanner />
@@ -167,36 +205,30 @@ export function App() {
             Theme not saved: {theme.error}
           </Banner>
         ) : null}
-        {warnings.map((w) => (
+        {state?.warnings.map((w) => (
           <Banner key={w} tone="warn" icon={Icon.alert}>
             {w}
           </Banner>
         ))}
 
-        {/* The Sessions board and the Skills page are their own height-constrained
-            grids with internal scrollers, so the shell must not pad them or scroll
-            around them. */}
-        <main
-          className={`content ${(route.page === "sessions" || route.page === "skills" || route.page === "agents") && state ? "flush" : ""}`}
-          id="content"
-          ref={contentRef}
-          tabIndex={-1}
-        >
+        <main className={`content ${flush && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1}>
           {!state ? (
             <Bootstrapping />
-          ) : route.page === "inbox" ? (
-            <Inbox state={state} onOpenSession={selectSession} />
           ) : route.page === "sessions" ? (
-            <Sessions
+            <Board state={state} onOpen={(id) => navigate({ page: "session", id, tab: "terminal" })} onNew={() => setNewOpen(true)} />
+          ) : route.page === "session" ? (
+            <SessionView
+              key={route.id}
               state={state}
-              selectedId={route.sessionId}
-              onSelect={selectSession}
+              id={route.id}
+              tab={route.tab}
+              onTab={(tab) => navigate({ page: "session", id: route.id, tab }, true)}
+              onOpen={(id) => navigate({ page: "session", id, tab: route.tab })}
             />
-          ) : route.page === "agents" ? (
-            <Agents
-              agentId={route.agentId}
-              onSelect={(id) => navigate({ page: "agents", agentId: id })}
-            />
+          ) : route.page === "accounts" ? (
+            <Suspense fallback={<Empty title="Loading…" />}>
+              <Accounts state={state} sub={route.sub} />
+            </Suspense>
           ) : route.page === "skills" ? (
             <Skills skills={state.skills} />
           ) : (
@@ -204,47 +236,49 @@ export function App() {
           )}
         </main>
 
-        {/* A sibling of `.content` inside the flex column, not `position:
-            fixed`. A floating status bar's failure mode is covering the last
-            row of whatever you are reading; this one takes its height out of
-            the scroller instead, so it cannot. */}
         <SystemBar />
       </div>
+
+      {newOpen && state ? (
+        <NewSession
+          state={state}
+          onClose={() => setNewOpen(false)}
+          onCreated={(id) => {
+            setNewOpen(false);
+            navigate({ page: "session", id, tab: "terminal" });
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
+function titleOfId(state: AppState, id: string): string {
+  const s = state.sessions.find((x) => x.id === id);
+  return s ? titleOf(s) : id;
+}
+
 // ----------------------------------------------------------------- counts
 
-function countsOf(state: AppState | null): Record<PageId, number> {
-  if (!state) return { inbox: 0, sessions: 0, agents: 0, skills: 0, settings: 0 };
+function countsOf(state: AppState | null): Record<NavId, number> {
+  if (!state) return { sessions: 0, accounts: 0, skills: 0, settings: 0 };
+  const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
+  const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
-    // The badge counts the rows the Inbox renders, by calling the function that
-    // renders them. An earlier version reimplemented the filter here and the
-    // two drifted to 72 against 67 on the same screen — a badge that is not
-    // literally the page's own count is a second opinion, not a summary.
-    inbox: inboxItems(state.sessions, state.prs).length,
-    // No closed filter: `state.sessions` is `listSessions(false)`, which is
-    // `WHERE archived_at IS NULL`. Filtering again would read as a guard and
-    // hide that closed sessions never reach the client at all.
-    sessions: state.sessions.filter((s) => s.status === "running" || s.status === "spawning").length,
-    // Subagents are not in `state` -- they are read from disk by the page
-    // itself -- so there is nothing to badge without a second poll for a
-    // number nobody navigates by.
-    agents: 0,
+    sessions: needsYou(state.sessions),
+    accounts: Math.max(loginsOpen, authBad),
     skills: 0,
     settings: 0,
   };
 }
 
-function countTitle(id: PageId, n: number): string {
-  if (id === "inbox") return `${n} thing${n === 1 ? "" : "s"} waiting on you`;
-  return `${n} session${n === 1 ? "" : "s"} working right now`;
+function countTitle(id: NavId, n: number): string {
+  if (id === "accounts") return `${n} account${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} a login`;
+  return `${n} session${n === 1 ? "" : "s"} waiting on you`;
 }
 
 // ------------------------------------------------------------- connection
 
-/** Seconds until a value in the future, ticking once a second. */
 function useCountdown(to: number | null): number | null {
   return useSyncExternalStore(
     subscribeToClock,
@@ -255,12 +289,9 @@ function useCountdown(to: number | null): number | null {
 
 function ConnectionChip() {
   const { connected, downSince } = useConnection();
-  const label = connected ? "Live" : downSince ? "Offline" : "Connecting…";
+  const label = connected ? (MOCK ? "Mock data" : "Live") : downSince ? "Offline" : "Connecting…";
   return (
-    // `title` and the wrapped label so the narrow rail can drop the word and
-    // keep the dot: whether the data is live is the one thing that must stay
-    // legible at every width, and the rail used to hide the chip outright.
-    <div className={`conn ${connected ? "on" : "off"}`} title={`Connection: ${label}`}>
+    <div className={`conn ${connected ? "on" : "off"}`} title={`Connection: ${label}`} role="status">
       <span className="dot" aria-hidden="true" />
       <span className="conn-label">{label}</span>
     </div>
@@ -272,7 +303,6 @@ function StaleBanner() {
   const { connected, downSince, retryAt, attempts, lastError, retryNow } = useConnection();
   const secs = useCountdown(retryAt);
   if (connected || downSince === null) return null;
-
   const downFor = Math.round((Date.now() - downSince) / 1000);
   return (
     <Banner tone="danger" icon={Icon.wifiOff}>
@@ -290,15 +320,7 @@ function StaleBanner() {
   );
 }
 
-function Banner({
-  tone,
-  icon: IconCmp,
-  children,
-}: {
-  tone: "warn" | "danger";
-  icon: IconComponent;
-  children: ReactNode;
-}) {
+function Banner({ tone, icon: IconCmp, children }: { tone: "warn" | "danger"; icon: IconComponent; children: ReactNode }) {
   return (
     <div className={`banner banner-${tone}`} role="status">
       <IconCmp size={15} />
@@ -307,58 +329,43 @@ function Banner({
   );
 }
 
-/**
- * Before the first state arrives. A bare "Connecting…" that can hang forever
- * is the thing this replaces: probe /api/health and show what it says.
- */
+/** Before the first state arrives: probe /api/health rather than hang on "Connecting…". */
 function Bootstrapping() {
   const { connected } = useConnection();
-  // Two different failures, deliberately not one string: "the server is not
-  // there" and "the server answered and omp is unusable" need opposite advice,
-  // and this screen used to give the first one's advice to both.
-  const [probe, setProbe] = useState<{ kind: "unreachable" | "omp"; detail: string } | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const t = setTimeout(() => {
       api.health().then(
-        (h) => {
-          if (cancelled || h.ompState === "ok") return;
-          // `ompDetail` already separates "not installed" from "installed and
-          // broken, here is why". Writing our own sentence here is how this
-          // line came to claim `omp` was not on PATH for an `omp` that was.
-          setProbe({ kind: "omp", detail: h.ompDetail ?? `omp is ${h.ompState}.` });
-        },
-        (err: Error) => !cancelled && setProbe({ kind: "unreachable", detail: err.message }),
+        () => undefined,
+        (err: Error) => !cancelled && setProblem(err.message),
       );
-    }, 1500); // give the socket a fair chance before crying wolf
+    }, 1500);
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
   }, []);
 
-  if (probe) {
-    const reload = (
-      <Button variant="primary" icon={Icon.refresh} onClick={() => location.reload()}>
-        Reload
-      </Button>
-    );
-    return probe.kind === "unreachable" ? (
-      <Empty title="Can't reach the agentbox server" action={reload}>
-        <p className="mono">{probe.detail}</p>
+  if (problem) {
+    return (
+      <Empty
+        title="Can't reach the agentbox server"
+        action={
+          <Button variant="primary" icon={Icon.refresh} onClick={() => location.reload()}>
+            Reload
+          </Button>
+        }
+      >
+        <p className="mono">{problem}</p>
         <p>
-          Start it with <code>bun run dev</code> in the agentbox checkout, then reload.
+          Start it with <code>bun run dev</code> in the agentbox checkout, then reload. To look around
+          without one, open this page with <code>?mock=1</code>.
         </p>
-      </Empty>
-    ) : (
-      <Empty title="agentbox is running, but omp is not usable" action={reload}>
-        <p className="mono">{probe.detail}</p>
-        <p>Nothing can be spawned until that is fixed. Everything else still works.</p>
       </Empty>
     );
   }
-
   return (
     <Empty title={connected ? "Loading your sessions…" : "Connecting to agentbox…"}>
       <p>This should take a moment. If it does not, the server is probably not running.</p>
@@ -376,13 +383,8 @@ const THEMES: { id: AgentSettings["theme"]; label: string; icon: IconComponent }
   { id: "dark", label: "Dark", icon: Icon.moon },
 ];
 
-/**
- * Three states, honestly. `system` is a real preference, not a thing that
- * collapses into light the first time you press the button.
- */
+/** Three states, honestly: `system` is a real preference. */
 function useTheme(serverPref: AgentSettings["theme"] | undefined) {
-  // Held locally only while the PUT is in flight, so the control responds
-  // immediately without pretending to be the source of truth.
   const [pending, setPending] = useState<AgentSettings["theme"] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pref = pending ?? serverPref ?? readCachedTheme();
@@ -397,7 +399,11 @@ function useTheme(serverPref: AgentSettings["theme"] | undefined) {
       document.documentElement.style.colorScheme = resolveTheme(pref);
     };
     apply();
-    localStorage.setItem(THEME_CACHE_KEY, pref); // so a reload does not flash
+    try {
+      localStorage.setItem(THEME_CACHE_KEY, pref);
+    } catch {
+      /* private mode: the system default on next load is fine */
+    }
     if (pref !== "system") return;
     const mq = matchMedia("(prefers-color-scheme: dark)");
     mq.addEventListener("change", apply);
@@ -411,10 +417,7 @@ function useTheme(serverPref: AgentSettings["theme"] | undefined) {
       setPending(next);
       setError(null);
       api.saveSettings({ theme: next }).catch((e: Error) => {
-        // Revert AND say why. Reverting alone is what this used to do, and a
-        // theme that silently snaps back reads as a UI glitch rather than as a
-        // server that refused the write — the reader has no way to tell the
-        // difference, so they retry the same click instead of reading the log.
+        // Revert AND say why: a theme that silently snaps back reads as a glitch.
         setPending(null);
         setError(e.message);
       });
@@ -423,8 +426,12 @@ function useTheme(serverPref: AgentSettings["theme"] | undefined) {
 }
 
 function readCachedTheme(): AgentSettings["theme"] {
-  const v = localStorage.getItem(THEME_CACHE_KEY);
-  return v === "light" || v === "dark" || v === "system" ? v : "system";
+  try {
+    const v = localStorage.getItem(THEME_CACHE_KEY);
+    return v === "light" || v === "dark" || v === "system" ? v : "system";
+  } catch {
+    return "system";
+  }
 }
 
 function resolveTheme(pref: AgentSettings["theme"]): "light" | "dark" {
@@ -432,13 +439,7 @@ function resolveTheme(pref: AgentSettings["theme"]): "light" | "dark" {
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function ThemeControl({
-  value,
-  onChange,
-}: {
-  value: AgentSettings["theme"];
-  onChange: (t: AgentSettings["theme"]) => void;
-}) {
+function ThemeControl({ value, onChange }: { value: AgentSettings["theme"]; onChange: (t: AgentSettings["theme"]) => void }) {
   return (
     <div className="theme-control" role="group" aria-label="Colour theme">
       {THEMES.map(({ id, label, icon: IconCmp }) => (

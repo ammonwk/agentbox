@@ -85,7 +85,7 @@ export function DiffPanel({ sessionId, active }: { sessionId: string; active: bo
         <Empty title={active ? "No changes yet" : "This session changed no files"}>
           {active
             ? `The agent has not written anything to the worktree. Files it creates or edits appear here, per file, as soon as it does — measured against ${diff.base}.`
-            : `Nothing in the worktree differs from ${diff.base}. The agent may have only read and searched, or it may have stopped before writing anything — the Activity tab shows which.`}
+            : `Nothing in the worktree differs from ${diff.base}. The agent may have only read and searched, or it may have stopped before writing anything — the Timeline tab shows which.`}
         </Empty>
       )}
 

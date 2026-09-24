@@ -1,153 +1,19 @@
-/* Sessions master–detail. Owned by ui-sessions; every class is `sx-` prefixed
-   so it cannot collide with the shell's stylesheet. Only the shell's design
-   tokens (--bg, --panel, --accent, --sunken, --tap, --list-w, …) are
-   referenced; there is not a literal colour in this file. Controls are left to
-   the shell's element selectors — only sizing that is specific to this screen
-   is set here. */
+/* Session detail: rail, header, tabs, terminal, timeline, diff, composer.
+   `sv-`, `sx-`, `tl-`, `term-`, `cmp-`, `rail-` prefixed; tokens only. */
 
-.sx-wrap {
+/* ------------------------------------------------------------------ layout */
+
+.sv {
   display: grid;
-  /* --list-w is the shell's master-column width; it flips to 100% at the same
-     900px breakpoint the row layout below switches on. */
-  grid-template-columns: var(--list-w) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  gap: 0;
+}
+.sv[data-rail="on"] {
+  grid-template-columns: 264px minmax(0, 1fr);
 }
 
-/* ---------------------------------------------------------------- list */
-
-.sx-list {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  border-right: 1px solid var(--border);
-  background: var(--panel);
-}
-
-.sx-list-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid var(--border);
-}
-
-.sx-list-count {
-  font-size: 12px;
-  color: var(--muted);
-  margin-right: auto;
-}
-
-.sx-list-scroll {
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-  padding-bottom: 16px;
-}
-
-.sx-section-label {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--panel);
-  padding: 10px 12px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.sx-row {
-  display: block;
-  width: 100%;
-  min-height: 56px;
-  text-align: left;
-  padding: 9px 12px;
-  border: 0;
-  border-left: 2px solid transparent;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.sx-row:hover { background: var(--hover); }
-/* The global ring sits 2px OUTSIDE the element; these rows are full-bleed
-   inside scrollers and `overflow: hidden` containers that clip it, so only
-   the offset is overridden — colour and width stay the shell's. */
-.sx-row:focus-visible { outline-offset: -2px; }
-
-.sx-row[aria-current="true"] {
-  background: var(--active);
-  border-left-color: var(--accent);
-}
-
-.sx-row-top {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.sx-row-title {
-  font-weight: 550;
-  font-size: 13.5px;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sx-row-meta {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  font-size: 11.5px;
-  color: var(--muted);
-  margin-top: 3px;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.sx-row-meta code {
-  font-family: var(--mono);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Wraps AttentionBadge, which brings its own icon, colour and label. */
-.sx-row-attention {
-  margin-top: 5px;
-  overflow: hidden;
-}
-
-/* A running session gets a live signal so the list shows motion without
-   re-reading anything. */
-.sx-live {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  flex: none;
-  animation: sx-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes sx-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.25; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sx-live { animation: none; }
-}
-
-/* -------------------------------------------------------------- detail */
-
-.sx-detail {
+.sv-main {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -155,79 +21,303 @@
   background: var(--bg);
 }
 
+.sv-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* -------------------------------------------------------------------- rail */
+
+.rail {
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 16px;
+}
+.rail-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+  padding: 10px 12px 4px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.rail-label span {
+  font-weight: 500;
+  margin-left: 3px;
+}
+.rail-sec[data-kind="blocked"] .rail-label {
+  color: var(--danger);
+}
+.rail-sec[data-kind="waiting"] .rail-label {
+  color: var(--warning);
+}
+.rail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 12px 7px 10px;
+  border-left: 2px solid transparent;
+  color: inherit;
+  text-decoration: none;
+}
+.rail-row:hover {
+  background: var(--hover);
+}
+.rail-row:focus-visible {
+  outline-offset: -2px;
+  border-radius: 0;
+}
+.rail-row[aria-current="page"] {
+  background: var(--active);
+  border-left-color: var(--accent);
+}
+.rail-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.rail-title {
+  font-size: 12.5px;
+  font-weight: 550;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-row[data-status="stopped"] .rail-title,
+.rail-row[data-status="archived"] .rail-title {
+  color: var(--muted);
+  font-weight: 450;
+}
+.rail-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 13px;
+  min-width: 0;
+}
+.rail-sub .acct {
+  font-size: 10.5px;
+  padding: 0 6px 0 5px;
+  line-height: 1.5;
+  min-width: 0;
+}
+.rail-when {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.rail-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--faint);
+}
+.rail-dot.st-running {
+  background: var(--info);
+  animation: pulse 1.4s infinite;
+}
+.rail-dot.st-waiting {
+  background: var(--warning);
+}
+.rail-dot.st-blocked {
+  background: var(--danger);
+}
+.rail-row .prov {
+  font-size: 9px;
+  padding: 0 4px;
+}
+
+/* ------------------------------------------------------------------ header */
+
 .sx-header {
-  padding: 14px 18px 0;
+  padding: 12px 18px 0;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
 
 .sx-header-top {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.sx-header-top > .pill,
+.sx-header-top > .host,
+.sx-header-top > .prov,
+.sx-header-top > .big-badge {
+  flex: none;
+}
+.tl:focus-visible {
+  outline-offset: -2px;
+  border-radius: 0;
 }
 
-.sx-header h2 {
+.sx-title {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 650;
   margin: 0;
   min-width: 0;
-  overflow-wrap: anywhere;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+.sx-title-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: none;
+  padding: 1px 4px;
+  margin-left: -4px;
+  border-radius: 5px;
+  font: inherit;
+  color: inherit;
+  cursor: text;
+  text-align: left;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.sx-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.sx-title-btn:hover {
+  background: var(--hover);
+}
+.sx-title-pen {
+  color: var(--faint);
+  opacity: 0;
+  flex: none;
+}
+.sx-title-btn:hover .sx-title-pen,
+.sx-title-btn:focus-visible .sx-title-pen {
+  opacity: 1;
+}
+.sx-header .sx-title-input {
+  flex: 1 1 320px;
+  font-size: 15px;
+  font-weight: 600;
+  min-height: 32px;
+  padding: 3px 8px;
 }
 
 .sx-header-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   margin-left: auto;
-  flex-wrap: wrap;
+  flex: none;
+}
+.attach-copy span {
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 
 .sx-facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
-  margin-top: 8px;
+  align-items: center;
+  gap: 6px 16px;
+  margin-top: 9px;
   font-size: 12px;
   color: var(--muted);
 }
-
-.sx-facts code { font-family: var(--mono); font-size: 11.5px; }
-.sx-facts a { color: var(--accent); }
-
-.sx-attention-line {
-  margin-top: 10px;
-  padding: 8px 11px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--raised);
-  font-size: 12.5px;
+.sx-facts .fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.sx-facts .fact.mono {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sx-facts a.fact {
+  color: var(--accent);
+  text-decoration: none;
+}
+.sx-facts .big-toggle {
+  margin-left: auto;
+}
+.sx-facts .big-toggle .toggle {
+  min-height: 24px;
+  font-size: 12px;
+  gap: 7px;
+}
+.sx-facts .big-toggle .toggle-track {
+  width: 30px;
+  height: 17px;
+}
+.sx-facts .big-toggle .toggle-knob {
+  width: 11px;
+  height: 11px;
+}
+.sx-facts .big-toggle .toggle.on .toggle-knob {
+  transform: translateX(13px);
 }
 
-.sx-attention-line.flagged { border-color: var(--danger); }
+.sx-attention-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 7px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--panel));
+  font-size: 12.5px;
+}
+.sx-attention-line.bad {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+}
+.sx-attention-line > svg {
+  flex: none;
+}
 
 .sx-tabs {
   display: flex;
   gap: 2px;
-  margin-top: 12px;
+  margin-top: 8px;
 }
-
 .sx-tab {
   border: 0;
   background: none;
   font: inherit;
   font-size: 13px;
   color: var(--muted);
-  padding: 8px 12px;
+  padding: 7px 12px;
   min-height: var(--tap);
   cursor: pointer;
   border-bottom: 2px solid transparent;
 }
-
-.sx-tab:hover { color: var(--text); }
-.sx-tab:focus-visible { outline-offset: -2px; }
-.sx-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 550; }
-.sx-tab .sx-tab-count { color: var(--faint); font-size: 11.5px; margin-left: 5px; }
+.sx-tab:hover {
+  color: var(--text);
+}
+.sx-tab:focus-visible {
+  outline-offset: -2px;
+}
+.sx-tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
 
 .sx-panel {
   flex: 1;
@@ -246,297 +336,232 @@
   background: var(--raised);
 }
 
-/* ------------------------------------------------------------ activity */
-
-.sx-stream { display: flex; flex-direction: column; gap: 10px; }
-
-.sx-assistant {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 13.5px;
-  line-height: 1.6;
-}
-
-/* ------------------------------------------------- markdown (agent prose) */
-
-.sx-md {
-  overflow-wrap: anywhere;
-  font-size: 13.5px;
-  line-height: 1.6;
-}
-.sx-md > :first-child { margin-top: 0; }
-.sx-md > :last-child { margin-bottom: 0; }
-
-.sx-md p { margin: 0 0 10px; }
-
-.sx-md h1, .sx-md h2, .sx-md h3, .sx-md h4, .sx-md h5, .sx-md h6 {
-  margin: 18px 0 8px;
-  line-height: 1.35;
-  color: var(--text);
-}
-.sx-md h1 { font-size: 17px; }
-.sx-md h2 { font-size: 15px; }
-.sx-md h3 { font-size: 14px; }
-.sx-md h4, .sx-md h5, .sx-md h6 { font-size: 13.5px; }
-
-.sx-md ul, .sx-md ol { margin: 0 0 10px; padding-left: 22px; }
-.sx-md li { margin: 3px 0; }
-.sx-md li > ul, .sx-md li > ol { margin: 3px 0 0; }
-
-.sx-md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
-.sx-md a:hover { color: var(--accent-hover); }
-
-/* PR references linked outside markdown too — task lines, event bodies. */
-.sx-pr-link { color: var(--accent); text-decoration: none; }
-.sx-pr-link:hover { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
-
-.sx-md code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  background: var(--raised);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px 4px;
-}
-
-.sx-md pre {
-  margin: 0 0 10px;
-  background: var(--raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  overflow-x: auto;
-  line-height: 1.45;
-}
-.sx-md pre code {
+.linkish {
+  border: 0;
   background: none;
-  border: none;
   padding: 0;
-  font-size: 12px;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.sx-md blockquote {
-  margin: 0 0 10px;
-  padding: 2px 0 2px 12px;
-  border-left: 3px solid var(--border-strong);
-  color: var(--muted);
+.rot {
+  transform: rotate(180deg);
 }
 
-.sx-md hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 14px 0;
-}
+/* ---------------------------------------------------------------- terminal */
 
-.sx-md table {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
-  margin: 0 0 10px;
+.term-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0e0e11;
+}
+.term-box {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 0 4px 10px;
+}
+.term-box .xterm {
+  height: 100%;
+}
+.term-box .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a40 transparent;
+}
+.term-overlay {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(20, 20, 23, 0.94);
+  color: #e6e6e9;
+  border: 1px solid #3a3a40;
+  box-shadow: var(--shadow-md);
   font-size: 12.5px;
+  z-index: 3;
+  max-width: calc(100% - 24px);
 }
-.sx-md th, .sx-md td {
-  border: 1px solid var(--border);
-  padding: 5px 9px;
-  text-align: left;
-  vertical-align: top;
-  overflow-wrap: normal;
+.term-overlay .btn {
+  background: #1c1c20;
+  color: #e6e6e9;
+  border-color: #3a3a40;
 }
-.sx-md th { background: var(--raised); font-weight: 600; white-space: nowrap; }
-.sx-md td code, .sx-md th code,
-.sx-md td a, .sx-md th a { white-space: nowrap; }
+.term-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+  border-top: 1px solid #27272b;
+  font-size: 11px;
+  background: #111114;
+}
+.term-foot .faint {
+  color: #85858e;
+}
+.term-foot code {
+  background: #1c1c20;
+  color: #c8c8ce;
+}
 
-.sx-md img { max-width: 100%; }
+.term-placeholder {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  background: var(--sunken);
+}
+.term-placeholder .empty {
+  max-width: 520px;
+}
 
-.sx-block {
+/* ---------------------------------------------------------------- timeline */
+
+.tl-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tl {
+  padding-top: 8px;
+}
+.tl-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 920px;
+  margin: 0 auto;
+}
+.tl-edge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 11.5px;
+  padding: 4px 0 12px;
+}
+.tl-edge::before,
+.tl-edge::after {
+  content: "";
+  height: 1px;
+  background: var(--border);
+  flex: 1;
+  max-width: 200px;
+}
+
+.tl-user {
   border: 1px solid var(--border);
-  border-left-width: 3px;
+  border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--panel);
-  padding: 9px 12px;
-  font-size: 13px;
+  padding: 8px 12px 10px;
 }
-
-.sx-block-head {
+.tl-who {
   display: flex;
-  gap: 8px;
-  align-items: baseline;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: 4px;
 }
-
-.sx-block-body { white-space: pre-wrap; overflow-wrap: anywhere; }
-
-/* A message the agent has not seen yet (Activity.tsx, `queuedPromptSeqs`). */
-.sx-queued { color: var(--warning); }
-
-.sx-block.human { border-left-color: var(--accent); }
-.sx-block.supervisor-msg { border-left-color: var(--info); }
-.sx-block.advisory-nit { border-left-color: var(--faint); }
-.sx-block.advisory-concern { border-left-color: var(--warning); }
-.sx-block.advisory-blocker { border-left-color: var(--danger); }
-.sx-block.error { border-left-color: var(--danger); color: var(--danger); }
-.sx-block.permission { border-left-color: var(--info); }
-
-/* Retry on a prompt whose turn failed without an answer. Sits in the block
-   head, so it has to shrink back out of the uppercase label styling. */
-.sx-retry-wrap {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
+.tl-time {
   margin-left: auto;
-}
-
-.sx-retry-error {
-  color: var(--danger);
-  text-transform: none;
-  letter-spacing: 0;
   font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.tl-assistant {
+  padding: 2px 2px;
 }
 
-.sx-retry {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 1px 7px;
-  cursor: pointer;
+.tl-thinking {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
 }
-
-.sx-retry:hover { color: var(--text); border-color: var(--muted); }
-.sx-retry:disabled { opacity: 0.5; cursor: default; }
-
-/* A supervisor verdict is commentary about the run, not a message in it — so
-   it deliberately looks nothing like a .sx-block: no panel, dashed rule,
-   indented off the conversation's left edge. */
-.sx-note {
-  margin-left: 18px;
-  border-left: 1px dashed var(--border);
-  padding: 2px 0 2px 10px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.sx-note-head {
+.tl-thinking-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   width: 100%;
   border: 0;
   background: none;
   color: var(--faint);
   font: inherit;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 2px 0;
+  font-size: 12px;
+  padding: 3px 0;
   text-align: left;
   cursor: pointer;
 }
-
-.sx-note-head:hover { color: var(--muted); }
-.sx-note-label { flex: none; }
-
-/* On an `ok` the reason is the whole row, and it must never grow tall enough
-   to read as the agent saying something. */
-.sx-note-peek {
+.tl-thinking-head:hover {
+  color: var(--muted);
+}
+.tl-thinking-label {
+  font-weight: 600;
+  flex: none;
+}
+.tl-thinking-peek {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  white-space: nowrap;
   text-overflow: ellipsis;
-  text-transform: none;
-  letter-spacing: 0;
+  white-space: nowrap;
+  font-style: italic;
 }
-
-.sx-note-chevron { flex: none; margin-left: auto; }
-.sx-note-peek + .sx-note-chevron { margin-left: 6px; }
-
-.sx-note-body {
+.tl-thinking-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  padding: 2px 0 4px;
-}
-
-.sx-note-aside { color: var(--faint); font-style: italic; }
-.sx-note-aside p { margin: 0 0 4px; }
-.sx-note-aside p:last-child { margin-bottom: 0; }
-
-/* Only the verdict that did something to the session gets colour. */
-.sx-note.verdict-nudge { border-left: 1px solid var(--warning); }
-.sx-note.verdict-nudge .sx-note-head { color: var(--warning); }
-
-.sx-turn {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--faint);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.sx-turn::before, .sx-turn::after {
-  content: "";
-  height: 1px;
-  background: var(--border);
-  flex: 1;
-}
-
-/* the top edge of the stream: history loading in, or its beginning reached */
-.sx-history {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--faint);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 4px 0;
-}
-.sx-history::before, .sx-history::after {
-  content: "";
-  height: 1px;
-  background: var(--border);
-  flex: 1;
-}
-
-/* the live tail of a running turn — see ThinkingRow */
-.sx-thinking {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  font-size: 12.5px;
   color: var(--muted);
-  font-size: 12px;
-  padding: 2px 4px;
-}
-.sx-thinking-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--warning);
-  animation: sx-pulse 1.6s ease-in-out infinite;
-}
-.sx-thinking-label { font-weight: 500; color: var(--faint, var(--muted)); }
-.sx-thinking-quiet { opacity: 0.75; }
-@media (prefers-reduced-motion: reduce) {
-  .sx-thinking-dot { animation: none; }
+  font-style: italic;
+  padding: 2px 0 6px;
+  line-height: 1.55;
 }
 
-/* tool rows: dense, one line each until expanded */
+.tl-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--faint);
+  text-align: center;
+}
+.tl-meta.tone-warn {
+  color: var(--warning);
+}
+.tl-meta.tone-error {
+  color: var(--danger);
+}
+
+.tl-jump {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.tl-jump .btn {
+  box-shadow: var(--shadow-md);
+}
+
+/* ------------------------------------------------------------ tool rows */
 
 .sx-run {
   border: 1px solid var(--border);
@@ -544,14 +569,13 @@
   background: var(--panel);
   overflow: hidden;
 }
-
 .sx-tool {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: var(--tap);
-  padding: 5px 10px;
+  min-height: 30px;
+  padding: 4px 10px;
   border: 0;
   border-top: 1px solid var(--border);
   background: none;
@@ -561,22 +585,44 @@
   text-align: left;
   cursor: pointer;
 }
-
-.sx-run > .sx-tool:first-child { border-top: 0; }
-.sx-tool:hover { background: var(--hover); }
-.sx-tool:focus-visible { outline-offset: -2px; }
-
+.sx-tool:disabled {
+  cursor: default;
+}
+.sx-run > .sx-tool:first-child {
+  border-top: 0;
+}
+.sx-tool:hover:not(:disabled) {
+  background: var(--hover);
+}
+.sx-tool:focus-visible {
+  outline-offset: -2px;
+}
+.sx-tool > svg {
+  color: var(--faint);
+  flex: none;
+}
 .sx-tool-glyph {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 16px;
-  color: var(--muted);
+  color: var(--success);
   flex: none;
 }
-
-.sx-tool-title { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
+.sx-tool.error .sx-tool-glyph {
+  color: var(--danger);
+}
+.sx-tool.running .sx-tool-glyph {
+  color: var(--warning);
+}
+.sx-tool-title {
+  flex: none;
+  font-weight: 600;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sx-tool-sub {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -587,16 +633,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.sx-tool-dur { color: var(--faint); font-size: 11px; flex: none; }
-
-.sx-tool-status { flex: none; font-size: 11px; font-family: var(--mono); }
-.sx-tool-status.ok { color: var(--success); }
-.sx-tool-status.error { color: var(--danger); }
-.sx-tool-status.running, .sx-tool-status.pending { color: var(--warning); }
-
-.sx-tool.error { background: color-mix(in srgb, var(--danger) 7%, transparent); }
-
+.sx-tool-status {
+  flex: none;
+  font-size: 11px;
+  font-family: var(--mono);
+}
+.sx-tool-status.error {
+  color: var(--danger);
+}
+.sx-tool-status.running {
+  color: var(--warning);
+}
+.sx-tool.error {
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
 .sx-tool-detail {
   border-top: 1px solid var(--border);
   background: var(--sunken);
@@ -605,15 +655,14 @@
   flex-direction: column;
   gap: 8px;
 }
-
 .sx-tool-detail h4 {
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--faint);
   font-weight: 600;
+  margin-bottom: 3px;
 }
-
 .sx-pre {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -625,34 +674,50 @@
   margin: 0;
 }
 
-.sx-fold {
-  display: block;
-  width: 100%;
-  min-height: var(--tap);
-  border: 0;
-  border-top: 1px solid var(--border);
-  background: var(--sunken);
-  color: var(--muted);
-  font: inherit;
+/* ------------------------------------------------------ markdown (agent prose) */
+
+.sx-md {
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.sx-md > :first-child { margin-top: 0; }
+.sx-md > :last-child { margin-bottom: 0; }
+.sx-md p { margin: 0 0 10px; }
+.sx-md h1, .sx-md h2, .sx-md h3, .sx-md h4, .sx-md h5, .sx-md h6 { margin: 18px 0 8px; line-height: 1.35; }
+.sx-md h1 { font-size: 17px; }
+.sx-md h2 { font-size: 15px; }
+.sx-md h3 { font-size: 14px; }
+.sx-md h4, .sx-md h5, .sx-md h6 { font-size: 13.5px; }
+.sx-md ul, .sx-md ol { margin: 0 0 10px; padding-left: 22px; }
+.sx-md li { margin: 3px 0; }
+.sx-md a { color: var(--accent); text-underline-offset: 2px; }
+.sx-md code {
+  font-family: var(--mono);
   font-size: 12px;
-  padding: 6px 10px;
-  text-align: left;
-  cursor: pointer;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
 }
-
-.sx-fold:hover { color: var(--text); }
-
-.sx-jump {
-  position: sticky;
-  bottom: 8px;
-  display: flex;
-  justify-content: center;
-  pointer-events: none;
+.sx-md pre {
+  margin: 0 0 10px;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  overflow-x: auto;
+  line-height: 1.45;
 }
+.sx-md pre code { background: none; border: none; padding: 0; }
+.sx-md blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
+.sx-md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+.sx-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }
+.sx-md th, .sx-md td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; vertical-align: top; }
+.sx-md th { background: var(--sunken); font-weight: 600; white-space: nowrap; }
+.sx-md img { max-width: 100%; }
 
-.sx-jump > * { pointer-events: auto; box-shadow: var(--shadow-md); }
-
-/* ---------------------------------------------------------------- diff */
+/* -------------------------------------------------------------------- diff */
 
 .sx-diff-summary {
   display: flex;
@@ -662,9 +727,7 @@
   color: var(--muted);
   margin-bottom: 12px;
 }
-
 .sx-file { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; background: var(--panel); }
-
 .sx-file-head {
   display: flex;
   align-items: center;
@@ -680,15 +743,12 @@
   text-align: left;
   cursor: pointer;
 }
-
 .sx-file-head:hover { background: var(--hover); }
 .sx-file-head:focus-visible { outline-offset: -2px; }
 .sx-file-path { font-family: var(--mono); flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .sx-file-tag { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-
 .sx-add { color: var(--success); font-family: var(--mono); font-size: 11.5px; }
 .sx-del { color: var(--danger); font-family: var(--mono); font-size: 11.5px; }
-
 .sx-patch {
   border-top: 1px solid var(--border);
   overflow-x: auto;
@@ -697,462 +757,120 @@
   line-height: 1.5;
   background: var(--sunken);
 }
-
 .sx-patch-line { padding: 0 11px; white-space: pre; }
 .sx-patch-line.add { background: color-mix(in srgb, var(--success) 14%, transparent); }
 .sx-patch-line.del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
 .sx-patch-line.hunk { color: var(--info); background: var(--hover); }
 .sx-patch-line.meta { color: var(--faint); }
+.sx-note { font-size: 12px; color: var(--muted); padding: 8px 11px; border-top: 1px solid var(--border); }
 
-.sx-note {
-  font-size: 12px;
-  color: var(--muted);
-  padding: 8px 11px;
+/* ---------------------------------------------------------------- composer */
+
+.cmp {
   border-top: 1px solid var(--border);
-}
-
-/* ------------------------------------------------------------ subagents */
-
-/* The Activity tab's column when a run has subagents: the strip holds its
-   line above the scrolling transcript instead of scrolling away with it. */
-.sx-activity {
+  background: var(--panel);
+  padding: 9px 18px 8px;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  height: 100%;
+  gap: 7px;
 }
-.sx-activity > .sx-panel { flex: 1; }
-
-/* The strip: the run's fan-out at a glance. */
-.sx-subs {
-  border: 1px solid var(--border);
+.cmp-row {
+  display: flex;
+  gap: 7px;
+  align-items: flex-end;
+}
+.cmp textarea {
+  flex: 1;
+  min-height: 36px;
+  max-height: 200px;
+  resize: none;
+  line-height: 1.45;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.cmp-hint {
+  font-size: 11px;
+  color: var(--faint);
+  min-height: 0;
+}
+.cmp-hint:empty {
+  display: none;
+}
+.cmp-hint kbd {
+  font-size: 10px;
+  line-height: 14px;
+}
+.cmp-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+.cmp-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
-  background: var(--panel);
-  margin: 16px 18px 10px;
+  background: color-mix(in srgb, var(--warning) 8%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border));
+}
+.cmp-note > svg {
+  color: var(--warning);
   flex: none;
 }
-
-.sx-subs-head {
+.cmp-note > .btn {
+  margin-left: auto;
+  flex: none;
+}
+.cmp-keys {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: var(--tap);
-  padding: 5px 10px;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.sx-subs-head:hover { background: var(--hover); }
-.sx-subs-head > svg { color: var(--muted); flex: none; }
-
-.sx-subs-label { flex: none; font-weight: 550; white-space: nowrap; }
-.sx-subs-running { color: var(--warning); }
-.sx-subs-failed { color: var(--danger); }
-.sx-subs-done { color: var(--success); }
-/* "last seen running": the same fact the live count states, minus the claim
-   that anyone is still watching. Deliberately not the live amber. */
-.sx-subs-stale { color: var(--faint); }
-
-.sx-subs-chips {
-  display: flex;
   gap: 5px;
-  align-items: center;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
-
-.sx-sub-chip {
+.cmp-keys-label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 1.5px 8px;
-  flex: none;
-  background: none;
-  cursor: pointer;
-}
-.sx-sub-chip:hover { border-color: var(--border-strong); color: var(--text); }
-.sx-sub-chip.selected {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-}
-.sx-sub-chip.running { color: var(--text); border-color: var(--border-strong); }
-.sx-sub-chip.failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
-.sx-sub-chip.more { border-style: dashed; }
-
-/* Status dot, shared by chips, the strip body and dispatch lines. */
-.sx-sub-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--faint);
-  flex: none;
-}
-.sx-sub-dot.running { background: var(--warning); animation: sx-pulse 1.6s ease-in-out infinite; }
-/* Nothing is streaming, so nothing pulses: a dot that throbs for an agent
-   nobody has heard from since yesterday is the animation telling a lie. */
-.sx-sub-dot.idle { animation: none; background: var(--faint); }
-.sx-sub-dot.completed.idle { background: var(--success); }
-.sx-sub-dot.failed.idle { background: var(--danger); }
-.sx-sub-dot.completed { background: var(--success); }
-.sx-sub-dot.failed { background: var(--danger); }
-@media (prefers-reduced-motion: reduce) {
-  .sx-sub-dot.running { animation: none; }
-}
-
-.sx-subs-chevron { flex: none; margin-left: auto; color: var(--faint); }
-
-.sx-subs-body {
-  border-top: 1px solid var(--border);
-  background: var(--sunken);
-  padding: 4px 10px 8px;
-  /* A 39-subagent fan-out must not push the transcript off the screen: the
-     roster scrolls inside the strip instead of growing it. */
-  max-height: min(60vh, 540px);
-  overflow-y: auto;
-}
-
-.sx-subs-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 5px 0;
   font-size: 12px;
-  flex-wrap: wrap;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: 0;
-  color: inherit;
-  font: inherit;
+  color: var(--danger);
+  margin-right: 4px;
+}
+.keycap {
+  min-width: 30px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--panel);
+  font-family: var(--mono);
   font-size: 12px;
   cursor: pointer;
 }
-.sx-subs-row + .sx-subs-row { border-top: 1px solid var(--border); }
-.sx-subs-row:hover { background: var(--hover); }
-.sx-subs-row.failed { background: color-mix(in srgb, var(--danger) 5%, transparent); }
-.sx-subs-row.selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-
-.sx-subs-name { font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
-.sx-subs-agent {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-  border-radius: 999px;
-  padding: 0 7px;
+.keycap:hover:not(:disabled) {
+  background: var(--hover);
 }
-.sx-subs-status { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
-.sx-subs-meta { display: flex; gap: 10px; color: var(--faint); font-size: 11px; font-family: var(--mono); flex: none; }
-.sx-subs-task {
-  flex-basis: 100%;
-  color: var(--faint);
-  font-size: 11.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.keycap:disabled {
+  opacity: 0.5;
 }
 
-/* The drilldown: one subagent's task, result and reconstructed activity. */
-.sx-subs-detail {
-  flex-basis: 100%;
-  width: 100%;
-  border-top: 1px dashed var(--border);
-  margin-top: 2px;
-  padding: 8px 2px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  cursor: default;
-}
-.sx-subs-detail h4 {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--faint);
-  font-weight: 600;
-  margin: 0 0 4px;
-}
-.sx-subs-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-.sx-subs-detail-head > code { font-family: var(--mono); font-weight: 600; }
-.sx-subs-detail-status { color: var(--muted); font-family: var(--mono); font-size: 11px; }
-.sx-subs-detail-task {
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 110px;
-  overflow-y: auto;
-}
-.sx-subs-detail-note { color: var(--faint); font-size: 11.5px; margin: 0; }
+/* ------------------------------------------------------------------ narrow */
 
-/* Said once, at the top of the roster, when the run is over and some of its
-   subagents never reported an ending. */
-.sx-subs-note {
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.5;
-  padding: 6px 8px;
-  margin: 2px 0 6px;
-  border-left: 2px solid var(--border-strong);
-  background: var(--panel);
-}
-.sx-subs-more {
-  background: none;
-  border: 0;
-  color: var(--accent);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11.5px;
-  padding: 2px 0 6px;
-}
-
-.sx-sub-steps {
-  display: flex;
-  flex-direction: column;
-  font-family: var(--mono);
-  font-size: 11px;
-  max-height: 280px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-}
-.sx-sub-step {
-  display: flex;
-  gap: 8px;
-  padding: 3px 8px;
-  align-items: baseline;
-  min-width: 0;
-}
-.sx-sub-step + .sx-sub-step { border-top: 1px solid var(--border); }
-.sx-sub-step-t { color: var(--faint); flex: none; min-width: 58px; }
-.sx-sub-step-tool { color: var(--accent); flex: none; font-weight: 600; }
-.sx-sub-step-args {
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 1;
-}
-.sx-sub-step.live .sx-sub-step-tool { color: var(--warning); }
-/* A step read from omp's own log carries its result; the reconstruction from
-   progress snapshots never could. */
-.sx-sub-step { flex-wrap: wrap; }
-.sx-sub-step-out {
-  flex-basis: 100%;
-  color: var(--faint);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 84px;
-  overflow-y: auto;
-  padding: 2px 0 2px 66px;
-}
-.sx-sub-step.text .sx-sub-step-said { color: var(--text); flex: 1; min-width: 0; }
-.sx-sub-step.text { background: color-mix(in srgb, var(--accent) 4%, transparent); }
-
-/* Subagents starting and finishing, in the stream itself. */
-.sx-sub-events {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  padding: 4px 2px;
-  font-size: 11.5px;
-}
-.sx-sub-event { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
-.sx-sub-event > code { font-family: var(--mono); font-weight: 600; color: var(--text); }
-.sx-sub-event.failed > code { color: var(--danger); }
-.sx-sub-event-what { color: var(--faint); }
-.sx-sub-event-meta { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
-
-/* Subagent tool rows inside the stream — structure, not plumbing. */
-.sx-tool-subagent .sx-tool-glyph { color: var(--accent); }
-
-.sx-dispatch-list { display: flex; flex-direction: column; }
-.sx-dispatch-line {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 4px 0;
-  font-size: 12px;
-  flex-wrap: wrap;
-}
-.sx-dispatch-line + .sx-dispatch-line { border-top: 1px solid var(--border); }
-.sx-dispatch-name { font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
-.sx-dispatch-agent { font-family: var(--mono); font-size: 10.5px; color: var(--accent); }
-.sx-dispatch-meta { color: var(--faint); font-size: 11px; }
-.sx-dispatch-task { flex-basis: 100%; color: var(--muted); font-size: 11.5px; }
-.sx-dispatch-note { margin: 6px 0 0; font-size: 11.5px; color: var(--faint); }
-
-/* Board row: "4 subs · 2 running", from the session's latest snapshot. */
-.sx-row-subs { color: var(--accent); overflow: hidden; text-overflow: ellipsis; }
-.sx-row-subs.failed { color: var(--danger); }
-.sx-row-subs-stale { color: var(--faint); }
-
-/* ---------------------------------------------------------------- task */
-
-.sx-task-prompt {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 13.5px;
-  line-height: 1.6;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-}
-
-/* --------------------------------------------------------------- steer */
-
-.sx-steer {
-  border-top: 1px solid var(--border);
-  background: var(--panel);
-  padding: 10px 18px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.sx-steer-row { display: flex; gap: 8px; align-items: flex-end; }
-
-/* Colours, border, padding and the focus ring come from the shell's element
-   selectors; only the composer's own sizing lives here. */
-.sx-steer textarea {
-  flex: 1;
-  min-height: 40px;
-  max-height: 160px;
-}
-
-.sx-steer-hint { font-size: 11.5px; color: var(--faint); }
-
-.sx-permission {
-  border: 1px solid var(--info);
-  border-radius: var(--radius-sm);
-  background: var(--raised);
-  padding: 11px 13px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-
-.sx-permission-title { font-size: 13px; font-weight: 550; }
-.sx-permission-tool { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
-
-/* ------------------------------------------------------------ new form */
-
-.sx-form { display: flex; flex-direction: column; gap: 14px; }
-
-/* The task box is the one control with a size opinion: it is where the run is
-   won or lost, so it gets room. Everything else is the shell's control. */
-.sx-task-wrap { position: relative; }
-.sx-form textarea { min-height: 150px; width: 100%; resize: vertical; }
-
-/* The menu hangs below the textarea, full width of it, and floats over the
-   fields beneath. The composer never reflows while it is open. */
-.sx-slash-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 5;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-lg);
-  max-height: 220px;
-  overflow: auto;
-  margin-top: -1px;
-  padding: 4px;
-}
-
-.sx-slash-menu li button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 7px 9px;
-  cursor: pointer;
-}
-
-.sx-slash-menu li button:hover,
-.sx-slash-menu li button.picked { background: var(--raised); }
-
-.sx-slash-menu code {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent);
-}
-
-.sx-slash-menu span {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sx-form-actions { display: flex; gap: 8px; justify-content: flex-end; }
-
-.sx-scope-hint {
-  font-size: 12px;
-  color: var(--muted);
-  background: var(--raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 9px 11px;
-  line-height: 1.55;
-}
-
-.sx-scope-hint ul { margin: 6px 0 0 16px; }
-.sx-scope-hint li { margin-top: 2px; }
-
-/* narrow windows: the list collapses above the detail rather than squeezing */
-/* Below the breakpoint the board shows ONE pane at a time — Sessions.tsx
-   mounts either the list or the detail and pairs this with a back button.
-   Stacking them was the previous answer and it does not work: at 720px the
-   detail was left ~70px of transcript beneath its own header, tabs and
-   composer, and the list's share landed mid-row, which read as a broken
-   layout rather than as something scrollable. Whichever pane is mounted now
-   gets the full height. Keep NARROW_PX in useIsNarrow.ts in step with this. */
 @media (max-width: 900px) {
-  .sx-wrap {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-  }
-
-  .sx-list { border-right: 0; }
-
-  /* Three tabs plus counts can exceed a phone width; let them scroll rather
-     than wrap into a second row that pushes the panel down. */
   .sx-tabs { overflow-x: auto; scrollbar-width: none; }
   .sx-tabs::-webkit-scrollbar { display: none; }
   .sx-tab { flex: none; }
-
-  .sx-header { padding: 12px 12px 0; }
+  .sx-header { padding: 10px 12px 0; }
   .sx-panel { padding: 12px; }
-  .sx-subs { margin: 12px 12px 10px; }
-  .sx-steer { padding: 10px 12px 12px; }
-  .sx-tool-title { max-width: 55%; }
+  .cmp { padding: 8px 12px; }
+  .sx-facts .big-toggle { margin-left: 0; }
+  .attach-copy span { display: none; }
+  .sx-header-top { flex-wrap: wrap; }
+  .cmp-row { flex-wrap: wrap; }
+  .cmp textarea { flex-basis: 100%; }
 }
