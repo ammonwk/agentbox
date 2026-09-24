@@ -45,6 +45,10 @@ export interface LiveProcess {
   startedAt: number;
   /** The provider's own busy/idle flag, when it publishes one. */
   busy?: boolean;
+  /** The provider's own word that the process is waiting on a human — claude's
+   *  session file says `status: "waiting", waitingFor: "dialog open"` while a
+   *  permission prompt is up. Knowable even for sessions outside our tmux. */
+  waitingOn?: string;
 }
 
 /** Everything an adapter can say about one transcript. */
