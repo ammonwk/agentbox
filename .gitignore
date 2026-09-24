@@ -3,3 +3,4 @@ web/dist/
 bun.lock
 .env
 *.log
+.claude/worktrees/
