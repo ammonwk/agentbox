@@ -1,7 +1,7 @@
 {
   "name": "agentbox",
   "version": "0.1.0",
-  "description": "Spawning and maintaining omp sessions — a board over your agents",
+  "description": "One place for every coding-agent session \u2014 Claude Code, Codex, Devin, omp \u2014 across every account",
   "type": "module",
   "private": true,
   "scripts": {
@@ -11,7 +11,8 @@
     "web:build": "vite build --config web/vite.config.ts",
     "build": "bun run web:build",
     "typecheck": "tsc --noEmit",
-    "doctor": "bun bin/agentbox doctor"
+    "doctor": "bun bin/agentbox doctor",
+    "test": "bun test"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",
