@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { listRepos, listSessions } from "./db";
+import { listRepos } from "./db";
 import {
   branchAt,
   commitsAhead,
@@ -15,7 +15,7 @@ import {
   type PrState,
 } from "./git";
 import { worktreeRoot } from "./paths";
-import type { ReclaimResult, WorktreeInfo, WorktreeScan, WorktreeVerdict } from "./types";
+import type { ReclaimResult, Session, WorktreeInfo, WorktreeScan, WorktreeVerdict } from "./types";
 
 /**
  * Disk reclaim for worktrees.
@@ -156,13 +156,17 @@ interface Candidate {
  * Still far too expensive to sit behind a render or a timer — this is the
  * "Scan" button and nothing else.
  */
-export async function scanWorktrees(scope: WorktreeScope = "all"): Promise<WorktreeScan> {
-  const sessions = listSessions(true);
-  const byPath = new Map(sessions.filter((s) => s.worktree).map((s) => [s.worktree!, s]));
-  const liveStatuses = new Set(["running", "spawning"]);
+export async function scanWorktrees(scope: WorktreeScope = "all", sessions: Session[] = []): Promise<WorktreeScan> {
+  // Keyed by cwd as well as by worktree: a session started in a worktree
+  // agentbox did not cut is still using it.
+  const byPath = new Map<string, Session>();
+  for (const s of sessions) {
+    if (s.cwd) byPath.set(s.cwd, s);
+    if (s.worktree) byPath.set(s.worktree, s);
+  }
   const liveOf = (path: string) => {
     const s = byPath.get(path);
-    return s ? liveStatuses.has(s.status) : false;
+    return s ? s.host !== "none" : false;
   };
 
   // ---- phase one: what is out there, and what does GitHub say about it
@@ -308,10 +312,12 @@ export async function scanWorktrees(scope: WorktreeScope = "all"): Promise<Workt
  */
 export async function reclaimWorktrees(
   paths: string[],
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; sessions?: Session[] } = {},
 ): Promise<ReclaimResult> {
   const wanted = new Set(paths);
-  const fresh = await scanWorktrees("all");
+  // The sessions are what make a worktree `live` and therefore untouchable;
+  // a rescan without them would offer a running agent's directory for removal.
+  const fresh = await scanWorktrees("all", opts.sessions ?? []);
   const result: ReclaimResult = { removed: [], failed: [], bytesFreed: 0 };
 
   for (const item of fresh.items) {

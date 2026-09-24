@@ -228,7 +228,7 @@ describe("skillRoots precedence", () => {
     // omp registers `.claude` at priority 80 and `.agent`/`.agents` at 70, and
     // sorts providers descending, so `.claude` is consulted first. Project-level
     // beats user-level within a provider. Read out of omp's bundle, not chosen.
-    expect(skillRoots().map((r) => r.source)).toEqual(["project", "global", "agents"]);
+    expect(skillRoots().map((r) => r.source)).toEqual(["project", "global", "agents", "codex", "omp"]);
   });
 
   test("a redirected $HOME is honoured, because Bun's homedir() is not", () => {
@@ -405,5 +405,16 @@ describe("skill body read / write", () => {
     writeFileSync(md, "old");
     expect(writeSkillBody(md, "new body")).toBe(true);
     expect(readFileSync(md, "utf8")).toBe("new body");
+  });
+});
+
+describe("skill names", () => {
+  test("demote refuses anything that is not one path segment", async () => {
+    const { demoteSkill, validSkillName } = await import("../skills");
+    for (const bad of ["../../Documents", "..", "a/b", "", ".hidden", "x/../../y"]) {
+      expect(validSkillName(bad)).toBe(false);
+      expect(demoteSkill(bad).ok).toBe(false);
+    }
+    expect(validSkillName("green-and-clean")).toBe(true);
   });
 });

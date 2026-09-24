@@ -59,7 +59,7 @@ export function listPrs(repos: Repo[], sessions: Session[]): PrScan {
       const number = typeof pr.number === "number" ? pr.number : null;
       const headRef = typeof pr.headRefName === "string" ? pr.headRefName : "";
       if (number === null) continue;
-      const session = sessions.find((s) => s.branch === headRef && s.repoFullName === slug);
+      const session = sessions.find((s) => s.branch === headRef && s.repoRoot !== null && slugOf(s.repoRoot) === slug);
       const author = pr.author as { login?: unknown } | undefined;
       out.push({
         number,
@@ -78,4 +78,12 @@ export function listPrs(repos: Repo[], sessions: Session[]): PrScan {
   }
   out.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   return { prs: out, warnings };
+}
+
+const slugs = new Map<string, string | null>();
+/** The GitHub slug of a checkout, cached: it costs a `git remote` call and a
+ *  checkout's remote does not change under a running app. */
+function slugOf(root: string): string | null {
+  if (!slugs.has(root)) slugs.set(root, repoFullNameOf(root));
+  return slugs.get(root)!;
 }

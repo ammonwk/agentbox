@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import { listSessions } from "./db";
 import { SystemMeter, metricsAvailable } from "./system";
 import {
   LoadMeter,
@@ -115,14 +114,14 @@ class Metrics {
         const live = new Set<number>();
         // Closed sessions are excluded: one that still holds a pid is a leak to
         // fix elsewhere, not a row on this bar.
-        for (const s of listSessions(false)) {
+        for (const s of source()) {
           if (s.pid === null) continue; // no pid means no reading — blank, not zero
           live.add(s.pid);
           const sample = this.meter.sample(table, s.pid);
           if (!sample) continue;
           // Only for parked sessions: while a turn is in flight every shell is
           // a foreground tool call, and counting those says nothing.
-          if (s.status !== "running" && s.status !== "spawning") {
+          if (s.status !== "running") {
             const n = await backgroundShells(table, s.pid).catch(() => 0);
             if (n > 0) sample.backgroundShells = n;
           }
@@ -157,7 +156,7 @@ class Metrics {
     try {
       const table = this.cur;
       if (!table) return;
-      for (const s of listSessions(false)) {
+      for (const s of source()) {
         if (s.pid === null) continue;
         const rows = subtree(table, s.pid);
         if (rows.length === 0) continue;
@@ -171,6 +170,19 @@ class Metrics {
 }
 
 const metrics = new Metrics();
+
+/** Where the sampler gets the sessions to measure. Set by the server to the
+ *  fleet's view; a function rather than an import so this module does not
+ *  depend on the fleet (and its tests do not need one). */
+export interface MeasuredSession {
+  id: string;
+  pid: number | null;
+  status: string;
+}
+let source: () => MeasuredSession[] = () => [];
+export function setMetricsSource(fn: () => MeasuredSession[]): void {
+  source = fn;
+}
 
 /**
  * Start or stop the sampler to match the number of connected clients.

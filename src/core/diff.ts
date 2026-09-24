@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { run } from "./git";
-import { getRepo } from "./db";
+import { resolveDefaultBranch, run } from "./git";
 import type { DiffFile, Session, SessionDiff } from "./types";
 
 /**
@@ -15,15 +14,24 @@ const MAX_TOTAL_PATCH_BYTES = 3 * 1024 * 1024;
 /** Beyond this, per-file `git diff` spawns cost more than the review is worth. */
 const MAX_PATCH_FILES = 400;
 
-/**
- * Which branch a session's work should be judged against. Knowing that a
- * session's `repo` field is a Repo `ref`, and that a Repo carries a
- * `defaultBranch`, is data's business — a transport that has to look it up
- * would be reimplementing this alongside its own fallback.
- */
+/** Which branch a session's work is judged against: the default branch of the
+ *  repository its directory belongs to. */
 export function baseFor(session: Session): string {
-  return getRepo(session.repo)?.defaultBranch ?? "main";
+  const root = session.repoRoot;
+  if (!root) return "main";
+  // Cached: resolving can ask the remote, and the diff tab re-asks on every open.
+  let base = bases.get(root);
+  if (!base) {
+    try {
+      base = resolveDefaultBranch(root);
+    } catch {
+      base = "main";
+    }
+    bases.set(root, base);
+  }
+  return base;
 }
+const bases = new Map<string, string>();
 
 /**
  * The diff a human reviews: this session's worktree against where it branched
@@ -35,7 +43,7 @@ export function baseFor(session: Session): string {
  */
 export function diffOf(session: Session, base = baseFor(session)): SessionDiff {
   const empty: SessionDiff = { base, files: [], additions: 0, deletions: 0, unavailable: true };
-  const wt = session.worktree;
+  const wt = session.worktree ?? session.cwd;
   if (!wt || !existsSync(wt)) return empty;
   if (run(["git", "rev-parse", "--is-inside-work-tree"], wt).code !== 0) return empty;
 

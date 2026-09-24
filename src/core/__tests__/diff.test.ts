@@ -29,13 +29,12 @@ function git(args: string[], cwd = repo) {
 
 function session(worktree: string | null): Session {
   return {
-    id: "s1", title: "t", prompt: "p", status: "waiting", repo,
-    branch: "work", worktree, model: "m", followUps: 0, lastMessage: null,
-    toolCalls: 0, exitCode: null, pid: null, hostPid: null, permission: null,
-    prNumber: null, repoFullName: null,
-    costUsd: null, tokens: null, blocked: false, flagReason: null,
-    ompSessionId: null, subs: null, createdAt: 0, updatedAt: 0, startedAt: null, closedAt: null,
-    parkedAt: null,
+    id: "s1", provider: "claude", agentSessionId: "a", accountId: null, status: "waiting", host: "none",
+    title: "t", label: null, cwd: worktree ?? "/nonexistent", repoRoot: repo, branch: "work", worktree,
+    model: "m", firstPrompt: null, lastPrompt: null, lastMessage: null, contextUsed: null, contextLimit: null,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0 }, big: false, claim: 0,
+    origin: "agentbox", pid: null, tmux: null, transcriptPath: null, startedAt: 0, lastActivityAt: 0,
+    archivedAt: null, prNumber: null,
   };
 }
 

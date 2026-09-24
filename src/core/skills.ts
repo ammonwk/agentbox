@@ -31,6 +31,8 @@ import type { SkillInfo, SkillResult } from "./types";
 export interface SkillRoot {
   source: SkillInfo["source"];
   dir: string;
+  /** For a repo's own skills, the repo they belong to. */
+  repo?: string;
 }
 
 /**
@@ -51,11 +53,24 @@ function home(): string {
   return process.env.HOME || homedir();
 }
 
-export function skillRoots(): SkillRoot[] {
+/**
+ * Every place a skill can live, in the order they shadow each other: a repo's
+ * own skills first, then the user-level ones each provider reads. Claude's and
+ * the shared `.agents` roots come before codex's and omp's because those two
+ * CLIs also read the first two — a skill in both is the same skill.
+ *
+ * Accounts other than the default share `~/.claude/skills` by symlink (see
+ * accounts/homes.ts), so there is exactly one global root per provider no
+ * matter how many accounts are logged in.
+ */
+export function skillRoots(repoDirs: string[] = []): SkillRoot[] {
   return [
+    ...repoDirs.map((d) => ({ source: "project" as const, dir: join(d, ".claude", "skills"), repo: d })),
     { source: "project", dir: join(process.cwd(), ".claude", "skills") },
     { source: "global", dir: join(home(), ".claude", "skills") },
     { source: "agents", dir: join(home(), ".agents", "skills") },
+    { source: "codex", dir: join(home(), ".codex", "skills") },
+    { source: "omp", dir: join(home(), ".omp", "agent", "skills") },
   ];
 }
 
@@ -146,7 +161,7 @@ export interface SkillScan {
 export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
   const skills: SkillInfo[] = [];
   const warnings: string[] = [];
-  for (const { source, dir } of roots) {
+  for (const { source, dir, repo } of roots) {
     if (!existsSync(dir)) continue;
     let entries;
     try {
@@ -177,6 +192,7 @@ export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
         name: fm.name ?? entry.name,
         description: fm.description ?? "",
         source,
+        ...(repo ? { repo } : {}),
         path: skillDir,
         lines: raw.split("\n").length,
         allowedTools: fm.allowedTools,
@@ -196,9 +212,14 @@ export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
   // arbitrary and the precedence has to match omp's, which `skillRoots()` now does
   // and cites. The surviving entry keeps its own `source` and `path`, so the UI
   // still says truthfully which copy won.
+  //
+  // A repo's own skill shadows a global one only inside that repo, so repo
+  // skills are keyed by repo as well — otherwise the first registered repo's
+  // `deploy` would hide every other repo's and the global one too.
   const byName = new Map<string, SkillInfo>();
   for (const skill of skills) {
-    if (!byName.has(skill.name)) byName.set(skill.name, skill);
+    const key = skill.repo ? `${skill.repo}\0${skill.name}` : skill.name;
+    if (!byName.has(key)) byName.set(key, skill);
   }
 
   const unique = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -208,7 +229,18 @@ export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
 // ─── Read / write / promote / demote ────────────────────────────────────────
 
 /** The skill directory a name resolves to in the global root. */
+/**
+ * A skill name is one path segment. It arrives from the browser (demote) or
+ * from a SKILL.md someone else wrote (promote), and joining an unchecked
+ * `../../Documents` onto the skills root is how v1's demote could be asked to
+ * delete a home directory.
+ */
+export function validSkillName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) && !name.includes("..");
+}
+
 function globalSkillDir(name: string): string {
+  if (!validSkillName(name)) throw new Error(`not a valid skill name: ${JSON.stringify(name)}`);
   return join(home(), ".claude", "skills", name);
 }
 
@@ -238,6 +270,9 @@ export function writeSkillBody(path: string, body: string): boolean {
  * commit to revert. Refuses to clobber an existing global skill of the same name.
  */
 export function promoteSkill(skill: SkillInfo): SkillResult {
+  if (!validSkillName(skill.name)) {
+    return { ok: false, from: skill.path, to: "", error: `not a valid skill name: ${JSON.stringify(skill.name)}` };
+  }
   const destDir = globalSkillDir(skill.name);
   const result: SkillResult = { ok: false, from: skill.path, to: destDir };
   if (existsSync(destDir)) {
@@ -252,6 +287,7 @@ export function promoteSkill(skill: SkillInfo): SkillResult {
 }
 
 export function demoteSkill(name: string): SkillResult {
+  if (!validSkillName(name)) return { ok: false, from: "", to: "", error: `not a valid skill name: ${JSON.stringify(name)}` };
   const dir = globalSkillDir(name);
   const result: SkillResult = { ok: false, from: dir, to: "" };
   if (!existsSync(dir)) return { ...result, error: "not found" };
