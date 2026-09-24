@@ -60,10 +60,12 @@ function placeMany(accounts: AccountState[], n: number, big = false): string[] {
 }
 
 describe("the worked example from the design", () => {
-  test("92% weekly / 0% short beats 12% / 80% twice, then its weekly is spoken for", () => {
+  // A is 92% weekly / 0% short, B is 12% / 80%. Room is short-window room
+  // capped by weekly left: A's 8 weekly points are a third of a 5-hour window.
+  test("A first; then A's weekly is too thin to beat B; then B's 5-hour is spent", () => {
     const a = claude("A", 92, 0);
     const b = claude("B", 12, 80);
-    expect(placeMany([a, b], 3)).toEqual(["A", "A", "B"]);
+    expect(placeMany([a, b], 3)).toEqual(["A", "B", "A"]);
 
     const after = place(req([a, b]));
     const candA = after.candidates.find((c) => c.accountId === "A")!;
@@ -76,10 +78,21 @@ describe("the worked example from the design", () => {
     const p = place(req([claude("A", 92, 0), claude("B", 12, 80)]));
     expect(p.mode).toBe("auto");
     expect(p.claim).toBe(5);
-    expect(p.why).toContain("5-hour room");
+    expect(p.why).toContain("most room");
     const a = p.candidates.find((c) => c.accountId === "A")!;
-    expect(a.legRoom).toBe(100);
+    // 8 weekly points left ÷ 24 per window = a third of a window.
+    expect(a.legRoom).toBeCloseTo(33.3, 1);
     expect(a.weeklyEffective).toBe(92);
+  });
+
+  test("a nearly spent weekly does not look like a fresh account", () => {
+    // The case that prompted the cap: 97% weekly with an idle 5-hour window
+    // used to show room 96, level with an untouched account.
+    const nearlyOut = claude("nearly-out", 97, 4);
+    const fresh = claude("fresh", 0, 30);
+    const p = place(req([nearlyOut, fresh]));
+    expect(p.accountId).toBe("fresh");
+    expect(p.candidates.find((c) => c.accountId === "nearly-out")!.legRoom).toBeCloseTo(12.5, 1);
   });
 });
 
@@ -101,10 +114,12 @@ describe("claims", () => {
     expect(c.shortEffective).toBeCloseTo(83.3, 0);
   });
 
-  test("an account under 100 but with a claim that would take it over still takes one more", () => {
-    // The rule is W' < 100, not W' + claim ≤ 100 — the claim is an estimate.
-    const p = place(req([claude("A", 97, 0), claude("B", 20, 95, { shortResetH: 4 })]));
+  test("an account under 100 but with a claim that would take it over is still eligible", () => {
+    // The gate is W' < 100, not W' + claim ≤ 100 — the claim is an estimate.
+    const p = place(req([claude("A", 97, 0)]));
     expect(p.accountId).toBe("A");
+    expect(p.mode).toBe("auto");
+    expect(p.candidates[0]!.eligible).toBe(true);
   });
 });
 

@@ -222,9 +222,10 @@ describe("Fleet", () => {
     const first = await fleet.spawn({ provider: "claude", cwd: dir });
     const second = await fleet.spawn({ provider: "claude", cwd: dir });
     const third = await fleet.spawn({ provider: "claude", cwd: dir });
-    expect([first, second, third].map((r) => r.placement.accountId)).toEqual(["claude-a", "claude-a", "claude-b"]);
-    const claims = fleet.claims().get("claude-a")!;
-    expect(claims.map((c) => c.outstanding)).toEqual([5, 5]);
+    // The design's worked example: A, then B (A's thin weekly caps its room), then A.
+    expect([first, second, third].map((r) => r.placement.accountId)).toEqual(["claude-a", "claude-b", "claude-a"]);
+    expect(fleet.claims().get("claude-a")!.map((c) => c.outstanding)).toEqual([5, 5]);
+    expect(fleet.claims().get("claude-b")!.map((c) => c.outstanding)).toEqual([5]);
   });
 
   test("nothing with weekly left refuses with the placement attached", async () => {

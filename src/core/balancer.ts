@@ -10,12 +10,13 @@
  * account where one full short window is worth 24 of them occupies about 21%
  * of that short window.
  *
- * Why the weekly limit is a gate and the short window is the ranking: running
- * into the short limit stalls a session *now*, while the weekly limit is a
- * budget to spend before it resets. So an account can take new sessions while
- * any weekly is left unclaimed, and among those the one with the most short
- * window leg room wins — ties going to whichever account would otherwise let
- * the most weekly expire unused.
+ * Why the weekly limit is a gate and room is the ranking: running into either
+ * limit stalls a session *now*, and the weekly limit is also a budget to spend
+ * before it resets. So an account can take new sessions while any weekly is
+ * left unclaimed, and among those the one with the most room wins — room being
+ * what is left of the short window, capped by what is left of the weekly
+ * (in short-window units) — with ties going to whichever account would
+ * otherwise let the most weekly expire unused.
  */
 
 import type {
@@ -132,6 +133,13 @@ export function evaluate(
     const horizonH = settings.resetHorizonMin / 60;
     const left = short.resetsAt !== null && short.resetsAt > now ? hoursLeft(short, now) : (short.windowMs || FIVE_HOURS) / HOUR;
     if (horizonH > 0 && left < horizonH) room += (100 - room) * (1 - left / horizonH);
+    // Short-window room is only room if there is weekly behind it. An account
+    // at 97% weekly with a fresh 5-hour window can run about an eighth of a
+    // window before it hits the weekly wall, so that is its room — not 100.
+    if (c.weeklyEffective !== null) {
+      const weeklyRoom = (Math.max(0, 100 - c.weeklyEffective) * 100) / settings.shortWindowInWeekly;
+      room = Math.min(room, weeklyRoom);
+    }
     c.legRoom = round1(room);
   } else if (weekly) {
     // No short window (codex since August 2026): nothing short-term to run
@@ -251,7 +259,7 @@ function explain(chosen: Candidate, eligible: Candidate[], tieBand: number): str
   if (chosen.legRoom === null) return `${chosen.label}: no usage reading for any account, so the first one`;
   const outsideBand = next.legRoom === null || chosen.legRoom - next.legRoom > tieBand;
   if (outsideBand && chosen.shortEffective !== null) {
-    return `${chosen.label} has the most 5-hour room (${chosen.legRoom}% free vs ${next.label} ${next.legRoom}%)`;
+    return `${chosen.label} has the most room (${chosen.legRoom} vs ${next.label} ${next.legRoom}, counting both its 5-hour and its weekly)`;
   }
   if (chosen.weeklyPerHour !== null && next.weeklyPerHour !== null && chosen.weeklyPerHour !== next.weeklyPerHour) {
     return `${chosen.label} has the most weekly to use before it resets (${chosen.weeklyPerHour}/h vs ${next.label} ${next.weeklyPerHour}/h)`;
