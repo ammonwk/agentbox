@@ -1,129 +1,159 @@
 /** The agentbox HTTP + WebSocket server.
  *
- * This process does NOT own the agents. Each live session runs in its own
- * `agentbox host` process, and the server is a client of those over unix
- * sockets — it can be restarted, and they carry on. The web UI and the MCP
- * server are in turn clients of this API. Two rules shape the whole file:
+ * This process owns no agents. Every session runs in agentbox's tmux server
+ * (or in some terminal of yours), so this server can be restarted at any time
+ * and nothing it shows is lost: the fleet rebuilds the board from transcripts,
+ * processes and tmux on its first tick.
  *
- *   1. `gh` never runs on a broadcast path. State is split into `hot`
- *      (sessions, cheap, pushed on change) and `cold` (repos/prs/skills/
- *      settings, expensive, cached by state.ts and pushed only when it moves).
- *   2. The transcript is never re-read whole on a timer. A client `watch`es
- *      one session and receives increments.
+ * Three pushes over `/ws`, on three clocks:
+ *   - `hot`: sessions, coalesced to one push per 250ms of changes.
+ *   - `cold`: accounts, logins, repos, PRs, skills, settings — recomputed when
+ *     something they depend on moves, pushed only when the result differs.
+ *   - `metrics`: machine and per-session load, every two seconds while anyone
+ *     is connected, never suppressed.
+ * Plus `timeline`, only to the socket watching that session.
+ *
+ * `/ws/term/:id` is a live terminal: a PTY running `tmux attach` on the
+ * session, bytes both ways. Closing it detaches; the agent keeps running.
  */
 
 import type { ServerWebSocket } from "bun";
 import { DEFAULT_PORT, webDist } from "../core/paths";
-import {
-  getAppState,
-  getColdState,
-  getHotState,
-  refreshCold,
-  startColdRefresh,
-  stateEvents,
-} from "../core/state";
-import {
-  BadRequest,
-  Conflict,
-  NotFound,
-  closeSession,
-  eventsOf,
-  interruptSession,
-  reconcile,
-  detachHosts,
-  replyPermission,
-  resumeSession,
-  sendMessage,
-  sessionEvents,
-  spawnSession,
-} from "../core/sessions";
+import { Fleet, FleetError } from "../core/fleet";
+import * as tmux from "../core/tmux";
+import { attentionOf, byAttention } from "../core/attention";
+import { calibrate } from "../core/calibration";
 import { diffOf } from "../core/diff";
-import {
-  metricsEvents,
-  metricsSnapshot,
-  procDetail,
-  setMetricsWatchers,
-} from "../core/metrics";
+import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
-import {
-  demoteSkill,
-  listSkills,
-  promoteSkill,
-  readSkillBody,
-  writeSkillBody,
-} from "../core/skills";
-import {
-  containedIn,
-  looksLikeSkillFile,
-  skillMdPath,
-  skillRootDirs,
-} from "./guard";
-import {
-  addRepo,
-  deleteRepo,
-  getRepoById,
-  getSession,
-  getSettings,
-  listRepos,
-  mergeSettings,
-  saveSettings,
-} from "../core/db";
-import { modelCatalog } from "../core/models";
+import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
+import { containedIn, looksLikeSkillFile, skillMdPath } from "./guard";
+import { addRepo, deleteRepo, getSettings, listRepos, mergeSettings, saveSettings } from "../core/db";
+import { listPrs } from "../core/prs";
+import { checkRequest } from "./csrf";
+import { HttpError, Router, fail, json, readBody } from "./router";
+import { optionalString, parseSettingsPatch, requireBoolean, requireString } from "./validate";
+import { parseClientMessage } from "./protocol";
+import { fileResponse, notBuiltPage, resolveStatic } from "./static";
+import { adapters } from "../core/providers";
+import { AccountsService } from "../core/accounts";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import type {
+  AccountView,
   ColdState,
+  HotState,
   MetricsState,
+  PrInfo,
+  ProviderId,
   ServerMessage,
-  Session,
-  TranscriptEvent,
+  SkillInfo,
 } from "../core/types";
-import { HttpError, Router, fail, json, readBody } from "./router";
-import {
-  beforeParam,
-  limitParam,
-  optionalString,
-  parseSettingsPatch,
-  requireBoolean,
-  requireString,
-  sinceParam,
-} from "./validate";
-import { commandSubagent, listSubagents, subagentDetail } from "./subagents";
-import { fanoutAgentOf, fanoutOf } from "./fanout";
-import { compactTranscripts, scanTranscripts } from "./transcripts";
-import { parseClientMessage } from "./protocol";
-import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 
 const PORT = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT);
 const HOST = process.env.AGENTBOX_HOST ?? "127.0.0.1";
-
-/** How long session changes are batched before a `hot` push. */
 const HOT_COALESCE_MS = 250;
+const COLD_DEBOUNCE_MS = 500;
+const SLOW_REFRESH_MS = 60_000;
+const TIMELINE_PAGE = 200;
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 
-/**
- * Most events a `watch` backfill will send in one frame. A long run can hold
- * tens of thousands; the newest few hundred are what a person opening the
- * transcript is looking at, and the client pages further back with
- * `GET /api/sessions/:id/events?before=&limit=` as the reader scrolls up.
- */
-const MAX_BACKFILL = 500;
+// ------------------------------------------------------------- the pieces
+
+export const accounts = new AccountsService();
+export const fleet = new Fleet({
+  adapters: adapters(),
+  runtime: tmux,
+  usage: {
+    usageOf: (id) => accounts.usageOf(id),
+    ingestRollout: (id, reading) => accounts.ingestRollout(id, reading),
+  },
+});
+setMetricsSource(() => fleet.sessions());
+
+// --------------------------------------------------------------- state
+
+function hotState(): HotState {
+  const sessions = fleet
+    .sessions()
+    .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }))
+    .sort(byAttention);
+  return { sessions, serverTime: Date.now() };
+}
+
+/** Slow-changing inputs to cold state, refreshed off the request path. */
+const slow = {
+  prs: [] as PrInfo[],
+  skills: [] as SkillInfo[],
+  warnings: [] as string[],
+  providers: [] as ColdState["providers"],
+};
+
+async function refreshSlow(): Promise<void> {
+  const repos = listRepos();
+  const localDirs = repos.filter((r) => r.kind === "local").map((r) => r.ref);
+  const skills = listSkills(skillRoots(localDirs));
+  slow.skills = skills.skills;
+  const providers = await Promise.all(
+    PROVIDERS.map(async (id) => {
+      const a = fleet.providers().find((p) => p.id === id);
+      const d = a ? await a.detect().catch(() => ({ installed: false, version: null })) : { installed: false, version: null };
+      return { id, installed: d.installed, version: d.version };
+    }),
+  );
+  slow.providers = providers;
+  // `gh` runs here and nowhere else: one call per repo, once a minute.
+  const prs = listPrs(repos, fleet.sessions());
+  slow.prs = prs.prs;
+  const warnings = [...skills.warnings, ...prs.warnings];
+  if (!tmux.tmuxVersion()) warnings.unshift("tmux is not installed — agentbox runs every session in tmux, so nothing can be started.");
+  slow.warnings = warnings;
+  scheduleCold();
+}
+
+function accountViews(): AccountView[] {
+  const claims = fleet.claims();
+  const placements = new Map<string, ReturnType<Fleet["placement"]>>();
+  return accounts.list().map((a) => {
+    let p = placements.get(a.provider);
+    if (!p) {
+      try {
+        p = fleet.placement(a.provider, false);
+      } catch {
+        p = undefined;
+      }
+      if (p) placements.set(a.provider, p);
+    }
+    return {
+      ...a,
+      claims: claims.get(a.id) ?? [],
+      placement: p?.candidates.find((c) => c.accountId === a.id) ?? null,
+    };
+  });
+}
+
+function coldState(): ColdState {
+  return {
+    accounts: accountViews(),
+    logins: accounts.logins(),
+    repos: listRepos(),
+    prs: slow.prs,
+    skills: slow.skills,
+    settings: getSettings(),
+    providers: slow.providers,
+    warnings: slow.warnings,
+  };
+}
 
 // ------------------------------------------------------------- websocket
 
-/** A socket watches at most one session's event stream. */
-type SocketState = { watching: string | null };
-type Socket = ServerWebSocket<SocketState>;
+type SocketData =
+  | { kind: "app"; watching: string | null; cursor: string | null; busy: boolean; again: boolean }
+  | { kind: "term"; sessionId: string; cols: number; rows: number; proc?: ReturnType<typeof Bun.spawn> };
+type Socket = ServerWebSocket<SocketData>;
 
 const clients = new Set<Socket>();
 
-/**
- * The one place a socket leaves the broadcast set.
- *
- * `close` is not the only way clients go away — a socket that dies mid-write is
- * dropped here too, and if that path skipped the watcher count then a browser
- * killed without a clean close would leave the metrics sampler reading /proc
- * every two seconds for nobody, for the life of the process.
- */
 function dropClient(ws: Socket): void {
   if (!clients.delete(ws)) return;
   setMetricsWatchers(clients.size);
@@ -136,11 +166,8 @@ function send(ws: Socket, msg: ServerMessage): void {
   }
   try {
     ws.send(JSON.stringify(msg));
-  } catch (e) {
-    // The socket died between the readyState check and the write. Drop it
-    // rather than letting a corpse accumulate in the broadcast set.
+  } catch {
     dropClient(ws);
-    console.error(`[ws] dropping a dead socket: ${(e as Error).message}`);
   }
 }
 
@@ -149,441 +176,471 @@ function broadcast(msg: ServerMessage): void {
 }
 
 let hotTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** Coalesce a burst of session changes into one push. */
 function scheduleHot(): void {
   if (hotTimer) return;
   hotTimer = setTimeout(() => {
     hotTimer = null;
-    if (clients.size === 0) return;
-    broadcast({ type: "hot", state: getHotState() });
+    if (clients.size > 0) broadcast({ type: "hot", state: hotState() });
   }, HOT_COALESCE_MS);
 }
 
-function onCold(state: ColdState): void {
-  broadcast({ type: "cold", state });
+let coldTimer: ReturnType<typeof setTimeout> | null = null;
+let lastCold = "";
+function scheduleCold(): void {
+  if (coldTimer) return;
+  coldTimer = setTimeout(() => {
+    coldTimer = null;
+    if (clients.size === 0) return;
+    const state = coldState();
+    const fp = JSON.stringify(state);
+    if (fp === lastCold) return;
+    lastCold = fp;
+    broadcast({ type: "cold", state });
+  }, COLD_DEBOUNCE_MS);
 }
 
 /**
- * Straight to the wire, uncoalesced and unsuppressed.
- *
- * Both of the other channels are throttled — `hot` coalesces a burst, `cold`
- * drops a push whose fingerprint matches the last one. Neither is right here.
- * The sampler already sets the cadence, and every sample differs by
- * construction, so suppressing one would just be a stale reading wearing a live
- * one's clothes.
+ * Bring one watching socket up to date. First call sends the newest page with
+ * `reset`; later calls send what was appended since the socket's cursor.
+ * Serialised per socket — two overlapping reads would send the same events
+ * twice and leave the cursor at whichever finished last.
  */
-function onMetrics(state: MetricsState): void {
-  broadcast({ type: "metrics", state });
-}
-
-function onSessionEvents(sessionId: string, events: TranscriptEvent[]): void {
-  if (events.length === 0) return;
-  for (const ws of [...clients]) {
-    if (ws.data.watching === sessionId) send(ws, { type: "events", sessionId, events });
+async function pumpTimeline(ws: Socket): Promise<void> {
+  const d = ws.data;
+  if (d.kind !== "app" || !d.watching) return;
+  if (d.busy) {
+    d.again = true;
+    return;
+  }
+  d.busy = true;
+  try {
+    do {
+      d.again = false;
+      const id: string | null = d.watching;
+      if (!id || !fleet.hasTranscript(id)) {
+        if (id && d.cursor === null) send(ws, { type: "timeline", sessionId: id, events: [], cursor: "", reset: true });
+        break;
+      }
+      if (d.cursor === null || d.cursor === "") {
+        const page = await fleet.timeline(id, null, TIMELINE_PAGE);
+        if (d.watching !== id) continue;
+        d.cursor = page.cursor;
+        send(ws, { type: "timeline", sessionId: id, events: page.events, cursor: page.cursor, reset: true });
+      } else {
+        const next = await fleet.since(id, d.cursor);
+        if (d.watching !== id) continue;
+        d.cursor = next.cursor;
+        if (next.events.length > 0 || next.reset) {
+          send(ws, { type: "timeline", sessionId: id, events: next.events, cursor: next.cursor, reset: next.reset });
+        }
+      }
+    } while (d.again);
+  } catch (e) {
+    send(ws, { type: "error", message: `timeline: ${(e as Error).message}` });
+  } finally {
+    d.busy = false;
   }
 }
 
-function handleClientMessage(ws: Socket, raw: string | Buffer): void {
+function onTranscript(sessionId: string): void {
+  for (const ws of clients) {
+    if (ws.data.kind === "app" && ws.data.watching === sessionId) void pumpTimeline(ws);
+  }
+}
+
+function handleAppMessage(ws: Socket, raw: string | Buffer): void {
   const parsed = parseClientMessage(raw);
   if (!parsed.ok) {
     send(ws, { type: "error", message: parsed.error });
     return;
   }
   const msg = parsed.message;
-  if (msg.type === "ping") return;
-
-  // Watching a new session replaces the old subscription.
+  if (msg.type === "ping" || ws.data.kind !== "app") return;
   ws.data.watching = msg.sessionId;
-  if (msg.sessionId === null) return;
+  ws.data.cursor = null;
+  void pumpTimeline(ws);
+}
 
-  // Backfill BEFORE streaming: the browser client deliberately does not fetch
-  // the backlog over HTTP, so a watch that only subscribes to future events
-  // opens every transcript in the app empty — and looks like the engine has
-  // stopped logging rather than like a protocol gap.
+// ------------------------------------------------------------- terminal
+
+function openTerminal(ws: Socket): void {
+  const d = ws.data;
+  if (d.kind !== "term") return;
+  let name: string;
   try {
-    const events = eventsOf(msg.sessionId, msg.since);
-    // Bound from the TAIL. A 50k-event session must not go into one frame, and
-    // the newest events are the ones a person opening a transcript wants; an
-    // oldest-first bound would show the run's first minute forever. The client
-    // merges by seq and re-watches from its highest held seq, so a bounded
-    // frame self-heals on reconnect.
-    send(ws, {
-      type: "events",
-      sessionId: msg.sessionId,
-      events: events.length > MAX_BACKFILL ? events.slice(-MAX_BACKFILL) : events,
-    });
+    name = fleet.tmuxOf(d.sessionId);
   } catch (e) {
-    send(ws, { type: "error", message: `cannot watch ${msg.sessionId}: ${(e as Error).message}` });
+    ws.send(`\r\n\x1b[2m${(e as Error).message}\x1b[0m\r\n`);
+    ws.close(4000, "not in tmux");
+    return;
+  }
+  // TMUX set in our environment (a server started from inside tmux) makes
+  // `tmux attach` refuse to nest; the attach is to a different server anyway.
+  const env = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<string, string>;
+  delete env.TMUX;
+  delete env.TMUX_PANE;
+  d.proc = Bun.spawn(tmux.attachArgv(name), {
+    env,
+    terminal: {
+      cols: d.cols,
+      rows: d.rows,
+      data(_term: unknown, bytes: Uint8Array) {
+        if (ws.readyState === WebSocket.OPEN) ws.sendBinary(bytes);
+      },
+    },
+  } as Parameters<typeof Bun.spawn>[1]);
+  void d.proc.exited.then(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.close(1000, "detached");
+  });
+}
+
+function termOf(d: SocketData): { write(s: string): void; resize(c: number, r: number): void; close(): void } | null {
+  if (d.kind !== "term" || !d.proc) return null;
+  return (d.proc as unknown as { terminal?: { write(s: string): void; resize(c: number, r: number): void; close(): void } }).terminal ?? null;
+}
+
+function handleTermMessage(ws: Socket, raw: string | Buffer): void {
+  const t = termOf(ws.data);
+  if (!t) return;
+  let msg: unknown;
+  try {
+    msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
+  } catch {
+    return;
+  }
+  const m = msg as { type?: string; data?: unknown; cols?: unknown; rows?: unknown };
+  if (m.type === "input" && typeof m.data === "string") t.write(m.data);
+  else if (m.type === "resize" && typeof m.cols === "number" && typeof m.rows === "number") {
+    const cols = Math.max(20, Math.min(500, Math.floor(m.cols)));
+    const rows = Math.max(5, Math.min(200, Math.floor(m.rows)));
+    t.resize(cols, rows);
   }
 }
 
-function sessionOr404(id: string): Session {
-  const s = getSession(id);
-  if (!s) throw new HttpError(404, `session not found: ${id}`);
-  return s;
+function closeTerminal(ws: Socket): void {
+  const d = ws.data;
+  if (d.kind !== "term") return;
+  termOf(d)?.close();
+  d.proc?.kill();
 }
 
-/**
- * Map the three failures the engine distinguishes onto statuses. Anything else
- * escaping a handler is a genuine fault and stays a 500.
- */
-function mapCoreError(e: unknown): HttpError {
-  if (e instanceof NotFound) return new HttpError(404, e.message);
-  if (e instanceof Conflict) return new HttpError(409, e.message);
-  if (e instanceof BadRequest) return new HttpError(400, e.message);
+// --------------------------------------------------------------- routes
+
+function mapError(e: unknown): HttpError {
+  if (e instanceof HttpError) return e;
+  if (e instanceof FleetError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }
 
-// ---------------------------------------------------------------- routes
+const provider = (v: unknown): ProviderId => {
+  if (typeof v !== "string" || !PROVIDERS.includes(v as ProviderId)) {
+    throw new HttpError(400, `provider must be one of ${PROVIDERS.join(", ")}`);
+  }
+  return v as ProviderId;
+};
 
-export const router = new Router(mapCoreError)
-  .add("GET", "/api/state", () => json(getAppState()))
+const router = new Router(mapError)
+  .add("GET", "/api/state", () => json({ ...hotState(), ...coldState() }))
+  .add("GET", "/api/health", async () =>
+    json({ version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: await dependencies() }),
+  )
 
-  .add("GET", "/api/health", ({ url }) => {
-    // Cached: every probe runs its program. Nothing polls this route, and
-    // `?refresh=1` is for the Re-check button — the user who has just fixed
-    // their auth is the one who needs a fresh answer. Never on a broadcast path.
-    const deps = dependencies(url.searchParams.get("refresh") === "1");
-
-    // Each dependency is reported ONLY as its tri-state. There is deliberately
-    // no per-dependency boolean: `gh: true` for an installed-but-logged-out
-    // `gh` is precisely the ambiguity the tri-state exists to remove, and
-    // shipping both leaves the imprecise field there to be reached for. A
-    // caller that wants a boolean derives it from `state === "ok"`.
-    return json({
-      // The one exception, because it is a summary rather than a second
-      // representation of any single dependency.
-      ok: deps.omp.state === "ok" && deps.gh.state === "ok" && deps.git.state === "ok",
-      ompState: deps.omp.state,
-      ghState: deps.gh.state,
-      gitState: deps.git.state,
-      ompDetail: deps.omp.detail,
-      ghDetail: deps.gh.detail,
-      gitDetail: deps.git.detail,
-      checkedAt: deps.at,
-      version: VERSION,
-    });
+  // ---- sessions
+  .add("POST", "/api/placement", async ({ req }) => {
+    const b = await readBody(req);
+    return json(fleet.placement(provider(b.provider), b.big === true, optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null));
   })
-
-  // The Model dropdowns' options. core/models.ts caches the fetch from
-  // opencode.ai, so opening a dialog reaches the network at most once per ten
-  // minutes. Never on a broadcast path.
-  .add("GET", "/api/models", async () => json(await modelCatalog()))
-
   .add("POST", "/api/sessions", async ({ req }) => {
-    const body = await readBody(req);
-    const repoId = requireString(body, "repoId");
-    const repo = getRepoById(repoId);
-    if (!repo) throw new HttpError(404, `repo not found: ${repoId}`);
-    const session = spawnSession(repo, requireString(body, "prompt"), {
-      model: optionalString(body, "model"),
-      branch: optionalString(body, "branch"),
-    });
-    return json(session, 201);
+    const b = await readBody(req);
+    try {
+      const out = await fleet.spawn({
+        provider: provider(b.provider),
+        cwd: optionalString(b, "cwd"),
+        repoId: optionalString(b, "repoId"),
+        worktree: b.worktree === true,
+        prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+        model: optionalString(b, "model"),
+        big: b.big === true,
+        accountId: optionalString(b, "accountId") ?? null,
+      });
+      scheduleHot();
+      scheduleCold();
+      return json(out, 201);
+    } catch (e) {
+      // A refusal carries the placement, so the dialog can show why.
+      if (e instanceof FleetError && e.placement) {
+        return new Response(JSON.stringify({ ok: false, data: { placement: e.placement }, error: e.message }), {
+          status: e.status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw e;
+    }
   })
-
-  .add("POST", "/api/sessions/:id/message", async ({ req, params }) => {
-    const body = await readBody(req);
-    return json(await sendMessage(params.id!, requireString(body, "text")));
-  })
-
-  .add("POST", "/api/sessions/:id/interrupt", async ({ params }) =>
-    json(await interruptSession(params.id!)),
-  )
-
-  .add("POST", "/api/sessions/:id/resume", async ({ params }) =>
-    json(await resumeSession(params.id!)),
-  )
-
-  .add("POST", "/api/sessions/:id/permission", async ({ req, params }) => {
-    const body = await readBody(req);
-    return json(await replyPermission(params.id!, requireBoolean(body, "approved")));
-  })
-
-  .add("POST", "/api/sessions/:id/close", ({ params }) => {
-    const s = closeSession(params.id!);
-    if (!s) throw new HttpError(404, `session not found: ${params.id}`);
+  .add("PATCH", "/api/sessions/:id", async ({ req, params }) => {
+    const b = await readBody(req);
+    const label = b.label === null ? null : typeof b.label === "string" ? b.label : undefined;
+    const big = typeof b.big === "boolean" ? b.big : undefined;
+    const s = await fleet.patch(params.id!, { label, big });
+    scheduleHot();
+    scheduleCold();
     return json(s);
   })
-
-  .add("GET", "/api/sessions/:id/events", ({ params, url }) =>
-    json(
-      eventsOf(sessionOr404(params.id!).id, sinceParam(url), {
-        before: beforeParam(url),
-        limit: limitParam(url),
-      }),
-    ),
-  )
-
-  // `diffOf` resolves its own base from the session's repo (data's `baseFor`).
-  // Which branch a session was cut from is data's knowledge, not the transport's.
-  .add("GET", "/api/sessions/:id/diff", ({ params }) =>
-    json(diffOf(sessionOr404(params.id!))),
-  )
-
-  /**
-   * The per-process breakdown behind one session's load figure.
-   *
-   * On demand and never polled by the board: this is the only caller that reads
-   * per-process PSS, and `smaps_rollup` makes the kernel walk every VMA — the
-   * single most expensive read in the product. A session with no live process
-   * returns an empty list rather than an error; "not running" is an answer.
-   */
+  .add("POST", "/api/sessions/:id/send", async ({ req, params }) => {
+    const b = await readBody(req);
+    await fleet.send(params.id!, requireString(b, "text"));
+    return json(null);
+  })
+  .add("POST", "/api/sessions/:id/keys", async ({ req, params }) => {
+    const b = await readBody(req);
+    if (!Array.isArray(b.keys) || !b.keys.every((k) => typeof k === "string" && k.length > 0 && k.length < 64)) {
+      throw new HttpError(400, "keys must be a list of tmux key names");
+    }
+    fleet.keys(params.id!, b.keys as string[]);
+    return json(null);
+  })
+  .add("POST", "/api/sessions/:id/interrupt", ({ params }) => {
+    fleet.interrupt(params.id!);
+    return json(null);
+  })
+  .add("POST", "/api/sessions/:id/resume", async ({ req, params }) => {
+    const b = await readBody(req);
+    const s = await fleet.resume(params.id!, typeof b.prompt === "string" ? b.prompt : undefined);
+    scheduleHot();
+    return json(s);
+  })
+  .add("POST", "/api/sessions/:id/adopt", async ({ params }) => {
+    const s = await fleet.adopt(params.id!);
+    scheduleHot();
+    return json(s);
+  })
+  .add("POST", "/api/sessions/:id/stop", async ({ params }) => {
+    await fleet.stopSession(params.id!);
+    scheduleHot();
+    return json(null);
+  })
+  .add("POST", "/api/sessions/:id/archive", async ({ req, params }) => {
+    const b = await readBody(req);
+    await fleet.archive(params.id!, requireBoolean(b, "archived"));
+    scheduleHot();
+    return json(null);
+  })
+  .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
+    const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));
+    return json(await fleet.timeline(params.id!, url.searchParams.get("before"), limit));
+  })
+  .add("GET", "/api/sessions/:id/diff", ({ params }) => json(diffOf(fleet.get(params.id!))))
   .add("GET", "/api/sessions/:id/load", async ({ params }) => {
-    const s = sessionOr404(params.id!);
-    return json({ procs: s.pid === null ? [] : await procDetail(s.pid) });
+    const s = fleet.get(params.id!);
+    if (!s.pid) throw new HttpError(409, "session has no running process");
+    return json(await procDetail(s.pid));
+  })
+  .add("GET", "/api/sessions/:id/attach", ({ params }) => json({ argv: fleet.attachCommand(params.id!) }))
+
+  // ---- accounts
+  .add("GET", "/api/accounts", () => json(accountViews()))
+  .add("POST", "/api/accounts", async ({ req }) => {
+    const b = await readBody(req);
+    const out = await accounts.create(provider(b.provider), optionalString(b, "label"));
+    scheduleCold();
+    return json(out, 201);
+  })
+  .add("POST", "/api/accounts/import", async ({ req }) => {
+    const b = await readBody(req);
+    const a = await accounts.importHome(provider(b.provider), requireString(b, "home"));
+    scheduleCold();
+    return json(a, 201);
+  })
+  .add("PATCH", "/api/accounts/:id", async ({ req, params }) => {
+    const b = await readBody(req);
+    const a = accounts.update(params.id!, {
+      label: optionalString(b, "label"),
+      enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
+    });
+    scheduleCold();
+    return json(a);
+  })
+  .add("DELETE", "/api/accounts/:id", ({ params }) => {
+    accounts.remove(params.id!);
+    scheduleCold();
+    return json(null);
+  })
+  .add("POST", "/api/accounts/:id/login", async ({ params }) => {
+    const flow = await accounts.login(params.id!);
+    scheduleCold();
+    return json(flow);
+  })
+  .add("POST", "/api/accounts/:id/usage", async ({ params }) => {
+    const u = await accounts.refreshUsage(params.id!);
+    scheduleCold();
+    return json(u);
+  })
+  .add("POST", "/api/logins/:id/paste", async ({ req, params }) => {
+    const b = await readBody(req);
+    const flow = accounts.paste(params.id!, requireString(b, "text"));
+    scheduleCold();
+    return json(flow);
+  })
+  .add("POST", "/api/logins/:id/cancel", ({ params }) => {
+    accounts.cancel(params.id!);
+    scheduleCold();
+    return json(null);
+  })
+  .add("GET", "/api/calibration", ({ url }) => {
+    const days = Math.min(60, Math.max(1, Number(url.searchParams.get("days") ?? 7) || 7));
+    return json(calibrate(days));
   })
 
-  /**
-   * One session's fan-out: the subagents ITS agent dispatched through omp.
-   *
-   * Distinct from `/api/subagents` below, which is the pool a *calling* agent
-   * owns over MCP. Two different systems that both produce something called a
-   * subagent; see docs/architecture.md for which is which and why both exist.
-   *
-   * Requested rather than pushed, because it goes to omp's session directory
-   * on disk. That read is what makes a finished fan-out readable at all once
-   * the turn that dispatched it has ended.
-   */
-  .add("GET", "/api/sessions/:id/subagents", ({ params }) =>
-    json(fanoutOf(sessionOr404(params.id!))),
-  )
-
-  .add("GET", "/api/sessions/:id/subagents/:name", ({ params }) => {
-    const detail = fanoutAgentOf(sessionOr404(params.id!), params.name!);
-    if (!detail) {
-      throw new HttpError(404, `omp has no record of subagent ${params.name} in this session`);
-    }
-    return json(detail);
+  // ---- settings, repos, worktrees, skills
+  .add("GET", "/api/settings", () => json(getSettings()))
+  .add("PUT", "/api/settings", async ({ req }) => {
+    const patch = parseSettingsPatch(await readBody(req));
+    const next = mergeSettings(getSettings(), patch);
+    saveSettings(next);
+    scheduleCold();
+    void fleet.tick().then(scheduleHot);
+    return json(next);
   })
-
-  // Subagents are off the board by design -- no rows, no worktrees, no
-  // supervisor -- so these read the record on disk rather than any session
-  // state, and show agents from every client session on the machine.
-  .add("GET", "/api/subagents", () => json(listSubagents()))
-
-  .add("GET", "/api/subagents/:id", ({ params }) => {
-    const detail = subagentDetail(params.id!);
-    if (!detail) throw new HttpError(404, `no subagent record: ${params.id}`);
-    return json(detail);
-  })
-
-  .add("POST", "/api/subagents/:id/:command", ({ params }) => {
-    const command = params.command;
-    if (command !== "interrupt" && command !== "stop") {
-      throw new HttpError(400, `unknown command: ${command}`);
-    }
-    if (!commandSubagent(params.id!, command)) {
-      throw new HttpError(404, `no subagent record: ${params.id}`);
-    }
-    // Deliberately not "stopped": the owner sweeps for this on its own beat
-    // and may have exited. A control that reports success it cannot verify is
-    // worse than one that says what it actually did.
-    return json({ requested: command });
-  })
-
   .add("GET", "/api/repos", () => json(listRepos()))
-
   .add("POST", "/api/repos", async ({ req }) => {
-    const body = await readBody(req);
-    // Registration resolves the default branch and GitHub slug, so it can be
-    // slow and can fail with a real message; both belong to data, not here.
-    const repo = await addRepo(requireString(body, "ref"));
-    // No rescan: repos come from sqlite, and `gh` must not run on this path.
-    refreshCold();
+    const b = await readBody(req);
+    const repo = await addRepo(requireString(b, "ref")).catch((e: Error) => {
+      throw new HttpError(400, e.message);
+    });
+    void refreshSlow();
     return json(repo, 201);
   })
-
   .add("DELETE", "/api/repos/:id", ({ params }) => {
     deleteRepo(params.id!);
-    refreshCold();
-    return json({ ok: true });
+    void refreshSlow();
+    return json(null);
   })
-
-  // Both of these shell out to git and gh many times over, so neither is on a
-  // broadcast path and neither is cached — they run when the human asks.
-  .add("POST", "/api/worktrees/scan", async ({ req }) => {
-    const body = await readBody(req);
-    const scope = optionalString(body, "scope") ?? "all";
-    if (scope !== "all" && scope !== "agentbox") {
-      throw new HttpError(400, "scope must be all or agentbox");
-    }
-    return json(await scanWorktrees(scope));
-  })
-
+  .add("POST", "/api/worktrees/scan", async () => json(await scanWorktrees("all", fleet.sessions())))
   .add("POST", "/api/worktrees/reclaim", async ({ req }) => {
-    const body = await readBody(req);
-    const paths = body.paths;
-    if (!Array.isArray(paths) || paths.some((p) => typeof p !== "string")) {
-      throw new HttpError(400, "paths must be an array of strings");
+    const b = await readBody(req);
+    if (!Array.isArray(b.paths) || !b.paths.every((p) => typeof p === "string")) {
+      throw new HttpError(400, "paths must be a list of worktree paths");
     }
-    if (paths.length === 0) throw new HttpError(400, "paths is empty — nothing to reclaim");
-    const force = body.force === undefined ? false : requireBoolean(body, "force");
-    const result = await reclaimWorktrees(paths as string[], { force });
-    // A reclaimed worktree changes what the session detail can show, so the
-    // board has to hear about it.
-    broadcast({ type: "hot", state: getHotState() });
-    return json(result);
+    return json(await reclaimWorktrees(b.paths as string[], { force: b.force === true, sessions: fleet.sessions() }));
   })
-
-  // Transcripts are the other thing on disk that grows without being asked to.
-  // Same contract as the worktree sweep above: a scan the human reads, then an
-  // explicit act naming exactly what to rewrite.
-  .add("GET", "/api/transcripts", () => json(scanTranscripts()))
-
-  .add("POST", "/api/transcripts/compact", async ({ req }) => {
-    const body = await readBody(req);
-    const ids = body.sessionIds;
-    if (!Array.isArray(ids) || ids.some((i) => typeof i !== "string")) {
-      throw new HttpError(400, "sessionIds must be an array of strings");
-    }
-    if (ids.length === 0) throw new HttpError(400, "sessionIds is empty — nothing to compact");
-    return json(compactTranscripts(ids as string[]));
-  })
-
-  .add("GET", "/api/settings", () => json(getSettings()))
-
-  // ── Skills ───────────────────────────────────────────────────────────────
-  // The list itself travels in cold state; these routes are the mutations and
-  // the body. Every path is caller-supplied, so it is confined to the known
-  // skill roots and required to look like a skill file.
-
-  /**
-   * Read a skill file's body.
-   *
-   * The path is the skill *directory* (as listed in cold state); this resolves
-   * SKILL.md inside it. Without the containment check this is an
-   * arbitrary-file-read primitive.
-   */
   .add("GET", "/api/skill/body", ({ url }) => {
-    const raw = url.searchParams.get("path");
-    if (!raw) throw new HttpError(400, "path required");
-    const confined = containedIn(raw, skillRootDirs());
-    const md = confined ? skillMdPath(confined) : null;
-    if (!confined || !md || !looksLikeSkillFile(md)) {
-      throw new HttpError(403, "path is not inside a skills directory");
-    }
-    return json({ body: readSkillBody(md) });
+    const raw = url.searchParams.get("path") ?? "";
+    const dir = containedIn(raw, skillRootDirs());
+    if (!dir) throw new HttpError(403, "not a skill directory agentbox manages");
+    const file = skillMdPath(dir);
+    if (!looksLikeSkillFile(file)) throw new HttpError(403, "not a skill file");
+    return json({ body: readSkillBody(file) });
   })
-
-  /** Same confinement, and rather more important: this one writes. */
   .add("POST", "/api/skill/body", async ({ req }) => {
     const b = await readBody(req);
-    const raw = requireString(b, "path");
-    const confined = containedIn(raw, skillRootDirs());
-    const md = confined ? skillMdPath(confined) : null;
-    if (!confined || !md || !looksLikeSkillFile(md)) {
-      throw new HttpError(403, "path is not inside a skills directory");
-    }
-    const body = b.body;
-    if (typeof body !== "string") throw new HttpError(400, "body must be a string");
-    const ok = writeSkillBody(md, body);
-    // The body may have changed name/description/lines, so the inventory is
-    // stale until the cold refresh re-reads it.
-    refreshCold(true);
+    const dir = containedIn(requireString(b, "path"), skillRootDirs());
+    if (!dir) throw new HttpError(403, "not a skill directory agentbox manages");
+    const file = skillMdPath(dir);
+    if (!looksLikeSkillFile(file)) throw new HttpError(403, "not a skill file");
+    if (typeof b.body !== "string") throw new HttpError(400, "body must be a string");
+    const ok = writeSkillBody(file, b.body);
+    void refreshSlow();
     return json({ ok });
   })
-
   .add("POST", "/api/skill/promote", async ({ req }) => {
     const b = await readBody(req);
     const name = requireString(b, "name");
-    const skill = listSkills().skills.find((s) => s.name === name && s.source === "project");
-    if (!skill) throw new HttpError(404, `no such project skill: ${name}`);
+    const skill = slow.skills.find((s) => s.name === name && s.source === "project");
+    if (!skill) throw new HttpError(404, `no project skill named ${name}`);
     const r = promoteSkill(skill);
-    refreshCold(true);
-    return json(r, r.ok ? 200 : 409);
+    void refreshSlow();
+    return json(r);
   })
-
   .add("POST", "/api/skill/demote", async ({ req }) => {
     const b = await readBody(req);
     const r = demoteSkill(requireString(b, "name"));
-    refreshCold(true);
-    return json(r, r.ok ? 200 : 409);
+    void refreshSlow();
+    return json(r);
   })
-
-  .add("PUT", "/api/settings", async ({ req }) => {
-    const next = mergeSettings(getSettings(), parseSettingsPatch(await readBody(req)));
-    saveSettings(next);
-    refreshCold();
-    return json(next);
-  })
-
   .otherwise(({ req, url }) => {
-    if (url.pathname.startsWith("/api/")) {
-      return fail(`no route for ${req.method} ${url.pathname}`, 404);
-    }
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      return fail(`${req.method} is not allowed on ${url.pathname} — try GET`, 405, { allow: "GET, HEAD" });
-    }
+    if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
     if (found.kind === "notBuilt") return notBuiltPage();
     if (found.kind === "notFound") return new Response("not found", { status: 404 });
     return fileResponse(webDist, found.path, req);
   });
 
-// ----------------------------------------------------------------- boot
+function skillRootDirs(): string[] {
+  const local = listRepos().filter((r) => r.kind === "local").map((r) => r.ref);
+  return skillRoots(local).map((r) => r.dir);
+}
+
+// ------------------------------------------------------------------ boot
 
 export async function startServer(): Promise<void> {
-  // Reattach to the agents that were already running before this process
-  // existed, and mark dead only the ones that really are. Awaited, because
-  // serving a board that says every session died — a second before reconnecting
-  // to them — is worse than starting a moment later.
-  await reconcile();
-  // The only place `gh` and the skills filesystem walk are allowed to run.
-  startColdRefresh();
+  accounts.start();
+  fleet.start();
+  await fleet.ready;
+  void refreshSlow();
+  setInterval(() => void refreshSlow(), SLOW_REFRESH_MS).unref?.();
 
-  // Agents are not ours to take with us. Without this the sockets close hard
-  // on exit and every host logs a control-channel error on its way to
-  // discovering it does not matter.
-  const letGo = () => {
-    detachHosts();
+  fleet.on("sessions", () => {
+    scheduleHot();
+    // Claims move with sessions, and claims are on the Accounts page.
+    scheduleCold();
+  });
+  fleet.on("transcript", onTranscript);
+  accounts.on("change", scheduleCold);
+  metricsEvents.on("metrics", (state: MetricsState) => broadcast({ type: "metrics", state }));
+
+  const stop = () => {
+    fleet.stop();
+    accounts.stop();
     process.exit(0);
   };
-  process.on("SIGINT", letGo);
-  process.on("SIGTERM", letGo);
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
 
-  sessionEvents.on("hot", scheduleHot);
-  sessionEvents.on("events", onSessionEvents);
-  stateEvents.on("cold", onCold);
-  // Note there is no `startMetrics()` beside `startColdRefresh()`: the sampler
-  // is driven entirely by whether anyone is connected. An agentbox left running
-  // with no tab open reads /proc exactly never.
-  metricsEvents.on("metrics", onMetrics);
-
-  Bun.serve<SocketState>({
+  Bun.serve<SocketData>({
     port: PORT,
     hostname: HOST,
-    // Bun's default is 10s. `resume` waits for the agent host to come up —
-    // up to HOST_READY_MS, and longer in practice on a cold cache — so a
-    // successful resume was being reported to the caller as a timeout.
     idleTimeout: 60,
     websocket: {
       open(ws) {
+        if (ws.data.kind === "term") {
+          openTerminal(ws);
+          return;
+        }
         clients.add(ws);
-        send(ws, { type: "hot", state: getHotState() });
-        send(ws, { type: "cold", state: getColdState() });
-        // The last sweep, so a tab that opens between polls paints something
-        // real immediately instead of an empty bar for two seconds. It carries
-        // its own `at`, so the client can tell a replayed reading from a live
-        // one rather than trusting it because it arrived on connect.
+        send(ws, { type: "hot", state: hotState() });
+        const cold = coldState();
+        lastCold = JSON.stringify(cold);
+        send(ws, { type: "cold", state: cold });
         send(ws, { type: "metrics", state: metricsSnapshot() });
         setMetricsWatchers(clients.size);
       },
       message(ws, raw) {
-        handleClientMessage(ws, raw);
+        if (ws.data.kind === "term") handleTermMessage(ws, raw);
+        else handleAppMessage(ws, raw);
       },
       close(ws) {
-        dropClient(ws);
+        if (ws.data.kind === "term") closeTerminal(ws);
+        else dropClient(ws);
       },
     },
     fetch(req, srv) {
       const url = new URL(req.url);
+      const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
+      const verdict = checkRequest(req, PORT, { upgrade });
+      if (!verdict.ok) return fail(verdict.reason, 403);
+
       if (url.pathname === "/ws") {
-        if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-          return fail("/ws requires a WebSocket upgrade", 426);
-        }
-        return srv.upgrade(req, { data: { watching: null } })
+        if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);
+        return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false } })
+          ? undefined
+          : fail("websocket upgrade failed", 500);
+      }
+      const term = url.pathname.match(/^\/ws\/term\/([a-z0-9]+)$/);
+      if (term) {
+        if (!upgrade) return fail("terminal requires a WebSocket upgrade", 426);
+        const cols = Math.max(20, Math.min(500, Number(url.searchParams.get("cols")) || 120));
+        const rows = Math.max(5, Math.min(200, Number(url.searchParams.get("rows")) || 40));
+        return srv.upgrade(req, { data: { kind: "term", sessionId: term[1]!, cols, rows } })
           ? undefined
           : fail("websocket upgrade failed", 500);
       }

@@ -1,336 +1,335 @@
 /** The agentbox CLI, in a file TypeScript can see.
  *
- * `bin/agentbox` has no extension, so `tsc` silently skips it however the
- * `include` globs are written — the one file the user actually runs was
- * invisible to every gate in the project, and a correct refactor of paths.ts
- * shipped a boot-time `SyntaxError` past a clean typecheck, a full test run and
- * a successful UI build. Everything with logic in it lives here; `bin/agentbox`
- * is a shim with nothing left to break.
+ * `bin/agentbox` has no extension, so `tsc` skips it however `include` is
+ * written; everything with logic in it lives here and the shim stays empty.
+ *
+ * Most commands are thin clients of the running server: the server owns the
+ * fleet and the balancer, so `agentbox claude` asks it where a new session
+ * should go rather than deciding locally with stale numbers. If the server is
+ * not running, the CLI starts it.
  */
 
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { run } from "../core/git";
-import { DEFAULT_PORT, agentboxHome, ensureDirs, webDist } from "../core/paths";
-import { getSettings, listRepos } from "../core/db";
-import { insertMember, removeMember, validates } from "./jsonc";
-import { dependencies } from "../deps";
-import type { DepStatus } from "../deps";
+import { existsSync, mkdirSync, openSync } from "node:fs";
+import { join } from "node:path";
+import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, webDist } from "../core/paths";
+import { listRepos } from "../core/db";
+import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
+import type { AppState, Placement, ProviderId, Session } from "../core/types";
 
-/** `new URL(..).pathname` leaves spaces and non-ASCII percent-encoded. */
-const AGENTBOX_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const PORT = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT);
+const BASE = `http://127.0.0.1:${PORT}`;
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 
-const OPENCODE_CONFIG =
-  process.env.AGENTBOX_OPENCODE_CONFIG ?? join(homedir(), ".config", "opencode", "opencode.jsonc");
+// ------------------------------------------------------------------ client
 
-const MCP_KEY = "agentbox";
-const MCP_PATH = ["mcp"];
-
-function mcpEntry() {
-  return {
-    type: "local",
-    command: ["bun", join(AGENTBOX_ROOT, "bin", "agentbox"), "mcp"],
-  };
+class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly data: unknown = null,
+  ) {
+    super(message);
+  }
 }
 
-// ------------------------------------------------------------------ install
-
-/** Copy the config aside before touching it, and say where the copy went. */
-function backup(path: string): string {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dest = `${path}.agentbox-backup-${stamp}`;
-  copyFileSync(path, dest);
-  return dest;
+async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: { "content-type": "application/json", "x-agentbox": "1" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError("server not reachable");
+  }
+  const out = (await res.json().catch(() => null)) as { ok: boolean; data: T; error: string | null } | null;
+  if (!out) throw new ApiError(`server answered ${res.status} with no body`);
+  if (!out.ok) throw new ApiError(out.error ?? `HTTP ${res.status}`, out.data);
+  return out.data;
 }
 
-/** Print the block to paste when we will not edit the file ourselves. */
-function printManualBlock(reason: string): void {
-  console.log(`✗ not editing ${OPENCODE_CONFIG}: ${reason}`);
-  console.log(`\nAdd this inside the "mcp" object yourself:\n`);
-  console.log(`    ${JSON.stringify(MCP_KEY)}: ${JSON.stringify(mcpEntry(), null, 2).split("\n").join("\n    ")}`);
+async function reachable(): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) });
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
 
-function installMcp(): number {
-  if (!existsSync(OPENCODE_CONFIG)) {
-    printManualBlock("no config found at that path");
+/**
+ * Start the server in the background if it is not already up. Detached into
+ * its own session, so closing the terminal that happened to start it does not
+ * take the board down with it.
+ */
+async function ensureServer(): Promise<void> {
+  if (await reachable()) return;
+  ensureDirs();
+  const logDir = join(agentboxHome(), "logs");
+  mkdirSync(logDir, { recursive: true });
+  const log = openSync(join(logDir, "server.log"), "a");
+  const p = Bun.spawn(["setsid", "bun", agentboxBin(), "serve"], {
+    stdio: ["ignore", log, log],
+    env: process.env,
+  });
+  p.unref();
+  process.stderr.write("starting agentbox server…");
+  for (let i = 0; i < 40; i++) {
+    await Bun.sleep(250);
+    if (await reachable()) {
+      process.stderr.write(" up\n");
+      return;
+    }
+  }
+  process.stderr.write("\n");
+  throw new ApiError(`the server did not come up; see ${join(logDir, "server.log")}`);
+}
+
+/** Hand this terminal to tmux until you detach or the agent exits. */
+async function attach(argv: string[]): Promise<number> {
+  const env = { ...process.env } as Record<string, string>;
+  // Attaching from inside your own tmux would otherwise refuse to nest; ours
+  // is a different server, so nesting is exactly what is wanted.
+  delete env.TMUX;
+  const p = Bun.spawn(argv, { stdio: ["inherit", "inherit", "inherit"], env });
+  return await p.exited;
+}
+
+// ----------------------------------------------------------------- commands
+
+function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: string[] } {
+  const flags = new Map<string, string | true>();
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--") {
+      rest.push(...args.slice(i + 1));
+      break;
+    }
+    const m = a.match(/^--([a-z-]+)(?:=(.*))?$/);
+    if (!m) {
+      rest.push(a);
+      continue;
+    }
+    const [, key, inline] = m;
+    const takesValue = key === "account" || key === "model";
+    if (inline !== undefined) flags.set(key!, inline);
+    else if (takesValue && args[i + 1] !== undefined) flags.set(key!, args[++i]!);
+    else flags.set(key!, true);
+  }
+  return { flags, rest };
+}
+
+/** `agentbox claude [--big] [--account X] [--model M] [--detach] [prompt…]` */
+async function startSession(provider: ProviderId, args: string[]): Promise<number> {
+  const { flags, rest } = parseFlags(args);
+  await ensureServer();
+
+  let accountId: string | null = null;
+  const wanted = flags.get("account");
+  if (typeof wanted === "string") {
+    const state = await api<AppState>("GET", "/api/state");
+    const match = state.accounts.find(
+      (a) => a.provider === provider && (a.id === wanted || a.label === wanted || a.email === wanted),
+    );
+    if (!match) {
+      console.error(`no ${provider} account "${wanted}" — have: ${state.accounts.filter((a) => a.provider === provider).map((a) => a.label).join(", ") || "none"}`);
+      return 2;
+    }
+    accountId = match.id;
+  }
+
+  let out: { session: Session; placement: Placement };
+  try {
+    out = await api("POST", "/api/sessions", {
+      provider,
+      cwd: process.cwd(),
+      prompt: rest.join(" ") || undefined,
+      model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
+      big: flags.has("big"),
+      accountId,
+    });
+  } catch (e) {
+    const err = e as ApiError;
+    console.error(`agentbox: ${err.message}`);
+    const placement = (err.data as { placement?: Placement } | null)?.placement;
+    if (placement) printPlacement(placement);
     return 1;
   }
-  const raw = readFileSync(OPENCODE_CONFIG, "utf8");
 
-  let next: string;
+  const { session, placement } = out;
+  const account = placement.candidates.find((c) => c.accountId === placement.accountId);
+  process.stderr.write(`${session.id} → ${account?.label ?? placement.accountId}: ${placement.why}\n`);
+  if (flags.has("detach")) {
+    console.log(session.id);
+    return 0;
+  }
+  const { argv } = await api<{ argv: string[] }>("GET", `/api/sessions/${session.id}/attach`);
+  return attach(argv);
+}
+
+function printPlacement(p: Placement): void {
+  for (const c of p.candidates) {
+    const wk = c.weekly === null ? "   ?" : `${String(c.weekly).padStart(4)}%`;
+    const eff = c.weeklyEffective === null ? "" : ` (+claims ${c.weeklyEffective}%)`;
+    const sh = c.short === null ? "" : `  5h ${c.short}%`;
+    console.error(`  ${c.eligible ? "✓" : "✗"} ${c.label.padEnd(24)} weekly ${wk}${eff}${sh}${c.reason ? `  — ${c.reason}` : ""}`);
+  }
+}
+
+async function list(args: string[]): Promise<number> {
+  const { flags } = parseFlags(args);
+  await ensureServer();
+  const state = await api<AppState>("GET", "/api/state");
+  const accountLabel = new Map(state.accounts.map((a) => [a.id, a.label]));
+  const rows = state.sessions.filter((s) => flags.has("all") || s.status !== "archived");
+  if (flags.has("json")) {
+    console.log(JSON.stringify(rows, null, 2));
+    return 0;
+  }
+  for (const s of rows) {
+    const acct = s.accountId ? accountLabel.get(s.accountId) ?? "?" : "-";
+    const where = s.host === "tmux" ? "box" : s.host === "external" ? "ext" : "   ";
+    console.log(`${s.id}  ${s.status.padEnd(8)} ${where}  ${s.provider.padEnd(6)} ${acct.slice(0, 18).padEnd(18)}  ${s.title.slice(0, 70)}`);
+  }
+  return 0;
+}
+
+async function usage(): Promise<number> {
+  await ensureServer();
+  const state = await api<AppState>("GET", "/api/state");
+  for (const a of state.accounts) {
+    const windows = a.usage.windows
+      .map((w) => `${w.label} ${Math.round(w.usedPct)}%`)
+      .join(" · ");
+    const claimed = a.claims.reduce((n, c) => n + c.outstanding, 0);
+    console.log(`${a.provider.padEnd(6)} ${a.label.slice(0, 28).padEnd(28)} ${windows || "no reading"}${claimed ? `  (+${claimed} claimed)` : ""}${a.usage.stale ? `  [${a.usage.stale}]` : ""}`);
+  }
+  return 0;
+}
+
+async function onSession(verb: "attach" | "resume" | "adopt" | "stop", id: string | undefined): Promise<number> {
+  if (!id) {
+    console.error(`agentbox ${verb}: a session id is required (see \`agentbox ls\`)`);
+    return 2;
+  }
+  await ensureServer();
   try {
-    next = insertMember(raw, MCP_PATH, MCP_KEY, mcpEntry());
-  } catch (e) {
-    const message = (e as Error).message;
-    if (/already/.test(message)) {
-      console.log("agentbox MCP is already registered in opencode.");
+    if (verb === "resume") await api("POST", `/api/sessions/${id}/resume`, {});
+    if (verb === "adopt") await api("POST", `/api/sessions/${id}/adopt`, {});
+    if (verb === "stop") {
+      await api("POST", `/api/sessions/${id}/stop`, {});
       return 0;
     }
-    printManualBlock(message);
-    return 1;
-  }
-
-  if (!validates(next, MCP_PATH)) {
-    printManualBlock("the edit did not re-parse — refusing to write a file we cannot read back");
-    return 1;
-  }
-
-  const saved = backup(OPENCODE_CONFIG);
-  writeFileSync(OPENCODE_CONFIG, next);
-  console.log(`✓ registered the agentbox MCP server in ${OPENCODE_CONFIG}`);
-  console.log(`  backup: ${saved}`);
-  console.log("  Restart opencode for it to take effect.");
-  return 0;
-}
-
-function uninstallMcp(): number {
-  if (!existsSync(OPENCODE_CONFIG)) {
-    console.log(`nothing to do — no config at ${OPENCODE_CONFIG}`);
-    return 0;
-  }
-  const raw = readFileSync(OPENCODE_CONFIG, "utf8");
-
-  let next: string | null;
-  try {
-    next = removeMember(raw, MCP_PATH, MCP_KEY);
+    const { argv } = await api<{ argv: string[] }>("GET", `/api/sessions/${id}/attach`);
+    return attach(argv);
   } catch (e) {
-    printManualBlock((e as Error).message);
+    console.error(`agentbox ${verb}: ${(e as Error).message}`);
     return 1;
   }
-  if (next === null) {
-    console.log("agentbox MCP is not registered — nothing to remove.");
-    return 0;
-  }
-  if (!validates(next, MCP_PATH)) {
-    printManualBlock("the edit did not re-parse — refusing to write a file we cannot read back");
-    return 1;
-  }
-
-  const saved = backup(OPENCODE_CONFIG);
-  writeFileSync(OPENCODE_CONFIG, next);
-  console.log(`✓ removed the agentbox MCP server from ${OPENCODE_CONFIG}`);
-  console.log(`  backup: ${saved}`);
-  return 0;
 }
 
 // ------------------------------------------------------------------- doctor
 
 type Check = { name: string; ok: boolean; detail: string; fatal: boolean };
 
-/** Is `selector` a model omp can actually reach? */
-function modelAvailable(selector: string, ompUsable: boolean): { ok: boolean; detail: string } {
-  if (!ompUsable) return { ok: false, detail: "cannot check — omp is not usable (see above)" };
-  // `find` takes a substring; the id after the provider prefix is the narrowest
-  // one that still matches, and we compare full selectors below.
-  const pattern = selector.includes("/") ? selector.slice(selector.lastIndexOf("/") + 1) : selector;
-  const res = run(["omp", "models", "find", pattern, "--json"]);
-  if (res.code !== 0) return { ok: false, detail: `omp models failed: ${res.stderr.trim().slice(0, 120)}` };
-  let models: { selector: string }[];
-  try {
-    models = (JSON.parse(res.stdout) as { models: { selector: string }[] }).models;
-  } catch {
-    return { ok: false, detail: "could not parse `omp models --json` output" };
-  }
-  return models.some((m) => m.selector === selector)
-    ? { ok: true, detail: selector }
-    : { ok: false, detail: `${selector} is not in omp's model catalog` };
-}
-
 function doctor(): number {
   ensureDirs();
-  const settings = getSettings();
-
-  // `doctor` is an explicit "check now", so it forces a fresh probe rather
-  // than reading whatever the cache last saw.
   const deps = dependencies(true);
   const uiBuilt = existsSync(join(webDist, "index.html"));
-
-  const dep = (name: string, d: DepStatus, fatal: boolean): Check => ({
-    name,
-    ok: d.state === "ok",
-    detail: d.detail ?? d.state,
-    fatal,
-  });
+  const dep = (name: string, d: DepStatus, fatal: boolean): Check => ({ name, ok: d.state === "ok", detail: d.detail ?? d.state, fatal });
+  const which = (bin: string) => Bun.spawnSync(["sh", "-c", `command -v ${bin}`]).exitCode === 0;
 
   const checks: Check[] = [
     { name: "data dir", ok: true, detail: agentboxHome(), fatal: false },
-    // omp and git missing stop agentbox working; gh missing only makes PRs
-    // invisible, which is a real problem but not a fatal one.
-    dep("omp", deps.omp, true),
+    dep("tmux", deps.tmux, true),
     dep("git", deps.git, true),
     dep("gh", deps.gh, false),
+    ...PROVIDERS.map((p) => ({ name: p, ok: which(p), detail: which(p) ? "on PATH" : "not installed", fatal: false })),
     {
       name: "web ui",
       ok: uiBuilt,
-      detail: uiBuilt
-        ? `built at ${webDist}`
-        : "not built — run `bun run web:build` (the API works without it; the board does not)",
+      detail: uiBuilt ? `built at ${webDist}` : "not built — run `bun run web:build`",
       fatal: false,
     },
+    { name: "repos", ok: true, detail: `${listRepos().length} registered`, fatal: false },
   ];
-
-  // A model that omp cannot reach is why a supervisor silently never fires.
-  if (settings.supervisor.enabled) {
-    checks.push({
-      name: "supervisor model",
-      ...modelAvailable(settings.supervisor.model, deps.omp.state === "ok"),
-      fatal: false,
-    });
-  } else {
-    checks.push({ name: "supervisor", ok: true, detail: "disabled", fatal: false });
-  }
-  if (settings.advisor.enabled) {
-    checks.push({
-      name: "advisor model",
-      ...modelAvailable(settings.advisor.model, deps.omp.state === "ok"),
-      fatal: false,
-    });
-  } else {
-    checks.push({ name: "advisor", ok: true, detail: "disabled", fatal: false });
-  }
-
-  const repos = listRepos();
-  checks.push({
-    name: "repos",
-    ok: true,
-    detail: repos.length === 0 ? "none registered yet — add one in Settings" : `${repos.length} registered`,
-    fatal: false,
-  });
-
   for (const c of checks) console.log(`${c.ok ? "✓" : "✗"} ${c.name}: ${c.detail}`);
-
-  const broken = checks.filter((c) => !c.ok);
-  const fatal = broken.filter((c) => c.fatal);
+  const fatal = checks.filter((c) => !c.ok && c.fatal);
   console.log(`\nagentbox ${VERSION} · home: ${agentboxHome()}`);
-  if (broken.length === 0) {
-    console.log("All good.");
-  } else {
-    console.log(
-      `${broken.length} problem(s)${fatal.length > 0 ? `, ${fatal.length} of which stop agentbox working` : " — none fatal, but some features are off"}.`,
-    );
-  }
   return fatal.length > 0 ? 1 : 0;
 }
 
 // --------------------------------------------------------------------- main
 
-const USAGE = `usage: agentbox [serve|watch|doctor|compact|install|uninstall|mcp|subagent-mcp|version]
-  serve       start the server on port ${DEFAULT_PORT} (default)
-  watch       live roster of running subagents; \`watch <name>\` for one in full
-              (--once prints a frame and exits; --interrupt/--stop act on one)
-  doctor      check that everything agentbox needs is present and configured
-  compact     list oversized transcripts; \`compact --apply\` rewrites them without
-              the subagent progress heartbeats that made them oversized
-  install     register the MCP server with opencode
-  uninstall   remove that registration
-  mcp         run the board MCP server on stdio (opencode invokes this)
-  subagent-mcp  run the subagent MCP server on stdio (Claude Code invokes this)
-  host        run one session's agent (the server spawns these; not for hand use)
-  version     print the version`;
+const USAGE = `usage: agentbox <command>
+  serve                 run the server on port ${DEFAULT_PORT} (default command)
+  claude|codex|devin|omp [--big] [--account NAME] [--model M] [--detach] [prompt…]
+                        start a session here, on the account with the most room,
+                        and attach this terminal to it (detach: Ctrl-b d)
+  ls [--all] [--json]   list sessions
+  usage                 each account's limits and what running sessions claim
+  attach <id>           attach this terminal to a session in agentbox
+  resume <id>           resume a stopped session (same account) and attach
+  adopt <id>            move a session running in another terminal into agentbox
+  stop <id>             end a session's process; it stays resumable
+  mcp                   run the fleet MCP server on stdio (for a conductor session)
+  doctor                check that everything agentbox needs is present
+  version               print the version`;
 
-/**
- * Run one command.
- *
- * Returns the exit code, or null when the command is a long-running process
- * that must be left alive — exiting on `serve` would stop the server it just
- * started.
- */
 export async function main(argv: string[]): Promise<number | null> {
   const cmd = argv[0] ?? "serve";
-  switch (cmd) {
-    case "doctor":
-      return doctor();
-
-    case "version":
-    case "--version":
-    case "-v":
-      console.log(`agentbox ${VERSION}`);
-      return 0;
-
-    case "help":
-    case "--help":
-    case "-h":
-      console.log(USAGE);
-      return 0;
-
-    case "mcp":
-      await import("../mcp/index");
-      return null;
-
-    /**
-     * Watch the subagents, from outside the process that owns them.
-     *
-     * Reads the record on disk and talks to nothing, which is the only design
-     * that can work: an agent's owner is an MCP server on somebody else's
-     * stdio, with no address and a lifetime measured in one client session.
-     */
-    case "watch": {
-      ensureDirs();
-      const { watch } = await import("./watch");
-      return watch(argv.slice(1));
-    }
-
-    /**
-     * The subagent MCP server — a different surface from `mcp`, not a second
-     * copy of it. `mcp` hands a conductor the board; this hands any MCP client
-     * agents it calls like functions, in its own cwd, off the board entirely.
-     */
-    case "subagent-mcp":
-      ensureDirs();
-      await import("../mcp/subagent");
-      return null;
-
-    /**
-     * Reclaim the disk a fan-out's progress heartbeats took, from transcripts
-     * written before they stopped going to the log.
-     */
-    case "compact": {
-      ensureDirs();
-      const { compact } = await import("./compact");
-      return compact(argv.slice(1));
-    }
-
-    case "install":
-      ensureDirs();
-      return installMcp();
-
-    case "uninstall":
-      return uninstallMcp();
-
-    case "serve": {
-      ensureDirs();
-      const { startServer } = await import("../server/index");
-      await startServer();
-      return null;
-    }
-
-    /**
-     * Run one session's agent. Spawned by the server, not by a person.
-     *
-     * This is the process that actually owns an omp child. It is a command
-     * rather than something the server forks internally so that the agent is a
-     * plain OS process with no tie to whoever started it: the server can be
-     * restarted, upgraded or killed and this keeps running.
-     */
-    case "host": {
-      const sessionId = argv[1];
-      if (!sessionId) {
-        console.error("agentbox host: a session id is required");
-        return 2;
+  try {
+    switch (cmd) {
+      case "serve": {
+        ensureDirs();
+        const { startServer } = await import("../server/index");
+        await startServer();
+        return null;
       }
-      const flag = argv.indexOf("--first-message");
-      const firstMessage = flag === -1 ? null : (argv[flag + 1] ?? null);
-      ensureDirs();
-      const { runHost } = await import("../core/host");
-      return await runHost(sessionId, firstMessage);
+      case "claude":
+      case "codex":
+      case "devin":
+      case "omp":
+        return await startSession(cmd, argv.slice(1));
+      case "ls":
+      case "list":
+        return await list(argv.slice(1));
+      case "usage":
+        return await usage();
+      case "attach":
+      case "resume":
+      case "adopt":
+      case "stop":
+        return await onSession(cmd, argv[1]);
+      case "mcp": {
+        const { runMcp } = await import("../mcp/fleet");
+        await runMcp(BASE);
+        return null;
+      }
+      case "doctor":
+        return doctor();
+      case "version":
+      case "--version":
+      case "-v":
+        console.log(`agentbox ${VERSION}`);
+        return 0;
+      case "help":
+      case "--help":
+      case "-h":
+        console.log(USAGE);
+        return 0;
+      default:
+        console.error(`agentbox: unknown command "${cmd}"\n`);
+        console.error(USAGE);
+        return 2;
     }
-
-    default:
-      console.error(`agentbox: unknown command "${cmd}"`);
-      console.error(USAGE);
-      return 2;
+  } catch (e) {
+    if (e instanceof ApiError) {
+      console.error(`agentbox: ${e.message}`);
+      return 1;
+    }
+    throw e;
   }
 }

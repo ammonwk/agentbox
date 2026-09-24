@@ -44,14 +44,7 @@ export function parseClientMessage(raw: unknown): ParseResult {
       if (sessionId === "") {
         return { ok: false, error: "watch.sessionId must not be empty — use null to stop watching" };
       }
-      let since: number | undefined;
-      if (msg.since !== undefined) {
-        if (typeof msg.since !== "number" || !Number.isInteger(msg.since) || msg.since < 0) {
-          return { ok: false, error: "watch.since must be a non-negative integer seq" };
-        }
-        since = msg.since;
-      }
-      return { ok: true, message: { type: "watch", sessionId, since } };
+      return { ok: true, message: { type: "watch", sessionId } };
     }
 
     default:

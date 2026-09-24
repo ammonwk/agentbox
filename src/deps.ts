@@ -29,7 +29,7 @@ export interface DepStatus {
 }
 
 export interface DepSnapshot {
-  omp: DepStatus;
+  tmux: DepStatus;
   gh: DepStatus;
   git: DepStatus;
   /** When this snapshot was taken. */
@@ -61,17 +61,14 @@ function attempt(cmd: string[]): Attempt {
   };
 }
 
-function probeOmp(): DepStatus {
-  const r = attempt(["omp", "--version"]);
+function probeTmux(): DepStatus {
+  const r = attempt(["tmux", "-V"]);
   if (r.absent) {
-    return { state: "missing", detail: "omp is not on PATH — install it from omp.sh; nothing runs without it" };
+    return { state: "missing", detail: "tmux is not on PATH — every agentbox session runs in tmux, so nothing can start without it" };
   }
   if (r.code !== 0) {
-    return { state: "unusable", detail: `omp is installed but will not run: ${r.said.split("\n")[0]?.slice(0, 160)}` };
+    return { state: "unusable", detail: `tmux is installed but will not run: ${r.said.split("\n")[0]?.slice(0, 160)}` };
   }
-  // The version, not a boolean: what agentbox knows about omp's ACP surface was
-  // established against a specific release, so "which one" is the actionable
-  // half of the answer when something stops lining up.
   return { state: "ok", detail: r.said.split("\n")[0]?.trim() || "installed" };
 }
 
@@ -111,6 +108,6 @@ let cached: DepSnapshot | null = null;
 /** The cached dependency states, re-probed when stale or when forced. */
 export function dependencies(force = false): DepSnapshot {
   if (!force && cached && Date.now() - cached.at < TTL_MS) return cached;
-  cached = { omp: probeOmp(), gh: probeGh(), git: probeGit(), at: Date.now() };
+  cached = { tmux: probeTmux(), gh: probeGh(), git: probeGit(), at: Date.now() };
   return cached;
 }

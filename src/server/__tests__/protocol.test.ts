@@ -18,27 +18,14 @@ describe("ClientMessage validation", () => {
     expect(ok('{"type":"ping"}')).toEqual({ type: "ping" });
   });
 
-  test("accepts watch with a session id and a cursor", () => {
-    expect(ok('{"type":"watch","sessionId":"s1","since":12}')).toEqual({
-      type: "watch",
-      sessionId: "s1",
-      since: 12,
-    });
-  });
-
-  test("accepts watch without a cursor", () => {
-    expect(ok('{"type":"watch","sessionId":"s1"}')).toEqual({
-      type: "watch",
-      sessionId: "s1",
-      since: undefined,
-    });
+  test("accepts watch with a session id", () => {
+    expect(ok('{"type":"watch","sessionId":"s1"}')).toEqual({ type: "watch", sessionId: "s1" });
   });
 
   test("accepts watch with a null session id — that is how a client unsubscribes", () => {
     expect(ok('{"type":"watch","sessionId":null}')).toEqual({
       type: "watch",
       sessionId: null,
-      since: undefined,
     });
   });
 
@@ -64,19 +51,5 @@ describe("ClientMessage validation", () => {
     expect(err('{"type":"watch","sessionId":7}')).toContain("sessionId");
     expect(err('{"type":"watch"}')).toContain("sessionId");
     expect(err('{"type":"watch","sessionId":""}')).toContain("empty");
-  });
-
-  test("rejects a since cursor that is not a non-negative integer", () => {
-    expect(err('{"type":"watch","sessionId":"s","since":-1}')).toContain("since");
-    expect(err('{"type":"watch","sessionId":"s","since":1.5}')).toContain("since");
-    expect(err('{"type":"watch","sessionId":"s","since":"3"}')).toContain("since");
-  });
-
-  test("since 0 is valid — it means 'everything from the start'", () => {
-    expect(ok('{"type":"watch","sessionId":"s","since":0}')).toEqual({
-      type: "watch",
-      sessionId: "s",
-      since: 0,
-    });
   });
 });

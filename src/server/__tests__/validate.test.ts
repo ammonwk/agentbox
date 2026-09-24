@@ -37,72 +37,48 @@ describe("the key/label separation", () => {
 });
 
 describe("settings patches the UI actually sends", () => {
-  // Every one of these 400'd before the fix, which made the whole Supervision
-  // section of Settings unreachable from the browser.
-  test("a nested partial from one toggle", () => {
-    expect(parseSettingsPatch({ supervisor: { enabled: true } })).toEqual({ supervisor: { enabled: true } });
+  test("one balancer knob", () => {
+    expect(parseSettingsPatch({ balancer: { claimBig: 25 } })).toEqual({ balancer: { claimBig: 25 } });
   });
 
-  test("a nested partial from one numeric field", () => {
-    expect(parseSettingsPatch({ supervisor: { everyToolCalls: 10 } })).toEqual({
-      supervisor: { everyToolCalls: 10 },
-    });
+  test("one provider's default model", () => {
+    expect(parseSettingsPatch({ models: { codex: " gpt-5.5 " } })).toEqual({ models: { codex: "gpt-5.5" } });
   });
 
-  test("the advisor toggle", () => {
-    expect(parseSettingsPatch({ advisor: { enabled: true } })).toEqual({ advisor: { enabled: true } });
-  });
-
-  test("a complete nested object", () => {
-    const body = { supervisor: { enabled: true, everyToolCalls: 5, model: "opencode-zen-responses/muse-spark-1.3-contributor-free" } };
-    expect(parseSettingsPatch(body)).toEqual(body);
-  });
-
-  test("top-level scalars still work", () => {
+  test("top-level scalars", () => {
     expect(parseSettingsPatch({ theme: "dark" })).toEqual({ theme: "dark" });
     expect(parseSettingsPatch({ autoApprove: false })).toEqual({ autoApprove: false });
-    expect(parseSettingsPatch({ model: "x/y" })).toEqual({ model: "x/y" });
-  });
-
-  test("an empty systemPrompt is a legitimate value, not a missing one", () => {
-    expect(parseSettingsPatch({ systemPrompt: "" })).toEqual({ systemPrompt: "" });
+    expect(parseSettingsPatch({ boardDays: 7 })).toEqual({ boardDays: 7 });
   });
 
   test("an empty patch is valid and changes nothing", () => {
     expect(parseSettingsPatch({})).toEqual({});
   });
 
-  // A patch that carries keys the caller never sent would reset them on merge —
-  // the silent-wipe failure the validator exists to prevent.
+  // A patch that carries keys the caller never sent would reset them on merge.
   test("a partial patch carries ONLY the keys that were sent", () => {
-    const patch = parseSettingsPatch({ supervisor: { enabled: true } });
-    expect(Object.keys(patch)).toEqual(["supervisor"]);
-    expect(Object.keys(patch.supervisor!)).toEqual(["enabled"]);
-    expect("model" in patch.supervisor!).toBe(false);
-    expect("everyToolCalls" in patch.supervisor!).toBe(false);
+    const patch = parseSettingsPatch({ balancer: { tieBand: 5 } });
+    expect(Object.keys(patch)).toEqual(["balancer"]);
+    expect(Object.keys(patch.balancer!)).toEqual(["tieBand"]);
   });
 });
 
 describe("settings patches that should be refused", () => {
   test("unknown keys, at the top level and nested", () => {
-    expect(rejects({ superviser: {} })).toContain("unknown setting: superviser");
-    expect(rejects({ systemPrompot: "x" })).toContain("unknown setting");
+    expect(rejects({ supervisor: {} })).toContain("unknown setting: supervisor");
+    expect(rejects({ balancer: { claimHuge: 3 } })).toContain("unknown balancer setting");
+    expect(rejects({ models: { gemini: "x" } })).toContain("unknown provider");
   });
 
-  test("wrong types name the full path", () => {
-    expect(rejects({ supervisor: { enabled: "yes" } })).toBe(
-      "supervisor.enabled is required and must be a boolean",
-    );
-    expect(rejects({ supervisor: { everyToolCalls: 0 } })).toContain("supervisor.everyToolCalls");
-    expect(rejects({ supervisor: { everyToolCalls: 2.5 } })).toContain("supervisor.everyToolCalls");
-    expect(rejects({ advisor: { model: "" } })).toContain("advisor.model");
+  test("out-of-range and wrong-typed values", () => {
+    expect(rejects({ balancer: { claimBig: -1 } })).toContain("balancer.claimBig");
+    expect(rejects({ balancer: { shortWindowInWeekly: "24" } })).toContain("balancer.shortWindowInWeekly");
     expect(rejects({ theme: "neon" })).toContain("theme must be");
-    expect(rejects({ systemPrompt: 42 })).toContain("systemPrompt");
+    expect(rejects({ boardDays: 0 })).toContain("boardDays");
   });
 
   test("a nested value that is not an object", () => {
-    expect(rejects({ supervisor: true })).toContain("supervisor must be an object");
-    expect(rejects({ advisor: [1] })).toContain("advisor must be an object");
+    expect(rejects({ balancer: true })).toContain("balancer must be an object");
   });
 });
 

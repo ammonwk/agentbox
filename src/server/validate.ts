@@ -93,7 +93,7 @@ export function limitParam(url: URL, max = 5000): number | undefined {
  * setting nothing reads.
  */
 export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch {
-  const known = ["theme", "model", "autoApprove", "systemPrompt", "supervisor", "advisor"];
+  const known = ["theme", "boardDays", "autoApprove", "models", "balancer"];
   for (const key of Object.keys(body)) {
     if (!known.includes(key)) throw new HttpError(400, `unknown setting: ${key}`);
   }
@@ -106,31 +106,40 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
     }
     patch.theme = body.theme;
   }
-  if (body.model !== undefined) patch.model = requireString(body, "model");
+  if (body.boardDays !== undefined) patch.boardDays = requirePositiveInt(body, "boardDays");
   if (body.autoApprove !== undefined) patch.autoApprove = requireBoolean(body, "autoApprove");
-  if (body.systemPrompt !== undefined) {
-    // An empty overlay is a legitimate choice, so this one may be blank.
-    if (typeof body.systemPrompt !== "string") throw new HttpError(400, "systemPrompt must be a string");
-    patch.systemPrompt = body.systemPrompt;
-  }
 
-  if (body.supervisor !== undefined) {
-    const sup = asObject(body.supervisor, "supervisor");
-    const next: NonNullable<SettingsPatch["supervisor"]> = {};
-    if (sup.enabled !== undefined) next.enabled = requireBoolean(sup, "enabled", "supervisor.enabled");
-    if (sup.everyToolCalls !== undefined) {
-      next.everyToolCalls = requirePositiveInt(sup, "everyToolCalls", "supervisor.everyToolCalls");
+  if (body.models !== undefined) {
+    const m = asObject(body.models, "models");
+    const next: NonNullable<SettingsPatch["models"]> = {};
+    for (const [k, v] of Object.entries(m)) {
+      if (!["claude", "codex", "devin", "omp"].includes(k)) throw new HttpError(400, `unknown provider in models: ${k}`);
+      if (typeof v !== "string") throw new HttpError(400, `models.${k} must be a string`);
+      next[k as keyof typeof next] = v.trim();
     }
-    if (sup.model !== undefined) next.model = requireString(sup, "model", "supervisor.model");
-    patch.supervisor = next;
+    patch.models = next;
   }
 
-  if (body.advisor !== undefined) {
-    const adv = asObject(body.advisor, "advisor");
-    const next: NonNullable<SettingsPatch["advisor"]> = {};
-    if (adv.enabled !== undefined) next.enabled = requireBoolean(adv, "enabled", "advisor.enabled");
-    if (adv.model !== undefined) next.model = requireString(adv, "model", "advisor.model");
-    patch.advisor = next;
+  if (body.balancer !== undefined) {
+    const b = asObject(body.balancer, "balancer");
+    const next: NonNullable<SettingsPatch["balancer"]> = {};
+    const ranges: Record<string, [number, number]> = {
+      claimNormal: [0, 100],
+      claimBig: [0, 100],
+      shortWindowInWeekly: [1, 100],
+      claimIdleMin: [1, 24 * 60],
+      resetHorizonMin: [0, 300],
+      tieBand: [0, 100],
+    };
+    for (const [k, v] of Object.entries(b)) {
+      const range = ranges[k];
+      if (!range) throw new HttpError(400, `unknown balancer setting: ${k}`);
+      if (typeof v !== "number" || !Number.isFinite(v) || v < range[0] || v > range[1]) {
+        throw new HttpError(400, `balancer.${k} must be a number from ${range[0]} to ${range[1]}`);
+      }
+      next[k as keyof typeof next] = v;
+    }
+    patch.balancer = next;
   }
 
   return patch;
