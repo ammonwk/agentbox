@@ -602,7 +602,15 @@ export interface AppState extends HotState, ColdState {}
 export type ServerMessage =
   | { type: "hot"; state: HotState }
   | { type: "cold"; state: ColdState }
-  | { type: "timeline"; sessionId: string; events: TimelineEvent[]; cursor: string; reset: boolean }
+  | {
+      type: "timeline";
+      sessionId: string;
+      events: TimelineEvent[];
+      cursor: string;
+      reset: boolean;
+      /** On a reset frame: pass as `before` to page further back; null at the start. */
+      before?: string | null;
+    }
   | { type: "metrics"; state: MetricsState }
   | { type: "error"; message: string };
 

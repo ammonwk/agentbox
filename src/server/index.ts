@@ -225,7 +225,7 @@ async function pumpTimeline(ws: Socket): Promise<void> {
         const page = await fleet.timeline(id, null, TIMELINE_PAGE);
         if (d.watching !== id) continue;
         d.cursor = page.cursor;
-        send(ws, { type: "timeline", sessionId: id, events: page.events, cursor: page.cursor, reset: true });
+        send(ws, { type: "timeline", sessionId: id, events: page.events, cursor: page.cursor, reset: true, before: page.before });
       } else {
         const next = await fleet.since(id, d.cursor);
         if (d.watching !== id) continue;
