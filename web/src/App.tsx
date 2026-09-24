@@ -38,7 +38,7 @@ function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
     addEventListener("hashchange", onChange);
     // Normalise "" and anything unrecognised without adding a history entry.
     if (hrefOf(parseHash(location.hash)) !== location.hash) {
-      history.replaceState(null, "", hrefOf(parseHash(location.hash)) + "");
+      history.replaceState(null, "", hrefOf(parseHash(location.hash)));
     }
     return () => removeEventListener("hashchange", onChange);
   }, []);
@@ -397,7 +397,6 @@ function useTheme(serverPref: AgentSettings["theme"] | undefined) {
     const apply = () => {
       document.documentElement.dataset.theme = resolveTheme(pref);
       document.documentElement.style.colorScheme = resolveTheme(pref);
-      dispatchEvent(new Event("agentbox:theme"));
     };
     apply();
     try {

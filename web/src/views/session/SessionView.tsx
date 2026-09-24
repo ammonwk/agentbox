@@ -18,12 +18,13 @@ import { hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
 import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
-import { Timeline } from "./Timeline";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
 import "./session.css";
 
 const Terminal = lazy(() => import("./Terminal"));
+// The timeline carries the markdown renderer, the second-heaviest dependency.
+const Timeline = lazy(() => import("./Timeline").then((m) => ({ default: m.Timeline })));
 
 const TAB_LABEL: Record<SessionTab, string> = {
   terminal: "Terminal",
@@ -305,7 +306,9 @@ function Detail({
             <TermPlaceholder session={session} busy={busy} onAdopt={() => void run(() => api.adopt(session.id))} onResume={() => void run(() => api.resume(session.id))} />
           )
         ) : tab === "timeline" ? (
-          <Timeline session={session} />
+          <Suspense fallback={<Empty title="Loading the timeline…" />}>
+            <Timeline session={session} />
+          </Suspense>
         ) : tab === "diff" ? (
           <DiffPanel sessionId={session.id} active={session.status === "running"} />
         ) : (
