@@ -326,6 +326,7 @@ export class Fleet extends EventEmitter {
    * account, in the same directory, started after we did, is it.
    */
   private matchPendingSpawns(now: number): void {
+    const defaults = new Set(listAccounts().filter((a) => a.isDefault).map((a) => a.id));
     const pending = listSessionRecords(now - MATCH_WINDOW_MS).filter(
       (r) => r.agentSessionId === null && r.origin === "agentbox" && now - r.createdAt < MATCH_WINDOW_MS,
     );
@@ -339,7 +340,11 @@ export class Fleet extends EventEmitter {
         let best: Tracked | null = null;
         for (const t of this.tracked.values()) {
           const f = t.facts;
-          if (!f || f.isSubagent || t.ref.provider !== rec.provider || t.ref.accountId !== rec.accountId) continue;
+          if (!f || f.isSubagent || t.ref.provider !== rec.provider) continue;
+          // Devin records no account per session, so its adapter lists every
+          // transcript under the default account; a session we started on
+          // another account still matches there.
+          if (t.ref.accountId !== rec.accountId && !defaults.has(t.ref.accountId)) continue;
           if (this.byAgentId.has(`${rec.provider}:${f.agentSessionId}`)) continue;
           if (findSessionRecord(rec.provider, f.agentSessionId)) continue;
           if ((f.startedAt ?? 0) < rec.createdAt - 10_000) continue;
