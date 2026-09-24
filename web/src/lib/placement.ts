@@ -64,5 +64,6 @@ export function placementHeadline(p: Placement, manualLabel?: string | null): st
   if (manualLabel) return `Manual → ${manualLabel}`;
   if (p.mode === "none" || !p.accountId) return "No account can take a new session";
   const c = p.candidates.find((x) => x.accountId === p.accountId);
-  return `${p.mode === "manual" ? "Manual" : "Auto"} → ${c?.label ?? p.accountId}`;
+  const how = p.mode === "manual" ? "Manual" : p.mode === "overflow" ? "Overflow" : "Auto";
+  return `${how} → ${c?.label ?? p.accountId}`;
 }

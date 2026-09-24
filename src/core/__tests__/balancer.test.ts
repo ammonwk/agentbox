@@ -173,8 +173,16 @@ describe("weekly-only providers (codex)", () => {
 });
 
 describe("edges", () => {
-  test("nothing eligible says so and picks nothing", () => {
-    const p = place(req([claude("A", 100, 0), claude("B", 99, 0, { outstanding: [5] })]));
+  test("everything fully claimed but not exhausted overflows onto the least claimed", () => {
+    const p = place(req([claude("A", 100, 0), claude("B", 99, 0, { outstanding: [5] }), claude("C", 90, 0, { outstanding: [5, 5] })]));
+    expect(p.mode).toBe("overflow");
+    // B is 99 + 5 = 104 effective, C is 90 + 10 = 100; A has no weekly left.
+    expect(p.accountId).toBe("C");
+    expect(p.why).toContain("fully claimed");
+  });
+
+  test("nothing with real weekly left says so and picks nothing", () => {
+    const p = place(req([claude("A", 100, 0), claude("B", 100, 0, { enabled: false })]));
     expect(p.mode).toBe("none");
     expect(p.accountId).toBeNull();
     expect(p.why).toContain("pick one by hand");

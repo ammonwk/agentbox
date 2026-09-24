@@ -213,11 +213,27 @@ export function place(req: PlaceRequest): Placement {
     return { ...base, accountId: null, mode: "none", why: `no ${req.provider} account is set up` };
   }
   if (eligible.length === 0) {
+    // Claims are estimates. When every account is spoken for but some still
+    // has real weekly left, refusing outright would leave work undone that the
+    // accounts could in fact do — so overflow onto the least-claimed one, and
+    // say so. Only a truly exhausted (or switched-off) fleet refuses.
+    const open = candidates
+      .filter((c) => req.accounts.find((a) => a.account.id === c.accountId)?.account.enabled && (c.weekly === null || c.weekly < 100))
+      .sort((a, b) => (a.weeklyEffective ?? 0) - (b.weeklyEffective ?? 0) || (b.legRoom ?? 0) - (a.legRoom ?? 0));
+    const least = open[0];
+    if (least) {
+      return {
+        ...base,
+        accountId: least.accountId,
+        mode: "overflow",
+        why: `every ${req.provider} account's weekly is fully claimed by running sessions; ${least.label} is the least claimed (${least.weekly}% used + ${least.outstanding} claimed)`,
+      };
+    }
     return {
       ...base,
       accountId: null,
       mode: "none",
-      why: `every ${req.provider} account is full or off — pick one by hand to go anyway`,
+      why: `every ${req.provider} account is at its weekly limit or turned off — pick one by hand to go anyway`,
     };
   }
 

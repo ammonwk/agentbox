@@ -227,7 +227,7 @@ describe("Fleet", () => {
     expect(claims.map((c) => c.outstanding)).toEqual([5, 5]);
   });
 
-  test("nothing eligible refuses with the placement attached", async () => {
+  test("nothing with weekly left refuses with the placement attached", async () => {
     fleet = new Fleet({ adapters: [adapter], runtime, usage: usageSource({ "claude-a": weekly(100, 0), "claude-b": weekly(100, 0) }) });
     const err = await fleet.spawn({ provider: "claude", cwd: dir }).catch((e) => e);
     expect(err).toBeInstanceOf(FleetError);

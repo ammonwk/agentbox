@@ -142,8 +142,12 @@ export interface Candidate {
 export interface Placement {
   provider: ProviderId;
   accountId: string | null;
-  /** "auto" chose it; "manual" was your pick; "none" means nothing eligible. */
-  mode: "auto" | "manual" | "none";
+  /**
+   * "auto" chose it; "manual" was your pick; "overflow" means every account's
+   * weekly is fully claimed, so it went to the least-claimed one that still
+   * has real weekly left; "none" means nothing can take it at all.
+   */
+  mode: "auto" | "manual" | "overflow" | "none";
   big: boolean;
   claim: number;
   candidates: Candidate[];

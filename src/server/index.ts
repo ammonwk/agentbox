@@ -126,7 +126,9 @@ function accountViews(): AccountView[] {
     }
     return {
       ...a,
-      claims: claims.get(a.id) ?? [],
+      // Lapsed claims weigh nothing; listing every session of the last few
+      // days under its account would bury the handful that do.
+      claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
       placement: p?.candidates.find((c) => c.accountId === a.id) ?? null,
     };
   });
