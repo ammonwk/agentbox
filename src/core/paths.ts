@@ -27,24 +27,16 @@ const logDir = (): string => join(agentboxHome(), "logs");
 export const worktreeRoot = (): string => join(agentboxHome(), "worktrees");
 export const sessionDir = (): string => join(agentboxHome(), "sessions");
 export const repoRoot = (): string => join(agentboxHome(), "repos");
-export const dbPath = (): string => join(agentboxHome(), "agentbox.db");
+/** v2's database. v1's `agentbox.db` is left where it is, untouched. */
+export const dbPath = (): string => join(agentboxHome(), "box.db");
 
-/** Scratch for MCP subagents: one directory per agent, holding the system
- *  prompt file omp is launched with and that agent's transcript. Separate from
- *  `sessions/` because a subagent is not a board session and must never appear
- *  as one. */
-export const subagentRoot = (): string => join(agentboxHome(), "subagents");
+/** Credential homes for every non-default account, one directory each. */
+export const accountsRoot = (): string => join(agentboxHome(), "accounts");
+export const accountHomeFor = (id: string): string => join(accountsRoot(), id);
 
-/**
- * Pre-rendered status lines for calls that are still in flight, one file per
- * blocked tool call, deleted when it answers.
- *
- * A file rather than a socket or a query against the running server, because
- * the only consumer that matters is a shell script re-run every few seconds by
- * a terminal, and it must cost approximately nothing. Reading a file is a bash
- * builtin; anything else is a fork.
- */
-export const liveRoot = (): string => join(agentboxHome(), "live");
+/** The tmux server agentbox runs every session in: `tmux -L <socket>`. Its
+ *  own socket, so your personal tmux sessions and ours never mix. */
+export const tmuxSocket = (): string => process.env.AGENTBOX_TMUX_SOCKET ?? "agentbox";
 
 /**
  * The installed package's own root, resolved from this module's location
@@ -59,10 +51,9 @@ const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const webDist = join(packageRoot, "web", "dist");
 
 export const DEFAULT_PORT = 4479;
-export const DEFAULT_MODEL = "opencode-go-responses/muse-spark-1.3-contributor";
 
 export function ensureDirs() {
-  for (const d of [dataDir(), worktreeRoot(), sessionDir(), logDir(), repoRoot()]) {
+  for (const d of [dataDir(), worktreeRoot(), sessionDir(), logDir(), repoRoot(), accountsRoot()]) {
     mkdirSync(d, { recursive: true });
   }
 }
@@ -71,29 +62,13 @@ export function sessionDirFor(id: string): string {
   return join(sessionDir(), id);
 }
 
-export function subagentDirFor(id: string): string {
-  return join(subagentRoot(), id);
-}
-
 export function logPathFor(id: string): string {
   return join(logDir(), `${id}.jsonl`);
 }
 
 /**
- * Where a session host's stdout and stderr go.
- *
- * Separate from the transcript: this is the host process's own output — a
- * stack trace from a failed launch, omp's stderr — and it is the only place
- * that survives to explain a host that died before it could write an event.
- */
-export function hostLogPathFor(id: string): string {
-  return join(logDir(), `host-${id}.log`);
-}
-
-/**
  * The `agentbox` entry point, resolved from this file rather than from the
- * cwd or PATH. The server spawns it to start hosts, and it has to be the
- * binary of the build that is running, not whichever one a shell would find.
+ * cwd or PATH, so it is the binary of the build that is running.
  */
 export function agentboxBin(): string {
   return join(packageRoot, "bin", "agentbox");

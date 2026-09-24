@@ -9,14 +9,40 @@
  *   2. It must look like a skill file (SKILL.md or a supporting file).
  */
 
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { skillRoots } from "../core/skills";
-import { containedIn } from "../core/place";
 
-// Re-exported rather than defined here: the subagent MCP server needs the same
-// containment test for a different reason (keeping an agent's edits inside its
-// own working directory) and must not drag the skills subsystem in to get it.
-export { containedIn };
+/**
+ * The real path of `candidate` if it lies inside one of `roots`, else null.
+ *
+ * Resolved through symlinks on both sides, so a link inside a root that points
+ * out of it is refused. A path that does not exist yet falls back to lexical
+ * resolution, so writing a new file inside a root still works while `..`
+ * traversal is still caught by the prefix test.
+ */
+export function containedIn(candidate: string, roots: string[]): string | null {
+  if (!candidate || typeof candidate !== "string") return null;
+  if (candidate.includes("\0")) return null;
+
+  let real: string;
+  try {
+    real = realpathSync(resolve(candidate));
+  } catch {
+    real = resolve(candidate);
+  }
+
+  for (const root of roots) {
+    let realRoot: string;
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      continue;
+    }
+    if (real === realRoot || real.startsWith(realRoot + sep)) return real;
+  }
+  return null;
+}
 
 /** Every directory a skill may legitimately live in. */
 export function skillRootDirs(): string[] {

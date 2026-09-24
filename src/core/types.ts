@@ -1,347 +1,332 @@
 /** agentbox domain model — the one source of truth.
  *
- * A "session" is one omp task: it owns a git worktree, one long-lived
- * `omp acp` process, and a conversation that survives between turns. The web
- * UI imports these types directly (type-only, so nothing ships at runtime) —
- * there is deliberately no second copy in web/src.
+ * The web UI imports these types directly (type-only, so nothing ships at
+ * runtime) — there is deliberately no second copy in web/src. Keep this file
+ * types-only: a value export here would drag server code into the UI bundle.
+ *
+ * docs/v2.md is the map of how these relate.
  */
+
+// -------------------------------------------------------------- providers
+
+export type ProviderId = "claude" | "codex" | "devin" | "omp";
+
+// --------------------------------------------------------------- accounts
+
+/**
+ * One login on one provider. The credential home is what isolates it: the
+ * provider's CLI is run with `env` and finds only this account's credentials.
+ */
+export interface Account {
+  id: string;
+  provider: ProviderId;
+  /** What you called it. Defaults to the email. */
+  label: string;
+  email: string | null;
+  /** "max", "pro", "prolite", "Devin Max" — whatever the provider reports. */
+  plan: string | null;
+  /**
+   * The credential home: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or the XDG data
+   * dir devin logged in under. For the default account this is the provider's
+   * own default (`~/.claude`, `~/.codex`, …) and no env is set.
+   */
+  home: string;
+  isDefault: boolean;
+  /** Off means the balancer never places a new session here. Existing
+   *  sessions pinned to it are unaffected. */
+  enabled: boolean;
+  createdAt: number;
+}
+
+export type WindowKind = "short" | "daily" | "weekly" | "monthly";
+
+/** One rate-limit window as the provider reports it. */
+export interface UsageWindow {
+  /** Stable within a provider: "five_hour", "seven_day", "seven_day:Fable", "weekly". */
+  id: string;
+  kind: WindowKind;
+  label: string;
+  /** 0–100. */
+  usedPct: number;
+  /** Epoch ms; null when the window has not started (nothing used yet). */
+  resetsAt: number | null;
+  windowMs: number;
+  /** A limit that applies only to one model. */
+  scope?: { model: string };
+}
+
+export interface AccountUsage {
+  accountId: string;
+  /** When these numbers were true, not when we last tried. */
+  at: number | null;
+  windows: UsageWindow[];
+  /** Why the numbers are old or missing: "token expired", "429 until 14:02". */
+  stale: string | null;
+  source: "endpoint" | "cache" | "rollout" | "cli" | "none";
+  /** Anything else worth a line: extra-usage state, credits, a locked reason. */
+  notes: string[];
+}
+
+/** Credential health as far as we can tell without refreshing anything. */
+export interface AccountAuth {
+  state: "ok" | "expired" | "missing" | "unknown";
+  /** Access-token expiry, epoch ms, when the provider publishes one. */
+  expiresAt: number | null;
+  detail: string | null;
+}
+
+/** An account with everything the Accounts page and the balancer need. */
+export interface AccountView extends Account {
+  auth: AccountAuth;
+  usage: AccountUsage;
+  /** Active sessions pinned here and what they still claim. */
+  claims: ClaimView[];
+  /** The balancer's current view of this account for a normal session. */
+  placement: Candidate | null;
+}
+
+export interface ClaimView {
+  sessionId: string;
+  title: string;
+  big: boolean;
+  /** Weekly points claimed at placement. */
+  claim: number;
+  /** Weekly points attributed to this session so far. */
+  consumed: number;
+  /** max(0, claim − consumed), or 0 once the claim has lapsed. */
+  outstanding: number;
+  lapsed: boolean;
+}
+
+// ------------------------------------------------------------- balancer
+
+export interface BalancerSettings {
+  /** Weekly points a normal session is assumed to use. */
+  claimNormal: number;
+  /** Weekly points a Big session is assumed to use. */
+  claimBig: number;
+  /** Weekly points one full short (5-hour) window is worth. */
+  shortWindowInWeekly: number;
+  /** A claim lapses after this long with no activity. */
+  claimIdleMin: number;
+  /** A short window this close to resetting is treated as partly fresh. */
+  resetHorizonMin: number;
+  /** Leg room within this many points of the best counts as a tie. */
+  tieBand: number;
+}
+
+/** One account, as the balancer saw it when placing a session. */
+export interface Candidate {
+  accountId: string;
+  label: string;
+  eligible: boolean;
+  /** Why not, in a sentence, when not eligible. */
+  reason: string | null;
+  /** Weekly used, and with outstanding claims added. */
+  weekly: number | null;
+  weeklyEffective: number | null;
+  weeklyResetsAt: number | null;
+  /** Short window used, and with claims added (claude). */
+  short: number | null;
+  shortEffective: number | null;
+  shortResetsAt: number | null;
+  /** 0–100: short-window room after claims and reset proximity. */
+  legRoom: number | null;
+  /** Weekly points left per hour until the weekly reset. */
+  weeklyPerHour: number | null;
+  outstanding: number;
+  /** Ordering key; higher wins. */
+  score: number;
+}
+
+export interface Placement {
+  provider: ProviderId;
+  accountId: string | null;
+  /** "auto" chose it; "manual" was your pick; "none" means nothing eligible. */
+  mode: "auto" | "manual" | "none";
+  big: boolean;
+  claim: number;
+  candidates: Candidate[];
+  /** One sentence: why this account. */
+  why: string;
+}
+
+export interface CalibrationReport {
+  /** How many days of samples this is built from. */
+  days: number;
+  shortWindowInWeekly: { estimate: number | null; samples: number; r2: number | null };
+  sessionUse: {
+    normal: Percentiles & { samples: number };
+    big: Percentiles & { samples: number };
+  };
+  placements: number;
+  /** Placements followed by a rate-limit hit on the chosen account. */
+  hitAfterPlacement: number;
+  suggested: Partial<BalancerSettings>;
+  current: BalancerSettings;
+}
+
+export interface Percentiles {
+  p50: number | null;
+  p75: number | null;
+  p90: number | null;
+}
 
 // ---------------------------------------------------------------- session
 
 /**
- * Where a session is in its life.
+ * What a session is doing right now.
  *
- *   spawning → running ⇄ waiting → done
- *                     ↘ flagged   (the supervisor halted it)
- *                     ↘ dead      (process vanished)
- *                     ↘ failed    (never opened a conversation)
- *
- * All three of `flagged`, `dead` and `failed` are **resumable**. `failed` used
- * to be documented as terminal, which left a spawn that died before opening a
- * conversation with no way back except retyping the task. Resume continues the
- * conversation when there is an `ompSessionId`, and re-sends the original
- * prompt when there is not.
- *
- * `waiting` means the turn ended and the conversation is alive; the next
- * message resumes it. `done` is set when the session's branch has an open PR:
- * that is the only observable "it finished the job" signal we have.
+ *   running   — a live process, mid-turn
+ *   waiting   — a live process, turn over, your move
+ *   blocked   — a live process showing a prompt it needs answered (permission,
+ *               trust, login) — only knowable for sessions in our tmux
+ *   stopped   — no process; the conversation can be resumed
+ *   archived  — you put it away; still resumable
  */
-export type SessionStatus =
-  | "spawning"
-  | "running"
-  | "waiting"
-  | "done"
-  | "flagged"
-  | "failed"
-  | "dead";
+export type SessionStatus = "running" | "waiting" | "blocked" | "stopped" | "archived";
 
-// Board ordering is NOT derived from status — it comes from `attentionOf`, so
-// the Inbox, the board and the sidebar badge cannot disagree. A `STATUS_RANK`
-// table lived here and was read by nothing; it was also the one *value* export
-// in a module the browser imports type-only, so any use of it would have pulled
-// server code into the UI bundle. Keep this file types-only.
+/** Where the running process lives, which decides what we can do to it. */
+export type SessionHost =
+  /** In agentbox's tmux: we can type into it, attach to it, interrupt it. */
+  | "tmux"
+  /** A process we did not start, in some other terminal: read-only until adopted. */
+  | "external"
+  /** No process. */
+  | "none";
 
 export interface Session {
+  /** agentbox's short id, stable for the row's life. */
   id: string;
-  title: string;
-  /** The task as first given. Never overwritten by follow-ups. */
-  prompt: string;
+  provider: ProviderId;
+  /** The provider's own session id — what `--resume` takes. Null for the few
+   *  seconds between spawning a provider that cannot be told its id up front
+   *  and finding the transcript it wrote. */
+  agentSessionId: string | null;
+  accountId: string | null;
   status: SessionStatus;
-  /** Repo this session works on: a local path or an owner/repo slug. */
-  repo: string;
-  branch: string;
-  worktree: string | null;
-  model: string;
+  host: SessionHost;
 
-  /** Human messages sent after the first one. */
-  followUps: number;
-  /** Assistant text tail, for the list row. */
-  lastMessage: string | null;
-  /** Total tool calls observed across every turn — the supervisor's clock. */
-  toolCalls: number;
-
-  exitCode: number | null;
-  /** The omp process itself. */
-  pid: number | null;
-  /**
-   * The `agentbox host <id>` process that owns the omp child.
-   *
-   * Agents outlive the web server, so "is this session live" can no longer be
-   * answered by looking in a map on the server's heap. This is the durable
-   * half of that answer — the socket is the other half, and the authoritative
-   * one, since a pid can be reused by an unrelated process.
-   */
-  hostPid: number | null;
-  prNumber: number | null;
-  repoFullName: string | null;
-  costUsd: number | null;
-  /** Live context occupancy in tokens — the last ACP `usage_update` `used`,
-   *  set rather than accumulated. Null until omp has reported once. */
-  tokens: number | null;
-
-  /** The agent asked for permission and is parked until answered. */
-  blocked: boolean;
-  /** Why the supervisor halted this session. Set iff status === "flagged". */
-  flagReason: string | null;
-  /** omp ACP session id, so the conversation survives a process restart. */
-  ompSessionId: string | null;
-
-  createdAt: number;
-  updatedAt: number;
-  /** First moment a turn started running — for elapsed time. */
-  startedAt: number | null;
-  closedAt: number | null;
-  /**
-   * When the host stopped this session's omp process for sitting idle, or null.
-   *
-   * Orthogonal to `status`, like `closedAt`. A parked session is still
-   * `waiting` or `done`, because both already mean "the turn is over and a
-   * message continues it", and that stays true with no process behind it:
-   * `sendMessage` finds no host and starts one onto the same omp conversation.
-   * What this field buys is the one place that has to tell a deliberate stop
-   * from a crash, `reconcile`, which would otherwise mark it `dead`.
-   * Cleared by the host that picks the session back up.
-   */
-  parkedAt: number | null;
-
-  /**
-   * The permission prompt the agent is parked on, set iff `blocked`.
-   *
-   * Persisted, which it did not used to be. It lived on the ACP connection in
-   * the server's memory, so restarting the server lost the question while the
-   * agent went on waiting for an answer to it — survivable when the restart
-   * killed the agent too, and a deadlock now that it doesn't. The host still
-   * holds the promise that answers it; this is the copy the UI reads.
-   */
-  permission: PermissionRequest | null;
-
-  /**
-   * This session's subagent roster: one entry per subagent the run has
-   * dispatched, merged across every tool call that mentioned it and across
-   * every turn.
-   *
-   * It used to be "the latest snapshot any tool call carried", replaced whole.
-   * That was wrong in two ways at once. A run that dispatched in two batches
-   * showed only whichever batch reported last, because the second snapshot
-   * overwrote the first; and every entry kept the status of the last frame the
-   * parent's turn happened to carry, so a fan-out that finished overnight was
-   * still drawn as running the next morning. Entries are merged by name now,
-   * and `observedAt` says when each was last actually described — see
-   * `roster.ts`.
-   */
-  subs: SubagentProgress[] | null;
-}
-
-export interface PermissionRequest {
-  id: string;
   title: string;
-  tool: string;
-  options: { id: string; name: string }[];
+  /** Your label, when you gave one; wins over the derived title. */
+  label: string | null;
+  cwd: string;
+  /** The git work tree root containing cwd, if any. */
+  repoRoot: string | null;
+  branch: string | null;
+  /** agentbox cut this worktree for the session. */
+  worktree: string | null;
+  model: string | null;
+
+  firstPrompt: string | null;
+  lastPrompt: string | null;
+  /** Tail of the last assistant text, for the list row. */
+  lastMessage: string | null;
+
+  /** Tokens currently in the context window, and the window's size. */
+  contextUsed: number | null;
+  contextLimit: number | null;
+  tokens: TokenTotals;
+
+  big: boolean;
+  claim: number;
+  /** Where this session came from. */
+  origin: "agentbox" | "external";
+
+  pid: number | null;
+  /** tmux session name, when host is "tmux". */
+  tmux: string | null;
+  transcriptPath: string | null;
+
+  startedAt: number;
+  lastActivityAt: number;
+  archivedAt: number | null;
+  prNumber: number | null;
 }
 
-// -------------------------------------------------------------- attention
+export interface TokenTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** What these tokens would have cost at API prices — the common unit that
+   *  lets usage be apportioned across sessions on different models. */
+  costEquiv: number;
+}
 
-/**
- * What this session needs from a human, if anything. Derived in exactly one
- * place (`attentionOf` in conductor.ts) so the Inbox, the board's sort order
- * and the sidebar badge can never disagree about what is urgent.
- */
-export type AttentionKind =
-  | "none"
-  | "approval"
-  | "failed"
-  | "flagged"
-  | "review"
-  | "idle";
+export type AttentionKind = "blocked" | "waiting" | "running" | "stopped" | "archived";
 
 export interface Attention {
   kind: AttentionKind;
-  /** 0 = most urgent. */
+  /** Lower sorts first. */
   rank: number;
-  /** One human sentence: what happened and what it wants. */
-  label: string;
+  /** One line for the board: why this is where it is. */
+  reason: string;
 }
 
-// ------------------------------------------------------------- transcript
-
-/** ACP's coarse tool classification. `other` covers anything unmapped. */
-export type ToolKind =
-  | "read"
-  | "edit"
-  | "delete"
-  | "move"
-  | "execute"
-  | "search"
-  | "fetch"
-  | "think"
-  | "other";
-
-export type SubagentStatus = "pending" | "running" | "completed" | "failed";
+// ---------------------------------------------------------------- timeline
 
 /**
- * One dispatched subagent, as the roster holds it.
- *
- * The live half of this is omp's own progress entry
- * (`rawOutput.details.progress[]` on a task call's updates), which is the only
- * visibility the protocol offers while a turn is running — omp runs these
- * in-process, not as ACP sessions of their own. The durable half comes from
- * omp's session directory on disk, which is what still answers after the turn
- * ends. `source` says which described this entry last, and `observedAt` when.
+ * A provider-neutral transcript event. Each adapter folds its own format into
+ * these; the UI renders only these.
  */
-export interface SubagentProgress {
-  id: string;
-  /** The subagent type omp ran this one as ("scout", "reviewer", …). */
-  agent: string;
-  status: SubagentStatus;
-  /** The task text the subagent was dispatched with. */
-  task: string;
-  /** The tool the subagent is inside right now, when one is. */
-  currentTool?: string;
-  currentToolArgs?: string;
-  /** omp's intent string for the current or last tool call. */
-  lastIntent?: string;
-  toolCount: number;
-  tokens: number;
-  cost: number;
-  durationMs: number;
-  recentTools?: { tool: string; args?: string }[];
-
-  /**
-   * When this entry was last described by anything. A roster without it
-   * cannot tell "running" from "was running when we last heard", which is the
-   * one distinction a reader of a finished run needs.
-   */
-  observedAt?: number;
-  /** What described it last: omp's live progress stream, or its session
-   *  directory on disk. */
-  source?: "stream" | "disk";
-  /** When it ended, once something observed an end. */
-  endedAt?: number;
-  /** The parent's `agent://<name>` read has taken the result into the
-   *  conversation. */
-  collected?: boolean;
-  /** omp wrote a report file for it. A subagent that ended without one was
-   *  disposed of before it answered, which is not the same as succeeding. */
-  hasResult?: boolean;
-  /** The subagent that dispatched this one, when omp nested it a level
-   *  deeper than the board's own agent. */
-  parent?: string;
-}
-
-export type ToolStatus = "pending" | "running" | "ok" | "error";
-
-/**
- * One tool call, assembled from ACP's `tool_call` + `tool_call_update` pair.
- *
- * NOTE: omp does not put the tool's name on the wire — `title` is built from
- * an `intent` string when the call carries one, and falls back to the name
- * otherwise. Classify on `kind` + the shape of `input`, never on a name.
- */
-export interface ToolCall {
-  /** ACP toolCallId. Stable across the call's updates. */
-  id: string;
-  kind: ToolKind;
-  title: string;
-  /** ACP `rawInput` — the tool's arguments, verbatim. */
-  input: unknown;
-  status: ToolStatus;
-  /** Absolute paths this call touched, when ACP reported any. */
-  locations: string[];
-  /** Compacted text of ACP `rawOutput`. Truncated; the log keeps it all. */
-  output: string | null;
-  /**
-   * Subagent progress snapshot, when this call is one of omp's subagent
-   * tools (dispatch / wait / hub) and omp streamed one. Replaced whole on
-   * every update — it is a snapshot, not a delta.
-   *
-   * Only the call's own start and end events carry this to the transcript.
-   * The snapshots in between are a heartbeat every couple of seconds, and
-   * appending each one re-wrote the whole call — including the dispatch
-   * arguments, which hold every subagent's assignment — to the log. One
-   * fifty-way fan-out wrote 800 MB that way. Live progress goes to the
-   * session's roster, which is state; the transcript keeps the transitions.
-   */
-  subs?: SubagentProgress[];
-  startedAt: number;
-  endedAt: number | null;
-}
-
-export type AdvisorySeverity = "nit" | "concern" | "blocker";
-
-/**
- * One line of a session's history. `seq` is monotonic per session and is what
- * the UI uses to request only what it has not seen.
- */
-export type TranscriptEvent = { seq: number; ts: number } & (
+export type TimelineEvent = { id: string; at: number } & (
+  | { kind: "user"; text: string; images?: number }
+  | { kind: "assistant"; text: string }
+  | { kind: "thinking"; text: string }
   | {
-      type: "user";
-      text: string;
-      from: "human" | "supervisor" | "auto";
-      /** Sent mid-turn: not in the agent's context until a `delivered` event names it. */
-      queued?: boolean;
-    }
-  | { type: "assistant"; text: string }
-  | { type: "tool"; call: ToolCall }
-  | { type: "advisory"; severity: AdvisorySeverity; text: string }
-  /**
-   * A subagent changed state: dispatched, started, finished, failed.
-   *
-   * One event per transition, not per heartbeat. A fifty-way fan-out that
-   * used to write fourteen thousand near-identical tool rows writes about a
-   * hundred of these, and they are the part a person reading the history
-   * afterwards actually wants: when each agent started and when it came back.
-   */
-  | {
-      type: "subagent";
+      kind: "tool";
       name: string;
-      agent: string | null;
-      status: SubagentStatus;
-      /** Only on the first event for a subagent, where it is news. */
-      task?: string;
-      toolCount?: number;
-      tokens?: number;
-      cost?: number;
-      durationMs?: number;
-      /** Whether the live stream or omp's session directory said so. */
-      source: "stream" | "disk";
+      /** One line: the command, the file, the pattern. */
+      summary: string;
+      input?: string;
+      output?: string;
+      status: "running" | "ok" | "error";
     }
-  | { type: "permission"; title: string; approved: boolean | null }
-  | { type: "supervisor"; verdict: SupervisorVerdict }
-  | { type: "turn"; stopReason: string }
-  | { type: "error"; message: string }
-  /** The queued `user` events with these seqs are now in the agent's context. */
-  | { type: "delivered"; refs: number[] }
+  | { kind: "meta"; text: string; tone?: "info" | "warn" | "error" }
 );
 
-// ------------------------------------------------------------- supervisor
-
-/**
- * What the judge can decide. Neither verdict disturbs the run: `ok` does
- * nothing, `nudge` sends the agent one corrective message it can argue with.
- * There used to be a third state that halted the session for a human; it is
- * gone — a watcher that cuts a run off mid-stride does more damage than the
- * loops it catches, and a nudge naming the loop does the same job without
- * the guillotine.
- */
-export type SupervisorState = "ok" | "nudge";
-
-export interface SupervisorVerdict {
-  state: SupervisorState;
-  /** One sentence, shown verbatim in the UI. */
-  reason: string;
-  /** Sent to the agent when state === "nudge". */
-  nudge?: string;
-  /**
-   * What *initiated* this check, not what decided it — heuristics escalate to
-   * the judge rather than ruling, so a "decided by" reading would make
-   * `"heuristic"` unreachable. `heuristic` = a cheap signal tripped and forced
-   * an early check; `model` = the scheduled every-N-tool-calls check.
-   */
-  source: "heuristic" | "model";
-  /** Session tool-call count when this fired. */
-  atToolCall: number;
+export interface TimelinePage {
+  events: TimelineEvent[];
+  /** Pass back as `before` to get the page before this one. Null at the start. */
+  before: string | null;
+  /** Pass back as `since` to get what happened after this page. */
+  cursor: string;
 }
 
+// ----------------------------------------------------------------- logins
+
+export type LoginState = "starting" | "awaiting-user" | "verifying" | "done" | "failed";
+
+export interface LoginFlow {
+  id: string;
+  provider: ProviderId;
+  accountId: string;
+  state: LoginState;
+  /** Open this. */
+  url: string | null;
+  /** Codex device flow: type this at the URL. */
+  userCode: string | null;
+  /** Claude and devin: paste what the browser gives you back here. */
+  needsPaste: boolean;
+  /** The tail of what the CLI printed, for when it asks something unexpected. */
+  output: string;
+  error: string | null;
+  startedAt: number;
+}
+
+// --------------------------------------------------------------- settings
+
+export interface AgentSettings {
+  theme: "light" | "dark" | "system";
+  /** Days of inactive sessions to keep on the board. */
+  boardDays: number;
+  /** Skip permission prompts (each provider's bypass flag). */
+  autoApprove: boolean;
+  /** Default model per provider; empty means the provider's own default. */
+  models: Record<ProviderId, string>;
+  balancer: BalancerSettings;
+}
 // ------------------------------------------------------------------ diff
 
 export interface DiffFile {
@@ -396,7 +381,10 @@ export interface PrInfo {
 export interface SkillInfo {
   name: string;
   description: string;
-  source: "global" | "agents" | "project";
+  /** Which root it came from; see `skillRoots` for the order they shadow in. */
+  source: SkillSource;
+  /** Repo-local skills: the repo they belong to. */
+  repo?: string;
   /** The skill directory — the folder that contains SKILL.md. */
   path: string;
   /** Length of SKILL.md, for the "size" column. */
@@ -411,51 +399,6 @@ export interface SkillResult {
   from: string;
   to: string;
   error?: string;
-}
-
-// -------------------------------------------------------------- settings
-
-export interface SupervisorSettings {
-  enabled: boolean;
-  /** Run the check every N tool calls. */
-  everyToolCalls: number;
-  /** omp model id for the judge. Cheap is correct here. */
-  model: string;
-}
-
-export interface AdvisorSettings {
-  /** Passes --advisor to omp; needs a model on the `advisor` role to do anything. */
-  enabled: boolean;
-  model: string;
-}
-
-export interface AgentSettings {
-  theme: "light" | "dark" | "system";
-  model: string;
-  autoApprove: boolean;
-  /** agentbox's own append-system-prompt overlay. Editable in Settings. */
-  systemPrompt: string;
-  supervisor: SupervisorSettings;
-  advisor: AdvisorSettings;
-}
-
-// ------------------------------------------------------------------ models
-
-/** One entry in a Model dropdown. `id` is the omp selector, `provider/model`. */
-export interface ModelOption {
-  id: string;
-  /** A human name, for an id that does not say what the model is. */
-  label?: string;
-}
-
-/** `GET /api/models`. Built in src/core/models.ts. */
-export interface ModelCatalog {
-  /** agentbox's short list. Always present: it does not depend on the fetch. */
-  recommended: ModelOption[];
-  /** Everything else OpenCode Go lists, sorted. Empty until it has loaded once. */
-  go: ModelOption[];
-  /** Why Go's list could not be fetched this time, or null. */
-  goError: string | null;
 }
 
 // ----------------------------------------------------------------- metrics
@@ -579,15 +522,6 @@ export interface MetricsState {
   load: Record<string, LoadSample>;
 }
 
-// ------------------------------------------------------------ wire shapes
-
-/** Pushed on every change. Small enough to send often. */
-export interface HotState {
-  sessions: (Session & { attention: Attention })[];
-  serverTime: number;
-}
-
-/** Changes rarely and costs subprocesses to build. Pushed only when it moves. */
 // ------------------------------------------------------------- worktrees
 
 /** Why a worktree may or may not be reclaimed. `reason` is for the UI to group
@@ -636,12 +570,29 @@ export interface ReclaimResult {
   bytesFreed: number;
 }
 
+// ------------------------------------------------------------- skills
+
+export type SkillSource = "global" | "agents" | "codex" | "omp" | "project";
+
+// ------------------------------------------------------------ wire shapes
+
+/** Pushed on every change. Small enough to send often. */
+export interface HotState {
+  sessions: (Session & { attention: Attention })[];
+  serverTime: number;
+}
+
+/** Changes on a slower clock; pushed only when it moves. */
 export interface ColdState {
+  accounts: AccountView[];
+  logins: LoginFlow[];
   repos: Repo[];
   prs: PrInfo[];
   skills: SkillInfo[];
   settings: AgentSettings;
-  /** Set when a dependency is missing, so the UI can say so instead of failing. */
+  /** Which provider CLIs are installed, and their versions. */
+  providers: { id: ProviderId; installed: boolean; version: string | null }[];
+  /** Set when something is missing, so the UI can say so instead of failing. */
   warnings: string[];
 }
 
@@ -651,13 +602,11 @@ export interface AppState extends HotState, ColdState {}
 export type ServerMessage =
   | { type: "hot"; state: HotState }
   | { type: "cold"; state: ColdState }
-  | { type: "events"; sessionId: string; events: TranscriptEvent[] }
-  // Its own channel because it is neither: pushed on a fixed cadence and never
-  // suppressed, since every sample differs and a suppressed one reads as live.
+  | { type: "timeline"; sessionId: string; events: TimelineEvent[]; cursor: string; reset: boolean }
   | { type: "metrics"; state: MetricsState }
   | { type: "error"; message: string };
 
-/** Client → server. A client watches at most one session's event stream. */
+/** Client → server. A client watches at most one session's timeline. */
 export type ClientMessage =
-  | { type: "watch"; sessionId: string | null; since?: number }
+  | { type: "watch"; sessionId: string | null }
   | { type: "ping" };
