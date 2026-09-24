@@ -51,4 +51,18 @@ describe("JsonlTail", () => {
     expect(r[0]!.value.s.length).toBe(big.length);
     expect(t.range(1, 2)[0]!.value.n).toBe(1);
   });
+
+  test("a visitor gets every record and nothing is collected", () => {
+    const p = tmp();
+    writeFileSync(p, '{"i":0}\n{"i":1}\n');
+    const t = new JsonlTail(p);
+    const seen: [number, number][] = [];
+    const r = t.read((rec) => seen.push([rec.index, rec.value.i]));
+    expect(r.records).toEqual([]);
+    expect(seen).toEqual([[0, 0], [1, 1]]);
+    appendFileSync(p, '{"i":2}\n');
+    t.read((rec) => seen.push([rec.index, rec.value.i]));
+    expect(seen.at(-1)).toEqual([2, 2]);
+    expect(t.range(0, 3).map((x) => x.value.i)).toEqual([0, 1, 2]);
+  });
 });

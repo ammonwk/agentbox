@@ -40,8 +40,13 @@ export class JsonlTail {
    * Read every complete line appended since the last call. A trailing partial
    * line (a write in progress) is left for next time. If the file was
    * truncated or replaced, everything is re-read and `reset` is true.
+   *
+   * With `visit`, each record is handed over as it is parsed and none are
+   * collected: the first read of a 200 MB rollout would otherwise hold every
+   * parsed record in memory at once. A reset is visible to a visitor as a
+   * record whose index is lower than the last one it saw.
    */
-  read(): { records: JsonlRecord[]; reset: boolean } {
+  read(visit?: (rec: JsonlRecord) => void): { records: JsonlRecord[]; reset: boolean } {
     let st;
     try {
       st = statSync(this.path);
@@ -73,7 +78,7 @@ export class JsonlTail {
         let lineStart = 0;
         for (let i = 0; i < data.length; i++) {
           if (data[i] !== NEWLINE) continue;
-          this.parseLine(data, lineStart, i, base + lineStart, records);
+          this.parseLine(data, lineStart, i, base + lineStart, records, visit);
           lineStart = i + 1;
         }
         carry = lineStart < data.length ? Buffer.from(data.subarray(lineStart)) : null;
@@ -87,7 +92,14 @@ export class JsonlTail {
     return { records, reset };
   }
 
-  private parseLine(data: Buffer, from: number, to: number, fileOffset: number, out: JsonlRecord[]): void {
+  private parseLine(
+    data: Buffer,
+    from: number,
+    to: number,
+    fileOffset: number,
+    out: JsonlRecord[],
+    visit?: (rec: JsonlRecord) => void,
+  ): void {
     if (to <= from) return;
     // Skip lines that cannot be an object without paying for a decode.
     let first = from;
@@ -99,8 +111,10 @@ export class JsonlTail {
     } catch {
       return;
     }
-    out.push({ offset: fileOffset, index: this.starts.length, value });
+    const rec = { offset: fileOffset, index: this.starts.length, value };
     this.starts.push(fileOffset);
+    if (visit) visit(rec);
+    else out.push(rec);
   }
 
   /**
