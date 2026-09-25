@@ -490,8 +490,10 @@ export class Fleet extends EventEmitter {
     // that was set too late; an mtime is only a guess and may only move it on.
     if (f.lastActivityAt !== null ? last !== rec.lastActivityAt : last > rec.lastActivityAt) patch.lastActivityAt = Math.min(last, now);
     if (f.cwd && !rec.cwd) patch.cwd = f.cwd;
-    // New activity on an archived session means you went back to it.
-    if (rec.archivedAt && last > rec.archivedAt) patch.archivedAt = null;
+    // A message from you to an archived session means you went back to it.
+    // Its own activity does not: an agent still finishing, or one another
+    // agent wrote to, stays where you put it.
+    if (rec.archivedAt && f.lastPromptAt !== null && f.lastPromptAt > rec.archivedAt) patch.archivedAt = null;
     updateSessionRecord(id, patch);
   }
 
@@ -600,8 +602,7 @@ export class Fleet extends EventEmitter {
     }
 
     let status: SessionStatus;
-    if (rec.archivedAt && host === "none") status = "archived";
-    else if (host === "none") status = "stopped";
+    if (host === "none") status = "stopped";
     else {
       const busy = proc?.busy;
       status = (busy ?? f?.turnOpen) ? "running" : "waiting";
@@ -626,16 +627,21 @@ export class Fleet extends EventEmitter {
       }
       this.autoAnswer(rec, pane, adapter, now);
     }
+    // Archived is your word, not the process's: a session you put away stays
+    // put away while its process lives on (idle in tmux, or finishing
+    // background agents), until you send it something (persistFacts).
+    const live = status;
+    if (rec.archivedAt) status = "archived";
 
     const cwd = f?.cwd || rec.cwd;
     const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;
     // The limit message is the session's last word: nothing after it, bar the
     // odd bookkeeping line written in the same breath.
     const hit = f?.rateLimitHits?.at(-1) ?? null;
-    const limitHit = hit && status !== "running" && hit.at >= lastActivityAt - 60_000 ? hit : null;
+    const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? hit : null;
     const cold =
       this.movable.has(rec.provider) &&
-      (status === "waiting" || status === "stopped" || status === "archived") &&
+      (live === "waiting" || live === "stopped") &&
       host !== "external" &&
       now - lastActivityAt > this.coldAfterMs;
     return {
@@ -752,7 +758,8 @@ export class Fleet extends EventEmitter {
     const settings = getSettings().balancer;
     const inputs: ClaimInput[] = [];
     for (const s of this.views.values()) {
-      if (!s.accountId || s.status === "archived") continue;
+      // An archived session with a process still alive can still spend.
+      if (!s.accountId || (s.status === "archived" && s.host === "none")) continue;
       inputs.push({
         sessionId: s.id,
         accountId: s.accountId,

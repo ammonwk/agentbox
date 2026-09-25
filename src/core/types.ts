@@ -186,7 +186,9 @@ export interface Percentiles {
  *   blocked   — a live process showing a prompt it needs answered (permission,
  *               trust, login) — only knowable for sessions in our tmux
  *   stopped   — no process; the conversation can be resumed
- *   archived  — you put it away; still resumable
+ *   archived  — you put it away; still resumable. Wins over the rest: its
+ *               process may still be alive (see `host`), and only a message
+ *               from you brings it back
  */
 export type SessionStatus = "running" | "waiting" | "blocked" | "stopped" | "archived";
 
