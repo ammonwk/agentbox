@@ -283,6 +283,11 @@ export class AccountsService extends EventEmitter {
     const id = await this.reidentify(account.id, true);
     void this.usage.refresh(account.id).catch(() => undefined);
     if (!id?.email) return null;
+    // Named after an email and logged into another: the login page used
+    // whoever the browser was signed into.
+    if (/^[^\s@]+@[^\s@]+$/.test(account.label) && account.label.toLowerCase() !== id.email.toLowerCase()) {
+      return `logged in as ${id.email}, not ${account.label} — your browser was probably signed into ${id.email}; switch accounts there and log in again`;
+    }
     // A CLI login that matches an account is the expected shape (see
     // `twinOf`); only two agentbox homes on one login are a mistake.
     const twin = listAccounts(account.provider).find(

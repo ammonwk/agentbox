@@ -21,7 +21,7 @@ export function Accounts({ state, sub }: { state: AppState; sub: "accounts" | "c
 }
 
 function AccountList({ state }: { state: AppState }) {
-  const [adding, setAdding] = useState<ProviderId | null>(null);
+  const [adding, setAdding] = useState<{ provider: ProviderId; expect?: string } | null>(null);
   const [importing, setImporting] = useState<ProviderId | null>(null);
   /** Logins this tab started, until the cold state carries them. */
   const [started, setStarted] = useState<LoginFlow[]>([]);
@@ -70,7 +70,7 @@ function AccountList({ state }: { state: AppState }) {
                     <Button size="sm" variant="ghost" icon={Icon.folder} onClick={() => setImporting(p)}>
                       Import existing home
                     </Button>
-                    <Button size="sm" icon={Icon.plus} disabled={!info?.installed} onClick={() => setAdding(p)}>
+                    <Button size="sm" icon={Icon.plus} disabled={!info?.installed} onClick={() => setAdding({ provider: p })}>
                       Add account
                     </Button>
                   </>
@@ -98,7 +98,7 @@ function AccountList({ state }: { state: AppState }) {
                     login={logins.find((l) => l.accountId === a.id) ?? null}
                     onLogin={(l) => setStarted((s) => [...s.filter((x) => x.accountId !== l.accountId), l])}
                     onDismissLogin={dismiss}
-                    onAddOwn={() => setAdding(p)}
+                    onAddOwn={() => setAdding({ provider: p, expect: a.email ?? undefined })}
                   />
                 ))}
               </div>
@@ -115,7 +115,8 @@ function AccountList({ state }: { state: AppState }) {
 
       {adding ? (
         <AddAccount
-          provider={adding}
+          provider={adding.provider}
+          expect={adding.expect}
           onClose={() => setAdding(null)}
           onStarted={(l) => {
             setStarted((s) => [...s, l]);
@@ -534,8 +535,19 @@ export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismis
 
 // ---------------------------------------------------------------- dialogs
 
-function AddAccount({ provider, onClose, onStarted }: { provider: ProviderId; onClose: () => void; onStarted: (l: LoginFlow) => void }) {
-  const [label, setLabel] = useState("");
+function AddAccount({
+  provider,
+  expect,
+  onClose,
+  onStarted,
+}: {
+  provider: ProviderId;
+  /** The email this login is meant to be (from "Add as its own"). */
+  expect?: string;
+  onClose: () => void;
+  onStarted: (l: LoginFlow) => void;
+}) {
+  const [label, setLabel] = useState(expect ?? "");
   const { run, busy, error } = useAction();
   return (
     <Modal
@@ -556,6 +568,15 @@ function AddAccount({ provider, onClose, onStarted }: { provider: ProviderId; on
         <Field label="Label" hint="What you call it — defaults to the email once logged in.">
           <input autoFocus value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. work, personal, team-b" />
         </Field>
+        {expect ? (
+          <p className="ac-twin">
+            <Icon.alert size={12} />
+            <span>
+              Sign in as <strong>{expect}</strong>. The login page uses whoever your browser is signed into, so switch accounts there
+              first if it is someone else.
+            </span>
+          </p>
+        ) : null}
         {error ? <p className="error-line">{error}</p> : null}
         <div className="modal-actions">
           <Button onClick={onClose}>Cancel</Button>
