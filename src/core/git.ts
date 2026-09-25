@@ -53,7 +53,7 @@ export const MISSING_BINARY = 127;
  * asks the same question of a hundred and fifty directories, and those are
  * independent I/O-bound subprocesses. Run serially they took 45 seconds.
  */
-export async function runAsync(
+async function runAsync(
   cmd: string[],
   cwd?: string,
   env?: Record<string, string>,
@@ -129,7 +129,7 @@ export function repoCheckoutPath(repo: Repo): string {
  * Local repos are used in place; GitHub slugs are cloned under repoRoot.
  * Returns the canonical local repo path.
  */
-export function ensureRepoClone(repo: Repo): { path: string; fullName: string | null } {
+function ensureRepoClone(repo: Repo): { path: string; fullName: string | null } {
   if (repo.kind === "local") {
     // A local checkout can still have a GitHub origin, which is what makes its
     // PRs findable. The slug is resolved at registration; re-resolve only if

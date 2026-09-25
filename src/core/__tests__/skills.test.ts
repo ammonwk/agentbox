@@ -13,7 +13,7 @@ import { join } from "node:path";
 import {
   demoteSkill,
   listSkills,
-  parseFrontmatterForTest as parseFrontmatter,
+  parseFrontmatter,
   promoteSkill,
   readSkillBody,
   skillRoots,

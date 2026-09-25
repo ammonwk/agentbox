@@ -497,7 +497,7 @@ export async function fetchOmpUsage(deps: UsageDeps): Promise<Reading> {
   return { kind: "ok", at: deps.now(), windows, notes, source: "cli" };
 }
 
-export function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
+function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
   switch (account.provider) {
     case "claude": return fetchClaudeUsage(account, deps);
     case "codex": return fetchCodexUsage(account, deps);

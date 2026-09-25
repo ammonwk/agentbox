@@ -359,10 +359,6 @@ export function listSessionRecords(sinceMs = 0): SessionRecord[] {
   return rows.map(rowToRecord);
 }
 
-export function deleteSessionRecord(id: string): void {
-  getDb().run("DELETE FROM sessions WHERE id = ?", [id]);
-}
-
 // ---------------------------------------------------------------- metrics
 
 export function insertUsageSample(accountId: string, at: number, w: UsageWindow, source: string): void {
@@ -422,23 +418,6 @@ export interface TokenSampleRow extends TokenTotals {
   at: number;
 }
 
-export function tokenSamplesBetween(fromMs: number, toMs: number, sessionIds: string[]): TokenSampleRow[] {
-  if (sessionIds.length === 0) return [];
-  const rows = getDb()
-    .query(
-      `SELECT * FROM token_samples WHERE at >= ? AND at <= ?
-         AND session_id IN (${sessionIds.map(() => "?").join(",")}) ORDER BY session_id, at`,
-    )
-    .all(fromMs, toMs, ...sessionIds) as {
-      session_id: string; at: number; input: number; output: number;
-      cache_read: number; cache_write: number; cost_equiv: number;
-    }[];
-  return rows.map((r) => ({
-    sessionId: r.session_id, at: r.at, input: r.input, output: r.output,
-    cacheRead: r.cache_read, cacheWrite: r.cache_write, costEquiv: r.cost_equiv,
-  }));
-}
-
 /** The newest token sample at or before `atMs`, for interval deltas. */
 export function tokenSampleAt(sessionId: string, atMs: number): TokenSampleRow | null {
   const r = getDb()
@@ -493,10 +472,6 @@ export function insertAssignment(a: AssignmentRow): void {
     [a.id, a.sessionId, a.at, a.provider, a.accountId, a.mode, a.big ? 1 : 0, a.claim,
      JSON.stringify(a.candidates), JSON.stringify(a.settings), a.why],
   );
-}
-
-export function linkAssignment(id: string, sessionId: string): void {
-  getDb().run("UPDATE assignments SET session_id = ? WHERE id = ?", [sessionId, id]);
 }
 
 export function assignmentsSince(sinceMs: number): AssignmentRow[] {

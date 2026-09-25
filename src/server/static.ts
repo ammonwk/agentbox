@@ -41,7 +41,7 @@ const HASHED = /-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/;
  * Content-hashed assets are the opposite case: their name changes whenever
  * their bytes do, so they can be cached forever and never go stale.
  */
-export function cacheControlFor(root: string, filePath: string): string {
+function cacheControlFor(root: string, filePath: string): string {
   const assets = resolve(root, "assets") + sep;
   if (filePath.startsWith(assets) && HASHED.test(filePath)) {
     return "public, max-age=31536000, immutable";

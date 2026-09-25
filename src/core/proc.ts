@@ -158,7 +158,7 @@ export function subtreeCpuTicks(rows: ProcRow[]): number {
 }
 
 /** How many samples of per-session CPU history to keep, for the sparkline. */
-export const HISTORY = 60;
+const HISTORY = 60;
 
 interface Prior {
   ticks: number;
@@ -224,7 +224,7 @@ export class LoadMeter {
 }
 
 /** Proportional set size for one process, in bytes. Undefined if unreadable. */
-export async function readPss(pid: number): Promise<number | undefined> {
+async function readPss(pid: number): Promise<number | undefined> {
   try {
     const text = await readFile(`/proc/${pid}/smaps_rollup`, "utf8");
     const m = /^Pss:\s+(\d+) kB/m.exec(text);
@@ -464,7 +464,7 @@ export async function backgroundShells(table: ProcTable, pid: number): Promise<n
 }
 
 /** Read command lines for a set of processes. Only for the drilldown. */
-export async function withCmdlines(rows: ProcRow[]): Promise<ProcRow[]> {
+async function withCmdlines(rows: ProcRow[]): Promise<ProcRow[]> {
   return Promise.all(
     rows.map(async (r) => {
       try {

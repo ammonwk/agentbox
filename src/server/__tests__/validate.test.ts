@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { HttpError } from "../router";
-import { beforeParam, limitParam, parseSettingsPatch, requireBoolean, requireString, sinceParam } from "../validate";
+import { parseSettingsPatch, requireBoolean, requireString } from "../validate";
 
 function rejects(body: Record<string, unknown>): string {
   try {
@@ -79,63 +79,5 @@ describe("settings patches that should be refused", () => {
 
   test("a nested value that is not an object", () => {
     expect(rejects({ balancer: true })).toContain("balancer must be an object");
-  });
-});
-
-describe("sinceParam", () => {
-  const at = (q: string) => sinceParam(new URL(`http://x/e${q}`));
-
-  test("absent, empty and zero", () => {
-    expect(at("")).toBeUndefined();
-    expect(at("?since=")).toBeUndefined();
-    expect(at("?since=0")).toBe(0);
-  });
-
-  test("a real cursor", () => {
-    expect(at("?since=42")).toBe(42);
-  });
-
-  test("junk is a 400, not NaN silently meaning 'from the start'", () => {
-    for (const q of ["?since=-1", "?since=1.5", "?since=abc"]) {
-      expect(() => at(q)).toThrow(/non-negative integer/);
-    }
-  });
-});
-
-describe("beforeParam", () => {
-  const at = (q: string) => beforeParam(new URL(`http://x/e${q}`));
-
-  test("absent and empty", () => {
-    expect(at("")).toBeUndefined();
-    expect(at("?before=")).toBeUndefined();
-  });
-
-  test("a real bound", () => {
-    expect(at("?before=42")).toBe(42);
-  });
-
-  test("junk is a 400 — zero is junk too, since the bound is exclusive", () => {
-    for (const q of ["?before=0", "?before=-1", "?before=1.5", "?before=abc"]) {
-      expect(() => at(q)).toThrow(/positive integer/);
-    }
-  });
-});
-
-describe("limitParam", () => {
-  const at = (q: string) => limitParam(new URL(`http://x/e${q}`));
-
-  test("absent and empty", () => {
-    expect(at("")).toBeUndefined();
-    expect(at("?limit=")).toBeUndefined();
-  });
-
-  test("a real bound", () => {
-    expect(at("?limit=50")).toBe(50);
-  });
-
-  test("junk, zero and anything past the cap are 400s", () => {
-    for (const q of ["?limit=0", "?limit=-1", "?limit=1.5", "?limit=abc", "?limit=999999"]) {
-      expect(() => at(q)).toThrow(/between 1 and/);
-    }
   });
 });

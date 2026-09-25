@@ -257,7 +257,8 @@ export interface TokenTotals {
   costEquiv: number;
 }
 
-export type AttentionKind = "blocked" | "waiting" | "running" | "stopped" | "archived";
+/** The board groups by status; an alias so the two can never drift apart. */
+export type AttentionKind = SessionStatus;
 
 export interface Attention {
   kind: AttentionKind;

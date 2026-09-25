@@ -55,7 +55,7 @@ export function weeklyWindow(windows: UsageWindow[]): UsageWindow | null {
   return windows.find((w) => w.kind === "weekly" && !w.scope) ?? null;
 }
 
-export function shortWindow(windows: UsageWindow[]): UsageWindow | null {
+function shortWindow(windows: UsageWindow[]): UsageWindow | null {
   return windows.find((w) => w.kind === "short" && !w.scope) ?? null;
 }
 
@@ -63,7 +63,7 @@ export function shortWindow(windows: UsageWindow[]): UsageWindow | null {
  * A weekly limit that applies only to the model being started, matched by
  * name: the provider says "Fable", the model string says "claude-fable-5-1".
  */
-export function scopedWindow(windows: UsageWindow[], model: string | null | undefined): UsageWindow | null {
+function scopedWindow(windows: UsageWindow[], model: string | null | undefined): UsageWindow | null {
   if (!model) return null;
   const m = model.toLowerCase();
   return (
@@ -90,7 +90,7 @@ function hoursLeft(w: UsageWindow, now: number): number {
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
-export function evaluate(
+function evaluate(
   state: AccountState,
   req: Pick<PlaceRequest, "model" | "settings" | "now">,
 ): Candidate {

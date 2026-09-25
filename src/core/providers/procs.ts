@@ -122,7 +122,7 @@ export function findProcesses(test: (argv: string[]) => boolean): ProcMatch[] {
  */
 let shared: ProcMatch[] | null = null;
 
-export function scanOwnProcesses(): ProcMatch[] {
+function scanOwnProcesses(): ProcMatch[] {
   return shared ?? scanUncached();
 }
 

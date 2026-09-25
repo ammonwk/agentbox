@@ -44,9 +44,10 @@ export function containedIn(candidate: string, roots: string[]): string | null {
   return null;
 }
 
-/** Every directory a skill may legitimately live in. */
-export function skillRootDirs(): string[] {
-  return skillRoots().map((r) => r.dir);
+/** Every directory a skill may legitimately live in, the local repos' own
+ *  skill directories included. */
+export function skillRootDirs(repoDirs: string[]): string[] {
+  return skillRoots(repoDirs).map((r) => r.dir);
 }
 
 /**

@@ -85,7 +85,7 @@ export function skillRoots(repoDirs: string[] = []): SkillRoot[] {
  * discarded. A real YAML parser is far more surface than one field needs, so
  * this handles the subset that actually appears and nothing else.
  */
-function parseFrontmatter(text: string): {
+export function parseFrontmatter(text: string): {
   name?: string;
   description?: string;
   allowedTools?: string;
@@ -142,9 +142,6 @@ function parseFrontmatter(text: string): {
   }
   return fm;
 }
-
-/** Exported for tests only — the parser is where the interesting failure was. */
-export const parseFrontmatterForTest = parseFrontmatter;
 
 export interface SkillScan {
   skills: SkillInfo[];

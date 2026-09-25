@@ -134,11 +134,6 @@ export function detectCli(provider: ProviderId): Promise<CliInfo> {
   return p;
 }
 
-/** For tests. */
-export function resetCliCache(): void {
-  detected.clear();
-}
-
 // ------------------------------------------------------------- accounts
 
 export function newAccountId(): string {

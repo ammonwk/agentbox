@@ -27,7 +27,7 @@ import { diffOf } from "../core/diff";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
-import { containedIn, looksLikeSkillFile, skillMdPath } from "./guard";
+import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getSettings, listRepos, mergeSettings, saveSettings } from "../core/db";
 import { listPrs } from "../core/prs";
 import { checkRequest } from "./csrf";
@@ -47,6 +47,7 @@ import type {
   MetricsState,
   PrInfo,
   ProviderId,
+  Repo,
   ServerMessage,
   SkillInfo,
 } from "../core/types";
@@ -90,10 +91,12 @@ const slow = {
   providers: [] as ColdState["providers"],
 };
 
+/** Checkouts on this machine; each may carry its own `.claude/skills`. */
+const localRepoDirs = (repos: Repo[]): string[] => repos.filter((r) => r.kind === "local").map((r) => r.ref);
+
 async function refreshSlow(): Promise<void> {
   const repos = listRepos();
-  const localDirs = repos.filter((r) => r.kind === "local").map((r) => r.ref);
-  const skills = listSkills(skillRoots(localDirs));
+  const skills = listSkills(skillRoots(localRepoDirs(repos)));
   slow.skills = skills.skills;
   await detectProviders();
   // `gh` runs here and nowhere else: one call per repo, once a minute.
@@ -543,7 +546,7 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/skill/body", ({ url }) => {
     const raw = url.searchParams.get("path") ?? "";
-    const dir = containedIn(raw, skillRootDirs());
+    const dir = containedIn(raw, skillRootDirs(localRepoDirs(listRepos())));
     if (!dir) throw new HttpError(403, "not a skill directory agentbox manages");
     const file = skillMdPath(dir);
     if (!looksLikeSkillFile(file)) throw new HttpError(403, "not a skill file");
@@ -551,7 +554,7 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/skill/body", async ({ req }) => {
     const b = await readBody(req);
-    const dir = containedIn(requireString(b, "path"), skillRootDirs());
+    const dir = containedIn(requireString(b, "path"), skillRootDirs(localRepoDirs(listRepos())));
     if (!dir) throw new HttpError(403, "not a skill directory agentbox manages");
     const file = skillMdPath(dir);
     if (!looksLikeSkillFile(file)) throw new HttpError(403, "not a skill file");
@@ -582,11 +585,6 @@ const router = new Router(mapError)
     if (found.kind === "notFound") return new Response("not found", { status: 404 });
     return fileResponse(webDist, found.path, req);
   });
-
-function skillRootDirs(): string[] {
-  const local = listRepos().filter((r) => r.kind === "local").map((r) => r.ref);
-  return skillRoots(local).map((r) => r.dir);
-}
 
 // ------------------------------------------------------------------ boot
 
