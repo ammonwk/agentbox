@@ -34,6 +34,9 @@ Codex, Devin and omp** — across every subscription you're logged into.
 - **A conductor.** `agentbox mcp` is an MCP server that gives one session a
   compact view of the whole fleet (`fleet`, `read_session`, `send`, `spawn`, …)
   without reading every transcript into its context.
+- **Subagents.** `agentbox subagent-mcp` is an MCP server that lets any agent
+  delegate to omp agents it calls like functions (`agent`, `send_message`,
+  `workflow`, …), in its own working directory.
 
 ## Use
 
@@ -66,6 +69,12 @@ For a conductor session:
 
 ```bash
 claude mcp add agentbox -- bun /path/to/agentbox/bin/agentbox mcp
+```
+
+For omp subagents any Claude session can delegate to (no server needed):
+
+```bash
+claude mcp add omp -e AGENTBOX_SUBAGENT_MODEL=opencode-go/space-bunny-free -- bun /path/to/agentbox/bin/agentbox subagent-mcp
 ```
 
 ## Develop
