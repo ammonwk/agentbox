@@ -1,0 +1,304 @@
+[
+  {
+    "toolCallId": "call_00_kIZbVNnOpcB55QlUOlTU2235",
+    "title": "reading greet file",
+    "kind": "read",
+    "status": "pending",
+    "locations": [
+      {
+        "path": "/w/src/greet.js"
+      }
+    ],
+    "rawInput": {
+      "path": "src/greet.js"
+    },
+    "sessionUpdate": "tool_call"
+  },
+  {
+    "toolCallId": "call_00_kIZbVNnOpcB55QlUOlTU2235",
+    "status": "completed",
+    "content": [
+      {
+        "content": {
+          "text": "export const GREETING = \"hello\";\nexport function greet(name) {\n  return `${GREETING} ${name}`;\n}\n",
+          "type": "text"
+        },
+        "type": "content"
+      },
+      {
+        "content": {
+          "text": "export const GREETING = \"hello\";\nexport function greet(name) {\n  return `${GREETING} ${name}`;\n}",
+          "type": "text"
+        },
+        "type": "content"
+      }
+    ],
+    "rawOutput": {
+      "content": [
+        {
+          "type": "text",
+          "text": "export const GREETING = \"hello\";\nexport function greet(name) {\n  return `${GREETING} ${name}`;\n}\n"
+        }
+      ],
+      "details": {
+        "totalLines": 5,
+        "displayContent": {
+          "text": "export const GREETING = \"hello\";\nexport function greet(name) {\n  return `${GREETING} ${name}`;\n}\n",
+          "startLine": 1,
+          "lineNumbers": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "fileSize": 97,
+        "meta": {
+          "source": {
+            "type": "path",
+            "value": "/w/src/greet.js"
+          }
+        }
+      }
+    },
+    "sessionUpdate": "tool_call_update"
+  },
+  {
+    "toolCallId": "call_00_ET_Me5AmJhZZYPUIZtroFkl9895",
+    "title": "$ ls -1 src",
+    "kind": "execute",
+    "status": "pending",
+    "content": [
+      {
+        "content": {
+          "text": "$ ls -1 src",
+          "type": "text"
+        },
+        "type": "content"
+      }
+    ],
+    "rawInput": {
+      "command": "ls -1 src"
+    },
+    "sessionUpdate": "tool_call"
+  },
+  {
+    "toolCallId": "call_00_ET_Me5AmJhZZYPUIZtroFkl9895",
+    "status": "in_progress",
+    "content": [
+      {
+        "content": {
+          "text": "$ ls -1 src",
+          "type": "text"
+        },
+        "type": "content"
+      },
+      {
+        "content": {
+          "text": "greet.js\n",
+          "type": "text"
+        },
+        "type": "content"
+      },
+      {
+        "content": {
+          "text": "greet.js",
+          "type": "text"
+        },
+        "type": "content"
+      }
+    ],
+    "rawOutput": {
+      "content": [
+        {
+          "type": "text",
+          "text": "greet.js\n"
+        }
+      ],
+      "details": {}
+    },
+    "sessionUpdate": "tool_call_update"
+  },
+  {
+    "toolCallId": "call_00_ET_Me5AmJhZZYPUIZtroFkl9895",
+    "status": "completed",
+    "content": [
+      {
+        "content": {
+          "text": "$ ls -1 src",
+          "type": "text"
+        },
+        "type": "content"
+      },
+      {
+        "content": {
+          "text": "greet.js\n\n\nWall time: 0.84 seconds",
+          "type": "text"
+        },
+        "type": "content"
+      }
+    ],
+    "rawOutput": {
+      "content": [
+        {
+          "type": "text",
+          "text": "greet.js\n\n\nWall time: 0.84 seconds"
+        }
+      ],
+      "details": {
+        "timeoutSeconds": 300,
+        "wallTimeMs": 840.3074430000015
+      }
+    },
+    "sessionUpdate": "tool_call_update"
+  },
+  {
+    "toolCallId": "call_00_ET_g10UFUweSoU7q8cFTErj7081",
+    "title": "$ cat src/does-not-exist.js",
+    "kind": "execute",
+    "status": "pending",
+    "content": [
+      {
+        "content": {
+          "text": "$ cat src/does-not-exist.js",
+          "type": "text"
+        },
+        "type": "content"
+      }
+    ],
+    "rawInput": {
+      "command": "cat src/does-not-exist.js"
+    },
+    "sessionUpdate": "tool_call"
+  },
+  {
+    "toolCallId": "call_00_ET_g10UFUweSoU7q8cFTErj7081",
+    "status": "in_progress",
+    "content": [
+      {
+        "content": {
+          "text": "$ cat src/does-not-exist.js",
+          "type": "text"
+        },
+        "type": "content"
+      },
+      {
+        "content": {
+          "text": "cat: src/does-not-exist.js: No such file or directory\n",
+          "type": "text"
+        },
+        "type": "content"
+      },
+      {
+        "content": {
+          "text": "cat: src/does-not-exist.js: No such file or directory",
+          "type": "text"
+        },
+        "type": "content"
+      }
+    ],
+    "rawOutput": {
+      "content": [
+        {
+          "type": "text",
+          "text": "cat: src/does-not-exist.js: No such file or directory\n"
+        }
+      ],
+      "details": {}
+    },
+    "sessionUpdate": "tool_call_update"
+  },
+  {
+    "toolCallId": "call_00_ET_g10UFUweSoU7q8cFTErj7081",
+    "status": "failed",
+    "content": [
+      {
+        "content": {
+          "text": "$ cat src/does-not-exist.js",
+          "type": "text"
+        },
+        "type": "content"
+      },
+      {
+        "content": {
+          "text": "cat: src/does-not-exist.js: No such file or directory\n\n\nWall time: 0.09 seconds\n\nCommand exited with code 1",
+          "type": "text"
+        },
+        "type": "content"
+      }
+    ],
+    "rawOutput": {
+      "content": [
+        {
+          "type": "text",
+          "text": "cat: src/does-not-exist.js: No such file or directory\n\n\nWall time: 0.09 seconds\n\nCommand exited with code 1"
+        }
+      ],
+      "details": {
+        "timeoutSeconds": 300,
+        "wallTimeMs": 92.85908500000005,
+        "exitCode": 1
+      },
+      "isError": true
+    },
+    "sessionUpdate": "tool_call_update"
+  },
+  {
+    "toolCallId": "call_00_ET_2H3Mz5AxjBYRkpCj4K4l7765",
+    "title": "changing greeting to hi",
+    "kind": "edit",
+    "status": "pending",
+    "locations": [
+      {
+        "path": "/w/src/greet.js"
+      }
+    ],
+    "rawInput": {
+      "path": "src/greet.js",
+      "old_string": "export const GREETING = \"hello\";",
+      "new_string": "export const GREETING = \"hi\";"
+    },
+    "sessionUpdate": "tool_call"
+  },
+  {
+    "toolCallId": "call_00_ET_2H3Mz5AxjBYRkpCj4K4l7765",
+    "status": "completed",
+    "content": [
+      {
+        "path": "/w/src/greet.js",
+        "oldText": "export const GREETING = \"hello\";\nexport function greet(name) {\n  return `${GREETING} ${name}`;\n}\n",
+        "newText": "export const GREETING = \"hi\";\nexport function greet(name) {\n  return `${GREETING} ${name}`;\n}\n",
+        "type": "diff"
+      },
+      {
+        "content": {
+          "text": "Successfully replaced text in src/greet.js.",
+          "type": "text"
+        },
+        "type": "content"
+      }
+    ],
+    "locations": [
+      {
+        "path": "/w/src/greet.js"
+      }
+    ],
+    "rawOutput": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Successfully replaced text in src/greet.js."
+        }
+      ],
+      "details": {
+        "diff": "-1|export const GREETING = \"hello\";\n+1|export const GREETING = \"hi\";\n 2|export function greet(name) {\n 3|  return `${GREETING} ${name}`;\n 4|}",
+        "path": "/w/src/greet.js",
+        "firstChangedLine": 1,
+        "oldText": "export const GREETING = \"hello\";\nexport function greet(name) {\n  return `${GREETING} ${name}`;\n}\n",
+        "newText": "export const GREETING = \"hi\";\nexport function greet(name) {\n  return `${GREETING} ${name}`;\n}\n"
+      }
+    },
+    "sessionUpdate": "tool_call_update"
+  }
+]

@@ -73,3 +73,23 @@ export function logPathFor(id: string): string {
 export function agentboxBin(): string {
   return join(packageRoot, "bin", "agentbox");
 }
+
+/** The subagent MCP's scratch: one directory per spawned agent, holding the
+ *  system prompt omp is launched with and that agent's record (meta.json,
+ *  state.json, transcript.jsonl). Nothing here is a fleet session. */
+export const subagentRoot = (): string => join(agentboxHome(), "subagents");
+
+export function subagentDirFor(id: string): string {
+  return join(subagentRoot(), id);
+}
+
+/**
+ * Pre-rendered status lines for subagents and workflows still in flight, one
+ * file per line, deleted when it ends (`src/subagents/live.ts`).
+ *
+ * A file rather than a socket or a query against a running server, because
+ * the only consumer that matters is a status-line script re-run every few
+ * seconds by a terminal, and it must cost approximately nothing. Reading a
+ * file is a bash builtin; anything else is a fork.
+ */
+export const liveRoot = (): string => join(agentboxHome(), "live");
