@@ -245,7 +245,6 @@ export interface Session {
   startedAt: number;
   lastActivityAt: number;
   archivedAt: number | null;
-  prNumber: number | null;
 }
 
 export interface TokenTotals {

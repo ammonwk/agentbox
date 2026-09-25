@@ -279,7 +279,6 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     startedAt: T0 - 2 * H,
     lastActivityAt: T0 - 5 * M,
     archivedAt: null,
-    prNumber: null,
     ...p,
   };
 }
@@ -316,7 +315,7 @@ const sessions: MockSession[] = [
     lastMessage: "Done. `wham.ts` reads the endpoint with the account's auth.json token and maps `primary_window` to a weekly window. Want me to add the 429 backoff too?",
     contextUsed: 58_000, contextLimit: 272_000,
     tokens: { input: 31_000, output: 12_000, cacheRead: 390_000, cacheWrite: 0, costEquiv: 1.96 },
-    startedAt: T0 - 3 * H, lastActivityAt: T0 - 14 * M, prNumber: 212,
+    startedAt: T0 - 3 * H, lastActivityAt: T0 - 14 * M,
   }),
   sess({
     id: "x4p0", provider: "claude", accountId: "cl-personal", status: "waiting", host: "tmux", label: "docs pass",

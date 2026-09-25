@@ -34,7 +34,7 @@ function session(worktree: string | null): Session {
     model: "m", firstPrompt: null, lastPrompt: null, lastMessage: null, contextUsed: null, contextLimit: null,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0 }, big: false, claim: 0,
     origin: "agentbox", pid: null, tmux: null, transcriptPath: null, startedAt: 0, lastActivityAt: 0,
-    archivedAt: null, prNumber: null,
+    archivedAt: null,
   };
 }
 

@@ -169,7 +169,8 @@ function Detail({
   const [confirmStop, setConfirmStop] = useState(false);
   const account = state.accounts.find((a) => a.id === session.accountId) ?? null;
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
-  const pr = session.prNumber != null ? state.prs.find((p) => p.number === session.prNumber && p.sessionId === session.id) ?? null : null;
+  // listPrs matched it by branch; the newest-updated one wins if there are several.
+  const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
   const attach = `agentbox attach ${session.id}`;
   const usageText = account ? usageSummary(account) : "";
 
@@ -245,14 +246,12 @@ function Detail({
           <span className="fact">
             started <RelativeTime ts={session.startedAt} />
           </span>
-          {pr ? (
+          {pr && (
             <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
               <Icon.prs size={12} /> #{pr.number}
               {pr.isDraft ? " (draft)" : ""}
             </a>
-          ) : session.prNumber != null ? (
-            <span className="fact">PR #{session.prNumber}</span>
-          ) : null}
+          )}
           <span className="fact big-toggle">
             <Toggle
               checked={session.big}

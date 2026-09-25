@@ -273,7 +273,6 @@ function row(id: string, kind: AttentionKind, lastActivityAt: number, extra: Par
     startedAt: 0,
     lastActivityAt,
     archivedAt: null,
-    prNumber: null,
     attention,
     ...extra,
   };
