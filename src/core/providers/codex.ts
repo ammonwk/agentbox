@@ -590,7 +590,7 @@ export function codexBlockedOn(raw: string): string | null {
 
 // ------------------------------------------------------------- commands
 
-function accountCommand(account: Account): Pick<Command, "env" | "unset"> {
+function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Command, "env" | "unset"> {
   // The server's own CODEX_HOME must not leak into the default account.
   return account.isDefault ? { env: {}, unset: ["CODEX_HOME"] } : { env: { CODEX_HOME: account.home } };
 }
@@ -655,6 +655,7 @@ export const codexAdapter: ProviderAdapter = {
   defaultHome: () => join(userHome(), ".codex"),
 
   accountCommand,
+  authEnv: accountCommand,
 
   async listTranscripts(account, sinceMs) {
     return indexFor(codexHome(account))

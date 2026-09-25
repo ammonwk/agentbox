@@ -11,7 +11,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Account, AccountAuth } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
-import { claudeJsonPath, credentialsPath, devinConfigHome } from "./homes";
+import { authEnv, claudeJsonPath, credentialsPath } from "./homes";
 
 export interface Identity {
   email: string | null;
@@ -229,17 +229,11 @@ export function parseDevinAuthStatus(text: string): { loggedIn: boolean; email: 
   return { loggedIn, email: field("Email"), plan: field("Tier") ?? field("Plan") };
 }
 
-export function devinEnv(account: AccountRef): { env: Record<string, string>; unset: string[] } {
-  return account.isDefault
-    ? { env: {}, unset: ["XDG_DATA_HOME", "XDG_CONFIG_HOME"] }
-    : { env: { XDG_DATA_HOME: account.home, XDG_CONFIG_HOME: devinConfigHome(account) }, unset: [] };
-}
-
 export async function identifyDevin(account: AccountRef, execFn: ExecFn = defaultExec): Promise<Identity> {
   if (!existsSync(credentialsPath("devin", account.home)!)) {
     return { email: null, plan: null, auth: { state: "missing", expiresAt: null, detail: "not logged in" } };
   }
-  const { env, unset } = devinEnv(account);
+  const { env, unset } = authEnv({ ...account, provider: "devin" });
   // For the default account we also drop any XDG overrides the server
   // inherited, so devin reads the same files a plain `devin` in your shell does.
   const r = await execFn(["devin", "auth", "status"], { env, unset, timeoutMs: 20_000 });

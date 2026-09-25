@@ -262,6 +262,8 @@ describe("devin processes and commands", () => {
     expect(windsurfKeyOf(home)).toBe("test-key-not-real");
     expect(a.accountCommand(acct(home, false, "second"))).toEqual({ env: { WINDSURF_API_KEY: "test-key-not-real" } });
     expect(a.defaultHome()).toBe("/unused");
+    // It runs on the key, but logs in (and reports its login) under the home.
+    expect(a.authEnv(acct(home, false, "second"))).toEqual({ env: { XDG_DATA_HOME: home, XDG_CONFIG_HOME: join(home, "config") }, unset: [] });
   });
 
   test("argv, dialogs", () => {

@@ -73,8 +73,10 @@ function pathsUnder(dataHome: string): DevinPaths {
   };
 }
 
+/** The XDG data dir devin's default login lives under — the default account's
+ *  "home", since a home is what `XDG_DATA_HOME` gets set to. */
 function defaultDataHome(): string {
-  return process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  return process.env.XDG_DATA_HOME || join(process.env.HOME || homedir(), ".local", "share");
 }
 
 // ----------------------------------------------------------- credentials
@@ -479,6 +481,14 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     return { env: { WINDSURF_API_KEY: key } };
   }
 
+  /** Logins and `auth status` see the home itself: its data dir, and its own
+   *  config dir (resyncShared links the user's config.json into it). */
+  function authEnv(account: Pick<Account, "home" | "isDefault">): Pick<Command, "env" | "unset"> {
+    return account.isDefault
+      ? { env: {}, unset: ["XDG_DATA_HOME", "XDG_CONFIG_HOME"] }
+      : { env: { XDG_DATA_HOME: account.home, XDG_CONFIG_HOME: join(account.home, "config") }, unset: [] };
+  }
+
   return {
     id: "devin",
     label: "Devin",
@@ -488,6 +498,8 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     defaultHome: () => dataHome(),
 
     accountCommand,
+
+    authEnv,
 
     async listTranscripts(account, sinceMs) {
       // devin cannot say which account ran a session; see the file header.

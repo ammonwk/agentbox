@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor } from "../paths";
+import { adapterFor } from "../providers";
 import type { Account, ProviderId } from "../types";
 import { exec } from "./exec";
 
@@ -56,11 +57,6 @@ export function userHome(): string {
   return process.env.HOME || homedir();
 }
 
-/** The XDG data dir devin's default login lives under. */
-function xdgDataHome(): string {
-  return process.env.XDG_DATA_HOME || join(userHome(), ".local", "share");
-}
-
 function xdgConfigHome(): string {
   return process.env.XDG_CONFIG_HOME || join(userHome(), ".config");
 }
@@ -69,14 +65,17 @@ function xdgConfigHome(): string {
  * The provider's own default credential home — what the CLI uses when no
  * isolating env var is set. For devin this is the XDG data dir, not
  * `<data>/devin`: the account "home" is what `XDG_DATA_HOME` gets set to.
+ * The adapter owns it, as it owns every way the CLI is pointed at a home.
  */
 export function defaultHome(provider: ProviderId): string {
-  switch (provider) {
-    case "claude": return join(userHome(), ".claude");
-    case "codex": return join(userHome(), ".codex");
-    case "devin": return xdgDataHome();
-    case "omp": return join(userHome(), ".omp");
-  }
+  return adapterFor(provider).defaultHome();
+}
+
+/** The environment that points a provider's auth commands (login, status) at
+ *  an account's home, `unset` always present. */
+export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault">): { env: Record<string, string>; unset: string[] } {
+  const e = adapterFor(account.provider).authEnv(account);
+  return { env: e.env, unset: e.unset ?? [] };
 }
 
 /** The file whose existence means "this home has logged in". Null for omp,
@@ -98,12 +97,6 @@ export function credentialsPath(provider: ProviderId, home: string): string | nu
  */
 export function claudeJsonPath(account: Pick<Account, "home" | "isDefault">): string {
   return account.isDefault ? join(userHome(), ".claude.json") : join(account.home, ".claude.json");
-}
-
-/** devin's `XDG_CONFIG_HOME` for this account: the user's own for the default,
- *  `<home>/config` for the rest (see createAccountHome). */
-export function devinConfigHome(account: Pick<Account, "home" | "isDefault">): string {
-  return account.isDefault ? xdgConfigHome() : join(account.home, "config");
 }
 
 // ------------------------------------------------------------ detection

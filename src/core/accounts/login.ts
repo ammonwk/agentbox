@@ -18,7 +18,7 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Account, LoginFlow, ProviderId } from "../types";
 import { childEnv } from "./exec";
-import { AccountError, credentialsPath, devinConfigHome, userHome } from "./homes";
+import { AccountError, authEnv, credentialsPath, userHome } from "./homes";
 
 const OUTPUT_KEEP = 4096;
 /** Raw (unscrubbed) text kept internally; larger than OUTPUT_KEEP so a secret
@@ -46,34 +46,22 @@ export interface LoginCommand {
  * we want: the URL is shown in the UI of whichever machine you are on.
  */
 export function loginCommand(account: Pick<Account, "provider" | "home" | "isDefault">): LoginCommand {
-  const quiet = { BROWSER: "true", NO_COLOR: "1" };
+  if (account.provider === "omp") {
+    throw new AccountError(400, "omp logins are managed by omp itself — run `omp auth-broker login <provider>` in a terminal");
+  }
+  const { env, unset } = authEnv(account);
+  const common = {
+    env: { BROWSER: "true", NO_COLOR: "1", ...env },
+    unset,
+    credentialFile: credentialsPath(account.provider, account.home)!,
+  };
   switch (account.provider) {
     case "claude":
-      return {
-        argv: ["claude", "auth", "login", "--claudeai"],
-        env: account.isDefault ? quiet : { ...quiet, CLAUDE_CONFIG_DIR: account.home },
-        unset: account.isDefault ? ["CLAUDE_CONFIG_DIR"] : [],
-        credentialFile: credentialsPath("claude", account.home)!,
-        needsPaste: true,
-      };
+      return { argv: ["claude", "auth", "login", "--claudeai"], ...common, needsPaste: true };
     case "codex":
-      return {
-        argv: ["codex", "login", "--device-auth"],
-        env: account.isDefault ? quiet : { ...quiet, CODEX_HOME: account.home },
-        unset: account.isDefault ? ["CODEX_HOME"] : [],
-        credentialFile: credentialsPath("codex", account.home)!,
-        needsPaste: false,
-      };
+      return { argv: ["codex", "login", "--device-auth"], ...common, needsPaste: false };
     case "devin":
-      return {
-        argv: ["devin", "auth", "login", "--force-manual-token-flow"],
-        env: account.isDefault ? quiet : { ...quiet, XDG_DATA_HOME: account.home, XDG_CONFIG_HOME: devinConfigHome(account) },
-        unset: account.isDefault ? ["XDG_DATA_HOME", "XDG_CONFIG_HOME"] : [],
-        credentialFile: credentialsPath("devin", account.home)!,
-        needsPaste: true,
-      };
-    case "omp":
-      throw new AccountError(400, "omp logins are managed by omp itself — run `omp auth-broker login <provider>` in a terminal");
+      return { argv: ["devin", "auth", "login", "--force-manual-token-flow"], ...common, needsPaste: true };
   }
 }
 
