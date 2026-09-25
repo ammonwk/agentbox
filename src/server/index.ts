@@ -42,6 +42,7 @@ import { VERSION } from "../version";
 import type {
   AccountView,
   ColdState,
+  Health,
   HotState,
   MetricsState,
   PrInfo,
@@ -94,14 +95,7 @@ async function refreshSlow(): Promise<void> {
   const localDirs = repos.filter((r) => r.kind === "local").map((r) => r.ref);
   const skills = listSkills(skillRoots(localDirs));
   slow.skills = skills.skills;
-  const providers = await Promise.all(
-    PROVIDERS.map(async (id) => {
-      const a = fleet.providers().find((p) => p.id === id);
-      const d = a ? await a.detect().catch(() => ({ installed: false, version: null })) : { installed: false, version: null };
-      return { id, installed: d.installed, version: d.version };
-    }),
-  );
-  slow.providers = providers;
+  await detectProviders();
   // `gh` runs here and nowhere else: one call per repo, once a minute.
   const prs = listPrs(repos, fleet.sessions());
   slow.prs = prs.prs;
@@ -109,6 +103,16 @@ async function refreshSlow(): Promise<void> {
   if (!tmux.tmuxVersion()) warnings.unshift("tmux is not installed — agentbox runs every session in tmux, so nothing can be started.");
   slow.warnings = warnings;
   scheduleCold();
+}
+
+async function detectProviders(): Promise<void> {
+  slow.providers = await Promise.all(
+    PROVIDERS.map(async (id) => {
+      const a = fleet.providers().find((p) => p.id === id);
+      const d = a ? await a.detect().catch(() => ({ installed: false, version: null })) : { installed: false, version: null };
+      return { id, installed: d.installed, version: d.version };
+    }),
+  );
 }
 
 function accountViews(): AccountView[] {
@@ -343,9 +347,16 @@ const provider = (v: unknown): ProviderId => {
 
 const router = new Router(mapError)
   .add("GET", "/api/state", () => json({ ...hotState(), ...coldState() }))
-  .add("GET", "/api/health", async () =>
-    json({ version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: await dependencies() }),
-  )
+  .add("GET", "/api/health", async ({ url }) => {
+    // Re-check is someone who just installed or logged into something.
+    const refresh = url.searchParams.get("refresh") === "1";
+    if (refresh) {
+      await detectProviders();
+      scheduleCold();
+    }
+    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh) };
+    return json(health);
+  })
 
   // ---- sessions
   .add("POST", "/api/placement", async ({ req }) => {

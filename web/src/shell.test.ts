@@ -53,18 +53,27 @@ describe("composer", () => {
 });
 
 describe("health", () => {
-  test("reads every dependency-shaped key, including nested providers, and ignores the rest", () => {
+  test("reads the server's shape: the probed dependencies, then the provider CLIs", () => {
     const rows = healthRows({
-      git: { state: "ok", detail: "2.51" },
-      gh: { state: "unusable", detail: "logged out" },
-      providers: { claude: { state: "missing", detail: null } },
-      at: 123,
-      version: "2.0.0",
+      version: "0.1.0",
+      tmux: "tmux 3.5a",
+      providers: [
+        { id: "claude", installed: true, version: "2.3.1" },
+        { id: "omp", installed: false, version: null },
+      ],
+      deps: {
+        tmux: { state: "ok", detail: "tmux 3.5a" },
+        gh: { state: "unusable", detail: "logged out" },
+        git: { state: "ok", detail: "2.51" },
+        at: 123,
+      },
     });
     expect(rows).toEqual([
+      { name: "tmux", state: "ok", detail: "tmux 3.5a" },
       { name: "git", state: "ok", detail: "2.51" },
       { name: "gh", state: "unusable", detail: "logged out" },
-      { name: "claude", state: "missing", detail: null },
+      { name: "claude", state: "ok", detail: "2.3.1" },
+      { name: "omp", state: "missing", detail: "omp is not on PATH" },
     ]);
   });
 });

@@ -19,6 +19,9 @@ import type {
   CalibrationReport,
   ClientMessage,
   ColdState,
+  DepState,
+  DepStatus,
+  Health,
   HotState,
   LoginFlow,
   MetricsState,
@@ -35,12 +38,10 @@ import type {
   TimelinePage,
   WorktreeScan,
 } from "../../src/core/types";
-import type { DepState, DepStatus } from "../../src/deps";
 import { mergeTimeline } from "./lib/timeline";
 
 export type { SessionRow } from "./lib/board";
-export type { LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
-export type { DepState, DepStatus } from "../../src/deps";
+export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
 export * from "./lib/format";
 
 // ------------------------------------------------------------------- mock
@@ -110,28 +111,24 @@ export interface NewSessionInput {
 }
 
 /**
- * `GET /api/health`. The v2 contract says only "provider CLIs, tmux, gh, git",
- * so this is read defensively: every key whose value looks like a `DepStatus`
- * is a dependency row; anything else is ignored.
+ * `GET /api/health` as Diagnostics rows: the probed dependencies first, then
+ * the provider CLIs. A provider is only ever found or not — its probe is
+ * `detect()`, which has no "installed but unusable".
  */
-export type Health = Record<string, unknown>;
-
 export function healthRows(h: Health): { name: string; state: DepState; detail: string | null }[] {
-  const rows: { name: string; state: DepState; detail: string | null }[] = [];
-  const visit = (name: string, v: unknown) => {
-    if (v && typeof v === "object" && "state" in v) {
-      const d = v as DepStatus;
-      if (d.state === "ok" || d.state === "unusable" || d.state === "missing") {
-        rows.push({ name, state: d.state, detail: d.detail ?? null });
-      }
-    }
-  };
-  for (const [k, v] of Object.entries(h)) {
-    if (k === "providers" && v && typeof v === "object") {
-      for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) visit(pk, pv);
-    } else visit(k, v);
-  }
-  return rows;
+  const deps: [string, DepStatus][] = [
+    ["tmux", h.deps.tmux],
+    ["git", h.deps.git],
+    ["gh", h.deps.gh],
+  ];
+  return [
+    ...deps.map(([name, d]) => ({ name, state: d.state, detail: d.detail })),
+    ...h.providers.map((p) => ({
+      name: p.id,
+      state: p.installed ? ("ok" as const) : ("missing" as const),
+      detail: p.installed ? p.version : `${p.id} is not on PATH`,
+    })),
+  ];
 }
 
 export const api = {

@@ -24,6 +24,7 @@ import type {
   ClaimView,
   ClientMessage,
   ColdState,
+  Health,
   HotState,
   LoadSample,
   LoginFlow,
@@ -905,17 +906,20 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
 
   if (method === "GET") {
     if (head === "state") return appState();
-    if (head === "health")
-      return {
-        claude: { state: "ok", detail: "2.3.1 (Claude Code)" },
-        codex: { state: "ok", detail: "codex-cli 0.61.0" },
-        devin: { state: "ok", detail: "devin 1.4.2" },
-        omp: { state: "missing", detail: "omp is not on PATH." },
-        tmux: { state: "ok", detail: "tmux 3.5a" },
-        gh: { state: "unusable", detail: "gh is installed but not logged in — run `gh auth login`." },
-        git: { state: "ok", detail: "git version 2.51.0" },
-        at: Date.now(),
+    if (head === "health") {
+      const health: Health = {
+        version: "0.1.0",
+        tmux: "tmux 3.5a",
+        providers: cold().providers,
+        deps: {
+          tmux: { state: "ok", detail: "tmux 3.5a" },
+          gh: { state: "unusable", detail: "gh is installed but not authenticated — run `gh auth login`. Pull requests are invisible until you do." },
+          git: { state: "ok", detail: "git version 2.51.0" },
+          at: Date.now(),
+        },
       };
+      return health;
+    }
     if (head === "accounts") return accountViews();
     if (head === "calibration") return calibration(Number(url.searchParams.get("days") ?? 7));
     if (head === "settings") return structuredClone(settings);

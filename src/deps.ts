@@ -16,25 +16,9 @@
  */
 
 import { run } from "./core/git";
+import type { DepSnapshot, DepStatus } from "./core/types";
 
-export type DepState = "ok" | "unusable" | "missing";
-
-export interface DepStatus {
-  state: DepState;
-  /**
-   * A sentence about this state that a user can act on — the reason it is not
-   * `ok`, or the version/account when it is. Null when there is nothing to add.
-   */
-  detail: string | null;
-}
-
-export interface DepSnapshot {
-  tmux: DepStatus;
-  gh: DepStatus;
-  git: DepStatus;
-  /** When this snapshot was taken. */
-  at: number;
-}
+export type { DepSnapshot, DepState, DepStatus } from "./core/types";
 
 /**
  * Long enough that nothing can turn `/api/health` into a subprocess treadmill;
