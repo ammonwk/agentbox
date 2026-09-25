@@ -36,6 +36,8 @@ export interface AccountState {
   /** Logged in as the same login as this account: one usage pool, which
    *  places and claims under that account only. */
   sameAs?: string | null;
+  /** No login in its home (a new account mid-login, or the CLI logged out). */
+  loggedOut?: boolean;
 }
 
 export interface PlaceRequest {
@@ -163,6 +165,9 @@ function evaluate(
   if (!state.account.enabled) {
     c.eligible = false;
     c.reason = "turned off for new sessions";
+  } else if (state.loggedOut) {
+    c.eligible = false;
+    c.reason = "not logged in";
   } else if (state.sameAs) {
     c.eligible = false;
     c.reason = `same login as ${state.sameAs} — one usage pool, placed there`;

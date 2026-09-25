@@ -187,6 +187,11 @@ export class AccountsService extends EventEmitter {
     return this.logins.start(a);
   }
 
+  /** The last-known login state, without re-reading anything. */
+  authState(accountId: string): AccountAuth["state"] | null {
+    return this.identities.peek(accountId)?.auth.state ?? null;
+  }
+
   refreshUsage(accountId: string): Promise<AccountUsage> {
     return this.usage.refresh(accountId);
   }
@@ -259,6 +264,12 @@ export class AccountsService extends EventEmitter {
     if (id.plan && id.plan !== a.plan) patch.plan = id.plan;
     const auto = isAutoLabel(a) || (!!a.email && a.label.toLowerCase() === a.email.toLowerCase());
     if (id.email && auto && a.label !== id.email) patch.label = id.email;
+    // Logged out is nobody: a stale email would keep it a twin of whoever it
+    // used to be.
+    if (id.auth.state === "missing" && a.email) {
+      patch.email = null;
+      if (auto) patch.label = placeholderLabel(a.provider, a.isDefault);
+    }
     if (Object.keys(patch).length) updateAccount(a.id, patch);
   }
 
@@ -272,8 +283,10 @@ export class AccountsService extends EventEmitter {
     const id = await this.reidentify(account.id, true);
     void this.usage.refresh(account.id).catch(() => undefined);
     if (!id?.email) return null;
+    // A CLI login that matches an account is the expected shape (see
+    // `twinOf`); only two agentbox homes on one login are a mistake.
     const twin = listAccounts(account.provider).find(
-      (o) => o.id !== account.id && o.email?.toLowerCase() === id.email!.toLowerCase(),
+      (o) => o.id !== account.id && !o.isDefault && !account.isDefault && o.email?.toLowerCase() === id.email!.toLowerCase(),
     );
     return twin
       ? `logged in as ${id.email}, which is also account "${twin.label}" — both share one usage pool; forget one of them`

@@ -98,6 +98,7 @@ function AccountList({ state }: { state: AppState }) {
                     login={logins.find((l) => l.accountId === a.id) ?? null}
                     onLogin={(l) => setStarted((s) => [...s.filter((x) => x.accountId !== l.accountId), l])}
                     onDismissLogin={dismiss}
+                    onAddOwn={() => setAdding(p)}
                   />
                 ))}
               </div>
@@ -136,6 +137,7 @@ function AccountCard({
   login,
   onLogin,
   onDismissLogin,
+  onAddOwn,
 }: {
   account: AccountView;
   state: AppState;
@@ -143,6 +145,7 @@ function AccountCard({
   login: LoginFlow | null;
   onLogin: (l: LoginFlow) => void;
   onDismissLogin: (id: string) => void;
+  onAddOwn: () => void;
 }) {
   const { run, busy, error, clear } = useAction();
   const refresh = useAction();
@@ -194,7 +197,11 @@ function AccountCard({
             </button>
           </h3>
         )}
-        {a.isDefault ? <span className="src ac-default" title="The provider's own default home — no env override">default</span> : null}
+        {a.isDefault && a.provider !== "omp" ? (
+          <span className="src ac-default" title={`Your plain ${a.provider} CLI's own login. Logging the CLI in or out changes this card only.`}>
+            CLI login
+          </span>
+        ) : null}
         <span className="ac-toggle">
           <Toggle
             checked={a.enabled}
@@ -215,7 +222,12 @@ function AccountCard({
       </div>
 
       {a.auth.detail && a.auth.state !== "ok" ? <p className="ac-auth-detail">{a.auth.detail}</p> : null}
-      {a.twinOf ? (
+      {a.twinOf && a.isDefault ? (
+        <p className="ac-auth-detail">
+          Your CLI is logged in as <strong>{a.twinOf.label}</strong>, which agentbox runs as its own account: new sessions go there, and
+          sessions started from the CLI count against it.
+        </p>
+      ) : a.twinOf ? (
         <p className="ac-twin">
           <Icon.alert size={12} />
           <span>
@@ -223,6 +235,17 @@ function AccountCard({
             sessions here claim against it. Log this home into a different account, or forget it.
           </span>
         </p>
+      ) : a.isDefault && a.email ? (
+        <div className="ac-twin">
+          <Icon.alert size={12} />
+          <span>
+            Only your CLI is logged into this account, so logging the CLI into another one would take it away from agentbox. Add it as
+            its own account to keep it.
+          </span>
+          <Button size="sm" variant="ghost" icon={Icon.plus} onClick={onAddOwn}>
+            Add as its own
+          </Button>
+        </div>
       ) : null}
 
       <div className="ac-windows">

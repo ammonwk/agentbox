@@ -74,6 +74,7 @@ export const fleet = new Fleet({
   runtime: tmux,
   usage: {
     usageOf: (id) => accounts.usage.get(id),
+    authOf: (id) => accounts.authState(id),
     ingestRollout: (id, reading) => void accounts.ingestRollout(id, reading),
   },
   poolSessions: () => poolSessionIds(),

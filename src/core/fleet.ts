@@ -91,6 +91,8 @@ export interface Runtime {
 
 export interface UsageSource {
   usageOf(accountId: string): AccountUsage | null;
+  /** The account's login state, if known. */
+  authOf?(accountId: string): "ok" | "expired" | "missing" | "unknown" | null;
   /** Codex reports its limits inside the rollout; hand fresher readings over. */
   ingestRollout?(accountId: string, reading: { at: number; windows: UsageWindow[] }): void;
 }
@@ -794,6 +796,7 @@ export class Fleet extends EventEmitter {
       windows: this.deps.usage.usageOf(a.id)?.windows ?? [],
       outstanding: [...pinned(a.id), ...all.filter((o) => twins.get(o.id)?.id === a.id).flatMap((o) => pinned(o.id))],
       sameAs: twins.get(a.id)?.label ?? null,
+      loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
     }));
   }
 

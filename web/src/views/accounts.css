@@ -226,6 +226,10 @@
 .ac-twin span {
   color: var(--text);
 }
+.ac-twin > button {
+  flex: none;
+  align-self: center;
+}
 .ac-stale {
   display: inline-flex;
   align-items: center;

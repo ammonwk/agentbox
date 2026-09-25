@@ -138,7 +138,9 @@ export function isAutoLabel(a: Pick<Account, "label" | "provider">): boolean {
  * the default home replaces whoever was there.
  *
  * Of a pair, the one that stays is a dedicated home (it cannot drift by
- * accident), then the older; the other is the twin.
+ * accident), then the older; the other is the twin. So the provider's default
+ * home — your plain CLI login — is a twin of whichever account you last logged
+ * the CLI into, and re-logging the CLI changes only that.
  */
 export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt">>(
   a: A,
