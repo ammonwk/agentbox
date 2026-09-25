@@ -65,6 +65,34 @@ export function clockHz(): number {
   return hz;
 }
 
+/** Boot time in ms since epoch, so a start tick becomes a wall clock. Lazy: an
+ *  import must not do I/O, and this file is imported by the server at boot.
+ *  0 when /proc/stat cannot be read (not Linux). */
+let bootMs: number | null = null;
+
+export function bootTimeMs(): number {
+  if (bootMs !== null) return bootMs;
+  bootMs = 0;
+  try {
+    const m = /^btime (\d+)/m.exec(readFileSync("/proc/stat", "utf8"));
+    if (m) bootMs = Number(m[1]) * 1000;
+  } catch {
+    /* not Linux */
+  }
+  return bootMs;
+}
+
+/** argv of a process, or null if it is gone, mid-exec, or not ours to read. */
+export function argvOf(pid: number): string[] | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    if (!raw) return null;
+    return raw.split("\0").filter((s, i, a) => s.length > 0 || i < a.length - 1);
+  } catch {
+    return null;
+  }
+}
+
 export function parseStat(pid: number, s: string): ProcRow | null {
   // comm is in parens and may itself contain spaces and parens, so split from
   // the *last* close paren rather than tokenising the whole line.
@@ -365,22 +393,6 @@ function squash(s: string, max = 44): string {
 
 // ─── The drilldown ──────────────────────────────────────────────────────────
 
-/** Boot time in ms since epoch, so a start tick becomes a wall clock. Lazy: an
- *  import must not do I/O, and this file is imported by the server at boot. */
-let bootMs: number | null = null;
-
-function bootTime(): number {
-  if (bootMs !== null) return bootMs;
-  bootMs = 0;
-  try {
-    const m = /^btime (\d+)/m.exec(readFileSync("/proc/stat", "utf8"));
-    if (m) bootMs = Number(m[1]) * 1000;
-  } catch {
-    /* ageMs falls back to 0 */
-  }
-  return bootMs;
-}
-
 /**
  * The per-process breakdown behind one session's row.
  *
@@ -397,7 +409,7 @@ export async function breakdown(
   agentPid: number,
   opts: { pss?: boolean } = {},
 ): Promise<ProcDetail[]> {
-  const rows = await withCmdlines(subtree(cur, agentPid));
+  const rows = withCmdlines(subtree(cur, agentPid));
   const byPid = new Map(rows.map((r) => [r.pid, r]));
 
   const out: ProcDetail[] = [];
@@ -415,7 +427,7 @@ export async function breakdown(
       cpuPct = Math.max(0, ((row.ownTicks - before.ownTicks) / elapsed) * 100);
     }
 
-    const boot = bootTime();
+    const boot = bootTimeMs();
     out.push({
       pid,
       ppid: row.ppid,
@@ -452,28 +464,13 @@ export async function breakdown(
 export async function backgroundShells(table: ProcTable, pid: number): Promise<number> {
   const kids = table.children.get(pid) ?? [];
   if (kids.length === 0) return 0;
-  const flags = await Promise.all(
-    kids.map(async (k) => {
-      try {
-        return isToolShell((await readFile(`/proc/${k}/cmdline`, "utf8")).replace(/\0/g, " "));
-      } catch {
-        return false;
-      }
-    }),
-  );
-  return flags.filter(Boolean).length;
+  return kids.filter((k) => isToolShell(argvOf(k)?.join(" "))).length;
 }
 
 /** Read command lines for a set of processes. Only for the drilldown. */
-async function withCmdlines(rows: ProcRow[]): Promise<ProcRow[]> {
-  return Promise.all(
-    rows.map(async (r) => {
-      try {
-        const raw = await readFile(`/proc/${r.pid}/cmdline`, "utf8");
-        return { ...r, cmd: raw.replace(/\0/g, " ").trim() };
-      } catch {
-        return r;
-      }
-    }),
-  );
+function withCmdlines(rows: ProcRow[]): ProcRow[] {
+  return rows.map((r) => {
+    const argv = argvOf(r.pid);
+    return argv ? { ...r, cmd: argv.join(" ").trim() } : r;
+  });
 }
