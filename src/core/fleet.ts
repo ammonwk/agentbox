@@ -97,6 +97,10 @@ export interface FleetDeps {
   adapters: ProviderAdapter[];
   runtime: Runtime;
   usage: UsageSource;
+  /** omp session ids that belong to the subagent MCP's pool. Their
+   *  transcripts land in omp's store like any other, but they are calls, not
+   *  sessions, and a fan-out would bury the board. */
+  poolSessions?: () => ReadonlySet<string>;
   now?: () => number;
 }
 
@@ -136,8 +140,9 @@ export class Fleet extends EventEmitter {
 
   /** By transcript path. */
   private tracked = new Map<string, Tracked>();
-  /** Transcripts that turned out to be subagents; never sessions. */
+  /** Transcripts that turned out to be subagents or pool agents; never sessions. */
   private ignored = new Set<string>();
+  private pool: ReadonlySet<string> = new Set();
   /** `${provider}:${agentSessionId}` → session id. */
   private byAgentId = new Map<string, string>();
   private views = new Map<string, Session>();
@@ -243,6 +248,12 @@ export class Fleet extends EventEmitter {
           for (const ref of refs) this.track(adapter, ref);
         }
       }
+      // A pool agent's id reaches its record a moment after its transcript
+      // appears, so one already tracked is dropped here once it is known.
+      this.pool = this.deps.poolSessions?.() ?? this.pool;
+      for (const [path, t] of this.tracked) {
+        if (t.facts && this.isPoolAgent(t.ref.provider, t.facts.agentSessionId)) this.ignored.add(path);
+      }
     }
 
     // A live session whose transcript is older than the window (resumed
@@ -282,7 +293,7 @@ export class Fleet extends EventEmitter {
       try {
         const r = await t.reader.refresh();
         t.facts = r.facts;
-        if (r.facts.isSubagent) {
+        if (r.facts.isSubagent || this.isPoolAgent(t.ref.provider, r.facts.agentSessionId)) {
           this.ignored.add(path);
           continue;
         }
@@ -315,6 +326,10 @@ export class Fleet extends EventEmitter {
     const existing = this.tracked.get(ref.path);
     if (existing) return;
     this.tracked.set(ref.path, { ref: { ...ref, mtimeMs: -1 }, reader: adapter.reader(ref), facts: null, hitsSeen: -1, lastUsageAt: 0 });
+  }
+
+  private isPoolAgent(provider: ProviderId, agentSessionId: string): boolean {
+    return provider === "omp" && this.pool.has(agentSessionId);
   }
 
   private hasTranscriptFor(provider: ProviderId, agentSessionId: string): boolean {

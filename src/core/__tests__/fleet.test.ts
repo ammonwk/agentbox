@@ -231,6 +231,26 @@ describe("Fleet", () => {
     expect(fleet.claims().get("claude-b")!.map((c) => c.outstanding)).toEqual([5]);
   });
 
+  test("a subagent-MCP pool agent's omp transcript never becomes a board row, even once already shown", async () => {
+    const O = account("omp-a", "omp");
+    insertAccount(O);
+    const omp = new FakeAdapter("omp", dir);
+    const pool = new Set<string>(["pool-1"]);
+    let clock = Date.now();
+    fleet = new Fleet({ adapters: [omp], runtime, usage: usageSource({}), poolSessions: () => pool, now: () => clock });
+    omp.write(O, { agentSessionId: "pool-1", cwd: dir, lastActivityAt: clock });
+    omp.write(O, { agentSessionId: "mine", cwd: dir, lastActivityAt: clock });
+    omp.write(O, { agentSessionId: "pool-2", cwd: dir, lastActivityAt: clock });
+    await fleet.tick();
+    expect(fleet.sessions().map((s) => s.agentSessionId).sort()).toEqual(["mine", "pool-2"]);
+
+    // pool-2's id reached its record after the fleet had already seen it.
+    pool.add("pool-2");
+    clock += 11_000;
+    await fleet.tick();
+    expect(fleet.sessions().map((s) => s.agentSessionId)).toEqual(["mine"]);
+  });
+
   test("nothing with weekly left refuses with the placement attached", async () => {
     fleet = new Fleet({ adapters: [adapter], runtime, usage: usageSource({ "claude-a": weekly(100, 0), "claude-b": weekly(100, 0) }) });
     const err = await fleet.spawn({ provider: "claude", cwd: dir }).catch((e) => e);

@@ -37,6 +37,7 @@ import { parseClientMessage } from "./protocol";
 import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
 import { AccountError, AccountsService } from "../core/accounts";
+import { poolSessionIds } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import type {
@@ -70,6 +71,7 @@ export const fleet = new Fleet({
     usageOf: (id) => accounts.usage.get(id),
     ingestRollout: (id, reading) => void accounts.ingestRollout(id, reading),
   },
+  poolSessions: () => poolSessionIds(),
 });
 setMetricsSource(() => fleet.sessions());
 

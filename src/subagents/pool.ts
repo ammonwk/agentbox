@@ -31,7 +31,7 @@ import {
   type Place,
 } from "./place";
 import * as live from "./live";
-import { takeCommand, writeMeta, writeState, type RecordMeta } from "./record";
+import { writeMeta, writeState, type RecordMeta } from "./record";
 import { subagentDirFor, subagentRoot } from "../core/paths";
 import { isProviderError } from "./provider-error";
 import {
@@ -1768,7 +1768,6 @@ export class SubagentPool {
       } catch {
         // Never let bookkeeping take down the agent it describes.
       }
-      this.obey(a);
       try {
         a.maybePark(now);
       } catch {
@@ -1784,31 +1783,6 @@ export class SubagentPool {
       this.published.add(id);
       live.publish(id, a.cwd, line);
     }
-  }
-
-  /**
-   * Act on anything a watcher asked for.
-   *
-   * The watcher is in another process with no way to reach this one, so it
-   * leaves a file and we sweep for it on the beat we are already keeping. A
-   * command nobody is running to collect simply never happens, which is the
-   * honest behaviour.
-   */
-  private obey(a: Subagent): void {
-    let command;
-    try {
-      command = takeCommand(a.dir);
-    } catch {
-      return;
-    }
-    if (command === null) return;
-    if (command === "interrupt") {
-      a.interrupt();
-      return;
-    }
-    // A stop from a watcher is a person deciding, so it overrides the
-    // uncollected-mail guard the MCP tool applies to a model.
-    this.remove(a.name);
   }
 
   private startTicking(): void {
