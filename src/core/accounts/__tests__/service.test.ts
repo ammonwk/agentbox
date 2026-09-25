@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Account, LoginFlow } from "../../types";
-import { AccountsService } from "../index";
+import { AccountError, AccountsService } from "../index";
 import { claudeCreds, useFakeHome, writeJson } from "./fixtures";
 
 let env: ReturnType<typeof useFakeHome>;
@@ -93,5 +93,23 @@ describe("AccountsService", () => {
     svc.remove(extra.id);
     expect(svc.get(extra.id)).toBeNull();
     expect(existsSync(extra.home)).toBe(true);
+  });
+
+  test("refusals carry the 4xx the server answers with: missing 404, never-works 400, conflict 409", async () => {
+    const statusOf = (fn: () => unknown): number | null => {
+      try {
+        fn();
+      } catch (e) {
+        return e instanceof AccountError ? e.status : null;
+      }
+      return null;
+    };
+    expect(statusOf(() => svc.update("nope", {}))).toBe(404);
+    expect(statusOf(() => svc.login("nope"))).toBe(404);
+    expect(statusOf(() => svc.paste("nope", "x"))).toBe(404);
+    const def = svc.list().find((a) => a.isDefault && a.provider === "claude")!;
+    expect(statusOf(() => svc.remove(def.id))).toBe(409);
+    const omp = await svc.create("omp").catch((e: unknown) => e);
+    expect(omp instanceof AccountError ? omp.status : null).toBe(400);
   });
 });

@@ -18,7 +18,7 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Account, LoginFlow, ProviderId } from "../types";
 import { childEnv } from "./exec";
-import { credentialsPath, devinConfigHome, userHome } from "./homes";
+import { AccountError, credentialsPath, devinConfigHome, userHome } from "./homes";
 
 const OUTPUT_KEEP = 4096;
 /** Raw (unscrubbed) text kept internally; larger than OUTPUT_KEEP so a secret
@@ -73,7 +73,7 @@ export function loginCommand(account: Pick<Account, "provider" | "home" | "isDef
         needsPaste: true,
       };
     case "omp":
-      throw new Error("omp logins are managed by omp itself — run `omp auth-broker login <provider>` in a terminal");
+      throw new AccountError(400, "omp logins are managed by omp itself — run `omp auth-broker login <provider>` in a terminal");
   }
 }
 
@@ -210,7 +210,7 @@ export class LoginManager extends EventEmitter {
     const busy = this.active().find((r) => r.flow.provider === account.provider);
     if (busy) {
       if (busy.flow.accountId === account.id) return { ...busy.flow };
-      throw new Error(`a ${account.provider} login is already running (for "${busy.account.label}") — finish or cancel it first`);
+      throw new AccountError(409, `a ${account.provider} login is already running (for "${busy.account.label}") — finish or cancel it first`);
     }
     const cmd = (this.opts.command ?? loginCommand)(account);
     const flow: LoginFlow = {
@@ -260,10 +260,10 @@ export class LoginManager extends EventEmitter {
   /** Type what the browser gave you into the CLI. */
   paste(id: string, text: string): LoginFlow {
     const run = this.flows.get(id);
-    if (!run) throw new Error(`no login ${id}`);
-    if (run.finished) throw new Error(`login ${id} has already ${run.flow.state === "done" ? "finished" : "failed"}`);
+    if (!run) throw new AccountError(404, `no login ${id}`);
+    if (run.finished) throw new AccountError(409, `login ${id} has already ${run.flow.state === "done" ? "finished" : "failed"}`);
     const value = text.trim();
-    if (!value) throw new Error("nothing to paste");
+    if (!value) throw new AccountError(400, "nothing to paste");
     run.secrets.push(value);
     run.proc?.terminal?.write(`${value}\r`);
     run.flow.state = "verifying";

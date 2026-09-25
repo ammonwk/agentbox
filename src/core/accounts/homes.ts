@@ -33,6 +33,21 @@ import { exec } from "./exec";
 
 export const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 
+/**
+ * A request this module refuses, with the HTTP status that says why: 404 for
+ * an account or login that does not exist, 400 for one that can never work,
+ * 409 for one that conflicts with what is already there. Anything else thrown
+ * from here is a real failure.
+ */
+export class AccountError extends Error {
+  constructor(
+    readonly status: 400 | 404 | 409,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 const CLI: Record<ProviderId, string> = { claude: "claude", codex: "codex", devin: "devin", omp: "omp" };
 
 /** `$HOME`, read on every call so tests (and a server started under a
@@ -345,7 +360,7 @@ function syncClaudeJson(home: string): boolean {
  */
 export function createAccountHome(provider: ProviderId, id: string): string {
   if (provider === "omp") {
-    throw new Error("omp manages its own credential pool — it has one implicit account and no extra homes");
+    throw new AccountError(400, "omp manages its own credential pool — it has one implicit account and no extra homes");
   }
   const home = accountHomeFor(id);
   mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -397,20 +412,20 @@ export async function importHome(
   path: string,
   deps: ImportDeps,
 ): Promise<{ account: Account; email: string | null }> {
-  if (provider === "omp") throw new Error("omp has one implicit account; there is no home to import");
+  if (provider === "omp") throw new AccountError(400, "omp has one implicit account; there is no home to import");
   const home = canonical(expandHome(path.trim()));
-  if (!existsSync(home) || !statSync(home).isDirectory()) throw new Error(`${home} is not a directory`);
+  if (!existsSync(home) || !statSync(home).isDirectory()) throw new AccountError(400, `${home} is not a directory`);
   const cred = credentialsPath(provider, home)!;
   if (!existsSync(cred)) {
-    throw new Error(`${home} has no ${provider} login (expected ${basename(cred)}${provider === "devin" ? " under devin/" : ""})`);
+    throw new AccountError(400, `${home} has no ${provider} login (expected ${basename(cred)}${provider === "devin" ? " under devin/" : ""})`);
   }
 
   const isDefault = samePath(home, defaultHome(provider));
   const existing = listAccounts(provider);
   const clash = existing.find((a) => samePath(a.home, home));
-  if (clash) throw new Error(`${home} is already registered as "${clash.label}"`);
+  if (clash) throw new AccountError(409, `${home} is already registered as "${clash.label}"`);
   if (isDefault && existing.some((a) => a.isDefault)) {
-    throw new Error(`${home} is the default ${provider} home and is already registered`);
+    throw new AccountError(409, `${home} is the default ${provider} home and is already registered`);
   }
 
   const email = await deps.identifyEmail({ provider, home, isDefault });
@@ -418,7 +433,8 @@ export async function importHome(
     for (const a of existing) {
       const theirs = a.email ?? (await deps.identifyEmail(a).catch(() => null));
       if (theirs && theirs.toLowerCase() === email.toLowerCase()) {
-        throw new Error(
+        throw new AccountError(
+          409,
           `${home} is logged in as ${email}, which is already account "${a.label}" (${a.home}). ` +
             "Two homes on one login share a refresh token and log each other out — log this home into a different account, or use the existing one.",
         );

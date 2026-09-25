@@ -11,6 +11,7 @@ import { deleteAccount, getAccount, insertAccount, listAccounts, updateAccount }
 import type { Account, AccountAuth, AccountUsage, LoginFlow, ProviderId, UsageWindow } from "../types";
 import type { ExecFn } from "./exec";
 import {
+  AccountError,
   createAccountHome,
   detectCli,
   ensureDefaultAccounts,
@@ -25,7 +26,9 @@ import { identify, IdentityCache, type Identity } from "./identity";
 import { LoginManager, type LoginCommand } from "./login";
 import { UsageService, type UsageDeps } from "./usage";
 
-export type AccountWithStatus = Account & { auth: AccountAuth; usage: AccountUsage };
+export { AccountError } from "./homes";
+
+export type AccountWithStatus =Account & { auth: AccountAuth; usage: AccountUsage };
 
 export interface AccountsServiceOptions {
   fetch?: typeof fetch;
@@ -106,7 +109,7 @@ export class AccountsService extends EventEmitter {
    * login you abandon can be resumed with `login(id)`.
    */
   async create(provider: ProviderId, label?: string): Promise<{ account: Account; login: LoginFlow }> {
-    if (provider === "omp") throw new Error("omp balances its own logins — add them with `omp auth-broker login` instead");
+    if (provider === "omp") throw new AccountError(400, "omp balances its own logins — add them with `omp auth-broker login` instead");
     const id = newAccountId();
     const home = createAccountHome(provider, id);
     const account: Account = {
@@ -146,7 +149,7 @@ export class AccountsService extends EventEmitter {
 
   update(id: string, patch: { label?: string; enabled?: boolean }): Account {
     const a = getAccount(id);
-    if (!a) throw new Error(`no account ${id}`);
+    if (!a) throw new AccountError(404, `no account ${id}`);
     const label = patch.label?.trim();
     updateAccount(id, { label: label || undefined, enabled: patch.enabled });
     this.emit("change");
@@ -161,7 +164,7 @@ export class AccountsService extends EventEmitter {
     const a = getAccount(id);
     if (!a) return;
     if (a.isDefault) {
-      throw new Error(`"${a.label}" is the ${a.provider} default account and would be re-registered at the next start — disable it instead`);
+      throw new AccountError(409, `"${a.label}" is the ${a.provider} default account and would be re-registered at the next start — disable it instead`);
     }
     this.logins.cancelForAccount(id);
     deleteAccount(id);
@@ -172,7 +175,7 @@ export class AccountsService extends EventEmitter {
 
   login(accountId: string): LoginFlow {
     const a = getAccount(accountId);
-    if (!a) throw new Error(`no account ${accountId}`);
+    if (!a) throw new AccountError(404, `no account ${accountId}`);
     if (a.provider !== "omp") resyncShared(a);
     return this.logins.start(a);
   }

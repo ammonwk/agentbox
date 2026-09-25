@@ -36,7 +36,7 @@ import { optionalString, parseSettingsPatch, requireBoolean, requireString } fro
 import { parseClientMessage } from "./protocol";
 import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
-import { AccountsService } from "../core/accounts";
+import { AccountError, AccountsService } from "../core/accounts";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import type {
@@ -330,7 +330,7 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
-  if (e instanceof FleetError) return new HttpError(e.status, e.message);
+  if (e instanceof FleetError || e instanceof AccountError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }
 

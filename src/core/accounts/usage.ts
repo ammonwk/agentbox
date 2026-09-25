@@ -26,7 +26,7 @@ import { statSync } from "node:fs";
 import { getKv, insertUsageSample, lastUsageSample, setKv, type UsageSampleRow } from "../db";
 import type { Account, AccountUsage, ProviderId, UsageWindow, WindowKind } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
-import { claudeJsonPath, credentialsPath, detectCli } from "./homes";
+import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
 import { readClaudeCredentials, readClaudeJson, readCodexAuth, readDevinCredentials } from "./identity";
 
 const MIN = 60_000;
@@ -614,7 +614,7 @@ export class UsageService extends EventEmitter {
    *  which "refresh" must not dig deeper. */
   async refresh(accountId: string): Promise<AccountUsage> {
     const account = this.opts.accounts().find((a) => a.id === accountId);
-    if (!account) throw new Error(`no account ${accountId}`);
+    if (!account) throw new AccountError(404, `no account ${accountId}`);
     const st = this.poll(accountId);
     if (st.inflight) return st.inflight;
     if (st.failures > 0 && this.get(accountId).stale?.startsWith("rate limited") && st.nextAt > this.deps.now()) {
