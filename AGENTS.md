@@ -11,8 +11,15 @@ run `bun run web:build` and refresh (or use `bun run web:dev` on :5173).
 
 After changing `src/`, restart the server — Bun does not hot-reload:
 
-    kill $(ss -tlnp | grep 4479 | grep -o 'pid=[0-9]*' | cut -d= -f2)
-    setsid nohup bun bin/agentbox serve >> ~/.local/share/agentbox/logs/server.log 2>&1 < /dev/null &
+    systemctl --user stop agentbox-serve.scope 2>/dev/null
+    kill $(ss -tlnp | grep 4479 | grep -o 'pid=[0-9]*' | cut -d= -f2) 2>/dev/null
+    systemd-run --user --scope --collect --unit=agentbox-serve \
+      setsid bun bin/agentbox serve >> ~/.local/share/agentbox/logs/server.log 2>&1 < /dev/null &
+
+Its own systemd scope, so it does not die with the terminal (or the agent
+session) that happened to start it: a process started from a terminal lives
+in that terminal's cgroup scope, and `setsid` alone does not leave it. Then
+check `/api/health`, and that `/api/state` has as many sessions as before.
 
 Restarting loses nothing. The server owns no agents: they run in
 `tmux -L agentbox` (one tmux session per agent session, `ab-<id>`) or in your
@@ -52,15 +59,18 @@ table and tmux on its first tick.
 ## Where things are
 
 - `src/core/providers/` — one adapter per CLI (transcript format, processes,
-  argv), plus `jsonl.ts` (incremental tail) and `procs.ts` (/proc helpers).
+  argv, and its credential homes and environments), plus `jsonl.ts`
+  (incremental tail) and `procs.ts` (/proc helpers).
 - `src/core/accounts/` — credential homes, identity, usage fetchers, logins.
 - `src/core/fleet.ts` — joins everything into sessions; spawn/resume/adopt.
 - `src/core/balancer.ts`, `claims.ts`, `calibration.ts` — placement.
-- `src/server/` — HTTP + WebSockets. `src/mcp/fleet.ts` — the conductor's MCP.
+- `src/server/` — HTTP + WebSockets. `src/mcp/fleet.ts` — the conductor's MCP;
+  it and the CLI share one HTTP client, `src/client.ts`.
 - `src/mcp/subagent.ts` — the subagent MCP (`agentbox subagent-mcp`), over
   `src/subagents/`: a pool of `omp acp` processes it owns, their records and
   live status lines. Independent of the server and the database.
-- `src/cli/index.ts` — `agentbox claude|codex|…`, `ls`, `attach`, `adopt`.
+- `src/cli/index.ts` — `agentbox claude|codex|…`, `ls`, `attach`, `resume`,
+  `adopt`, `stop`, `usage`, `mcp`, `subagent-mcp`, `doctor`.
 
 ## Tests
 
