@@ -275,6 +275,7 @@ const USAGE = `usage: agentbox <command>
   adopt <id>            move a session running in another terminal into agentbox
   stop <id>             end a session's process; it stays resumable
   mcp                   run the fleet MCP server on stdio (for a conductor session)
+  subagent-mcp          run the omp subagent MCP server on stdio (needs no server)
   doctor                check that everything agentbox needs is present
   version               print the version`;
 
@@ -306,6 +307,13 @@ export async function main(argv: string[]): Promise<number | null> {
       case "mcp": {
         const { runMcp } = await import("../mcp/fleet");
         await runMcp(BASE);
+        return null;
+      }
+      // Not a client of the server, unlike `mcp`: it owns its omp agents
+      // itself and must work whether or not `agentbox serve` is running.
+      case "subagent-mcp": {
+        const { runSubagentMcp } = await import("../mcp/subagent");
+        await runSubagentMcp();
         return null;
       }
       case "doctor":

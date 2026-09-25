@@ -57,6 +57,9 @@ table and tmux on its first tick.
 - `src/core/fleet.ts` — joins everything into sessions; spawn/resume/adopt.
 - `src/core/balancer.ts`, `claims.ts`, `calibration.ts` — placement.
 - `src/server/` — HTTP + WebSockets. `src/mcp/fleet.ts` — the conductor's MCP.
+- `src/mcp/subagent.ts` — the subagent MCP (`agentbox subagent-mcp`), over
+  `src/subagents/`: a pool of `omp acp` processes it owns, their records and
+  live status lines. Independent of the server and the database.
 - `src/cli/index.ts` — `agentbox claude|codex|…`, `ls`, `attach`, `adopt`.
 
 ## Tests
