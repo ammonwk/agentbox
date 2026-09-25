@@ -18,7 +18,8 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Account, LoginFlow, ProviderId } from "../types";
 import { childEnv } from "./exec";
-import { AccountError, authEnv, credentialsPath, userHome } from "./homes";
+import { userHome } from "../paths";
+import { AccountError, authEnv, credentialsPath } from "./homes";
 
 const OUTPUT_KEEP = 4096;
 /** Raw (unscrubbed) text kept internally; larger than OUTPUT_KEEP so a secret

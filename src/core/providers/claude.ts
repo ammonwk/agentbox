@@ -22,9 +22,10 @@
  */
 
 import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { userHome } from "../paths";
+import { cliVersion } from "./cli-version";
 import type { Account, TokenTotals } from "../types";
 import { emptyTotals } from "../pricing";
 import { JsonlTail } from "./jsonl";
@@ -45,9 +46,6 @@ import type {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_JSONL = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
-function userHome(): string {
-  return process.env.HOME || homedir();
-}
 
 export function claudeHome(account: Pick<Account, "isDefault" | "home">): string {
   return account.isDefault ? join(userHome(), ".claude") : account.home;
@@ -490,20 +488,6 @@ function resumeCommand(opts: ResumeOptions): Command {
   return { argv, ...accountCommand(opts.account) };
 }
 
-async function version(cmd: string[]): Promise<{ installed: boolean; version: string | null }> {
-  try {
-    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-    const timer = setTimeout(() => proc.kill(), 10_000);
-    const out = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    clearTimeout(timer);
-    if (code !== 0) return { installed: false, version: null };
-    return { installed: true, version: /\d+\.\d+\.\d+[\w.-]*/.exec(out)?.[0] ?? (out.trim() || null) };
-  } catch {
-    return { installed: false, version: null };
-  }
-}
-
 // ------------------------------------------------------------- adapter
 
 function refOf(account: Account, path: string, id: string, mtimeMs: number, size: number): TranscriptRef {
@@ -523,7 +507,7 @@ export const claudeAdapter: ProviderAdapter = {
   id: "claude",
   label: "Claude Code",
 
-  detect: () => version(["claude", "--version"]),
+  detect: () => cliVersion(["claude", "--version"]),
 
   defaultHome: () => join(userHome(), ".claude"),
 

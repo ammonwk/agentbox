@@ -29,8 +29,9 @@
  */
 
 import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { userHome } from "../paths";
+import { cliVersion } from "./cli-version";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import * as db from "./devin-db";
 import {
@@ -76,7 +77,7 @@ function pathsUnder(dataHome: string): DevinPaths {
 /** The XDG data dir devin's default login lives under — the default account's
  *  "home", since a home is what `XDG_DATA_HOME` gets set to. */
 function defaultDataHome(): string {
-  return process.env.XDG_DATA_HOME || join(process.env.HOME || homedir(), ".local", "share");
+  return process.env.XDG_DATA_HOME || join(userHome(), ".local", "share");
 }
 
 // ----------------------------------------------------------- credentials
@@ -420,18 +421,6 @@ class DevinReader implements TranscriptReader {
 
 // ----------------------------------------------------------- adapter
 
-async function versionOf(argv: string[]): Promise<{ installed: boolean; version: string | null }> {
-  try {
-    const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const timer = setTimeout(() => proc.kill(), 10_000);
-    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    clearTimeout(timer);
-    return { installed: true, version: code === 0 ? (/(\d+\.\d+\.\d+)/.exec(out)?.[1] ?? null) : null };
-  } catch {
-    return { installed: false, version: null };
-  }
-}
-
 function flags(opts: { model?: string; autoApprove: boolean }): string[] {
   const a: string[] = [];
   if (opts.model) a.push("--model", opts.model);
@@ -493,7 +482,7 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     id: "devin",
     label: "Devin",
 
-    detect: () => versionOf(["devin", "--version"]),
+    detect: () => cliVersion(["devin", "--version"]),
 
     defaultHome: () => dataHome(),
 

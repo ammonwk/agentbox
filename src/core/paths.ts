@@ -17,6 +17,25 @@ import { mkdirSync } from "node:fs";
  * Reading the env on each call is a string join. It is not worth caching, and a
  * cache would reintroduce exactly the staleness this removes.
  */
+/**
+ * `$HOME` first, and not merely for tests.
+ *
+ * Honouring `$HOME` is the Unix contract — it is how a sandbox, a systemd unit
+ * or `HOME=... cmd` redirects a process — and Bun's `homedir()` is the anomaly:
+ * it resolves once and ignores a later `process.env.HOME`, verified rather than
+ * assumed. Reading the variable first makes agentbox agree with every other
+ * tool on the box about where home is (skills, the default credential homes,
+ * `~/.claude.json`); `homedir()` remains the fallback for platforms that do
+ * not set it.
+ *
+ * Do not "simplify" this back to a bare `homedir()`. It reads as redundant and
+ * is not: the tests would start reading the developer's real skills and
+ * credential homes, which is the exact class of thing they exist to prevent.
+ */
+export function userHome(): string {
+  return process.env.HOME || homedir();
+}
+
 export function agentboxHome(): string {
   return process.env.AGENTBOX_HOME ?? join(homedir(), ".local", "share", "agentbox");
 }

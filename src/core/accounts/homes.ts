@@ -24,13 +24,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
-import { accountHomeFor } from "../paths";
+import { accountHomeFor, userHome } from "../paths";
 import { adapterFor } from "../providers";
 import type { Account, ProviderId } from "../types";
-import { exec } from "./exec";
 
 export const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 
@@ -49,13 +47,6 @@ export class AccountError extends Error {
   }
 }
 
-const CLI: Record<ProviderId, string> = { claude: "claude", codex: "codex", devin: "devin", omp: "omp" };
-
-/** `$HOME`, read on every call so tests (and a server started under a
- *  different HOME) see the right one. */
-export function userHome(): string {
-  return process.env.HOME || homedir();
-}
 
 function xdgConfigHome(): string {
   return process.env.XDG_CONFIG_HOME || join(userHome(), ".config");
@@ -109,7 +100,7 @@ export interface CliInfo {
 const detected = new Map<ProviderId, Promise<CliInfo>>();
 
 /**
- * Is the provider's CLI installed, by running `<cli> --version`. Cached for the
+ * Is the provider's CLI installed — its adapter's `detect()`, cached for the
  * life of the process: installing a CLI is rare and a restart picks it up,
  * while re-probing on every boot-time registration pass would fork four
  * processes each time.
@@ -117,11 +108,7 @@ const detected = new Map<ProviderId, Promise<CliInfo>>();
 export function detectCli(provider: ProviderId): Promise<CliInfo> {
   let p = detected.get(provider);
   if (!p) {
-    p = exec([CLI[provider], "--version"], { timeoutMs: 10_000 }).then((r) => {
-      if (r.code !== 0) return { installed: false, version: null };
-      const m = /\d+\.\d+(?:\.\d+)?/.exec(r.stdout);
-      return { installed: true, version: m?.[0] ?? (r.stdout.trim().split("\n")[0] || null) };
-    });
+    p = adapterFor(provider).detect();
     detected.set(provider, p);
   }
   return p;

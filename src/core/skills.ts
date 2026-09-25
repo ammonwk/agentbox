@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { userHome } from "./paths";
 import type { SkillInfo, SkillResult } from "./types";
 
 /**
@@ -35,23 +35,6 @@ export interface SkillRoot {
   repo?: string;
 }
 
-/**
- * `$HOME` first, and not merely for tests.
- *
- * Honouring `$HOME` is the Unix contract — it is how a sandbox, a systemd unit
- * or `HOME=... cmd` redirects a process — and Bun's `homedir()` is the anomaly:
- * it resolves once and ignores a later `process.env.HOME`, verified rather than
- * assumed. Reading the variable first makes agentbox agree with every other
- * tool on the box about where home is; `homedir()` remains the fallback for
- * platforms that do not set it, Windows included.
- *
- * Do not "simplify" this back to a bare `homedir()`. It reads as redundant and
- * is not: the tests below would start reading the developer's real skills
- * directory, which is the exact class of thing they exist to prevent.
- */
-function home(): string {
-  return process.env.HOME || homedir();
-}
 
 /**
  * Every place a skill can live, in the order they shadow each other: a repo's
@@ -67,10 +50,10 @@ export function skillRoots(repoDirs: string[] = []): SkillRoot[] {
   return [
     ...repoDirs.map((d) => ({ source: "project" as const, dir: join(d, ".claude", "skills"), repo: d })),
     { source: "project", dir: join(process.cwd(), ".claude", "skills") },
-    { source: "global", dir: join(home(), ".claude", "skills") },
-    { source: "agents", dir: join(home(), ".agents", "skills") },
-    { source: "codex", dir: join(home(), ".codex", "skills") },
-    { source: "omp", dir: join(home(), ".omp", "agent", "skills") },
+    { source: "global", dir: join(userHome(), ".claude", "skills") },
+    { source: "agents", dir: join(userHome(), ".agents", "skills") },
+    { source: "codex", dir: join(userHome(), ".codex", "skills") },
+    { source: "omp", dir: join(userHome(), ".omp", "agent", "skills") },
   ];
 }
 
@@ -238,7 +221,7 @@ export function validSkillName(name: string): boolean {
 
 function globalSkillDir(name: string): string {
   if (!validSkillName(name)) throw new Error(`not a valid skill name: ${JSON.stringify(name)}`);
-  return join(home(), ".claude", "skills", name);
+  return join(userHome(), ".claude", "skills", name);
 }
 
 /** Read a skill file. The caller confines the path before it reaches us. */

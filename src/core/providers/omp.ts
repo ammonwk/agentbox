@@ -19,6 +19,8 @@
 import { closeSync, openSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
+import { userHome } from "../paths";
+import { cliVersion } from "./cli-version";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import { JsonlTail } from "./jsonl";
 import {
@@ -569,18 +571,6 @@ function lowerBound<T = number>(a: T[], x: number, key: (v: T) => number = (v) =
 
 // ------------------------------------------------------------ adapter
 
-async function versionOf(argv: string[], parse: (out: string) => string | null): Promise<{ installed: boolean; version: string | null }> {
-  try {
-    const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const timer = setTimeout(() => proc.kill(), 10_000);
-    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    clearTimeout(timer);
-    return code === 0 ? { installed: true, version: parse(out) } : { installed: true, version: null };
-  } catch {
-    return { installed: false, version: null };
-  }
-}
-
 function withPrompt(argv: string[], prompt?: string): string[] {
   // `--` so a prompt starting with `-` is not read as a flag. omp still
   // treats a leading `@` as a file to attach, which is its documented syntax.
@@ -608,11 +598,11 @@ export const ompAdapter: ProviderAdapter = {
   label: "omp",
 
   detect() {
-    return versionOf(["omp", "--version"], (out) => /(\d+\.\d+\.\d+)/.exec(out)?.[1] ?? (out.trim() || null));
+    return cliVersion(["omp", "--version"]);
   },
 
   defaultHome() {
-    return join(process.env.HOME || homedir(), ".omp");
+    return join(userHome(), ".omp");
   },
 
   accountCommand: ompAccountCommand,
@@ -645,7 +635,7 @@ export const ompAdapter: ProviderAdapter = {
       procs.push({ pid: m.pid, ppid: m.ppid, argv: argvOf(m.pid) ?? m.argv, cwd, startedAt });
     }
     if (procs.length === 0) return [];
-    const root = account ? sessionsRootOf(account) : join(homedir(), ".omp", "agent", "sessions");
+    const root = account ? sessionsRootOf(account) : join(userHome(), ".omp", "agent", "sessions");
     const ids = attributeOmp(procs, root, openFilesOf);
     return procs.map(
       (p): LiveProcess => ({
