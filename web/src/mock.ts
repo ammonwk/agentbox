@@ -60,7 +60,7 @@ const settings: AgentSettings = {
   autoApprove: false,
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "" },
   balancer: {
-    claimNormal: 5,
+    claimNormal: 3,
     claimBig: 20,
     shortWindowInWeekly: 24,
     claimIdleMin: 60,
@@ -95,7 +95,7 @@ function usage(accountId: string, windows: UsageWindow[], extra: Partial<Account
   return { accountId, at: T0 - 2 * M, windows, stale: null, source: "endpoint", notes: [], ...extra };
 }
 
-type MockAccount = Omit<AccountView, "claims" | "placement">;
+type MockAccount = Omit<AccountView, "claims" | "placement" | "twinOf">;
 
 const accounts: MockAccount[] = [
   {
@@ -556,7 +556,7 @@ function placementFor(provider: ProviderId, big: boolean, manual?: string): Plac
 
 function accountViews(): AccountView[] {
   const now = Date.now();
-  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, false, now) }));
+  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, false, now), twinOf: null }));
 }
 
 // ------------------------------------------------------------- state

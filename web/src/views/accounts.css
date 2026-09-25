@@ -213,6 +213,19 @@
   min-height: 24px;
   width: 24px;
 }
+.ac-twin {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--warning);
+  background: color-mix(in oklab, var(--warning) 10%, transparent);
+}
+.ac-twin span {
+  color: var(--text);
+}
 .ac-stale {
   display: inline-flex;
   align-items: center;

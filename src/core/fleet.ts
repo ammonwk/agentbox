@@ -22,6 +22,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { twinOf } from "./accounts/homes";
 import { place, type AccountState } from "./balancer";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import {
@@ -528,14 +529,19 @@ export class Fleet extends EventEmitter {
   /** Feed each account's newest weekly reading to the attributor once. */
   private observeUsage(now: number): void {
     const records = listSessionRecords(now - 8 * DAY);
-    for (const account of listAccounts()) {
+    const accounts = listAccounts();
+    for (const account of accounts) {
+      // A twin's rises are its primary's rises; attributing both would count
+      // every point twice. The primary takes the twin's sessions instead.
+      if (twinOf(account, accounts)) continue;
+      const pool = new Set([account.id, ...accounts.filter((o) => twinOf(o, accounts)?.id === account.id).map((o) => o.id)]);
       const usage = this.deps.usage.usageOf(account.id);
       const weekly = usage ? weeklyWindow(usage.windows) : null;
       if (!usage?.at || !weekly) continue;
       const key = `${usage.at}:${weekly.usedPct}`;
       if (this.lastWeekly.get(account.id) === key) continue;
       this.lastWeekly.set(account.id, key);
-      const ids = records.filter((r) => r.accountId === account.id).map((r) => r.id);
+      const ids = records.filter((r) => r.accountId && pool.has(r.accountId)).map((r) => r.id);
       this.attributor.observe(
         account.id,
         { windowId: weekly.id, at: usage.at, usedPct: weekly.usedPct, resetsAt: weekly.resetsAt },
@@ -773,12 +779,21 @@ export class Fleet extends EventEmitter {
     return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), settings, now);
   }
 
+  /**
+   * The balancer's input. Two accounts on one login are one usage pool: the
+   * twin stays listed (so you can see why it is skipped) but its sessions'
+   * claims count against the account it duplicates.
+   */
   accountStates(provider: ProviderId): AccountState[] {
     const claims = this.claims();
-    return listAccounts(provider).map((a) => ({
+    const all = listAccounts(provider);
+    const twins = new Map(all.map((a) => [a.id, twinOf(a, all)]));
+    const pinned = (id: string) => (claims.get(id) ?? []).map((c) => c.outstanding);
+    return all.map((a) => ({
       account: a,
       windows: this.deps.usage.usageOf(a.id)?.windows ?? [],
-      outstanding: (claims.get(a.id) ?? []).map((c) => c.outstanding),
+      outstanding: [...pinned(a.id), ...all.filter((o) => twins.get(o.id)?.id === a.id).flatMap((o) => pinned(o.id))],
+      sameAs: twins.get(a.id)?.label ?? null,
     }));
   }
 

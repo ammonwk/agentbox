@@ -215,6 +215,15 @@ function AccountCard({
       </div>
 
       {a.auth.detail && a.auth.state !== "ok" ? <p className="ac-auth-detail">{a.auth.detail}</p> : null}
+      {a.twinOf ? (
+        <p className="ac-twin">
+          <Icon.alert size={12} />
+          <span>
+            Same login as <strong>{a.twinOf.label}</strong>, so it is one usage pool: new sessions go there, and
+            sessions here claim against it. Log this home into a different account, or forget it.
+          </span>
+        </p>
+      ) : null}
 
       <div className="ac-windows">
         {windows.length === 0 ? (

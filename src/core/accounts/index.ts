@@ -20,6 +20,7 @@ import {
   newAccountId,
   placeholderLabel,
   resyncShared,
+  twinOf,
   type CliInfo,
 } from "./homes";
 import { identify, IdentityCache, type Identity } from "./identity";
@@ -28,7 +29,12 @@ import { UsageService, type UsageDeps } from "./usage";
 
 export { AccountError } from "./homes";
 
-export type AccountWithStatus =Account & { auth: AccountAuth; usage: AccountUsage };
+export type AccountWithStatus = Account & {
+  auth: AccountAuth;
+  usage: AccountUsage;
+  /** Logged in as the same email as this account (see `twinOf`). */
+  twinOf: { id: string; label: string } | null;
+};
 
 export interface AccountsServiceOptions {
   fetch?: typeof fetch;
@@ -90,12 +96,13 @@ export class AccountsService extends EventEmitter {
   }
 
   list(): AccountWithStatus[] {
-    return listAccounts().map((a) => this.withStatus(a));
+    const all = listAccounts();
+    return all.map((a) => this.withStatus(a, all));
   }
 
   get(id: string): AccountWithStatus | null {
     const a = getAccount(id);
-    return a ? this.withStatus(a) : null;
+    return a ? this.withStatus(a, listAccounts(a.provider)) : null;
   }
 
   /** Windows for the balancer, by account. */
@@ -203,7 +210,7 @@ export class AccountsService extends EventEmitter {
 
   // -------------------------------------------------------------- internals
 
-  private withStatus(a: Account): AccountWithStatus {
+  private withStatus(a: Account, all: Account[]): AccountWithStatus {
     const usage = this.usage.get(a.id);
     let auth = this.identities.peek(a.id)?.auth ?? UNKNOWN_AUTH;
     if (a.provider === "omp") {
@@ -217,7 +224,8 @@ export class AccountsService extends EventEmitter {
     // Keep claude/codex auth current with the clock without waiting for the
     // identity sweep: the cache expires after a minute and this re-reads.
     if (a.provider === "claude" || a.provider === "codex") void this.maybeReidentify(a).catch(() => undefined);
-    return { ...a, auth, usage };
+    const twin = twinOf(a, all);
+    return { ...a, auth, usage, twinOf: twin ? { id: twin.id, label: twin.label } : null };
   }
 
   private async maybeReidentify(a: Account): Promise<void> {
@@ -243,12 +251,14 @@ export class AccountsService extends EventEmitter {
   }
 
   /** Write what identify learned back to the row: email and plan always, the
-   *  label only if it was never chosen by you. */
+   *  label only if it was never chosen by you — a placeholder, or the email it
+   *  was logged in as before (a label that says the old login is a lie). */
   private apply(a: Account, id: Identity): void {
     const patch: Parameters<typeof updateAccount>[1] = {};
     if (id.email && id.email !== a.email) patch.email = id.email;
     if (id.plan && id.plan !== a.plan) patch.plan = id.plan;
-    if (id.email && isAutoLabel(a) && a.label !== id.email) patch.label = id.email;
+    const auto = isAutoLabel(a) || (!!a.email && a.label.toLowerCase() === a.email.toLowerCase());
+    if (id.email && auto && a.label !== id.email) patch.label = id.email;
     if (Object.keys(patch).length) updateAccount(a.id, patch);
   }
 
@@ -271,7 +281,7 @@ export class AccountsService extends EventEmitter {
   }
 }
 
-export { defaultHome, detectCli, ensureDefaultAccounts, createAccountHome, resyncShared } from "./homes";
+export { defaultHome, detectCli, ensureDefaultAccounts, createAccountHome, resyncShared, twinOf } from "./homes";
 export { identify } from "./identity";
 export { UsageService } from "./usage";
 export { LoginManager } from "./login";

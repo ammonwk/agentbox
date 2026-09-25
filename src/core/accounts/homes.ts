@@ -131,6 +131,33 @@ export function isAutoLabel(a: Pick<Account, "label" | "provider">): boolean {
 }
 
 /**
+ * The account this one is a second copy of: same provider, logged in as the
+ * same email. Two homes on one login share one usage pool, and counting it
+ * twice is how a balancer ends up placing onto a full account it thinks is
+ * someone else. This happens without anyone registering anything: `/login` in
+ * the default home replaces whoever was there.
+ *
+ * Of a pair, the one that stays is a dedicated home (it cannot drift by
+ * accident), then the older; the other is the twin.
+ */
+export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt">>(
+  a: A,
+  all: readonly A[],
+): A | null {
+  if (!a.email) return null;
+  const email = a.email.toLowerCase();
+  const rank = (x: A) => [x.isDefault ? 1 : 0, x.createdAt, x.id] as const;
+  const before = (x: A, y: A) => {
+    const [p, q] = [rank(x), rank(y)];
+    return p[0] - q[0] || p[1] - q[1] || p[2].localeCompare(q[2]);
+  };
+  const primary = all
+    .filter((o) => o.provider === a.provider && o.email?.toLowerCase() === email)
+    .sort(before)[0];
+  return primary && primary.id !== a.id ? primary : null;
+}
+
+/**
  * Register the default account of every installed provider CLI. Idempotent: a
  * provider that already has a default account, or whose default home was
  * imported by hand, is left alone.

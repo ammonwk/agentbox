@@ -1,6 +1,6 @@
 /** Turning a week of metrics into better balancer settings.
  *
- * The balancer's numbers start as guesses: a session uses 5 weekly points, a
+ * The balancer's numbers start as guesses: a session uses 3 weekly points, a
  * Big one 20, a full short window is worth 24. Every one of them is measurable
  * from what agentbox records anyway, and this file measures them. It proposes;
  * the settings only change when you apply the proposal.

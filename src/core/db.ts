@@ -639,7 +639,7 @@ function remoteDefaultBranch(slug: string): string {
 // -------------------------------------------------------------- settings
 
 export const DEFAULT_BALANCER: BalancerSettings = {
-  claimNormal: 5,
+  claimNormal: 3,
   claimBig: 20,
   shortWindowInWeekly: 24,
   claimIdleMin: 60,

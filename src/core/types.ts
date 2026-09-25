@@ -83,6 +83,8 @@ export interface AccountView extends Account {
   claims: ClaimView[];
   /** The balancer's current view of this account for a normal session. */
   placement: Candidate | null;
+  /** Logged in as the same email as this other account: one usage pool. */
+  twinOf: { id: string; label: string } | null;
 }
 
 export interface ClaimView {
