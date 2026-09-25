@@ -287,6 +287,11 @@ describe("isToolShell", () => {
     expect(isToolShell("sh -c 'bun test'")).toBe(true);
   });
 
+  test("codex's `bash -lc` counts: -c inside an option cluster", () => {
+    expect(isToolShell("/bin/bash -lc rg --files")).toBe(true);
+    expect(isToolShell("bash --norc")).toBe(false);
+  });
+
   test("Claude Code's snapshot wrapper is recognised outright", () => {
     expect(isToolShell("/bin/bash -c source /home/u/.claude/shell-snapshots/snap.sh && eval 'ls'")).toBe(
       true,
@@ -340,6 +345,7 @@ describe("describe", () => {
 
   test("unwraps a shell tool call to the command that was run", () => {
     expect(describeProc(row(1, 0, { cmd: "/bin/bash -c bun run typecheck" }))).toBe("bun run typecheck");
+    expect(describeProc(row(1, 0, { cmd: "bash -lc cargo test" }))).toBe("cargo test");
   });
 
   test("unwraps Claude Code's snapshot preamble to the eval'd command", () => {

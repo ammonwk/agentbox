@@ -1,12 +1,12 @@
 /** Turning an untrusted JSON body into the shapes the core modules are typed for.
  *
  * Every reader takes the object to look in, the KEY to look up, and separately
- * the LABEL to name in the error. Conflating those two shipped a bug that made
- * the whole Supervision section of Settings unusable: the nested readers were
- * called as `requireBoolean(supervisor, "supervisor.enabled")`, which looks up
- * `supervisor["supervisor.enabled"]` — always undefined — so every payload
- * containing a `supervisor` key was rejected with a message insisting the field
- * was missing while it sat right there in the request.
+ * the LABEL to name in the error. Conflating those two once made a whole
+ * section of Settings unusable: a nested reader called as
+ * `requireBoolean(section, "section.enabled")` looks up
+ * `section["section.enabled"]` — always undefined — so every payload carrying
+ * that section was rejected with a message insisting the field was missing
+ * while it sat right there in the request.
  */
 
 import type { SettingsPatch } from "../core/db";
@@ -55,7 +55,7 @@ export function asObject(v: unknown, label: string): Record<string, unknown> {
  *
  * The merge itself belongs to db.ts — this only establishes that what arrived
  * over the wire is the shape the merge is typed for. Every field is optional at
- * every level: the UI sends partials like `{supervisor: {enabled: true}}`, and
+ * every level: the UI sends partials like `{balancer: {tieBand: 15}}`, and
  * the keys it leaves out must survive the merge rather than being reset. Unknown
  * keys are rejected rather than persisted, so a client typo is a 400 and not a
  * setting nothing reads.

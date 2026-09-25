@@ -6,11 +6,13 @@ import type { LoadSample, ProcDetail, ProcRole } from "./types";
 /**
  * What each session is actually costing the machine.
  *
- * A session is never one process. `omp acp` with a couple of MCP servers and a
- * type-check running is several, and the several are what make the laptop hot —
- * the agent process itself is mostly idle waiting on the network. So everything
- * here works on the *subtree* rooted at the session's pid, which is exactly what
- * `Session.pid` holds (see acp.ts: it is the pid of the spawned `omp acp`).
+ * A session is never one process. A provider CLI with a couple of MCP servers
+ * and a type-check running is several, and the several are what make the laptop
+ * hot — the agent process itself is mostly idle waiting on the network. So
+ * everything here works on the *subtree* rooted at the session's pid, which is
+ * exactly what `Session.pid` holds: the provider's own CLI process (`claude`,
+ * `codex`, `devin`, `omp`), whether it runs in agentbox's tmux or in some
+ * terminal of yours.
  *
  * ── On cost ────────────────────────────────────────────────────────────────
  * Reading /proc/<pid>/stat for every process on the machine is 16-37ms for the
@@ -254,32 +256,31 @@ export async function subtreePss(rows: ProcRow[]): Promise<number | undefined> {
 
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "fish"]);
 
+/** `-c`, alone or in a short-option cluster: codex runs its commands as `bash -lc`. */
+const DASH_C = /^-[a-z]*c[a-z]*$/;
+
 /**
  * Is this command line an agent running a shell tool call?
  *
- * PROVISIONAL, and deliberately structural rather than string-matched.
+ * Structural rather than string-matched, because the four providers do not
+ * share a shape. Claude Code runs every Bash call through `bash -c source
+ * <shell snapshot>`, which nothing else does, so that marker is exact. Codex
+ * runs `bash -lc <command>` (its rollouts record the argv). omp's and devin's
+ * shapes have not been sampled mid-turn; an idle agent has no children at all,
+ * so the subtree only exists while a turn is running.
  *
- * Switchyard could be exact here because it watched Claude Code, which runs
- * every Bash tool call through `bash -c source <shell snapshot>` — a shape
- * nothing else has. agentbox drives omp, and omp's tool-call shape has not been
- * observed: an idle `omp acp` is a single `bun` process with no children at all,
- * so the subtree only exists mid-turn.
- *
- * So the rule here is the weaker one that holds for any agent: a direct child
- * that is a shell running `-c` is work the agent asked for, and a direct child
- * that is anything else is a server it started at boot. The Claude Code marker
- * is kept as an additional positive because it costs nothing and makes the
- * classification exact when the subtree does happen to be Claude's.
- *
- * To tighten this, sample a subtree while a turn is actually in flight:
- *   ps -e -o pid,ppid,args --no-headers | awk '$2==<omp pid>'
+ * So the rule is the one that holds for any of them: a direct child that is a
+ * shell running `-c` is work the agent asked for, and a direct child that is
+ * anything else is a server it started at boot. To check a provider against
+ * it, sample a subtree while a turn is in flight:
+ *   ps -e -o pid,ppid,args --no-headers | awk '$2==<agent pid>'
  */
 export function isToolShell(cmd: string | undefined): boolean {
   if (!cmd) return false;
   if (cmd.includes("shell-snapshots")) return true;
   const parts = cmd.trim().split(/\s+/);
   const base = basename(parts[0] ?? "");
-  return SHELLS.has(base) && parts.includes("-c");
+  return SHELLS.has(base) && parts.some((p) => DASH_C.test(p));
 }
 
 /**
@@ -319,7 +320,7 @@ export function describe(row: ProcRow): string {
     const evaled =
       /eval '([^']+)'/.exec(cmd)?.[1] ?? // Claude Code's snapshot wrapper
       /&& *([^&]+)$/.exec(cmd)?.[1] ??
-      cmd.slice(cmd.indexOf(" -c ") + 4).replace(/^['"]|['"]$/g, "");
+      /\s-[a-z]*c[a-z]*\s+(.+)$/.exec(cmd)?.[1]?.replace(/^['"]|['"]$/g, "");
     return evaled ? squash(evaled) : base;
   }
 
