@@ -268,8 +268,12 @@ export class LoginManager extends EventEmitter {
   }
 
   /** Cancel whatever is running for an account (it is being forgotten). */
+  /** The account is gone: stop its login, and drop finished ones — their
+   *  messages are about an account that no longer exists. */
   cancelForAccount(accountId: string): void {
     for (const r of this.active()) if (r.flow.accountId === accountId) this.cancel(r.flow.id);
+    for (const [id, r] of this.flows) if (r.finished && r.flow.accountId === accountId) this.flows.delete(id);
+    this.emit("change", null);
   }
 
   stop(): void {

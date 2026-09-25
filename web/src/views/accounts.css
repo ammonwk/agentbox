@@ -226,9 +226,24 @@
 .ac-twin span {
   color: var(--text);
 }
-.ac-twin > button {
-  flex: none;
-  align-self: center;
+.ac-cli-only {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  font-size: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--warning) 10%, transparent);
+}
+.ac-cli-only p {
+  margin: 0;
+}
+.ac-cli-only-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--warning);
+  font-weight: 600;
 }
 .ac-stale {
   display: inline-flex;

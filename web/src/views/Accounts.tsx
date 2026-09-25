@@ -51,7 +51,12 @@ function AccountList({ state }: { state: AppState }) {
 
       {providers.map((p) => {
         const accounts = state.accounts.filter((a) => a.provider === p);
-        const orphanLogins = logins.filter((l) => l.provider === p && !accounts.some((a) => a.id === l.accountId));
+        // A login whose account is not listed: one just created (not in the
+        // state yet), or a failure worth reading. A finished one whose
+        // account was forgotten says nothing true any more.
+        const orphanLogins = logins.filter(
+          (l) => l.provider === p && l.state !== "done" && !accounts.some((a) => a.id === l.accountId),
+        );
         const info = state.providers.find((x) => x.id === p);
         return (
           <section key={p} className="acs-sec" aria-labelledby={`acs-${p}`}>
@@ -237,14 +242,19 @@ function AccountCard({
           </span>
         </p>
       ) : a.isDefault && a.email ? (
-        <div className="ac-twin">
-          <Icon.alert size={12} />
-          <span>
-            Only your CLI is logged into this account, so logging the CLI into another one would take it away from agentbox. Add it as
-            its own account to keep it.
-          </span>
-          <Button size="sm" variant="ghost" icon={Icon.plus} onClick={onAddOwn}>
-            Add as its own
+        <div className="ac-cli-only">
+          <p className="ac-cli-only-head">
+            <Icon.alert size={12} /> agentbox is borrowing your CLI's login
+          </p>
+          <p>
+            {a.email} is only logged in here, in your <code>{a.provider}</code> CLI. Log the CLI into another account and agentbox loses
+            this one.
+          </p>
+          <p>
+            To keep it, sign your browser into <strong>{a.email}</strong>, then:
+          </p>
+          <Button size="sm" icon={Icon.plus} onClick={onAddOwn}>
+            Give agentbox its own login
           </Button>
         </div>
       ) : null}
