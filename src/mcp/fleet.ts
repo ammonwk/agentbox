@@ -16,28 +16,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { VERSION } from "../version";
+import { apiClient } from "../client";
 import type { AppState, Placement, Session, TimelineEvent, TimelinePage } from "../core/types";
-
-type Envelope<T> = { ok: boolean; data: T; error: string | null };
-
-function client(base: string) {
-  return async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
-    let res: Response;
-    try {
-      res = await fetch(`${base}${path}`, {
-        method,
-        headers: { "content-type": "application/json", "x-agentbox": "1" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-    } catch (e) {
-      throw new Error(`agentbox server is not running at ${base} — start it with \`agentbox serve\` (${(e as Error).message})`);
-    }
-    const env = (await res.json().catch(() => null)) as Envelope<T> | null;
-    if (!env) throw new Error(`agentbox answered ${path} with HTTP ${res.status} and no JSON`);
-    if (!env.ok) throw new Error(env.error ?? `HTTP ${res.status}`);
-    return env.data;
-  };
-}
 
 const text = (body: string) => ({ content: [{ type: "text" as const, text: body }] });
 
@@ -96,7 +76,7 @@ export function condense(events: TimelineEvent[]): string {
 }
 
 export async function runMcp(base: string): Promise<void> {
-  const api = client(base);
+  const api = apiClient(base);
   const server = new McpServer({ name: "agentbox", version: VERSION });
 
   server.registerTool(
