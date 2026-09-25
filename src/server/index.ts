@@ -31,6 +31,7 @@ import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./g
 import { addRepo, deleteRepo, getSettings, listRepos, mergeSettings, saveSettings } from "../core/db";
 import { listPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
+import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { clearProject, compactProject, ensureProject, followProject, projectState } from "../core/project";
 import { checkRequest } from "./csrf";
 import { HttpError, Router, fail, json, readBody } from "./router";
@@ -119,7 +120,7 @@ async function detectProviders(): Promise<void> {
     PROVIDERS.map(async (id) => {
       const a = fleet.providers().find((p) => p.id === id);
       const d = a ? await a.detect().catch(() => ({ installed: false, version: null })) : { installed: false, version: null };
-      return { id, installed: d.installed, version: d.version };
+      return { id, installed: d.installed, version: d.version, efforts: [...(a?.efforts ?? [])] };
     }),
   );
 }
@@ -385,6 +386,7 @@ const router = new Router(mapError)
         pr: typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0 ? b.pr : undefined,
         prompt: typeof b.prompt === "string" ? b.prompt : undefined,
         model: optionalString(b, "model"),
+        effort: optionalString(b, "effort"),
         big: b.big === true,
         accountId: optionalString(b, "accountId") ?? null,
       });
@@ -433,6 +435,31 @@ const router = new Router(mapError)
     const s = await fleet.resume(params.id!, typeof b.prompt === "string" ? b.prompt : undefined);
     scheduleHot();
     return json(s);
+  })
+  .add("POST", "/api/sessions/:id/move", async ({ req, params }) => {
+    const b = await readBody(req);
+    const s = await fleet.moveAndContinue(params.id!, {
+      accountId: optionalString(b, "accountId") ?? null,
+      prompt: typeof b.prompt === "string" && b.prompt.trim() ? b.prompt : undefined,
+    });
+    scheduleHot();
+    scheduleCold();
+    return json(s);
+  })
+  .add("POST", "/api/uploads", async ({ req }) => {
+    const len = Number(req.headers.get("content-length") ?? 0);
+    if (len > MAX_UPLOAD_BYTES) throw new HttpError(413, `the image is over ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    try {
+      return json(saveUpload(bytes, req.headers.get("content-type") ?? ""), 201);
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message);
+    }
+  })
+  .add("GET", "/api/uploads/:name", ({ params }) => {
+    const f = uploadFile(params.name!);
+    if (!f) throw new HttpError(404, "no such upload");
+    return new Response(Bun.file(f.path), { headers: { "content-type": f.mime, "cache-control": "private, max-age=86400" } });
   })
   .add("POST", "/api/sessions/:id/adopt", async ({ params }) => {
     const s = await fleet.adopt(params.id!);

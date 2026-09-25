@@ -319,7 +319,7 @@ function Row({
           {s.big ? <BigBadge /> : null}
           {s.host === "external" ? <HostBadge host="external" /> : null}
           <span className="bd-inline-acct">
-            <AccountChip accountId={s.accountId} accounts={state.accounts} />
+            <AccountChip accountId={s.accountId} accounts={state.accounts} cold={s.cold} />
           </span>
         </span>
         {snippet ? (
@@ -341,7 +341,7 @@ function Row({
       </span>
 
       <span className="bd-c-acct">
-        <AccountChip accountId={s.accountId} accounts={state.accounts} plain />
+        <AccountChip accountId={s.accountId} accounts={state.accounts} cold={s.cold} plain />
       </span>
 
       <span className="bd-c-ctx">

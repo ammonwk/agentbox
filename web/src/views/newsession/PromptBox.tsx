@@ -1,24 +1,27 @@
 import { useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
 import type { SkillInfo } from "../../../../src/core/types";
+import { AttachFrame, type Attachments } from "../../attachments";
 import { completeSlash, matchSkills, slashToken } from "../../lib/newsession";
 import { scrollActiveIntoView, useDismiss, useFloating } from "./popover";
 
 /**
  * The prompt, with `/skill` completion: typing `/go` lists the skills that
  * match, Tab or Enter takes the highlighted one, arrows move, Escape dismisses
- * until the next keystroke.
+ * until the next keystroke. Images pasted or dropped in attach to it.
  */
 export function PromptBox({
   value,
   onChange,
   skills,
   textareaRef,
+  attachments,
   id,
 }: {
   value: string;
   onChange: (v: string) => void;
   skills: SkillInfo[];
   textareaRef: Ref<HTMLTextAreaElement>;
+  attachments: Attachments;
   id?: string;
 }) {
   const localRef = useRef<HTMLTextAreaElement | null>(null);
@@ -59,7 +62,7 @@ export function PromptBox({
   }
 
   return (
-    <div className="ns-promptbox">
+    <AttachFrame a={attachments} className="ns-promptbox">
       <textarea
         id={id}
         className="ns-prompt"
@@ -69,7 +72,7 @@ export function PromptBox({
           else if (textareaRef) textareaRef.current = el;
         }}
         value={value}
-        placeholder="What should it do? Type / for skills."
+        placeholder="What should it do? Type / for skills; paste or drop images."
         rows={6}
         role="combobox"
         aria-expanded={open}
@@ -83,7 +86,10 @@ export function PromptBox({
         }}
         onSelect={syncCaret}
         onKeyDown={(e) => {
-          if (!open) return;
+          if (!open) {
+            attachments.onKeyDown(e);
+            return;
+          }
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
             const d = e.key === "ArrowDown" ? 1 : -1;
@@ -120,6 +126,6 @@ export function PromptBox({
           </div>
         </div>
       ) : null}
-    </div>
+    </AttachFrame>
   );
 }

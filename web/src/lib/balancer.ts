@@ -11,7 +11,11 @@ export const BALANCER_HELP: Record<keyof BalancerSettings, { label: string; unit
     unit: "pts",
     help: "How many weekly points one full 5-hour window is worth; converts claims into 5-hour room.",
   },
-  claimIdleMin: { label: "Claim lapses after", unit: "min idle", help: "A session idle this long stops holding its claim." },
+  claimIdleMin: {
+    label: "Cache goes cold after",
+    unit: "min idle",
+    help: "A session idle this long stops holding its claim and its account: its prompt cache is cold, so it wakes on whichever account has room.",
+  },
   resetHorizonMin: {
     label: "Reset horizon",
     unit: "min",

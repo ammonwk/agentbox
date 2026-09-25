@@ -54,9 +54,13 @@ export function AccountChip({
   detail,
   onClick,
   plain,
+  cold,
 }: {
   accountId: string | null;
   accounts: readonly AccountView[];
+  /** Idle past the claim window: no longer pinned. Shown as a hollow ring
+   *  and "any account", with where it last ran in the tooltip. */
+  cold?: boolean;
   /** Extra text after the label, e.g. a usage summary. */
   detail?: string;
   onClick?: () => void;
@@ -71,6 +75,26 @@ export function AccountChip({
     : accountId
       ? `Account ${accountId} (not found — forgotten?)`
       : "Not pinned to an account";
+  if (cold && a) {
+    const coldTitle = `Unpinned: idle long enough that its prompt cache is cold, so it wakes on whichever ${a.provider} account has room. Last ran on ${a.label}.`;
+    const coldInner = (
+      <>
+        <span className="acct-dot" aria-hidden="true" />
+        <span className="acct-label">any account</span>
+      </>
+    );
+    const coldCls = `acct acct-cold${plain ? " acct-plain" : ""}`;
+    const coldStyle = { ["--acct" as string]: `var(--acct-${hue})` };
+    return onClick ? (
+      <button type="button" className={coldCls} style={coldStyle} title={coldTitle} onClick={onClick}>
+        {coldInner}
+      </button>
+    ) : (
+      <span className={coldCls} style={coldStyle} title={coldTitle}>
+        {coldInner}
+      </span>
+    );
+  }
   const inner = (
     <>
       <span className="acct-dot" aria-hidden="true" />

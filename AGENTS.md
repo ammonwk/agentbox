@@ -41,10 +41,15 @@ table and tmux on its first tick.
 - **The provider's transcript is the record.** Never write a copy of a
   conversation. The database holds only what the provider cannot know: the
   account pin, the claim, the tmux session, a label, archive state, metrics.
-- **A session never changes account.** That is the whole point: switching
-  accounts invalidates the provider's prompt cache. Resume and adopt always use
-  the session's pinned account. Transcripts are deliberately not shared between
-  account homes so a plain `claude --resume` cannot cross accounts either.
+- **A warm session never changes account.** Switching accounts invalidates
+  the provider's prompt cache, so while a session has been active within
+  `claimIdleMin` (60) resume and adopt use its pinned account. Once it is idle
+  past that the cache is cold anyway: it is shown unpinned, and a resume or a
+  message wakes it on the balancer's pick (`Fleet.wake`, which moves — never
+  copies — the transcript into that account's home; claude and devin only).
+  A session stopped at a limit is never moved on its own: the UI offers a
+  button. Transcripts are not shared between account homes, so a plain
+  `claude --resume` cannot cross accounts.
 - **Never kill before proving the resume.** Adopt checks the transcript exists
   and (claude) the resume cwd slugs to the transcript's directory, *then*
   SIGTERMs, waits for exit, *then* resumes. `Fleet.resumeCwd` refuses rather

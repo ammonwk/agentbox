@@ -234,6 +234,19 @@ export interface Session {
 
   big: boolean;
   claim: number;
+  /** The reasoning effort it was started with; null for the CLI's default. */
+  effort: string | null;
+  /**
+   * Idle past `claimIdleMin`, so its prompt cache is cold and nothing is lost
+   * by moving it: it is no longer pinned to `accountId` (the account it last
+   * ran on) and wakes — on resume or on a message — on whichever account has
+   * the most room. Only for providers that can move a session between
+   * accounts, and only while it is not mid-turn or showing a prompt.
+   */
+  cold: boolean;
+  /** The provider's latest "you hit your limit", when that is the last thing
+   *  the session did — it stopped there and is waiting to be continued. */
+  limitHit: { at: number; detail: string } | null;
   /** Where this session came from. */
   origin: "agentbox" | "external";
 
@@ -623,8 +636,9 @@ export interface ColdState {
   prs: PrInfo[];
   skills: SkillInfo[];
   settings: AgentSettings;
-  /** Which provider CLIs are installed, and their versions. */
-  providers: { id: ProviderId; installed: boolean; version: string | null }[];
+  /** Which provider CLIs are installed, their versions, and the reasoning
+   *  effort levels each takes (lowest first; empty for none). */
+  providers: { id: ProviderId; installed: boolean; version: string | null; efforts: string[] }[];
   /** Set when something is missing, so the UI can say so instead of failing. */
   warnings: string[];
   project: ProjectState;

@@ -109,9 +109,32 @@ export interface NewSessionInput {
   pr?: number;
   prompt?: string;
   model?: string;
+  effort?: string;
   big?: boolean;
   accountId?: string;
 }
+
+/** An image saved for a prompt to name: agents read it from `path`. */
+export interface Upload {
+  name: string;
+  path: string;
+}
+
+/** Raw bytes, not JSON, so it skips `request`; same header and envelope. */
+async function upload(file: Blob): Promise<Upload> {
+  if (MOCK) return { name: "mock.png", path: `/tmp/agentbox-mock/${Math.random().toString(36).slice(2)}.png` };
+  let res: Response;
+  try {
+    res = await fetch("/api/uploads", { method: "POST", headers: { "x-agentbox": "1", "content-type": file.type }, body: file });
+  } catch (err) {
+    throw new Error(`/api/uploads: cannot reach agentbox (${(err as Error).message})`);
+  }
+  const env = (await res.json().catch(() => ({ ok: false, error: `${res.status} ${res.statusText}` }))) as { ok?: boolean; data?: Upload; error?: string };
+  if (!env.ok || !env.data) throw new Error(env.error || `upload failed: ${res.status}`);
+  return env.data;
+}
+
+export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComponent(name)}`;
 
 /**
  * `GET /api/health` as Diagnostics rows: the probed dependencies first, then
@@ -156,6 +179,9 @@ export const api = {
   resume: (id: string, prompt?: string) =>
     post<Session>(`/api/sessions/${enc(id)}/resume`, prompt ? { prompt } : {}),
   adopt: (id: string) => post<Session>(`/api/sessions/${enc(id)}/adopt`),
+  /** Continue on another account (`auto` = the balancer's pick), sending `prompt`. */
+  move: (id: string, opts: { accountId?: string; prompt?: string }) => post<Session>(`/api/sessions/${enc(id)}/move`, opts),
+  upload,
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
   archive: (id: string, archived: boolean) => post<unknown>(`/api/sessions/${enc(id)}/archive`, { archived }),
   timeline: (id: string, opts: { before?: string; limit?: number } = {}) => {

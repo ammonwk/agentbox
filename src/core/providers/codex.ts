@@ -599,6 +599,7 @@ const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
   const argv = ["codex"];
   if (opts.model) argv.push("--model", opts.model);
+  if (opts.effort) argv.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (opts.autoApprove) argv.push("--dangerously-bypass-approvals-and-sandbox");
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: null };
@@ -607,6 +608,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
 function resumeCommand(opts: ResumeOptions): Command {
   const argv = ["codex", "resume"];
   if (opts.model) argv.push("--model", opts.model);
+  if (opts.effort) argv.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (opts.autoApprove) argv.push("--dangerously-bypass-approvals-and-sandbox");
   argv.push(opts.agentSessionId);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
@@ -633,6 +635,7 @@ export function codexReader(ref: TranscriptRef): TranscriptReader {
 export const codexAdapter: ProviderAdapter = {
   id: "codex",
   label: "Codex",
+  efforts: ["minimal", "low", "medium", "high", "xhigh"],
 
   detect: () => cliVersion(["codex", "--version"]),
 

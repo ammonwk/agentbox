@@ -1614,6 +1614,22 @@ button.acct:hover {
   color: var(--faint);
   font-style: italic;
 }
+/* Cold: not pinned to any account. The ring keeps the colour of where it last
+   ran, faintly, so a glance still says "that one was on the work account". */
+.acct-cold {
+  color: var(--muted);
+  font-weight: 450;
+  background: none;
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+.acct-cold .acct-dot {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--acct, var(--faint)) 60%, var(--faint));
+}
+.acct-cold.acct-plain {
+  border-color: transparent;
+}
 .acct-off .acct-label {
   text-decoration: line-through;
   text-decoration-color: var(--faint);
@@ -1939,4 +1955,196 @@ kbd {
   .mock-tag {
     display: none;
   }
+}
+
+/* ------------------------------------------------------------ attachments
+   A prompt box and its pasted images share one frame (attachments.tsx): the
+   border and focus ring live on the frame, so thumbnails read as part of the
+   box. The textarea inside keeps its own padding and loses its border. */
+.att-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.att-frame:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.att-frame > textarea,
+.att-frame > * > textarea {
+  border: 0;
+  background: transparent;
+  box-shadow: none !important;
+  border-radius: var(--radius-sm);
+}
+.att-frame[data-drop] {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+.att-dropzone {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel) 85%);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.att-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 10px 10px;
+}
+.att {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex: none;
+  animation: att-in 0.16s ease-out;
+}
+@keyframes att-in {
+  from { opacity: 0; transform: scale(0.92); }
+}
+.att-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--sunken);
+  cursor: zoom-in;
+}
+.att-thumb:hover,
+.att-thumb:focus-visible {
+  border-color: var(--border-strong);
+}
+.att-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.att[data-state="uploading"] img {
+  opacity: 0.45;
+  filter: saturate(0.6);
+}
+.att[data-state="error"] .att-thumb {
+  border-color: var(--danger);
+  cursor: pointer;
+}
+.att-over {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+}
+.att-err {
+  color: #fff;
+  background: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+.att-n {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 15px;
+  color: #fff;
+  background: rgb(0 0 0 / 0.6);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.att-x {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--raised, var(--panel));
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.1s, transform 0.1s;
+  box-shadow: var(--shadow-sm);
+}
+.att:hover .att-x,
+.att:focus-within .att-x,
+.att[data-state="error"] .att-x {
+  opacity: 1;
+  transform: none;
+}
+.att-x:hover {
+  color: var(--text);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 18%, var(--panel));
+}
+@media (hover: none) {
+  .att-x { opacity: 1; transform: none; }
+}
+
+.att-pick {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.att-pick:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.att-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  background: rgb(0 0 0 / 0.78);
+  cursor: zoom-out;
+  animation: att-fade 0.12s ease-out;
+}
+@keyframes att-fade {
+  from { opacity: 0; }
+}
+.att-lightbox img {
+  max-width: 100%;
+  max-height: calc(100vh - 100px);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.5);
+}
+.att-lightbox-cap {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: rgb(255 255 255 / 0.75);
+  font-size: 12px;
 }

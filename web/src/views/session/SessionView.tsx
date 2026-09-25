@@ -307,7 +307,12 @@ function Detail({
 
         <div className="sx-facts">
           <span className="fact">
-            <AccountChip accountId={session.accountId} accounts={state.accounts} onClick={() => (location.hash = hrefOf({ page: "accounts", sub: "accounts" }))} />
+            <AccountChip
+              accountId={session.accountId}
+              accounts={state.accounts}
+              cold={session.cold}
+              onClick={() => (location.hash = hrefOf({ page: "accounts", sub: "accounts" }))}
+            />
           </span>
           <span className="fact mono fact-cwd" title={session.cwd}>
             <Icon.folder size={12} />
@@ -320,7 +325,12 @@ function Detail({
               <Icon.branch size={12} /> {session.branch}
             </span>
           ) : null}
-          {session.model ? <span className="fact mono">{session.model}</span> : null}
+          {session.model ? (
+            <span className="fact mono">
+              {session.model}
+              {session.effort ? <span className="muted"> · {session.effort}</span> : null}
+            </span>
+          ) : null}
           <span className="fact">
             <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
           </span>
@@ -380,7 +390,7 @@ function Detail({
               <Terminal sessionId={session.id} sessionIds={sessionIds} prBase={prBase} />
             </Suspense>
           ) : (
-            <TermPlaceholder session={session} busy={busy} onAdopt={() => void run(() => api.adopt(session.id))} onResume={() => void run(() => api.resume(session.id))} />
+            <TranscriptInstead session={session} busy={busy} onAdopt={() => void run(() => api.adopt(session.id))} onResume={() => void run(() => api.resume(session.id))} />
           )
         ) : tab === "timeline" ? (
           <Suspense fallback={<Empty title="Loading the timeline…" />}>
@@ -394,7 +404,7 @@ function Detail({
       </div>
       </PrBase.Provider>
 
-      <Composer session={session} />
+      <Composer session={session} accounts={state.accounts} />
 
       {confirmStop ? (
         <Confirm
@@ -404,7 +414,7 @@ function Detail({
             <p>
               Ends the {PROVIDER_LABEL[session.provider]} process
               {session.host === "external" ? " running in your other terminal" : " and its tmux session"}. The conversation is kept and Resume
-              continues it on the same account.
+              continues it — on the same account while its cache is warm, on whichever has room once it has been idle an hour.
             </p>
           }
           onCancel={() => setConfirmStop(false)}
@@ -418,7 +428,12 @@ function Detail({
   );
 }
 
-function TermPlaceholder({
+/**
+ * The Terminal tab when there is no terminal to attach to: the conversation
+ * itself, under one line saying why it is not live and how to make it so.
+ * Reading a stopped session should not cost a resume.
+ */
+function TranscriptInstead({
   session,
   busy,
   onAdopt,
@@ -429,38 +444,36 @@ function TermPlaceholder({
   onAdopt: () => void;
   onResume: () => void;
 }) {
+  const external = session.host === "external";
   return (
-    <div className="term-placeholder">
-      {session.host === "external" ? (
-        <Empty
-          title="Running in another terminal"
-          action={
-            <Button variant="primary" icon={Icon.link} loading={busy} onClick={onAdopt}>
-              Adopt it here
-            </Button>
-          }
-        >
-          <p>
-            This {PROVIDER_LABEL[session.provider]} session was started outside agentbox, so there is no tmux to attach to. Adopt it to control
-            it here: agentbox proves the conversation will resume, stops that process, and continues it in its own tmux on the same
-            account. The Timeline tab already shows what it is doing.
-          </p>
-        </Empty>
-      ) : (
-        <Empty
-          title={session.status === "archived" ? "Archived" : "Stopped"}
-          action={
-            <Button variant="primary" icon={Icon.play} loading={busy} onClick={onResume}>
-              Resume
-            </Button>
-          }
-        >
-          <p>
-            No process is running. Resume starts {PROVIDER_LABEL[session.provider]} again in agentbox&apos;s tmux with this conversation,
-            on the account it started on — or type a prompt below to resume with it.
-          </p>
-        </Empty>
-      )}
+    <div className="term-transcript">
+      <div className="term-transcript-bar">
+        <Icon.terminal size={13} />
+        {external ? (
+          <span>
+            Running in a terminal agentbox did not start, so there is no live terminal here — this is its transcript. Adopt it to take it over:
+            agentbox proves the conversation resumes, stops that process, and continues it in its own tmux.
+          </span>
+        ) : (
+          <span>
+            {session.status === "archived" ? "Archived" : "Stopped"} — this is its transcript. Resume, or type a prompt below, to get the live
+            terminal back
+            {session.cold ? " on whichever account has room (its cache is cold)" : " on the same account"}.
+          </span>
+        )}
+        {external ? (
+          <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={onAdopt}>
+            Adopt
+          </Button>
+        ) : (
+          <Button size="sm" variant="primary" icon={Icon.play} loading={busy} onClick={onResume}>
+            Resume
+          </Button>
+        )}
+      </div>
+      <Suspense fallback={<Empty title="Loading the transcript…" />}>
+        <Timeline session={session} />
+      </Suspense>
     </div>
   );
 }

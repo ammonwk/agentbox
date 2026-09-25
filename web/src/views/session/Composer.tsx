@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { Session } from "../../../../src/core/types";
-import { api } from "../../api";
+import type { AccountView, Placement, Session } from "../../../../src/core/types";
+import { ago, api } from "../../api";
+import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
 import { useAction } from "./useAction";
@@ -34,12 +35,13 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * session in someone else's terminal cannot be typed into until adopted, so
  * the box is replaced by the Adopt explanation.
  */
-export function Composer({ session }: { session: Session }) {
+export function Composer({ session, accounts }: { session: Session; accounts: readonly AccountView[] }) {
   const [text, setText] = useState("");
   const { run, busy, error, clear } = useAction();
   const mode = composerMode(session);
   const ref = useRef<HTMLTextAreaElement>(null);
   const provider = PROVIDER_LABEL[session.provider];
+  const images = useAttachments({ text, setText, textareaRef: ref });
 
   // Grow with the text up to a cap, then scroll.
   useEffect(() => {
@@ -50,13 +52,16 @@ export function Composer({ session }: { session: Session }) {
   }, [text]);
 
   async function submit() {
-    const body = text.trim();
     if (busy) return;
-    if (mode.kind === "send") {
-      if (!body) return;
-      if (await run(() => api.send(session.id, body))) setText("");
-    } else if (mode.kind === "resume") {
-      if (await run(() => api.resume(session.id, body || undefined))) setText("");
+    if (mode.kind === "send" && !text.trim()) return;
+    const ok = await run(async () => {
+      const body = (await images.resolve(text)).trim();
+      if (mode.kind === "send") await api.send(session.id, body);
+      else if (mode.kind === "resume") await api.resume(session.id, body || undefined);
+    });
+    if (ok) {
+      setText("");
+      images.clear();
     }
   }
 
@@ -66,6 +71,7 @@ export function Composer({ session }: { session: Session }) {
         ? `Message ${provider} — it arrives when the current step yields`
         : `Message ${provider}`
       : "Stopped. Type a prompt to resume with it, or just press Resume.";
+  const lastOn = accounts.find((a) => a.id === session.accountId)?.label ?? null;
 
   return (
     <div className="cmp" data-mode={mode.kind}>
@@ -111,11 +117,14 @@ export function Composer({ session }: { session: Session }) {
         </div>
       ) : null}
 
+      {session.limitHit ? <LimitBanner session={session} accounts={accounts} /> : null}
+
       {mode.kind !== "adopt" ? (
       <div className="cmp-row">
         <label className="sr-only" htmlFor={`cmp-${session.id}`}>
           {mode.kind === "resume" ? "Prompt to resume with" : "Message to the agent"}
         </label>
+        <AttachFrame a={images} className="cmp-frame">
         <textarea
           id={`cmp-${session.id}`}
           ref={ref}
@@ -125,6 +134,7 @@ export function Composer({ session }: { session: Session }) {
           title="Enter sends · Shift+Enter for a new line"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
+            if (images.onKeyDown(e)) return;
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void submit();
@@ -133,13 +143,15 @@ export function Composer({ session }: { session: Session }) {
             }
           }}
         />
+        </AttachFrame>
+        <AttachButton a={images} className="cmp-attach" />
         {mode.kind === "send" ? (
           <>
             <Button
               variant="primary"
               icon={Icon.send}
               loading={busy}
-              disabled={!text.trim()}
+              disabled={!text.trim() || images.uploading}
               onClick={() => void submit()}
             >
               Send
@@ -170,7 +182,81 @@ export function Composer({ session }: { session: Session }) {
       ) : null}
       {/* Enter / Shift+Enter is what every chat box does; it lives in the
           textarea's tooltip rather than a permanent line under it. */}
-      {mode.kind === "resume" ? <div className="cmp-hint">Resumes on the same account it started on, in agentbox&apos;s tmux.</div> : null}
+      {session.cold && mode.kind !== "adopt" ? (
+        <div className="cmp-hint">
+          Idle since {ago(session.lastActivityAt)}, so its cache is cold: {mode.kind === "send" ? "a message" : "resuming"} wakes it on whichever account has
+          room{lastOn ? ` (last on ${lastOn})` : ""}{mode.kind === "send" ? ", restarting it there if that is another one" : ""}.
+        </div>
+      ) : mode.kind === "resume" ? (
+        <div className="cmp-hint">Resumes on the same account{lastOn ? `, ${lastOn}` : ""}, in agentbox&apos;s tmux — its cache is still warm.</div>
+      ) : null}
+    </div>
+  );
+}
+
+const CONTINUE = "Usage limits have reset, continue";
+
+/**
+ * The session stopped at its account's limit. Nothing moves it on its own —
+ * a move is a cache miss you should choose — so this offers the one-click
+ * version: continue on the account with the most room (the balancer's pick,
+ * shown before you click), telling the agent to carry on.
+ */
+function LimitBanner({ session, accounts }: { session: Session; accounts: readonly AccountView[] }) {
+  const { run, busy, error, clear } = useAction();
+  const [placement, setPlacement] = useState<Placement | null>(null);
+  const hit = session.limitHit!;
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .placement({ provider: session.provider, big: session.big, ...(session.model ? { model: session.model } : {}) })
+      .then((p) => !cancelled && setPlacement(p))
+      .catch(() => !cancelled && setPlacement(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, hit.at]);
+
+  const here = accounts.find((a) => a.id === session.accountId) ?? null;
+  const target = placement?.accountId && placement.mode !== "none" ? accounts.find((a) => a.id === placement.accountId) ?? null : null;
+  const moves = !!target && target.id !== session.accountId;
+  const label = moves ? `Continue on ${target!.label}` : "Continue here";
+  return (
+    <div className="cmp-limit" role="status">
+      <Icon.gauge size={15} />
+      <div className="cmp-limit-body">
+        <strong>
+          Stopped at {here ? `${here.label}'s` : "its account's"} limit {ago(hit.at)}
+        </strong>
+        <span className="cmp-limit-detail">{hit.detail}</span>
+        {error ? (
+          <span className="cmp-limit-err">
+            {error}{" "}
+            <button className="linkish" onClick={clear}>
+              dismiss
+            </button>
+          </span>
+        ) : (
+          <span className="cmp-limit-why">
+            {moves
+              ? `${target!.label} has the most room. Moving costs one cold cache read; the agent is told “${CONTINUE}”.`
+              : placement
+                ? `No other account has more room, so this just tells it “${CONTINUE}”.`
+                : "Asking the balancer where there is room…"}
+          </span>
+        )}
+      </div>
+      <Button
+        size="sm"
+        variant="primary"
+        icon={Icon.play}
+        loading={busy}
+        disabled={!placement}
+        title={placement?.why}
+        onClick={() => void run(() => api.move(session.id, { accountId: target?.id ?? "auto", prompt: CONTINUE }))}
+      >
+        {label}
+      </Button>
     </div>
   );
 }

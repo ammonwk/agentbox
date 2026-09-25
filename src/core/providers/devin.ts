@@ -481,6 +481,7 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
   return {
     id: "devin",
     label: "Devin",
+    efforts: [],
 
     detect: () => cliVersion(["devin", "--version"]),
 
@@ -545,6 +546,10 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     spawnCommand(opts: SpawnOptions) {
       return { argv: withPrompt(["devin", ...flags(opts)], opts.prompt), ...accountCommand(opts.account), agentSessionId: null };
     },
+
+    // Every account runs on the one session store (only the key differs), so
+    // a session is already wherever it is resumed.
+    moveSession: ({ transcriptPath }) => transcriptPath,
 
     resumeCommand(opts: ResumeOptions): Command {
       return {

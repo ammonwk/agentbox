@@ -577,9 +577,10 @@ function withPrompt(argv: string[], prompt?: string): string[] {
   return prompt ? [...argv, "--", prompt] : argv;
 }
 
-function commonFlags(opts: { cwd: string; model?: string; autoApprove: boolean }): string[] {
+function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoApprove: boolean }): string[] {
   const a: string[] = [];
   if (opts.model) a.push("--model", opts.model);
+  if (opts.effort) a.push(`--thinking=${opts.effort}`);
   if (opts.autoApprove) a.push("--auto-approve");
   // omp silently moves a session started in ~ to a temp dir unless told not to.
   if (canonical(opts.cwd) === canonical(homedir())) a.push("--allow-home");
@@ -596,6 +597,7 @@ function ompAccountCommand(): Pick<Command, "env" | "unset"> {
 export const ompAdapter: ProviderAdapter = {
   id: "omp",
   label: "omp",
+  efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
 
   detect() {
     return cliVersion(["omp", "--version"]);

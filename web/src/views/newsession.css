@@ -554,3 +554,83 @@
     display: none;
   }
 }
+
+/* effort, beside the model */
+.ns-model-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.ns-model-row .ns-model {
+  flex: 1;
+  min-width: 0;
+}
+.ns-effort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  min-height: 36px;
+  padding: 0 8px 0 10px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.ns-effort-btn[data-default] .ns-effort-val {
+  color: var(--faint);
+  font-weight: 450;
+}
+.ns-effort-btn svg {
+  color: var(--faint);
+}
+.ns-effort-btn:focus-visible,
+.ns-effort-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.ns-effort-val {
+  min-width: 42px;
+  text-align: left;
+}
+.ns-effort-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+}
+.ns-effort-opt[aria-selected="true"] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.ns-effort-note {
+  margin-left: auto;
+  font-size: 11px;
+}
+.ns-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+.ns-meter i {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+.ns-meter i[data-on] {
+  background: var(--accent);
+}
+
+/* the prompt's hint row: the attach button sits in the line */
+.ns-prompt-head .att-pick {
+  width: 22px;
+  height: 22px;
+  align-self: center;
+}
+.ns-wt-hint .ns-tag {
+  margin-right: 6px;
+}

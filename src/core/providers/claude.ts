@@ -22,7 +22,8 @@
  */
 
 import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { moveInto } from "./move";
 import { randomUUID } from "node:crypto";
 import { userHome } from "../paths";
 import { cliVersion } from "./cli-version";
@@ -483,6 +484,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   const id = randomUUID();
   const argv = ["claude", "--session-id", id];
   if (opts.model) argv.push("--model", opts.model);
+  if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: id };
@@ -494,8 +496,10 @@ function resumeCommand(opts: ResumeOptions): Command {
     // An adopted session keeps how it was launched, permissions included.
     argv.push(...opts.carry);
     if (opts.model && !opts.carry.some((a) => a === "--model" || a.startsWith("--model="))) argv.push("--model", opts.model);
+    if (opts.effort && !opts.carry.some((a) => a === "--effort" || a.startsWith("--effort="))) argv.push("--effort", opts.effort);
   } else {
     if (opts.model) argv.push("--model", opts.model);
+    if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
   }
   if (opts.prompt) argv.push(promptArg(opts.prompt));
@@ -566,6 +570,51 @@ export function claudeCarryOver(argv: string[]): string[] {
   return out;
 }
 
+/**
+ * Move a stopped session to another account's home: the transcript and its
+ * sibling directory (subagents, tool results) into the same project slug,
+ * then what Claude keys by session id elsewhere in the home — rewind
+ * snapshots, the shell environment, tasks and todos. Moved, never copied:
+ * two homes holding one session is how `--resume` crosses accounts by
+ * accident. The transcript goes first and is the only part that may fail the
+ * move; the rest is best effort, as Claude does without any of it.
+ */
+function moveSession(opts: { from: Account; to: Account; agentSessionId: string; transcriptPath: string }): string {
+  const id = opts.agentSessionId;
+  if (!UUID.test(id)) throw new Error(`not a claude session id: ${id}`);
+  const fromHome = claudeHome(opts.from);
+  const toHome = claudeHome(opts.to);
+  const rel = relative(join(fromHome, "projects"), opts.transcriptPath);
+  if (rel.startsWith("..") || basename(rel) !== `${id}.jsonl` || dirname(rel).includes("/")) {
+    throw new Error(`the transcript is not where ${opts.from.label} keeps it: ${opts.transcriptPath}`);
+  }
+  const dest = join(toHome, "projects", rel);
+  moveInto(opts.transcriptPath, dest);
+  const side = (home: string, ...p: string[]) => join(home, ...p);
+  const extras: [string, string][] = [
+    [opts.transcriptPath.slice(0, -".jsonl".length), dest.slice(0, -".jsonl".length)],
+    [side(fromHome, "file-history", id), side(toHome, "file-history", id)],
+    [side(fromHome, "session-env", id), side(toHome, "session-env", id)],
+    [side(fromHome, "tasks", id), side(toHome, "tasks", id)],
+  ];
+  try {
+    for (const n of readdirSync(side(fromHome, "todos"))) {
+      if (n.startsWith(`${id}-`)) extras.push([side(fromHome, "todos", n), side(toHome, "todos", n)]);
+    }
+  } catch {
+    /* no todos */
+  }
+  for (const [a, b] of extras) {
+    if (!existsSync(a)) continue;
+    try {
+      moveInto(a, b);
+    } catch (e) {
+      console.error(`agentbox: moving ${a} for session ${id}:`, e);
+    }
+  }
+  return dest;
+}
+
 // ------------------------------------------------------------- adapter
 
 function refOf(account: Account, path: string, id: string, mtimeMs: number, size: number): TranscriptRef {
@@ -584,6 +633,7 @@ export function claudeReader(ref: TranscriptRef): TranscriptReader {
 export const claudeAdapter: ProviderAdapter = {
   id: "claude",
   label: "Claude Code",
+  efforts: ["low", "medium", "high", "xhigh", "max"],
 
   detect: () => cliVersion(["claude", "--version"]),
 
@@ -632,6 +682,7 @@ export const claudeAdapter: ProviderAdapter = {
   reader: claudeReader,
   spawnCommand,
   resumeCommand,
+  moveSession,
   carryOver: claudeCarryOver,
   headless: isHeadless,
   autoAnswer: claudeAutoAnswer,

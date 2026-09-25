@@ -90,6 +90,16 @@ function hoursLeft(w: UsageWindow, now: number): number {
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
+/**
+ * A weekly rate for a sentence: two decimals (these are fractions of a point
+ * an hour, so fewer says nothing), three when two would print a tie the
+ * ranking did not see. The candidate itself keeps three.
+ */
+function rates(a: number, b: number): [string, string] {
+  const d = a.toFixed(2) === b.toFixed(2) ? 3 : 2;
+  return [a.toFixed(d), b.toFixed(d)];
+}
+
 function evaluate(
   state: AccountState,
   req: Pick<PlaceRequest, "model" | "settings" | "now">,
@@ -120,7 +130,7 @@ function evaluate(
   if (weekly) {
     c.weekly = round1(usedNow(weekly, now));
     c.weeklyEffective = round1(c.weekly + outstanding);
-    c.weeklyPerHour = round1((Math.max(0, 100 - c.weeklyEffective) / Math.max(hoursLeft(weekly, now), 0.25)) * 100) / 100;
+    c.weeklyPerHour = Math.round((Math.max(0, 100 - c.weeklyEffective) / Math.max(hoursLeft(weekly, now), 0.25)) * 1000) / 1000;
   }
 
   if (short) {
@@ -262,7 +272,8 @@ function explain(chosen: Candidate, eligible: Candidate[], tieBand: number): str
     return `${chosen.label} has the most room (${chosen.legRoom} vs ${next.label} ${next.legRoom}, counting both its 5-hour and its weekly)`;
   }
   if (chosen.weeklyPerHour !== null && next.weeklyPerHour !== null && chosen.weeklyPerHour !== next.weeklyPerHour) {
-    return `${chosen.label} has the most weekly to use before it resets (${chosen.weeklyPerHour}/h vs ${next.label} ${next.weeklyPerHour}/h)`;
+    const [a, b] = rates(chosen.weeklyPerHour, next.weeklyPerHour);
+    return `${chosen.label} has the most weekly to use before it resets (${a}/h vs ${next.label} ${b}/h)`;
   }
   return `${chosen.label} has the fewest sessions claiming it`;
 }

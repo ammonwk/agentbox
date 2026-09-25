@@ -167,6 +167,11 @@ const MIGRATIONS: string[] = [
   `,
   // 2 — how an adopted session was launched (src/core/launch.ts), JSON.
   `ALTER TABLE sessions ADD COLUMN launch TEXT;`,
+  // 3 — the reasoning effort a session was started with, kept for its resumes.
+  `ALTER TABLE sessions ADD COLUMN effort TEXT;`,
+  // 4 — the model it was started with, likewise: a resume without `--model`
+  // runs on the CLI's default.
+  `ALTER TABLE sessions ADD COLUMN model TEXT;`,
 ];
 
 function migrate(d: Database) {
@@ -259,6 +264,10 @@ export interface SessionRecord {
   createdAt: number;
   /** Flags and environment carried over by adopt; absent for sessions we started. */
   launch?: Launch | null;
+  /** The effort level it was started with; null for the CLI's default. */
+  effort?: string | null;
+  /** The model asked for at spawn (`--model`), e.g. `claude-fable-5-1[1m]`. */
+  model?: string | null;
 }
 
 type SessionRow = {
@@ -266,7 +275,7 @@ type SessionRow = {
   cwd: string; worktree: string | null; label: string | null; big: number; claim: number;
   origin: string; tmux: string | null; transcript_path: string | null; started_at: number;
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
-  launch: string | null;
+  launch: string | null; effort: string | null; model: string | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -287,6 +296,8 @@ function rowToRecord(r: SessionRow): SessionRecord {
     lastActivityAt: r.last_activity_at, archivedAt: r.archived_at,
     facts: parseJson(r.facts), createdAt: r.created_at,
     launch: (parseJson(r.launch) as Launch | null) ?? null,
+    effort: r.effort ?? null,
+    model: r.model ?? null,
   };
 }
 
@@ -308,6 +319,8 @@ const RECORD_COLUMNS = {
   facts: "facts",
   createdAt: "created_at",
   launch: "launch",
+  effort: "effort",
+  model: "model",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;

@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ModelOption, Placement, PrInfo, ProviderId } from "../../../src/core/types";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
+import { AttachButton, useAttachments } from "../attachments";
 import { Button, Icon, Modal } from "../components";
 import {
   loadPrefs,
   parseWorktreeRef,
+  promptPrs,
   prsOf,
   rankModels,
   recentFolders,
@@ -16,6 +18,7 @@ import {
 } from "../lib/newsession";
 import { AccountPicker } from "./newsession/AccountPicker";
 import { ModelPicker } from "./newsession/ModelPicker";
+import { EffortPicker } from "./newsession/EffortPicker";
 import { PromptBox } from "./newsession/PromptBox";
 import { WorktreeField } from "./newsession/WorktreeField";
 import "./newsession.css";
@@ -55,7 +58,10 @@ export function NewSession({
   const [perProvider, setPerProvider] = useState(prefs.perProvider ?? {});
   const model = perProvider[provider]?.model ?? "";
   const accountId = perProvider[provider]?.accountId ?? "auto";
-  const setChoice = (patch: { model?: string; accountId?: string }) =>
+  const efforts = state.providers.find((p) => p.id === provider)?.efforts ?? [];
+  const effortPref = perProvider[provider]?.effort ?? "";
+  const effort = efforts.includes(effortPref) ? effortPref : "";
+  const setChoice = (patch: { model?: string; accountId?: string; effort?: string }) =>
     setPerProvider((p) => ({ ...p, [provider]: { ...p[provider], ...patch } }));
 
   const [placement, setPlacement] = useState<Placement | null>(null);
@@ -66,6 +72,7 @@ export function NewSession({
   const [error, setError] = useState<string | null>(null);
 
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const images = useAttachments({ text: prompt, setText: setPrompt, textareaRef: promptRef, initial: prefs.draftImages });
   // After the Modal's own focus handling (child effects run first), so the
   // prompt, not the close button, is where typing lands — at the end of a
   // restored draft.
@@ -75,11 +82,6 @@ export function NewSession({
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
-
-  // Remember everything as it changes, so Cancel keeps it too.
-  useEffect(() => {
-    savePrefs({ provider, where, repoId, worktree, path, big, perProvider, draft: prompt });
-  }, [provider, where, repoId, worktree, path, big, perProvider, prompt]);
 
   const accounts = useMemo(() => state.accounts.filter((a) => a.provider === provider), [state.accounts, provider]);
   const b = state.settings.balancer;
@@ -131,6 +133,45 @@ export function NewSession({
   const repo = state.repos.find((r) => r.id === repoId) ?? null;
   const repoPrs = useMemo(() => prsOf(state.prs, repo), [state.prs, repo]);
   const wt = parseWorktreeRef(wtText, repoPrs);
+
+  // A PR named in the prompt is where the session should run: one PR fills
+  // the worktree box with it; two or more name no single branch, so it goes
+  // back to a new worktree. Only when the set of PRs changes, so a choice
+  // made by hand after that sticks — and dropping the PR from the prompt
+  // undoes only what the prompt did, not something you typed since.
+  const mentioned = useMemo(
+    () => (where === "repo" ? promptPrs(prompt, repoPrs, repo?.fullName ?? null) : []),
+    [where, prompt, repoPrs, repo?.fullName],
+  );
+  const mentionedKey = mentioned.join(",");
+  const autoWt = useRef<string | null>(null);
+  useEffect(() => {
+    if (mentioned.length === 1) {
+      const t = `#${mentioned[0]}`;
+      setWorktree(false);
+      setWtText(t);
+      autoWt.current = t;
+    } else if (mentioned.length > 1) {
+      setWorktree(true);
+      setWtText("");
+      autoWt.current = null;
+    } else if (autoWt.current !== null) {
+      if (wtText === autoWt.current) {
+        setWorktree(true);
+        setWtText("");
+      }
+      autoWt.current = null;
+    }
+  }, [mentionedKey]);
+  const wtFromPrompt = !worktree && autoWt.current !== null && wtText === autoWt.current;
+
+  // Remember everything as it changes, so Cancel keeps it too.
+  const draftImages = images.saved();
+  const draftImagesKey = JSON.stringify(draftImages);
+  useEffect(() => {
+    // A PR the prompt ticked off is not a preference for next time.
+    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider, draft: prompt, draftImages });
+  }, [provider, where, repoId, worktree, wtFromPrompt, path, big, perProvider, prompt, draftImagesKey]);
   // Typing `new` is the same as ticking the box again.
   useEffect(() => {
     if (!worktree && wt.kind === "new") {
@@ -149,6 +190,14 @@ export function NewSession({
     if (!canSubmit) return;
     setBusy(true);
     setError(null);
+    let text: string;
+    try {
+      text = (await images.resolve(prompt)).trim();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+      return;
+    }
     const input: NewSessionInput = {
       provider,
       ...(where === "path"
@@ -158,14 +207,15 @@ export function NewSession({
           : wt.kind === "main"
             ? { repoId, worktree: false }
             : { repoId, branch: wt.branch, ...(wt.kind === "pr" ? { pr: wt.number } : {}) }),
-      ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
+      ...(text ? { prompt: text } : {}),
       ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
       big,
       accountId,
     };
     try {
       const r = await api.createSession(input);
-      savePrefs({ provider, where, repoId, worktree, path, big, perProvider });
+      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider });
       onCreated(r.session.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -252,7 +302,16 @@ export function NewSession({
               </select>
               <WorktreeField on={worktree} onToggle={setWorktree} text={wtText} onText={setWtText} prs={repoPrs} />
             </div>
-            {!worktree ? <p className="ns-wt-hint">{worktreeHint(wt, repo?.ref ?? null, repoPrs)}</p> : null}
+            {!worktree ? (
+              <p className="ns-wt-hint">
+                {wtFromPrompt ? <span className="ns-tag">from the prompt</span> : null}
+                {worktreeHint(wt, repo?.ref ?? null, repoPrs)}
+              </p>
+            ) : mentioned.length > 1 ? (
+              <p className="ns-wt-hint">
+                The prompt names {mentioned.length} PRs ({mentioned.map((n) => `#${n}`).join(", ")}), so it gets a new worktree; untick to pick one.
+              </p>
+            ) : null}
           </>
         ) : (
           <>
@@ -277,7 +336,8 @@ export function NewSession({
           <label className="field-head ns-prompt-head" htmlFor="ns-prompt">
             <span className="field-label">Prompt</span>
             <span className="field-hint">
-              Optional. <kbd>/</kbd> for skills{skills.length ? ` (${skills.length})` : ""}.
+              Optional. <kbd>/</kbd> for skills{skills.length ? ` (${skills.length})` : ""}, paste images.
+              <AttachButton a={images} />
               {prompt ? (
                 <button type="button" className="ns-linkbtn" onClick={() => setPrompt("")}>
                   Clear
@@ -285,7 +345,7 @@ export function NewSession({
               ) : null}
             </span>
           </label>
-          <PromptBox id="ns-prompt" value={prompt} onChange={setPrompt} skills={skills} textareaRef={promptRef} />
+          <PromptBox id="ns-prompt" value={prompt} onChange={setPrompt} skills={skills} textareaRef={promptRef} attachments={images} />
         </div>
 
         <div className="field">
@@ -307,13 +367,16 @@ export function NewSession({
             <label className="field-label ns-label" htmlFor="ns-model">
               Model
             </label>
-            <ModelPicker
-              id="ns-model"
-              models={models}
-              value={model}
-              onChange={(m) => setChoice({ model: m })}
-              defaultLabel={defaultModel}
-            />
+            <div className="ns-model-row">
+              <ModelPicker
+                id="ns-model"
+                models={models}
+                value={model}
+                onChange={(m) => setChoice({ model: m })}
+                defaultLabel={defaultModel}
+              />
+              {efforts.length ? <EffortPicker levels={efforts} value={effort} onChange={(e) => setChoice({ effort: e })} /> : null}
+            </div>
           </div>
           <label className="ns-big" data-on={big || undefined} title={`Claims ${b.claimBig}% of the account's weekly instead of ${b.claimNormal}%, so the balancer keeps room for a long run and steers other sessions elsewhere.`}>
             <input type="checkbox" checked={big} onChange={(e) => setBig(e.target.checked)} />

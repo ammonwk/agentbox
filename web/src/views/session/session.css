@@ -931,3 +931,100 @@
   padding: 2px 8px;
   font-size: 12.5px;
 }
+
+/* The Terminal tab of a session with no terminal: its transcript, under a
+   line saying how to get the live one back. */
+.term-transcript {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.term-transcript > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+.term-transcript-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: none;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.term-transcript-bar > svg {
+  flex: none;
+  color: var(--faint);
+}
+.term-transcript-bar > span {
+  flex: 1;
+  min-width: 0;
+}
+.term-transcript-bar .btn {
+  flex: none;
+}
+
+/* The composer's box shares its frame with pasted images. */
+.cmp-frame {
+  flex: 1;
+  min-width: 0;
+}
+.cmp-frame .att-strip {
+  padding: 0 8px 8px;
+}
+.cmp-frame .att {
+  width: 48px;
+  height: 48px;
+}
+.cmp-attach {
+  width: 32px;
+  height: 36px;
+  flex: none;
+}
+
+/* Stopped at a usage limit: say where, and offer to carry on elsewhere. */
+.cmp-limit {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--panel));
+  font-size: 12.5px;
+}
+.cmp-limit > svg {
+  flex: none;
+  color: var(--warning);
+}
+.cmp-limit-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cmp-limit-detail {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmp-limit-why {
+  color: var(--faint);
+  font-size: 11.5px;
+}
+.cmp-limit-err {
+  color: var(--danger);
+  font-size: 11.5px;
+}
+.cmp-limit .btn {
+  flex: none;
+}
+@media (max-width: 720px) {
+  .cmp-limit { flex-wrap: wrap; }
+  .cmp-frame { flex-basis: 100%; }
+}

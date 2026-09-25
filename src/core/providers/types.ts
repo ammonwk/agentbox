@@ -120,6 +120,8 @@ export interface SpawnOptions {
   cwd: string;
   prompt?: string;
   model?: string;
+  /** One of the adapter's `efforts`; absent means the CLI's default. */
+  effort?: string;
   autoApprove: boolean;
 }
 
@@ -130,6 +132,7 @@ export interface ResumeOptions {
   cwd: string;
   prompt?: string;
   model?: string;
+  effort?: string;
   autoApprove: boolean;
   /** Flags the session was launched with outside agentbox, kept by adopt
    *  (`carryOver`). When present they decide model and permissions: the
@@ -150,6 +153,9 @@ export interface Command {
 export interface ProviderAdapter {
   readonly id: ProviderId;
   readonly label: string;
+  /** Reasoning-effort levels the CLI takes, lowest first; empty when it has
+   *  no such knob. */
+  readonly efforts: readonly string[];
 
   /** Is the CLI installed, and what version. */
   detect(): Promise<{ installed: boolean; version: string | null }>;
@@ -195,6 +201,15 @@ export interface ProviderAdapter {
   spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null };
 
   resumeCommand(opts: ResumeOptions): Command;
+
+  /**
+   * Re-home a stopped session's transcript under another account of this
+   * provider, so the next resume there finds it; returns the transcript's new
+   * path. Only for a session whose prompt cache is cold anyway (see
+   * `Fleet.wake`). Absent when the provider cannot do it safely, which pins
+   * its sessions to the account they started on for good.
+   */
+  moveSession?(opts: { from: Account; to: Account; agentSessionId: string; transcriptPath: string }): string;
 
   /** The flags in a live process's argv worth keeping when adopt resumes it —
    *  permissions, directories, MCP config, model — and never the session id,

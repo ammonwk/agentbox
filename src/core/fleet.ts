@@ -136,6 +136,8 @@ export interface SpawnRequest {
   pr?: number;
   prompt?: string;
   model?: string;
+  /** One of the adapter's `efforts`. */
+  effort?: string;
   big?: boolean;
   accountId?: string | null;
 }
@@ -166,6 +168,10 @@ export class Fleet extends EventEmitter {
   private ticking: Promise<void> | null = null;
   private attributor = new Attributor();
   private lastWeekly = new Map<string, string>();
+  /** Providers whose sessions can wake on another account: the adapter can
+   *  move a session, and there is another account to move it to. */
+  private movable = new Set<ProviderId>();
+  private coldAfterMs = 60 * 60_000;
   readonly ready: Promise<void>;
   private markReady!: () => void;
 
@@ -220,6 +226,8 @@ export class Fleet extends EventEmitter {
     const accountsOf = (p: ProviderId) => accounts.filter((a) => a.provider === p);
 
     this.panes = new Map(this.deps.runtime.listPanes().map((p) => [p.name, p]));
+    this.coldAfterMs = settings.balancer.claimIdleMin * 60_000;
+    this.movable = new Set([...this.adapters.values()].filter((a) => a.moveSession && accountsOf(a.id).length > 1).map((a) => a.id));
 
     // Processes.
     this.live.clear();
@@ -620,6 +628,16 @@ export class Fleet extends EventEmitter {
     }
 
     const cwd = f?.cwd || rec.cwd;
+    const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;
+    // The limit message is the session's last word: nothing after it, bar the
+    // odd bookkeeping line written in the same breath.
+    const hit = f?.rateLimitHits?.at(-1) ?? null;
+    const limitHit = hit && status !== "running" && hit.at >= lastActivityAt - 60_000 ? hit : null;
+    const cold =
+      this.movable.has(rec.provider) &&
+      (status === "waiting" || status === "stopped" || status === "archived") &&
+      host !== "external" &&
+      now - lastActivityAt > this.coldAfterMs;
     return {
       id: rec.id,
       provider: rec.provider,
@@ -642,6 +660,9 @@ export class Fleet extends EventEmitter {
       tokens: f?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0 },
       big: rec.big,
       claim: rec.claim,
+      effort: rec.effort ?? null,
+      cold,
+      limitHit,
       origin: rec.origin,
       pid,
       tmux: host === "tmux" || (pane && pane.dead) ? rec.tmux : null,
@@ -649,7 +670,7 @@ export class Fleet extends EventEmitter {
       startedAt: rec.startedAt,
       // When the conversation last moved. Starting or resuming a process is not
       // activity: a session resumed and left alone is as idle as before.
-      lastActivityAt: f?.lastActivityAt ?? rec.lastActivityAt,
+      lastActivityAt,
       archivedAt: rec.archivedAt,
     };
   }
@@ -800,7 +821,11 @@ export class Fleet extends EventEmitter {
     if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);
 
     const model = req.model || settings.models[req.provider] || undefined;
-    const cmd = adapter.spawnCommand({ account, cwd, prompt: req.prompt || undefined, model, autoApprove: settings.autoApprove });
+    if (req.effort && !adapter.efforts.includes(req.effort)) {
+      throw new FleetError(400, `${adapter.label} takes no effort "${req.effort}"${adapter.efforts.length ? ` (${adapter.efforts.join(", ")})` : ""}`);
+    }
+    const effort = req.effort || undefined;
+    const cmd = adapter.spawnCommand({ account, cwd, prompt: req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
     const now = this.now();
     const name = tmuxName(id);
 
@@ -822,6 +847,8 @@ export class Fleet extends EventEmitter {
       archivedAt: null,
       facts: req.prompt ? { firstPrompt: req.prompt, lastPrompt: req.prompt, cwd } : { cwd },
       createdAt: now,
+      effort: effort ?? null,
+      model: model ?? null,
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     insertAssignment({
@@ -874,7 +901,145 @@ export class Fleet extends EventEmitter {
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
     const cwd = this.resumeCwd(rec);
     if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
-    this.startTmux(rec, account, cwd, prompt);
+    if (view.cold) {
+      await this.wake(rec, view, account, cwd, this.wakeTarget(rec, view), prompt);
+    } else {
+      this.startTmux(rec, account, cwd, prompt);
+    }
+    await this.tick();
+    return this.get(id);
+  }
+
+  /**
+   * Where a cold session should wake: the balancer's pick for a session like
+   * it, when that is another account. Null means stay — the pick is where it
+   * already is, or nothing can take it and a pinned session beats none.
+   */
+  private wakeTarget(rec: SessionRecord, view: Session, accountId?: string | null): { account: Account; placement: Placement } | null {
+    if (!this.adapter(rec.provider).moveSession) return null;
+    const placement = this.placement(rec.provider, rec.big, view.model, accountId);
+    if (!placement.accountId || placement.mode === "none" || placement.accountId === rec.accountId) return null;
+    const account = getAccount(placement.accountId);
+    return account ? { account, placement } : null;
+  }
+
+  /**
+   * Continue a session whose prompt cache is cold (or that stopped at its
+   * account's limit), on `target` when given, else where it is. Proves the
+   * resume first — directory, transcript — and only then stops what is
+   * running, moves the transcript over, and resumes with `prompt`. A move
+   * that fails resumes on the old account rather than not at all.
+   *
+   * The session claims afresh either way: what it used before it went cold
+   * was used, and the balancer should count what it is about to use.
+   */
+  private async wake(
+    rec: SessionRecord,
+    view: Session,
+    from: Account,
+    cwd: string,
+    target: { account: Account; placement: Placement } | null,
+    prompt?: string,
+  ): Promise<void> {
+    const adapter = this.adapter(rec.provider);
+    if (target && (!rec.transcriptPath || !existsSync(rec.transcriptPath))) {
+      throw new FleetError(409, "its transcript is missing, so it cannot be moved to another account");
+    }
+    if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
+    if (view.host === "tmux") await this.stopAndWait(rec, view);
+
+    let account = from;
+    let transcriptPath = rec.transcriptPath;
+    if (target) {
+      try {
+        transcriptPath = adapter.moveSession!({ from, to: target.account, agentSessionId: rec.agentSessionId!, transcriptPath: rec.transcriptPath! });
+        account = target.account;
+      } catch (e) {
+        console.error(`agentbox: moving ${rec.id} to ${target.account.label} failed; resuming on ${from.label}:`, e);
+      }
+    }
+    const settings = getSettings();
+    const consumed = consumedBy([rec.id]).get(rec.id) ?? 0;
+    const claim = Math.round((consumed + (rec.big ? settings.balancer.claimBig : settings.balancer.claimNormal)) * 100) / 100;
+    const patch: Partial<SessionRecord> = { claim };
+    if (account.id !== from.id) {
+      patch.accountId = account.id;
+      patch.transcriptPath = transcriptPath;
+      if (rec.transcriptPath && rec.transcriptPath !== transcriptPath) this.tracked.delete(rec.transcriptPath);
+      const p = target!.placement;
+      insertAssignment({
+        id: randomUUID(),
+        sessionId: rec.id,
+        at: this.now(),
+        provider: rec.provider,
+        accountId: account.id,
+        mode: p.mode,
+        big: rec.big,
+        claim,
+        candidates: p.candidates,
+        settings: settings.balancer,
+        why: `moved from ${from.label}: ${p.why}`,
+      });
+    }
+    updateSessionRecord(rec.id, patch);
+    if (account.id !== from.id) {
+      const ref = await adapter.findTranscript(account, rec.agentSessionId!).catch(() => null);
+      if (ref) this.track(adapter, ref);
+    }
+    this.startTmux({ ...rec, ...patch }, account, cwd, prompt);
+  }
+
+  /** End the session's process in our tmux and wait until it is gone, so
+   *  nothing is still writing the transcript when it moves. */
+  private async stopAndWait(rec: SessionRecord, view: Session): Promise<void> {
+    const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
+    const pid = (pane ? this.processUnder(pane.pid, rec.provider)?.pid : undefined) ?? view.pid;
+    if (rec.tmux) this.deps.runtime.killSession(rec.tmux);
+    if (!pid) return;
+    const start = this.now();
+    let termed = false;
+    while (isAlive(pid)) {
+      if (!termed && this.now() - start > 5_000) {
+        termed = true;
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* gone */
+        }
+      }
+      if (this.now() - start > 20_000) throw new FleetError(409, `the process (${pid}) did not exit within 20s; nothing was moved or resumed`);
+      await Bun.sleep(200);
+    }
+    await Bun.sleep(500);
+  }
+
+  /**
+   * Continue a session on another account: the "limits reset" button for a
+   * session that stopped at its account's limit. `accountId` absent or
+   * "auto" is the balancer's pick; the pick being where it already is just
+   * continues it there.
+   */
+  async moveAndContinue(id: string, opts: { accountId?: string | null; prompt?: string }): Promise<Session> {
+    const rec = getSessionRecord(id);
+    if (!rec) throw new FleetError(404, `no session ${id}`);
+    const view = this.get(id);
+    if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
+    if (view.status === "running") throw new FleetError(409, "it is mid-turn; interrupt it first");
+    if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
+    const from = rec.accountId ? getAccount(rec.accountId) : null;
+    if (!from) throw new FleetError(409, "this session's account is no longer set up");
+    const accountId = opts.accountId && opts.accountId !== "auto" ? opts.accountId : null;
+    const target = this.wakeTarget(rec, view, accountId);
+    if (accountId && accountId !== rec.accountId && !target) {
+      throw new FleetError(409, this.adapter(rec.provider).moveSession ? `no ${rec.provider} account ${accountId}` : `${this.adapter(rec.provider).label} sessions cannot change account`);
+    }
+    if (!target && view.host === "tmux" && view.tmux) {
+      if (opts.prompt) await this.deps.runtime.sendText(view.tmux, opts.prompt);
+      return view;
+    }
+    const cwd = this.resumeCwd(rec);
+    if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
+    await this.wake(rec, view, from, cwd, target, opts.prompt);
     await this.tick();
     return this.get(id);
   }
@@ -886,6 +1051,8 @@ export class Fleet extends EventEmitter {
       agentSessionId: rec.agentSessionId!,
       cwd,
       prompt: prompt || undefined,
+      ...(rec.effort ? { effort: rec.effort } : {}),
+      ...(resumeModel(rec) ? { model: resumeModel(rec)! } : {}),
       autoApprove: settings.autoApprove,
       ...(rec.launch ? { carry: rec.launch.args } : {}),
     });
@@ -946,10 +1113,28 @@ export class Fleet extends EventEmitter {
     return this.get(id);
   }
 
+  /** Type into the session. A cold one wakes where there is room, which may
+   *  mean restarting it on another account with `text` as its prompt. */
   async send(id: string, text: string): Promise<void> {
     const s = this.get(id);
     if (s.host !== "tmux" || !s.tmux) {
       throw new FleetError(409, s.host === "external" ? "running in another terminal — adopt it to type here" : "not running — resume it first");
+    }
+    const rec = s.cold ? getSessionRecord(id) : null;
+    const target = rec ? this.wakeTarget(rec, s) : null;
+    const from = rec?.accountId ? getAccount(rec.accountId) : null;
+    if (rec && target && from && rec.agentSessionId) {
+      let cwd: string | null = null;
+      try {
+        cwd = this.resumeCwd(rec);
+      } catch {
+        /* cannot prove a resume: type into it where it is */
+      }
+      if (cwd && existsSync(cwd)) {
+        await this.wake(rec, s, from, cwd, target, text);
+        await this.tick();
+        return;
+      }
     }
     await this.deps.runtime.sendText(s.tmux, text);
   }
@@ -1021,6 +1206,22 @@ export class Fleet extends EventEmitter {
 
 // ---------------------------------------------------------------- helpers
 
+/**
+ * The model to resume on. A resume without `--model` runs on the CLI's
+ * default, so a session started on Haiku or on 1M-context Fable would come
+ * back as something else. The model it was started with, unless the
+ * transcript shows it has since been switched (`/model`) to another.
+ */
+function resumeModel(rec: SessionRecord): string | null {
+  if (!rec.model) return null;
+  const latest = (rec.facts as Partial<TranscriptFacts> | null)?.model ?? null;
+  const base = rec.model.replace(/\[[^\]]*\]$/, "");
+  if (!latest || latest.startsWith(base) || base.startsWith(latest)) return rec.model;
+  // An alias (`opus`) resolves to a full id; that is not a switch.
+  if (!base.includes("-") && latest.includes(base)) return rec.model;
+  return latest;
+}
+
 /** Short, URL-safe, unambiguous: no 0/o/1/l. */
 export function newSessionId(): string {
   const alphabet = "23456789abcdefghijkmnpqrstuvwxyz";
@@ -1047,6 +1248,7 @@ function compactFacts(f: TranscriptFacts): Partial<TranscriptFacts> {
     contextUsed: f.contextUsed,
     contextLimit: f.contextLimit,
     tokens: f.tokens,
+    rateLimitHits: f.rateLimitHits.slice(-1),
   };
 }
 

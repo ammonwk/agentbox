@@ -2,6 +2,8 @@
  *  Pure, apart from the two localStorage calls. */
 
 import type { ModelOption, PrInfo, ProviderId, Repo, Session, SkillInfo, SkillSource } from "../../../src/core/types";
+import type { SavedAttachment } from "../attachments";
+import { prRefs } from "./prlinks";
 
 // ------------------------------------------------------------------ prefs
 
@@ -17,9 +19,11 @@ export interface NewSessionPrefs {
   worktree?: boolean;
   path?: string;
   big?: boolean;
-  perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string }>>;
+  perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string; effort?: string }>>;
   /** The unsent prompt; cleared when a session starts. */
   draft?: string;
+  /** Images already uploaded for the draft. */
+  draftImages?: SavedAttachment[];
 }
 
 const PREFS_KEY = "agentbox.newSession";
@@ -55,15 +59,19 @@ export interface ModelChoice extends ModelOption {
  * every subscription of one CLI runs the same models, and the account Auto
  * picks is often not the one you last used. A model a past session used that
  * the catalog does not know is still offered — it worked once.
+ *
+ * Only sessions agentbox started count. The board also shows sessions some
+ * script ran through the SDK on its own pinned model (a bot's scheduled
+ * report on an old Opus), and those say nothing about what you pick.
  */
 export function rankModels(
   catalog: readonly ModelOption[],
-  sessions: readonly Pick<Session, "provider" | "model" | "lastActivityAt">[],
+  sessions: readonly Pick<Session, "provider" | "model" | "lastActivityAt" | "origin">[],
   provider: ProviderId,
 ): ModelChoice[] {
   const used = new Map<string, number>();
   for (const s of sessions) {
-    if (s.provider !== provider || !s.model) continue;
+    if (s.provider !== provider || !s.model || s.origin !== "agentbox") continue;
     used.set(s.model, Math.max(used.get(s.model) ?? 0, s.lastActivityAt));
   }
   const byId = new Map(catalog.map((m) => [m.id, m]));
@@ -177,6 +185,31 @@ export function parseWorktreeRef(text: string, prs: readonly PrInfo[]): Worktree
     return { kind: "pr", number, branch: pr?.headRef ?? `pr-${number}`, pr };
   }
   return { kind: "branch", branch: t };
+}
+
+/**
+ * The PRs a prompt names, once each, in order: `#6759`, `PR 6759`, a pull
+ * URL of this repo, or a bare number — the last only when it is one of the
+ * repo's open PRs (a bare four-digit number is as often a port or a count),
+ * or when the PR list is unknown.
+ */
+export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string | null): number[] {
+  const out: number[] = [];
+  const add = (n: number) => {
+    if (!out.includes(n)) out.push(n);
+  };
+  const found: { at: number; n: number }[] = [];
+  for (const m of text.matchAll(/https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)) {
+    if (!repoSlug || m[1]!.toLowerCase() === repoSlug.toLowerCase()) found.push({ at: m.index, n: Number(m[2]) });
+  }
+  const known = new Set(prs.map((p) => p.number));
+  for (const r of prRefs(text)) {
+    const bare = /^\d/.test(text.slice(r.start, r.end));
+    if (bare && prs.length > 0 && !known.has(r.number)) continue;
+    found.push({ at: r.start, n: r.number });
+  }
+  for (const f of found.sort((a, b) => a.at - b.at)) add(f.n);
+  return out;
 }
 
 /** The open PRs of one repo. */
