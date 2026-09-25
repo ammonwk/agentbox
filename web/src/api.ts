@@ -159,11 +159,7 @@ export const api = {
   },
   diff: (id: string) => get<SessionDiff>(`/api/sessions/${enc(id)}/diff`),
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
-  load: async (id: string): Promise<ProcDetail[]> => {
-    // The contract says `ProcDetail[]`; v1 wrapped it in `{procs}`. Accept both.
-    const r = await get<ProcDetail[] | { procs: ProcDetail[] }>(`/api/sessions/${enc(id)}/load`);
-    return Array.isArray(r) ? r : r.procs;
-  },
+  load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
 
   // accounts
   accounts: () => get<AccountView[]>("/api/accounts"),
@@ -448,12 +444,12 @@ export interface TimelineState {
 /**
  * One session's timeline, over the `watch` subscription: a `reset` frame with
  * the newest page, then increments, merged by id (a tool event is re-sent with
- * the same id when its result lands). Scrolling up pages backwards over HTTP.
+ * the same id when its result lands). Scrolling up pages backwards over HTTP,
+ * from the reset frame's `before` cursor and then each page's.
  *
- * The contract's `reset` frame carries no `before` cursor, so the first older
- * page is asked for with the oldest held event's id as `before`; every page
- * after that uses the cursor the server returned. A server that also puts
- * `before` on the reset frame is honoured.
+ * A session with no transcript yet gets a reset frame with no `before`; its
+ * first older page, if one ever exists, is asked for by the oldest held
+ * event's id.
  */
 export function useTimeline(sessionId: string): TimelineState & { loadOlder: () => void } {
   const [st, setSt] = useState<TimelineState>({
@@ -476,10 +472,9 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: () 
     const off = wire.onMessage((msg) => {
       if (msg.type !== "timeline" || msg.sessionId !== sessionId) return;
       if (msg.reset) {
-        const withBefore = msg as typeof msg & { before?: string | null };
-        before.current = withBefore.before;
+        before.current = msg.before;
         eventsRef.current = mergeTimeline([], msg.events);
-        setSt({ events: eventsRef.current, ready: true, loadingOlder: false, exhausted: withBefore.before === null, error: null });
+        setSt({ events: eventsRef.current, ready: true, loadingOlder: false, exhausted: msg.before === null, error: null });
       } else {
         const next = mergeTimeline(eventsRef.current, msg.events);
         if (next === eventsRef.current) return;

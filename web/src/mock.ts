@@ -244,7 +244,7 @@ const skills: SkillInfo[] = [
   { name: "babysit", description: "Sweep every open PR you authored and get the rest green.", source: "global", path: `${HOME}/.claude/skills/babysit`, lines: 64, modelInvocable: false },
   { name: "humanizer", description: "Rewrite AI-sounding text so it reads like the writer.", source: "agents", path: `${HOME}/.agents/skills/humanizer`, lines: 97, modelInvocable: true },
   { name: "rollout-reader", description: "Read a Codex rollout JSONL and summarise the turns.", source: "codex", path: `${HOME}/.codex/skills/rollout-reader`, lines: 41, modelInvocable: true },
-  { name: "omp-fanout", description: "Dispatch a task across omp subagents and collect results.", source: "omp", path: `${HOME}/.omp/agent/skills/omp-fanout`, lines: 120, modelInvocable: true },
+  { name: "transcript-grep", description: "Search omp session transcripts for a phrase and list the sessions that matched.", source: "omp", path: `${HOME}/.omp/agent/skills/transcript-grep`, lines: 120, modelInvocable: true },
   { name: "release", description: "Cut a release: bump, changelog, tag, publish.", source: "project", repo: "agentbox", path: `${HOME}/Documents/agentbox/.claude/skills/release`, lines: 58, modelInvocable: false },
   { name: "schema-migrate", description: "Write and verify a sqlite migration for agentbox's db.", source: "project", repo: "agentbox", path: `${HOME}/Documents/agentbox/.claude/skills/schema-migrate`, lines: 77, modelInvocable: true },
 ];
@@ -382,8 +382,8 @@ const sessions: MockSession[] = [
   }),
   sess({
     id: "z7y6", provider: "omp", accountId: null, status: "stopped", host: "none",
-    title: "Fan-out: audit every route for the x-agentbox header", cwd: AB, repoRoot: AB, branch: "main", model: "anthropic/claude-sonnet-4.5",
-    lastMessage: "12 of 12 subagents reported. 3 routes were missing the header check; patched in guard.ts.",
+    title: "Audit every mutating route for the x-agentbox header", cwd: AB, repoRoot: AB, branch: "main", model: "anthropic/claude-sonnet-4.5",
+    lastMessage: "Checked all 31 routes. 3 mutating ones reached the handler before the header check; csrf.ts now runs first for every non-GET.",
     tokens: { input: 120_000, output: 44_000, cacheRead: 0, cacheWrite: 0, costEquiv: 3.3 },
     startedAt: T0 - 3 * D, lastActivityAt: T0 - 3 * D + 40 * M,
   }),
@@ -499,6 +499,21 @@ function placementFor(provider: ProviderId, big: boolean, manual?: string): Plac
     return { provider, accountId: manual, mode: "manual", big, claim, candidates, why: `You picked ${c?.label ?? manual}.` };
   }
   if (!best) {
+    // As the balancer: fully claimed but not spent overflows onto the least claimed.
+    const least = candidates
+      .filter((c) => accounts.find((a) => a.id === c.accountId)?.enabled && (c.weekly == null || c.weekly < 100))
+      .sort((a, b) => (a.weeklyEffective ?? 0) - (b.weeklyEffective ?? 0) || (b.legRoom ?? 0) - (a.legRoom ?? 0))[0];
+    if (least) {
+      return {
+        provider,
+        accountId: least.accountId,
+        mode: "overflow",
+        big,
+        claim,
+        candidates,
+        why: `every ${provider} account's weekly is fully claimed by running sessions; ${least.label} is the least claimed (${least.weekly}% used + ${least.outstanding} claimed)`,
+      };
+    }
     return {
       provider,
       accountId: null,
@@ -1186,7 +1201,7 @@ export const mockServer = {
     setTimeout(() => {
       if (watching !== sid) return;
       const page = pageBefore(sid, null, PAGE);
-      emit({ type: "timeline", sessionId: sid, events: page.events, cursor: page.cursor, reset: true });
+      emit({ type: "timeline", sessionId: sid, events: page.events, cursor: page.cursor, reset: true, before: page.before });
       startLive(sid);
     }, 150);
   },
