@@ -43,15 +43,6 @@ export function outstandingOf(claims: readonly ClaimView[]): number {
   return claims.reduce((n, c) => n + (c.lapsed ? 0 : c.outstanding), 0);
 }
 
-/**
- * The short window's share of the effective picture: outstanding weekly points
- * expressed as short-window percent (`× 100 / shortWindowInWeekly`).
- */
-export function shortClaimPct(outstanding: number, shortWindowInWeekly: number): number {
-  if (shortWindowInWeekly <= 0) return 0;
-  return (outstanding * 100) / shortWindowInWeekly;
-}
-
 /** "resets in 3h 12m", "not started", "resetting". */
 export function resetText(resetsAt: number | null, now: number): string {
   if (resetsAt == null) return "not started";

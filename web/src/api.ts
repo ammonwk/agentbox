@@ -12,7 +12,6 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import type {
   Account,
   AccountUsage,
-  AccountView,
   AgentSettings,
   AppState,
   BalancerSettings,
@@ -162,7 +161,6 @@ export const api = {
   load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
 
   // accounts
-  accounts: () => get<AccountView[]>("/api/accounts"),
   addAccount: (provider: ProviderId, label?: string) =>
     post<{ account: Account; login: LoginFlow }>("/api/accounts", label ? { provider, label } : { provider }),
   importAccount: (provider: ProviderId, home: string) => post<Account>("/api/accounts/import", { provider, home }),
@@ -176,13 +174,11 @@ export const api = {
   calibration: (days = 7) => get<CalibrationReport>(`/api/calibration?days=${days}`),
 
   // settings
-  settings: () => get<AgentSettings>("/api/settings"),
   /** Deep-merges server-side, so a partial is a patch, not a replacement. */
   saveSettings: (patch: SettingsPatch) => request<AgentSettings>("PUT", "/api/settings", patch),
   applyBalancer: (b: BalancerSettings) => request<AgentSettings>("PUT", "/api/settings", { balancer: b }),
 
   // repos, worktrees
-  repos: () => get<Repo[]>("/api/repos"),
   addRepo: (ref: string) => post<Repo>("/api/repos", { ref }),
   deleteRepo: (id: string) => request<unknown>("DELETE", `/api/repos/${enc(id)}`),
   /** Slow by construction — many git and gh calls. Only ever on a button. */

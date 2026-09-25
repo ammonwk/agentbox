@@ -772,8 +772,7 @@ textarea,
   border-color: var(--accent);
 }
 
-.commit,
-.model-picker {
+.commit {
   display: flex;
   flex-direction: column;
   gap: 5px;

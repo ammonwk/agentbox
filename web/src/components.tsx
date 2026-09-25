@@ -47,14 +47,12 @@ const I =
 /** Not annotated as `Record<string, ...>` on purpose: the exact key set means a
  *  typo at a callsite is a compile error rather than a silently missing glyph. */
 export const Icon = {
-  inbox: I("M3 13h5l1 3h6l1-3h5", "M5 5h14l2 8v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5z"),
   sessions: I("M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", "M3 9h18M9 9v12"),
   settings: I("M4 7h8M16 7h4M4 17h4M12 17h8", "M14 4v6M8 14v6"),
 
   plus: I("M12 5v14M5 12h14"),
   play: I("M7 4.5v15l12-7.5z"),
   stop: I("M7 6h10v12H7z"),
-  pause: I("M9 5v14M15 5v14"),
   refresh: I("M20.5 12a8.5 8.5 0 1 1-2.5-6M20.5 3.5v6h-6"),
   archive: I("M4 5h16M4 5l1 15h14l1-15", "M10 12h4"),
   trash: I("M4 7h16M9 7V5h6v2", "M6 7l1 14h10l1-14M10 11v6M14 11v6"),
@@ -72,39 +70,27 @@ export const Icon = {
   monitor: I("M3 5h18v11H3z", "M9 20h6M12 16v4"),
 
   alert: I("M12 8v5M12 16.5v.01", "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"),
-  flag: I("M5 21V4M5 4h12l-2 4 2 4H5"),
-  clock: I("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 7v5l3 2"),
-  shield: I("M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7z", "M9 12l2 2 4-4"),
-  eye: I("M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z", "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"),
 
   branch: I("M6 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM6 9v11", "M18 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM18 9v2a4 4 0 0 1-4 4h-4"),
   prs: I("M6 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM6 9v11", "M18 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 15V9l-4-4h-3M11 2l-3 3 3 3"),
-  repo: I("M5 4h14v16H7a2 2 0 0 1-2-2z", "M5 17h14"),
   folder: I("M3 6h6l2 2h10v11H3z"),
 
-  file: I("M6 3h8l4 4v14H6z", "M14 3v4h4"),
   edit: I("M4 20h4L20 8l-4-4L4 16z"),
   terminal: I("M4 5h16v14H4z", "M8 10l2.5 2L8 14M13 15h4"),
   search: I("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z", "M16.5 16.5L21 21"),
   brain: I("M9 4a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8V17a3 3 0 0 0 4 2.8", "M15 4a3 3 0 0 1 3 3 3 3 0 0 1 1 5.8V17a3 3 0 0 1-4 2.8M12 4v16"),
-  download: I("M12 4v10M8 11l4 4 4-4", "M4 19h16"),
   move: I("M9 6l-4 4 4 4", "M5 10h9a5 5 0 0 1 5 5v4"),
 
-  chat: I("M4 5h16v11H9l-5 4z"),
   user: I("M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M4 21a8 8 0 0 1 16 0"),
-  robot: I("M6 9h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z", "M12 5v4M9 14v1M15 14v1"),
-  dollar: I("M12 3v18", "M16 7.5A3.5 3.5 0 0 0 12.5 5h-1a3 3 0 0 0 0 6h1a3 3 0 0 1 0 6h-1A3.5 3.5 0 0 1 8 16.5"),
   wifiOff: I("M2 2l20 20", "M5 12.5a11 11 0 0 1 4-2.4M15 10.1a11 11 0 0 1 4 2.4M8.5 16a6 6 0 0 1 7 0M12 20h.01"),
 
   users: I("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M22 21a7 7 0 0 0-4.5-6.5"),
-  sliders: I("M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3", "M1 14h6M9 8h6M17 16h6"),
   copy: I("M9 9h11v11H9z", "M5 15H4V4h11v1"),
   key: I("M15 7a4 4 0 1 1-3.9 5H3v3h3v3h3v-3h2.1A4 4 0 0 1 15 7z"),
   bolt: I("M13 2L4 14h7l-1 8 9-12h-7z"),
   gauge: I("M12 14l4-4", "M3.5 18a9 9 0 1 1 17 0"),
   link: I("M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1", "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"),
   undo: I("M9 14L4 9l5-5", "M4 9h11a5 5 0 0 1 0 10h-3"),
-  keyboard: I("M3 6h18v12H3z", "M7 10h.01M11 10h.01M15 10h.01M7 14h10"),
 };
 
 // ----------------------------------------------------------------- button
