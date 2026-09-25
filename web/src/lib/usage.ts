@@ -43,17 +43,26 @@ export function outstandingOf(claims: readonly ClaimView[]): number {
   return claims.reduce((n, c) => n + (c.lapsed ? 0 : c.outstanding), 0);
 }
 
-/** "resets in 3h 12m", "not started", "resetting". */
+/**
+ * Used percent as of `now`, by the balancer's rule: a reading whose window has
+ * since reset counts as empty, not as its old value. Matters when polling has
+ * stopped (an expired token) and the last reading outlives its window.
+ */
+export function usedNow(w: Pick<UsageWindow, "usedPct" | "resetsAt">, now: number): number {
+  return w.resetsAt != null && w.resetsAt <= now ? 0 : w.usedPct;
+}
+
+/** "resets in 3h 12m", "not started", "reset since last reading". */
 export function resetText(resetsAt: number | null, now: number): string {
   if (resetsAt == null) return "not started";
   const ms = resetsAt - now;
-  if (ms <= 0) return "resetting";
+  if (ms <= 0) return "reset since last reading";
   return `resets in ${fmtCountdown(ms)}`;
 }
 
 /** Fraction of the window already elapsed, for the "time" tick on a bar. */
 export function windowElapsed(w: Pick<UsageWindow, "resetsAt" | "windowMs">, now: number): number | null {
-  if (w.resetsAt == null || w.windowMs <= 0) return null;
+  if (w.resetsAt == null || w.windowMs <= 0 || w.resetsAt <= now) return null;
   const start = w.resetsAt - w.windowMs;
   return clamp((now - start) / w.windowMs, 0, 1);
 }

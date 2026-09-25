@@ -7,7 +7,7 @@ import type { AccountView, ProviderId, SessionHost, SessionStatus, UsageWindow }
 import { Icon } from "./components";
 import { contextPct } from "./lib/board";
 import { fmtTokens } from "./lib/format";
-import { barSegments, resetText, usageTone, windowElapsed, windowLabel } from "./lib/usage";
+import { barSegments, resetText, usageTone, usedNow, windowElapsed, windowLabel } from "./lib/usage";
 
 // --------------------------------------------------------------- provider
 
@@ -221,8 +221,9 @@ export function UsageBar({
   now: number;
   compact?: boolean;
 }) {
-  const seg = barSegments(w.usedPct, outstanding);
-  const tone = usageTone(outstanding > 0 ? seg.effective : w.usedPct);
+  const used = usedNow(w, now);
+  const seg = barSegments(used, outstanding);
+  const tone = usageTone(outstanding > 0 ? seg.effective : used);
   const elapsed = windowElapsed(w, now);
   const label = windowLabel(w);
   const claimText = outstanding > 0 ? ` + ${Math.round(outstanding * 10) / 10} claimed = ${Math.round(seg.effective)}` : "";
@@ -231,7 +232,7 @@ export function UsageBar({
       <div className="ubar-head">
         <span className="ubar-label">{label}</span>
         <span className="ubar-pct">
-          {Math.round(w.usedPct)}%
+          {Math.round(used)}%
           {outstanding > 0 ? <span className="ubar-claim"> +{Math.round(outstanding * 10) / 10}</span> : null}
         </span>
         <span className="ubar-reset">{resetText(w.resetsAt, now)}</span>
@@ -242,9 +243,9 @@ export function UsageBar({
         aria-label={`${label} usage`}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(w.usedPct)}
-        aria-valuetext={`${Math.round(w.usedPct)}% used${claimText}, ${resetText(w.resetsAt, now)}`}
-        title={`${Math.round(w.usedPct)}% used${claimText}${seg.overCommitted ? " — over-committed" : ""}\n${resetText(w.resetsAt, now)}`}
+        aria-valuenow={Math.round(used)}
+        aria-valuetext={`${Math.round(used)}% used${claimText}, ${resetText(w.resetsAt, now)}`}
+        title={`${Math.round(used)}% used${claimText}${seg.overCommitted ? " — over-committed" : ""}\n${resetText(w.resetsAt, now)}`}
       >
         <i className="ubar-used" style={{ width: `${seg.used}%` }} />
         {seg.claimed > 0 ? <i className="ubar-claimed" style={{ left: `${seg.used}%`, width: `${seg.claimed}%` }} /> : null}

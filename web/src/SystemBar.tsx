@@ -3,7 +3,7 @@ import type { AccountView, UsageWindow } from "../../src/core/types";
 import { useMetrics, useNow, type SystemState } from "./api";
 import { accountHue, UsageBar } from "./bits";
 import { fmtCountdown } from "./lib/format";
-import { headlineWindows, resetText, usageTone } from "./lib/usage";
+import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
 
 /**
  * The machine, along the bottom of every view.
@@ -304,7 +304,7 @@ function claudeLimits(accounts: readonly AccountView[]): AccountView[] {
 function LimitCell({ account, hue, focused, now }: { account: AccountView; hue: number; focused: boolean; now: number }) {
   const { short, weekly } = headlineWindows(account.usage);
   const line = (w: UsageWindow | null, name: string) =>
-    w ? `${name}: ${Math.round(w.usedPct)}% used, ${resetText(w.resetsAt, now)}` : `${name}: no data`;
+    w ? `${name}: ${Math.round(usedNow(w, now))}% used, ${resetText(w.resetsAt, now)}` : `${name}: no data`;
   const title =
     `${account.label}${account.plan ? ` · ${account.plan}` : ""}${focused ? " · this session's account" : ""}\n` +
     `${line(short, "5-hour")}\n${line(weekly, "Weekly")}` +
@@ -328,9 +328,10 @@ function LimitCell({ account, hue, focused, now }: { account: AccountView; hue: 
 /** 5-hour on top in blue, weekly under it in grey — the Accounts page's
  *  convention. The tooltip names them. */
 function LimitRow({ kind, w, now }: { kind: "5h" | "wk"; w: UsageWindow | null; now: number }) {
-  const pct = w ? Math.round(w.usedPct) : null;
+  const pct = w ? Math.round(usedNow(w, now)) : null;
   // A 5-hour window nobody has touched has no reset time: it starts on use.
-  const reset = !w ? "" : w.resetsAt == null ? "idle" : fmtCountdown(w.resetsAt - now);
+  // One that reset after the last reading is empty, like the balancer says.
+  const reset = !w ? "" : w.resetsAt == null ? "idle" : w.resetsAt <= now ? "reset" : fmtCountdown(w.resetsAt - now);
   return (
     <>
       <span className="sys-limit-bar" data-tone={usageTone(pct)} data-kind={kind}>
