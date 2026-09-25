@@ -517,7 +517,12 @@ const router = new Router(mapError)
     void refreshSlow();
     return json(null);
   })
-  .add("POST", "/api/worktrees/scan", async () => json(await scanWorktrees("all", fleet.sessions())))
+  .add("POST", "/api/worktrees/scan", async ({ req }) => {
+    const b = await readBody(req);
+    const scope = b.scope ?? "all";
+    if (scope !== "all" && scope !== "agentbox") throw new HttpError(400, "scope must be all or agentbox");
+    return json(await scanWorktrees(scope, fleet.sessions()));
+  })
   .add("POST", "/api/worktrees/reclaim", async ({ req }) => {
     const b = await readBody(req);
     if (!Array.isArray(b.paths) || !b.paths.every((p) => typeof p === "string")) {
