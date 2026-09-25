@@ -43,6 +43,7 @@ export interface OmpState {
   tokens: TokenTotals;
   firstPrompt: string | null;
   lastPrompt: string | null;
+  lastPromptAt: number | null;
   lastMessage: string | null;
   lastActivityAt: number | null;
   turnOpen: boolean;
@@ -68,6 +69,7 @@ export function newOmpState(): OmpState {
     tokens: emptyTotals(),
     firstPrompt: null,
     lastPrompt: null,
+    lastPromptAt: null,
     lastMessage: null,
     lastActivityAt: null,
     turnOpen: false,
@@ -218,6 +220,7 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       if (!text) return;
       s.firstPrompt ??= text;
       s.lastPrompt = text;
+      if (when) s.lastPromptAt = when;
       return;
     }
     case "developer":

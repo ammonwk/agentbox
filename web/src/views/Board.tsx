@@ -8,6 +8,7 @@ import {
   neighbourId,
   repoKey,
   sectionsOf,
+  sentTip,
   titleOf,
   usualProvider,
   whereOf,
@@ -212,7 +213,9 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
               <span className="bd-c-acct">Account</span>
               <span className="bd-c-ctx">Context</span>
               <span className="bd-c-load">Load</span>
-              <span className="bd-c-when">Active</span>
+              <span className="bd-c-when" title="When you last sent it something — what the rows are sorted by within each section">
+                Sent
+              </span>
             </div>
             {sections.map((sec) => (
               <section key={sec.kind} className="bd-section" data-kind={sec.kind} aria-label={sec.label}>
@@ -353,7 +356,7 @@ function Row({
       </span>
 
       <span className="bd-c-when">
-        <RelativeTime ts={s.lastActivityAt} />
+        <RelativeTime ts={s.lastPromptAt} title={sentTip(s)} />
       </span>
     </a>
   );

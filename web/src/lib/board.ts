@@ -18,13 +18,18 @@ export const KIND_ORDER: Record<AttentionKind, number> = {
   archived: 4,
 };
 
-/** blocked → waiting → running → stopped → archived; newest activity first within. */
+/**
+ * blocked → waiting → running → stopped → archived; within each, the session
+ * you last sent something to first. Your own messages, not the agent's
+ * activity: an agent finishing a step, or another agent messaging it, does
+ * not move a row, so the order is the one you made.
+ */
 export function sortByAttention<T extends SessionRow>(rows: readonly T[]): T[] {
   return [...rows].sort(
     (a, b) =>
       KIND_ORDER[a.attention.kind] - KIND_ORDER[b.attention.kind] ||
       a.attention.rank - b.attention.rank ||
-      b.lastActivityAt - a.lastActivityAt,
+      b.lastPromptAt - a.lastPromptAt,
   );
 }
 
@@ -84,6 +89,12 @@ export function sectionsOf<T extends SessionRow>(rows: readonly T[]): Section<T>
   return (Object.keys(KIND_ORDER) as AttentionKind[])
     .map((kind) => ({ kind, label: SECTION_LABEL[kind], rows: sorted.filter((s) => s.attention.kind === kind) }))
     .filter((s) => s.rows.length > 0);
+}
+
+/** The time column's tooltip: when you last wrote, and when the agent last moved. */
+export function sentTip(s: Pick<Session, "lastPromptAt" | "lastActivityAt">): string {
+  const at = (t: number) => new Date(t).toLocaleString();
+  return `You last sent it something ${at(s.lastPromptAt)}\nLast activity ${at(s.lastActivityAt)}`;
 }
 
 /** Next id for j/k, clamped at both ends. */

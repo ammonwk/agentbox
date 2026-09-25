@@ -66,6 +66,9 @@ export interface TranscriptFacts {
   title: string | null;
   firstPrompt: string | null;
   lastPrompt: string | null;
+  /** When you last sent it something: a prompt or a slash command typed by a
+   *  person, not a message from another agent or the CLI waking itself. */
+  lastPromptAt: number | null;
   /** Tail of the latest assistant text, at most ~300 chars. */
   lastMessage: string | null;
   model: string | null;

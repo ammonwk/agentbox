@@ -441,6 +441,7 @@ class OmpReader implements TranscriptReader {
       title: this.slotTitle ?? s.titleChange ?? s.header?.title ?? null,
       firstPrompt: s.firstPrompt,
       lastPrompt: s.lastPrompt,
+      lastPromptAt: s.lastPromptAt,
       lastMessage: s.lastMessage,
       model: s.model,
       gitBranch: null,

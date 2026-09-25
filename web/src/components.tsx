@@ -600,14 +600,14 @@ export function CommitInput({
  * Self-updating, off one page-wide interval. The snapshot is the formatted
  * string, so a row only re-renders when its label actually changes.
  */
-export function RelativeTime({ ts, short }: { ts: number; short?: boolean }) {
+export function RelativeTime({ ts, short, title }: { ts: number; short?: boolean; title?: string }) {
   const label = useSyncExternalStore(
     subscribeToClock,
     () => fmt(ago(ts, clockNow()), short),
     () => fmt(ago(ts, ts), short),
   );
   return (
-    <time dateTime={new Date(ts).toISOString()} title={new Date(ts).toLocaleString()}>
+    <time dateTime={new Date(ts).toISOString()} title={title ?? new Date(ts).toLocaleString()}>
       {label}
     </time>
   );

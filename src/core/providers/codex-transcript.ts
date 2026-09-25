@@ -205,6 +205,7 @@ export class CodexFold {
   private gitBranch: string | null = null;
   private firstPrompt: string | null = null;
   private lastPrompt: string | null = null;
+  private lastPromptAt: number | null = null;
   private lastMessage: string | null = null;
   private startedAt: number | null = null;
   private lastActivityAt: number | null = null;
@@ -275,6 +276,7 @@ export class CodexFold {
           this.firstPrompt ??= t;
           this.lastPrompt = t;
         }
+        if (prompt && at !== null) this.lastPromptAt = at;
         // Rollouts from before task_started existed only had the message.
         if (prompt) this.turnOpen = true;
       } else if (p.type === "message" && p.role === "assistant") {
@@ -371,6 +373,7 @@ export class CodexFold {
       title: this.titleOf(),
       firstPrompt: this.firstPrompt,
       lastPrompt: this.lastPrompt,
+      lastPromptAt: this.lastPromptAt,
       lastMessage: this.lastMessage,
       model: this.model,
       gitBranch: this.gitBranch,

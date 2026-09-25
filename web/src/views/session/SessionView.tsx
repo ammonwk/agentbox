@@ -12,7 +12,7 @@ import {
   StatusPill,
 } from "../../bits";
 import { Button, Confirm, Empty, Icon, RelativeTime } from "../../components";
-import { filterSessions, neighbourId, sectionsOf, titleOf, usualProvider, type SessionRow } from "../../lib/board";
+import { filterSessions, neighbourId, sectionsOf, sentTip, titleOf, usualProvider, type SessionRow } from "../../lib/board";
 import { hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
 import { DiffPanel } from "./DiffPanel";
@@ -154,7 +154,7 @@ function Rail({ rows, state, current }: { rows: SessionRow[]; state: AppState; c
                 <span className="rail-title">{titleOf(s)}</span>
                 {s.provider !== usual ? <ProviderBadge provider={s.provider} short /> : null}
                 <span className="rail-when">
-                  <RelativeTime ts={s.lastActivityAt} short />
+                  <RelativeTime ts={s.lastPromptAt} short title={sentTip(s)} />
                 </span>
               </a>
             ))}

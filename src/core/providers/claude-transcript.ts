@@ -340,6 +340,7 @@ export class ClaudeFold {
   private agentName: string | null = null;
   private firstPrompt: string | null = null;
   private lastPrompt: string | null = null;
+  private lastPromptAt: number | null = null;
   /** A slash command not yet answered; see `user`. */
   private command: string | null = null;
   private lastMessage: string | null = null;
@@ -439,7 +440,7 @@ export class ClaudeFold {
         this.noteCwd(r.cwd);
         if (typeof r.gitBranch === "string" && r.gitBranch) this.gitBranch = r.gitBranch;
         if (side) return;
-        this.user(r);
+        this.user(r, at);
         return;
       case "assistant":
         this.noteCwd(r.cwd);
@@ -457,8 +458,13 @@ export class ClaudeFold {
     this.lastPrompt = t;
   }
 
-  private user(r: any): void {
+  private user(r: any, at: number | null): void {
     if (r.isMeta || r.isCompactSummary) return;
+    // Claude says who a message is from: `human`, or `peer` (another agent),
+    // `task-notification`, `auto-continuation`. Older versions say nothing,
+    // and then it was typed.
+    const kind0 = r.origin?.kind;
+    const mine = kind0 === undefined || kind0 === "human";
     const content = r.message?.content;
     if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_result")) {
       // A tool finished; the model is about to continue.
@@ -482,12 +488,14 @@ export class ClaudeFold {
       // (a skill) or only prints something (`/model`) shows in what follows,
       // so it becomes a prompt when the model answers it.
       this.command = commandLine(first);
+      if (mine && at !== null) this.lastPromptAt = at;
       return;
     }
     if (kind === "output") this.command = null;
     const p = promptOf(content);
     if (p) {
       if (p.text) this.prompt(p.text);
+      if (mine && at !== null) this.lastPromptAt = at;
       this.turnOpen = true;
     }
   }
@@ -566,6 +574,7 @@ export class ClaudeFold {
       title: this.customTitle ?? this.aiTitle ?? this.agentName,
       firstPrompt: this.firstPrompt,
       lastPrompt: this.lastPrompt,
+      lastPromptAt: this.lastPromptAt,
       lastMessage: this.lastMessage,
       model: this.model,
       gitBranch: this.gitBranch,

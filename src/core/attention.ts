@@ -27,7 +27,8 @@ export function attentionOf(s: Session, blockedReason: string | null = null): At
   }
 }
 
-/** Most urgent first; within a rank, most recently active first. */
+/** Most urgent first; within a rank, the one you last sent something to
+ *  first — not the one whose agent last moved, which reshuffles on its own. */
 export function byAttention<T extends Session & { attention: Attention }>(a: T, b: T): number {
-  return a.attention.rank - b.attention.rank || b.lastActivityAt - a.lastActivityAt;
+  return a.attention.rank - b.attention.rank || b.lastPromptAt - a.lastPromptAt;
 }

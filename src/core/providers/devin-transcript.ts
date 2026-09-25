@@ -250,6 +250,7 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     title: row?.title ?? null,
     firstPrompt: prompts[0]?.content ?? atif?.userPrompts[0] ?? null,
     lastPrompt: lastPrompt?.content ?? atif?.userPrompts[atif.userPrompts.length - 1] ?? null,
+    lastPromptAt,
     lastMessage: atif?.lastMessage ?? null,
     model: atif?.model ?? (row?.model || null),
     gitBranch: null,
