@@ -5,10 +5,10 @@ import { join } from "node:path";
 /**
  * Point `AGENTBOX_HOME` at a throwaway directory for the life of one suite.
  *
- * Any suite that reaches `worktreeRoot()`, `dbPath()`, `sessionDir()` or
- * `logDir()` — directly or three calls down — must use this. Without it the
+ * Any suite that reaches `worktreeRoot()`, `dbPath()`, `accountsRoot()` or
+ * `ensureDirs()` — directly or three calls down — must use this. Without it the
  * test writes into the developer's live agentbox data: real worktrees, real
- * sessions, the real database. That is a bug even when the test is green,
+ * account homes, the real database. That is a bug even when the test is green,
  * because nothing about a passing run tells you it happened.
  *
  * Call it from `beforeAll` and `restore()` from `afterAll`. Since paths.ts

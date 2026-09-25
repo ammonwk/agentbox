@@ -123,10 +123,6 @@ export function listPanes(): PaneInfo[] {
   return out;
 }
 
-export function hasSession(name: string): boolean {
-  return tmux(["has-session", "-t", `=${name}`]).code === 0;
-}
-
 /**
  * Type `text` into the session as one prompt: a bracketed paste (so a
  * multi-line message is not submitted line by line), then Enter on its own.

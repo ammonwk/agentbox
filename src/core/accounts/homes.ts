@@ -28,10 +28,26 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor } from "../paths";
+import { adapterFor } from "../providers";
 import type { Account, ProviderId } from "../types";
 import { exec } from "./exec";
 
 export const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
+
+/**
+ * A request this module refuses, with the HTTP status that says why: 404 for
+ * an account or login that does not exist, 400 for one that can never work,
+ * 409 for one that conflicts with what is already there. Anything else thrown
+ * from here is a real failure.
+ */
+export class AccountError extends Error {
+  constructor(
+    readonly status: 400 | 404 | 409,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 const CLI: Record<ProviderId, string> = { claude: "claude", codex: "codex", devin: "devin", omp: "omp" };
 
@@ -39,11 +55,6 @@ const CLI: Record<ProviderId, string> = { claude: "claude", codex: "codex", devi
  *  different HOME) see the right one. */
 export function userHome(): string {
   return process.env.HOME || homedir();
-}
-
-/** The XDG data dir devin's default login lives under. */
-function xdgDataHome(): string {
-  return process.env.XDG_DATA_HOME || join(userHome(), ".local", "share");
 }
 
 function xdgConfigHome(): string {
@@ -54,14 +65,17 @@ function xdgConfigHome(): string {
  * The provider's own default credential home — what the CLI uses when no
  * isolating env var is set. For devin this is the XDG data dir, not
  * `<data>/devin`: the account "home" is what `XDG_DATA_HOME` gets set to.
+ * The adapter owns it, as it owns every way the CLI is pointed at a home.
  */
 export function defaultHome(provider: ProviderId): string {
-  switch (provider) {
-    case "claude": return join(userHome(), ".claude");
-    case "codex": return join(userHome(), ".codex");
-    case "devin": return xdgDataHome();
-    case "omp": return join(userHome(), ".omp");
-  }
+  return adapterFor(provider).defaultHome();
+}
+
+/** The environment that points a provider's auth commands (login, status) at
+ *  an account's home, `unset` always present. */
+export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault">): { env: Record<string, string>; unset: string[] } {
+  const e = adapterFor(account.provider).authEnv(account);
+  return { env: e.env, unset: e.unset ?? [] };
 }
 
 /** The file whose existence means "this home has logged in". Null for omp,
@@ -83,12 +97,6 @@ export function credentialsPath(provider: ProviderId, home: string): string | nu
  */
 export function claudeJsonPath(account: Pick<Account, "home" | "isDefault">): string {
   return account.isDefault ? join(userHome(), ".claude.json") : join(account.home, ".claude.json");
-}
-
-/** devin's `XDG_CONFIG_HOME` for this account: the user's own for the default,
- *  `<home>/config` for the rest (see createAccountHome). */
-export function devinConfigHome(account: Pick<Account, "home" | "isDefault">): string {
-  return account.isDefault ? xdgConfigHome() : join(account.home, "config");
 }
 
 // ------------------------------------------------------------ detection
@@ -117,11 +125,6 @@ export function detectCli(provider: ProviderId): Promise<CliInfo> {
     detected.set(provider, p);
   }
   return p;
-}
-
-/** For tests. */
-export function resetCliCache(): void {
-  detected.clear();
 }
 
 // ------------------------------------------------------------- accounts
@@ -345,7 +348,7 @@ function syncClaudeJson(home: string): boolean {
  */
 export function createAccountHome(provider: ProviderId, id: string): string {
   if (provider === "omp") {
-    throw new Error("omp manages its own credential pool — it has one implicit account and no extra homes");
+    throw new AccountError(400, "omp manages its own credential pool — it has one implicit account and no extra homes");
   }
   const home = accountHomeFor(id);
   mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -397,20 +400,20 @@ export async function importHome(
   path: string,
   deps: ImportDeps,
 ): Promise<{ account: Account; email: string | null }> {
-  if (provider === "omp") throw new Error("omp has one implicit account; there is no home to import");
+  if (provider === "omp") throw new AccountError(400, "omp has one implicit account; there is no home to import");
   const home = canonical(expandHome(path.trim()));
-  if (!existsSync(home) || !statSync(home).isDirectory()) throw new Error(`${home} is not a directory`);
+  if (!existsSync(home) || !statSync(home).isDirectory()) throw new AccountError(400, `${home} is not a directory`);
   const cred = credentialsPath(provider, home)!;
   if (!existsSync(cred)) {
-    throw new Error(`${home} has no ${provider} login (expected ${basename(cred)}${provider === "devin" ? " under devin/" : ""})`);
+    throw new AccountError(400, `${home} has no ${provider} login (expected ${basename(cred)}${provider === "devin" ? " under devin/" : ""})`);
   }
 
   const isDefault = samePath(home, defaultHome(provider));
   const existing = listAccounts(provider);
   const clash = existing.find((a) => samePath(a.home, home));
-  if (clash) throw new Error(`${home} is already registered as "${clash.label}"`);
+  if (clash) throw new AccountError(409, `${home} is already registered as "${clash.label}"`);
   if (isDefault && existing.some((a) => a.isDefault)) {
-    throw new Error(`${home} is the default ${provider} home and is already registered`);
+    throw new AccountError(409, `${home} is the default ${provider} home and is already registered`);
   }
 
   const email = await deps.identifyEmail({ provider, home, isDefault });
@@ -418,7 +421,8 @@ export async function importHome(
     for (const a of existing) {
       const theirs = a.email ?? (await deps.identifyEmail(a).catch(() => null));
       if (theirs && theirs.toLowerCase() === email.toLowerCase()) {
-        throw new Error(
+        throw new AccountError(
+          409,
           `${home} is logged in as ${email}, which is already account "${a.label}" (${a.home}). ` +
             "Two homes on one login share a refresh token and log each other out — log this home into a different account, or use the existing one.",
         );

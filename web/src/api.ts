@@ -12,13 +12,15 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import type {
   Account,
   AccountUsage,
-  AccountView,
   AgentSettings,
   AppState,
   BalancerSettings,
   CalibrationReport,
   ClientMessage,
   ColdState,
+  DepState,
+  DepStatus,
+  Health,
   HotState,
   LoginFlow,
   MetricsState,
@@ -35,12 +37,10 @@ import type {
   TimelinePage,
   WorktreeScan,
 } from "../../src/core/types";
-import type { DepState, DepStatus } from "../../src/deps";
 import { mergeTimeline } from "./lib/timeline";
 
 export type { SessionRow } from "./lib/board";
-export type { LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
-export type { DepState, DepStatus } from "../../src/deps";
+export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
 export * from "./lib/format";
 
 // ------------------------------------------------------------------- mock
@@ -110,28 +110,24 @@ export interface NewSessionInput {
 }
 
 /**
- * `GET /api/health`. The v2 contract says only "provider CLIs, tmux, gh, git",
- * so this is read defensively: every key whose value looks like a `DepStatus`
- * is a dependency row; anything else is ignored.
+ * `GET /api/health` as Diagnostics rows: the probed dependencies first, then
+ * the provider CLIs. A provider is only ever found or not — its probe is
+ * `detect()`, which has no "installed but unusable".
  */
-export type Health = Record<string, unknown>;
-
 export function healthRows(h: Health): { name: string; state: DepState; detail: string | null }[] {
-  const rows: { name: string; state: DepState; detail: string | null }[] = [];
-  const visit = (name: string, v: unknown) => {
-    if (v && typeof v === "object" && "state" in v) {
-      const d = v as DepStatus;
-      if (d.state === "ok" || d.state === "unusable" || d.state === "missing") {
-        rows.push({ name, state: d.state, detail: d.detail ?? null });
-      }
-    }
-  };
-  for (const [k, v] of Object.entries(h)) {
-    if (k === "providers" && v && typeof v === "object") {
-      for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) visit(pk, pv);
-    } else visit(k, v);
-  }
-  return rows;
+  const deps: [string, DepStatus][] = [
+    ["tmux", h.deps.tmux],
+    ["git", h.deps.git],
+    ["gh", h.deps.gh],
+  ];
+  return [
+    ...deps.map(([name, d]) => ({ name, state: d.state, detail: d.detail })),
+    ...h.providers.map((p) => ({
+      name: p.id,
+      state: p.installed ? ("ok" as const) : ("missing" as const),
+      detail: p.installed ? p.version : `${p.id} is not on PATH`,
+    })),
+  ];
 }
 
 export const api = {
@@ -162,14 +158,9 @@ export const api = {
   },
   diff: (id: string) => get<SessionDiff>(`/api/sessions/${enc(id)}/diff`),
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
-  load: async (id: string): Promise<ProcDetail[]> => {
-    // The contract says `ProcDetail[]`; v1 wrapped it in `{procs}`. Accept both.
-    const r = await get<ProcDetail[] | { procs: ProcDetail[] }>(`/api/sessions/${enc(id)}/load`);
-    return Array.isArray(r) ? r : r.procs;
-  },
+  load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
 
   // accounts
-  accounts: () => get<AccountView[]>("/api/accounts"),
   addAccount: (provider: ProviderId, label?: string) =>
     post<{ account: Account; login: LoginFlow }>("/api/accounts", label ? { provider, label } : { provider }),
   importAccount: (provider: ProviderId, home: string) => post<Account>("/api/accounts/import", { provider, home }),
@@ -183,13 +174,11 @@ export const api = {
   calibration: (days = 7) => get<CalibrationReport>(`/api/calibration?days=${days}`),
 
   // settings
-  settings: () => get<AgentSettings>("/api/settings"),
   /** Deep-merges server-side, so a partial is a patch, not a replacement. */
   saveSettings: (patch: SettingsPatch) => request<AgentSettings>("PUT", "/api/settings", patch),
   applyBalancer: (b: BalancerSettings) => request<AgentSettings>("PUT", "/api/settings", { balancer: b }),
 
   // repos, worktrees
-  repos: () => get<Repo[]>("/api/repos"),
   addRepo: (ref: string) => post<Repo>("/api/repos", { ref }),
   deleteRepo: (id: string) => request<unknown>("DELETE", `/api/repos/${enc(id)}`),
   /** Slow by construction — many git and gh calls. Only ever on a button. */
@@ -451,12 +440,12 @@ export interface TimelineState {
 /**
  * One session's timeline, over the `watch` subscription: a `reset` frame with
  * the newest page, then increments, merged by id (a tool event is re-sent with
- * the same id when its result lands). Scrolling up pages backwards over HTTP.
+ * the same id when its result lands). Scrolling up pages backwards over HTTP,
+ * from the reset frame's `before` cursor and then each page's.
  *
- * The contract's `reset` frame carries no `before` cursor, so the first older
- * page is asked for with the oldest held event's id as `before`; every page
- * after that uses the cursor the server returned. A server that also puts
- * `before` on the reset frame is honoured.
+ * A session with no transcript yet gets a reset frame with no `before`; its
+ * first older page, if one ever exists, is asked for by the oldest held
+ * event's id.
  */
 export function useTimeline(sessionId: string): TimelineState & { loadOlder: () => void } {
   const [st, setSt] = useState<TimelineState>({
@@ -479,10 +468,9 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: () 
     const off = wire.onMessage((msg) => {
       if (msg.type !== "timeline" || msg.sessionId !== sessionId) return;
       if (msg.reset) {
-        const withBefore = msg as typeof msg & { before?: string | null };
-        before.current = withBefore.before;
+        before.current = msg.before;
         eventsRef.current = mergeTimeline([], msg.events);
-        setSt({ events: eventsRef.current, ready: true, loadingOlder: false, exhausted: withBefore.before === null, error: null });
+        setSt({ events: eventsRef.current, ready: true, loadingOlder: false, exhausted: msg.before === null, error: null });
       } else {
         const next = mergeTimeline(eventsRef.current, msg.events);
         if (next === eventsRef.current) return;

@@ -64,10 +64,6 @@ class Metrics {
     return this.state;
   }
 
-  running(): boolean {
-    return this.fast !== null;
-  }
-
   start(): void {
     if (this.fast || !metricsAvailable()) return;
     void this.poll();
@@ -196,5 +192,4 @@ export function setMetricsWatchers(n: number): void {
 }
 
 export const metricsSnapshot = (): MetricsState => metrics.snapshot();
-export const metricsRunning = (): boolean => metrics.running();
 export const procDetail = (pid: number): Promise<ProcDetail[]> => metrics.detail(pid);

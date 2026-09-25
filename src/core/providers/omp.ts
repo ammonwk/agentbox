@@ -612,10 +612,11 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   defaultHome() {
-    return join(homedir(), ".omp");
+    return join(process.env.HOME || homedir(), ".omp");
   },
 
   accountCommand: ompAccountCommand,
+  authEnv: ompAccountCommand,
 
   async listTranscripts(account, sinceMs) {
     const out: TranscriptRef[] = [];

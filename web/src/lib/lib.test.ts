@@ -4,7 +4,7 @@ import { EMPTY_FILTER, filterSessions, neighbourId, sectionsOf, sortByAttention,
 import { fmtCountdown, fmtPts } from "./format";
 import { arrow, candidateCells, candidateTable, placementHeadline } from "./placement";
 import { firstLine, groupTimeline, mergeTimeline } from "./timeline";
-import { barSegments, headlineWindows, outstandingOf, resetText, shortClaimPct, sortWindows, usageSummary, usageTone, windowElapsed, windowLabel } from "./usage";
+import { barSegments, headlineWindows, outstandingOf, resetText, sortWindows, usageSummary, usageTone, windowElapsed, windowLabel } from "./usage";
 
 const M = 60_000;
 const H = 60 * M;
@@ -106,12 +106,6 @@ describe("usage bars", () => {
       { sessionId: "b", title: "b", big: true, claim: 20, consumed: 1, outstanding: 19, lapsed: true },
     ];
     expect(outstandingOf(claims)).toBe(3);
-  });
-
-  test("outstanding weekly points become short-window percent via shortWindowInWeekly", () => {
-    // The design doc's worked example: 5 points against a 24-point window is ~21%.
-    expect(Math.round(shortClaimPct(5, 24))).toBe(21);
-    expect(shortClaimPct(5, 0)).toBe(0);
   });
 
   test("reset countdown", () => {
@@ -273,7 +267,6 @@ function row(id: string, kind: AttentionKind, lastActivityAt: number, extra: Par
     startedAt: 0,
     lastActivityAt,
     archivedAt: null,
-    prNumber: null,
     attention,
     ...extra,
   };

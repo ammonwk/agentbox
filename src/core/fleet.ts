@@ -625,7 +625,6 @@ export class Fleet extends EventEmitter {
       startedAt: rec.startedAt,
       lastActivityAt: Math.max(rec.lastActivityAt, f?.lastActivityAt ?? 0),
       archivedAt: rec.archivedAt,
-      prNumber: null,
     };
   }
 

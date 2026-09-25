@@ -33,8 +33,11 @@ class FakeAdapter implements ProviderAdapter {
   defaultHome() {
     return this.dir;
   }
-  accountCommand(account: Account) {
+  accountCommand(account: Pick<Account, "home">) {
     return { env: { FAKE_HOME: account.home }, unset: [] };
+  }
+  authEnv(account: Pick<Account, "home">) {
+    return this.accountCommand(account);
   }
   write(account: Account, facts: Partial<TranscriptFacts> & { agentSessionId: string }): string {
     const dir = join(this.dir, account.id);

@@ -27,7 +27,7 @@ import { diffOf } from "../core/diff";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
-import { containedIn, looksLikeSkillFile, skillMdPath } from "./guard";
+import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getSettings, listRepos, mergeSettings, saveSettings } from "../core/db";
 import { listPrs } from "../core/prs";
 import { checkRequest } from "./csrf";
@@ -36,16 +36,18 @@ import { optionalString, parseSettingsPatch, requireBoolean, requireString } fro
 import { parseClientMessage } from "./protocol";
 import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
-import { AccountsService } from "../core/accounts";
+import { AccountError, AccountsService } from "../core/accounts";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import type {
   AccountView,
   ColdState,
+  Health,
   HotState,
   MetricsState,
   PrInfo,
   ProviderId,
+  Repo,
   ServerMessage,
   SkillInfo,
 } from "../core/types";
@@ -89,19 +91,14 @@ const slow = {
   providers: [] as ColdState["providers"],
 };
 
+/** Checkouts on this machine; each may carry its own `.claude/skills`. */
+const localRepoDirs = (repos: Repo[]): string[] => repos.filter((r) => r.kind === "local").map((r) => r.ref);
+
 async function refreshSlow(): Promise<void> {
   const repos = listRepos();
-  const localDirs = repos.filter((r) => r.kind === "local").map((r) => r.ref);
-  const skills = listSkills(skillRoots(localDirs));
+  const skills = listSkills(skillRoots(localRepoDirs(repos)));
   slow.skills = skills.skills;
-  const providers = await Promise.all(
-    PROVIDERS.map(async (id) => {
-      const a = fleet.providers().find((p) => p.id === id);
-      const d = a ? await a.detect().catch(() => ({ installed: false, version: null })) : { installed: false, version: null };
-      return { id, installed: d.installed, version: d.version };
-    }),
-  );
-  slow.providers = providers;
+  await detectProviders();
   // `gh` runs here and nowhere else: one call per repo, once a minute.
   const prs = listPrs(repos, fleet.sessions());
   slow.prs = prs.prs;
@@ -109,6 +106,16 @@ async function refreshSlow(): Promise<void> {
   if (!tmux.tmuxVersion()) warnings.unshift("tmux is not installed — agentbox runs every session in tmux, so nothing can be started.");
   slow.warnings = warnings;
   scheduleCold();
+}
+
+async function detectProviders(): Promise<void> {
+  slow.providers = await Promise.all(
+    PROVIDERS.map(async (id) => {
+      const a = fleet.providers().find((p) => p.id === id);
+      const d = a ? await a.detect().catch(() => ({ installed: false, version: null })) : { installed: false, version: null };
+      return { id, installed: d.installed, version: d.version };
+    }),
+  );
 }
 
 function accountViews(): AccountView[] {
@@ -330,7 +337,7 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
-  if (e instanceof FleetError) return new HttpError(e.status, e.message);
+  if (e instanceof FleetError || e instanceof AccountError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }
 
@@ -343,9 +350,16 @@ const provider = (v: unknown): ProviderId => {
 
 const router = new Router(mapError)
   .add("GET", "/api/state", () => json({ ...hotState(), ...coldState() }))
-  .add("GET", "/api/health", async () =>
-    json({ version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: await dependencies() }),
-  )
+  .add("GET", "/api/health", async ({ url }) => {
+    // Re-check is someone who just installed or logged into something.
+    const refresh = url.searchParams.get("refresh") === "1";
+    if (refresh) {
+      await detectProviders();
+      scheduleCold();
+    }
+    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh) };
+    return json(health);
+  })
 
   // ---- sessions
   .add("POST", "/api/placement", async ({ req }) => {
@@ -517,7 +531,12 @@ const router = new Router(mapError)
     void refreshSlow();
     return json(null);
   })
-  .add("POST", "/api/worktrees/scan", async () => json(await scanWorktrees("all", fleet.sessions())))
+  .add("POST", "/api/worktrees/scan", async ({ req }) => {
+    const b = await readBody(req);
+    const scope = b.scope ?? "all";
+    if (scope !== "all" && scope !== "agentbox") throw new HttpError(400, "scope must be all or agentbox");
+    return json(await scanWorktrees(scope, fleet.sessions()));
+  })
   .add("POST", "/api/worktrees/reclaim", async ({ req }) => {
     const b = await readBody(req);
     if (!Array.isArray(b.paths) || !b.paths.every((p) => typeof p === "string")) {
@@ -527,7 +546,7 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/skill/body", ({ url }) => {
     const raw = url.searchParams.get("path") ?? "";
-    const dir = containedIn(raw, skillRootDirs());
+    const dir = containedIn(raw, skillRootDirs(localRepoDirs(listRepos())));
     if (!dir) throw new HttpError(403, "not a skill directory agentbox manages");
     const file = skillMdPath(dir);
     if (!looksLikeSkillFile(file)) throw new HttpError(403, "not a skill file");
@@ -535,7 +554,7 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/skill/body", async ({ req }) => {
     const b = await readBody(req);
-    const dir = containedIn(requireString(b, "path"), skillRootDirs());
+    const dir = containedIn(requireString(b, "path"), skillRootDirs(localRepoDirs(listRepos())));
     if (!dir) throw new HttpError(403, "not a skill directory agentbox manages");
     const file = skillMdPath(dir);
     if (!looksLikeSkillFile(file)) throw new HttpError(403, "not a skill file");
@@ -566,11 +585,6 @@ const router = new Router(mapError)
     if (found.kind === "notFound") return new Response("not found", { status: 404 });
     return fileResponse(webDist, found.path, req);
   });
-
-function skillRootDirs(): string[] {
-  const local = listRepos().filter((r) => r.kind === "local").map((r) => r.ref);
-  return skillRoots(local).map((r) => r.dir);
-}
 
 // ------------------------------------------------------------------ boot
 

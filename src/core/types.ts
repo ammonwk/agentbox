@@ -245,7 +245,6 @@ export interface Session {
   startedAt: number;
   lastActivityAt: number;
   archivedAt: number | null;
-  prNumber: number | null;
 }
 
 export interface TokenTotals {
@@ -258,7 +257,8 @@ export interface TokenTotals {
   costEquiv: number;
 }
 
-export type AttentionKind = "blocked" | "waiting" | "running" | "stopped" | "archived";
+/** The board groups by status; an alias so the two can never drift apart. */
+export type AttentionKind = SessionStatus;
 
 export interface Attention {
   kind: AttentionKind;
@@ -601,6 +601,37 @@ export interface ColdState {
 }
 
 export interface AppState extends HotState, ColdState {}
+
+// ----------------------------------------------------------------- health
+
+/** `ok`, installed but `unusable` (with the reason), or `missing` — src/deps.ts. */
+export type DepState = "ok" | "unusable" | "missing";
+
+export interface DepStatus {
+  state: DepState;
+  /**
+   * A sentence about this state that a user can act on — the reason it is not
+   * `ok`, or the version/account when it is. Null when there is nothing to add.
+   */
+  detail: string | null;
+}
+
+export interface DepSnapshot {
+  tmux: DepStatus;
+  gh: DepStatus;
+  git: DepStatus;
+  /** When this snapshot was taken. */
+  at: number;
+}
+
+/** `GET /api/health`. `?refresh=1` re-probes instead of answering from cache. */
+export interface Health {
+  version: string;
+  /** `tmux -V`, or null when tmux will not run. */
+  tmux: string | null;
+  providers: ColdState["providers"];
+  deps: DepSnapshot;
+}
 
 /** Server → client. */
 export type ServerMessage =

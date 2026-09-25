@@ -6,11 +6,13 @@ import type { LoadSample, ProcDetail, ProcRole } from "./types";
 /**
  * What each session is actually costing the machine.
  *
- * A session is never one process. `omp acp` with a couple of MCP servers and a
- * type-check running is several, and the several are what make the laptop hot —
- * the agent process itself is mostly idle waiting on the network. So everything
- * here works on the *subtree* rooted at the session's pid, which is exactly what
- * `Session.pid` holds (see acp.ts: it is the pid of the spawned `omp acp`).
+ * A session is never one process. A provider CLI with a couple of MCP servers
+ * and a type-check running is several, and the several are what make the laptop
+ * hot — the agent process itself is mostly idle waiting on the network. So
+ * everything here works on the *subtree* rooted at the session's pid, which is
+ * exactly what `Session.pid` holds: the provider's own CLI process (`claude`,
+ * `codex`, `devin`, `omp`), whether it runs in agentbox's tmux or in some
+ * terminal of yours.
  *
  * ── On cost ────────────────────────────────────────────────────────────────
  * Reading /proc/<pid>/stat for every process on the machine is 16-37ms for the
@@ -61,6 +63,34 @@ export function clockHz(): number {
     /* keep the default */
   }
   return hz;
+}
+
+/** Boot time in ms since epoch, so a start tick becomes a wall clock. Lazy: an
+ *  import must not do I/O, and this file is imported by the server at boot.
+ *  0 when /proc/stat cannot be read (not Linux). */
+let bootMs: number | null = null;
+
+export function bootTimeMs(): number {
+  if (bootMs !== null) return bootMs;
+  bootMs = 0;
+  try {
+    const m = /^btime (\d+)/m.exec(readFileSync("/proc/stat", "utf8"));
+    if (m) bootMs = Number(m[1]) * 1000;
+  } catch {
+    /* not Linux */
+  }
+  return bootMs;
+}
+
+/** argv of a process, or null if it is gone, mid-exec, or not ours to read. */
+export function argvOf(pid: number): string[] | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    if (!raw) return null;
+    return raw.split("\0").filter((s, i, a) => s.length > 0 || i < a.length - 1);
+  } catch {
+    return null;
+  }
 }
 
 export function parseStat(pid: number, s: string): ProcRow | null {
@@ -158,7 +188,7 @@ export function subtreeCpuTicks(rows: ProcRow[]): number {
 }
 
 /** How many samples of per-session CPU history to keep, for the sparkline. */
-export const HISTORY = 60;
+const HISTORY = 60;
 
 interface Prior {
   ticks: number;
@@ -224,7 +254,7 @@ export class LoadMeter {
 }
 
 /** Proportional set size for one process, in bytes. Undefined if unreadable. */
-export async function readPss(pid: number): Promise<number | undefined> {
+async function readPss(pid: number): Promise<number | undefined> {
   try {
     const text = await readFile(`/proc/${pid}/smaps_rollup`, "utf8");
     const m = /^Pss:\s+(\d+) kB/m.exec(text);
@@ -254,32 +284,31 @@ export async function subtreePss(rows: ProcRow[]): Promise<number | undefined> {
 
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "fish"]);
 
+/** `-c`, alone or in a short-option cluster: codex runs its commands as `bash -lc`. */
+const DASH_C = /^-[a-z]*c[a-z]*$/;
+
 /**
  * Is this command line an agent running a shell tool call?
  *
- * PROVISIONAL, and deliberately structural rather than string-matched.
+ * Structural rather than string-matched, because the four providers do not
+ * share a shape. Claude Code runs every Bash call through `bash -c source
+ * <shell snapshot>`, which nothing else does, so that marker is exact. Codex
+ * runs `bash -lc <command>` (its rollouts record the argv). omp's and devin's
+ * shapes have not been sampled mid-turn; an idle agent has no children at all,
+ * so the subtree only exists while a turn is running.
  *
- * Switchyard could be exact here because it watched Claude Code, which runs
- * every Bash tool call through `bash -c source <shell snapshot>` — a shape
- * nothing else has. agentbox drives omp, and omp's tool-call shape has not been
- * observed: an idle `omp acp` is a single `bun` process with no children at all,
- * so the subtree only exists mid-turn.
- *
- * So the rule here is the weaker one that holds for any agent: a direct child
- * that is a shell running `-c` is work the agent asked for, and a direct child
- * that is anything else is a server it started at boot. The Claude Code marker
- * is kept as an additional positive because it costs nothing and makes the
- * classification exact when the subtree does happen to be Claude's.
- *
- * To tighten this, sample a subtree while a turn is actually in flight:
- *   ps -e -o pid,ppid,args --no-headers | awk '$2==<omp pid>'
+ * So the rule is the one that holds for any of them: a direct child that is a
+ * shell running `-c` is work the agent asked for, and a direct child that is
+ * anything else is a server it started at boot. To check a provider against
+ * it, sample a subtree while a turn is in flight:
+ *   ps -e -o pid,ppid,args --no-headers | awk '$2==<agent pid>'
  */
 export function isToolShell(cmd: string | undefined): boolean {
   if (!cmd) return false;
   if (cmd.includes("shell-snapshots")) return true;
   const parts = cmd.trim().split(/\s+/);
   const base = basename(parts[0] ?? "");
-  return SHELLS.has(base) && parts.includes("-c");
+  return SHELLS.has(base) && parts.some((p) => DASH_C.test(p));
 }
 
 /**
@@ -319,7 +348,7 @@ export function describe(row: ProcRow): string {
     const evaled =
       /eval '([^']+)'/.exec(cmd)?.[1] ?? // Claude Code's snapshot wrapper
       /&& *([^&]+)$/.exec(cmd)?.[1] ??
-      cmd.slice(cmd.indexOf(" -c ") + 4).replace(/^['"]|['"]$/g, "");
+      /\s-[a-z]*c[a-z]*\s+(.+)$/.exec(cmd)?.[1]?.replace(/^['"]|['"]$/g, "");
     return evaled ? squash(evaled) : base;
   }
 
@@ -364,22 +393,6 @@ function squash(s: string, max = 44): string {
 
 // ─── The drilldown ──────────────────────────────────────────────────────────
 
-/** Boot time in ms since epoch, so a start tick becomes a wall clock. Lazy: an
- *  import must not do I/O, and this file is imported by the server at boot. */
-let bootMs: number | null = null;
-
-function bootTime(): number {
-  if (bootMs !== null) return bootMs;
-  bootMs = 0;
-  try {
-    const m = /^btime (\d+)/m.exec(readFileSync("/proc/stat", "utf8"));
-    if (m) bootMs = Number(m[1]) * 1000;
-  } catch {
-    /* ageMs falls back to 0 */
-  }
-  return bootMs;
-}
-
 /**
  * The per-process breakdown behind one session's row.
  *
@@ -396,7 +409,7 @@ export async function breakdown(
   agentPid: number,
   opts: { pss?: boolean } = {},
 ): Promise<ProcDetail[]> {
-  const rows = await withCmdlines(subtree(cur, agentPid));
+  const rows = withCmdlines(subtree(cur, agentPid));
   const byPid = new Map(rows.map((r) => [r.pid, r]));
 
   const out: ProcDetail[] = [];
@@ -414,7 +427,7 @@ export async function breakdown(
       cpuPct = Math.max(0, ((row.ownTicks - before.ownTicks) / elapsed) * 100);
     }
 
-    const boot = bootTime();
+    const boot = bootTimeMs();
     out.push({
       pid,
       ppid: row.ppid,
@@ -451,28 +464,13 @@ export async function breakdown(
 export async function backgroundShells(table: ProcTable, pid: number): Promise<number> {
   const kids = table.children.get(pid) ?? [];
   if (kids.length === 0) return 0;
-  const flags = await Promise.all(
-    kids.map(async (k) => {
-      try {
-        return isToolShell((await readFile(`/proc/${k}/cmdline`, "utf8")).replace(/\0/g, " "));
-      } catch {
-        return false;
-      }
-    }),
-  );
-  return flags.filter(Boolean).length;
+  return kids.filter((k) => isToolShell(argvOf(k)?.join(" "))).length;
 }
 
 /** Read command lines for a set of processes. Only for the drilldown. */
-export async function withCmdlines(rows: ProcRow[]): Promise<ProcRow[]> {
-  return Promise.all(
-    rows.map(async (r) => {
-      try {
-        const raw = await readFile(`/proc/${r.pid}/cmdline`, "utf8");
-        return { ...r, cmd: raw.replace(/\0/g, " ").trim() };
-      } catch {
-        return r;
-      }
-    }),
-  );
+function withCmdlines(rows: ProcRow[]): ProcRow[] {
+  return rows.map((r) => {
+    const argv = argvOf(r.pid);
+    return argv ? { ...r, cmd: argv.join(" ").trim() } : r;
+  });
 }

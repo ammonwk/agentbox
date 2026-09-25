@@ -8,33 +8,9 @@
 
 import { readFileSync, readlinkSync, readdirSync } from "node:fs";
 import { basename } from "node:path";
-import { clockHz } from "../proc";
+import { argvOf, bootTimeMs, clockHz } from "../proc";
 
-let bootMs: number | null = null;
-
-/** Wall-clock ms at boot, for turning /proc start ticks into timestamps. */
-function bootTimeMs(): number {
-  if (bootMs !== null) return bootMs;
-  bootMs = 0;
-  try {
-    const m = readFileSync("/proc/stat", "utf8").match(/^btime (\d+)$/m);
-    if (m) bootMs = Number(m[1]) * 1000;
-  } catch {
-    /* not Linux */
-  }
-  return bootMs;
-}
-
-/** argv of a process, or null if it is gone or not ours to read. */
-export function argvOf(pid: number): string[] | null {
-  try {
-    const raw = readFileSync(`/proc/${pid}/cmdline`, "utf8");
-    if (!raw) return null;
-    return raw.split("\0").filter((s, i, a) => s.length > 0 || i < a.length - 1);
-  } catch {
-    return null;
-  }
-}
+export { argvOf };
 
 /** The whole environment a process was started with. */
 export function environOf(pid: number): Map<string, string> | null {
@@ -122,7 +98,7 @@ export function findProcesses(test: (argv: string[]) => boolean): ProcMatch[] {
  */
 let shared: ProcMatch[] | null = null;
 
-export function scanOwnProcesses(): ProcMatch[] {
+function scanOwnProcesses(): ProcMatch[] {
   return shared ?? scanUncached();
 }
 

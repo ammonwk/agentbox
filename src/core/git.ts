@@ -53,7 +53,7 @@ export const MISSING_BINARY = 127;
  * asks the same question of a hundred and fifty directories, and those are
  * independent I/O-bound subprocesses. Run serially they took 45 seconds.
  */
-export async function runAsync(
+async function runAsync(
   cmd: string[],
   cwd?: string,
   env?: Record<string, string>,
@@ -129,7 +129,7 @@ export function repoCheckoutPath(repo: Repo): string {
  * Local repos are used in place; GitHub slugs are cloned under repoRoot.
  * Returns the canonical local repo path.
  */
-export function ensureRepoClone(repo: Repo): { path: string; fullName: string | null } {
+function ensureRepoClone(repo: Repo): { path: string; fullName: string | null } {
   if (repo.kind === "local") {
     // A local checkout can still have a GitHub origin, which is what makes its
     // PRs findable. The slug is resolved at registration; re-resolve only if
@@ -425,47 +425,10 @@ export async function diskBytesOf(path: string): Promise<number> {
 // ------------------------------------------------------------- github
 
 /**
- * "Is there an open PR for this branch?" — with a third answer.
- *
- * `parseInt` on gh's output collapses "no PR exists" and "gh is not installed"
- * into the same null, which is how a missing dependency turns into a session
- * that quietly never reaches `done`.
- */
-export type PrLookup =
-  | { ok: true; number: number | null }
-  | { ok: false; error: string };
-
-export function findOpenPr(repoFullName: string, branch: string): PrLookup {
-  if (!repoFullName) return { ok: false, error: "no GitHub repo is associated with this session" };
-  if (!branch) return { ok: false, error: "session has no branch to look up" };
-  const r = run([
-    "gh", "pr", "list",
-    "--repo", repoFullName,
-    "--head", branch,
-    "--state", "open",
-    "--json", "number",
-  ]);
-  if (r.code !== 0) {
-    return { ok: false, error: ghErrorMessage(r) };
-  }
-  let rows: { number?: unknown }[];
-  try {
-    rows = JSON.parse(r.stdout) as { number?: unknown }[];
-  } catch {
-    return { ok: false, error: `could not read gh output: ${r.stdout.slice(0, 120)}` };
-  }
-  const first = rows[0]?.number;
-  return { ok: true, number: typeof first === "number" ? first : null };
-}
-
-/**
- * What GitHub thinks of a branch, closed and merged PRs included.
- *
- * `findOpenPr` deliberately asks only about open PRs, because that is the
- * question "is this session done" turns on. Reclaiming disk asks the opposite
- * one — is this branch *finished with* — and a merged PR is the strongest
- * possible yes. `unknown` covers both "gh could not answer" and "gh is not
- * here", and the reclaim path must never read it as "finished".
+ * What GitHub thinks of a branch, closed and merged PRs included. Reclaiming
+ * disk asks whether a branch is *finished with*, and a merged PR is the
+ * strongest possible yes. `unknown` covers both "gh could not answer" and "gh
+ * is not here", and the reclaim path must never read it as "finished".
  */
 export type PrState = "open" | "merged" | "closed" | "none" | "unknown";
 

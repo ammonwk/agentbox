@@ -149,12 +149,22 @@ export interface ProviderAdapter {
   /** Is the CLI installed, and what version. */
   detect(): Promise<{ installed: boolean; version: string | null }>;
 
-  /** The provider's default credential home (`~/.claude`, `~/.codex`, …). */
+  /** The provider's default credential home (`~/.claude`, `~/.codex`, …) —
+   *  where the accounts module registers the default account. Honours a
+   *  `$HOME` set at runtime, as every path the accounts module derives does. */
   defaultHome(): string;
 
   /** Environment that points the CLI at this account; `{}` plus `unset` of
    *  the relevant variable for the default account. */
   accountCommand(account: Account): Pick<Command, "env" | "unset">;
+
+  /**
+   * Environment for the CLI's own auth commands (`login`, `auth status`),
+   * which read and write the account's home. `accountCommand`'s env for every
+   * provider but devin, which runs on a key taken from the home and so cannot
+   * log in that way: it logs in under `XDG_DATA_HOME=<home>`.
+   */
+  authEnv(account: Pick<Account, "home" | "isDefault">): Pick<Command, "env" | "unset">;
 
   /**
    * Transcripts under this account touched at or after `sinceMs`. Must only

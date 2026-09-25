@@ -16,7 +16,7 @@ export interface PrScan {
  * Open pull requests across every registered GitHub repo, via `gh`.
  *
  * This spawns one subprocess per repo and must only be called from the cold
- * refresh in state.ts — never on a broadcast path.
+ * refresh in src/server/index.ts — never on a broadcast path.
  */
 export function listPrs(repos: Repo[], sessions: Session[]): PrScan {
   const warnings: string[] = [];

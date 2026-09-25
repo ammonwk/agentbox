@@ -21,11 +21,10 @@ export function agentboxHome(): string {
   return process.env.AGENTBOX_HOME ?? join(homedir(), ".local", "share", "agentbox");
 }
 
-const dataDir = (): string => join(agentboxHome(), "data");
+/** `server.log`, when the server is started as AGENTS.md says. */
 const logDir = (): string => join(agentboxHome(), "logs");
 
 export const worktreeRoot = (): string => join(agentboxHome(), "worktrees");
-export const sessionDir = (): string => join(agentboxHome(), "sessions");
 export const repoRoot = (): string => join(agentboxHome(), "repos");
 /** v2's database. v1's `agentbox.db` is left where it is, untouched. */
 export const dbPath = (): string => join(agentboxHome(), "box.db");
@@ -53,17 +52,9 @@ export const webDist = join(packageRoot, "web", "dist");
 export const DEFAULT_PORT = 4479;
 
 export function ensureDirs() {
-  for (const d of [dataDir(), worktreeRoot(), sessionDir(), logDir(), repoRoot(), accountsRoot()]) {
+  for (const d of [worktreeRoot(), logDir(), repoRoot(), accountsRoot()]) {
     mkdirSync(d, { recursive: true });
   }
-}
-
-export function sessionDirFor(id: string): string {
-  return join(sessionDir(), id);
-}
-
-export function logPathFor(id: string): string {
-  return join(logDir(), `${id}.jsonl`);
 }
 
 /**

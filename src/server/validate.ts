@@ -1,12 +1,12 @@
 /** Turning an untrusted JSON body into the shapes the core modules are typed for.
  *
  * Every reader takes the object to look in, the KEY to look up, and separately
- * the LABEL to name in the error. Conflating those two shipped a bug that made
- * the whole Supervision section of Settings unusable: the nested readers were
- * called as `requireBoolean(supervisor, "supervisor.enabled")`, which looks up
- * `supervisor["supervisor.enabled"]` — always undefined — so every payload
- * containing a `supervisor` key was rejected with a message insisting the field
- * was missing while it sat right there in the request.
+ * the LABEL to name in the error. Conflating those two once made a whole
+ * section of Settings unusable: a nested reader called as
+ * `requireBoolean(section, "section.enabled")` looks up
+ * `section["section.enabled"]` — always undefined — so every payload carrying
+ * that section was rejected with a message insisting the field was missing
+ * while it sat right there in the request.
  */
 
 import type { SettingsPatch } from "../core/db";
@@ -50,44 +50,12 @@ export function asObject(v: unknown, label: string): Record<string, unknown> {
   return v as Record<string, unknown>;
 }
 
-/** `?since=` on the events routes. */
-export function sinceParam(url: URL): number | undefined {
-  const raw = url.searchParams.get("since");
-  if (raw === null || raw === "") return undefined;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) throw new HttpError(400, "since must be a non-negative integer seq");
-  return n;
-}
-
-/** `?before=` on the events route — exclusive upper seq bound, for paging
- *  backwards through a transcript. */
-export function beforeParam(url: URL): number | undefined {
-  const raw = url.searchParams.get("before");
-  if (raw === null || raw === "") return undefined;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1) throw new HttpError(400, "before must be a positive integer seq");
-  return n;
-}
-
-/** `?limit=` on the events route — keep at most this many of the window, from
- *  its newest end. Capped: a typo'd limit must not ask the server to serialize
- *  the whole log. */
-export function limitParam(url: URL, max = 5000): number | undefined {
-  const raw = url.searchParams.get("limit");
-  if (raw === null || raw === "") return undefined;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1 || n > max) {
-    throw new HttpError(400, `limit must be an integer between 1 and ${max}`);
-  }
-  return n;
-}
-
 /**
  * Validate a settings PUT body into a `SettingsPatch`.
  *
  * The merge itself belongs to db.ts — this only establishes that what arrived
  * over the wire is the shape the merge is typed for. Every field is optional at
- * every level: the UI sends partials like `{supervisor: {enabled: true}}`, and
+ * every level: the UI sends partials like `{balancer: {tieBand: 15}}`, and
  * the keys it leaves out must survive the merge rather than being reset. Unknown
  * keys are rejected rather than persisted, so a client typo is a 400 and not a
  * setting nothing reads.

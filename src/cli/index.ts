@@ -15,39 +15,15 @@ import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, webDist } from "..
 import { listRepos } from "../core/db";
 import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
+import { ApiError, apiClient, serverBase } from "../client";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 
-const PORT = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT);
-const BASE = `http://127.0.0.1:${PORT}`;
+const BASE = serverBase();
 const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 
 // ------------------------------------------------------------------ client
 
-class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly data: unknown = null,
-  ) {
-    super(message);
-  }
-}
-
-async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}${path}`, {
-      method,
-      headers: { "content-type": "application/json", "x-agentbox": "1" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch {
-    throw new ApiError("server not reachable");
-  }
-  const out = (await res.json().catch(() => null)) as { ok: boolean; data: T; error: string | null } | null;
-  if (!out) throw new ApiError(`server answered ${res.status} with no body`);
-  if (!out.ok) throw new ApiError(out.error ?? `HTTP ${res.status}`, out.data);
-  return out.data;
-}
+const api = apiClient(BASE);
 
 async function reachable(): Promise<boolean> {
   try {

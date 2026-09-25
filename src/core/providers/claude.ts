@@ -466,7 +466,7 @@ export function claudeBlockedOn(raw: string): string | null {
 
 // ------------------------------------------------------------- commands
 
-function accountCommand(account: Account): Pick<Command, "env" | "unset"> {
+function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Command, "env" | "unset"> {
   return account.isDefault ? { env: {}, unset: ["CLAUDE_CONFIG_DIR"] } : { env: { CLAUDE_CONFIG_DIR: account.home } };
 }
 
@@ -528,6 +528,7 @@ export const claudeAdapter: ProviderAdapter = {
   defaultHome: () => join(userHome(), ".claude"),
 
   accountCommand,
+  authEnv: accountCommand,
 
   async listTranscripts(account, sinceMs) {
     const ix = indexFor(claudeHome(account));
