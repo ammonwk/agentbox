@@ -11,6 +11,7 @@ import {
   renderAgentLine,
   resolveModel,
   waitForTurn,
+  type PoolTiming,
   type Runner,
   type RunnerFactory,
 } from "../pool";
@@ -118,7 +119,7 @@ let pool: SubagentPool;
 beforeEach(() => {
   ({ home, restore: restoreHome } = useTempHome());
   fakes = [];
-  pool = new SubagentPool(home, factory);
+  pool = new SubagentPool(home, factory, TIMING);
 });
 
 afterEach(() => {
@@ -132,8 +133,18 @@ afterEach(() => {
 
 const only = () => fakes[fakes.length - 1]!;
 
-/** Mirrors CONTINUE_BACKOFF_MS in pool.ts, for tests that wait one out. */
-const CONTINUE_BACKOFF = [1_000, 4_000, 10_000];
+/**
+ * The pool's waits on a failed turn, shortened so a test waits out a backoff
+ * in milliseconds rather than seconds. The one relation the tests lean on is
+ * the real one: the grace window is well inside the first backoff.
+ */
+const TIMING: PoolTiming = { deathGraceMs: 50, continueBackoffMs: [150, 200, 250] };
+/** Room for a timer that is due to have fired, on a loaded machine. */
+const SLACK = 60;
+const insideGrace = () => Bun.sleep(TIMING.deathGraceMs / 5);
+const insideBackoff = () => Bun.sleep(TIMING.deathGraceMs + TIMING.continueBackoffMs[0]! / 2);
+/** Past the resume for `attempt`, measured from the failed turn's end. */
+const pastResume = (attempt = 1) => Bun.sleep(TIMING.deathGraceMs + TIMING.continueBackoffMs[attempt - 1]! + SLACK);
 
 describe("names", () => {
   test("are lowercased and stripped to something typeable", () => {
@@ -392,12 +403,12 @@ describe("resuming through provider errors", () => {
     f.events.onTurnEnd("x", "error");
 
     // Nothing is reported: the turn is still owed.
-    await Bun.sleep(400);
+    await insideBackoff();
     expect(agent.state).toBe("running");
     expect(agent.uncollected).toBe(0);
 
     // …and omp is asked to carry on, after a backoff.
-    await Bun.sleep(1200);
+    await pastResume();
     expect(f.sent[1]).toContain("Continue from exactly where you stopped");
 
     // The salvaged prose is still there for the resumed text to join.
@@ -416,7 +427,7 @@ describe("resuming through provider errors", () => {
     for (let i = 0; i < 4; i++) {
       f.events.onError("x", "HTTP 500");
       f.events.onTurnEnd("x", "error");
-      await Bun.sleep(i < 3 ? 400 + (CONTINUE_BACKOFF[i] ?? 0) : 400);
+      await (i < 3 ? pastResume(i + 1) : Bun.sleep(TIMING.deathGraceMs + SLACK));
     }
     const r = await agent.settle(500);
     expect(r).not.toBeNull();
@@ -442,13 +453,13 @@ describe("resuming through provider errors", () => {
     const agent = await pool.spawn({ prompt: "p" });
     const f = only();
     f.events.onTurnEnd("x", "error");
-    await Bun.sleep(1500);
+    await pastResume();
     f.endTurn();
     await agent.settle(500);
 
     agent.send("second");
     f.events.onTurnEnd("x", "error");
-    await Bun.sleep(1500);
+    await pastResume();
     expect(f.sent.filter((m) => m.includes("Continue from exactly")).length).toBe(2);
   }, 15_000);
 
@@ -457,13 +468,13 @@ describe("resuming through provider errors", () => {
     const f = only();
     f.say("partial");
     f.events.onTurnEnd("x", "error");
-    await Bun.sleep(400);           // inside the backoff, before the resume
+    await insideBackoff();          // inside the backoff, before the resume
     expect(agent.interrupt()).toBe(true);
     const r = await agent.settle(500);
     expect(r!.stopReason).toBe("cancelled");
     expect(r!.report).toBe("partial");
     expect(agent.state).toBe("idle");
-    await Bun.sleep(1500);
+    await pastResume();
     expect(f.sent.filter((m) => m.includes("Continue from exactly"))).toHaveLength(0);
   }, 10_000);
 });
@@ -481,10 +492,10 @@ describe("resume: the ordering hazards", () => {
     agent.send("two");                       // owed = 2
     f.say("PROSE-A");
     f.events.onTurnEnd("x", "error");        // end #1
-    await Bun.sleep(100);                    // …still inside its grace window
+    await insideGrace();                     // …still inside its grace window
     f.say("PROSE-B");
     f.events.onTurnEnd("x", "error");        // end #2
-    await Bun.sleep(1600);
+    await pastResume();
 
     const r1 = await agent.settle(50, 1);
     expect(r1!.report).toBe("PROSE-A");       // not PROSE-B
@@ -501,9 +512,9 @@ describe("resume: the ordering hazards", () => {
     const f = only();
     f.say("PROSE-A");
     f.events.onTurnEnd("x", "error");        // owed 1 -> resume scheduled
-    await Bun.sleep(500);
+    await insideBackoff();
     agent.send("two");                       // caller steers inside the backoff
-    await Bun.sleep(1500);
+    await pastResume();
 
     expect(f.sent).toEqual(["one", "two"]);   // no phantom third prompt
     const r1 = await agent.settle(50, 1);
@@ -515,13 +526,13 @@ describe("resume: the ordering hazards", () => {
     const f = only();
     f.say("PROSE-A");
     f.events.onTurnEnd("x", "error");
-    await Bun.sleep(50);                     // inside the window
+    await insideGrace();                     // inside the window
     expect(agent.interrupt()).toBe(true);
     const r = await agent.settle(50);
     expect(r!.stopReason).toBe("cancelled");
     expect(r!.report).toBe("PROSE-A");
     expect(agent.state).toBe("idle");
-    await Bun.sleep(1500);
+    await pastResume();
     expect(f.sent.filter((m) => m.includes("Continue from exactly"))).toHaveLength(0);
   }, 10_000);
 
@@ -531,7 +542,7 @@ describe("resume: the ordering hazards", () => {
     const agent = await pool.spawn({ prompt: "one" });
     const f = only();
     f.events.onTurnEnd("x", "error");
-    await Bun.sleep(400);                    // in the backoff
+    await insideBackoff();                   // in the backoff
     agent.send("two");                       // now running inside omp
     expect(agent.interrupt()).toBe(true);
     expect(f.interrupted).toBe(1);
@@ -545,7 +556,7 @@ describe("resume: the ordering hazards", () => {
     f.say("PROSE-A");
     f.events.onTurnEnd("x", "error");
     f.say("-LATE");                          // arrives after the end
-    await Bun.sleep(1600);
+    await pastResume();
     f.say("-RESUMED");
     f.endTurn();
     const r = await agent.settle(500, 1);
@@ -605,7 +616,7 @@ describe("death", () => {
     const agent = await pool.spawn({ prompt: "p" });
     only().events.onError("x", "provider 502");
     only().endTurn("error");
-    await Bun.sleep(400);
+    await insideBackoff();
     expect(await agent.settle(50)).toBeNull();
     expect(agent.state).toBe("running");
     expect(agent.alive).toBe(true);
@@ -624,7 +635,7 @@ describe("death", () => {
     const r = await agent.settle(2000, 1);
     expect(r!.stopReason).toBe("error");
     expect(r!.report).toBe("partial");
-    await Bun.sleep(1500);
+    await pastResume();
     expect(f.sent.filter((m) => m.includes("Continue from exactly"))).toHaveLength(0);
   }, 10_000);
 });

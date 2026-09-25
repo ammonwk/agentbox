@@ -108,6 +108,18 @@ const MAX_CONTINUES = 3;
  *  least likely to succeed if asked again immediately. */
 const CONTINUE_BACKOFF_MS = [1_000, 4_000, 10_000];
 
+/** The two waits on a failed turn's path, which a test shortens rather than
+ *  sleeping through seconds of real backoff. */
+export interface PoolTiming {
+  deathGraceMs: number;
+  continueBackoffMs: number[];
+}
+
+export const DEFAULT_TIMING: PoolTiming = {
+  deathGraceMs: DEATH_GRACE_MS,
+  continueBackoffMs: CONTINUE_BACKOFF_MS,
+};
+
 /**
  * Wall clock for one turn.
  *
@@ -535,6 +547,7 @@ export class Subagent {
     readOnly = false,
     maxTurnMs = MAX_TURN_MS,
     quiet = false,
+    private readonly timing: PoolTiming = DEFAULT_TIMING,
   ) {
     this.name = name;
     this.cwd = cwd;
@@ -1150,7 +1163,7 @@ export class Subagent {
     // turn looks like from here, a beat before the exit lands — so wait out
     // the beat before deciding this agent is still usable.
     if (stopReason === "error" && this._state === "running" && this.runner.alive) {
-      this.defer(DEATH_GRACE_MS, text, (sr) => this.report(sr, text), () =>
+      this.defer(this.timing.deathGraceMs, text, (sr) => this.report(sr, text), () =>
         this.decide(stopReason, text, owedAtEnd),
       );
       return;
@@ -1219,7 +1232,8 @@ export class Subagent {
     );
     this.log({ type: "continue", attempt, salvagedChars: text.length });
 
-    const delay = CONTINUE_BACKOFF_MS[attempt - 1] ?? CONTINUE_BACKOFF_MS.at(-1)!;
+    const backoff = this.timing.continueBackoffMs;
+    const delay = backoff[attempt - 1] ?? backoff.at(-1)!;
     // The salvage is already in `carried`, so an abandoned backoff reports it.
     this.defer(delay, "", (sr) => this.report(sr, ""), () => {
       // The caller may have steered while we waited out the backoff. If so
@@ -1616,6 +1630,7 @@ export class SubagentPool {
   constructor(
     private defaultCwd: string,
     private makeRunner: RunnerFactory = ompRunner,
+    private timing: PoolTiming = DEFAULT_TIMING,
   ) {}
 
   list(): Subagent[] {
@@ -1672,6 +1687,7 @@ export class SubagentPool {
       opts.readOnly ?? false,
       opts.maxTurnMs,
       opts.quiet ?? false,
+      this.timing,
     );
     // Registered BEFORE the await, not after. Two same-name spawns in one
     // message both used to pass the name check during the first one's launch;
