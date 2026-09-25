@@ -176,9 +176,20 @@ function evaluate(
 }
 
 /**
- * The ordering: leg room first, but anything within `tieBand` of the leader is
- * a tie, settled by weekly left per hour (use it or lose it), then by fewer
- * outstanding claims, then by name for determinism.
+ * How far below the leader's room still counts as a tie: `tieBand`, but never
+ * more than half the leader's room. The band is for "about as much room",
+ * and when the best account has only 8 points (its last 2% of weekly), an
+ * account with none is not about as much — a flat 10 tied them, the tie went
+ * to the empty one on weekly per hour, and the 2% was never used.
+ */
+function bandWidth(best: number, tieBand: number): number {
+  return Math.min(tieBand, best / 2);
+}
+
+/**
+ * The ordering: leg room first, but anything within the band (`bandWidth`) of
+ * the leader is a tie, settled by weekly left per hour (use it or lose it),
+ * then by fewer outstanding claims, then by name for determinism.
  *
  * The band is anchored to the leader rather than applied pairwise, because a
  * pairwise "within 10 points" is not transitive and would make the order
@@ -191,7 +202,7 @@ function rank(candidates: Candidate[], tieBand: number): Candidate[] {
     const known = group.filter((c) => c.legRoom !== null);
     const best = known.length ? Math.max(...known.map((c) => c.legRoom!)) : null;
     const band = (c: Candidate): number =>
-      c.legRoom === null ? 2 : best !== null && c.legRoom >= best - tieBand ? 0 : 1;
+      c.legRoom === null ? 2 : best !== null && c.legRoom >= best - bandWidth(best, tieBand) ? 0 : 1;
     return [...group].sort(
       (a, b) =>
         band(a) - band(b) ||
@@ -267,7 +278,7 @@ function explain(chosen: Candidate, eligible: Candidate[], tieBand: number): str
   }
   const next = eligible[1]!;
   if (chosen.legRoom === null) return `${chosen.label}: no usage reading for any account, so the first one`;
-  const outsideBand = next.legRoom === null || chosen.legRoom - next.legRoom > tieBand;
+  const outsideBand = next.legRoom === null || chosen.legRoom - next.legRoom > bandWidth(chosen.legRoom, tieBand);
   if (outsideBand && chosen.shortEffective !== null) {
     return `${chosen.label} has the most room (${chosen.legRoom} vs ${next.label} ${next.legRoom}, counting both its 5-hour and its weekly)`;
   }
