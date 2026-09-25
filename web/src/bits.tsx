@@ -53,12 +53,15 @@ export function AccountChip({
   accounts,
   detail,
   onClick,
+  plain,
 }: {
   accountId: string | null;
   accounts: readonly AccountView[];
   /** Extra text after the label, e.g. a usage summary. */
   detail?: string;
   onClick?: () => void;
+  /** Dot and text only — for a column of them, where pills become a wall. */
+  plain?: boolean;
 }) {
   const a = accounts.find((x) => x.id === accountId) ?? null;
   const hue = accountHue(accountId, accounts);
@@ -75,7 +78,7 @@ export function AccountChip({
       {detail ? <span className="acct-detail">{detail}</span> : null}
     </>
   );
-  const cls = `acct${hue < 0 ? " acct-none" : ""}${a && !a.enabled ? " acct-off" : ""}`;
+  const cls = `acct${hue < 0 ? " acct-none" : ""}${a && !a.enabled ? " acct-off" : ""}${plain ? " acct-plain" : ""}`;
   const style = hue >= 0 ? { ["--acct" as string]: `var(--acct-${hue})` } : undefined;
   return onClick ? (
     <button type="button" className={cls} style={style} title={title} onClick={onClick}>
@@ -113,6 +116,12 @@ export function StatusPill({ status }: { status: SessionStatus }) {
       {STATUS_LABEL[status]}
     </span>
   );
+}
+
+/** Status as a dot, for lists already sectioned by status: the heading says
+ *  "Your turn" once, the rows need not say it eighteen times. */
+export function StatusDot({ status }: { status: SessionStatus }) {
+  return <span className={`st-dot st-${status}`} title={`${STATUS_LABEL[status]} — ${STATUS_TITLE[status]}`} role="img" aria-label={STATUS_LABEL[status]} />;
 }
 
 const HOST_LABEL: Record<SessionHost, string> = { tmux: "tmux", external: "external", none: "no process" };

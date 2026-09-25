@@ -131,6 +131,11 @@ export interface ResumeOptions {
   prompt?: string;
   model?: string;
   autoApprove: boolean;
+  /** Flags the session was launched with outside agentbox, kept by adopt
+   *  (`carryOver`). When present they decide model and permissions: the
+   *  session keeps the permissions it was started with, whatever
+   *  `autoApprove` says. */
+  carry?: string[];
 }
 
 export interface Command {
@@ -191,12 +196,23 @@ export interface ProviderAdapter {
 
   resumeCommand(opts: ResumeOptions): Command;
 
+  /** The flags in a live process's argv worth keeping when adopt resumes it —
+   *  permissions, directories, MCP config, model — and never the session id,
+   *  the prompt, or anything that makes it a one-shot. */
+  carryOver?(argv: string[]): string[];
+
+  /** A scripted one-shot (`claude -p`): something is waiting on its output,
+   *  so it is never adopted. */
+  headless?(argv: string[]): boolean;
+
   /**
    * Given the visible text of the session's terminal, the keys to press to get
    * past a known start-up dialog (folder trust, theme picker, "update
-   * available"), or null. Only dialogs that are safe to accept blindly.
+   * available"), or null. Only dialogs that are safe to accept blindly —
+   * `bypassPermissions` (the autoApprove setting the session was started
+   * under) widens that where it makes a dialog's question moot.
    */
-  autoAnswer?(screen: string): string[] | null;
+  autoAnswer?(screen: string, ctx?: { bypassPermissions: boolean }): string[] | null;
 
   /** Given the visible terminal text, what the session is waiting on a human
    *  for (a permission prompt, a login), in a few words — or null. */

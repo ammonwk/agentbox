@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { hrefOf } from "../../route";
+import { prRefs, prUrl } from "../../lib/prlinks";
 import { backoffMs, openTerm, type TermChannel } from "../../api";
 import { Button, Icon } from "../../components";
 
@@ -43,8 +45,26 @@ const THEME: ITheme = {
 
 type Phase = { kind: "connecting" } | { kind: "live" } | { kind: "down"; retryAt: number; reason: string | null };
 
-export default function Terminal({ sessionId, attach }: { sessionId: string; attach: string }) {
+/** agentbox session ids (src/core/fleet.ts `newSessionId`), as whole words. */
+const SESSION_ID = /(?<![\w-])[2-9a-km-z]{8}(?![\w-])/g;
+
+export default function Terminal({
+  sessionId,
+  sessionIds,
+  prBase,
+}: {
+  sessionId: string;
+  sessionIds: ReadonlySet<string>;
+  /** `https://github.com/owner/repo` for PR numbers on screen, or null. */
+  prBase: string | null;
+}) {
   const boxRef = useRef<HTMLDivElement>(null);
+  // Read by the link provider on hover; a ref so the board changing does not
+  // tear the terminal down.
+  const ids = useRef(sessionIds);
+  ids.current = sessionIds;
+  const pr = useRef(prBase);
+  pr.current = prBase;
   const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
   const [kick, setKick] = useState(0);
 
@@ -103,6 +123,43 @@ export default function Terminal({ sessionId, attach }: { sessionId: string; att
       });
     };
 
+    // Another session's id on screen — the Project session names them all
+    // the time — is a link to that session. Only ids that exist, so an
+    // ordinary eight-letter word never lights up.
+    const links = term.registerLinkProvider({
+      provideLinks(y, callback) {
+        const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+        const found = [...text.matchAll(SESSION_ID)]
+          .filter((m) => m[0] !== sessionId && ids.current.has(m[0]))
+          .map((m) => ({
+            range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } },
+            text: m[0],
+            decorations: { pointerCursor: true, underline: true },
+            activate: () => {
+              location.hash = hrefOf({ page: "session", id: m[0], tab: "terminal" });
+            },
+          }));
+        callback(found.length ? found : undefined);
+      },
+    });
+    // PR numbers — `#6307`, `PR 6644`, a bare `6644` — open the PR on GitHub.
+    const prLinks = term.registerLinkProvider({
+      provideLinks(y, callback) {
+        const base = pr.current;
+        if (!base) return callback(undefined);
+        const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+        const found = prRefs(text).map((r) => ({
+          range: { start: { x: r.start + 1, y }, end: { x: r.end, y } },
+          text: text.slice(r.start, r.end),
+          decorations: { pointerCursor: true, underline: true },
+          activate: (e: MouseEvent) => {
+            e.preventDefault();
+            window.open(prUrl(base, r.number), "_blank", "noopener");
+          },
+        }));
+        callback(found.length ? found : undefined);
+      },
+    });
     const input = term.onData((d) => chan?.send(d));
     const sized = term.onResize(({ cols, rows }) => chan?.resize(cols, rows));
 
@@ -122,6 +179,8 @@ export default function Terminal({ sessionId, attach }: { sessionId: string; att
       ro.disconnect();
       input.dispose();
       sized.dispose();
+      links.dispose();
+      prLinks.dispose();
       chan?.close();
       term.dispose();
     };
@@ -146,11 +205,6 @@ export default function Terminal({ sessionId, attach }: { sessionId: string; att
           )}
         </div>
       ) : null}
-      <div className="term-foot">
-        <span className="faint">
-          Same session as <code>{attach}</code> — typing here types into the agent.
-        </span>
-      </div>
     </div>
   );
 }

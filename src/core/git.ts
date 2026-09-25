@@ -225,7 +225,10 @@ export function createWorktree(
   repo: Repo,
   id: string,
   branch: string,
-  fromBranch?: string
+  fromBranch?: string,
+  /** The PR `fromBranch` is the head of: fetched as `pull/N/head` when the
+   *  branch itself is not on origin (a PR from a fork). */
+  pr?: number
 ): { path: string; fullName: string | null } {
   const { path: repoPath, fullName } = ensureRepoClone(repo);
   mkdirSync(worktreeRoot(), { recursive: true });
@@ -254,8 +257,8 @@ export function createWorktree(
     // Branch we were asked to continue only exists on the remote (or is a PR ref).
     const fetched = run(["git", "fetch", "origin", `${fromBranch}:refs/heads/${fromBranch}`], repoPath);
     if (fetched.code !== 0) {
-      const pr = run(["git", "fetch", "origin", `pull/${fromBranch}/head:refs/heads/${fromBranch}`], repoPath);
-      if (pr.code !== 0) {
+      const pull = run(["git", "fetch", "origin", `pull/${pr ?? fromBranch}/head:refs/heads/${fromBranch}`], repoPath);
+      if (pull.code !== 0) {
         throw new Error(`branch "${fromBranch}" is not in this repo or on its remote`);
       }
     }
@@ -292,6 +295,21 @@ export function createWorktree(
   const r = run(cmd, repoPath);
   if (r.code !== 0) throw new Error(`worktree add failed: ${firstLine(r.stderr) || `exit ${r.code}`}`);
   return { path: abs, fullName };
+}
+
+/**
+ * A checkout of `branch` to run a session in: the worktree that already has
+ * it checked out — the main checkout included — or else a new one at
+ * worktreeRoot/<id>. `created` says which, because only a worktree agentbox
+ * cut belongs to the session (and may be reclaimed with it); someone else's
+ * is only borrowed.
+ */
+export function worktreeForBranch(repo: Repo, id: string, branch: string, pr?: number): { path: string; created: boolean } {
+  const { path: repoPath } = ensureRepoClone(repo);
+  run(["git", "worktree", "prune"], repoPath);
+  const existing = listWorktreesOf(repoPath).find((w) => w.branch === branch && existsSync(w.path));
+  if (existing) return { path: existing.path, created: false };
+  return { path: createWorktree(repo, id, branch, branch, pr).path, created: true };
 }
 
 /**

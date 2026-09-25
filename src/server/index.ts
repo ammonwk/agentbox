@@ -30,6 +30,8 @@ import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, write
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getSettings, listRepos, mergeSettings, saveSettings } from "../core/db";
 import { listPrs } from "../core/prs";
+import { modelOptions } from "../core/models";
+import { clearProject, compactProject, ensureProject, followProject, projectState } from "../core/project";
 import { checkRequest } from "./csrf";
 import { HttpError, Router, fail, json, readBody } from "./router";
 import { optionalString, parseSettingsPatch, requireBoolean, requireString } from "./validate";
@@ -43,6 +45,7 @@ import { VERSION } from "../version";
 import type {
   AccountView,
   ColdState,
+  GrepHit,
   Health,
   HotState,
   MetricsState,
@@ -51,6 +54,7 @@ import type {
   Repo,
   ServerMessage,
   SkillInfo,
+  TimelinePage,
 } from "../core/types";
 
 const PORT = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT);
@@ -153,6 +157,7 @@ function coldState(): ColdState {
     settings: getSettings(),
     providers: slow.providers,
     warnings: slow.warnings,
+    project: projectState(),
   };
 }
 
@@ -376,6 +381,8 @@ const router = new Router(mapError)
         cwd: optionalString(b, "cwd"),
         repoId: optionalString(b, "repoId"),
         worktree: b.worktree === true,
+        branch: optionalString(b, "branch"),
+        pr: typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0 ? b.pr : undefined,
         prompt: typeof b.prompt === "string" ? b.prompt : undefined,
         model: optionalString(b, "model"),
         big: b.big === true,
@@ -454,9 +461,65 @@ const router = new Router(mapError)
     return json(await procDetail(s.pid));
   })
   .add("GET", "/api/sessions/:id/attach", ({ params }) => json({ argv: fleet.attachCommand(params.id!) }))
+  .add("GET", "/api/sessions/:id/screen", ({ params }) => json({ text: fleet.screen(params.id!) }))
+  .add("GET", "/api/grep", async ({ url }) => {
+    const q = url.searchParams.get("q") ?? "";
+    if (!q) throw new HttpError(400, "q is required");
+    let re: RegExp;
+    try {
+      re = new RegExp(q, url.searchParams.get("i") === "1" ? "i" : "");
+    } catch (e) {
+      throw new HttpError(400, `bad pattern: ${(e as Error).message}`);
+    }
+    const all = url.searchParams.get("all") === "1";
+    const hits: GrepHit[] = [];
+    for (const s of fleet.sessions()) {
+      if ((!all && s.status === "archived") || !s.transcriptPath) continue;
+      let before: string | null = null;
+      try {
+        do {
+          const page: TimelinePage = await fleet.timeline(s.id, before, 1000);
+          for (const ev of page.events) {
+            const text = ev.kind === "tool" ? `${ev.name}: ${ev.summary}` : ev.text;
+            for (const line of text.split("\n")) if (re.test(line)) hits.push({ sessionId: s.id, at: ev.at, kind: ev.kind, line: line.trim().slice(0, 300) });
+          }
+          before = page.before;
+        } while (before && hits.length < 5000);
+      } catch {
+        // an unreadable transcript is skipped, not fatal
+      }
+      if (hits.length >= 5000) break;
+    }
+    return json(hits);
+  })
+
+  // ---- the Project session
+  .add("GET", "/api/project", () => json(projectState()))
+  .add("POST", "/api/project", async ({ req }) => {
+    const b = await readBody(req);
+    const s = await ensureProject(fleet, b.provider === undefined ? undefined : provider(b.provider));
+    scheduleHot();
+    scheduleCold();
+    return json(s);
+  })
+  .add("POST", "/api/project/clear", async () => {
+    const s = await clearProject(fleet);
+    scheduleHot();
+    scheduleCold();
+    return json(s);
+  })
+  .add("POST", "/api/project/compact", async () => {
+    await compactProject(fleet);
+    return json(null);
+  })
 
   // ---- accounts
   .add("GET", "/api/accounts", () => json(accountViews()))
+  .add("GET", "/api/models", ({ url }) => {
+    const a = accounts.get(url.searchParams.get("accountId") ?? "");
+    if (!a) throw new HttpError(404, "no such account");
+    return json(modelOptions(a));
+  })
   .add("POST", "/api/accounts", async ({ req }) => {
     const b = await readBody(req);
     const out = await accounts.create(provider(b.provider), optionalString(b, "label"));
@@ -605,6 +668,7 @@ export async function startServer(): Promise<void> {
     scheduleCold();
   });
   fleet.on("transcript", onTranscript);
+  followProject(fleet, scheduleCold);
   accounts.on("change", scheduleCold);
   metricsEvents.on("metrics", (state: MetricsState) => broadcast({ type: "metrics", state }));
 

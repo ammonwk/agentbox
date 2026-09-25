@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ProviderId } from "../../../src/core/types";
-import { AccountChip, BigBadge, ContextBar, HostBadge, PROVIDER_LABEL, ProviderBadge, StatusPill } from "../bits";
-import { Button, Empty, Icon, RelativeTime } from "../components";
+import { AccountChip, BigBadge, ContextBar, HostBadge, PROVIDER_LABEL, ProviderBadge, StatusDot, StatusPill } from "../bits";
+import { Button, Empty, Icon, RelativeTime, Spinner } from "../components";
 import {
   EMPTY_FILTER,
   filterSessions,
@@ -9,6 +9,7 @@ import {
   repoKey,
   sectionsOf,
   titleOf,
+  usualProvider,
   whereOf,
   type BoardFilter,
   type SessionRow,
@@ -16,6 +17,7 @@ import {
 import { baseName } from "../lib/format";
 import { hrefOf } from "../route";
 import { LoadCell } from "./session/load";
+import { useOpenProject } from "./project";
 import "./board.css";
 
 /** Survives a trip into a session and back; a board that forgets its filter
@@ -39,9 +41,14 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
     setCursorState(id);
   };
 
-  const rows = useMemo(() => filterSessions(state.sessions, filter), [state.sessions, filter]);
+  // The Project session is pinned above the list, not sorted into it.
+  const rows = useMemo(
+    () => filterSessions(state.sessions.filter((s) => s.id !== state.project.sessionId), filter),
+    [state.sessions, state.project.sessionId, filter],
+  );
   const sections = useMemo(() => sectionsOf(rows), [rows]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
+  const usual = useMemo(() => usualProvider(ordered), [ordered]);
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
 
   const providers = useMemo(() => {
@@ -168,9 +175,13 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
             <Icon.archive size={12} /> Archived <span className="n">{archivedCount}</span>
           </button>
         ) : null}
+        <Button size="sm" variant="primary" icon={Icon.plus} onClick={onNew} title="New session (n)">
+          New session
+        </Button>
       </div>
 
       <div className="bd-scroll">
+        <ProjectRow state={state} onOpen={onOpen} />
         {state.sessions.length === 0 ? (
           <Empty
             title="No sessions yet"
@@ -195,7 +206,7 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
         ) : (
           <div className="bd-table" role="list" aria-label="Sessions">
             <div className="bd-head" aria-hidden="true">
-              <span>Status</span>
+              <span />
               <span>Session</span>
               <span className="bd-c-where">Where</span>
               <span className="bd-c-acct">Account</span>
@@ -213,6 +224,7 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
                     key={s.id}
                     s={s}
                     state={state}
+                    usual={usual}
                     cursor={cursor === s.id}
                     refFn={(el) => {
                       if (el) rowRefs.current.set(s.id, el);
@@ -241,15 +253,45 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
   );
 }
 
+/**
+ * The Project session: one agent whose job is the other sessions, always
+ * here. Opening it starts it (or resumes it) when it is not running.
+ */
+function ProjectRow({ state, onOpen }: { state: AppState; onOpen: (id: string) => void }) {
+  const { session: s, running, busy, error, open } = useOpenProject(state, onOpen);
+  const snippet = s?.status === "blocked" ? s.attention.reason : s?.lastMessage ?? s?.lastPrompt ?? null;
+
+  return (
+    <button type="button" className="bd-project" data-status={s?.status ?? "none"} onClick={() => void open()} disabled={busy}>
+      <span className="bd-project-mark" aria-hidden="true">
+        <Icon.sessions size={15} />
+      </span>
+      <span className="bd-c-main">
+        <span className="bd-title-line">
+          <span className="bd-title">Project</span>
+          <ProviderBadge provider={state.project.provider} />
+          {s && running ? <StatusPill status={s.status} /> : <span className="faint bd-project-off">{s ? "stopped — opens where it left off" : "not started"}</span>}
+        </span>
+        <span className={`bd-snippet${error ? " blocked" : ""}`}>
+          {error ?? (snippet ? snippet.replace(/\s+/g, " ") : "Sees and manages every session through the agentbox CLI. Open it to ask.")}
+        </span>
+      </span>
+      <span className="bd-project-go">{busy ? <Spinner size={13} /> : <Icon.chevronRight size={15} />}</span>
+    </button>
+  );
+}
+
 function Row({
   s,
   state,
+  usual,
   cursor,
   refFn,
   onFocus,
 }: {
   s: SessionRow;
   state: AppState;
+  usual: ProviderId | null;
   cursor: boolean;
   refFn: (el: HTMLAnchorElement | null) => void;
   onFocus: () => void;
@@ -267,12 +309,12 @@ function Row({
       onFocus={onFocus}
     >
       <span className="bd-c-status">
-        <StatusPill status={s.status} />
+        <StatusDot status={s.status} />
       </span>
 
       <span className="bd-c-main">
         <span className="bd-title-line">
-          <ProviderBadge provider={s.provider} />
+          {s.provider !== usual ? <ProviderBadge provider={s.provider} /> : null}
           <span className="bd-title">{titleOf(s)}</span>
           {s.big ? <BigBadge /> : null}
           {s.host === "external" ? <HostBadge host="external" /> : null}
@@ -299,7 +341,7 @@ function Row({
       </span>
 
       <span className="bd-c-acct">
-        <AccountChip accountId={s.accountId} accounts={state.accounts} />
+        <AccountChip accountId={s.accountId} accounts={state.accounts} plain />
       </span>
 
       <span className="bd-c-ctx">

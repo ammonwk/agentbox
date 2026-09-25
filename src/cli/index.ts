@@ -16,6 +16,7 @@ import { listRepos } from "../core/db";
 import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
 import { ApiError, apiClient, serverBase } from "../client";
+import * as verbs from "./sessions";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 
 const BASE = serverBase();
@@ -154,24 +155,6 @@ function printPlacement(p: Placement): void {
   }
 }
 
-async function list(args: string[]): Promise<number> {
-  const { flags } = parseFlags(args);
-  await ensureServer();
-  const state = await api<AppState>("GET", "/api/state");
-  const accountLabel = new Map(state.accounts.map((a) => [a.id, a.label]));
-  const rows = state.sessions.filter((s) => flags.has("all") || s.status !== "archived");
-  if (flags.has("json")) {
-    console.log(JSON.stringify(rows, null, 2));
-    return 0;
-  }
-  for (const s of rows) {
-    const acct = s.accountId ? accountLabel.get(s.accountId) ?? "?" : "-";
-    const where = s.host === "tmux" ? "box" : s.host === "external" ? "ext" : "   ";
-    console.log(`${s.id}  ${s.status.padEnd(8)} ${where}  ${s.provider.padEnd(6)} ${acct.slice(0, 18).padEnd(18)}  ${s.title.slice(0, 70)}`);
-  }
-  return 0;
-}
-
 async function usage(): Promise<number> {
   await ensureServer();
   const state = await api<AppState>("GET", "/api/state");
@@ -179,13 +162,17 @@ async function usage(): Promise<number> {
     const windows = a.usage.windows
       .map((w) => `${w.label} ${Math.round(w.usedPct)}%`)
       .join(" · ");
-    const claimed = a.claims.reduce((n, c) => n + c.outstanding, 0);
-    console.log(`${a.provider.padEnd(6)} ${a.label.slice(0, 28).padEnd(28)} ${windows || "no reading"}${claimed ? `  (+${claimed} claimed)` : ""}${a.usage.stale ? `  [${a.usage.stale}]` : ""}`);
+    // Weekly points its live sessions are expected to spend on top of the
+    // reading; the balancer counts them as already used.
+    const claimed = Math.round(a.claims.reduce((n, c) => n + c.outstanding, 0));
+    const n = a.claims.filter((c) => c.outstanding > 0).length;
+    const claims = claimed ? `  +${claimed}% weekly claimed by ${n} session${n === 1 ? "" : "s"}` : "";
+    console.log(`${a.provider.padEnd(6)} ${a.label.slice(0, 28).padEnd(28)} ${windows || "no reading"}${claims}${a.usage.stale ? `  [${a.usage.stale}]` : ""}`);
   }
   return 0;
 }
 
-async function onSession(verb: "attach" | "resume" | "adopt" | "stop", id: string | undefined): Promise<number> {
+async function onSession(verb: "attach" | "resume" | "adopt", id: string | undefined): Promise<number> {
   if (!id) {
     console.error(`agentbox ${verb}: a session id is required (see \`agentbox ls\`)`);
     return 2;
@@ -194,10 +181,6 @@ async function onSession(verb: "attach" | "resume" | "adopt" | "stop", id: strin
   try {
     if (verb === "resume") await api("POST", `/api/sessions/${id}/resume`, {});
     if (verb === "adopt") await api("POST", `/api/sessions/${id}/adopt`, {});
-    if (verb === "stop") {
-      await api("POST", `/api/sessions/${id}/stop`, {});
-      return 0;
-    }
     const { argv } = await api<{ argv: string[] }>("GET", `/api/sessions/${id}/attach`);
     return attach(argv);
   } catch (e) {
@@ -244,12 +227,21 @@ const USAGE = `usage: agentbox <command>
   claude|codex|devin|omp [--big] [--account NAME] [--model M] [--detach] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d)
-  ls [--all] [--json]   list sessions
   usage                 each account's limits and what running sessions claim
   attach <id>           attach this terminal to a session in agentbox
-  resume <id>           resume a stopped session (same account) and attach
-  adopt <id>            move a session running in another terminal into agentbox
-  stop <id>             end a session's process; it stays resumable
+
+sessions (ids first on every line; verbs taking ids read them from stdin with -):
+  ls [--status s,s] [--idle '>2h'] [--repo x] [--provider p] [--all] [-q] [--json]
+  show <id>...          where it is, model, context, first/last prompt, last reply
+  log <id> [-n turns] [--tools] [--thinking]    the conversation, oldest first
+  grep <regex> [-i] [--all]                     search every conversation
+  screen <id>...        what its terminal shows now
+  diff <id>... [--stat] its worktree's changes
+  send <id> <text…|->   type a message into it
+  archive|unarchive <id>...
+  stop <id>...          end its process; it stays resumable
+  resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not
+  label <id> [name]     rename it on the board (no name clears)
   mcp                   run the fleet MCP server on stdio (for a conductor session)
   subagent-mcp          run the omp subagent MCP server on stdio (needs no server)
   doctor                check that everything agentbox needs is present
@@ -272,13 +264,33 @@ export async function main(argv: string[]): Promise<number | null> {
         return await startSession(cmd, argv.slice(1));
       case "ls":
       case "list":
-        return await list(argv.slice(1));
+        await ensureServer();
+        return await verbs.ls(api, argv.slice(1));
+      case "show":
+      case "log":
+      case "grep":
+      case "screen":
+      case "diff":
+      case "send":
+      case "label":
+        await ensureServer();
+        return await verbs[cmd](api, argv.slice(1));
+      case "archive":
+      case "unarchive":
+      case "stop":
+        await ensureServer();
+        return await verbs.each(api, cmd, argv.slice(1));
+      case "resume":
+      case "adopt": {
+        const rest = argv.slice(1);
+        const ids = rest.filter((a) => !a.startsWith("-"));
+        if (ids.length === 1 && !rest.includes("--detach") && process.stdout.isTTY) return await onSession(cmd, ids[0]);
+        await ensureServer();
+        return await verbs.each(api, cmd, rest.filter((a) => a !== "--detach"));
+      }
       case "usage":
         return await usage();
       case "attach":
-      case "resume":
-      case "adopt":
-      case "stop":
         return await onSession(cmd, argv[1]);
       case "mcp": {
         const { runMcp } = await import("../mcp/fleet");
@@ -310,8 +322,9 @@ export async function main(argv: string[]): Promise<number | null> {
         return 2;
     }
   } catch (e) {
-    if (e instanceof ApiError) {
-      console.error(`agentbox: ${e.message}`);
+    // An API refusal or a bad argument is a message, not a stack trace.
+    if (e instanceof ApiError || e instanceof Error) {
+      console.error(`agentbox ${cmd}: ${e.message}`);
       return 1;
     }
     throw e;

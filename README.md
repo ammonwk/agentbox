@@ -88,8 +88,8 @@ claude mcp add omp -e AGENTBOX_SUBAGENT_MODEL=opencode-go/space-bunny-free -- bu
 ## Develop
 
 ```bash
-bun test                 # everything
 bun run typecheck
+bun test                 # just the CSRF guard; see AGENTS.md
 bun run web:dev          # vite on :5173, proxying the API on :4479
 ```
 

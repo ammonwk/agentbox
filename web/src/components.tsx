@@ -5,12 +5,14 @@
  */
 
 import {
+  Component,
   useEffect,
   useId,
   useRef,
   useState,
   useSyncExternalStore,
   type ButtonHTMLAttributes,
+  type ErrorInfo,
   type ReactElement,
   type ReactNode,
   type Ref,
@@ -186,6 +188,50 @@ export function Empty({
       {action ? <div className="empty-action">{action}</div> : null}
     </div>
   );
+}
+
+// ---------------------------------------------------------- error boundary
+
+/**
+ * A crash in one view shows an error there instead of unmounting the whole
+ * app — without one, any render or effect error left a blank page. `resetKey`
+ * clears the error when it changes, so navigating away is the way out.
+ */
+export class ErrorBoundary extends Component<
+  { children: ReactNode; resetKey?: string; label?: string },
+  { error: Error | null; key: string | undefined }
+> {
+  state = { error: null as Error | null, key: this.props.resetKey };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  static getDerivedStateFromProps(props: { resetKey?: string }, state: { error: Error | null; key: string | undefined }) {
+    return props.resetKey !== state.key ? { error: null, key: props.resetKey } : null;
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(`agentbox: ${this.props.label ?? "view"} crashed`, error, info.componentStack);
+  }
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    return (
+      <Empty
+        title={`${this.props.label ?? "This view"} crashed`}
+        action={
+          <Button icon={Icon.refresh} onClick={() => this.setState({ error: null })}>
+            Try again
+          </Button>
+        }
+      >
+        <p className="mono error-detail">{error.message}</p>
+        <p>The rest of agentbox is fine. The details are in the browser console.</p>
+      </Empty>
+    );
+  }
 }
 
 // ------------------------------------------------------------------ modal
@@ -553,15 +599,21 @@ export function CommitInput({
  * Self-updating, off one page-wide interval. The snapshot is the formatted
  * string, so a row only re-renders when its label actually changes.
  */
-export function RelativeTime({ ts }: { ts: number }) {
+export function RelativeTime({ ts, short }: { ts: number; short?: boolean }) {
   const label = useSyncExternalStore(
     subscribeToClock,
-    () => ago(ts, clockNow()),
-    () => ago(ts, ts),
+    () => fmt(ago(ts, clockNow()), short),
+    () => fmt(ago(ts, ts), short),
   );
   return (
     <time dateTime={new Date(ts).toISOString()} title={new Date(ts).toLocaleString()}>
       {label}
     </time>
   );
+}
+
+/** "12m ago" → "12m", for columns where every entry is in the past. */
+function fmt(label: string, short?: boolean): string {
+  if (!short) return label;
+  return label === "just now" ? "now" : label.replace(/ ago$/, "");
 }

@@ -114,3 +114,14 @@ export function contextPct(s: Pick<Session, "contextUsed" | "contextLimit">): nu
 export function needsYou(rows: readonly SessionRow[]): number {
   return rows.filter((s) => s.attention.kind === "blocked" || s.attention.kind === "waiting").length;
 }
+
+/**
+ * The provider most of these rows share. Lists badge only the exceptions: a
+ * board of Claude sessions does not need "Claude" on every line, but the one
+ * Codex among them should say so.
+ */
+export function usualProvider(rows: readonly Pick<Session, "provider">[]): ProviderId | null {
+  const n = new Map<ProviderId, number>();
+  for (const r of rows) n.set(r.provider, (n.get(r.provider) ?? 0) + 1);
+  return [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}

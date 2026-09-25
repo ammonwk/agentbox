@@ -80,11 +80,35 @@ export function newSession(s: NewSession): number {
     "-P", "-F", "#{pane_pid}",
     "--", ...cmd,
   );
-  const r = tmux(args);
+  const r = tmux(["list-sessions"]).code === 0 ? tmux(args) : startServer(args);
   if (r.code !== 0) throw new Error(`tmux could not start the session: ${r.stderr.trim() || r.stdout.trim()}`);
   const pid = Number(r.stdout.trim().split("\n").pop());
   if (!Number.isFinite(pid) || pid <= 0) throw new Error(`tmux started the session but reported no pid: ${r.stdout}`);
   return pid;
+}
+
+/**
+ * Run the invocation that starts our tmux server in a systemd scope of its
+ * own. Started plainly, the server lands in the cgroup of whatever started it
+ * — the agentbox server's scope, whose `systemctl stop` then takes the tmux
+ * server and every agent with it (each pane is in a scope of its own, but
+ * loses its terminal when the server dies). Without systemd, or if the unit
+ * name is still held by a scope being torn down, tmux runs plainly.
+ */
+function startServer(args: string[]): TmuxResult {
+  let p: ReturnType<typeof Bun.spawnSync>;
+  try {
+    p = Bun.spawnSync(["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-tmux", "tmux", "-L", tmuxSocket(), ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch {
+    return tmux(args);
+  }
+  const r = { code: p.exitCode ?? -1, stdout: p.stdout?.toString() ?? "", stderr: p.stderr?.toString() ?? "" };
+  if (r.code !== 0 && /transient|systemd|Failed to connect/i.test(r.stderr)) return tmux(args);
+  return r;
 }
 
 export interface PaneInfo {

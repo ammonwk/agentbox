@@ -1,3 +1,4 @@
+import type { Launch } from "./launch";
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -164,6 +165,8 @@ const MIGRATIONS: string[] = [
     UNIQUE (session_id, at)
   );
   `,
+  // 2 — how an adopted session was launched (src/core/launch.ts), JSON.
+  `ALTER TABLE sessions ADD COLUMN launch TEXT;`,
 ];
 
 function migrate(d: Database) {
@@ -254,6 +257,8 @@ export interface SessionRecord {
   /** Opaque to the database: the fleet's last derived snapshot. */
   facts: unknown;
   createdAt: number;
+  /** Flags and environment carried over by adopt; absent for sessions we started. */
+  launch?: Launch | null;
 }
 
 type SessionRow = {
@@ -261,6 +266,7 @@ type SessionRow = {
   cwd: string; worktree: string | null; label: string | null; big: number; claim: number;
   origin: string; tmux: string | null; transcript_path: string | null; started_at: number;
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
+  launch: string | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -280,6 +286,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     transcriptPath: r.transcript_path, startedAt: r.started_at,
     lastActivityAt: r.last_activity_at, archivedAt: r.archived_at,
     facts: parseJson(r.facts), createdAt: r.created_at,
+    launch: (parseJson(r.launch) as Launch | null) ?? null,
   };
 }
 
@@ -300,13 +307,14 @@ const RECORD_COLUMNS = {
   archivedAt: "archived_at",
   facts: "facts",
   createdAt: "created_at",
+  launch: "launch",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;
 
 function recordToSql(key: RecordKey, value: unknown): string | number | null {
   if (value === undefined || value === null) return null;
-  if (key === "facts") return JSON.stringify(value);
+  if (key === "facts" || key === "launch") return JSON.stringify(value);
   if (typeof value === "boolean") return value ? 1 : 0;
   return value as string | number;
 }

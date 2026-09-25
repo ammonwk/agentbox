@@ -122,6 +122,7 @@ export function Composer({ session }: { session: Session }) {
           rows={1}
           value={text}
           placeholder={placeholder}
+          title="Enter sends · Shift+Enter for a new line"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -167,15 +168,9 @@ export function Composer({ session }: { session: Session }) {
         ) : null}
       </div>
       ) : null}
-      <div className="cmp-hint">
-        {mode.kind === "send" ? (
-          <>
-            <kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line
-          </>
-        ) : mode.kind === "resume" ? (
-          <>Resumes on the same account it started on, in agentbox&apos;s tmux.</>
-        ) : null}
-      </div>
+      {/* Enter / Shift+Enter is what every chat box does; it lives in the
+          textarea's tooltip rather than a permanent line under it. */}
+      {mode.kind === "resume" ? <div className="cmp-hint">Resumes on the same account it started on, in agentbox&apos;s tmux.</div> : null}
     </div>
   );
 }

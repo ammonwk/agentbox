@@ -1,25 +1,27 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import type { AppState } from "../../../../src/core/types";
+import type { AppState, ProviderId } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
 import {
   AccountChip,
-  BigBadge,
   ContextBar,
   CopyButton,
   HostBadge,
   PROVIDER_LABEL,
   ProviderBadge,
+  StatusDot,
   StatusPill,
 } from "../../bits";
-import { Button, Confirm, Empty, Icon, RelativeTime, Toggle } from "../../components";
-import { filterSessions, neighbourId, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
-import { usageSummary } from "../../lib/usage";
+import { Button, Confirm, Empty, Icon, RelativeTime } from "../../components";
+import { filterSessions, neighbourId, sectionsOf, titleOf, usualProvider, type SessionRow } from "../../lib/board";
 import { hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
 import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
+import { useOpenProject } from "../project";
 import { useIsNarrow } from "./useIsNarrow";
+import { prBaseFor } from "../../lib/prlinks";
+import { PrBase } from "./prbase";
 import "./session.css";
 
 const Terminal = lazy(() => import("./Terminal"));
@@ -54,8 +56,14 @@ export function SessionView({
 
   // j/k switch sessions from anywhere that is not a text field or the terminal.
   const ordered = useMemo(
-    () => sectionsOf(filterSessions(state.sessions, { query: "", provider: "all", account: "all", repo: "all", showArchived: session?.status === "archived" })).flatMap((s) => s.rows),
-    [state.sessions, session?.status],
+    () =>
+      sectionsOf(
+        filterSessions(
+          state.sessions.filter((s) => s.id !== state.project.sessionId),
+          { query: "", provider: "all", account: "all", repo: "all", showArchived: session?.status === "archived" },
+        ),
+      ).flatMap((s) => s.rows),
+    [state.sessions, state.project.sessionId, session?.status],
   );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -115,40 +123,72 @@ function useWide(px: number): boolean {
  *  and sections as the board, so a session is never somewhere else here. */
 function Rail({ rows, state, current }: { rows: SessionRow[]; state: AppState; current: string }) {
   const sections = useMemo(() => sectionsOf(rows), [rows]);
+  const usual = useMemo(() => usualProvider(rows), [rows]);
   const cur = useRef<HTMLAnchorElement>(null);
-  useEffect(() => cur.current?.scrollIntoView({ block: "nearest" }), [current]);
+  // A block body, not `() => el.scrollIntoView()`: newer browsers return a
+  // Promise from scrollIntoView, and React calls whatever an effect returns as
+  // its cleanup — `destroy is not a function` took the whole app down.
+  useEffect(() => {
+    cur.current?.scrollIntoView({ block: "nearest" });
+  }, [current]);
   return (
     <nav className="rail" aria-label="Sessions">
-      {sections.map((sec) => (
-        <div key={sec.kind} className="rail-sec" data-kind={sec.kind}>
-          <div className="rail-label">
-            {sec.label} <span>{sec.rows.length}</span>
-          </div>
-          {sec.rows.map((s) => (
-            <a
-              key={s.id}
-              ref={s.id === current ? cur : undefined}
-              className="rail-row"
-              href={hrefOf({ page: "session", id: s.id, tab: "terminal" })}
-              aria-current={s.id === current ? "page" : undefined}
-              data-status={s.status}
-            >
-              <span className="rail-top">
-                <span className={`rail-dot st-${s.status}`} aria-hidden="true" />
-                <ProviderBadge provider={s.provider} short />
+      <RailProject state={state} current={current} />
+      <div className="rail-scroll">
+        {sections.map((sec) => (
+          <div key={sec.kind} className="rail-sec" data-kind={sec.kind}>
+            <div className="rail-label">
+              {sec.label} <span>{sec.rows.length}</span>
+            </div>
+            {sec.rows.map((s) => (
+              <a
+                key={s.id}
+                ref={s.id === current ? cur : undefined}
+                className="rail-row"
+                href={hrefOf({ page: "session", id: s.id, tab: "terminal" })}
+                aria-current={s.id === current ? "page" : undefined}
+                data-status={s.status}
+                title={railTip(s)}
+              >
+                <StatusDot status={s.status} />
                 <span className="rail-title">{titleOf(s)}</span>
-              </span>
-              <span className="rail-sub">
-                <AccountChip accountId={s.accountId} accounts={state.accounts} />
+                {s.provider !== usual ? <ProviderBadge provider={s.provider} short /> : null}
                 <span className="rail-when">
-                  <RelativeTime ts={s.lastActivityAt} />
+                  <RelativeTime ts={s.lastActivityAt} short />
                 </span>
-              </span>
-            </a>
-          ))}
-        </div>
-      ))}
+              </a>
+            ))}
+          </div>
+        ))}
+      </div>
     </nav>
+  );
+}
+
+/** What the row no longer spells out, on hover. */
+function railTip(s: SessionRow): string {
+  const said = s.status === "blocked" ? s.attention.reason : s.lastMessage ?? s.lastPrompt ?? s.firstPrompt;
+  return [titleOf(s), said ? said.replace(/\s+/g, " ").slice(0, 240) : null].filter(Boolean).join("\n\n");
+}
+
+/** The Project session, pinned above the rail's scroll so it is one click
+ *  from any session. */
+function RailProject({ state, current }: { state: AppState; current: string }) {
+  const p = useOpenProject(state, (id) => (location.hash = hrefOf({ page: "session", id, tab: "terminal" })));
+  return (
+    <button
+      type="button"
+      className="rail-project"
+      aria-current={p.session?.id === current ? "page" : undefined}
+      disabled={p.busy}
+      title={p.error ?? "The Project session: sees and manages every session"}
+      onClick={() => void p.open()}
+    >
+      <StatusDot status={p.running ? p.session!.status : "stopped"} />
+      <Icon.sessions size={13} />
+      <span className="rail-title">Project</span>
+      <ProviderBadge provider={state.project.provider} short />
+    </button>
   );
 }
 
@@ -167,12 +207,14 @@ function Detail({
 }) {
   const { run, busy, error, clear } = useAction();
   const [confirmStop, setConfirmStop] = useState(false);
-  const account = state.accounts.find((a) => a.id === session.accountId) ?? null;
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
   // listPrs matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
   const attach = `agentbox attach ${session.id}`;
-  const usageText = account ? usageSummary(account) : "";
+  const isProject = session.id === state.project.sessionId;
+  const sessionIds = useMemo(() => new Set(state.sessions.map((s) => s.id)), [state.sessions]);
+  const openSession = (id: string) => (location.hash = hrefOf({ page: "session", id, tab }));
+  const prBase = useMemo(() => prBaseFor(session, state), [session, state]);
 
   return (
     <div className="sv-main">
@@ -180,12 +222,55 @@ function Detail({
         <div className="sx-header-top">
           <ProviderBadge provider={session.provider} />
           <TitleEdit session={session} />
+          <CopyButton text={session.id} label={session.id} className="sx-id" />
           <StatusPill status={session.status} />
-          <HostBadge host={session.host} />
-          {session.big ? <BigBadge /> : null}
+          {/* tmux is the normal case; only say where it runs when it is not ours. */}
+          {session.host === "external" ? <HostBadge host={session.host} /> : null}
 
           <div className="sx-header-actions">
+            {isProject ? (
+              <>
+                <select
+                  className="sx-harness"
+                  aria-label="Project harness"
+                  title="Which agent runs the Project. Changing it starts a fresh one."
+                  value={state.project.provider}
+                  disabled={busy}
+                  onChange={(e) => void run(async () => openSession((await api.project(e.target.value as ProviderId)).id))}
+                >
+                  {state.providers.filter((p) => p.installed).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {PROVIDER_LABEL[p.id]}
+                    </option>
+                  ))}
+                </select>
+                {state.project.canCompact && session.host === "tmux" ? (
+                  <Button size="sm" icon={Icon.move} disabled={busy} title="Summarise the conversation so far to free context" onClick={() => void run(() => api.compactProject())}>
+                    Compact
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  icon={Icon.refresh}
+                  disabled={busy}
+                  title="Start a fresh Project conversation; this one is archived"
+                  onClick={() => void run(async () => openSession((await api.clearProject()).id))}
+                >
+                  Clear
+                </Button>
+              </>
+            ) : null}
             {session.host === "tmux" ? <CopyButton text={attach} label={attach} className="attach-copy" /> : null}
+            <button
+              type="button"
+              className="sx-big"
+              aria-pressed={session.big}
+              disabled={busy}
+              title={session.big ? "Big session: claims the larger share of the account's weekly. Click to make it normal." : "Mark as Big: claims the larger share of the account's weekly"}
+              onClick={() => void run(() => api.patchSession(session.id, { big: !session.big }))}
+            >
+              <Icon.bolt size={12} /> Big
+            </button>
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt
@@ -201,7 +286,7 @@ function Detail({
                 Stop
               </Button>
             ) : null}
-            {session.status === "archived" ? (
+            {isProject ? null : session.status === "archived" ? (
               <Button size="sm" variant="ghost" icon={Icon.undo} disabled={busy} onClick={() => void run(() => api.archive(session.id, false))}>
                 Unarchive
               </Button>
@@ -222,10 +307,13 @@ function Detail({
 
         <div className="sx-facts">
           <span className="fact">
-            <AccountChip accountId={session.accountId} accounts={state.accounts} detail={usageText || undefined} onClick={() => (location.hash = hrefOf({ page: "accounts", sub: "accounts" }))} />
+            <AccountChip accountId={session.accountId} accounts={state.accounts} onClick={() => (location.hash = hrefOf({ page: "accounts", sub: "accounts" }))} />
           </span>
-          <span className="fact mono" title={session.cwd}>
-            <Icon.folder size={12} /> {tildify(session.cwd, home)}
+          <span className="fact mono fact-cwd" title={session.cwd}>
+            <Icon.folder size={12} />
+            <span className="fact-cwd-text">
+              <span dir="ltr">{tildify(session.cwd, home)}</span>
+            </span>
           </span>
           {session.branch ? (
             <span className="fact mono">
@@ -238,13 +326,10 @@ function Detail({
           </span>
           <span
             className="fact"
-            title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.`}
+            title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
           >
             {fmtTokens(session.tokens.input + session.tokens.output)} tok · {fmtTokens(session.tokens.cacheRead)} cached ·{" "}
             <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
-          </span>
-          <span className="fact">
-            started <RelativeTime ts={session.startedAt} />
           </span>
           {pr && (
             <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
@@ -252,14 +337,6 @@ function Detail({
               {pr.isDraft ? " (draft)" : ""}
             </a>
           )}
-          <span className="fact big-toggle">
-            <Toggle
-              checked={session.big}
-              disabled={busy}
-              label="Big"
-              onChange={(v) => void run(() => api.patchSession(session.id, { big: v }))}
-            />
-          </span>
         </div>
 
         {session.status === "blocked" || error ? (
@@ -295,11 +372,12 @@ function Detail({
         </div>
       </header>
 
+      <PrBase.Provider value={prBase}>
       <div className="sv-body" role="tabpanel" aria-label={TAB_LABEL[tab]}>
         {tab === "terminal" ? (
           session.host === "tmux" ? (
             <Suspense fallback={<Empty title="Loading the terminal…" />}>
-              <Terminal sessionId={session.id} attach={attach} />
+              <Terminal sessionId={session.id} sessionIds={sessionIds} prBase={prBase} />
             </Suspense>
           ) : (
             <TermPlaceholder session={session} busy={busy} onAdopt={() => void run(() => api.adopt(session.id))} onResume={() => void run(() => api.resume(session.id))} />
@@ -314,6 +392,7 @@ function Detail({
           <LoadPanel sessionId={session.id} />
         )}
       </div>
+      </PrBase.Provider>
 
       <Composer session={session} />
 

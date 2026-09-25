@@ -422,14 +422,21 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
  * The option is found by the pointer, never assumed (Claude 2.1 focuses
  * "No, exit" in both).
  *
- * Not answered: the trust dialog when the folder also pre-approves tool
- * permissions, adds directories or mints HTTP headers — that is a new
- * decision, not the one you made — and the resume-from-summary choice.
+ * The trust dialog when the folder also pre-approves tool permissions is
+ * answered only in bypass mode, where pre-approving a tool grants nothing the
+ * session does not already have. Every git worktree of a repo raises it, since
+ * Claude reads the main checkout's `.claude/settings.local.json` for all of
+ * them and each new worktree is a folder it has not been told to trust.
+ *
+ * Not answered: a folder that adds directories or mints HTTP headers (runs a
+ * helper before the session starts) — a new decision even in bypass mode, not
+ * the one you made — and the resume-from-summary choice.
  */
-export function claudeAutoAnswer(raw: string): string[] | null {
+export function claudeAutoAnswer(raw: string, ctx: { bypassPermissions: boolean } = { bypassPermissions: false }): string[] | null {
   const s = plainScreen(raw);
   if (/Quick safety check|Accessing workspace/.test(s) && /Yes, I trust this folder/.test(s)) {
-    if (/pre-approves|adds \d+ director|mint HTTP headers/.test(s)) return null;
+    if (/adds \d+ director|mint HTTP headers/.test(s)) return null;
+    if (/pre-approves/.test(s) && !ctx.bypassPermissions) return null;
     return pickOption(s, /^Yes, I trust this folder/);
   }
   if (/Bypass Permissions mode/.test(s) && /Yes, I accept/.test(s) && /No, exit/.test(s)) {
@@ -443,7 +450,8 @@ export function claudeAutoAnswer(raw: string): string[] | null {
 export function claudeBlockedOn(raw: string): string | null {
   const s = plainScreen(raw);
   if (/Select login method|Please run \/login|Not logged in/.test(s)) return "login required";
-  if (/Quick safety check|Accessing workspace/.test(s) && /Yes, I trust this folder/.test(s)) return "folder trust";
+  // The options alone: in a short pane the dialog's heading has scrolled away.
+  if (/Yes, I trust this folder/.test(s) && /No, exit/.test(s)) return "folder trust";
   if (/Bypass Permissions mode/.test(s) && /Yes, I accept/.test(s)) return "confirm bypass-permissions mode";
   if (/Resume from summary/.test(s) && /Resume full session/.test(s)) return "resume: summary or full session";
   if (/Yes, I trust these settings/.test(s)) return "trust project settings";
@@ -482,10 +490,80 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
 
 function resumeCommand(opts: ResumeOptions): Command {
   const argv = ["claude", "--resume", opts.agentSessionId];
-  if (opts.model) argv.push("--model", opts.model);
-  if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
+  if (opts.carry) {
+    // An adopted session keeps how it was launched, permissions included.
+    argv.push(...opts.carry);
+    if (opts.model && !opts.carry.some((a) => a === "--model" || a.startsWith("--model="))) argv.push("--model", opts.model);
+  } else {
+    if (opts.model) argv.push("--model", opts.model);
+    if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
+  }
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
+}
+
+/**
+ * Flags adopt carries over, by how many values each takes (`many` runs to the
+ * next flag, as commander parses it). An allowlist, not a denylist: a flag we
+ * do not know the arity of could swallow the prompt, and one we do not know
+ * the meaning of could be the session id.
+ */
+const CARRIED: Record<string, "none" | "one" | "many"> = {
+  "--dangerously-skip-permissions": "none",
+  "--allow-dangerously-skip-permissions": "none",
+  "--permission-mode": "one",
+  "--allowedTools": "many",
+  "--allowed-tools": "many",
+  "--disallowedTools": "many",
+  "--disallowed-tools": "many",
+  "--tools": "many",
+  "--add-dir": "many",
+  "--mcp-config": "many",
+  "--strict-mcp-config": "none",
+  "--settings": "one",
+  "--setting-sources": "one",
+  "--plugin-dir": "one",
+  "--agent": "one",
+  "--agents": "one",
+  "--model": "one",
+  "--fallback-model": "one",
+  "--effort": "one",
+  "--thinking-display": "one",
+  "--autocompact": "one",
+  "--betas": "many",
+  "--append-system-prompt": "one",
+  "--append-system-prompt-file": "one",
+  "--system-prompt": "one",
+  "--system-prompt-file": "one",
+  "--disable-slash-commands": "none",
+  "--exclude-dynamic-system-prompt-sections": "none",
+  "--bare": "none",
+  "--restricted": "none",
+  "--safe-mode": "none",
+  "--ide": "none",
+  "--chrome": "none",
+  "--no-chrome": "none",
+  "--brief": "none",
+  "--verbose": "none",
+};
+
+export function claudeCarryOver(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    const eq = a.indexOf("=");
+    const flag = a.startsWith("--") && eq > 0 ? a.slice(0, eq) : a;
+    const arity = CARRIED[flag];
+    if (!arity) continue;
+    out.push(a);
+    if (arity === "none" || eq > 0) continue;
+    if (arity === "one") {
+      if (argv[i + 1] !== undefined) out.push(argv[++i]!);
+      continue;
+    }
+    while (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith("-")) out.push(argv[++i]!);
+  }
+  return out;
 }
 
 // ------------------------------------------------------------- adapter
@@ -554,6 +632,8 @@ export const claudeAdapter: ProviderAdapter = {
   reader: claudeReader,
   spawnCommand,
   resumeCommand,
+  carryOver: claudeCarryOver,
+  headless: isHeadless,
   autoAnswer: claudeAutoAnswer,
   blockedOn: claudeBlockedOn,
 };

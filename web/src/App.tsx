@@ -5,7 +5,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { api, clockNow, MOCK, subscribeToClock, useAppState, useConnection } from "./api";
 import type { AgentSettings, AppState } from "../../src/core/types";
-import { Button, Empty, Icon, type IconComponent } from "./components";
+import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./components";
 import { needsYou, titleOf } from "./lib/board";
 import { hrefOf, navOf, parseHash, type NavId, type Route } from "./route";
 import { SystemBar } from "./SystemBar";
@@ -85,9 +85,11 @@ export function App() {
     contentRef.current?.scrollTo(0, 0);
   }, [route.page]);
 
+  // With the breadcrumb gone, the tab title is where the session's name lives.
+  const here = route.page === "session" && state ? `${titleOfId(state, route.id)} — agentbox` : "agentbox";
   useEffect(() => {
-    document.title = counts.sessions > 0 ? `(${counts.sessions}) agentbox` : "agentbox";
-  }, [counts.sessions]);
+    document.title = counts.sessions > 0 ? `(${counts.sessions}) ${here}` : here;
+  }, [counts.sessions, here]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -109,7 +111,8 @@ export function App() {
     return () => removeEventListener("keydown", onKey);
   }, []);
 
-  const flush = route.page === "sessions" || route.page === "session" || route.page === "skills";
+  const flush = route.page === "sessions" || route.page === "session";
+  const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
     <div className="app">
@@ -117,87 +120,86 @@ export function App() {
         Skip to content
       </a>
 
-      <aside className="sidebar">
-        <div className="brand">
-          <BrandMark />
-          <span>agentbox</span>
-          {MOCK ? (
-            <span className="mock-tag" title="Opened with ?mock=1 — nothing here is real and nothing is sent anywhere">
-              mock
-            </span>
-          ) : null}
-        </div>
+      {/* The slot holds the icon rail's width in the layout; the sidebar
+          itself widens over the page on hover, so nothing beside it reflows. */}
+      <div className="sidebar-slot">
+        <aside className="sidebar">
+          <div className="brand">
+            <BrandMark />
+            <span className="nav-label">agentbox</span>
+            {MOCK ? (
+              <span className="mock-tag" title="Opened with ?mock=1 — nothing here is real and nothing is sent anywhere">
+                mock
+              </span>
+            ) : null}
+          </div>
 
-        <nav aria-label="Primary">
-          {NAV.map(({ id, label, icon: IconCmp, to }) => {
-            const count = counts[id];
-            const active = nav === id;
-            return (
-              <a
-                key={id}
-                className={`nav-item ${active ? "active" : ""}`}
-                href={hrefOf(to)}
-                aria-current={active ? "page" : undefined}
-              >
-                <IconCmp />
-                <span className="nav-label">{label}</span>
-                {count > 0 ? (
-                  <span className={`count${id === "accounts" ? " count-warn" : ""}`} title={countTitle(id, count)}>
-                    {count}
-                  </span>
-                ) : null}
-              </a>
-            );
-          })}
-        </nav>
+          <button type="button" className="nav-item nav-new" title="New session (n)" onClick={() => setNewOpen(true)}>
+            <Icon.plus />
+            <span className="nav-label">New session</span>
+            <kbd className="nav-label">n</kbd>
+          </button>
 
-        <div className="spacer" />
-        <div className="sidebar-keys" aria-hidden="true">
-          <span><kbd>n</kbd> new</span>
-          <span><kbd>/</kbd> search</span>
-          <span><kbd>j</kbd><kbd>k</kbd> move</span>
-        </div>
-        <ConnectionChip />
-        <ThemeControl value={theme.pref} onChange={theme.set} />
-      </aside>
+          <nav aria-label="Primary">
+            {NAV.map(({ id, label, icon: IconCmp, to }) => {
+              const count = counts[id];
+              const active = nav === id;
+              return (
+                <a
+                  key={id}
+                  className={`nav-item ${active ? "active" : ""}`}
+                  href={hrefOf(to)}
+                  aria-current={active ? "page" : undefined}
+                  title={label}
+                >
+                  <IconCmp />
+                  <span className="nav-label">{label}</span>
+                  {count > 0 ? (
+                    <span className={`count${id === "accounts" ? " count-warn" : ""}`} title={countTitle(id, count)}>
+                      {count}
+                    </span>
+                  ) : null}
+                </a>
+              );
+            })}
+          </nav>
+
+          <div className="spacer" />
+          <div className="sidebar-keys nav-label" aria-hidden="true">
+            <span><kbd>/</kbd> search</span>
+            <span><kbd>j</kbd><kbd>k</kbd> move</span>
+          </div>
+          <ConnectionChip />
+          <ThemeControl value={theme.pref} onChange={theme.set} />
+        </aside>
+      </div>
 
       <div className="main">
-        <header className="topbar">
-          {route.page === "session" ? (
-            <h1 className="crumbs">
-              <a href={hrefOf({ page: "sessions" })}>Sessions</a>
-              <Icon.chevronRight size={14} />
-              <span className="crumb-here">
-                {state ? titleOfId(state, route.id) : "…"}
-              </span>
-            </h1>
-          ) : (
+        {/* The sessions pages carry their own header — the board's filter bar,
+            the session's title — so a page title above them is a second one. */}
+        {flush ? null : (
+          <header className="topbar">
             <h1>{PAGE_TITLE[nav]}</h1>
-          )}
-          {route.page === "accounts" ? (
-            <div className="seg topbar-seg" role="group" aria-label="Accounts view">
-              <button
-                type="button"
-                aria-pressed={route.sub === "accounts"}
-                onClick={() => navigate({ page: "accounts", sub: "accounts" })}
-              >
-                Accounts
-              </button>
-              <button
-                type="button"
-                aria-pressed={route.sub === "calibration"}
-                onClick={() => navigate({ page: "accounts", sub: "calibration" })}
-              >
-                Calibration
-              </button>
-            </div>
-          ) : null}
-          <div className="topbar-actions">
-            <Button variant="primary" icon={Icon.plus} onClick={() => setNewOpen(true)} title="New session (n)">
-              New session
-            </Button>
-          </div>
-        </header>
+            {route.page === "accounts" ? (
+              <div className="seg topbar-seg" role="group" aria-label="Accounts view">
+                <button
+                  type="button"
+                  aria-pressed={route.sub === "accounts"}
+                  onClick={() => navigate({ page: "accounts", sub: "accounts" })}
+                >
+                  Accounts
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={route.sub === "calibration"}
+                  onClick={() => navigate({ page: "accounts", sub: "calibration" })}
+                >
+                  Calibration
+                </button>
+              </div>
+            ) : null}
+          </header>
+        )}
 
         <StaleBanner />
         {theme.error ? (
@@ -211,43 +213,49 @@ export function App() {
           </Banner>
         ))}
 
-        <main className={`content ${flush && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1}>
-          {!state ? (
-            <Bootstrapping />
-          ) : route.page === "sessions" ? (
-            <Board state={state} onOpen={(id) => navigate({ page: "session", id, tab: "terminal" })} onNew={() => setNewOpen(true)} />
-          ) : route.page === "session" ? (
-            <SessionView
-              key={route.id}
-              state={state}
-              id={route.id}
-              tab={route.tab}
-              onTab={(tab) => navigate({ page: "session", id: route.id, tab }, true)}
-              onOpen={(id) => navigate({ page: "session", id, tab: route.tab })}
-            />
-          ) : route.page === "accounts" ? (
-            <Suspense fallback={<Empty title="Loading…" />}>
-              <Accounts state={state} sub={route.sub} />
-            </Suspense>
-          ) : route.page === "skills" ? (
-            <Skills skills={state.skills} />
-          ) : (
-            <Settings state={state} />
-          )}
+        <main className={`content ${(flush || route.page === "skills") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1}>
+          <ErrorBoundary resetKey={hrefOf(route)} label="This page">
+            {!state ? (
+              <Bootstrapping />
+            ) : route.page === "sessions" ? (
+              <Board state={state} onOpen={(id) => navigate({ page: "session", id, tab: "terminal" })} onNew={() => setNewOpen(true)} />
+            ) : route.page === "session" ? (
+              <SessionView
+                key={route.id}
+                state={state}
+                id={route.id}
+                tab={route.tab}
+                onTab={(tab) => navigate({ page: "session", id: route.id, tab }, true)}
+                onOpen={(id) => navigate({ page: "session", id, tab: route.tab })}
+              />
+            ) : route.page === "accounts" ? (
+              <Suspense fallback={<Empty title="Loading…" />}>
+                <Accounts state={state} sub={route.sub} />
+              </Suspense>
+            ) : route.page === "skills" ? (
+              <Skills skills={state.skills} />
+            ) : (
+              <Settings state={state} />
+            )}
+          </ErrorBoundary>
         </main>
 
-        <SystemBar />
+        <ErrorBoundary label="The system bar">
+          <SystemBar accounts={state?.accounts ?? []} focusAccount={focusAccount} />
+        </ErrorBoundary>
       </div>
 
       {newOpen && state ? (
-        <NewSession
-          state={state}
-          onClose={() => setNewOpen(false)}
-          onCreated={(id) => {
-            setNewOpen(false);
-            navigate({ page: "session", id, tab: "terminal" });
-          }}
-        />
+        <ErrorBoundary label="The new-session dialog">
+          <NewSession
+            state={state}
+            onClose={() => setNewOpen(false)}
+            onCreated={(id) => {
+              setNewOpen(false);
+              navigate({ page: "session", id, tab: "terminal" });
+            }}
+          />
+        </ErrorBoundary>
       ) : null}
     </div>
   );
@@ -293,7 +301,7 @@ function ConnectionChip() {
   return (
     <div className={`conn ${connected ? "on" : "off"}`} title={`Connection: ${label}`} role="status">
       <span className="dot" aria-hidden="true" />
-      <span className="conn-label">{label}</span>
+      <span className="conn-label nav-label">{label}</span>
     </div>
   );
 }

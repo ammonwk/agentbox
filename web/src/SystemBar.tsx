@@ -1,5 +1,9 @@
 import { useState, type ReactNode } from "react";
-import { useMetrics, type SystemState } from "./api";
+import type { AccountView, UsageWindow } from "../../src/core/types";
+import { useMetrics, useNow, type SystemState } from "./api";
+import { accountHue, UsageBar } from "./bits";
+import { fmtCountdown } from "./lib/format";
+import { headlineWindows, resetText, usageTone } from "./lib/usage";
 
 /**
  * The machine, along the bottom of every view.
@@ -15,6 +19,10 @@ import { useMetrics, type SystemState } from "./api";
  * and throttling. Standing conditions (disk, battery) sit last, after a spacer,
  * because they are context rather than news.
  *
+ * After the machine, the Claude subscriptions: each account's 5-hour and weekly
+ * window, because "which account has room" is the other thing you glance down
+ * for before starting work.
+ *
  * Every cell is conditional on its own field. On a kernel without PSI, a
  * desktop with no battery, or a chip whose sensors we cannot name, the cell is
  * absent rather than showing a zero we cannot support.
@@ -25,10 +33,12 @@ function gb(n: number): string {
   return g >= 100 ? `${Math.round(g)}G` : `${g.toFixed(1)}G`;
 }
 
-export function SystemBar() {
+export function SystemBar({ accounts, focusAccount }: { accounts: readonly AccountView[]; focusAccount: string | null }) {
   const { metrics, stale } = useMetrics();
   const [open, setOpen] = useState(false);
+  const now = useNow(30_000);
   const sys = metrics?.system;
+  const limits = claudeLimits(accounts);
 
   // Nothing to say: not Linux, or the first sweep has not landed. An empty
   // strip would be a permanent piece of furniture claiming a measurement.
@@ -227,6 +237,17 @@ export function SystemBar() {
           </span>
         ) : null}
 
+        {limits.length > 0 ? (
+          <>
+            <Div />
+            <span className="sys-limits">
+              {limits.map((a) => (
+                <LimitCell key={a.id} account={a} hue={accountHue(a.id, accounts)} focused={a.id === focusAccount} now={now} />
+              ))}
+            </span>
+          </>
+        ) : null}
+
         <span className="sys-spacer" />
 
         {/* ── Standing conditions ── */}
@@ -264,8 +285,62 @@ export function SystemBar() {
         </span>
       </button>
 
-      {open ? <SystemDetail sys={sys} /> : null}
+      {open ? <SystemDetail sys={sys} limits={limits} now={now} /> : null}
     </div>
+  );
+}
+
+/** Enabled Claude accounts, in the order their colours were handed out. */
+function claudeLimits(accounts: readonly AccountView[]): AccountView[] {
+  return accounts
+    .filter((a) => a.provider === "claude" && a.enabled)
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+}
+
+/**
+ * One account, a dot in its colour and two hairline bars: 5-hour over weekly, each with its figure and
+ * the time until it resets. Quiet by default; only amber or red pulls the eye.
+ */
+function LimitCell({ account, hue, focused, now }: { account: AccountView; hue: number; focused: boolean; now: number }) {
+  const { short, weekly } = headlineWindows(account.usage);
+  const line = (w: UsageWindow | null, name: string) =>
+    w ? `${name}: ${Math.round(w.usedPct)}% used, ${resetText(w.resetsAt, now)}` : `${name}: no data`;
+  const title =
+    `${account.label}${account.plan ? ` · ${account.plan}` : ""}${focused ? " · this session's account" : ""}\n` +
+    `${line(short, "5-hour")}\n${line(weekly, "Weekly")}` +
+    (account.usage.stale ? `\nStale: ${account.usage.stale}` : "");
+  return (
+    <span
+      className="sys-limit"
+      data-focus={focused || undefined}
+      data-stale={account.usage.stale ? true : undefined}
+      style={hue >= 0 ? { ["--acct" as string]: `var(--acct-${hue})` } : undefined}
+      title={title}
+    >
+      {/* The colour says which account; the name is in the tooltip. */}
+      <i className="sys-limit-dot" aria-hidden="true" />
+      <LimitRow kind="5h" w={short} now={now} />
+      <LimitRow kind="wk" w={weekly} now={now} />
+    </span>
+  );
+}
+
+/** 5-hour on top in blue, weekly under it in grey — the Accounts page's
+ *  convention. The tooltip names them. */
+function LimitRow({ kind, w, now }: { kind: "5h" | "wk"; w: UsageWindow | null; now: number }) {
+  const pct = w ? Math.round(w.usedPct) : null;
+  // A 5-hour window nobody has touched has no reset time: it starts on use.
+  const reset = !w ? "" : w.resetsAt == null ? "idle" : fmtCountdown(w.resetsAt - now);
+  return (
+    <>
+      <span className="sys-limit-bar" data-tone={usageTone(pct)} data-kind={kind}>
+        <i style={{ width: `${Math.min(100, pct ?? 0)}%` }} />
+      </span>
+      <b className="sys-limit-pct" data-tone={usageTone(pct)}>
+        {pct == null ? "–" : `${pct}%`}
+      </b>
+      <span className="sys-limit-reset">{reset}</span>
+    </>
   );
 }
 
@@ -274,9 +349,26 @@ function Div() {
 }
 
 /** The expanded sheet: everything the one-line bar had to leave out. */
-function SystemDetail({ sys }: { sys: SystemState }) {
+function SystemDetail({ sys, limits, now }: { sys: SystemState; limits: AccountView[]; now: number }) {
   return (
     <div className="sysdetail">
+      {limits.length > 0 ? (
+        <Block title="claude limits">
+          <div className="syslimits">
+            {limits.map((a) => {
+              const { short, weekly } = headlineWindows(a.usage);
+              return (
+                <div key={a.id} className="syslimits-acct">
+                  <span className="muted">{a.label}</span>
+                  {short ? <UsageBar window={short} now={now} compact /> : null}
+                  {weekly ? <UsageBar window={weekly} now={now} compact /> : null}
+                </div>
+              );
+            })}
+          </div>
+        </Block>
+      ) : null}
+
       <Block title="cores">
         <div className="coregrid">
           {sys.perCore.map((v, i) => (

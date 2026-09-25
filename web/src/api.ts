@@ -24,6 +24,7 @@ import type {
   HotState,
   LoginFlow,
   MetricsState,
+  ModelOption,
   Placement,
   ProcDetail,
   ProviderId,
@@ -103,6 +104,9 @@ export interface NewSessionInput {
   cwd?: string;
   repoId?: string;
   worktree?: boolean;
+  /** An existing branch to run on — its worktree, or a new one. */
+  branch?: string;
+  pr?: number;
   prompt?: string;
   model?: string;
   big?: boolean;
@@ -137,6 +141,11 @@ export const api = {
   // sessions
   placement: (input: { provider: ProviderId; big: boolean; model?: string }) =>
     post<Placement>("/api/placement", input),
+  project: (provider?: ProviderId) => post<Session>("/api/project", provider ? { provider } : {}),
+  clearProject: () => post<Session>("/api/project/clear"),
+  compactProject: () => post<null>("/api/project/compact"),
+  /** What `--model` can be on this account, newest release first. */
+  models: (accountId: string) => get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}`),
   createSession: (input: NewSessionInput) =>
     post<{ session: Session; placement: Placement }>("/api/sessions", input),
   patchSession: (id: string, patch: { label?: string | null; big?: boolean }) =>
@@ -385,6 +394,7 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               settings: s.settings,
               providers: s.providers,
               warnings: s.warnings,
+              project: s.project,
             },
         );
       },

@@ -29,6 +29,7 @@ import type {
   LoadSample,
   LoginFlow,
   MetricsState,
+  ModelOption,
   Placement,
   ProcDetail,
   ProviderId,
@@ -489,6 +490,21 @@ function candidateFor(a: MockAccount, big: boolean, now: number): Candidate {
   };
 }
 
+const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
+  claude: [
+    { id: "claude-fable-5-1", label: "Claude Fable 5.1", releasedAt: "2026-09-01" },
+    { id: "claude-opus-5", label: "Claude Opus 5", releasedAt: "2026-07-24" },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5", releasedAt: "2026-06-29" },
+    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", releasedAt: "2025-10-15" },
+  ],
+  codex: [
+    { id: "gpt-6-astra", label: "GPT-6-Astra", releasedAt: "2026-09-04" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", releasedAt: "2026-07-09" },
+  ],
+  omp: [{ id: "opencode-go/deepseek-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
+  devin: [],
+};
+
 function placementFor(provider: ProviderId, big: boolean, manual?: string): Placement {
   const now = Date.now();
   const candidates = accounts.filter((a) => a.provider === provider).map((a) => candidateFor(a, big, now));
@@ -566,6 +582,7 @@ function cold(): ColdState {
       { id: "omp", installed: false, version: null },
     ],
     warnings: [],
+    project: { provider: "claude", sessionId: null, canCompact: true },
   };
 }
 
@@ -939,6 +956,10 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
     if (head === "calibration") return calibration(Number(url.searchParams.get("days") ?? 7));
     if (head === "settings") return structuredClone(settings);
     if (head === "repos") return repos;
+    if (head === "models") {
+      const a = mustAccount(url.searchParams.get("accountId") ?? "");
+      return MOCK_MODELS[a.provider];
+    }
     if (head === "skill") return { body: `---\nname: example\ndescription: A mock skill body.\n---\n\n# Example\n\nThis is what SKILL.md would contain.\n` };
     if (head === "sessions" && action === "timeline") {
       await sleep(350);

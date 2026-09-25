@@ -62,7 +62,9 @@
   --acct-6: #65a30d;
   --acct-7: #0891b2;
 
-  --sidebar-w: 204px;
+  /* The sidebar is an icon rail that widens over the page on hover. */
+  --sidebar-w: 56px;
+  --sidebar-open-w: 212px;
   /* The Sessions master column. Exported so the view and the shell agree. */
   --list-w: 320px;
   --tap: 32px; /* nothing interactive is smaller than this */
@@ -296,25 +298,65 @@ code {
   overflow: hidden;
 }
 
-.sidebar {
+/* The slot is what the layout sees: always the rail's width. The sidebar in it
+ * is absolutely positioned, so widening it on hover covers the page instead of
+ * pushing it — a terminal that reflowed every time the pointer crossed the
+ * left edge would be unusable. */
+.sidebar-slot {
+  position: relative;
   width: var(--sidebar-w);
   flex-shrink: 0;
+  z-index: 40;
+}
+
+.sidebar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--sidebar-w);
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 14px 10px;
-  gap: 6px;
+  padding: 12px 10px;
+  gap: 4px;
+  overflow: hidden;
+  /* Leaving closes at once; arriving waits a beat, so a pointer passing
+   * through on its way to the session rail does not throw a panel open. */
+  transition: width 0.14s ease, box-shadow 0.14s ease;
+}
+.sidebar:hover,
+.sidebar:has(:focus-visible) {
+  width: var(--sidebar-open-w);
+  box-shadow: var(--shadow-lg);
+  transition-delay: 0.12s;
+}
+
+/* Everything that only makes sense with room to read it. */
+.sidebar .nav-label {
+  opacity: 0;
+  white-space: nowrap;
+  transition: opacity 0.1s ease;
+}
+.sidebar:hover .nav-label,
+.sidebar:has(:focus-visible) .nav-label {
+  opacity: 1;
+  transition: opacity 0.14s ease 0.16s;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 4px 8px 12px;
+  gap: 12px;
+  height: 36px;
+  padding: 0 8px;
+  margin-bottom: 8px;
   font-weight: 650;
   font-size: 15px;
   letter-spacing: -0.01em;
+  flex: none;
+}
+.brand svg {
+  flex: none;
 }
 
 .sidebar nav {
@@ -323,17 +365,28 @@ code {
   gap: 2px;
 }
 
+/* Icons sit at a fixed x (10px padding + 10px inset = centred in 56px), so
+ * nothing moves when the rail opens — only the labels fade in beside them. */
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  width: 100%;
   min-height: 36px;
   padding: 0 10px;
+  border: 0;
   border-radius: var(--radius-sm);
+  background: none;
   color: var(--muted);
   font-weight: 500;
   font-size: 13.5px;
   text-decoration: none;
+  cursor: pointer;
+  text-align: left;
+}
+.nav-item > svg {
+  flex: none;
 }
 .nav-item:hover {
   background: var(--hover);
@@ -344,19 +397,55 @@ code {
   color: var(--text);
   font-weight: 600;
 }
-.nav-item .count {
-  margin-left: auto;
-  background: var(--active);
-  color: var(--muted);
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 11.5px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
 }
-.nav-item.active .count {
+.nav-new {
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.nav-new:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.nav-new kbd {
+  margin-left: auto;
+}
+
+/* Collapsed, the count is a badge on the icon's corner; open, it moves to the
+ * end of the row. */
+.nav-item .count {
+  position: absolute;
+  top: 2px;
+  left: 22px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
   background: var(--accent);
   color: var(--on-accent);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.sidebar:hover .nav-item .count,
+.sidebar:has(:focus-visible) .nav-item .count {
+  position: static;
+  margin-left: auto;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 18px;
+  box-shadow: none;
 }
 
 .sidebar .spacer {
@@ -366,8 +455,9 @@ code {
 .conn {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 10px;
+  gap: 12px;
+  height: 30px;
+  padding: 0 14px;
   font-size: 12px;
   color: var(--muted);
 }
@@ -389,12 +479,17 @@ code {
 .theme-control {
   display: flex;
   gap: 2px;
-  padding: 3px;
+  padding: 2px;
   background: var(--sunken);
   border-radius: var(--radius-sm);
+  flex: none;
+}
+/* Collapsed, only the current theme shows; the choice appears with the room. */
+.sidebar:not(:hover):not(:has(:focus-visible)) .theme-opt:not(.on) {
+  display: none;
 }
 .theme-opt {
-  flex: 1;
+  flex: 1 0 28px;
   min-height: var(--tap);
   display: grid;
   place-items: center;
@@ -613,6 +708,30 @@ code {
   color: var(--faint);
 }
 
+.st-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--faint);
+}
+.st-dot.st-running {
+  background: var(--info);
+  animation: pulse 1.4s infinite;
+}
+.st-dot.st-waiting {
+  background: var(--warning);
+}
+.st-dot.st-blocked {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+.st-dot.st-archived {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--faint);
+}
+
 /* empty ------------------------------------------------------------------- */
 
 .empty {
@@ -632,6 +751,11 @@ code {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.error-detail {
+  color: var(--danger);
+  font-size: 12px;
+  word-break: break-word;
 }
 .empty-action {
   margin-top: 16px;
@@ -837,42 +961,7 @@ textarea,
  * sidebar becomes an icon rail and the views drop to a single column. */
 @media (max-width: 900px) {
   :root {
-    --sidebar-w: 56px;
     --list-w: 100%;
-  }
-  .sidebar {
-    padding: 12px 8px;
-    align-items: stretch;
-  }
-  .brand span,
-  .nav-label,
-  .conn-label {
-    display: none;
-  }
-  /* The dot stays. Hiding the whole chip left no way to tell live from stale. */
-  .conn {
-    justify-content: center;
-    padding: 6px 0;
-  }
-  .brand {
-    justify-content: center;
-    padding: 4px 0 12px;
-  }
-  .nav-item {
-    justify-content: center;
-    padding: 0;
-    position: relative;
-  }
-  .nav-item .count {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    margin: 0;
-    padding: 0 5px;
-    font-size: 10px;
-  }
-  .theme-control {
-    flex-direction: column;
   }
   .topbar,
   .banner,
@@ -918,7 +1007,7 @@ textarea,
 .sysbar-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   width: 100%;
   height: 42px;
   padding: 0 14px;
@@ -1023,7 +1112,7 @@ textarea,
  * "used" is the classic way to panic about a machine that is perfectly fine. */
 .stackbar {
   display: flex;
-  width: 130px;
+  width: 84px;
   height: 8px;
   background: var(--border);
   border-radius: 2px;
@@ -1045,6 +1134,110 @@ textarea,
 .seg-cache {
   background: var(--border-strong);
   display: block;
+}
+
+/* Claude limits: per account a name, then 5-hour over weekly as hairline bars
+ * with the figure and the countdown to reset. Deliberately quieter than the
+ * machine cells — muted until a window is actually close to full. */
+.sys-limits {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  min-width: 0;
+}
+.sys-limit {
+  display: grid;
+  grid-template-columns: auto 34px 28px auto;
+  grid-template-rows: 13px 13px;
+  align-items: center;
+  column-gap: 4px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.sys-limit[data-stale] {
+  opacity: 0.55;
+}
+.sys-limit-dot {
+  grid-row: 1 / 3;
+  width: 6px;
+  height: 6px;
+  margin-right: 2px;
+  border-radius: 50%;
+  background: var(--acct, var(--faint));
+}
+/* The account the open session is spending. */
+.sys-limit[data-focus] .sys-limit-dot {
+  box-shadow: 0 0 0 2px var(--sunken), 0 0 0 3.5px var(--acct, var(--faint));
+}
+.sys-limit-bar {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  overflow: hidden;
+}
+.sys-limit-bar i {
+  display: block;
+  height: 100%;
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+}
+.sys-limit-bar[data-kind="5h"] i {
+  background: color-mix(in srgb, var(--info) 75%, transparent);
+}
+.sys-limit-bar[data-tone="warn"] i {
+  background: var(--warning);
+}
+.sys-limit-bar[data-tone="bad"] i {
+  background: var(--danger);
+}
+.sys-limit-pct {
+  font-weight: 500;
+  color: var(--muted);
+  text-align: right;
+}
+.sys-limit-pct[data-tone="warn"] {
+  color: var(--warning);
+  font-weight: 650;
+}
+.sys-limit-pct[data-tone="bad"] {
+  color: var(--danger);
+  font-weight: 650;
+}
+.sys-limit-reset {
+  white-space: nowrap;
+}
+
+/* Narrower windows keep the bars and drop the countdowns, then the whole
+ * group; the expanded sheet always has all of it. */
+@media (max-width: 1480px) {
+  .sys-limit {
+    grid-template-columns: auto 30px 28px;
+  }
+  .sys-limit-reset {
+    display: none;
+  }
+}
+@media (max-width: 1300px) {
+  .sys-limits,
+  .sys-div:has(+ .sys-limits) {
+    display: none;
+  }
+}
+
+.syslimits {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.syslimits-acct {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
 }
 
 /* Throttling is a condition, not a measurement, so it gets a border as well as
@@ -1410,6 +1603,13 @@ button.acct:hover {
   font-weight: 450;
   font-variant-numeric: tabular-nums;
 }
+.acct-plain {
+  background: none;
+  border-color: transparent;
+  padding-left: 0;
+  font-weight: 500;
+  color: var(--muted);
+}
 .acct-none {
   color: var(--faint);
   font-style: italic;
@@ -1720,8 +1920,8 @@ kbd {
 }
 .sidebar-keys {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
+  flex-wrap: nowrap;
+  gap: 4px 12px;
   padding: 6px 10px 8px;
   font-size: 11px;
   color: var(--faint);
@@ -1734,45 +1934,9 @@ kbd {
   padding-top: 8px;
   padding-bottom: 8px;
 }
-.topbar-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
-}
-.topbar-seg {
-  margin-left: 8px;
-}
-.crumbs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.crumbs a {
-  color: var(--muted);
-  text-decoration: none;
-  font-weight: 550;
-}
-.crumbs a:hover {
-  color: var(--text);
-}
-.crumbs > svg {
-  color: var(--faint);
-  flex: none;
-}
-.crumb-here {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
 @media (max-width: 900px) {
   .sidebar-keys,
   .mock-tag {
     display: none;
-  }
-  .topbar-actions .btn {
-    padding: 0 10px;
   }
 }

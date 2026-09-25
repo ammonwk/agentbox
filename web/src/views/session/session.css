@@ -10,7 +10,7 @@
   min-height: 0;
 }
 .sv[data-rail="on"] {
-  grid-template-columns: 264px minmax(0, 1fr);
+  grid-template-columns: 248px minmax(0, 1fr);
 }
 
 .sv-main {
@@ -33,9 +33,44 @@
 .rail {
   border-right: 1px solid var(--border);
   background: var(--panel);
-  overflow-y: auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding-bottom: 16px;
+}
+/* The Project session, above the scroll so it never moves. */
+.rail-project {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  margin: 8px 8px 2px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.rail-project svg {
+  color: var(--accent);
+  flex: none;
+}
+.rail-project .rail-title {
+  flex: 1;
+}
+.rail-project:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+.rail-project[aria-current="page"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
 }
 .rail-label {
   position: sticky;
@@ -59,11 +94,14 @@
 .rail-sec[data-kind="waiting"] .rail-label {
   color: var(--warning);
 }
+/* One line per session: status, title, age. The account, provider (when it
+ * is the usual one) and last message are a hover away, not on every row. */
 .rail-row {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px 12px 7px 10px;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 12px 0 12px;
   border-left: 2px solid transparent;
   color: inherit;
   text-decoration: none;
@@ -79,70 +117,40 @@
   background: var(--active);
   border-left-color: var(--accent);
 }
-.rail-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
 .rail-title {
+  flex: 1;
   font-size: 12.5px;
-  font-weight: 550;
+  font-weight: 500;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.rail-row[aria-current="page"] .rail-title {
+  font-weight: 600;
 }
 .rail-row[data-status="stopped"] .rail-title,
 .rail-row[data-status="archived"] .rail-title {
   color: var(--muted);
   font-weight: 450;
 }
-.rail-sub {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 13px;
-  min-width: 0;
-}
-.rail-sub .acct {
-  font-size: 10.5px;
-  padding: 0 6px 0 5px;
-  line-height: 1.5;
-  min-width: 0;
-}
 .rail-when {
-  margin-left: auto;
+  flex: none;
   font-size: 10.5px;
   color: var(--faint);
   white-space: nowrap;
-}
-.rail-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: none;
-  background: var(--faint);
-}
-.rail-dot.st-running {
-  background: var(--info);
-  animation: pulse 1.4s infinite;
-}
-.rail-dot.st-waiting {
-  background: var(--warning);
-}
-.rail-dot.st-blocked {
-  background: var(--danger);
+  font-variant-numeric: tabular-nums;
 }
 .rail-row .prov {
-  font-size: 9px;
-  padding: 0 4px;
+  font-size: 8.5px;
+  padding: 0 3px;
+  box-shadow: none;
 }
 
 /* ------------------------------------------------------------------ header */
 
 .sx-header {
-  padding: 12px 18px 0;
+  padding: 10px 18px 0;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
@@ -150,7 +158,8 @@
 .sx-header-top {
   display: flex;
   align-items: center;
-  gap: 9px;
+  flex-wrap: wrap;
+  gap: 6px 9px;
   min-width: 0;
 }
 .sx-header-top > .pill,
@@ -168,9 +177,14 @@
   font-size: 16px;
   font-weight: 650;
   margin: 0;
-  min-width: 0;
+  /* Never squeezed to nothing: a crowded header wraps its actions instead. */
+  min-width: 6em;
   flex: 0 1 auto;
   overflow: hidden;
+  /* On the h2, not the button inside it: a negative margin on the child made
+   * the h2's max-content 4px narrower than the button, so every title was
+   * truncated by one character with half the header empty. */
+  margin-left: -4px;
 }
 .sx-title-btn {
   display: inline-flex;
@@ -179,7 +193,6 @@
   border: 0;
   background: none;
   padding: 1px 4px;
-  margin-left: -4px;
   border-radius: 5px;
   font: inherit;
   color: inherit;
@@ -220,6 +233,20 @@
   margin-left: auto;
   flex: none;
 }
+/* The session id beside the title: quiet until pointed at. */
+.copy-btn.sx-id {
+  min-height: 22px;
+  padding: 0 6px;
+  border-color: transparent;
+  background: none;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  flex: none;
+}
+.copy-btn.sx-id:hover {
+  border-color: var(--border-strong);
+}
 .attach-copy span {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -227,10 +254,12 @@
 
 .sx-facts {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px 16px;
-  margin-top: 9px;
+  margin-top: 7px;
+  min-width: 0;
+  overflow: hidden;
   font-size: 12px;
   color: var(--muted);
 }
@@ -241,6 +270,19 @@
   min-width: 0;
   max-width: 100%;
   white-space: nowrap;
+  flex: none;
+}
+/* The worktree path is the longest fact and the least read; it shrinks first,
+ * from the left, so the distinctive tail stays visible. */
+.sx-facts .fact-cwd {
+  flex: 0 1 auto;
+}
+.fact-cwd-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
 }
 .sx-facts .fact.mono {
   font-family: var(--mono);
@@ -252,24 +294,33 @@
   color: var(--accent);
   text-decoration: none;
 }
-.sx-facts .big-toggle {
-  margin-left: auto;
+/* Big, as a pressable chip among the actions rather than a switch on its own
+ * line — it is a property you set once, not a control you watch. */
+.sx-big {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 9px 0 7px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--faint);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
 }
-.sx-facts .big-toggle .toggle {
-  min-height: 24px;
-  font-size: 12px;
-  gap: 7px;
+.sx-big:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--faint);
 }
-.sx-facts .big-toggle .toggle-track {
-  width: 30px;
-  height: 17px;
-}
-.sx-facts .big-toggle .toggle-knob {
-  width: 11px;
-  height: 11px;
-}
-.sx-facts .big-toggle .toggle.on .toggle-knob {
-  transform: translateX(13px);
+.sx-big[aria-pressed="true"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
 }
 
 .sx-attention-line {
@@ -294,7 +345,8 @@
 .sx-tabs {
   display: flex;
   gap: 2px;
-  margin-top: 8px;
+  margin-top: 4px;
+  margin-left: -12px;
 }
 .sx-tab {
   border: 0;
@@ -396,23 +448,6 @@
   color: #e6e6e9;
   border-color: #3a3a40;
 }
-.term-foot {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 12px;
-  border-top: 1px solid #27272b;
-  font-size: 11px;
-  background: #111114;
-}
-.term-foot .faint {
-  color: #85858e;
-}
-.term-foot code {
-  background: #1c1c20;
-  color: #c8c8ce;
-}
-
 .term-placeholder {
   flex: 1;
   min-height: 0;
@@ -868,9 +903,31 @@
   .sx-header { padding: 10px 12px 0; }
   .sx-panel { padding: 12px; }
   .cmp { padding: 8px 12px; }
-  .sx-facts .big-toggle { margin-left: 0; }
-  .attach-copy span { display: none; }
+  .sx-facts { flex-wrap: wrap; }
+  /* The session id beside the title: quiet until pointed at. */
+.copy-btn.sx-id {
+  min-height: 22px;
+  padding: 0 6px;
+  border-color: transparent;
+  background: none;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  flex: none;
+}
+.copy-btn.sx-id:hover {
+  border-color: var(--border-strong);
+}
+.attach-copy span { display: none; }
   .sx-header-top { flex-wrap: wrap; }
   .cmp-row { flex-wrap: wrap; }
   .cmp textarea { flex-basis: 100%; }
+}
+
+/* The Project session's harness picker, sized like the header's buttons. */
+.sx-harness {
+  width: auto;
+  min-height: 28px;
+  padding: 2px 8px;
+  font-size: 12.5px;
 }

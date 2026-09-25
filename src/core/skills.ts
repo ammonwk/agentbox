@@ -96,7 +96,7 @@ export function parseFrontmatter(text: string): {
     // `|`, `>` and their chomping/indentation variants (`|-`, `>+`, `|2`).
     const block = inline.match(/^([|>])([+-]?\d*|\d*[+-]?)$/);
     if (!block) {
-      fm[key] = inline.replace(/^["']|["']$/g, "");
+      fm[key] = unquote(inline);
       continue;
     }
 
@@ -124,6 +124,20 @@ export function parseFrontmatter(text: string): {
             .join("\n\n");
   }
   return fm;
+}
+
+/** A flow scalar's value: a double-quoted one carries backslash escapes
+ *  (`\"go for it\"`), which are JSON's; a single-quoted one doubles `'`. */
+function unquote(v: string): string {
+  if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+    try {
+      return JSON.parse(v) as string;
+    } catch {
+      return v.slice(1, -1);
+    }
+  }
+  if (v.length >= 2 && v.startsWith("'") && v.endsWith("'")) return v.slice(1, -1).replace(/''/g, "'");
+  return v;
 }
 
 export interface SkillScan {

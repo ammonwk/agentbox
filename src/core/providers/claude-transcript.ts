@@ -340,6 +340,8 @@ export class ClaudeFold {
   private agentName: string | null = null;
   private firstPrompt: string | null = null;
   private lastPrompt: string | null = null;
+  /** A slash command not yet answered; see `user`. */
+  private command: string | null = null;
   private lastMessage: string | null = null;
   private model: string | null = null;
   private gitBranch: string | null = null;
@@ -474,6 +476,15 @@ export class ClaudeFold {
       this.turnOpen = true;
       return;
     }
+    if (kind === "command") {
+      // `/release` is what you asked for, and for a session opened with one
+      // the only thing that says what it is about. Whether it starts a turn
+      // (a skill) or only prints something (`/model`) shows in what follows,
+      // so it becomes a prompt when the model answers it.
+      this.command = commandLine(first);
+      return;
+    }
+    if (kind === "output") this.command = null;
     const p = promptOf(content);
     if (p) {
       if (p.text) this.prompt(p.text);
@@ -493,6 +504,10 @@ export class ClaudeFold {
       return;
     }
     if (m.model === SYNTHETIC) return;
+    if (this.command) {
+      this.prompt(this.command);
+      this.command = null;
+    }
     if (m.model) this.model = m.model;
     if (m.usage) {
       const u = m.usage;

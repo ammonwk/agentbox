@@ -1,19 +1,30 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { AppState, Placement, ProviderId } from "../../../src/core/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { AppState, ModelOption, Placement, PrInfo, ProviderId } from "../../../src/core/types";
 import { api, type NewSessionInput } from "../api";
-import { AccountChip, PROVIDER_LABEL, PROVIDERS } from "../bits";
-import { Button, Field, Icon, Modal, Spinner } from "../components";
-import { candidateTable, placementHeadline } from "../lib/placement";
-import { usageSummary } from "../lib/usage";
+import { PROVIDER_LABEL, PROVIDERS } from "../bits";
+import { Button, Icon, Modal } from "../components";
+import {
+  loadPrefs,
+  parseWorktreeRef,
+  prsOf,
+  rankModels,
+  recentFolders,
+  reposByRecency,
+  savePrefs,
+  skillsFor,
+  type NewSessionPrefs,
+} from "../lib/newsession";
+import { AccountPicker } from "./newsession/AccountPicker";
+import { ModelPicker } from "./newsession/ModelPicker";
+import { PromptBox } from "./newsession/PromptBox";
+import { WorktreeField } from "./newsession/WorktreeField";
 import "./newsession.css";
 
-/** Remembered between openings: the last provider and where, not the prompt. */
-let lastProvider: ProviderId | null = null;
-let lastRepo: string | null = null;
-
 /**
- * Start a session: which CLI, where, what to do, and on which account — with
- * the balancer's reasoning shown live, so "Auto" is never a black box.
+ * Start a session: which CLI, where, what to do, on which model and account.
+ * Every choice is remembered (lib/newsession.ts), so the next session starts
+ * the way the last one did; the account picker carries the balancer's
+ * reasoning, so "Auto" is never a black box.
  */
 export function NewSession({
   state,
@@ -24,37 +35,58 @@ export function NewSession({
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  const [prefs] = useState<NewSessionPrefs>(loadPrefs);
   const installed = state.providers.filter((p) => p.installed).map((p) => p.id);
   const [provider, setProvider] = useState<ProviderId>(
-    lastProvider && installed.includes(lastProvider) ? lastProvider : installed[0] ?? "claude",
+    prefs.provider && installed.includes(prefs.provider) ? prefs.provider : installed[0] ?? "claude",
   );
-  const [where, setWhere] = useState<"repo" | "path">(state.repos.length > 0 ? "repo" : "path");
+  const repos = useMemo(() => reposByRecency(state.repos, state.sessions), [state.repos, state.sessions]);
+  const [where, setWhere] = useState<"repo" | "path">(state.repos.length === 0 ? "path" : prefs.where ?? "repo");
   const [repoId, setRepoId] = useState<string>(
-    lastRepo && state.repos.some((r) => r.id === lastRepo) ? lastRepo : state.repos[0]?.id ?? "",
+    prefs.repoId && state.repos.some((r) => r.id === prefs.repoId) ? prefs.repoId : repos[0]?.id ?? "",
   );
-  const [worktree, setWorktree] = useState(true);
-  const [path, setPath] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [model, setModel] = useState("");
-  const [big, setBig] = useState(false);
-  const [accountId, setAccountId] = useState<string>("auto");
+  const [worktree, setWorktree] = useState(prefs.worktree ?? true);
+  /** With "New worktree" off: blank (main checkout), `new`, or a PR. Not
+   *  remembered — a PR is a one-off. */
+  const [wtText, setWtText] = useState("");
+  const [path, setPath] = useState(prefs.path ?? "");
+  const [prompt, setPrompt] = useState(prefs.draft ?? "");
+  const [big, setBig] = useState(prefs.big ?? false);
+  const [perProvider, setPerProvider] = useState(prefs.perProvider ?? {});
+  const model = perProvider[provider]?.model ?? "";
+  const accountId = perProvider[provider]?.accountId ?? "auto";
+  const setChoice = (patch: { model?: string; accountId?: string }) =>
+    setPerProvider((p) => ({ ...p, [provider]: { ...p[provider], ...patch } }));
+
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [placing, setPlacing] = useState(false);
   const [placeErr, setPlaceErr] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<ModelOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const promptRef = useRef<HTMLTextAreaElement>(null);
   // After the Modal's own focus handling (child effects run first), so the
-  // prompt, not the close button, is where typing lands.
-  useEffect(() => promptRef.current?.focus(), []);
+  // prompt, not the close button, is where typing lands — at the end of a
+  // restored draft.
+  useEffect(() => {
+    const el = promptRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+
+  // Remember everything as it changes, so Cancel keeps it too.
+  useEffect(() => {
+    savePrefs({ provider, where, repoId, worktree, path, big, perProvider, draft: prompt });
+  }, [provider, where, repoId, worktree, path, big, perProvider, prompt]);
 
   const accounts = useMemo(() => state.accounts.filter((a) => a.provider === provider), [state.accounts, provider]);
   const b = state.settings.balancer;
 
-  // A manual pick that belongs to another provider is not a pick.
+  // A remembered pin to an account that is gone is not a pin.
   useEffect(() => {
-    if (accountId !== "auto" && !accounts.some((a) => a.id === accountId)) setAccountId("auto");
+    if (accountId !== "auto" && !accounts.some((a) => a.id === accountId)) setChoice({ accountId: "auto" });
   }, [accounts, accountId]);
 
   // Live placement: re-asked whenever the things it depends on change. The
@@ -65,7 +97,7 @@ export function NewSession({
     setPlaceErr(null);
     const t = setTimeout(() => {
       api
-        .placement({ provider, big, ...(model.trim() ? { model: model.trim() } : {}) })
+        .placement({ provider, big, ...(model ? { model } : {}) })
         .then((p) => !cancelled && setPlacement(p))
         .catch((e: unknown) => !cancelled && setPlaceErr(e instanceof Error ? e.message : String(e)))
         .finally(() => !cancelled && setPlacing(false));
@@ -77,6 +109,38 @@ export function NewSession({
   }, [provider, big, model]);
 
   const manual = accountId !== "auto" ? accounts.find((a) => a.id === accountId) ?? null : null;
+  // The account whose models to offer: the pin, else where Auto would go.
+  const target = manual ?? accounts.find((a) => a.id === placement?.accountId) ?? accounts[0] ?? null;
+
+  useEffect(() => {
+    if (!target) return setCatalog([]);
+    let cancelled = false;
+    api
+      .models(target.id)
+      .then((m) => !cancelled && setCatalog(m))
+      .catch(() => !cancelled && setCatalog([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [target?.id]);
+
+  const models = useMemo(
+    () => rankModels(catalog, state.sessions, provider),
+    [catalog, state.sessions, provider],
+  );
+  const repo = state.repos.find((r) => r.id === repoId) ?? null;
+  const repoPrs = useMemo(() => prsOf(state.prs, repo), [state.prs, repo]);
+  const wt = parseWorktreeRef(wtText, repoPrs);
+  // Typing `new` is the same as ticking the box again.
+  useEffect(() => {
+    if (!worktree && wt.kind === "new") {
+      setWtText("");
+      setWorktree(true);
+    }
+  }, [worktree, wt.kind]);
+  const skills = useMemo(() => skillsFor(state.skills, provider, where === "repo" ? repo : null), [state.skills, provider, where, repo]);
+  const folders = useMemo(() => recentFolders(state.sessions), [state.sessions]);
+
   const noEligible = !manual && placement?.mode === "none";
   const whereOk = where === "repo" ? !!repoId : path.trim().length > 0;
   const canSubmit = whereOk && !busy && !noEligible && installed.includes(provider);
@@ -87,16 +151,21 @@ export function NewSession({
     setError(null);
     const input: NewSessionInput = {
       provider,
-      ...(where === "repo" ? { repoId, worktree } : { cwd: path.trim() }),
+      ...(where === "path"
+        ? { cwd: path.trim() }
+        : worktree || wt.kind === "new"
+          ? { repoId, worktree: true }
+          : wt.kind === "main"
+            ? { repoId, worktree: false }
+            : { repoId, branch: wt.branch, ...(wt.kind === "pr" ? { pr: wt.number } : {}) }),
       ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
-      ...(model.trim() ? { model: model.trim() } : {}),
+      ...(model ? { model } : {}),
       big,
       accountId,
     };
     try {
       const r = await api.createSession(input);
-      lastProvider = provider;
-      if (where === "repo") lastRepo = repoId;
+      savePrefs({ provider, where, repoId, worktree, path, big, perProvider });
       onCreated(r.session.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -104,7 +173,8 @@ export function NewSession({
     }
   }
 
-  const rows = placement ? candidateTable(placement, manual?.id ?? null) : [];
+  const defaultModel = state.settings.models[provider] ? `Default (${state.settings.models[provider]})` : `${PROVIDER_LABEL[provider]}'s default`;
+  const landing = manual ?? accounts.find((a) => a.id === placement?.accountId) ?? null;
 
   return (
     <Modal title="New session" onClose={onClose} wide>
@@ -118,195 +188,143 @@ export function NewSession({
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             void submit();
+          } else if (e.altKey && /^[1-4]$/.test(e.key)) {
+            // Alt+1..4 picks the agent without leaving the prompt.
+            const p = PROVIDERS[Number(e.key) - 1];
+            if (p && installed.includes(p)) {
+              e.preventDefault();
+              setProvider(p);
+            }
           }
         }}
       >
-        <div className="ns-grid">
-          <div className="ns-col">
-            <div className="field">
-              <span className="field-label" id="ns-agent">
-                Agent
-              </span>
-              <div className="seg ns-providers" role="group" aria-labelledby="ns-agent">
-                  {PROVIDERS.map((p) => {
-                    const info = state.providers.find((x) => x.id === p);
-                    const ok = !!info?.installed;
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        aria-pressed={provider === p}
-                        disabled={!ok}
-                        title={ok ? `${PROVIDER_LABEL[p]} ${info?.version ?? ""}`.trim() : `${PROVIDER_LABEL[p]} is not installed`}
-                        onClick={() => setProvider(p)}
-                      >
-                        <span className={`ns-pdot prov-${p}`} aria-hidden="true" />
-                        {PROVIDER_LABEL[p]}
-                      </button>
-                    );
-                  })}
-              </div>
-            </div>
-
-            <div className="field">
-              <div className="ns-where-head">
-                <span className="field-label">Where</span>
-                <div className="seg seg-sm" role="group" aria-label="Where to run">
-                  <button type="button" aria-pressed={where === "repo"} disabled={state.repos.length === 0} onClick={() => setWhere("repo")}>
-                    Repository
+        <div className="ns-top">
+          <div className="field">
+            <span className="field-label" id="ns-agent">
+              Agent
+            </span>
+            <div className="seg ns-providers" role="group" aria-labelledby="ns-agent">
+              {PROVIDERS.map((p, i) => {
+                const info = state.providers.find((x) => x.id === p);
+                const ok = !!info?.installed;
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    aria-pressed={provider === p}
+                    disabled={!ok}
+                    title={ok ? `${PROVIDER_LABEL[p]} ${info?.version ?? ""} · Alt+${i + 1}`.trim() : `${PROVIDER_LABEL[p]} is not installed`}
+                    onClick={() => setProvider(p)}
+                  >
+                    <span className={`ns-pdot prov-${p}`} aria-hidden="true" />
+                    {PROVIDER_LABEL[p]}
                   </button>
-                  <button type="button" aria-pressed={where === "path"} onClick={() => setWhere("path")}>
-                    Folder
-                  </button>
-                </div>
-              </div>
-              {where === "repo" ? (
-                <div className="ns-where">
-                  <select aria-label="Repository" value={repoId} onChange={(e) => setRepoId(e.target.value)}>
-                    {state.repos.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.displayName} — {r.fullName ?? r.ref}
-                      </option>
-                    ))}
-                  </select>
-                  <label className="ns-check">
-                    <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
-                    <span>
-                      New worktree
-                      <span className="field-hint">
-                        A fresh branch off {state.repos.find((r) => r.id === repoId)?.defaultBranch ?? "the default branch"}, so it cannot
-                        collide with anything else running there.
-                      </span>
-                    </span>
-                  </label>
-                </div>
-              ) : (
-                <input
-                  aria-label="Folder path"
-                  className="mono"
-                  placeholder="/home/you/code/project"
-                  value={path}
-                  onChange={(e) => setPath(e.target.value)}
-                  spellCheck={false}
-                />
-              )}
+                );
+              })}
             </div>
-
-            <Field label="Prompt" hint="Optional. Leave empty to start at the CLI's own prompt.">
-              <textarea
-                className="ns-prompt"
-                ref={promptRef}
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="What should it do?"
-                rows={6}
-              />
-            </Field>
-
-            <div className="ns-row2">
-              <Field label="Model">
-                <input
-                  className="mono"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder={state.settings.models[provider] || "provider default"}
-                  spellCheck={false}
-                />
-              </Field>
-              <Field label="Account">
-                <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-                  <option value="auto">Auto (recommended)</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.label} — {usageSummary(a)}
-                      {!a.enabled ? " · disabled" : a.auth.state !== "ok" ? ` · ${a.auth.state}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-
-            <label className="ns-check ns-big">
-              <input type="checkbox" checked={big} onChange={(e) => setBig(e.target.checked)} />
-              <span>
-                <strong>Big session</strong>
-                <span className="field-hint">
-                  Claims {b.claimBig}% of the account&apos;s weekly instead of {b.claimNormal}%, so the balancer keeps room for a long
-                  run and steers other sessions elsewhere.
-                </span>
-              </span>
-            </label>
           </div>
-
-          <aside className="ns-place" aria-label="Placement preview" aria-busy={placing}>
-            <div className="ns-place-head">
-              <span className="section-label">Placement</span>
-              {placing ? <Spinner size={12} /> : null}
+          <div className="field ns-where-field">
+            <span className="field-label" id="ns-where">
+              Where
+            </span>
+            <div className="seg" role="group" aria-labelledby="ns-where">
+              <button type="button" aria-pressed={where === "repo"} disabled={state.repos.length === 0} onClick={() => setWhere("repo")}>
+                <Icon.branch size={13} />
+                Repository
+              </button>
+              <button type="button" aria-pressed={where === "path"} onClick={() => setWhere("path")}>
+                <Icon.folder size={13} />
+                Folder
+              </button>
             </div>
-            {placeErr ? (
-              <p className="error-line">Could not preview placement: {placeErr}</p>
-            ) : !placement ? (
-              <p className="hint">Asking the balancer…</p>
-            ) : (
-              <>
-                <div className={`ns-choice${noEligible ? " none" : ""}`}>
-                  <span className="ns-choice-head">{placementHeadline(placement, manual?.label ?? null)}</span>
-                  {!noEligible ? (
-                    <AccountChip accountId={manual?.id ?? placement.accountId} accounts={state.accounts} />
-                  ) : null}
-                </div>
-                <p className="ns-why">
-                  {manual
-                    ? manual.enabled
-                      ? `You picked ${manual.label}. Auto would choose ${placement.candidates.find((c) => c.accountId === placement.accountId)?.label ?? "nothing"}: ${placement.why}`
-                      : `${manual.label} is disabled for auto-placement, but a manual pick still runs there.`
-                    : placement.why}
-                </p>
-                {rows.length > 0 ? (
-                  <table className="ns-table">
-                    <thead>
-                      <tr>
-                        <th>Account</th>
-                        <th className="num" title="Weekly % used → with outstanding claims (W′)">Weekly</th>
-                        <th className="num" title="5-hour % used → with claims (F′)">5h</th>
-                        <th className="num" title="5-hour room after claims, raised as the reset nears">Room</th>
-                        <th className="num" title="Ordering key; higher wins">Score</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((r) => (
-                        <Fragment key={r.accountId}>
-                          <tr data-chosen={r.chosen || undefined} data-eligible={r.eligible} className={r.eligible ? undefined : "has-reason"}>
-                            <td>
-                              <span className="ns-t-acct">
-                                {r.chosen ? <Icon.check size={12} /> : <span className="ns-t-spacer" />}
-                                {r.label}
-                              </span>
-                            </td>
-                            <td className="num">{r.weekly}</td>
-                            <td className="num">{r.short}</td>
-                            <td className="num">{r.legRoom}</td>
-                            <td className="num">{r.eligible ? r.score : "—"}</td>
-                          </tr>
-                          {!r.eligible ? (
-                            <tr className="ns-reason" data-chosen={r.chosen || undefined}>
-                              <td colSpan={5}>{r.verdict}</td>
-                            </tr>
-                          ) : null}
-                        </Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <p className="hint">No {PROVIDER_LABEL[provider]} account is set up. Add one on the Accounts page.</p>
-                )}
-                <p className="hint ns-claim">
-                  This session will claim <strong>{placement.claim}</strong> weekly points until it has used them or goes idle{" "}
-                  {b.claimIdleMin} min.
-                </p>
-              </>
-            )}
-          </aside>
+          </div>
+        </div>
+
+        {where === "repo" ? (
+          <>
+            <div className="ns-where">
+              <select aria-label="Repository" value={repoId} onChange={(e) => setRepoId(e.target.value)}>
+                {repos.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.displayName} — {r.fullName ?? r.ref}
+                  </option>
+                ))}
+              </select>
+              <WorktreeField on={worktree} onToggle={setWorktree} text={wtText} onText={setWtText} prs={repoPrs} />
+            </div>
+            {!worktree ? <p className="ns-wt-hint">{worktreeHint(wt, repo?.ref ?? null, repoPrs)}</p> : null}
+          </>
+        ) : (
+          <>
+            <input
+              aria-label="Folder path"
+              className="mono"
+              placeholder="/home/you/code/project"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              spellCheck={false}
+              list="ns-folders"
+            />
+            <datalist id="ns-folders">
+              {folders.map((f) => (
+                <option key={f} value={f} />
+              ))}
+            </datalist>
+          </>
+        )}
+
+        <div className="field">
+          <label className="field-head ns-prompt-head" htmlFor="ns-prompt">
+            <span className="field-label">Prompt</span>
+            <span className="field-hint">
+              Optional. <kbd>/</kbd> for skills{skills.length ? ` (${skills.length})` : ""}.
+              {prompt ? (
+                <button type="button" className="ns-linkbtn" onClick={() => setPrompt("")}>
+                  Clear
+                </button>
+              ) : null}
+            </span>
+          </label>
+          <PromptBox id="ns-prompt" value={prompt} onChange={setPrompt} skills={skills} textareaRef={promptRef} />
+        </div>
+
+        <div className="field">
+          <span className="field-label ns-label">Account</span>
+          <AccountPicker
+            accounts={accounts}
+            allAccounts={state.accounts}
+            value={accountId}
+            onChange={(id) => setChoice({ accountId: id })}
+            placement={placement}
+            placing={placing}
+            placeErr={placeErr}
+            claimIdleMin={b.claimIdleMin}
+          />
+        </div>
+
+        <div className="ns-row2">
+          <div className="field">
+            <label className="field-label ns-label" htmlFor="ns-model">
+              Model
+            </label>
+            <ModelPicker
+              id="ns-model"
+              models={models}
+              value={model}
+              onChange={(m) => setChoice({ model: m })}
+              defaultLabel={defaultModel}
+            />
+          </div>
+          <label className="ns-big" data-on={big || undefined} title={`Claims ${b.claimBig}% of the account's weekly instead of ${b.claimNormal}%, so the balancer keeps room for a long run and steers other sessions elsewhere.`}>
+            <input type="checkbox" checked={big} onChange={(e) => setBig(e.target.checked)} />
+            <Icon.bolt size={13} />
+            <span>
+              <strong>Big session</strong>
+              <span className="field-hint">
+                Claims {b.claimBig}% of the weekly, not {b.claimNormal}%
+              </span>
+            </span>
+          </label>
         </div>
 
         {error ? (
@@ -322,9 +340,27 @@ export function NewSession({
           <Button onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="primary" icon={Icon.play} loading={busy} disabled={!canSubmit}>
             Start {PROVIDER_LABEL[provider]}
+            {landing ? <span className="ns-start-on"> on {landing.label}</span> : null}
           </Button>
         </div>
       </form>
     </Modal>
   );
+}
+
+/** One line under the worktree box: where the session will actually run. */
+function worktreeHint(wt: ReturnType<typeof parseWorktreeRef>, repoPath: string | null, prs: readonly PrInfo[]): string {
+  switch (wt.kind) {
+    case "main":
+    case "new":
+      return `Runs in the main checkout${repoPath ? `, ${repoPath}` : ""}, on whatever branch it has out.`;
+    case "pr":
+      // `67` on the way to `6730` is not a claim about PR #67.
+      if (!wt.pr && prs.some((p) => String(p.number).startsWith(String(wt.number)))) return "Pick a PR from the list, or type its whole number.";
+      return wt.pr
+        ? `PR #${wt.number}, ${wt.branch}: runs in the worktree that has it checked out, or a new one.`
+        : `PR #${wt.number} is not among the open PRs; its head is fetched as ${wt.branch}.`;
+    case "branch":
+      return `Branch ${wt.branch}: runs in the worktree that has it checked out, or a new one.`;
+  }
 }

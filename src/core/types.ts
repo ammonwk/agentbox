@@ -574,6 +574,18 @@ export interface ReclaimResult {
   bytesFreed: number;
 }
 
+// ------------------------------------------------------------- models
+
+/** One model a provider CLI will take for `--model`, as the new-session
+ *  dialog offers it. `GET /api/models?provider=&accountId=`. */
+export interface ModelOption {
+  /** What goes after `--model`. */
+  id: string;
+  label: string;
+  /** "2026-09-01", from the models.dev catalog when it knows the model. */
+  releasedAt: string | null;
+}
+
 // ------------------------------------------------------------- skills
 
 export type SkillSource = "global" | "agents" | "codex" | "omp" | "project";
@@ -584,6 +596,23 @@ export type SkillSource = "global" | "agents" | "codex" | "omp" | "project";
 export interface HotState {
   sessions: (Session & { attention: Attention })[];
   serverTime: number;
+}
+
+/** The Project session pinned atop the board (src/core/project.ts). */
+export interface ProjectState {
+  provider: ProviderId;
+  /** Null until it is first opened, or when its row is gone. */
+  sessionId: string | null;
+  /** The harness has a compact command. */
+  canCompact: boolean;
+}
+
+/** One line of `GET /api/grep`. */
+export interface GrepHit {
+  sessionId: string;
+  at: number;
+  kind: TimelineEvent["kind"];
+  line: string;
 }
 
 /** Changes on a slower clock; pushed only when it moves. */
@@ -598,6 +627,7 @@ export interface ColdState {
   providers: { id: ProviderId; installed: boolean; version: string | null }[];
   /** Set when something is missing, so the UI can say so instead of failing. */
   warnings: string[];
+  project: ProjectState;
 }
 
 export interface AppState extends HotState, ColdState {}

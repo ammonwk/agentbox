@@ -55,7 +55,7 @@ const DEFAULT_PAGE = 50;
 
 /** omp's agent dir for an account. `PI_CODING_AGENT_DIR` in the server's own
  *  environment relocates the default one, exactly as it would for omp. */
-function agentDirOf(account: Pick<Account, "home" | "isDefault">): string {
+export function agentDirOf(account: Pick<Account, "home" | "isDefault">): string {
   const override = process.env.PI_CODING_AGENT_DIR;
   if (account.isDefault && override) return override;
   return join(account.home, "agent");

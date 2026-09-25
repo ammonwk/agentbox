@@ -13,13 +13,23 @@ After changing `src/`, restart the server — Bun does not hot-reload:
 
     systemctl --user stop agentbox-serve.scope 2>/dev/null
     kill $(ss -tlnp | grep 4479 | grep -o 'pid=[0-9]*' | cut -d= -f2) 2>/dev/null
+    while systemctl --user list-units --all --no-legend agentbox-serve.scope | grep -q .; do sleep 0.5; done
     systemd-run --user --scope --collect --unit=agentbox-serve \
       setsid bun bin/agentbox serve >> ~/.local/share/agentbox/logs/server.log 2>&1 < /dev/null &
 
 Its own systemd scope, so it does not die with the terminal (or the agent
 session) that happened to start it: a process started from a terminal lives
-in that terminal's cgroup scope, and `setsid` alone does not leave it. Then
-check `/api/health`, and that `/api/state` has as many sessions as before.
+in that terminal's cgroup scope, and `setsid` alone does not leave it. The
+wait matters: `systemd-run` refuses the unit name while the old scope is
+still stopping. Then check `/api/health`, and that `/api/state` has as many
+sessions as before.
+
+The tmux server runs in a scope of its own, `agentbox-tmux.scope`
+(`src/core/tmux.ts` starts it through `systemd-run`). This is what makes a
+restart safe: tmux puts each pane in a `tmux-spawn-*.scope` that is `PartOf`
+whatever unit the tmux server was in when the pane started, so a tmux server
+living in `agentbox-serve.scope` meant stopping the server stopped every
+agent. Check with `systemctl --user show <pane scope> -p PartOf`.
 
 Restarting loses nothing. The server owns no agents: they run in
 `tmux -L agentbox` (one tmux session per agent session, `ab-<id>`) or in your
@@ -45,8 +55,7 @@ table and tmux on its first tick.
 - **The balancer is pure.** `src/core/balancer.ts` takes numbers and returns
   a choice with every candidate's inputs attached; it touches no I/O. Keep it
   that way — the assignments table stores its inputs so placements can be
-  replayed, and the tests in `__tests__/balancer.test.ts` are the spec (the
-  "worked example" test is the one the design was built from).
+  replayed.
 - **Mutating requests carry `x-agentbox: 1`**, and Host/Origin must be
   loopback (`src/server/csrf.ts`). The terminal WebSocket types into agents
   that skip permission prompts; do not loosen this.
@@ -69,11 +78,20 @@ table and tmux on its first tick.
 - `src/mcp/subagent.ts` — the subagent MCP (`agentbox subagent-mcp`), over
   `src/subagents/`: a pool of `omp acp` processes it owns, their records and
   live status lines. Independent of the server and the database.
-- `src/cli/index.ts` — `agentbox claude|codex|…`, `ls`, `attach`, `resume`,
-  `adopt`, `stop`, `usage`, `mcp`, `subagent-mcp`, `doctor`.
+- `src/cli/index.ts` — `agentbox claude|codex|…`, `attach`, `usage`, `mcp`,
+  `subagent-mcp`, `doctor`; `src/cli/sessions.ts` — the Unix-shaped session
+  verbs (`ls`, `show`, `log`, `grep`, `screen`, `diff`, `send`, `archive`,
+  `stop`, `resume`, `adopt`, `label`): ids first on every line, `-` reads ids
+  from stdin.
+- `src/core/project.ts` — the Project session pinned atop the board: an
+  ordinary session in `<agentbox home>/project`, whose CLAUDE.md/AGENTS.md
+  (written from here on every start) teaches it the CLI.
 
 ## Tests
 
-`bun test` (everything is hermetic: suites that touch paths use
-`src/core/__tests__/tmp-home.ts`; the fleet tests use a fake adapter and a fake
-tmux). `bun run typecheck` must be clean.
+Almost none, on purpose: this is a dev tool, and tests that pin behaviour
+slowed it down more than they caught. Check a change by running it (`bun run
+web:dev`, the live server) and keep `bun run typecheck` clean. Do not add tests
+by default. One has to guard a non-obvious rule whose breakage would be
+destructive or a security hole, and "useful" is not enough — the only one left
+is `src/server/__tests__/csrf.test.ts`.

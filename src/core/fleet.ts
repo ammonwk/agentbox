@@ -21,7 +21,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { place, type AccountState } from "./balancer";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import {
@@ -39,7 +39,7 @@ import {
   updateSessionRecord,
   type SessionRecord,
 } from "./db";
-import { createWorktree, run } from "./git";
+import { createWorktree, run, worktreeForBranch } from "./git";
 import { attachArgv, tmuxName, type NewSession, type PaneInfo } from "./tmux";
 import type {
   LiveProcess,
@@ -48,7 +48,8 @@ import type {
   TranscriptReader,
   TranscriptRef,
 } from "./providers/types";
-import { isAlive, withProcessScan } from "./providers/procs";
+import { argvOf, environOf, isAlive, withProcessScan } from "./providers/procs";
+import { carryEnv, type Launch } from "./launch";
 import { weeklyWindow } from "./balancer";
 import type {
   Account,
@@ -128,6 +129,11 @@ export interface SpawnRequest {
   cwd?: string;
   repoId?: string;
   worktree?: boolean;
+  /** Run on this existing branch (a PR's head): in the worktree that has it
+   *  checked out, or a new one. Wins over `worktree`. */
+  branch?: string;
+  /** The PR `branch` belongs to, for fetching it when origin has no such branch. */
+  pr?: number;
   prompt?: string;
   model?: string;
   big?: boolean;
@@ -414,6 +420,7 @@ export class Fleet extends EventEmitter {
       updateSessionRecord(target.id, { tmux: rec.tmux, accountId: rec.accountId, archivedAt: null });
       updateSessionRecord(rec.id, { tmux: null });
       this.byAgentId.set(`${rec.provider}:${proc.agentSessionId}`, target.id);
+      this.emit("paneMoved", rec.id, target.id);
     }
   }
 
@@ -471,7 +478,9 @@ export class Fleet extends EventEmitter {
     if (!rec) return;
     const patch: Partial<SessionRecord> = { facts: compactFacts(f), transcriptPath: t.ref.path };
     const last = f.lastActivityAt ?? t.ref.mtimeMs;
-    if (last > rec.lastActivityAt) patch.lastActivityAt = Math.min(last, now);
+    // The transcript's newest turn is the record, so it also corrects a value
+    // that was set too late; an mtime is only a guess and may only move it on.
+    if (f.lastActivityAt !== null ? last !== rec.lastActivityAt : last > rec.lastActivityAt) patch.lastActivityAt = Math.min(last, now);
     if (f.cwd && !rec.cwd) patch.cwd = f.cwd;
     // New activity on an archived session means you went back to it.
     if (rec.archivedAt && last > rec.archivedAt) patch.archivedAt = null;
@@ -638,7 +647,9 @@ export class Fleet extends EventEmitter {
       tmux: host === "tmux" || (pane && pane.dead) ? rec.tmux : null,
       transcriptPath: rec.transcriptPath,
       startedAt: rec.startedAt,
-      lastActivityAt: Math.max(rec.lastActivityAt, f?.lastActivityAt ?? 0),
+      // When the conversation last moved. Starting or resuming a process is not
+      // activity: a session resumed and left alone is as idle as before.
+      lastActivityAt: f?.lastActivityAt ?? rec.lastActivityAt,
       archivedAt: rec.archivedAt,
     };
   }
@@ -647,9 +658,13 @@ export class Fleet extends EventEmitter {
     if (!pane || !adapter?.autoAnswer) return;
     const started = this.startedAt.get(rec.id);
     if (!started || now - started > AUTO_ANSWER_MS) return;
-    const screen = this.deps.runtime.capture(pane.name);
+    // With scrollback: a short pane (tmux sizes a window to its latest client)
+    // scrolls a dialog's top — and any "pre-approves permissions" line — out
+    // of view. Only the first minutes after a start get here, so the history
+    // is this start-up's and nothing older.
+    const screen = this.deps.runtime.capture(pane.name, { scrollback: 200 });
     if (!screen) return;
-    const keys = adapter.autoAnswer(screen);
+    const keys = adapter.autoAnswer(screen, { bypassPermissions: getSettings().autoApprove });
     if (!keys) return;
     // Claude's trust dialog ignores keys for a moment after it opens, so the
     // same screen again is worth another try — a few, spaced out, then stop:
@@ -767,7 +782,11 @@ export class Fleet extends EventEmitter {
     if (req.repoId) {
       const repo = getRepoById(req.repoId);
       if (!repo) throw new FleetError(404, `no repo ${req.repoId}`);
-      if (req.worktree) {
+      if (req.branch) {
+        const wt = worktreeForBranch(repo, id, req.branch, req.pr);
+        cwd = wt.path;
+        worktree = wt.created ? wt.path : null;
+      } else if (req.worktree) {
         const wt = createWorktree(repo, id, `ab/${id}`);
         cwd = wt.path;
         worktree = wt.path;
@@ -868,12 +887,15 @@ export class Fleet extends EventEmitter {
       cwd,
       prompt: prompt || undefined,
       autoApprove: settings.autoApprove,
+      ...(rec.launch ? { carry: rec.launch.args } : {}),
     });
     const name = tmuxName(rec.id);
     // A dead pane from the last run holds the name.
     this.deps.runtime.killSession(name);
-    this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env: cmd.env, unset: cmd.unset });
-    updateSessionRecord(rec.id, { tmux: name, archivedAt: null, lastActivityAt: this.now() });
+    // The account's variables win over the launching shell's.
+    const env = { ...rec.launch?.env, ...cmd.env };
+    this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env, unset: cmd.unset });
+    updateSessionRecord(rec.id, { tmux: name, archivedAt: null });
     this.startedAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
   }
@@ -897,6 +919,13 @@ export class Fleet extends EventEmitter {
     if (!rec.transcriptPath || !existsSync(rec.transcriptPath)) throw new FleetError(409, "its transcript is missing, so a resume would start empty");
 
     const pid = view.pid;
+    // Read how it was launched before it is gone: the resume keeps its flags
+    // and its shell's environment (src/core/launch.ts).
+    const adapter = this.adapter(rec.provider);
+    const argv = argvOf(pid) ?? [];
+    if (adapter.headless?.(argv)) throw new FleetError(409, "a scripted one-shot run: something is waiting on its output, so it is left alone");
+    const env = environOf(pid);
+    const launch: Launch = { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} };
     try {
       process.kill(pid, "SIGTERM");
     } catch {
@@ -911,7 +940,8 @@ export class Fleet extends EventEmitter {
     }
     // Let the CLI's own exit bookkeeping (session files, locks) settle.
     await Bun.sleep(500);
-    this.startTmux(rec, account, cwd);
+    updateSessionRecord(id, { launch });
+    this.startTmux({ ...rec, launch }, account, cwd);
     await this.tick();
     return this.get(id);
   }
@@ -922,6 +952,13 @@ export class Fleet extends EventEmitter {
       throw new FleetError(409, s.host === "external" ? "running in another terminal — adopt it to type here" : "not running — resume it first");
     }
     await this.deps.runtime.sendText(s.tmux, text);
+  }
+
+  /** What the session's terminal shows now, as plain text. */
+  screen(id: string): string {
+    const s = this.get(id);
+    if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, s.host === "external" ? "running in another terminal; its screen is not ours to read" : "not running");
+    return this.deps.runtime.capture(s.tmux) ?? "";
   }
 
   keys(id: string, keys: string[]): void {
@@ -1015,27 +1052,34 @@ function compactFacts(f: TranscriptFacts): Partial<TranscriptFacts> {
 
 /**
  * A board title from a first prompt: its first line, trimmed at a word
- * boundary. Prompts that are pasted logs or slash commands make poor titles,
- * so those fall through to the directory name.
+ * boundary. A prompt that opens with markup (a pasted log, a message another
+ * agent sent) makes a poor title, so it falls through to the directory name;
+ * a slash command (`/release`) says what the session is for, so it stays.
  */
 export function headline(prompt: string | null | undefined): string | null {
   if (!prompt) return null;
   const line = prompt.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
-  if (!line || line.startsWith("/") || line.startsWith("<")) return null;
+  if (!line || line.startsWith("<")) return null;
   if (line.length <= 80) return line;
   const cut = line.slice(0, 80);
   const space = cut.lastIndexOf(" ");
   return `${space > 40 ? cut.slice(0, space) : cut}…`;
 }
 
+/** The repository a directory belongs to: for a linked worktree, the main
+ *  checkout it was made from, so worktree sessions group, filter and name
+ *  under their repo rather than under their worktree directory. */
 const roots = new Map<string, string | null>();
 function repoRootOf(cwd: string): string | null {
   if (!cwd) return null;
   if (roots.has(cwd)) return roots.get(cwd)!;
   let root: string | null = null;
   if (existsSync(cwd)) {
-    const r = run(["git", "rev-parse", "--show-toplevel"], cwd);
-    root = r.code === 0 ? r.stdout.trim() || null : null;
+    const r = run(["git", "rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"], cwd);
+    const [top, common] = r.code === 0 ? r.stdout.trim().split("\n") : [];
+    // A common dir not named .git (bare repo, --separate-git-dir) has no main
+    // checkout to point at; the worktree itself is the best answer.
+    root = common?.endsWith("/.git") ? dirname(common) : top || null;
   }
   roots.set(cwd, root);
   return root;
