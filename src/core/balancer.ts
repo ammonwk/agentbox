@@ -105,6 +105,13 @@ function rates(a: number, b: number): [string, string] {
   return [a.toFixed(d), b.toFixed(d)];
 }
 
+/** At its 5-hour limit now and not resetting within the horizon (which would
+ *  have raised its room): a session placed there stalls on its first turn.
+ *  Claims are an estimate; this is not. */
+function atShortLimit(c: Candidate): boolean {
+  return c.short !== null && c.short >= 100 && c.legRoom === 0;
+}
+
 function evaluate(
   state: AccountState,
   req: Pick<PlaceRequest, "model" | "settings" | "now">,
@@ -141,7 +148,9 @@ function evaluate(
   if (short) {
     c.short = round1(usedNow(short, now));
     c.shortEffective = round1(c.short + (outstanding * 100) / settings.shortWindowInWeekly);
-    let room = Math.max(0, 100 - c.shortEffective);
+    // Unfloored until the end: below zero is how far claims overrun the
+    // window, which is what separates two accounts that both have none.
+    let room = 100 - c.shortEffective;
     // A window about to reset is mostly fresh room: over the next
     // `resetHorizonMin` a new session spends little time in what is left of
     // this window and most of it in the next one.
@@ -152,14 +161,19 @@ function evaluate(
     // at 97% weekly with a fresh 5-hour window can run about an eighth of a
     // window before it hits the weekly wall, so that is its room — not 100.
     if (c.weeklyEffective !== null) {
-      const weeklyRoom = (Math.max(0, 100 - c.weeklyEffective) * 100) / settings.shortWindowInWeekly;
+      const weeklyRoom = ((100 - c.weeklyEffective) * 100) / settings.shortWindowInWeekly;
       room = Math.min(room, weeklyRoom);
     }
-    c.legRoom = round1(room);
+    c.legRoom = round1(Math.max(0, room));
+    c.score = round1(room);
   } else if (weekly) {
     // No short window (codex since August 2026): nothing short-term to run
     // into, so every account has full leg room and the weekly rate decides.
     c.legRoom = 100;
+    c.score = 100;
+  } else {
+    // Finite, so it survives JSON; sorts below any real room.
+    c.score = -Number.MAX_VALUE;
   }
 
   if (!state.account.enabled) {
@@ -171,6 +185,9 @@ function evaluate(
   } else if (state.sameAs) {
     c.eligible = false;
     c.reason = `same login as ${state.sameAs} — one usage pool, placed there`;
+  } else if (atShortLimit(c)) {
+    c.eligible = false;
+    c.reason = `5-hour limit reached (${c.short}%)`;
   } else if (c.weeklyEffective !== null && c.weeklyEffective >= 100) {
     c.eligible = false;
     c.reason =
@@ -182,7 +199,6 @@ function evaluate(
     c.reason = `${scoped.scope!.model} weekly limit reached (${round1(usedNow(scoped, now))}%)`;
   }
 
-  c.score = c.legRoom ?? -1;
   return c;
 }
 
@@ -202,6 +218,10 @@ function bandWidth(best: number, tieBand: number): number {
  * the leader is a tie, settled by weekly left per hour (use it or lose it),
  * then by fewer outstanding claims, then by name for determinism.
  *
+ * Accounts with no room at all are not tied with each other, though: the one
+ * least overrun by claims (`score`, the room before it is floored at zero)
+ * goes first, since it is the least likely to stall.
+ *
  * The band is anchored to the leader rather than applied pairwise, because a
  * pairwise "within 10 points" is not transitive and would make the order
  * depend on input order. And it is anchored among *eligible* accounts only: a
@@ -218,6 +238,7 @@ function rank(candidates: Candidate[], tieBand: number): Candidate[] {
       (a, b) =>
         band(a) - band(b) ||
         (band(a) === 1 ? b.legRoom! - a.legRoom! : 0) ||
+        (a.legRoom === 0 && b.legRoom === 0 ? b.score - a.score : 0) ||
         (b.weeklyPerHour ?? -1) - (a.weeklyPerHour ?? -1) ||
         a.outstanding - b.outstanding ||
         a.label.localeCompare(b.label),
@@ -256,9 +277,10 @@ export function place(req: PlaceRequest): Placement {
     // Claims are estimates. When every account is spoken for but some still
     // has real weekly left, refusing outright would leave work undone that the
     // accounts could in fact do — so overflow onto the least-claimed one, and
-    // say so. Only a truly exhausted (or switched-off) fleet refuses.
+    // say so. Only a truly exhausted (or switched-off) fleet refuses — and
+    // an account at its 5-hour limit is exhausted for now, estimate or not.
     const open = candidates
-      .filter((c) => req.accounts.find((a) => a.account.id === c.accountId)?.account.enabled && (c.weekly === null || c.weekly < 100))
+      .filter((c) => req.accounts.find((a) => a.account.id === c.accountId)?.account.enabled && (c.weekly === null || c.weekly < 100) && !atShortLimit(c))
       .sort((a, b) => (a.weeklyEffective ?? 0) - (b.weeklyEffective ?? 0) || (b.legRoom ?? 0) - (a.legRoom ?? 0));
     const least = open[0];
     if (least) {
@@ -266,14 +288,14 @@ export function place(req: PlaceRequest): Placement {
         ...base,
         accountId: least.accountId,
         mode: "overflow",
-        why: `every ${req.provider} account's weekly is fully claimed by running sessions; ${least.label} is the least claimed (${least.weekly}% used + ${least.outstanding} claimed)`,
+        why: `no ${req.provider} account has both unclaimed weekly and an open 5-hour window; ${least.label} is the least claimed (${least.weekly}% used + ${least.outstanding} claimed)`,
       };
     }
     return {
       ...base,
       accountId: null,
       mode: "none",
-      why: `every ${req.provider} account is at its weekly limit or turned off — pick one by hand to go anyway`,
+      why: `every ${req.provider} account is at its weekly or 5-hour limit, or turned off — pick one by hand to go anyway`,
     };
   }
 
@@ -285,10 +307,13 @@ function explain(chosen: Candidate, eligible: Candidate[], tieBand: number): str
   if (eligible.length === 1) {
     return chosen.legRoom === null
       ? `${chosen.label} is the only account that can take it (usage unknown)`
-      : `${chosen.label} is the only account with weekly left`;
+      : `${chosen.label} is the only account that can take it`;
   }
   const next = eligible[1]!;
   if (chosen.legRoom === null) return `${chosen.label}: no usage reading for any account, so the first one`;
+  if (chosen.legRoom === 0 && next.legRoom === 0) {
+    return `no account has room to spare; ${chosen.label} is the least overrun by claims (room ${chosen.score} vs ${next.label} ${next.score})`;
+  }
   const outsideBand = next.legRoom === null || chosen.legRoom - next.legRoom > bandWidth(chosen.legRoom, tieBand);
   if (outsideBand && chosen.shortEffective !== null) {
     return `${chosen.label} has the most room (${chosen.legRoom} vs ${next.label} ${next.legRoom}, counting both its 5-hour and its weekly)`;

@@ -4,6 +4,8 @@ import { ago, api } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
+import { AccountPicker } from "../newsession/AccountPicker";
+import "../newsession.css";
 import { useAction } from "./useAction";
 
 /** What the composer can do for a session, and the sentence that says so. */
@@ -35,7 +37,7 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * session in someone else's terminal cannot be typed into until adopted, so
  * the box is replaced by the Adopt explanation.
  */
-export function Composer({ session, accounts }: { session: Session; accounts: readonly AccountView[] }) {
+export function Composer({ session, accounts, claimIdleMin }: { session: Session; accounts: readonly AccountView[]; claimIdleMin: number }) {
   const [text, setText] = useState("");
   const { run, busy, error, clear } = useAction();
   const mode = composerMode(session);
@@ -117,7 +119,7 @@ export function Composer({ session, accounts }: { session: Session; accounts: re
         </div>
       ) : null}
 
-      {session.limitHit ? <LimitBanner session={session} accounts={accounts} /> : null}
+      {session.limitHit ? <LimitBanner session={session} accounts={accounts} claimIdleMin={claimIdleMin} /> : null}
 
       {mode.kind !== "adopt" ? (
       <div className="cmp-row">
@@ -196,29 +198,48 @@ export function Composer({ session, accounts }: { session: Session; accounts: re
 
 const CONTINUE = "Usage limits have reset, continue";
 
+/** Providers whose adapter can move a transcript between account homes
+ *  (`moveSession`); the others can only continue where they are. */
+const MOVABLE = new Set(["claude", "devin"]);
+
 /**
  * The session stopped at its account's limit. Nothing moves it on its own —
  * a move is a cache miss you should choose — so this offers the one-click
  * version: continue on the account with the most room (the balancer's pick,
- * shown before you click), telling the agent to carry on.
+ * shown before you click), or on whichever account you pick instead, telling
+ * the agent to carry on.
  */
-function LimitBanner({ session, accounts }: { session: Session; accounts: readonly AccountView[] }) {
+function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; accounts: readonly AccountView[]; claimIdleMin: number }) {
   const { run, busy, error, clear } = useAction();
   const [placement, setPlacement] = useState<Placement | null>(null);
+  const [placeErr, setPlaceErr] = useState<string | null>(null);
+  const [choice, setChoice] = useState("auto");
   const hit = session.limitHit!;
   useEffect(() => {
     let cancelled = false;
+    setChoice("auto");
     api
       .placement({ provider: session.provider, big: session.big, ...(session.model ? { model: session.model } : {}) })
-      .then((p) => !cancelled && setPlacement(p))
-      .catch(() => !cancelled && setPlacement(null));
+      .then((p) => {
+        if (cancelled) return;
+        setPlacement(p);
+        setPlaceErr(null);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setPlacement(null);
+        setPlaceErr(e instanceof Error ? e.message : String(e));
+      });
     return () => {
       cancelled = true;
     };
   }, [session.id, hit.at]);
 
+  const mine = accounts.filter((a) => a.provider === session.provider);
+  const canMove = MOVABLE.has(session.provider) && mine.length > 1;
   const here = accounts.find((a) => a.id === session.accountId) ?? null;
-  const target = placement?.accountId && placement.mode !== "none" ? accounts.find((a) => a.id === placement.accountId) ?? null : null;
+  const auto = placement?.accountId && placement.mode !== "none" ? accounts.find((a) => a.id === placement.accountId) ?? null : null;
+  const target = choice !== "auto" ? mine.find((a) => a.id === choice) ?? null : canMove ? auto : null;
   const moves = !!target && target.id !== session.accountId;
   const label = moves ? `Continue on ${target!.label}` : "Continue here";
   return (
@@ -239,10 +260,16 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
         ) : (
           <span className="cmp-limit-why">
             {moves
-              ? `${target!.label} has the most room. Moving costs one cold cache read; the agent is told “${CONTINUE}”.`
-              : placement
-                ? `No other account has more room, so this just tells it “${CONTINUE}”.`
-                : "Asking the balancer where there is room…"}
+              ? `${choice !== "auto" ? "" : placement?.mode === "overflow" ? `${target!.label} is the least claimed. ` : `${target!.label} has the most room. `}Moving costs one cold cache read; the agent is told “${CONTINUE}”.`
+              : choice !== "auto"
+                ? `Stays here; the agent is told “${CONTINUE}”.`
+                : !canMove
+                  ? `It can only continue here, so this just tells it “${CONTINUE}”.`
+                  : placement
+                    ? `The balancer would keep it here, so this just tells it “${CONTINUE}”.`
+                    : placeErr
+                      ? `Could not ask the balancer (${placeErr}); pick an account below, or continue here.`
+                      : "Asking the balancer where there is room…"}
           </span>
         )}
       </div>
@@ -251,12 +278,26 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
         variant="primary"
         icon={Icon.play}
         loading={busy}
-        disabled={!placement}
-        title={placement?.why}
-        onClick={() => void run(() => api.move(session.id, { accountId: target?.id ?? "auto", prompt: CONTINUE }))}
+        disabled={choice === "auto" && !placement && !placeErr}
+        title={choice === "auto" ? placement?.why : undefined}
+        onClick={() => void run(() => api.move(session.id, { accountId: moves ? target!.id : session.accountId ?? "auto", prompt: CONTINUE }))}
       >
         {label}
       </Button>
+      {canMove ? (
+        <div className="cmp-limit-pick">
+          <AccountPicker
+            accounts={mine}
+            allAccounts={[...accounts]}
+            value={choice}
+            onChange={setChoice}
+            placement={placement}
+            placing={!placement && !placeErr}
+            placeErr={placeErr}
+            claimIdleMin={claimIdleMin}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

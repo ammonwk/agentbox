@@ -35,7 +35,7 @@ export function candidateCells(c: Candidate, chosenId: string | null): Candidate
     short: arrow(c.short, c.shortEffective),
     legRoom: c.legRoom == null ? "—" : fmtPts(c.legRoom),
     perHour: c.weeklyPerHour == null ? "—" : `${c.weeklyPerHour.toFixed(2)}/h`,
-    score: Number.isFinite(c.score) ? c.score.toFixed(1) : "—",
+    score: c.legRoom == null ? "—" : c.score.toFixed(1),
     eligible: c.eligible,
     verdict: c.eligible ? "eligible" : c.reason ?? "not eligible",
     chosen: c.accountId === chosenId,

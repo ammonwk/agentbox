@@ -137,7 +137,9 @@ export interface Candidate {
   /** Weekly points left per hour until the weekly reset. */
   weeklyPerHour: number | null;
   outstanding: number;
-  /** Ordering key; higher wins. */
+  /** Room before it is floored at 0 (below zero: how far claims overrun
+   *  it); what orders accounts that all have none. -Number.MAX_VALUE when
+   *  usage is unknown. */
   score: number;
 }
 

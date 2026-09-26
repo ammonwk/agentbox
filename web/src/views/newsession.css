@@ -553,6 +553,13 @@
   .ns-start-on {
     display: none;
   }
+  /* A phone is too narrow for label, plan, two bars and a tag on one line:
+     unwrapped, the label shrank to nothing and the tag sat on the bars. */
+  .ns-acct-opt .ns-acct-title,
+  .ns-acct-line {
+    flex-wrap: wrap;
+    row-gap: 3px;
+  }
 }
 
 /* effort, beside the model */

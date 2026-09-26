@@ -988,6 +988,7 @@
 /* Stopped at a usage limit: say where, and offer to carry on elsewhere. */
 .cmp-limit {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 11px;
   padding: 9px 12px;
@@ -1001,7 +1002,9 @@
   color: var(--warning);
 }
 .cmp-limit-body {
-  flex: 1;
+  /* The basis lets a long "Continue on <account>" wrap below instead of
+     squeezing the text into a column. */
+  flex: 1 1 220px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1016,6 +1019,15 @@
 .cmp-limit-why {
   color: var(--faint);
   font-size: 11.5px;
+}
+/* The account picker is a row of its own under the banner's text. */
+.cmp-limit-pick {
+  flex-basis: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 26px;
 }
 .cmp-limit-err {
   color: var(--danger);

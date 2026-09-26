@@ -404,7 +404,7 @@ function Detail({
       </div>
       </PrBase.Provider>
 
-      <Composer session={session} accounts={state.accounts} />
+      <Composer session={session} accounts={state.accounts} claimIdleMin={state.settings.balancer.claimIdleMin} />
 
       {confirmStop ? (
         <Confirm
