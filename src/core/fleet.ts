@@ -766,9 +766,18 @@ export class Fleet extends EventEmitter {
             holds.set(v.id, "something stirred since the last check");
             continue;
           }
-          for (const pid of check.agentPids) this.dying.set(pid, { since: this.now(), start: startedAtOf(pid), termed: false });
+          if (this.deps.runtime.listPanes().some((p) => p.name === v.tmux && p.clients > 0)) {
+            holds.set(v.id, "a terminal or browser is attached to it");
+            continue;
+          }
+          const starts = check.agentPids.map((pid) => [pid, startedAtOf(pid)] as const);
           this.deps.runtime.killSession(v.tmux!);
           clean.delete(v.id);
+          if (this.paneAlive(v.tmux)) {
+            holds.set(v.id, "tmux did not stop it");
+            continue;
+          }
+          for (const [pid, start] of starts) this.dying.set(pid, { since: this.now(), start, termed: false });
           updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null });
           // The board says so now, not a tick from now: a message sent in
           // between must resume it, not type into a pane that is gone.
@@ -801,6 +810,16 @@ export class Fleet extends EventEmitter {
       }
       try {
         if (now - d.since > 120_000) {
+          // Its tool shells run in process groups of their own, which the
+          // hangup never reached and nothing will clean up after a SIGKILL.
+          for (const kid of childrenOf(pid)) {
+            if (!isToolShell(argvOf(kid)?.join(" "))) continue;
+            try {
+              process.kill(-kid, "SIGTERM");
+            } catch {
+              /* not a group leader, or gone */
+            }
+          }
           process.kill(pid, "SIGKILL");
           this.dying.delete(pid);
         } else if (now - d.since > 10_000 && !d.termed) {
@@ -832,7 +851,7 @@ export class Fleet extends EventEmitter {
 
     // Every pane is an agent: the lead, and teammates, which name their team
     // and themselves on the command line.
-    const agents: { pid: number; team: string | null; name: string | null }[] = [];
+    const agents: { pid: number; team: string | null; name: string | null; sessionId: string | null; started: number }[] = [];
     for (const pane of panes) {
       if (pane.dead) continue;
       const argv = argvOf(pane.pid);
@@ -844,7 +863,7 @@ export class Fleet extends EventEmitter {
         const i = argv.indexOf(f);
         return i === -1 ? null : (argv[i + 1] ?? null);
       };
-      agents.push({ pid: pane.pid, team: flag("--team-name"), name: flag("--agent-name") });
+      agents.push({ pid: pane.pid, team: flag("--team-name"), name: flag("--agent-name"), sessionId: flag("--session-id"), started: started ?? 0 });
     }
 
     // The conversations: its own, and every member's of a team with a pane
@@ -857,9 +876,8 @@ export class Fleet extends EventEmitter {
         family.push({ name: `teammate ${t.facts.title ?? t.facts.agentSessionId.slice(0, 8)}`, t });
       }
     }
-    for (const team of teams) {
-      if (!family.some((m) => m.t.facts?.team === team)) return `its teammates' transcripts (${team}) have not been found`;
-    }
+    // A team whose transcripts are not tracked has been quiet longer than
+    // the board's window: nothing to check there beyond its processes below.
     const monitors = new Set<string>();
     for (const { name, t } of family) {
       const f = t.facts!;
@@ -870,7 +888,9 @@ export class Fleet extends EventEmitter {
       }
       let scan = this.wakeScans.get(t.ref.path);
       if (!scan) this.wakeScans.set(t.ref.path, (scan = new WakeScan(t.ref.path)));
-      const wake = await scan.hold(now);
+      // Timers set before these processes started died with the one before.
+      const since = Math.min(...agents.map((a) => a.started), now);
+      const wake = await scan.hold(now, since);
       if (wake) return name === "it" ? wake : `${name}: ${wake}`;
       for (const m of scan.monitors) monitors.add(m);
       const sub = subagentsLastWrite(t.ref.path, f.agentSessionId);
@@ -881,7 +901,9 @@ export class Fleet extends EventEmitter {
     const shells: number[] = [];
     let cpuTicks = 0;
     for (const a of agents) {
-      const owners = [`pid:${a.pid}`, ...family.map((m) => m.t.facts!.agentSessionId)];
+      // The subagent MCP names its owner by the `--session-id` its client was
+      // started with, which a `/clear` does not change.
+      const owners = [`pid:${a.pid}`, ...(a.sessionId ? [a.sessionId] : []), ...family.map((m) => m.t.facts!.agentSessionId)];
       if (live.some((e) => owners.includes(e.owner))) return "omp subagents are running";
       cpuTicks += subtreeCpuTicks(subtree(table, a.pid));
       for (const kid of table.children.get(a.pid) ?? []) {
@@ -1617,9 +1639,10 @@ export class Fleet extends EventEmitter {
     const started = this.startedAt.get(id);
     if (!started) return;
     const rec = getSessionRecord(id);
-    const key = rec?.agentSessionId ? `${rec.provider}:${rec.agentSessionId}` : null;
+    if (!rec?.agentSessionId) return; // nothing to watch for (a fresh codex or devin)
+    const key = `${rec.provider}:${rec.agentSessionId}`;
     while (this.now() - started < 30_000) {
-      const p = key ? this.live.get(key) : undefined;
+      const p = this.live.get(key);
       if (p && p.startedAt >= started - 5_000) {
         if (this.now() - started < 8_000) await Bun.sleep(1_500);
         return;

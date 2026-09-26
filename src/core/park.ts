@@ -44,6 +44,10 @@ export const SERVICE_GRACE_MS = 4 * 3_600_000;
  * its transcript, a teammate its own, and a model reply lands in minutes.
  */
 export const STALE_TURN_MS = 2 * 3_600_000;
+/** A background command that has only been sleeping between checks keeps
+ *  its session up this long after the conversation goes quiet. Anything it
+ *  was waiting on has had a day; one still polling is taken to be stuck. */
+export const POLL_MAX_MS = 24 * 3_600_000;
 /** A subagent that wrote to its transcript this recently is still working;
  *  long, because one large generation (a big Write, long thinking) writes
  *  nothing until it ends. */
@@ -56,7 +60,7 @@ export const ONE_SHOT_MAX_MS = 24 * 3_600_000;
 
 // ---------------------------------------------------------------- shells
 
-export type ShellKind = "work" | "service" | "follower";
+export type ShellKind = "work" | "poller" | "service" | "follower";
 
 /**
  * The command a shell tool call is running, without the wrapper.
@@ -93,10 +97,11 @@ const FOLLOWERS: RegExp[] = [
   /(^|\/)less\b.*\s\+F\b/,
 ];
 
-/** What may sit downstream of a follower without making it finite. */
-const FILTER = /(^|\/)(grep|egrep|rg|awk|sed|cat|tee|jq|cut|tr)\b/;
+/** What may sit downstream of a follower without making it finite. (Claude
+ *  Code's shell runs `grep` as `ugrep`.) */
+const FILTER = /(^|\/)(u?grep|egrep|rg|awk|sed|cat|tee|jq|cut|tr)\b/;
 /** ...unless it quits on a match, which is a completion waiter. */
-const QUITS = /\bgrep\b.*\s(-[a-zA-Z]*[mq]|--max-count|--quiet)|\bsed\b.*q['"]?(\s|$)|\bawk\b.*\bexit\b|(^|[\s\/|])head\b|\brg\b.*\s(-m|--max-count)/;
+const QUITS = /\bu?grep\b.*\s(-[a-zA-Z]*[mq]|--max-count|--quiet)|\bsed\b.*q['"]?(\s|$)|\bawk\b.*\bexit\b|(^|[\s\/|])head\b|\brg\b.*\s(-m|--max-count)/;
 
 /**
  * Commands that serve until killed: you may be using one, but it never
@@ -168,6 +173,10 @@ function idleProcess(c: string): boolean {
  */
 export function classifyShell(command: string, running: string[]): ShellKind {
   if (SERVICES.some((re) => re.test(command)) || sshTunnel(command)) return "service";
+  // Waiting on something outside it — a PR, a file, a remote job. Work, but
+  // a poll whose condition cannot come true (`until ! pgrep -f x` matches
+  // its own command line) looks exactly like this forever.
+  if (running.length > 0 && running.every((c) => /(^|\/)sleep\s(?!inf)/.test(c)) && !endlessLoop(command)) return "poller";
   if (QUITS.test(command)) return "work";
   const live = running.length ? running : [command];
   // An endless loop only waits between rounds; while a round runs anything
@@ -183,6 +192,9 @@ export function shellHold(kind: ShellKind, label: string, quietMs: number): stri
   if (kind === "follower") return null;
   if (kind === "service") {
     return quietMs < SERVICE_GRACE_MS ? `a server is running (${label}); it is stopped with the session after ${hours(SERVICE_GRACE_MS)} quiet` : null;
+  }
+  if (kind === "poller") {
+    return quietMs < POLL_MAX_MS ? `a background command is waiting (${label})` : null;
   }
   return `a background command is running (${label})`;
 }
@@ -209,20 +221,25 @@ export function normalCommand(c: string): string {
  */
 export class WakeScan {
   private offset = 0;
-  private wakeDue: number | null = null;
-  private crons = new Map<string, { until: number }>();
+  private wake: { due: number; setAt: number } | null = null;
+  private crons = new Map<string, { until: number; setAt: number; durable: boolean }>();
   /** Every command a Monitor call started, whitespace-collapsed. */
   readonly monitors = new Set<string>();
 
   constructor(private readonly path: string) {}
 
-  /** Why the session must stay up to be woken, or null. */
-  async hold(now: number): Promise<string | null> {
+  /**
+   * Why the session must stay up to be woken, or null. `since` is when the
+   * running process started: a wakeup or session-only cron set before it
+   * died with the process that set it.
+   */
+  async hold(now: number, since: number): Promise<string | null> {
     await this.read();
-    if (this.wakeDue !== null && this.wakeDue > now - WAKE_GRACE_MS) {
-      return `a /loop wakeup is due ${this.wakeDue > now ? `in ${minutes(this.wakeDue - now)}` : "now"}`;
+    const w = this.wake;
+    if (w && w.setAt >= since && w.due > now - WAKE_GRACE_MS) {
+      return `a /loop wakeup is due ${w.due > now ? `in ${minutes(w.due - now)}` : "now"}`;
     }
-    for (const [id, c] of this.crons) if (c.until > now) return `cron job ${id} is scheduled`;
+    for (const [id, c] of this.crons) if (c.until > now && (c.durable || c.setAt >= since)) return `cron job ${id} is scheduled`;
     return null;
   }
 
@@ -236,7 +253,7 @@ export class WakeScan {
     if (size < this.offset) {
       // Rewritten from scratch: start over.
       this.offset = 0;
-      this.wakeDue = null;
+      this.wake = null;
       this.crons.clear();
       this.monitors.clear();
     }
@@ -294,11 +311,12 @@ export class WakeScan {
     const tur = r?.toolUseResult;
     if (tur && typeof tur.id === "string" && typeof tur.humanSchedule === "string" && Number.isFinite(at)) {
       const text = JSON.stringify(r.message?.content ?? "");
+      const durable = tur.durable === true;
       if (tur.recurring) {
         const days = Number(/expires after (\d+) days?/i.exec(text)?.[1] ?? 7);
-        this.crons.set(tur.id, { until: at + days * 86_400_000 });
+        this.crons.set(tur.id, { until: at + days * 86_400_000, setAt: at, durable });
       } else {
-        this.crons.set(tur.id, { until: oneShotFire(tur.humanSchedule, at) + WAKE_GRACE_MS });
+        this.crons.set(tur.id, { until: oneShotFire(tur.humanSchedule, at) + WAKE_GRACE_MS, setAt: at, durable });
       }
       return;
     }
@@ -308,7 +326,7 @@ export class WakeScan {
       if (b?.type !== "tool_use") continue;
       if (b.name === "ScheduleWakeup") {
         const delay = Number(b.input?.delaySeconds);
-        this.wakeDue = b.input?.stop || !Number.isFinite(at) || !Number.isFinite(delay) ? null : at + delay * 1000;
+        this.wake = b.input?.stop || !Number.isFinite(at) || !Number.isFinite(delay) ? null : { due: at + delay * 1000, setAt: at };
       } else if (b.name === "CronDelete") {
         this.crons.delete(String(b.input?.id ?? ""));
       } else if (b.name === "Monitor" && typeof b.input?.command === "string") {
