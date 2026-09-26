@@ -278,6 +278,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     cold: false,
     limitHit: null,
     origin: "agentbox",
+    parent: null,
     pid: live ? 40000 + Math.floor(Math.random() * 20000) : null,
     tmux: p.host === "tmux" ? `ab-${p.id}` : null,
     transcriptPath: null,
@@ -398,6 +399,17 @@ const sessions: MockSession[] = [
     lastMessage: "The addon-fit needs the container to have a real height before `fit()`; a ResizeObserver solves it.",
     tokens: { input: 8_000, output: 3_000, cacheRead: 40_000, cacheWrite: 9_000, costEquiv: 0.4 },
     startedAt: T0 - 4 * D, lastActivityAt: T0 - 4 * D + 2 * H, archivedAt: T0 - 3 * D,
+  }),
+  // Two teammates of 7fk2, nested under it on the board.
+  sess({
+    id: "t1a2", provider: "claude", accountId: "cl-work", status: "waiting", host: "tmux", origin: "external", parent: "7fk2",
+    title: "tie-tests", cwd: `${AB}/.worktrees/balancer-ties`, repoRoot: `${AB}/.worktrees/balancer-ties`, model: "claude-fable-5-1",
+    lastMessage: "Tests for the tie band are in; waiting on the lead.", lastActivityAt: T0 - 9 * M,
+  }),
+  sess({
+    id: "t3b4", provider: "codex", accountId: "cx-main", status: "stopped", host: "none", origin: "external", parent: "7fk2",
+    title: "Review the tie-break change", cwd: `${AB}/.worktrees/balancer-ties`, repoRoot: `${AB}/.worktrees/balancer-ties`,
+    lastMessage: "No findings.", lastActivityAt: T0 - 40 * M,
   }),
 ];
 

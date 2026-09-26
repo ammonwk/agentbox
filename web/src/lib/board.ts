@@ -75,6 +75,32 @@ export interface Section<T> {
   rows: T[];
 }
 
+/** A row placed in the tree: how deep it sits under the session that started
+ *  it, and how many sessions it started are here under it. */
+export type Nested<T> = T & { depth: number; kids: number };
+
+/**
+ * The row each row nests under: its parent, when the parent is one of `rows`.
+ * A parent that is archived (and not shown), filtered out or gone leaves its
+ * children at the root. So does a loop, which would otherwise hide itself.
+ */
+export function parentsOf(rows: readonly Pick<Session, "id" | "parent">[]): Map<string, string> {
+  const ids = new Set(rows.map((r) => r.id));
+  const up = new Map<string, string>();
+  for (const r of rows) if (r.parent && r.parent !== r.id && ids.has(r.parent)) up.set(r.id, r.parent);
+  for (const r of rows) {
+    const seen = new Set<string>();
+    for (let x: string | undefined = r.id; x !== undefined; x = up.get(x)) {
+      if (seen.has(x)) {
+        up.delete(x);
+        break;
+      }
+      seen.add(x);
+    }
+  }
+  return up;
+}
+
 const SECTION_LABEL: Record<AttentionKind, string> = {
   blocked: "Blocked",
   waiting: "Your turn",
@@ -83,11 +109,31 @@ const SECTION_LABEL: Record<AttentionKind, string> = {
   archived: "Archived",
 };
 
-/** Sections always in the same order so the board does not reshuffle under the cursor. */
-export function sectionsOf<T extends SessionRow>(rows: readonly T[]): Section<T>[] {
-  const sorted = sortByAttention(rows);
+/**
+ * Sections always in the same order so the board does not reshuffle under the
+ * cursor. A session another one started sits under it, in its section whatever
+ * its own status, and only while `open` says its parent is expanded.
+ */
+export function sectionsOf<T extends SessionRow>(rows: readonly T[], open: (id: string) => boolean = () => true): Section<Nested<T>>[] {
+  const up = parentsOf(rows);
+  const kids = new Map<string, T[]>();
+  const roots: T[] = [];
+  for (const s of sortByAttention(rows)) {
+    const p = up.get(s.id);
+    if (p) kids.set(p, [...(kids.get(p) ?? []), s]);
+    else roots.push(s);
+  }
+  const place = (s: T, depth: number, out: Nested<T>[]) => {
+    const k = kids.get(s.id) ?? [];
+    out.push({ ...s, depth, kids: k.length });
+    if (open(s.id)) for (const c of k) place(c, depth + 1, out);
+  };
   return (Object.keys(KIND_ORDER) as AttentionKind[])
-    .map((kind) => ({ kind, label: SECTION_LABEL[kind], rows: sorted.filter((s) => s.attention.kind === kind) }))
+    .map((kind) => {
+      const out: Nested<T>[] = [];
+      for (const r of roots) if (r.attention.kind === kind) place(r, 0, out);
+      return { kind, label: SECTION_LABEL[kind], rows: out };
+    })
     .filter((s) => s.rows.length > 0);
 }
 
@@ -121,9 +167,11 @@ export function contextPct(s: Pick<Session, "contextUsed" | "contextLimit">): nu
   return Math.min(100, (s.contextUsed / s.contextLimit) * 100);
 }
 
-/** Counts for the nav badge and the tab title: things that want a human. */
+/** Counts for the nav badge and the tab title: things that want a human. A
+ *  helper waiting on the session that started it is waiting on that session. */
 export function needsYou(rows: readonly SessionRow[]): number {
-  return rows.filter((s) => s.attention.kind === "blocked" || s.attention.kind === "waiting").length;
+  const up = parentsOf(rows.filter((s) => s.status !== "archived"));
+  return rows.filter((s) => s.attention.kind === "blocked" || (s.attention.kind === "waiting" && !up.has(s.id))).length;
 }
 
 /**

@@ -268,6 +268,14 @@ export interface Session {
   limitHit: { at: number; detail: string } | null;
   /** Where this session came from. */
   origin: "agentbox" | "external";
+  /**
+   * The session that started this one — a Claude teammate's lead, or the
+   * session whose process a `codex exec`, `claude -p` or omp ran under, or the
+   * session that asked the API for it. Null for top-level work, which
+   * includes everything the Project session launches. May name a session that
+   * is archived or gone; the board shows such a child at the root.
+   */
+  parent: string | null;
 
   pid: number | null;
   /** tmux session name, when host is "tmux". */

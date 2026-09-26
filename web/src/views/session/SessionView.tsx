@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AppState, ProviderId } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
 import {
@@ -12,7 +12,8 @@ import {
   StatusPill,
 } from "../../bits";
 import { Button, Confirm, Empty, Icon, RelativeTime } from "../../components";
-import { filterSessions, neighbourId, sectionsOf, sentTip, titleOf, usualProvider, type SessionRow } from "../../lib/board";
+import { filterSessions, neighbourId, sectionsOf, sentTip, titleOf, usualProvider, type Nested, type Section, type SessionRow } from "../../lib/board";
+import { openParents } from "../Board";
 import { hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
 import { DiffPanel } from "./DiffPanel";
@@ -55,16 +56,20 @@ export function SessionView({
   const wide = useWide(RAIL_MIN_PX);
 
   // j/k switch sessions from anywhere that is not a text field or the terminal.
-  const ordered = useMemo(
-    () =>
-      sectionsOf(
-        filterSessions(
-          state.sessions.filter((s) => s.id !== state.project.sessionId),
-          { query: "", provider: "all", account: "all", repo: "all", showArchived: session?.status === "archived" },
-        ),
-      ).flatMap((s) => s.rows),
-    [state.sessions, state.project.sessionId, session?.status],
-  );
+  // Folded as on the board, but never with this session folded out of sight.
+  const sections = useMemo(() => {
+    const byId = new Map(state.sessions.map((s) => [s.id, s]));
+    const above = new Set<string>();
+    for (let p = session?.parent; p && !above.has(p); p = byId.get(p)?.parent) above.add(p);
+    return sectionsOf(
+      filterSessions(
+        state.sessions.filter((s) => s.id !== state.project.sessionId),
+        { query: "", provider: "all", account: "all", repo: "all", showArchived: session?.status === "archived" },
+      ),
+      (id) => openParents.has(id) || above.has(id),
+    );
+  }, [state.sessions, state.project.sessionId, session?.status, session?.parent]);
+  const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
@@ -87,7 +92,7 @@ export function SessionView({
 
   return (
     <div className="sv" data-rail={wide ? "on" : "off"}>
-      {wide ? <Rail rows={ordered} state={state} current={id} /> : null}
+      {wide ? <Rail sections={sections} state={state} current={id} /> : null}
       {session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} />
       ) : (
@@ -121,9 +126,8 @@ function useWide(px: number): boolean {
 
 /** The fleet, demoted to a sidebar while you work on one session. Same order
  *  and sections as the board, so a session is never somewhere else here. */
-function Rail({ rows, state, current }: { rows: SessionRow[]; state: AppState; current: string }) {
-  const sections = useMemo(() => sectionsOf(rows), [rows]);
-  const usual = useMemo(() => usualProvider(rows), [rows]);
+function Rail({ sections, state, current }: { sections: Section<Nested<SessionRow>>[]; state: AppState; current: string }) {
+  const usual = useMemo(() => usualProvider(sections.flatMap((s) => s.rows)), [sections]);
   const cur = useRef<HTMLAnchorElement>(null);
   // A block body, not `() => el.scrollIntoView()`: newer browsers return a
   // Promise from scrollIntoView, and React calls whatever an effect returns as
@@ -138,7 +142,7 @@ function Rail({ rows, state, current }: { rows: SessionRow[]; state: AppState; c
         {sections.map((sec) => (
           <div key={sec.kind} className="rail-sec" data-kind={sec.kind}>
             <div className="rail-label">
-              {sec.label} <span>{sec.rows.length}</span>
+              {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length}</span>
             </div>
             {sec.rows.map((s) => (
               <a
@@ -148,6 +152,8 @@ function Rail({ rows, state, current }: { rows: SessionRow[]; state: AppState; c
                 href={hrefOf({ page: "session", id: s.id, tab: "terminal" })}
                 aria-current={s.id === current ? "page" : undefined}
                 data-status={s.status}
+                data-depth={s.depth || undefined}
+                style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
                 title={railTip(s)}
               >
                 <StatusDot status={s.status} />

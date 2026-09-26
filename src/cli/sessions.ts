@@ -96,6 +96,30 @@ function oneOf<T extends string>(flag: string, given: string[] | undefined, know
 
 const repoName = (s: Session) => (s.repoRoot ?? s.cwd).split("/").filter(Boolean).pop() ?? "-";
 
+/**
+ * Rows in tree order: each row whose parent is not among them, followed by
+ * the sessions it started, depth first, every level in the order given.
+ */
+export function nested<T extends Pick<Session, "id" | "parent">>(rows: T[]): { row: T; depth: number }[] {
+  const ids = new Set(rows.map((r) => r.id));
+  const kids = new Map<string, T[]>();
+  for (const r of rows) {
+    if (r.parent && r.parent !== r.id && ids.has(r.parent)) kids.set(r.parent, [...(kids.get(r.parent) ?? []), r]);
+  }
+  const out: { row: T; depth: number }[] = [];
+  const seen = new Set<string>();
+  const walk = (r: T, depth: number) => {
+    if (seen.has(r.id)) return;
+    seen.add(r.id);
+    out.push({ row: r, depth });
+    for (const k of kids.get(r.id) ?? []) walk(k, depth + 1);
+  };
+  for (const r of rows) if (!r.parent || !ids.has(r.parent)) walk(r, 0);
+  // Parents that loop have no root; list them rather than lose them.
+  for (const r of rows) walk(r, 0);
+  return out;
+}
+
 function clock(at: number): string {
   const d = new Date(at);
   const today = new Date().toDateString() === d.toDateString();
@@ -106,9 +130,12 @@ function clock(at: number): string {
 
 // ------------------------------------------------------------------ verbs
 
-/** `agentbox ls [--status a,b] [--idle >2h] [--repo x] [--provider p] [--all] [-q] [--json]` */
+/** `agentbox ls [--status a,b] [--idle >2h] [--repo x] [--provider p] [--all] [--roots] [-q] [--json]`
+ *
+ * A session another one started is listed right after it, its title
+ * indented; `--roots` leaves those out when their parent is on the board. */
 export async function ls(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["status", "idle", "repo", "provider"], ["all", "q", "json"]);
+  const { flags, rest } = parseArgs(args, ["status", "idle", "repo", "provider"], ["all", "roots", "q", "json"]);
   if (rest.length) throw new Error(`unexpected argument "${rest[0]}" (filters are options: --repo, --status, …)`);
   const statuses = oneOf("status", str(flags.get("status"))?.split(","), STATUSES);
   const idle = str(flags.get("idle")) ? idleTest(str(flags.get("idle"))!) : null;
@@ -116,21 +143,25 @@ export async function ls(api: Api, args: string[]): Promise<number> {
   const provider = oneOf("provider", str(flags.get("provider"))?.split(","), PROVIDERS);
   const s = await state(api);
   const now = s.serverTime;
-  const rows = s.sessions
+  const board = s.sessions
     // Its own row is left out, so a pipe into archive/stop cannot take it down.
     .filter((x) => x.id !== s.project.sessionId)
-    .filter((x) => flags.has("all") || x.status !== "archived")
+    .filter((x) => flags.has("all") || x.status !== "archived");
+  const onBoard = new Set(board.map((x) => x.id));
+  const sorted = board
+    .filter((x) => !flags.has("roots") || !x.parent || !onBoard.has(x.parent))
     .filter((x) => !statuses || statuses.includes(x.status))
     .filter((x) => !idle || idle(now - x.lastActivityAt))
     // By name, not path: every agentbox worktree's path contains "agentbox".
     .filter((x) => !repo || repoName(x).toLowerCase().includes(repo))
     .filter((x) => !provider || provider.includes(x.provider))
     .sort((a, b) => a.attention.rank - b.attention.rank || b.lastActivityAt - a.lastActivityAt);
+  const tree = nested(sorted);
   if (flags.has("json")) {
-    console.log(JSON.stringify(rows, null, 2));
+    console.log(JSON.stringify(tree.map((t) => t.row), null, 2));
     return 0;
   }
-  for (const x of rows) {
+  for (const { row: x, depth } of tree) {
     if (flags.has("q")) {
       console.log(x.id);
       continue;
@@ -138,7 +169,7 @@ export async function ls(api: Api, args: string[]): Promise<number> {
     const host = x.host === "tmux" ? "box" : x.host === "external" ? "ext" : "-";
     const where = `${repoName(x)}${x.branch ? `@${x.branch}` : ""}`;
     console.log(
-      [x.id, x.status.padEnd(8), ageOf(now - x.lastActivityAt).padStart(4), host.padEnd(3), x.provider.padEnd(6), where.slice(0, 40).padEnd(40), (x.label ?? x.title).replace(/\s+/g, " ").slice(0, 90)].join("  "),
+      [x.id, x.status.padEnd(8), ageOf(now - x.lastActivityAt).padStart(4), host.padEnd(3), x.provider.padEnd(6), where.slice(0, 40).padEnd(40), (depth ? `${"  ".repeat(depth - 1)}└ ` : "") + (x.label ?? x.title).replace(/\s+/g, " ").slice(0, 90)].join("  "),
     );
   }
   return 0;
@@ -158,6 +189,8 @@ export async function show(api: Api, args: string[]): Promise<number> {
       ["id", x.id],
       ["title", x.label ?? x.title],
       ["status", `${x.status} — ${x.attention.reason}`],
+      ["parent", x.parent],
+      ["children", sessions.filter((c) => c.parent === x.id).map((c) => c.id).join(" ") || null],
       ["host", x.host + (x.tmux ? ` (${x.tmux})` : "") + (x.pid ? ` pid ${x.pid}` : "")],
       ["provider", `${x.provider}${x.model ? ` · ${x.model}` : ""}`],
       ["account", x.accountId ? acct.get(x.accountId) ?? x.accountId : null],

@@ -296,6 +296,7 @@ function usageParts(model: string | null, u: any): Counted[] {
 const SEEN_IDS = 512;
 const MAX_HITS = 200;
 const MAX_CWDS = 64;
+const MAX_TEAMS = 64;
 
 /** Token totals over assistant records, deduplicated by message id. Used for
  *  the main transcript and for each subagent transcript. */
@@ -338,6 +339,8 @@ export class ClaudeFold {
   private customTitle: string | null = null;
   private aiTitle: string | null = null;
   private agentName: string | null = null;
+  private team: string | null = null;
+  private teamsLed = new Set<string>();
   private firstPrompt: string | null = null;
   private lastPrompt: string | null = null;
   private lastPromptAt: number | null = null;
@@ -440,15 +443,35 @@ export class ClaudeFold {
         this.noteCwd(r.cwd);
         if (typeof r.gitBranch === "string" && r.gitBranch) this.gitBranch = r.gitBranch;
         if (side) return;
+        this.teammate(r);
         this.user(r, at);
         return;
       case "assistant":
         this.noteCwd(r.cwd);
         if (typeof r.gitBranch === "string" && r.gitBranch) this.gitBranch = r.gitBranch;
         if (side) return;
+        this.teammate(r);
         this.assistant(r, at);
         return;
     }
+  }
+
+  /**
+   * Agent teams. A member stamps `teamName` and `agentName` on its records —
+   * its name is a better title than its directory, since its first prompt is
+   * the lead's message. The lead's transcript has a `teammate_spawned` tool
+   * result per member it started, naming the team. (The team's config.json
+   * has a `leadSessionId`, but it is not the lead's transcript id.)
+   */
+  private teammate(r: any): void {
+    if (typeof r.teamName === "string" && r.teamName) {
+      this.team ??= r.teamName;
+      if (!this.agentName && typeof r.agentName === "string" && r.agentName) this.agentName = r.agentName;
+    }
+    const spawned = r.toolUseResult;
+    if (spawned?.status !== "teammate_spawned" || this.teamsLed.size >= MAX_TEAMS) return;
+    const team = typeof spawned.team_name === "string" ? spawned.team_name : String(spawned.agent_id ?? "").split("@")[1];
+    if (team) this.teamsLed.add(team);
   }
 
   private prompt(text: string): void {
@@ -588,6 +611,8 @@ export class ClaudeFold {
       rateLimitHits: [...this.hits],
       isSubagent: sub.is,
       parentId: sub.parent,
+      team: this.team,
+      teamsLed: [...this.teamsLed],
     };
   }
 }

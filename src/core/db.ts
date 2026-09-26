@@ -172,6 +172,9 @@ const MIGRATIONS: string[] = [
   // 4 — the model it was started with, likewise: a resume without `--model`
   // runs on the CLI's default.
   `ALTER TABLE sessions ADD COLUMN model TEXT;`,
+  // 5 — the session that started this one (Session.parent); set once, by the
+  // fleet, when it can prove it.
+  `ALTER TABLE sessions ADD COLUMN parent TEXT;`,
 ];
 
 function migrate(d: Database) {
@@ -268,6 +271,8 @@ export interface SessionRecord {
   effort?: string | null;
   /** The model asked for at spawn (`--model`), e.g. `claude-fable-5-1[1m]`. */
   model?: string | null;
+  /** The session that started this one, once proven (see `Fleet.linkParents`). */
+  parent?: string | null;
 }
 
 type SessionRow = {
@@ -275,7 +280,7 @@ type SessionRow = {
   cwd: string; worktree: string | null; label: string | null; big: number; claim: number;
   origin: string; tmux: string | null; transcript_path: string | null; started_at: number;
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
-  launch: string | null; effort: string | null; model: string | null;
+  launch: string | null; effort: string | null; model: string | null; parent: string | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -298,6 +303,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     launch: (parseJson(r.launch) as Launch | null) ?? null,
     effort: r.effort ?? null,
     model: r.model ?? null,
+    parent: r.parent ?? null,
   };
 }
 
@@ -321,6 +327,7 @@ const RECORD_COLUMNS = {
   launch: "launch",
   effort: "effort",
   model: "model",
+  parent: "parent",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;

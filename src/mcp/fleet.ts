@@ -169,7 +169,7 @@ export async function runMcp(base: string): Promise<void> {
         accountId = match.id;
       }
       const out = await api<{ session: Session; placement: Placement }>("POST", "/api/sessions", {
-        provider, cwd, prompt, big, model, accountId,
+        provider, cwd, prompt, big, model, accountId, callerPid: process.pid,
       });
       return text(`started ${out.session.id}: ${out.placement.why}`);
     },

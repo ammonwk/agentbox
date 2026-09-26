@@ -105,6 +105,9 @@ export interface FleetDeps {
    *  transcripts land in omp's store like any other, but they are calls, not
    *  sessions, and a fan-out would bury the board. */
   poolSessions?: () => ReadonlySet<string>;
+  /** The Project session's id. It launches top-level work, so it is never
+   *  recorded as anyone's parent. */
+  projectSession?: () => string | null;
   now?: () => number;
 }
 
@@ -143,6 +146,9 @@ export interface SpawnRequest {
   effort?: string;
   big?: boolean;
   accountId?: string | null;
+  /** The process asking (the CLI, the fleet MCP). A session it runs under
+   *  becomes the new session's parent. */
+  callerPid?: number;
 }
 
 export class Fleet extends EventEmitter {
@@ -166,6 +172,8 @@ export class Fleet extends EventEmitter {
   private answered = new Map<string, { sig: string; at: number; tries: number }>();
   private blocked = new Map<string, string>();
   private tokenSampled = new Map<string, { at: number; costEquiv: number; turnOpen: boolean }>();
+  /** `${session}:${pid}` whose process ancestry has been looked at. */
+  private ancestryChecked = new Set<string>();
   private lastDiscovery = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking: Promise<void> | null = null;
@@ -342,6 +350,7 @@ export class Fleet extends EventEmitter {
       this.emit("transcript", id);
     }
 
+    this.linkParents(since);
     this.observeUsage(now);
     this.reapDeadPanes(now);
     this.rebuildViews(since, now);
@@ -490,6 +499,55 @@ export class Fleet extends EventEmitter {
     });
     this.byAgentId.set(key, id);
     return id;
+  }
+
+  /**
+   * Who started each session, recorded once and kept. Only from proof:
+   *
+   * - A Claude teammate names its team on every record, and its lead's
+   *   transcript records spawning members into that team.
+   * - A process started inside another session — a Bash tool running `codex
+   *   exec` or `claude -p`, an omp — has that session's process above it. Only
+   *   while it runs, and only when its conversation began under that process:
+   *   a session merely resumed from inside another one is not claimed by it.
+   *
+   * Sessions started through the API are given theirs at spawn. The Project
+   * session launches top-level work, so it is never a parent.
+   */
+  private linkParents(since: number): void {
+    const leads = new Map<string, string>();
+    for (const t of this.tracked.values()) {
+      if (!t.facts?.teamsLed?.length) continue;
+      const lead = this.byAgentId.get(`${t.ref.provider}:${t.facts.agentSessionId}`);
+      if (lead) for (const team of t.facts.teamsLed) leads.set(team, lead);
+    }
+    const project = this.deps.projectSession?.() ?? null;
+    for (const rec of listSessionRecords(since)) {
+      if (rec.parent) continue;
+      const team = rec.transcriptPath ? this.tracked.get(rec.transcriptPath)?.facts?.team : null;
+      let parent = team ? leads.get(team) ?? null : null;
+      const proc = rec.agentSessionId ? this.live.get(`${rec.provider}:${rec.agentSessionId}`) : undefined;
+      if (!parent && proc && !this.ancestryChecked.has(`${rec.id}:${proc.pid}`)) {
+        this.ancestryChecked.add(`${rec.id}:${proc.pid}`);
+        if (rec.startedAt >= proc.startedAt - 5_000) parent = this.sessionAbove(proc.pid);
+      }
+      if (parent && parent !== rec.id && parent !== project) updateSessionRecord(rec.id, { parent });
+    }
+  }
+
+  /** The session whose process `pid` runs under: the nearest ancestor that is
+   *  a live session's own process. */
+  private sessionAbove(pid: number): string | null {
+    let cur = ppidOf(pid);
+    for (let i = 0; i < 32 && cur !== null && cur > 1; i++) {
+      const p = this.livePids.get(cur);
+      if (p?.agentSessionId) {
+        const id = this.byAgentId.get(`${p.provider}:${p.agentSessionId}`) ?? findSessionRecord(p.provider, p.agentSessionId)?.id;
+        if (id) return id;
+      }
+      cur = ppidOf(cur);
+    }
+    return null;
   }
 
   private persistFacts(id: string, t: Tracked, now: number): void {
@@ -689,6 +747,7 @@ export class Fleet extends EventEmitter {
       cold,
       limitHit,
       origin: rec.origin,
+      parent: rec.parent ?? null,
       pid,
       tmux: host === "tmux" || (pane && pane.dead) ? rec.tmux : null,
       transcriptPath: rec.transcriptPath,
@@ -869,6 +928,7 @@ export class Fleet extends EventEmitter {
     const cmd = adapter.spawnCommand({ account, cwd, prompt: req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
     const now = this.now();
     const name = tmuxName(id);
+    const parent = req.callerPid ? this.sessionAbove(req.callerPid) : null;
 
     insertSessionRecord({
       id,
@@ -890,6 +950,7 @@ export class Fleet extends EventEmitter {
       createdAt: now,
       effort: effort ?? null,
       model: model ?? null,
+      parent: parent && parent !== this.deps.projectSession?.() ? parent : null,
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     insertAssignment({
@@ -1349,15 +1410,19 @@ function expandHome(p: string): string {
 }
 
 function isDescendant(pid: number, ancestor: number): boolean {
-  let cur = pid;
-  for (let i = 0; i < 16 && cur > 1; i++) {
+  let cur: number | null = pid;
+  for (let i = 0; i < 16 && cur !== null && cur > 1; i++) {
     if (cur === ancestor) return true;
-    try {
-      const s = readFileSync(`/proc/${cur}/stat`, "utf8");
-      cur = Number(s.slice(s.lastIndexOf(")") + 2).split(" ")[1]);
-    } catch {
-      return false;
-    }
+    cur = ppidOf(cur);
   }
   return false;
+}
+
+function ppidOf(pid: number): number | null {
+  try {
+    const s = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return Number(s.slice(s.lastIndexOf(")") + 2).split(" ")[1]);
+  } catch {
+    return null;
+  }
 }

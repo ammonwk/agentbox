@@ -134,6 +134,9 @@
   color: var(--muted);
   font-weight: 450;
 }
+.rail-row[data-depth] {
+  padding-left: calc(12px + var(--depth) * 14px);
+}
 .rail-when {
   flex: none;
   font-size: 10.5px;

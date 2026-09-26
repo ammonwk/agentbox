@@ -78,6 +78,7 @@ export const fleet = new Fleet({
     ingestRollout: (id, reading) => void accounts.ingestRollout(id, reading),
   },
   poolSessions: () => poolSessionIds(),
+  projectSession: () => projectState().sessionId,
 });
 setMetricsSource(() => fleet.sessions());
 
@@ -393,6 +394,7 @@ const router = new Router(mapError)
         effort: optionalString(b, "effort"),
         big: b.big === true,
         accountId: optionalString(b, "accountId") ?? null,
+        callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
       });
       scheduleHot();
       scheduleCold();

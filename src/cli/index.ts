@@ -126,6 +126,8 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
       big: flags.has("big"),
       accountId,
+      // Started from inside another session, it is that session's child.
+      callerPid: process.pid,
     });
   } catch (e) {
     const err = e as ApiError;
@@ -231,7 +233,9 @@ const USAGE = `usage: agentbox <command>
   attach <id>           attach this terminal to a session in agentbox
 
 sessions (ids first on every line; verbs taking ids read them from stdin with -):
-  ls [--status s,s] [--idle '>2h'] [--repo x] [--provider p] [--all] [-q] [--json]
+  ls [--status s,s] [--idle '>2h'] [--repo x] [--provider p] [--all] [--roots] [-q] [--json]
+                        a session another started follows it, its title indented;
+                        --roots leaves those out while their parent is on the board
   show <id>...          where it is, model, context, first/last prompt, last reply
   log <id> [-n turns] [--tools] [--thinking]    the conversation, oldest first
   grep <regex> [-i] [--all]                     search every conversation

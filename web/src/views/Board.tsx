@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AppState, ProviderId } from "../../../src/core/types";
 import { AccountChip, BigBadge, ContextBar, HostBadge, PROVIDER_LABEL, ProviderBadge, StatusDot, StatusPill } from "../bits";
 import { Button, Empty, Icon, RelativeTime, Spinner } from "../components";
@@ -13,6 +13,7 @@ import {
   usualProvider,
   whereOf,
   type BoardFilter,
+  type Nested,
   type SessionRow,
 } from "../lib/board";
 import { baseName } from "../lib/format";
@@ -25,6 +26,10 @@ import "./board.css";
  *  every time you look at a row is a board you stop filtering. */
 let rememberedFilter: BoardFilter = EMPTY_FILTER;
 let rememberedCursor: string | null = null;
+/** Parents whose children are shown. Folded by default: a lead with nine
+ *  teammates is one row until you open it. The rail beside a session reads
+ *  this too, so the two lists agree. */
+export let openParents: ReadonlySet<string> = new Set();
 
 /**
  * Every session on the machine, most urgent first: blocked, then your turn,
@@ -41,13 +46,21 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
     rememberedCursor = id;
     setCursorState(id);
   };
+  const [open, setOpenState] = useState(openParents);
+  const setOpen = (id: string, on: boolean) => {
+    const next = new Set(open);
+    if (on) next.add(id);
+    else next.delete(id);
+    openParents = next;
+    setOpenState(next);
+  };
 
   // The Project session is pinned above the list, not sorted into it.
   const rows = useMemo(
     () => filterSessions(state.sessions.filter((s) => s.id !== state.project.sessionId), filter),
     [state.sessions, state.project.sessionId, filter],
   );
-  const sections = useMemo(() => sectionsOf(rows), [rows]);
+  const sections = useMemo(() => sectionsOf(rows, (id) => open.has(id)), [rows, open]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const usual = useMemo(() => usualProvider(ordered), [ordered]);
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
@@ -90,6 +103,18 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
         if (next) {
           setCursor(next);
           rowRefs.current.get(next)?.focus();
+        }
+      } else if ((e.key === "ArrowRight" || e.key === "l" || e.key === "ArrowLeft" || e.key === "h") && cursor) {
+        // Open a parent, fold it, or from a child step out to its parent.
+        const row = ordered.find((s) => s.id === cursor);
+        if (!row) return;
+        e.preventDefault();
+        if (e.key === "ArrowRight" || e.key === "l") {
+          if (row.kids) setOpen(row.id, true);
+        } else if (row.kids && open.has(row.id)) setOpen(row.id, false);
+        else if (row.depth > 0 && row.parent) {
+          setCursor(row.parent);
+          rowRefs.current.get(row.parent)?.focus();
         }
       } else if (e.key === "Enter" && cursor && !(t && t.tagName === "A")) {
         e.preventDefault();
@@ -220,7 +245,7 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
             {sections.map((sec) => (
               <section key={sec.kind} className="bd-section" data-kind={sec.kind} aria-label={sec.label}>
                 <h2 className="bd-section-label">
-                  {sec.label} <span className="n">{sec.rows.length}</span>
+                  {sec.label} <span className="n">{sec.rows.filter((s) => s.depth === 0).length}</span>
                 </h2>
                 {sec.rows.map((s) => (
                   <Row
@@ -229,6 +254,8 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
                     state={state}
                     usual={usual}
                     cursor={cursor === s.id}
+                    open={open.has(s.id)}
+                    onToggle={() => setOpen(s.id, !open.has(s.id))}
                     refFn={(el) => {
                       if (el) rowRefs.current.set(s.id, el);
                       else rowRefs.current.delete(s.id);
@@ -244,12 +271,13 @@ export function Board({ state, onOpen, onNew }: { state: AppState; onOpen: (id: 
 
       <div className="bd-foot">
         <span>
-          {ordered.length === state.sessions.length ? `${ordered.length} sessions` : `${ordered.length} of ${state.sessions.length} sessions`}
+          {rows.length === state.sessions.length ? `${rows.length} sessions` : `${rows.length} of ${state.sessions.length} sessions`}
         </span>
         <span className="bd-spacer" />
         <span className="bd-keys">
           <kbd>j</kbd>
-          <kbd>k</kbd> move · <kbd>Enter</kbd> open · <kbd>/</kbd> search · <kbd>n</kbd> new
+          <kbd>k</kbd> move · <kbd>←</kbd>
+          <kbd>→</kbd> fold · <kbd>Enter</kbd> open · <kbd>/</kbd> search · <kbd>n</kbd> new
         </span>
       </div>
     </div>
@@ -289,13 +317,17 @@ function Row({
   state,
   usual,
   cursor,
+  open,
+  onToggle,
   refFn,
   onFocus,
 }: {
-  s: SessionRow;
+  s: Nested<SessionRow>;
   state: AppState;
   usual: ProviderId | null;
   cursor: boolean;
+  open: boolean;
+  onToggle: () => void;
   refFn: (el: HTMLAnchorElement | null) => void;
   onFocus: () => void;
 }) {
@@ -308,6 +340,8 @@ function Row({
       className="bd-row"
       data-status={s.status}
       data-cursor={cursor || undefined}
+      data-depth={s.depth || undefined}
+      style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
       href={hrefOf({ page: "session", id: s.id, tab: "terminal" })}
       onFocus={onFocus}
     >
@@ -319,6 +353,23 @@ function Row({
         <span className="bd-title-line">
           {s.provider !== usual ? <ProviderBadge provider={s.provider} /> : null}
           <span className="bd-title">{titleOf(s)}</span>
+          {s.kids ? (
+            <button
+              type="button"
+              className="bd-kids"
+              aria-expanded={open}
+              title={`${open ? "Hide" : "Show"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started (← →)`}
+              onClick={(e) => {
+                // Inside the row's link: fold, do not open.
+                e.preventDefault();
+                e.stopPropagation();
+                onToggle();
+              }}
+            >
+              {open ? <Icon.chevronDown size={11} /> : <Icon.chevronRight size={11} />}
+              {s.kids}
+            </button>
+          ) : null}
           {s.big ? <BigBadge /> : null}
           {s.host === "external" ? <HostBadge host="external" /> : null}
           <span className="bd-inline-acct">

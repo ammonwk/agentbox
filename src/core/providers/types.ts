@@ -96,6 +96,13 @@ export interface TranscriptFacts {
   isSubagent: boolean;
   /** For subagents: the parent's agentSessionId. */
   parentId: string | null;
+  /**
+   * Agent teams (claude): the team this session is a member of, and the teams
+   * it spawned members into. A teammate is a session of its own, in a pane of
+   * its own; this is what ties it to its lead.
+   */
+  team?: string | null;
+  teamsLed?: string[];
 }
 
 /** An incremental reader over one transcript. Holds its own offsets. */

@@ -111,6 +111,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox ls                     # one line each: id status idle host provider repo branch title
     agentbox ls --status waiting,blocked --idle '>2h'
     agentbox ls --repo widget --all   # --all includes archived
+    agentbox ls --roots             # without the helpers other sessions started
     agentbox ls -q ...              # ids only, for piping
     agentbox ls --json | jq ...     # every field
     agentbox show <id>              # the header: where, model, context, first/last prompt, last reply
@@ -151,6 +152,13 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
   lands mid-turn. Ask before stopping or sending to a running session.
 - \`ls\` leaves out your own session (labelled "Project"), so piping its
   output into archive or stop cannot take you down.
+- A session another one started (a teammate, a \`codex exec\` run from a
+  Bash tool) is listed right after its parent with its title indented \`└\`,
+  and \`show\` names its parent and children. Every verb acts on exactly the
+  ids it is given: archiving or stopping a parent leaves its children alone,
+  so list them (\`ls | grep\`, or \`ls --json | jq\` on \`.parent\`) to act on
+  them too. What you start with \`agentbox claude|codex --detach\` is
+  top-level, never your child.
 - Prefer reading \`show\` and the tail of \`log\` over whole transcripts; they
   are long.
 `;
