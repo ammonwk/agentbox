@@ -31,4 +31,16 @@ describe("checkRequest", () => {
     expect(checkRequest(req("GET", { host: "evil.example:4479" }), PORT).ok).toBe(false);
     expect(checkRequest(req("GET", { host: "127.0.0.1:9999" }), PORT).ok).toBe(false);
   });
+
+  test("tailnet names pass only where the tailnet listener passes them, and only on our port", () => {
+    const hosts = ["100.101.102.103", "box.tail1234.ts.net", "box"];
+    const ts = { host: "box.tail1234.ts.net:4479", origin: "http://box.tail1234.ts.net:4479", "x-agentbox": "1" };
+    expect(checkRequest(req("POST", ts), PORT, { hosts }).ok).toBe(true);
+    expect(checkRequest(req("GET", { host: "box:4479", origin: "http://box:4479" }), PORT, { upgrade: true, hosts }).ok).toBe(true);
+    expect(checkRequest(req("POST", ts), PORT).ok).toBe(false);
+    expect(checkRequest(req("POST", { ...ts, origin: "https://box.tail1234.ts.net:4479" }), PORT, { hosts }).ok).toBe(true);
+    expect(checkRequest(req("POST", { host: "127.0.0.1:4479", origin: "https://127.0.0.1:4479", "x-agentbox": "1" }), PORT).ok).toBe(false);
+    expect(checkRequest(req("GET", { host: "box.tail1234.ts.net:5173" }), PORT, { hosts }).ok).toBe(false);
+    expect(checkRequest(req("POST", { ...ts, origin: "https://evil.example" }), PORT, { hosts }).ok).toBe(false);
+  });
 });

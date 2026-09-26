@@ -160,6 +160,20 @@ export default function Terminal({
         callback(found.length ? found : undefined);
       },
     });
+    // The keys a desktop terminal set up by `/terminal-setup` would send, which
+    // xterm.js does not: Shift+Enter a newline (ESC Enter, which Claude Code
+    // reads as a newline, not a submit) and Ctrl+Backspace a word (Ctrl+W;
+    // xterm.js sends a plain ^H, one character). The keypress and keyup of the
+    // same combination are swallowed too, or the Enter would still submit.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.altKey || e.metaKey) return true;
+      const seq =
+        e.key === "Enter" && e.shiftKey && !e.ctrlKey ? "\x1b\r" : e.key === "Backspace" && e.ctrlKey && !e.shiftKey ? "\x17" : null;
+      if (seq === null) return true;
+      e.preventDefault();
+      if (e.type === "keydown") chan?.send(seq);
+      return false;
+    });
     const input = term.onData((d) => chan?.send(d));
     const sized = term.onResize(({ cols, rows }) => chan?.resize(cols, rows));
 

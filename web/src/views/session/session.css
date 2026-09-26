@@ -10,7 +10,14 @@
   min-height: 0;
 }
 .sv[data-rail="on"] {
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: 264px minmax(0, 1fr);
+}
+/* With nothing open on a narrow screen, the list is the page. */
+.sv[data-rail="full"] .rail {
+  border-right: 0;
+}
+.sv-none {
+  justify-content: center;
 }
 
 .sv-main {
@@ -42,6 +49,160 @@
   min-height: 0;
   overflow-y: auto;
   padding-bottom: 16px;
+}
+/* Search and the sort menu, above everything that scrolls. */
+.rail-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 8px 8px 0;
+}
+.rail-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--faint);
+}
+.rail-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.rail-search input,
+.rail-search input:focus {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  min-height: 0;
+  height: 28px;
+  background: none;
+  box-shadow: none;
+  font-size: 12.5px;
+}
+.rail-search kbd {
+  flex: none;
+}
+.rail-sort {
+  position: relative;
+  flex: none;
+}
+.rail-sort-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.rail-sort-btn:hover,
+.rail-sort-btn[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--hover);
+}
+.rail-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+.rail-menu-label {
+  padding: 5px 8px 3px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.rail-menu button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-menu button:hover {
+  background: var(--hover);
+}
+.rail-menu-check {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  flex: none;
+  color: var(--accent);
+}
+.rail-menu-n {
+  margin-left: auto;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+/* See closed: folded under the list, loads as it scrolls. */
+.rail-closed {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.rail-closed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-closed-toggle:hover {
+  color: var(--text);
+}
+.rail-closed .rail-title {
+  color: var(--muted);
+  font-weight: 450;
+}
+.rail-closed-end {
+  height: 1px;
+}
+.rail-err {
+  margin: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 12%, var(--panel));
+  color: var(--danger);
+  font-size: 12px;
+}
+.rail-none {
+  padding: 16px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
 }
 /* The Project session, above the scroll so it never moves. */
 .rail-project {
@@ -84,9 +245,13 @@
   text-transform: uppercase;
   color: var(--faint);
 }
+.rail-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .rail-label span {
   font-weight: 500;
-  margin-left: 3px;
 }
 .rail-sec[data-kind="blocked"] .rail-label {
   color: var(--danger);
@@ -117,6 +282,12 @@
   background: var(--active);
   border-left-color: var(--accent);
 }
+.rail-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 .rail-title {
   flex: 1;
   font-size: 12.5px;
@@ -130,12 +301,74 @@
   font-weight: 600;
 }
 .rail-row[data-status="stopped"] .rail-title,
-.rail-row[data-status="archived"] .rail-title {
+.rail-row[data-status="closed"] .rail-title {
   color: var(--muted);
   font-weight: 450;
 }
 .rail-row[data-depth] {
   padding-left: calc(12px + var(--depth) * 14px);
+}
+/* What it last said: a hover away beside a session, on the row when the list
+   is the page. */
+.rail-snippet {
+  display: none;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-snippet.blocked {
+  color: var(--danger);
+}
+.sv[data-rail="full"] .rail-row {
+  align-items: flex-start;
+  min-height: 60px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.sv[data-rail="full"] .rail-row > .st-shape,
+.sv[data-rail="full"] .rail-row > .st-dot {
+  margin-top: 4px;
+}
+.sv[data-rail="full"] .rail-title {
+  font-size: 15px;
+}
+.sv[data-rail="full"] .rail-snippet {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.sv[data-rail="full"] .rail-search {
+  height: 38px;
+}
+.sv[data-rail="full"] .rail-search kbd {
+  display: none;
+}
+.rail-kids {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  height: 17px;
+  padding: 0 5px 0 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.rail-kids:hover,
+.rail-kids[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--hover);
 }
 .rail-when {
   flex: none;
@@ -143,6 +376,44 @@
   color: var(--faint);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+/* Close from the list: the ✕ takes the time's place under the pointer. Not on
+   touch screens, which have no hover to reveal it. */
+.rail-x {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  margin: -2px -4px -2px 0;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rail-x:hover {
+  color: var(--text);
+  background: var(--active);
+}
+.rail-x[data-armed] {
+  display: inline-flex;
+  color: var(--danger);
+}
+.rail-row:has(.rail-x[data-armed]) .rail-when {
+  display: none;
+}
+@media (hover: hover) {
+  .rail-row:hover .rail-when {
+    display: none;
+  }
+  .rail-row:hover .rail-x {
+    display: inline-flex;
+  }
 }
 .rail-row .prov {
   font-size: 8.5px;
@@ -500,6 +771,10 @@
   max-width: 200px;
 }
 
+/* Sent from here, not yet in the transcript. */
+.tl-echo {
+  opacity: 0.6;
+}
 .tl-user {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
@@ -975,6 +1250,11 @@
   flex: 1;
   min-width: 0;
 }
+/* Its height is the auto-grow's to set; `flex: 1` in the frame's column
+   pinned it to one line, under the thumbnails. */
+.cmp-frame > textarea {
+  flex: none;
+}
 .cmp-frame .att-strip {
   padding: 0 8px 8px;
 }
@@ -1042,4 +1322,134 @@
 @media (max-width: 720px) {
   .cmp-limit { flex-wrap: wrap; }
   .cmp-frame { flex-basis: 100%; }
+}
+
+/* ------------------------------------------------------------------- phone */
+
+/* The header shrinks to two lines — title and status, then the actions in a
+   row you can swipe — and the facts scroll sideways instead of stacking, so
+   the conversation keeps most of the screen. */
+@media (max-width: 640px) {
+  .sx-header {
+    padding: 8px 12px 0;
+  }
+  .sx-header-top {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+  }
+  .sx-title {
+    flex: 1 1 0;
+    min-width: 0;
+    font-size: 16px;
+  }
+  .copy-btn.sx-id,
+  .copy-btn.attach-copy {
+    display: none;
+  }
+  .sx-header-actions {
+    order: 5;
+    width: 100%;
+    margin: 2px 0 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .sx-header-actions::-webkit-scrollbar,
+  .sx-facts::-webkit-scrollbar {
+    display: none;
+  }
+  .sx-header-actions > * {
+    flex: none;
+  }
+  .sx-facts {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-top: 6px;
+    padding-bottom: 2px;
+  }
+  .sx-facts .fact-cwd {
+    display: none;
+  }
+  .sx-tab {
+    min-height: 40px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .cmp {
+    padding: 8px 10px;
+  }
+  .cmp-row {
+    flex-wrap: wrap;
+  }
+  .cmp-row .btn {
+    min-height: 40px;
+  }
+  .cmp-hint {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .cmp-keys-label {
+    flex-basis: 100%;
+  }
+  .keycap {
+    min-width: 40px;
+    min-height: 36px;
+  }
+  .term-transcript-bar {
+    flex-wrap: wrap;
+  }
+
+  /* Typing (main.tsx sets data-kb): the conversation and the box, nothing
+     else. The header, the hints and the extra keys come back with the
+     keyboard's going; an error stays, since it is about what you just sent. */
+  :root[data-kb] .sx-header,
+  :root[data-kb] .term-transcript-bar,
+  :root[data-kb] .cmp-aux,
+  :root[data-kb] .cmp-hint,
+  :root[data-kb] .cmp-keys,
+  :root[data-kb] .cmp-limit {
+    display: none;
+  }
+  :root[data-kb] .cmp {
+    padding: 6px 8px;
+  }
+  :root[data-kb] .cmp-row {
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: 6px;
+  }
+  :root[data-kb] .cmp-frame {
+    flex: 1 1 auto;
+  }
+  :root[data-kb] .cmp textarea {
+    max-height: calc(var(--vvh, 100dvh) * 0.3);
+  }
+  /* Send is the arrow alone, round, as in every phone chat. */
+  .cmp-row .cmp-go {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    justify-content: center;
+  }
+  .cmp-go-label {
+    display: none;
+  }
+  .cmp-row .cmp-go svg {
+    width: 20px;
+    height: 20px;
+  }
+  .cmp-frame .att {
+    width: 40px;
+    height: 40px;
+  }
+  .cmp-frame .att-strip {
+    gap: 6px;
+    padding: 0 8px 6px;
+  }
 }

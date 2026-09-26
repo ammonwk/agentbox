@@ -24,7 +24,7 @@ import { addUsage, emptyTotals } from "../pricing";
 import type { TimelineEvent, TokenTotals, UsageWindow, WindowKind } from "../types";
 import { oneLine, tidyPath } from "./claude-transcript";
 import { cap, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
-import type { TranscriptFacts, TranscriptRef } from "./types";
+import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 
 const ms = (t: unknown): number | null => {
   if (typeof t !== "string") return null;
@@ -276,7 +276,7 @@ export class CodexFold {
           this.firstPrompt ??= t;
           this.lastPrompt = t;
         }
-        if (prompt && at !== null) this.lastPromptAt = at;
+        if (prompt && at !== null && !isAgentSent(prompt.text ?? "")) this.lastPromptAt = at;
         // Rollouts from before task_started existed only had the message.
         if (prompt) this.turnOpen = true;
       } else if (p.type === "message" && p.role === "assistant") {

@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
 import { api, fmtBytes, useMetrics, type ProcDetail, type ProcRole } from "../../api";
 import { Empty } from "../../components";
-import { cpuText } from "./load";
 
 /**
  * Where a session's CPU and memory actually went.
  *
- * The board can only say "4.4 GB", which is the number that makes you ask the
+ * A process list can only say "4.4 GB", which is the number that makes you ask the
  * question, not the one that answers it. This is the answer: every process in
  * the subtree, what it is, and what it is holding.
  *
@@ -15,6 +14,20 @@ import { cpuText } from "./load";
  * just today's type-check. See `classify` in src/core/proc.ts for how a role is
  * decided.
  */
+
+/**
+ * CPU as a percentage of ONE core, always — the htop convention.
+ *
+ * The tempting alternative is to switch to "3.5×" above 100 and stay in percent
+ * below it, which makes 96% and 4× look like two different units when they are
+ * the same one: 96% is most of a single core, 400% is four of them. A threshold
+ * that changes notation is worse than a big number.
+ */
+export function cpuText(pct: number): string {
+  if (pct >= 10) return `${Math.round(pct)}%`;
+  if (pct >= 1) return `${pct.toFixed(1)}%`;
+  return pct > 0 ? "<1%" : "—";
+}
 
 const ROLE_LABEL: Record<ProcRole, string> = {
   agent: "the agent",

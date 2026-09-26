@@ -84,7 +84,7 @@ export async function runMcp(base: string): Promise<void> {
     {
       title: "Every session, briefly",
       description:
-        "Every coding-agent session on this machine that is not archived — Claude Code, Codex, Devin, omp — " +
+        "Every coding-agent session on this machine that is not closed — Claude Code, Codex, Devin, omp — " +
         "most urgent first (blocked, then waiting for a reply, then working, then stopped), plus each " +
         "account's usage. Three or four lines per session: id, status, provider/account, repo@branch, " +
         "last activity, the title, the last prompt and the last thing the agent said. Call this first " +
@@ -96,7 +96,7 @@ export async function runMcp(base: string): Promise<void> {
       const now = Date.now();
       const labels = new Map(state.accounts.map((a) => [a.id, a.label]));
       const sessions = state.sessions.filter(
-        (s) => s.status !== "archived" && (include_stopped || s.status !== "stopped" || now - s.lastActivityAt < 86_400_000),
+        (s) => s.status !== "closed" && (include_stopped || s.status !== "stopped" || now - s.lastActivityAt < 86_400_000),
       );
       const parts = sessions.map((s) => brief(s, s.accountId ? labels.get(s.accountId) ?? "?" : "-", now));
       const usage = state.accounts.map((a) => {
@@ -137,7 +137,7 @@ export async function runMcp(base: string): Promise<void> {
       inputSchema: { id: z.string(), text: z.string().min(1) },
     },
     async ({ id, text: body }) => {
-      await api("POST", `/api/sessions/${id}/send`, { text: body });
+      await api("POST", `/api/sessions/${id}/send`, { text: body, from: "agent" });
       return text(`sent to ${id}`);
     },
   );
@@ -202,15 +202,15 @@ export async function runMcp(base: string): Promise<void> {
   );
 
   server.registerTool(
-    "archive",
+    "close",
     {
-      title: "Archive or unarchive a session",
-      description: "Hides a finished session from the fleet (it stays resumable).",
-      inputSchema: { id: z.string(), archived: z.boolean().optional() },
+      title: "Close or reopen a session",
+      description: "Close stops a finished session's process and takes it off the fleet; it stays resumable. closed: false reopens it (back on the list, still stopped).",
+      inputSchema: { id: z.string(), closed: z.boolean().optional() },
     },
-    async ({ id, archived }) => {
-      await api("POST", `/api/sessions/${id}/archive`, { archived: archived ?? true });
-      return text(`${archived === false ? "unarchived" : "archived"} ${id}`);
+    async ({ id, closed }) => {
+      await api("POST", `/api/sessions/${id}/close`, { closed: closed ?? true });
+      return text(`${closed === false ? "reopened" : "closed"} ${id}`);
     },
   );
 

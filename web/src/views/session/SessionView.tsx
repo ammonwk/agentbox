@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import type { AppState, ProviderId } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
 import {
@@ -8,18 +8,17 @@ import {
   HostBadge,
   PROVIDER_LABEL,
   ProviderBadge,
-  StatusDot,
   StatusPill,
 } from "../../bits";
-import { Button, Confirm, Empty, Icon, RelativeTime } from "../../components";
-import { filterSessions, neighbourId, sectionsOf, sentTip, titleOf, usualProvider, type Nested, type Section, type SessionRow } from "../../lib/board";
-import { openParents } from "../Board";
+import { Button, Confirm, Empty, Icon } from "../../components";
+import { filterSessions, neighbourId, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
+import { closedSessions, Rail, useListState } from "./Rail";
+import { closeNow, forget, useClosing } from "./closing";
 import { hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
 import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
-import { useOpenProject } from "../project";
 import { useIsNarrow } from "./useIsNarrow";
 import { prBaseFor } from "../../lib/prlinks";
 import { PrBase } from "./prbase";
@@ -36,66 +35,109 @@ const TAB_LABEL: Record<SessionTab, string> = {
   load: "Load",
 };
 
-/** Wide enough for a session rail beside the detail without squeezing the terminal. */
-const RAIL_MIN_PX = 1280;
-
+/**
+ * The Sessions page: the list down the side and the open session beside it —
+ * or, with none open, an empty pane. On a narrow screen one of the two at a
+ * time: the list until you pick a session, then the session.
+ */
 export function SessionView({
   state,
   id,
   tab,
   onTab,
   onOpen,
+  onNew,
 }: {
   state: AppState;
-  id: string;
+  id: string | null;
   tab: SessionTab;
   onTab: (t: SessionTab) => void;
   onOpen: (id: string) => void;
+  onNew: () => void;
 }) {
-  const session = state.sessions.find((s) => s.id === id) ?? null;
-  const wide = useWide(RAIL_MIN_PX);
+  // One closed too long ago to be in the state comes from the closed list's
+  // fetches, or is looked up by id for a link straight to it.
+  const [, found] = useState(0);
+  const session = id ? state.sessions.find((s) => s.id === id) ?? closedSessions.get(id) ?? null : null;
+  const missing = !!id && !session;
+  useEffect(() => {
+    if (!missing || !id) return;
+    let live = true;
+    api.closed(id, 0, 5).then(
+      (page) => {
+        const s = page.sessions.find((x) => x.id === id);
+        if (s && live) {
+          closedSessions.set(id, s);
+          found((n) => n + 1);
+        }
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [missing, id]);
+  const narrow = useIsNarrow();
+  const list = useListState();
+  const { filter, sort, open, setOpen } = list;
+  const closing = useClosing().pending;
 
-  // j/k switch sessions from anywhere that is not a text field or the terminal.
-  // Folded as on the board, but never with this session folded out of sight.
+  // Folded as the user left it, but never with the open session folded out of
+  // sight. Closed ones are not here: they have their own list at the bottom.
   const sections = useMemo(() => {
     const byId = new Map(state.sessions.map((s) => [s.id, s]));
     const above = new Set<string>();
     for (let p = session?.parent; p && !above.has(p); p = byId.get(p)?.parent) above.add(p);
-    return sectionsOf(
-      filterSessions(
-        state.sessions.filter((s) => s.id !== state.project.sessionId),
-        { query: "", provider: "all", account: "all", repo: "all", showArchived: session?.status === "archived" },
-      ),
-      (id) => openParents.has(id) || above.has(id),
+    const rows = filterSessions(
+      state.sessions.filter((s) => s.id !== state.project.sessionId && s.status !== "closed" && !closing.has(s.id)),
+      filter,
     );
-  }, [state.sessions, state.project.sessionId, session?.status, session?.parent]);
+    return sectionsOf(rows, (x) => open.has(x) || above.has(x), sort);
+  }, [state.sessions, state.project.sessionId, session?.parent, filter, sort, open, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
+
+  // j/k switch sessions and ←/→ fold, from anywhere that is not a text field
+  // or the terminal; 1–4 pick a tab.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.closest(".xterm") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
       if (document.querySelector(".modal-backdrop")) return;
+      const row = ordered.find((s) => s.id === id);
       if (e.key === "j" || e.key === "k") {
         const next = neighbourId(ordered, id, e.key === "j" ? 1 : -1);
         if (next && next !== id) {
           e.preventDefault();
           onOpen(next);
         }
-      } else if (/^[1-4]$/.test(e.key)) {
+      } else if ((e.key === "l" || e.key === "ArrowRight") && row?.kids && !open.has(row.id)) {
+        e.preventDefault();
+        setOpen(row.id, true);
+      } else if ((e.key === "h" || e.key === "ArrowLeft") && row) {
+        if (row.kids && open.has(row.id)) {
+          e.preventDefault();
+          setOpen(row.id, false);
+        } else if (row.depth > 0 && row.parent) {
+          e.preventDefault();
+          onOpen(row.parent);
+        }
+      } else if (id && /^[1-4]$/.test(e.key)) {
         onTab(SESSION_TABS[Number(e.key) - 1]);
       }
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [ordered, id, onOpen, onTab]);
+  });
 
+  const showRail = !narrow || !id;
+  const showMain = !narrow || !!id;
   return (
-    <div className="sv" data-rail={wide ? "on" : "off"}>
-      {wide ? <Rail sections={sections} state={state} current={id} /> : null}
-      {session ? (
+    <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"}>
+      {showRail ? <Rail sections={sections} state={state} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} /> : null}
+      {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} />
-      ) : (
+      ) : id ? (
         <div className="sv-main">
           <Empty title="No such session" action={<a className="btn" href={hrefOf({ page: "sessions" })}>Back to sessions</a>}>
             <p>
@@ -104,97 +146,26 @@ export function SessionView({
             </p>
           </Empty>
         </div>
+      ) : (
+        <div className="sv-main sv-none">
+          {state.sessions.length === 0 ? (
+            <Empty
+              title="No sessions yet"
+              action={
+                <Button variant="primary" icon={Icon.plus} onClick={onNew}>
+                  New session
+                </Button>
+              }
+            >
+              Start one here, or run <code>agentbox claude</code> in a terminal. Sessions you start with plain{" "}
+              <code>claude</code> or <code>codex</code> show up too, read-only until you adopt them.
+            </Empty>
+          ) : (
+            <Empty title="Click a session to begin" />
+          )}
+        </div>
       )}
     </div>
-  );
-}
-
-function useWide(px: number): boolean {
-  const narrow = useIsNarrow();
-  const [wide, setWide] = useState(() => typeof window !== "undefined" && window.innerWidth >= px);
-  useEffect(() => {
-    const mq = matchMedia(`(min-width: ${px}px)`);
-    const on = () => setWide(mq.matches);
-    on();
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, [px]);
-  return wide && !narrow;
-}
-
-// -------------------------------------------------------------------- rail
-
-/** The fleet, demoted to a sidebar while you work on one session. Same order
- *  and sections as the board, so a session is never somewhere else here. */
-function Rail({ sections, state, current }: { sections: Section<Nested<SessionRow>>[]; state: AppState; current: string }) {
-  const usual = useMemo(() => usualProvider(sections.flatMap((s) => s.rows)), [sections]);
-  const cur = useRef<HTMLAnchorElement>(null);
-  // A block body, not `() => el.scrollIntoView()`: newer browsers return a
-  // Promise from scrollIntoView, and React calls whatever an effect returns as
-  // its cleanup — `destroy is not a function` took the whole app down.
-  useEffect(() => {
-    cur.current?.scrollIntoView({ block: "nearest" });
-  }, [current]);
-  return (
-    <nav className="rail" aria-label="Sessions">
-      <RailProject state={state} current={current} />
-      <div className="rail-scroll">
-        {sections.map((sec) => (
-          <div key={sec.kind} className="rail-sec" data-kind={sec.kind}>
-            <div className="rail-label">
-              {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length}</span>
-            </div>
-            {sec.rows.map((s) => (
-              <a
-                key={s.id}
-                ref={s.id === current ? cur : undefined}
-                className="rail-row"
-                href={hrefOf({ page: "session", id: s.id, tab: "terminal" })}
-                aria-current={s.id === current ? "page" : undefined}
-                data-status={s.status}
-                data-depth={s.depth || undefined}
-                style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
-                title={railTip(s)}
-              >
-                <StatusDot status={s.status} />
-                <span className="rail-title">{titleOf(s)}</span>
-                {s.provider !== usual ? <ProviderBadge provider={s.provider} short /> : null}
-                <span className="rail-when">
-                  <RelativeTime ts={s.lastPromptAt} short title={sentTip(s)} />
-                </span>
-              </a>
-            ))}
-          </div>
-        ))}
-      </div>
-    </nav>
-  );
-}
-
-/** What the row no longer spells out, on hover. */
-function railTip(s: SessionRow): string {
-  const said = s.status === "blocked" ? s.attention.reason : s.lastMessage ?? s.lastPrompt ?? s.firstPrompt;
-  return [titleOf(s), said ? said.replace(/\s+/g, " ").slice(0, 240) : null].filter(Boolean).join("\n\n");
-}
-
-/** The Project session, pinned above the rail's scroll so it is one click
- *  from any session. */
-function RailProject({ state, current }: { state: AppState; current: string }) {
-  const p = useOpenProject(state, (id) => (location.hash = hrefOf({ page: "session", id, tab: "terminal" })));
-  return (
-    <button
-      type="button"
-      className="rail-project"
-      aria-current={p.session?.id === current ? "page" : undefined}
-      disabled={p.busy}
-      title={p.error ?? "The Project session: sees and manages every session"}
-      onClick={() => void p.open()}
-    >
-      <StatusDot status={p.running ? p.session!.status : "stopped"} />
-      <Icon.sessions size={13} />
-      <span className="rail-title">Project</span>
-      <ProviderBadge provider={state.project.provider} short />
-    </button>
   );
 }
 
@@ -213,6 +184,12 @@ function Detail({
 }) {
   const { run, busy, error, clear } = useAction();
   const [confirmStop, setConfirmStop] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const close = () => {
+    closeNow(session.id, titleOf(session));
+    // Gone from the list: back to the empty pane, not a view of what you just closed.
+    location.hash = hrefOf({ page: "sessions" });
+  };
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
   // listPrs matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
@@ -259,7 +236,7 @@ function Detail({
                   size="sm"
                   icon={Icon.refresh}
                   disabled={busy}
-                  title="Start a fresh Project conversation; this one is archived"
+                  title="Start a fresh Project conversation; this one is closed"
                   onClick={() => void run(async () => openSession((await api.clearProject()).id))}
                 >
                   Clear
@@ -292,20 +269,30 @@ function Detail({
                 Stop
               </Button>
             ) : null}
-            {isProject ? null : session.status === "archived" ? (
-              <Button size="sm" variant="ghost" icon={Icon.undo} disabled={busy} onClick={() => void run(() => api.archive(session.id, false))}>
-                Unarchive
+            {isProject ? null : session.status === "closed" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={Icon.undo}
+                disabled={busy}
+                title="Put it back on the list. It stays stopped until you resume it or send it something."
+                onClick={() => {
+                  forget(session.id);
+                  void run(() => api.close(session.id, false));
+                }}
+              >
+                Reopen
               </Button>
             ) : (
               <Button
                 size="sm"
                 variant="ghost"
-                icon={Icon.archive}
+                icon={Icon.x}
                 disabled={busy}
-                title="Take it off the board. The transcript and worktree stay; it can be resumed."
-                onClick={() => void run(() => api.archive(session.id, true))}
+                title="Stop it and take it off the list. The transcript and worktree stay; See closed finds it, and it can be resumed."
+                onClick={() => (session.status === "running" ? setConfirmClose(true) : void close())}
               >
-                Archive
+                Close
               </Button>
             )}
           </div>
@@ -412,6 +399,18 @@ function Detail({
 
       <Composer session={session} accounts={state.accounts} claimIdleMin={state.settings.balancer.claimIdleMin} />
 
+      {confirmClose ? (
+        <Confirm
+          title={`Close “${titleOf(session)}”?`}
+          confirmLabel="Close"
+          body={<p>It is mid-turn. Closing stops it now, so this turn is cut short. The conversation is kept, and See closed finds it to reopen or resume.</p>}
+          onCancel={() => setConfirmClose(false)}
+          onConfirm={() => {
+            setConfirmClose(false);
+            void close();
+          }}
+        />
+      ) : null}
       {confirmStop ? (
         <Confirm
           title={`Stop “${titleOf(session)}”?`}
@@ -462,7 +461,7 @@ function TranscriptInstead({
           </span>
         ) : (
           <span>
-            {session.status === "archived" ? "Archived" : "Stopped"} — this is its transcript. Resume, or type a prompt below, to get the live
+            {session.status === "closed" ? "Closed" : "Stopped"} — this is its transcript. Resume, or type a prompt below, to get the live
             terminal back
             {session.cold ? " on whichever account has room (its cache is cold)" : " on the same account"}.
           </span>

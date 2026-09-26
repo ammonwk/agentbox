@@ -373,8 +373,9 @@ export function findSessionRecord(provider: ProviderId, agentSessionId: string):
   return row ? rowToRecord(row) : null;
 }
 
-/** Sessions active since `sinceMs`, plus every session that is not archived
- *  and was started by agentbox (those stay until you archive them). */
+/** Sessions active since `sinceMs`, plus every session that is not closed
+ *  and was started by agentbox (those stay until you close them).
+ *  (`archived_at` is when it was closed: the old name for it.) */
 export function listSessionRecords(sinceMs = 0): SessionRecord[] {
   const rows = getDb()
     .query(
@@ -384,6 +385,14 @@ export function listSessionRecords(sinceMs = 0): SessionRecord[] {
         ORDER BY last_activity_at DESC`,
     )
     .all(sinceMs) as SessionRow[];
+  return rows.map(rowToRecord);
+}
+
+/** Every closed session, the most recently closed first. */
+export function listClosedRecords(): SessionRecord[] {
+  const rows = getDb()
+    .query("SELECT * FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC")
+    .all() as SessionRow[];
   return rows.map(rowToRecord);
 }
 

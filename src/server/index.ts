@@ -17,7 +17,7 @@
  * session, bytes both ways. Closing it detaches; the agent keeps running.
  */
 
-import type { ServerWebSocket } from "bun";
+import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { DEFAULT_PORT, webDist } from "../core/paths";
 import { Fleet, FleetError } from "../core/fleet";
 import * as tmux from "../core/tmux";
@@ -34,11 +34,15 @@ import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { clearProject, compactProject, ensureProject, followProject, projectState } from "../core/project";
 import { checkRequest } from "./csrf";
+import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
+import { VoiceHub } from "../voice/hub";
+import type { Conversation } from "../voice/conversation";
 import { HttpError, Router, fail, json, readBody } from "./router";
 import { optionalString, parseSettingsPatch, requireBoolean, requireString } from "./validate";
 import { parseClientMessage } from "./protocol";
 import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
+import { AGENT_SENT_MARK } from "../core/providers/types";
 import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolSessionIds } from "../subagents/record";
 import { dependencies } from "../deps";
@@ -81,6 +85,8 @@ export const fleet = new Fleet({
   projectSession: () => projectState().sessionId,
 });
 setMetricsSource(() => fleet.sessions());
+/** Hands-free mode (src/voice); made once the fleet is up. */
+let voice: VoiceHub;
 
 // --------------------------------------------------------------- state
 
@@ -171,7 +177,8 @@ function coldState(): ColdState {
 
 type SocketData =
   | { kind: "app"; watching: string | null; cursor: string | null; busy: boolean; again: boolean }
-  | { kind: "term"; sessionId: string; cols: number; rows: number; proc?: ReturnType<typeof Bun.spawn> };
+  | { kind: "term"; sessionId: string; cols: number; rows: number; proc?: ReturnType<typeof Bun.spawn> }
+  | { kind: "voice"; convId: string; conv?: Conversation };
 type Socket = ServerWebSocket<SocketData>;
 
 const clients = new Set<Socket>();
@@ -363,6 +370,7 @@ const provider = (v: unknown): ProviderId => {
 
 const router = new Router(mapError)
   .add("GET", "/api/state", () => json({ ...hotState(), ...coldState() }))
+  .add("GET", "/api/voice", () => json(voice.status()))
   .add("GET", "/api/health", async ({ url }) => {
     // Re-check is someone who just installed or logged into something.
     const refresh = url.searchParams.get("refresh") === "1";
@@ -421,7 +429,8 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions/:id/send", async ({ req, params }) => {
     const b = await readBody(req);
-    await fleet.send(params.id!, requireString(b, "text"));
+    const text = requireString(b, "text");
+    await fleet.send(params.id!, b.from === "agent" ? `${AGENT_SENT_MARK} ${text}` : text);
     return json(null);
   })
   .add("POST", "/api/sessions/:id/keys", async ({ req, params }) => {
@@ -477,11 +486,18 @@ const router = new Router(mapError)
     scheduleHot();
     return json(null);
   })
-  .add("POST", "/api/sessions/:id/archive", async ({ req, params }) => {
+  .add("POST", "/api/sessions/:id/close", async ({ req, params }) => {
     const b = await readBody(req);
-    await fleet.archive(params.id!, requireBoolean(b, "archived"));
+    if (requireBoolean(b, "closed") && params.id === projectState().sessionId) throw new HttpError(409, "the Project session is not closed; clear it instead");
+    await fleet.close(params.id!, requireBoolean(b, "closed"));
     scheduleHot();
     return json(null);
+  })
+  .add("GET", "/api/sessions/closed", ({ url }) => {
+    const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 30));
+    const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit);
+    return json({ sessions: page.sessions.map((s) => ({ ...s, attention: attentionOf(s, null) })), total: page.total });
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));
@@ -507,7 +523,7 @@ const router = new Router(mapError)
     const all = url.searchParams.get("all") === "1";
     const hits: GrepHit[] = [];
     for (const s of fleet.sessions()) {
-      if ((!all && s.status === "archived") || !s.transcriptPath) continue;
+      if ((!all && s.status === "closed") || !s.transcriptPath) continue;
       let before: string | null = null;
       try {
         do {
@@ -687,6 +703,15 @@ const router = new Router(mapError)
 // ------------------------------------------------------------------ boot
 
 export async function startServer(): Promise<void> {
+  // Hold the port through startup, which takes a while on a busy machine. A
+  // CLI that finds the server slow to answer starts another; found busy only at
+  // Bun.serve, that one used to linger with a whole second fleet ticking in it.
+  let hold: { stop(closeActive?: boolean): void };
+  try {
+    hold = Bun.listen({ hostname: HOST, port: PORT, socket: { open: (s) => void s.end(), data() {} } });
+  } catch {
+    throw new Error(`port ${PORT} is in use — another agentbox server is already running`);
+  }
   // Default accounts must exist before the first fleet tick, or every
   // transcript found on it would be filed under no account.
   await accounts.start();
@@ -701,6 +726,7 @@ export async function startServer(): Promise<void> {
     scheduleCold();
   });
   fleet.on("transcript", onTranscript);
+  voice = new VoiceHub(fleet);
   followProject(fleet, scheduleCold);
   accounts.on("change", scheduleCold);
   metricsEvents.on("metrics", (state: MetricsState) => broadcast({ type: "metrics", state }));
@@ -713,59 +739,133 @@ export async function startServer(): Promise<void> {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  Bun.serve<SocketData>({
-    port: PORT,
-    hostname: HOST,
-    idleTimeout: 60,
-    websocket: {
-      open(ws) {
-        if (ws.data.kind === "term") {
-          openTerminal(ws);
-          return;
-        }
-        clients.add(ws);
-        send(ws, { type: "hot", state: hotState() });
-        const cold = coldState();
-        lastCold = JSON.stringify(cold);
-        send(ws, { type: "cold", state: cold });
-        send(ws, { type: "metrics", state: metricsSnapshot() });
-        setMetricsWatchers(clients.size);
-      },
-      message(ws, raw) {
-        if (ws.data.kind === "term") handleTermMessage(ws, raw);
-        else handleAppMessage(ws, raw);
-      },
-      close(ws) {
-        if (ws.data.kind === "term") closeTerminal(ws);
-        else dropClient(ws);
-      },
-    },
-    fetch(req, srv) {
-      const url = new URL(req.url);
-      const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
-      const verdict = checkRequest(req, PORT, { upgrade });
-      if (!verdict.ok) return fail(verdict.reason, 403);
-
-      if (url.pathname === "/ws") {
-        if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);
-        return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false } })
-          ? undefined
-          : fail("websocket upgrade failed", 500);
+  const websocket: WebSocketHandler<SocketData> = {
+    open(ws) {
+      if (ws.data.kind === "term") {
+        openTerminal(ws);
+        return;
       }
-      const term = url.pathname.match(/^\/ws\/term\/([a-z0-9]+)$/);
-      if (term) {
-        if (!upgrade) return fail("terminal requires a WebSocket upgrade", 426);
-        const cols = Math.max(20, Math.min(500, Number(url.searchParams.get("cols")) || 120));
-        const rows = Math.max(5, Math.min(200, Number(url.searchParams.get("rows")) || 40));
-        return srv.upgrade(req, { data: { kind: "term", sessionId: term[1]!, cols, rows } })
-          ? undefined
-          : fail("websocket upgrade failed", 500);
+      if (ws.data.kind === "voice") {
+        const d = ws.data;
+        const r = voice.open(d.convId, {
+          json: (m) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m)),
+          audio: (pcm) => ws.readyState === WebSocket.OPEN && ws.send(pcm),
+        });
+        if (typeof r === "string") {
+          ws.send(JSON.stringify({ type: "error", message: r }));
+          ws.close(1011, "voice unavailable");
+        } else d.conv = r;
+        return;
       }
-      return router.handle(req);
+      clients.add(ws);
+      send(ws, { type: "hot", state: hotState() });
+      const cold = coldState();
+      lastCold = JSON.stringify(cold);
+      send(ws, { type: "cold", state: cold });
+      send(ws, { type: "metrics", state: metricsSnapshot() });
+      setMetricsWatchers(clients.size);
     },
-  });
+    message(ws, raw) {
+      if (ws.data.kind === "voice") {
+        const c = ws.data.conv;
+        if (!c) return;
+        if (typeof raw === "string") voice.message(c, raw);
+        else c.audio(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
+        return;
+      }
+      if (ws.data.kind === "term") handleTermMessage(ws, raw);
+      else handleAppMessage(ws, raw);
+    },
+    close(ws) {
+      if (ws.data.kind === "voice") ws.data.conv?.detach();
+      else if (ws.data.kind === "term") closeTerminal(ws);
+      else dropClient(ws);
+    },
+  };
 
+  const handle = (req: Request, srv: Server<SocketData>, hosts?: readonly string[]): Response | undefined | Promise<Response> => {
+    const url = new URL(req.url);
+    const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
+    const verdict = checkRequest(req, PORT, { upgrade, hosts });
+    if (!verdict.ok) return fail(verdict.reason, 403);
+
+    if (url.pathname === "/ws") {
+      if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);
+      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false } })
+        ? undefined
+        : fail("websocket upgrade failed", 500);
+    }
+    if (url.pathname === "/ws/voice") {
+      if (!upgrade) return fail("voice requires a WebSocket upgrade", 426);
+      const convId = url.searchParams.get("c") ?? "";
+      if (!/^[a-z0-9-]{8,64}$/.test(convId)) return fail("voice needs a conversation id", 400);
+      return srv.upgrade(req, { data: { kind: "voice", convId } }) ? undefined : fail("websocket upgrade failed", 500);
+    }
+    const term = url.pathname.match(/^\/ws\/term\/([a-z0-9]+)$/);
+    if (term) {
+      if (!upgrade) return fail("terminal requires a WebSocket upgrade", 426);
+      const cols = Math.max(20, Math.min(500, Number(url.searchParams.get("cols")) || 120));
+      const rows = Math.max(5, Math.min(200, Number(url.searchParams.get("rows")) || 40));
+      return srv.upgrade(req, { data: { kind: "term", sessionId: term[1]!, cols, rows } })
+        ? undefined
+        : fail("websocket upgrade failed", 500);
+    }
+    return router.handle(req);
+  };
+
+  hold.stop(true);
+  Bun.serve<SocketData>({ port: PORT, hostname: HOST, idleTimeout: 60, websocket, fetch: (req, srv) => handle(req, srv) });
   console.log(`agentbox listening on http://${HOST}:${PORT}`);
+  void listenOnTailnet(websocket, handle);
+}
+
+/** The same app on the Tailscale address, for your own devices only (`tailnet.ts`).
+ *  Tailscale may come up after we do, so keep looking until it has. */
+async function listenOnTailnet(
+  websocket: WebSocketHandler<SocketData>,
+  handle: (req: Request, srv: Server<SocketData>, hosts?: readonly string[]) => Response | undefined | Promise<Response>,
+): Promise<void> {
+  const self = await tailnetSelf();
+  if (!self) {
+    if (process.env.AGENTBOX_TAILNET !== "0") setTimeout(() => void listenOnTailnet(websocket, handle), 60_000);
+    return;
+  }
+  const peers = new PeerCheck(self);
+  let server: Server<SocketData> | null = null;
+  let tls: { cert: string; key: string } | null = null;
+  const listen = () => {
+    server?.stop(true);
+    try {
+      server = Bun.serve<SocketData>({
+        port: PORT,
+        hostname: self.ip,
+        idleTimeout: 60,
+        websocket,
+        ...(tls ? { tls } : {}),
+        async fetch(req, srv) {
+          const from = srv.requestIP(req)?.address;
+          if (!from || !(await peers.isOwner(from))) return fail("only your own Tailscale devices may connect", 403);
+          return handle(req, srv, self.names);
+        },
+      });
+      console.log(`agentbox listening on ${tls ? "https" : "http"}://${self.dnsName ?? self.ip}:${PORT} (your Tailscale devices)`);
+    } catch (err) {
+      server = null;
+      console.error(`agentbox: not listening on the tailnet (${self.ip}:${PORT}): ${(err as Error).message}`);
+    }
+  };
+  tls = await tailnetCert(self);
+  listen();
+  // Upgrade to HTTPS the moment the tailnet allows it, and pick up renewals.
+  const recheck = async () => {
+    const next = await tailnetCert(self);
+    if (next && next.cert !== tls?.cert) {
+      tls = next;
+      listen();
+    }
+    setTimeout(() => void recheck(), tls ? 12 * 3_600_000 : 5 * 60_000).unref?.();
+  };
+  setTimeout(() => void recheck(), tls ? 12 * 3_600_000 : 5 * 60_000).unref?.();
 }
 
 if (import.meta.main) await startServer();

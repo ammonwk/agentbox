@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountView, ProviderId, SessionHost, SessionStatus, UsageWindow } from "../../src/core/types";
 import { Icon } from "./components";
-import { contextPct } from "./lib/board";
+import { contextPct, type Shape } from "./lib/board";
 import { fmtTokens } from "./lib/format";
 import { barSegments, resetText, usageTone, usedNow, windowElapsed, windowLabel } from "./lib/usage";
 
@@ -122,7 +122,7 @@ const STATUS_LABEL: Record<SessionStatus, string> = {
   waiting: "Your turn",
   running: "Running",
   stopped: "Stopped",
-  archived: "Archived",
+  closed: "Closed",
 };
 
 const STATUS_TITLE: Record<SessionStatus, string> = {
@@ -130,7 +130,7 @@ const STATUS_TITLE: Record<SessionStatus, string> = {
   waiting: "The turn is over; the process is alive and waiting for you",
   running: "Mid-turn",
   stopped: "No process — the conversation can be resumed on the same account",
-  archived: "Put away; still resumable",
+  closed: "Stopped and off the list; still resumable",
 };
 
 export function StatusPill({ status }: { status: SessionStatus }) {
@@ -142,10 +142,36 @@ export function StatusPill({ status }: { status: SessionStatus }) {
   );
 }
 
-/** Status as a dot, for lists already sectioned by status: the heading says
- *  "Your turn" once, the rows need not say it eighteen times. */
-export function StatusDot({ status }: { status: SessionStatus }) {
-  return <span className={`st-dot st-${status}`} title={`${STATUS_LABEL[status]} — ${STATUS_TITLE[status]}`} role="img" aria-label={STATUS_LABEL[status]} />;
+const SHAPE_PATH: Record<Shape, string> = {
+  circle: "M5 1a4 4 0 1 1 0 8 4 4 0 0 1 0-8z",
+  square: "M2.3 1.3h5.4a1 1 0 0 1 1 1v5.4a1 1 0 0 1-1 1H2.3a1 1 0 0 1-1-1V2.3a1 1 0 0 1 1-1z",
+  triangle: "M5 .8 9.5 9H.5z",
+  diamond: "M5 .3 9.7 5 5 9.7.3 5z",
+  star: "M5 .5 6.2 3.7 9.7 3.9 7 6 7.9 9.4 5 7.5 2.1 9.4 3 6 .3 3.9 3.8 3.7z",
+  down: "M5 9.2 9.5 1H.5z",
+  cross: "M3.6.8h2.8v2.8h2.8v2.8H6.4v2.8H3.6V6.4H.8V3.6h2.8z",
+};
+
+/** A repo's shape on its own, for a heading. */
+export function ShapeMark({ shape }: { shape: Shape }) {
+  return (
+    <svg className="st-shape" viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+      <path d={SHAPE_PATH[shape]} />
+    </svg>
+  );
+}
+
+/** Status as a dot: its colour is the status, and given a `shape`, its shape
+ *  is the repo — a list sorted by time still says both at a glance. */
+export function StatusDot({ status, shape, repo }: { status: SessionStatus; shape?: Shape; repo?: string }) {
+  const title = `${STATUS_LABEL[status]} — ${STATUS_TITLE[status]}${repo ? `\nIn ${repo}` : ""}`;
+  if (!shape) return <span className={`st-dot st-${status}`} title={title} role="img" aria-label={STATUS_LABEL[status]} />;
+  return (
+    <svg className={`st-shape st-${status}`} viewBox="0 0 10 10" width="10" height="10" role="img" aria-label={STATUS_LABEL[status]}>
+      <title>{title}</title>
+      <path d={SHAPE_PATH[shape]} />
+    </svg>
+  );
 }
 
 const HOST_LABEL: Record<SessionHost, string> = { tmux: "tmux", external: "external", none: "no process" };
@@ -261,6 +287,22 @@ export function UsageBar({
 
 /** Copies, and says so for a moment. Falls back to selecting when the
  *  clipboard API is refused (plain http on a non-loopback host). */
+/** `navigator.clipboard` exists only in a secure context, and a phone on the
+ *  tailnet reaches us over plain http; the old selection copy still works there. */
+function copyText(text: string): Promise<void> {
+  if (navigator.clipboard) return navigator.clipboard.writeText(text);
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand("copy");
+  ta.remove();
+  return ok ? Promise.resolve() : Promise.reject(new Error("copy refused"));
+}
+
 export function CopyButton({ text, label, className }: { text: string; label?: string; className?: string }) {
   const [done, setDone] = useState(false);
   const t = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -274,7 +316,7 @@ export function CopyButton({ text, label, className }: { text: string; label?: s
       aria-label={label ? undefined : `Copy ${text}`}
       title={`Copy: ${text}`}
       onClick={() => {
-        void navigator.clipboard?.writeText(text).then(
+        void copyText(text).then(
           () => {
             setDone(true);
             if (t.current) clearTimeout(t.current);

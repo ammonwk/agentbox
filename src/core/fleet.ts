@@ -36,6 +36,7 @@ import {
   insertSessionRecord,
   insertTokenSample,
   listAccounts,
+  listClosedRecords,
   listSessionRecords,
   updateSessionRecord,
   type SessionRecord,
@@ -300,7 +301,7 @@ export class Fleet extends EventEmitter {
       const ref = await this.adapter(provider).findTranscript(account, p.agentSessionId).catch(() => null);
       if (ref) this.track(this.adapter(provider), ref);
     }
-    // And so is every unarchived agentbox session, so its board row has facts.
+    // And so is every open agentbox session, so its board row has facts.
     for (const rec of listSessionRecords(since)) {
       if (!rec.transcriptPath || this.tracked.has(rec.transcriptPath) || !rec.accountId) continue;
       if (!existsSync(rec.transcriptPath)) continue;
@@ -560,7 +561,7 @@ export class Fleet extends EventEmitter {
     // that was set too late; an mtime is only a guess and may only move it on.
     if (f.lastActivityAt !== null ? last !== rec.lastActivityAt : last > rec.lastActivityAt) patch.lastActivityAt = Math.min(last, now);
     if (f.cwd && !rec.cwd) patch.cwd = f.cwd;
-    // A message from you to an archived session means you went back to it.
+    // A message from you to a closed session means you went back to it.
     // Its own activity does not: an agent still finishing, or one another
     // agent wrote to, stays where you put it.
     if (rec.archivedAt && f.lastPromptAt !== null && f.lastPromptAt > rec.archivedAt) patch.archivedAt = null;
@@ -703,11 +704,12 @@ export class Fleet extends EventEmitter {
       }
       this.autoAnswer(rec, pane, adapter, now);
     }
-    // Archived is your word, not the process's: a session you put away stays
-    // put away while its process lives on (idle in tmux, or finishing
-    // background agents), until you send it something (persistFacts).
+    // Closed is your word, not the process's: a session you closed stays
+    // closed even if a process outlived the stop (an external one that
+    // ignored SIGTERM, a pane restarted by hand), until you send it
+    // something (persistFacts).
     const live = status;
-    if (rec.archivedAt) status = "archived";
+    if (rec.archivedAt) status = "closed";
 
     const cwd = f?.cwd || rec.cwd;
     const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;
@@ -755,7 +757,7 @@ export class Fleet extends EventEmitter {
       // When the conversation last moved. Starting or resuming a process is not
       // activity: a session resumed and left alone is as idle as before.
       lastActivityAt,
-      archivedAt: rec.archivedAt,
+      closedAt: rec.archivedAt,
     };
   }
 
@@ -800,6 +802,23 @@ export class Fleet extends EventEmitter {
     return view;
   }
 
+  /**
+   * Closed sessions for the See closed list, most recently closed first: all
+   * of them, not only the board's window, so an old one can be found and
+   * reopened. `q` matches as the board's search does; `offset` pages.
+   */
+  closed(q: string, offset: number, limit: number): { sessions: Session[]; total: number } {
+    const needle = q.trim().toLowerCase();
+    const all: Session[] = [];
+    for (const rec of listClosedRecords()) {
+      const s = this.views.get(rec.id) ?? this.viewOf(rec, this.now());
+      if (!s) continue;
+      if (needle && ![s.label, s.title, s.cwd, s.branch, s.lastMessage, s.firstPrompt, s.id, s.model, s.provider].some((x) => x?.toLowerCase().includes(needle))) continue;
+      all.push(s);
+    }
+    return { sessions: all.slice(offset, offset + limit), total: all.length };
+  }
+
   blockedReason(id: string): string | null {
     return this.blocked.get(id) ?? null;
   }
@@ -835,8 +854,8 @@ export class Fleet extends EventEmitter {
     const settings = getSettings().balancer;
     const inputs: ClaimInput[] = [];
     for (const s of this.views.values()) {
-      // An archived session with a process still alive can still spend.
-      if (!s.accountId || (s.status === "archived" && s.host === "none")) continue;
+      // A closed session with a process still alive can still spend.
+      if (!s.accountId || (s.status === "closed" && s.host === "none")) continue;
       inputs.push({
         sessionId: s.id,
         accountId: s.accountId,
@@ -1273,10 +1292,16 @@ export class Fleet extends EventEmitter {
     await this.tick();
   }
 
-  async archive(id: string, archived: boolean): Promise<void> {
+  /**
+   * Close: stop its process, then take it off the list. The transcript and
+   * worktree stay, and a resume or a message brings it back. Reopening only
+   * puts it back on the list; it stays stopped until you resume it.
+   */
+  async close(id: string, closed: boolean): Promise<void> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
-    updateSessionRecord(id, { archivedAt: archived ? this.now() : null });
+    if (closed && this.get(id).host !== "none") await this.stopSession(id);
+    updateSessionRecord(id, { archivedAt: closed ? this.now() : null });
     await this.tick();
   }
 

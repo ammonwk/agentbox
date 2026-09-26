@@ -1,10 +1,11 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Session, TimelineEvent } from "../../../../src/core/types";
 import { fmtClock, useTimeline } from "../../api";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline } from "../../lib/timeline";
 import { Markdown } from "./Markdown";
 import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
+import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -16,6 +17,7 @@ type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 export function Timeline({ session }: { session: Session }) {
   const { events, ready, loadingOlder, exhausted, error, loadOlder } = useTimeline(session.id);
   const rows = useMemo(() => groupTimeline(events), [events]);
+  const echoes = useEchoes(session.id, events);
 
   const boxRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
@@ -33,7 +35,7 @@ export function Timeline({ session }: { session: Session }) {
       el.scrollTop = el.scrollHeight;
     }
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
-  }, [events, pinned]);
+  }, [events, pinned, echoes.length]);
 
   const onScroll = () => {
     const el = boxRef.current;
@@ -91,6 +93,14 @@ export function Timeline({ session }: { session: Session }) {
           {rows.map((r) =>
             r.type === "tools" ? <ToolRun key={r.id} events={r.events} /> : <EventRow key={r.event.id} ev={r.event} />,
           )}
+          {echoes.map((e) => (
+            <div key={e.at} className="tl-user tl-echo" title="Sent; the agent has not recorded it yet">
+              <div className="tl-who">
+                <Icon.user size={13} /> You <span className="faint">· sending…</span>
+              </div>
+              <Markdown text={e.text} />
+            </div>
+          ))}
         </div>
       </div>
       {!pinned ? (
@@ -110,6 +120,24 @@ export function Timeline({ session }: { session: Session }) {
       ) : null}
     </div>
   );
+}
+
+/** Messages sent from here that the transcript has not caught up with. */
+function useEchoes(sessionId: string, events: readonly TimelineEvent[]): Echo[] {
+  const [sent, setSent] = useState<Echo[]>([]);
+  useEffect(() => onEcho((e) => e.sessionId === sessionId && setSent((xs) => [...xs, e])), [sessionId]);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (sent.length === 0) return;
+    const t = setInterval(() => tick((n) => n + 1), 5000);
+    return () => clearInterval(t);
+  }, [sent.length]);
+  const users = useMemo(() => events.filter((e): e is Extract<TimelineEvent, { kind: "user" }> => e.kind === "user").slice(-20), [events]);
+  const live = sent.filter((e) => Date.now() - e.at < ECHO_TTL_MS && !landed(e, users));
+  useEffect(() => {
+    if (live.length !== sent.length) setSent(live);
+  });
+  return live;
 }
 
 const EventRow = memo(function EventRow({ ev }: { ev: Exclude<TimelineEvent, ToolEvent> }) {

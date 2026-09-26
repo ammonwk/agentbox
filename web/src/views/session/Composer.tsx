@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { AccountView, Placement, Session } from "../../../../src/core/types";
 import { ago, api, fmtTokens } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
@@ -7,6 +7,7 @@ import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
 import "../newsession.css";
 import { useAction } from "./useAction";
+import { echoSent } from "./echo";
 
 /** What the composer can do for a session, and the sentence that says so. */
 export type ComposerMode =
@@ -58,7 +59,10 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
     if (mode.kind === "send" && !text.trim()) return;
     const ok = await run(async () => {
       const body = (await images.resolve(text)).trim();
-      if (mode.kind === "send") await api.send(session.id, body);
+      if (mode.kind === "send") {
+        await api.send(session.id, body);
+        echoSent(session.id, body);
+      }
       else if (mode.kind === "resume") await api.resume(session.id, body || undefined);
     });
     if (ok) {
@@ -133,6 +137,7 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
           rows={1}
           value={text}
           placeholder={placeholder}
+          enterKeyHint="send"
           title="Enter sends · Shift+Enter for a new line"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -150,15 +155,19 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
         {mode.kind === "send" ? (
           <>
             <Button
+              className="cmp-go"
               variant="primary"
-              icon={Icon.send}
+              icon={Icon.arrowUp}
               loading={busy}
               disabled={!text.trim() || images.uploading}
+              aria-label="Send"
+              onMouseDown={keepKeyboard}
               onClick={() => void submit()}
             >
-              Send
+              <span className="cmp-go-label">Send</span>
             </Button>
             <Button
+              className="cmp-aux"
               title="Press Escape in the session — cancels the current prompt or menu"
               disabled={busy}
               onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
@@ -166,6 +175,7 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
               Esc
             </Button>
             <Button
+              className="cmp-aux"
               variant="danger"
               icon={Icon.stop}
               title="Interrupt the current turn"
@@ -176,8 +186,16 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
             </Button>
           </>
         ) : mode.kind === "resume" ? (
-          <Button variant="primary" icon={Icon.play} loading={busy} onClick={() => void submit()}>
-            {text.trim() ? "Resume with prompt" : "Resume"}
+          <Button
+            className="cmp-go"
+            variant="primary"
+            icon={text.trim() ? Icon.arrowUp : Icon.play}
+            loading={busy}
+            aria-label={text.trim() ? "Resume with prompt" : "Resume"}
+            onMouseDown={keepKeyboard}
+            onClick={() => void submit()}
+          >
+            <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
           </Button>
         ) : null}
       </div>
@@ -195,6 +213,10 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
     </div>
   );
 }
+
+/** Pressing Send leaves the box focused, so the keyboard stays up for the next
+ *  message, as every phone chat does. */
+const keepKeyboard = (e: ReactMouseEvent) => e.preventDefault();
 
 const CONTINUE = "Usage limits have reset, continue";
 

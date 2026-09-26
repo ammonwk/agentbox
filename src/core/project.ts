@@ -4,7 +4,7 @@
  * It is an ordinary session — same tmux, same transcript, same account pin —
  * that runs in a directory of its own, where a CLAUDE.md / AGENTS.md teaches it
  * the `agentbox` CLI. Which session it is, and on which harness, is kept in the
- * kv table; "clear" starts a fresh one and archives the old, so a clean slate
+ * kv table; "clear" starts a fresh one and closes the old, so a clean slate
  * works the same on every provider.
  */
 
@@ -38,7 +38,7 @@ function save(provider: ProviderId, sessionId: string | null): void {
 function writeGuide(): string {
   const dir = projectDir();
   mkdirSync(dir, { recursive: true });
-  for (const name of ["CLAUDE.md", "AGENTS.md"]) writeFileSync(join(dir, name), GUIDE);
+  for (const name of ["CLAUDE.md", "AGENTS.md"]) writeFileSync(join(dir, name), GUIDE());
   return dir;
 }
 
@@ -54,7 +54,7 @@ export function followProject(fleet: Fleet, onChange: () => void): void {
 }
 
 /** The Project session, running: resumed if stopped, started if there is none
- *  or the harness changed (the old one is archived). */
+ *  or the harness changed (the old one is closed). */
 export async function ensureProject(fleet: Fleet, provider?: ProviderId): Promise<Session> {
   const p = projectState();
   const want = provider ?? p.provider;
@@ -70,7 +70,7 @@ export async function ensureProject(fleet: Fleet, provider?: ProviderId): Promis
   return fresh(fleet, want, p.sessionId);
 }
 
-/** A clean slate: stop and archive the current one, start a new one. */
+/** A clean slate: close the current one, start a new one. */
 export async function clearProject(fleet: Fleet): Promise<Session> {
   const p = projectState();
   return fresh(fleet, p.provider, p.sessionId);
@@ -86,23 +86,25 @@ export async function compactProject(fleet: Fleet): Promise<void> {
 
 async function fresh(fleet: Fleet, provider: ProviderId, old: string | null): Promise<Session> {
   if (old) {
-    const s = fleet.get(old);
-    if (s.host !== "none") await fleet.stopSession(old);
-    await fleet.archive(old, true);
+    await fleet.close(old, true);
   }
   const { session } = await fleet.spawn({ provider, cwd: writeGuide() });
   save(provider, session.id);
   return fleet.patch(session.id, { label: "Project" });
 }
 
-const GUIDE = `# Project
+const GUIDE = () => `# Project
 
 You are the Project session in agentbox: the user's agent for seeing and
 managing all of their other coding-agent sessions (Claude Code, Codex, Devin,
 omp) across accounts. You do not work on code here; you look at, sort, nudge
 and tidy the sessions that do.
 
-Everything goes through the \`agentbox\` CLI. It behaves like a Unix tool: plain
+${CLI_GUIDE}`;
+
+/** The \`agentbox\` CLI, for an agent driving the fleet with it: the Project
+ *  session, and voice mode (src/voice), which runs it through bash. */
+export const CLI_GUIDE = `Everything goes through the \`agentbox\` CLI. It behaves like a Unix tool: plain
 text out, the session id in the first column, and every verb that takes ids
 also reads them from stdin with \`-\`, so pipes and xargs work.
 
@@ -110,7 +112,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
 
     agentbox ls                     # one line each: id status idle host provider repo branch title
     agentbox ls --status waiting,blocked --idle '>2h'
-    agentbox ls --repo widget --all   # --all includes archived
+    agentbox ls --repo widget --all   # --all includes closed
     agentbox ls --roots             # without the helpers other sessions started
     agentbox ls -q ...              # ids only, for piping
     agentbox ls --json | jq ...     # every field
@@ -121,12 +123,17 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox screen <id>            # what its terminal shows right now (tmux sessions)
     agentbox diff <id>              # its worktree's changes
     agentbox usage                  # each account's limits
+    agentbox watch [<id>...] [--status blocked,waiting,running,stopped] [--once]
+                                    # runs until killed: a line each time one starts
+                                    # asking (blocked), finishes its turn (waiting, with
+                                    # the end of its last message) or stops. --once
+                                    # exits after the first: \`watch <id> --once\` waits for it
 
 ## Doing
 
     agentbox send <id> 'text'       # type a message into it (echo ... | agentbox send <id> -)
-    agentbox archive <id>...        # off the board; reversible (unarchive), transcript kept
-    agentbox unarchive <id>...
+    agentbox close <id>...          # stop it and take it off the board; transcript and worktree kept
+    agentbox reopen <id>...         # back on the board (still stopped; resume to run it)
     agentbox stop <id>...           # end its process; it stays resumable
     agentbox resume <id>... --detach
     agentbox adopt <id>... --detach # move a session from another terminal into agentbox
@@ -136,7 +143,8 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
 ## Conventions
 
 - Statuses: running (mid-turn), blocked (a prompt needs answering), waiting
-  (turn over, the user's move), stopped (no process, resumable), archived.
+  (turn over, the user's move), stopped (no process, resumable), closed (stopped and
+  off the board, still resumable).
 - Idle is the time since the conversation last moved. Resuming a session
   does not reset it.
 - Host: \`box\` runs in agentbox's tmux, so \`screen\` and \`send\` work on it;
@@ -146,16 +154,16 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
   ask first.
 - Repo is the repository, also for a session in a worktree; the branch says
   which worktree (agentbox's own are \`ab/<id>\`).
-- Archiving is cheap and reversible. A session that is still running stays
-  on the board until it stops; \`stop\` then \`archive\` puts it away now.
+- Closing is cheap and reversible, but it stops the process first, so a
+  session mid-turn loses that turn: ask before closing a running one.
 - Stopping a running session interrupts its work, and a message sent to one
   lands mid-turn. Ask before stopping or sending to a running session.
-- \`ls\` leaves out your own session (labelled "Project"), so piping its
-  output into archive or stop cannot take you down.
+- \`ls\` and \`watch\` leave out the Project session (labelled "Project"), so
+  piping their output into close or stop cannot take it down.
 - A session another one started (a teammate, a \`codex exec\` run from a
   Bash tool) is listed right after its parent with its title indented \`└\`,
   and \`show\` names its parent and children. Every verb acts on exactly the
-  ids it is given: archiving or stopping a parent leaves its children alone,
+  ids it is given: closing or stopping a parent leaves its children alone,
   so list them (\`ls | grep\`, or \`ls --json | jq\` on \`.parent\`) to act on
   them too. What you start with \`agentbox claude|codex --detach\` is
   top-level, never your child.

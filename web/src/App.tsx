@@ -8,8 +8,8 @@ import type { AgentSettings, AppState } from "../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./components";
 import { needsYou, titleOf } from "./lib/board";
 import { hrefOf, navOf, parseHash, type NavId, type Route } from "./route";
+import { openingTab } from "./lib/phone";
 import { SystemBar } from "./SystemBar";
-import { Board } from "./views/Board";
 import { SessionView } from "./views/session/SessionView";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
@@ -19,6 +19,7 @@ import { Skills } from "./views/Skills";
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
 // heaviest thing in the bundle.)
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
+const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice })));
 
 // ----------------------------------------------------------------- routing
 
@@ -59,6 +60,7 @@ function isTyping(e: KeyboardEvent): boolean {
 
 const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
+  { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
   { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
   { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
   { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
@@ -66,6 +68,7 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
 
 const PAGE_TITLE: Record<NavId, string> = {
   sessions: "Sessions",
+  voice: "Voice",
   accounts: "Accounts",
   skills: "Skills",
   settings: "Settings",
@@ -111,11 +114,11 @@ export function App() {
     return () => removeEventListener("keydown", onKey);
   }, []);
 
-  const flush = route.page === "sessions" || route.page === "session";
+  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice";
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
-    <div className="app">
+    <div className="app" data-page={route.page}>
       <a className="skip" href="#content">
         Skip to content
       </a>
@@ -217,20 +220,28 @@ export function App() {
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
-            ) : route.page === "sessions" ? (
-              <Board state={state} onOpen={(id) => navigate({ page: "session", id, tab: "terminal" })} onNew={() => setNewOpen(true)} />
-            ) : route.page === "session" ? (
+            ) : route.page === "sessions" || route.page === "session" ? (
               <SessionView
-                key={route.id}
                 state={state}
-                id={route.id}
-                tab={route.tab}
-                onTab={(tab) => navigate({ page: "session", id: route.id, tab }, true)}
-                onOpen={(id) => navigate({ page: "session", id, tab: route.tab })}
+                id={route.page === "session" ? route.id : null}
+                tab={route.page === "session" ? route.tab : "terminal"}
+                onTab={(tab) => route.page === "session" && navigate({ page: "session", id: route.id, tab }, true)}
+                onOpen={(id) =>
+                  navigate({
+                    page: "session",
+                    id,
+                    tab: route.page === "session" ? route.tab : openingTab(state.sessions.find((s) => s.id === id)?.status),
+                  })
+                }
+                onNew={() => setNewOpen(true)}
               />
             ) : route.page === "accounts" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
                 <Accounts state={state} sub={route.sub} />
+              </Suspense>
+            ) : route.page === "voice" ? (
+              <Suspense fallback={<Empty title="Loading…" />}>
+                <Voice />
               </Suspense>
             ) : route.page === "skills" ? (
               <Skills skills={state.skills} />
@@ -252,7 +263,7 @@ export function App() {
             onClose={() => setNewOpen(false)}
             onCreated={(id) => {
               setNewOpen(false);
-              navigate({ page: "session", id, tab: "terminal" });
+              navigate({ page: "session", id, tab: openingTab() });
             }}
           />
         </ErrorBoundary>
@@ -269,11 +280,12 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { sessions: 0, accounts: 0, skills: 0, settings: 0 };
+  if (!state) return { sessions: 0, voice: 0, accounts: 0, skills: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
     sessions: needsYou(state.sessions),
+    voice: 0,
     accounts: Math.max(loginsOpen, authBad),
     skills: 0,
     settings: 0,

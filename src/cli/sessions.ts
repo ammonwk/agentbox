@@ -4,6 +4,7 @@
  *  takes ids also reads them from stdin with `-`. */
 
 import type { Api } from "../client";
+import { CHANGE_KINDS, ChangeWatcher, changeLine, type ChangeKind } from "../core/changes";
 import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage } from "../core/types";
 
 type Row = AppState["sessions"][number];
@@ -11,7 +12,7 @@ type Row = AppState["sessions"][number];
 /** `--key value`, `--key=value`, `-q` style; `valued` says which keys take a
  *  value and `bare` which do not. Any other option is an error: a mistyped
  *  filter that is quietly ignored lists everything, and that output gets piped
- *  into archive or stop. */
+ *  into close or stop. */
 export function parseArgs(args: string[], valued: string[], bare: string[] = []): { flags: Map<string, string | true>; rest: string[] } {
   const flags = new Map<string, string | true>();
   const rest: string[] = [];
@@ -46,7 +47,7 @@ async function state(api: Api): Promise<AppState> {
 }
 
 /** Ids from args, or from stdin when an arg is `-`: the first word of each line,
- *  so `agentbox ls ... | agentbox archive -` works on ls's own output. Unique
+ *  so `agentbox ls ... | agentbox close -` works on ls's own output. Unique
  *  prefixes are accepted. */
 async function resolveIds(api: Api, args: string[]): Promise<{ ids: string[]; sessions: Row[] }> {
   let raw = args.filter((a) => a !== "-");
@@ -84,7 +85,7 @@ function idleTest(spec: string): (idleMs: number) => boolean {
   return m[1] === "<" ? (x) => x < ms : (x) => x >= ms;
 }
 
-const STATUSES = ["running", "blocked", "waiting", "stopped", "archived"] as const;
+const STATUSES = ["running", "blocked", "waiting", "stopped", "closed"] as const;
 const PROVIDERS = ["claude", "codex", "devin", "omp"] as const;
 
 function oneOf<T extends string>(flag: string, given: string[] | undefined, known: readonly T[]): T[] | undefined {
@@ -137,16 +138,17 @@ function clock(at: number): string {
 export async function ls(api: Api, args: string[]): Promise<number> {
   const { flags, rest } = parseArgs(args, ["status", "idle", "repo", "provider"], ["all", "roots", "q", "json"]);
   if (rest.length) throw new Error(`unexpected argument "${rest[0]}" (filters are options: --repo, --status, …)`);
-  const statuses = oneOf("status", str(flags.get("status"))?.split(","), STATUSES);
+  // "archived" is what closed used to be called.
+  const statuses = oneOf("status", str(flags.get("status"))?.split(",").map((x) => (x === "archived" ? "closed" : x)), STATUSES);
   const idle = str(flags.get("idle")) ? idleTest(str(flags.get("idle"))!) : null;
   const repo = str(flags.get("repo"))?.toLowerCase();
   const provider = oneOf("provider", str(flags.get("provider"))?.split(","), PROVIDERS);
   const s = await state(api);
   const now = s.serverTime;
   const board = s.sessions
-    // Its own row is left out, so a pipe into archive/stop cannot take it down.
+    // Its own row is left out, so a pipe into close/stop cannot take it down.
     .filter((x) => x.id !== s.project.sessionId)
-    .filter((x) => flags.has("all") || x.status !== "archived");
+    .filter((x) => flags.has("all") || x.status !== "closed");
   const onBoard = new Set(board.map((x) => x.id));
   const sorted = board
     .filter((x) => !flags.has("roots") || !x.parent || !onBoard.has(x.parent))
@@ -294,6 +296,39 @@ export async function diff(api: Api, args: string[]): Promise<number> {
   return 0;
 }
 
+/** `agentbox watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once]`
+ *
+ * Runs until killed, one line per change as it happens: a session started
+ * asking something (blocked, with what), finished its turn (waiting, with the
+ * end of its last message), started working (running), stopped. Nothing for
+ * the board as it is when it starts. `--once` exits after the first line, so
+ * `agentbox watch <id> --once` waits for that session. Default: blocked,
+ * waiting and stopped, every session but the Project's. */
+export async function watch(api: Api, args: string[]): Promise<number> {
+  const { flags, rest } = parseArgs(args, ["status"], ["once"]);
+  const kinds: readonly ChangeKind[] = oneOf("status", str(flags.get("status"))?.split(","), CHANGE_KINDS) ?? ["blocked", "waiting", "stopped"];
+  const only = rest.length ? new Set((await resolveIds(api, rest)).ids) : null;
+  const watcher = new ChangeWatcher();
+  for (;;) {
+    let s: AppState | null = null;
+    try {
+      s = await state(api);
+    } catch {
+      // The server restarting is not the end of a watch.
+    }
+    if (s) {
+      const project = s.project.sessionId;
+      const rows = s.sessions.filter((x) => (only ? only.has(x.id) : x.id !== project)).map((x) => ({ ...x, reason: x.attention.reason }));
+      for (const c of watcher.next(rows)) {
+        if (!kinds.includes(c.kind)) continue;
+        console.log(changeLine(c));
+        if (flags.has("once")) return 0;
+      }
+    }
+    await Bun.sleep(s ? 2_000 : 5_000);
+  }
+}
+
 /** `agentbox send <id> <text…>` or `… | agentbox send <id> -` */
 export async function send(api: Api, args: string[]): Promise<number> {
   const [target, ...words] = args;
@@ -301,21 +336,23 @@ export async function send(api: Api, args: string[]): Promise<number> {
   const { ids } = await resolveIds(api, [target]);
   const text = words.length === 1 && words[0] === "-" ? (await new Response(Bun.stdin.stream()).text()).trim() : words.join(" ");
   if (!text) throw new Error("nothing to send");
-  await api("POST", `/api/sessions/${ids[0]}/send`, { text });
+  // Agents are who use this; you type in the app or the terminal. Voice mode
+  // is the exception: what it sends is you, spoken (AGENTBOX_SEND_AS=you).
+  await api("POST", `/api/sessions/${ids[0]}/send`, process.env.AGENTBOX_SEND_AS === "you" ? { text } : { text, from: "agent" });
   return 0;
 }
 
-const DONE = { archive: "archived", unarchive: "unarchived", stop: "stopped", resume: "resumed", adopt: "adopted" } as const;
+const DONE = { close: "closed", reopen: "reopened", stop: "stopped", resume: "resumed", adopt: "adopted" } as const;
 
 /** Verbs that act on each id in turn, and say what happened to each. */
-export async function each(api: Api, verb: "archive" | "unarchive" | "stop" | "resume" | "adopt", args: string[]): Promise<number> {
+export async function each(api: Api, verb: "close" | "reopen" | "stop" | "resume" | "adopt", args: string[]): Promise<number> {
   const { rest } = parseArgs(args, []);
   const { ids } = await resolveIds(api, rest);
   if (ids.length === 0) throw new Error(`${verb} needs session ids (or - to read them from stdin)`);
   let failed = 0;
   for (const id of ids) {
     try {
-      if (verb === "archive" || verb === "unarchive") await api("POST", `/api/sessions/${id}/archive`, { archived: verb === "archive" });
+      if (verb === "close" || verb === "reopen") await api("POST", `/api/sessions/${id}/close`, { closed: verb === "close" });
       else await api("POST", `/api/sessions/${id}/${verb}`, {});
       console.log(`${id}  ${DONE[verb]}`);
     } catch (e) {

@@ -26,6 +26,15 @@ const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 
 const api = apiClient(BASE);
 
+/**
+ * The server's CPU and IO share against its sibling scopes. Every agent pane
+ * is a scope of its own with the default 100, so with a hundred agents busy an
+ * unweighted server got a hundredth of the machine: 30 seconds to take a
+ * phone's photo, and a message that took 5s to send and 5s more to appear.
+ * It is light, and it is what you are looking at.
+ */
+const SERVER_WEIGHT = ["CPUWeight=2000", "IOWeight=1000"];
+
 async function reachable(): Promise<boolean> {
   try {
     const r = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) });
@@ -38,7 +47,8 @@ async function reachable(): Promise<boolean> {
 /**
  * Start the server in the background if it is not already up. Detached into
  * its own session, so closing the terminal that happened to start it does not
- * take the board down with it.
+ * take the board down with it — and, where systemd is there, into its own
+ * scope (the one AGENTS.md restarts it in), with SERVER_WEIGHT.
  */
 async function ensureServer(): Promise<void> {
   if (await reachable()) return;
@@ -46,7 +56,11 @@ async function ensureServer(): Promise<void> {
   const logDir = join(agentboxHome(), "logs");
   mkdirSync(logDir, { recursive: true });
   const log = openSync(join(logDir, "server.log"), "a");
-  const p = Bun.spawn(["setsid", "bun", agentboxBin(), "serve"], {
+  const serve = ["setsid", "bun", agentboxBin(), "serve"];
+  const scoped = Bun.which("systemd-run")
+    ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-serve", ...SERVER_WEIGHT.flatMap((w) => ["-p", w])]
+    : [];
+  const p = Bun.spawn([...scoped, ...serve], {
     stdio: ["ignore", log, log],
     env: process.env,
   });
@@ -242,7 +256,11 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   screen <id>...        what its terminal shows now
   diff <id>... [--stat] its worktree's changes
   send <id> <text…|->   type a message into it
-  archive|unarchive <id>...
+  watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once]
+                        a line each time one starts asking, finishes its turn
+                        (with the end of its last message), or stops; until killed
+  close <id>...         stop it and take it off the list; resumable
+  reopen <id>...        put a closed one back on the list (still stopped)
   stop <id>...          end its process; it stays resumable
   resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not
   label <id> [name]     rename it on the board (no name clears)
@@ -277,13 +295,19 @@ export async function main(argv: string[]): Promise<number | null> {
       case "diff":
       case "send":
       case "label":
+      case "watch":
         await ensureServer();
         return await verbs[cmd](api, argv.slice(1));
-      case "archive":
-      case "unarchive":
+      case "close":
+      case "reopen":
       case "stop":
         await ensureServer();
         return await verbs.each(api, cmd, argv.slice(1));
+      // The old names, for scripts and agents that learnt them.
+      case "archive":
+      case "unarchive":
+        await ensureServer();
+        return await verbs.each(api, cmd === "archive" ? "close" : "reopen", argv.slice(1));
       case "resume":
       case "adopt": {
         const rest = argv.slice(1);

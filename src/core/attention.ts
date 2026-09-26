@@ -6,7 +6,7 @@
 
 import type { Attention, Session } from "./types";
 
-const RANK = { blocked: 0, waiting: 1, running: 2, stopped: 3, archived: 4 } as const;
+const RANK = { blocked: 0, waiting: 1, running: 2, stopped: 3, closed: 4 } as const;
 
 export function attentionOf(s: Session, blockedReason: string | null = null): Attention {
   switch (s.status) {
@@ -22,8 +22,8 @@ export function attentionOf(s: Session, blockedReason: string | null = null): At
       return { kind: "running", rank: RANK.running, reason: "working" };
     case "stopped":
       return { kind: "stopped", rank: RANK.stopped, reason: "not running — resume to continue" };
-    case "archived":
-      return { kind: "archived", rank: RANK.archived, reason: "archived" };
+    case "closed":
+      return { kind: "closed", rank: RANK.closed, reason: "closed" };
   }
 }
 

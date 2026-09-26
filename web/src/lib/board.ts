@@ -1,7 +1,7 @@
-/** Ordering, filtering and sectioning for the Sessions board. Pure.
+/** Ordering, filtering and sectioning for the session list. Pure.
  *
  * Urgency is not derived here: the server stamps `attention` on every session
- * so the board, the rail and the tab title can never disagree. This only
+ * so the list, the voice agent and the tab title can never disagree. This only
  * sorts and buckets by it. */
 
 import type { Attention, AttentionKind, ProviderId, Session } from "../../../src/core/types";
@@ -15,11 +15,11 @@ export const KIND_ORDER: Record<AttentionKind, number> = {
   waiting: 1,
   running: 2,
   stopped: 3,
-  archived: 4,
+  closed: 4,
 };
 
 /**
- * blocked → waiting → running → stopped → archived; within each, the session
+ * blocked → waiting → running → stopped → closed; within each, the session
  * you last sent something to first. Your own messages, not the agent's
  * activity: an agent finishing a step, or another agent messaging it, does
  * not move a row, so the order is the one you made.
@@ -35,23 +35,11 @@ export function sortByAttention<T extends SessionRow>(rows: readonly T[]): T[] {
 
 export interface BoardFilter {
   query: string;
-  provider: ProviderId | "all";
-  /** An account id, "all", or "none" for sessions not pinned to one. */
-  account: string;
-  /** A repo root path, or "all". */
-  repo: string;
-  showArchived: boolean;
 }
 
-export const EMPTY_FILTER: BoardFilter = {
-  query: "",
-  provider: "all",
-  account: "all",
-  repo: "all",
-  showArchived: false,
-};
+export const EMPTY_FILTER: BoardFilter = { query: "" };
 
-/** Where a session lives, for grouping and the repo filter. */
+/** Where a session lives, for the Repo sort and its dot's shape. */
 export function repoKey(s: Pick<Session, "repoRoot" | "cwd">): string {
   return s.repoRoot ?? s.cwd;
 }
@@ -59,20 +47,39 @@ export function repoKey(s: Pick<Session, "repoRoot" | "cwd">): string {
 export function filterSessions<T extends SessionRow>(rows: readonly T[], f: BoardFilter): T[] {
   const q = f.query.trim().toLowerCase();
   return rows.filter((s) => {
-    if (!f.showArchived && s.status === "archived") return false;
-    if (f.provider !== "all" && s.provider !== f.provider) return false;
-    if (f.account === "none" ? s.accountId !== null : f.account !== "all" && s.accountId !== f.account) return false;
-    if (f.repo !== "all" && repoKey(s) !== f.repo) return false;
     if (!q) return true;
-    return [s.label, s.title, s.cwd, s.branch, s.lastMessage, s.firstPrompt, s.id, s.model]
+    return [s.label, s.title, s.cwd, s.branch, s.lastMessage, s.firstPrompt, s.id, s.model, s.provider]
       .some((x) => x != null && x.toLowerCase().includes(q));
   });
 }
 
 export interface Section<T> {
-  kind: AttentionKind;
+  /** Stable key: an attention kind, a repo path, or "all". */
+  key: string;
+  /** Empty for the one unlabelled section of a flat sort. */
   label: string;
+  /** What it colours the label by: the attention kind, when there is one. */
+  kind?: AttentionKind;
   rows: T[];
+}
+
+/** How the session list is ordered.
+ *  - mine: the last time you sent it something (your order, not the agents')
+ *  - all: the last time anything happened in it
+ *  - status: blocked, your turn, running, stopped
+ *  - repo: grouped by repository or folder */
+export type SortKey = "mine" | "all" | "status" | "repo";
+
+export const SORT_LABEL: Record<SortKey, string> = {
+  mine: "Your activity",
+  all: "All activity",
+  status: "Status",
+  repo: "Repo",
+};
+
+/** The timestamp a sort orders by, and the one a row shows. */
+export function sortTime(s: Pick<Session, "lastPromptAt" | "lastActivityAt">, sort: SortKey): number {
+  return sort === "all" ? s.lastActivityAt : s.lastPromptAt;
 }
 
 /** A row placed in the tree: how deep it sits under the session that started
@@ -81,7 +88,7 @@ export type Nested<T> = T & { depth: number; kids: number };
 
 /**
  * The row each row nests under: its parent, when the parent is one of `rows`.
- * A parent that is archived (and not shown), filtered out or gone leaves its
+ * A parent that is closed (and not shown), filtered out or gone leaves its
  * children at the root. So does a loop, which would otherwise hide itself.
  */
 export function parentsOf(rows: readonly Pick<Session, "id" | "parent">[]): Map<string, string> {
@@ -106,19 +113,30 @@ const SECTION_LABEL: Record<AttentionKind, string> = {
   waiting: "Your turn",
   running: "Running",
   stopped: "Stopped",
-  archived: "Archived",
+  closed: "Closed",
 };
 
+function ordered<T extends SessionRow>(rows: readonly T[], sort: SortKey): T[] {
+  if (sort === "status") return sortByAttention(rows);
+  return [...rows].sort((a, b) => sortTime(b, sort) - sortTime(a, sort));
+}
+
 /**
- * Sections always in the same order so the board does not reshuffle under the
- * cursor. A session another one started sits under it, in its section whatever
- * its own status, and only while `open` says its parent is expanded.
+ * The list in sections. Status sections always come in the same order and
+ * repos alphabetically, so the list does not reshuffle under the cursor; the
+ * activity sorts are one flat section. A session another one started sits
+ * under it, in its section whatever its own status or repo, and only while
+ * `open` says its parent is expanded.
  */
-export function sectionsOf<T extends SessionRow>(rows: readonly T[], open: (id: string) => boolean = () => true): Section<Nested<T>>[] {
+export function sectionsOf<T extends SessionRow>(
+  rows: readonly T[],
+  open: (id: string) => boolean = () => true,
+  sort: SortKey = "status",
+): Section<Nested<T>>[] {
   const up = parentsOf(rows);
   const kids = new Map<string, T[]>();
   const roots: T[] = [];
-  for (const s of sortByAttention(rows)) {
+  for (const s of ordered(rows, sort)) {
     const p = up.get(s.id);
     if (p) kids.set(p, [...(kids.get(p) ?? []), s]);
     else roots.push(s);
@@ -128,16 +146,48 @@ export function sectionsOf<T extends SessionRow>(rows: readonly T[], open: (id: 
     out.push({ ...s, depth, kids: k.length });
     if (open(s.id)) for (const c of k) place(c, depth + 1, out);
   };
-  return (Object.keys(KIND_ORDER) as AttentionKind[])
-    .map((kind) => {
-      const out: Nested<T>[] = [];
-      for (const r of roots) if (r.attention.kind === kind) place(r, 0, out);
-      return { kind, label: SECTION_LABEL[kind], rows: out };
-    })
-    .filter((s) => s.rows.length > 0);
+  const build = (key: string, label: string, pick: (r: T) => boolean, kind?: AttentionKind): Section<Nested<T>> => {
+    const out: Nested<T>[] = [];
+    for (const r of roots) if (pick(r)) place(r, 0, out);
+    return { key, label, kind, rows: out };
+  };
+  let sections: Section<Nested<T>>[];
+  if (sort === "status") {
+    sections = (Object.keys(KIND_ORDER) as AttentionKind[]).map((kind) => build(kind, SECTION_LABEL[kind], (r) => r.attention.kind === kind, kind));
+  } else if (sort === "repo") {
+    const repos = [...new Set(roots.map(repoKey))].sort((a, b) => baseName(a).localeCompare(baseName(b)) || a.localeCompare(b));
+    sections = repos.map((repo) => build(repo, baseName(repo), (r) => repoKey(r) === repo));
+  } else {
+    sections = [build("all", "", () => true)];
+  }
+  return sections.filter((s) => s.rows.length > 0);
 }
 
-/** The time column's tooltip: when you last wrote, and when the agent last moved. */
+/** The shapes a session's status dot takes, one per repo. */
+export const SHAPES = ["circle", "square", "triangle", "diamond", "star", "cross", "down"] as const;
+export type Shape = (typeof SHAPES)[number];
+
+/**
+ * Each repo's shape. The repos of the sessions on the list come first, most
+ * sessions first, so what you can see gets distinct shapes before a folder
+ * three closed sessions once ran in; ties go to the all-time count, which
+ * barely moves. Past the seventh they repeat.
+ */
+export function repoShapes(rows: readonly Pick<Session, "repoRoot" | "cwd" | "status">[]): Map<string, Shape> {
+  const live = new Map<string, number>();
+  const all = new Map<string, number>();
+  for (const r of rows) {
+    const k = repoKey(r);
+    all.set(k, (all.get(k) ?? 0) + 1);
+    if (r.status !== "closed") live.set(k, (live.get(k) ?? 0) + 1);
+  }
+  const repos = [...all.keys()].sort(
+    (a, b) => (live.get(b) ?? 0) - (live.get(a) ?? 0) || all.get(b)! - all.get(a)! || a.localeCompare(b),
+  );
+  return new Map(repos.map((repo, i) => [repo, SHAPES[i % SHAPES.length]!]));
+}
+
+/** The time's tooltip: when you last wrote, and when the agent last moved. */
 export function sentTip(s: Pick<Session, "lastPromptAt" | "lastActivityAt">): string {
   const at = (t: number) => new Date(t).toLocaleString();
   return `You last sent it something ${at(s.lastPromptAt)}\nLast activity ${at(s.lastActivityAt)}`;
@@ -170,7 +220,7 @@ export function contextPct(s: Pick<Session, "contextUsed" | "contextLimit">): nu
 /** Counts for the nav badge and the tab title: things that want a human. A
  *  helper waiting on the session that started it is waiting on that session. */
 export function needsYou(rows: readonly SessionRow[]): number {
-  const up = parentsOf(rows.filter((s) => s.status !== "archived"));
+  const up = parentsOf(rows.filter((s) => s.status !== "closed"));
   return rows.filter((s) => s.attention.kind === "blocked" || (s.attention.kind === "waiting" && !up.has(s.id))).length;
 }
 

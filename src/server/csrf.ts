@@ -17,26 +17,32 @@
  * Non-browser clients (the CLI, the MCP server, curl) send no Origin and set
  * the header; they are local processes running as you, which is the trust
  * boundary anyway.
+ *
+ * The tailnet listener (`tailnet.ts`) passes this machine's Tailscale names as
+ * `hosts`: the same rules, with those names standing in for loopback. Its
+ * peers are vetted before this runs; the loopback listener never passes any.
  */
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const VITE_DEV_PORT = 5173;
 
-function hostOk(host: string | null, port: number): boolean {
+function hostOk(host: string | null, port: number, extra: readonly string[]): boolean {
   if (!host) return false;
   const m = host.match(/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/);
   if (!m) return false;
   const name = m[1]!.toLowerCase();
   const p = m[2] ? Number(m[2]) : 80;
+  if (extra.includes(name)) return p === port;
   return LOOPBACK.has(name) && (p === port || p === VITE_DEV_PORT);
 }
 
-function originOk(origin: string | null, port: number): boolean {
+function originOk(origin: string | null, port: number, extra: readonly string[]): boolean {
   if (origin === null) return true;
   try {
     const u = new URL(origin);
-    if (u.protocol !== "http:") return false;
-    return hostOk(u.host, port);
+    // The tailnet listener serves HTTPS once it has a certificate.
+    if (u.protocol !== "http:" && !(u.protocol === "https:" && extra.length > 0)) return false;
+    return hostOk(u.host, port, extra);
   } catch {
     return false;
   }
@@ -44,9 +50,10 @@ function originOk(origin: string | null, port: number): boolean {
 
 export type Verdict = { ok: true } | { ok: false; reason: string };
 
-export function checkRequest(req: Request, port: number, opts: { upgrade?: boolean } = {}): Verdict {
-  if (!hostOk(req.headers.get("host"), port)) return { ok: false, reason: "unexpected Host header" };
-  if (!originOk(req.headers.get("origin"), port)) return { ok: false, reason: "cross-origin requests are not allowed" };
+export function checkRequest(req: Request, port: number, opts: { upgrade?: boolean; hosts?: readonly string[] } = {}): Verdict {
+  const extra = opts.hosts ?? [];
+  if (!hostOk(req.headers.get("host"), port, extra)) return { ok: false, reason: "unexpected Host header" };
+  if (!originOk(req.headers.get("origin"), port, extra)) return { ok: false, reason: "cross-origin requests are not allowed" };
   const safe = req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS";
   if (!safe && !opts.upgrade && req.headers.get("x-agentbox") !== "1") {
     return { ok: false, reason: "missing x-agentbox header" };

@@ -98,7 +98,7 @@ export function newSession(s: NewSession): number {
 function startServer(args: string[]): TmuxResult {
   let p: ReturnType<typeof Bun.spawnSync>;
   try {
-    p = Bun.spawnSync(["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-tmux", "tmux", "-L", tmuxSocket(), ...args], {
+    p = Bun.spawnSync(["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-tmux", "-p", "CPUWeight=1000", "tmux", "-L", tmuxSocket(), ...args], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",

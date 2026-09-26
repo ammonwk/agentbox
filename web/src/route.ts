@@ -9,10 +9,11 @@ export type Route =
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
   | { page: "skills" }
+  | { page: "voice" }
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "sessions" | "accounts" | "skills" | "settings";
+export type NavId = "sessions" | "voice" | "accounts" | "skills" | "settings";
 
 export function navOf(route: Route): NavId {
   return route.page === "session" ? "sessions" : route.page;
@@ -36,6 +37,7 @@ export function parseHash(hash: string): Route {
   }
   if (head === "accounts") return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
   if (head === "skills") return { page: "skills" };
+  if (head === "voice") return { page: "voice" };
   if (head === "settings") return { page: "settings" };
   return { page: "sessions" };
 }

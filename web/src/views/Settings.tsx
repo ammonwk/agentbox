@@ -68,7 +68,7 @@ function General({ settings, save, saveStateOf }: SectionProps) {
       </Field>
       <SaveMark state={saveStateOf("theme")} />
 
-      <Field label="Board history" hint="How many days a session with no activity stays on the board before it drops off. Archived sessions are kept regardless.">
+      <Field label="Board history" hint="How many days a session with no activity stays on the board before it drops off. Open sessions agentbox started are kept regardless; closed ones stay findable under See closed while they are inside this window.">
         {(id) => (
           <div className="input-row">
             <CommitInput
@@ -207,7 +207,7 @@ function Repositories({ repos, sessions }: { repos: Repo[]; sessions: AppState["
   }
 
   const usedBy = (repo: Repo) =>
-    sessions.filter((s) => s.status !== "archived" && (s.repoRoot ?? s.cwd).startsWith(repo.ref)).length;
+    sessions.filter((s) => s.status !== "closed" && (s.repoRoot ?? s.cwd).startsWith(repo.ref)).length;
 
   async function remove(repo: Repo) {
     setConfirming(null);
@@ -345,9 +345,9 @@ function Repositories({ repos, sessions }: { repos: Repo[]; sessions: AppState["
 /**
  * Reclaim disk from worktrees.
  *
- * This exists because Close deliberately keeps a session's checkout: the branch
- * is what makes a session resumable, and a close that destroyed a gigabyte to
- * clear a row off the board was the wrong trade. So the disk is reclaimed here
+ * This exists because Close (and Stop) deliberately keep a session's
+ * checkout: the branch is what makes a session resumable, and a close that
+ * destroyed a gigabyte to clear a row off the board was the wrong trade. So the disk is reclaimed here
  * instead — explicitly, over worktrees rather than sessions, after the human has
  * read what is about to go.
  *
@@ -403,7 +403,7 @@ function Disk() {
     <section className="card">
       <h3>Disk</h3>
       <p className="hint">
-        Every session keeps its worktree when it stops or is archived, because the checkout
+        Every session keeps its worktree when it stops or is closed, because the checkout
         is what Resume comes back to. They add up — a worktree of a large repo is
         a gigabyte — so this is where you get the space back. Removing a worktree
         never touches its branch: a session whose worktree is gone still resumes,

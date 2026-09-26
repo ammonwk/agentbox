@@ -252,7 +252,7 @@ const skills: SkillInfo[] = [
 
 // ------------------------------------------------------------- sessions
 
-const ATTN: Record<AttentionKind, number> = { blocked: 0, waiting: 1, running: 2, stopped: 3, archived: 4 };
+const ATTN: Record<AttentionKind, number> = { blocked: 0, waiting: 1, running: 2, stopped: 3, closed: 4 };
 
 type MockSession = Session;
 
@@ -284,7 +284,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     transcriptPath: null,
     startedAt: T0 - 2 * H,
     lastActivityAt: T0 - 5 * M,
-    archivedAt: null,
+    closedAt: null,
     ...p,
     lastPromptAt: p.lastPromptAt ?? p.lastActivityAt ?? T0 - 5 * M,
   };
@@ -394,11 +394,11 @@ const sessions: MockSession[] = [
     startedAt: T0 - 3 * D, lastActivityAt: T0 - 3 * D + 40 * M,
   }),
   sess({
-    id: "r5t4", provider: "claude", accountId: "cl-personal", status: "archived", host: "none",
+    id: "r5t4", provider: "claude", accountId: "cl-personal", status: "closed", host: "none",
     title: "Spike: xterm.js in React 19", cwd: `${HOME}/scratch/xterm-spike`, model: "claude-fable-5-1",
     lastMessage: "The addon-fit needs the container to have a real height before `fit()`; a ResizeObserver solves it.",
     tokens: { input: 8_000, output: 3_000, cacheRead: 40_000, cacheWrite: 9_000, costEquiv: 0.4 },
-    startedAt: T0 - 4 * D, lastActivityAt: T0 - 4 * D + 2 * H, archivedAt: T0 - 3 * D,
+    startedAt: T0 - 4 * D, lastActivityAt: T0 - 4 * D + 2 * H, closedAt: T0 - 3 * D,
   }),
   // Two teammates of 7fk2, nested under it on the board.
   sess({
@@ -418,7 +418,7 @@ const REASON: Record<AttentionKind, (s: Session) => string> = {
   waiting: (s) => (s.host === "external" ? "Turn over, in another terminal" : "Turn over — your move"),
   running: () => "Working",
   stopped: () => "No process — resumable",
-  archived: () => "Archived",
+  closed: () => "Closed",
 };
 
 function attentionOf(s: Session): Attention {
@@ -977,6 +977,14 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       return MOCK_MODELS[a.provider];
     }
     if (head === "skill") return { body: `---\nname: example\ndescription: A mock skill body.\n---\n\n# Example\n\nThis is what SKILL.md would contain.\n` };
+    if (head === "sessions" && id === "closed") {
+      const q = (url.searchParams.get("q") ?? "").toLowerCase();
+      const all = sessions
+        .filter((s) => s.status === "closed" && (!q || `${s.title} ${s.id} ${s.cwd}`.toLowerCase().includes(q)))
+        .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0));
+      const off = Number(url.searchParams.get("offset") ?? 0);
+      return { sessions: all.slice(off, off + Number(url.searchParams.get("limit") ?? 30)).map((s) => ({ ...s, attention: attentionOf(s) })), total: all.length };
+    }
     if (head === "sessions" && action === "timeline") {
       await sleep(350);
       return pageBefore(id, url.searchParams.get("before"), Number(url.searchParams.get("limit") ?? PAGE));
@@ -1015,7 +1023,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
 
   if (head === "sessions" && id) {
     const s = mustSession(id);
-    const x = body<{ label: string | null; big: boolean; text: string; keys: string[]; prompt: string; archived: boolean }>(b);
+    const x = body<{ label: string | null; big: boolean; text: string; keys: string[]; prompt: string; closed: boolean }>(b);
     switch (method === "PATCH" ? "patch" : action) {
       case "patch":
         if ("label" in x) s.label = x.label?.trim() ? x.label.trim() : null;
@@ -1042,7 +1050,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
         s.host = "tmux";
         s.tmux = `ab-${s.id}`;
         s.pid = 50000 + Math.floor(Math.random() * 9999);
-        s.archivedAt = null;
+        s.closedAt = null;
         s.lastActivityAt = Date.now();
         break;
       case "adopt":
@@ -1057,10 +1065,10 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
         s.pid = null;
         s.tmux = null;
         break;
-      case "archive":
-        s.status = x.archived ? "archived" : "stopped";
-        s.archivedAt = x.archived ? Date.now() : null;
-        if (x.archived) {
+      case "close":
+        s.status = x.closed ? "closed" : "stopped";
+        s.closedAt = x.closed ? Date.now() : null;
+        if (x.closed) {
           s.host = "none";
           s.pid = null;
         }

@@ -160,6 +160,7 @@ export function healthRows(h: Health): { name: string; state: DepState; detail: 
 export const api = {
   state: () => get<AppState>("/api/state"),
   health: (refresh = false) => get<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
+  voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
 
   // sessions
   placement: (input: { provider: ProviderId; big: boolean; model?: string }) =>
@@ -183,7 +184,11 @@ export const api = {
   move: (id: string, opts: { accountId?: string; prompt?: string }) => post<Session>(`/api/sessions/${enc(id)}/move`, opts),
   upload,
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
-  archive: (id: string, archived: boolean) => post<unknown>(`/api/sessions/${enc(id)}/archive`, { archived }),
+  /** Close stops it and takes it off the list; `false` reopens it (still stopped). */
+  close: (id: string, closed: boolean) => post<unknown>(`/api/sessions/${enc(id)}/close`, { closed }),
+  /** A page of closed sessions, the most recently closed first, from all of history. */
+  closed: (q: string, offset: number, limit = 30) =>
+    get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit) })}`),
   timeline: (id: string, opts: { before?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set("before", opts.before);

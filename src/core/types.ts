@@ -197,11 +197,11 @@ export interface Percentiles {
  *   blocked   — a live process showing a prompt it needs answered (permission,
  *               trust, login) — only knowable for sessions in our tmux
  *   stopped   — no process; the conversation can be resumed
- *   archived  — you put it away; still resumable. Wins over the rest: its
- *               process may still be alive (see `host`), and only a message
- *               from you brings it back
+ *   closed    — you closed it: stopped and off the list; still resumable.
+ *               Wins over the rest: a process that outlived the stop (see
+ *               `host`) does not bring it back, only a message from you does
  */
-export type SessionStatus = "running" | "waiting" | "blocked" | "stopped" | "archived";
+export type SessionStatus = "running" | "waiting" | "blocked" | "stopped" | "closed";
 
 /** Where the running process lives, which decides what we can do to it. */
 export type SessionHost =
@@ -273,7 +273,7 @@ export interface Session {
    * session whose process a `codex exec`, `claude -p` or omp ran under, or the
    * session that asked the API for it. Null for top-level work, which
    * includes everything the Project session launches. May name a session that
-   * is archived or gone; the board shows such a child at the root.
+   * is closed or gone; the board shows such a child at the root.
    */
   parent: string | null;
 
@@ -284,7 +284,8 @@ export interface Session {
 
   startedAt: number;
   lastActivityAt: number;
-  archivedAt: number | null;
+  /** When you closed it; null while it is on the list. */
+  closedAt: number | null;
 }
 
 export interface TokenTotals {

@@ -15,6 +15,7 @@ After changing `src/`, restart the server — Bun does not hot-reload:
     kill $(ss -tlnp | grep 4479 | grep -o 'pid=[0-9]*' | cut -d= -f2) 2>/dev/null
     while systemctl --user list-units --all --no-legend agentbox-serve.scope | grep -q .; do sleep 0.5; done
     systemd-run --user --scope --collect --unit=agentbox-serve \
+      -p CPUWeight=2000 -p IOWeight=1000 \
       setsid bun bin/agentbox serve >> ~/.local/share/agentbox/logs/server.log 2>&1 < /dev/null &
 
 Its own systemd scope, so it does not die with the terminal (or the agent
@@ -22,7 +23,10 @@ session) that happened to start it: a process started from a terminal lives
 in that terminal's cgroup scope, and `setsid` alone does not leave it. The
 wait matters: `systemd-run` refuses the unit name while the old scope is
 still stopping. Then check `/api/health`, and that `/api/state` has as many
-sessions as before.
+sessions as before. The weights put it ahead of the agents: each tmux pane is a
+scope of its own at the default 100, and with a hundred busy the unweighted
+server took seconds to answer anything. `ensureServer` (src/cli/index.ts)
+starts it the same way.
 
 The tmux server runs in a scope of its own, `agentbox-tmux.scope`
 (`src/core/tmux.ts` starts it through `systemd-run`). This is what makes a
@@ -40,7 +44,7 @@ table and tmux on its first tick.
 
 - **The provider's transcript is the record.** Never write a copy of a
   conversation. The database holds only what the provider cannot know: the
-  account pin, the claim, the tmux session, a label, archive state, metrics.
+  account pin, the claim, the tmux session, a label, when it was closed, metrics.
 - **A warm session never changes account.** Switching accounts invalidates
   the provider's prompt cache, so while a session has been active within
   `claimIdleMin` (60) resume and adopt use its pinned account. Once it is idle
@@ -63,7 +67,14 @@ table and tmux on its first tick.
   replayed.
 - **Mutating requests carry `x-agentbox: 1`**, and Host/Origin must be
   loopback (`src/server/csrf.ts`). The terminal WebSocket types into agents
-  that skip permission prompts; do not loosen this.
+  that skip permission prompts; do not loosen this. The one exception is the
+  tailnet listener (`src/server/tailnet.ts`): the same app on this machine's
+  Tailscale IP, for a phone, where every peer must `tailscale whois` to the
+  machine's own user on an untagged node, and only then do the Tailscale
+  names stand in for loopback. `AGENTBOX_TAILNET=0` turns it off.
+- **`agentbox serve` holds its port from its first line.** A CLI that finds
+  the server slow starts another; that one must fail at once, not run a
+  second fleet.
 - **Address tmux by session name**, never by pane id (`%12` is renumbered when
   the tmux server restarts). `src/core/tmux.ts` is the only thing that runs
   tmux.
@@ -85,9 +96,19 @@ table and tmux on its first tick.
   live status lines. Independent of the server and the database.
 - `src/cli/index.ts` — `agentbox claude|codex|…`, `attach`, `usage`, `mcp`,
   `subagent-mcp`, `doctor`; `src/cli/sessions.ts` — the Unix-shaped session
-  verbs (`ls`, `show`, `log`, `grep`, `screen`, `diff`, `send`, `archive`,
+  verbs (`ls`, `show`, `log`, `grep`, `screen`, `diff`, `send`, `watch`, `close`,
   `stop`, `resume`, `adopt`, `label`): ids first on every line, `-` reads ids
   from stdin.
+- `src/voice/` — hands-free mode (the Voice page, `/ws/voice`): Deepgram Flux
+  hears, Claude (`claude-opus-5-5`, low effort, on the API key in
+  `<agentbox home>/voice.env`) decides and may `stay_silent`, Deepgram Aura
+  speaks. Its tools are a shell with the `agentbox` CLI on it (the Project's
+  guide, `CLI_GUIDE` in src/core/project.ts, is in its prompt), background
+  `watch`es whose output lines come back to it as messages, and `ask_project`
+  for real work. It speaks up on its own from those lines and from board news
+  (`src/core/changes.ts`, the same changes `agentbox watch` prints).
+- `.claude/skills/telegram/` — Telegram Dev (a personal Telegram bot) with a link back
+  to the session; for sessions working in this checkout.
 - `src/core/project.ts` — the Project session pinned atop the board: an
   ordinary session in `<agentbox home>/project`, whose CLAUDE.md/AGENTS.md
   (written from here on every start) teaches it the CLI.

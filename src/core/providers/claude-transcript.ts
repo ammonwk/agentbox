@@ -15,7 +15,7 @@ import { basename, dirname, sep } from "node:path";
 import { addUsage, emptyTotals } from "../pricing";
 import type { TimelineEvent, TokenTotals } from "../types";
 import { cap, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
-import type { TranscriptFacts, TranscriptRef } from "./types";
+import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
  *  collide), so it only ever proves a candidate, never recovers a path. */
@@ -72,6 +72,9 @@ const WRAPPER_TAG = /^\s*<([a-z][a-z0-9_-]*)>/;
 export function classifyUserText(text: string): UserTextKind {
   if (text.startsWith("[Request interrupted")) return "interrupted";
   if (text.startsWith("Caveat:")) return "hidden";
+  // An agent teammate's message, delivered as a plain user record with no
+  // origin: not yours, so it must not count as when you last wrote to it.
+  if (text.startsWith("Another Claude session sent a message:") || text.startsWith("<teammate-message")) return "notification";
   const m = WRAPPER_TAG.exec(text);
   if (!m) return "prompt";
   switch (m[1]) {
@@ -114,8 +117,10 @@ export function commandLine(s: string): string {
   return args ? `${n} ${args}` : n;
 }
 
-/** The text of a background-task notification, for a one-line meta event. */
+/** The text of a background-task notification or a teammate's message, for a one-line meta event. */
 function notificationLine(s: string): string {
+  const mate = /<teammate-message teammate_id="([^"]*)"[^>]*>([\s\S]*?)(?:<\/teammate-message>|$)/.exec(s);
+  if (mate) return `from teammate ${mate[1]}: ${oneLine(mate[2]!, 200)}`;
   const summary = tag(s, "summary") ?? tag(s, "status") ?? "";
   return `background task: ${oneLine(summary || s.replace(/<[^>]+>/g, " "), 200)}`;
 }
@@ -423,6 +428,12 @@ export class ClaudeFold {
           const p = promptOf(a.prompt);
           if (p?.text) this.prompt(p.text);
           this.turnOpen = true;
+          // Yours unless it says otherwise — and it is when you last sent it
+          // something, which the board sorts by. A session you keep talking to
+          // mid-turn sank below ones you had not touched in hours.
+          const kind = a.origin?.kind;
+          const when = at ?? (typeof a.timestamp === "string" ? Date.parse(a.timestamp) : NaN);
+          if ((kind === undefined || kind === "human") && !isAgentSent(String(a.prompt ?? "")) && Number.isFinite(when)) this.lastPromptAt = when;
         }
         return;
       }
@@ -487,7 +498,6 @@ export class ClaudeFold {
     // `task-notification`, `auto-continuation`. Older versions say nothing,
     // and then it was typed.
     const kind0 = r.origin?.kind;
-    const mine = kind0 === undefined || kind0 === "human";
     const content = r.message?.content;
     if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_result")) {
       // A tool finished; the model is about to continue.
@@ -496,6 +506,7 @@ export class ClaudeFold {
     }
     const first = typeof content === "string" ? content : Array.isArray(content) ? (content.find((b: any) => b?.type === "text")?.text ?? "") : "";
     const kind = classifyUserText(first);
+    const mine = (kind0 === undefined || kind0 === "human") && !isAgentSent(first);
     if (kind === "interrupted") {
       this.turnOpen = false;
       return;
