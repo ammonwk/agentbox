@@ -50,7 +50,13 @@ function AccountList({ state }: { state: AppState }) {
       </p>
 
       {providers.map((p) => {
-        const accounts = state.accounts.filter((a) => a.provider === p);
+        const all = state.accounts.filter((a) => a.provider === p);
+        // Your CLI's login on the same email as an account is that account
+        // seen through ~/.claude (one usage pool; see `twinOf`), so it folds
+        // into that account's card instead of repeating it. It gets a card
+        // of its own again the moment the CLI is logged in as anyone else.
+        const cliOf = (a: AccountView) => all.find((x) => x.isDefault && x.twinOf?.id === a.id) ?? null;
+        const accounts = all.filter((a) => !(a.isDefault && a.twinOf && all.some((x) => x.id === a.twinOf!.id)));
         // A login whose account is not listed: one just created (not in the
         // state yet), or a failure worth reading. A finished one whose
         // account was forgotten says nothing true any more.
@@ -98,9 +104,10 @@ function AccountList({ state }: { state: AppState }) {
                   <AccountCard
                     key={a.id}
                     account={a}
+                    cli={cliOf(a)}
                     state={state}
                     home={home}
-                    login={logins.find((l) => l.accountId === a.id) ?? null}
+                    login={logins.find((l) => l.accountId === a.id || l.accountId === cliOf(a)?.id) ?? null}
                     onLogin={(l) => setStarted((s) => [...s.filter((x) => x.accountId !== l.accountId), l])}
                     onDismissLogin={dismiss}
                     onAddOwn={() => setAdding({ provider: p, expect: a.email ?? undefined })}
@@ -138,6 +145,7 @@ function AccountList({ state }: { state: AppState }) {
 
 function AccountCard({
   account: a,
+  cli,
   state,
   home,
   login,
@@ -146,6 +154,8 @@ function AccountCard({
   onAddOwn,
 }: {
   account: AccountView;
+  /** Your CLI's login, when it is logged in as this account (folded in here). */
+  cli: AccountView | null;
   state: AppState;
   home: string | null;
   login: LoginFlow | null;
@@ -159,7 +169,9 @@ function AccountCard({
   const [label, setLabel] = useState(a.label);
   const [forget, setForget] = useState(false);
   const now = useNow(30_000);
-  const outstanding = outstandingOf(a.claims);
+  // Sessions started from the CLI claim against this account's pool.
+  const claims = cli ? [...a.claims, ...cli.claims] : a.claims;
+  const outstanding = outstandingOf(claims);
   const windows = sortWindows(a.usage.windows);
   const hue = accountHue(a.id, state.accounts);
   const c = a.placement;
@@ -226,6 +238,12 @@ function AccountCard({
       <div className="ac-home mono" title={a.home}>
         {tildify(a.home, home)}
       </div>
+      {cli ? (
+        <p className="ac-cli-too">
+          Your <code>{a.provider}</code> CLI (<span className="mono">{tildify(cli.home, home)}</span>) is logged in as this account too:
+          sessions started from it count here.
+        </p>
+      ) : null}
 
       {a.auth.detail && a.auth.state !== "ok" ? <p className="ac-auth-detail">{a.auth.detail}</p> : null}
       {a.twinOf && a.isDefault ? (
@@ -308,12 +326,12 @@ function AccountCard({
         </ul>
       ) : null}
 
-      {a.claims.length > 0 ? (
+      {claims.length > 0 ? (
         <div className="ac-claims">
           <div className="ac-claims-head">
             <span>Claims</span>
             <span className="faint">
-              {a.claims.filter((x) => !x.lapsed).length} active · {fmtPts(outstanding)} pts outstanding
+              {claims.filter((x) => !x.lapsed).length} active · {fmtPts(outstanding)} pts outstanding
             </span>
           </div>
           <table>
@@ -326,7 +344,7 @@ function AccountCard({
               </tr>
             </thead>
             <tbody>
-              {a.claims.map((cl) => (
+              {claims.map((cl) => (
                 <tr key={cl.sessionId} data-lapsed={cl.lapsed || undefined}>
                   <td>
                     <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "terminal" })} className="ac-claim-title">
@@ -388,9 +406,13 @@ function AccountCard({
         >
           Log in again
         </Button>
-        <Button size="sm" variant="ghost" icon={Icon.trash} className="ac-forget" disabled={busy} onClick={() => setForget(true)}>
-          Forget
-        </Button>
+        {/* The CLI's own home cannot be forgotten: it is re-registered at the
+            next start, and sessions started from the CLI live in it. */}
+        {a.isDefault ? null : (
+          <Button size="sm" variant="ghost" icon={Icon.trash} className="ac-forget" disabled={busy} onClick={() => setForget(true)}>
+            Forget
+          </Button>
+        )}
       </footer>
 
       {forget ? (

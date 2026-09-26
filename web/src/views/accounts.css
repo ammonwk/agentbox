@@ -166,6 +166,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ac-cli-too {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: -4px;
+}
 
 .ac-auth {
   display: inline-flex;
