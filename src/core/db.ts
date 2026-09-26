@@ -175,6 +175,11 @@ const MIGRATIONS: string[] = [
   // 5 — the session that started this one (Session.parent); set once, by the
   // fleet, when it can prove it.
   `ALTER TABLE sessions ADD COLUMN parent TEXT;`,
+  // 6 — when the fleet stopped this session for sitting idle (src/core/park.ts);
+  // null once it runs again or you stop it yourself.
+  `ALTER TABLE sessions ADD COLUMN parked_at INTEGER;`,
+  // 7 — the teammates stopped with it, JSON; told to it when it resumes.
+  `ALTER TABLE sessions ADD COLUMN parked_mates TEXT;`,
 ];
 
 function migrate(d: Database) {
@@ -273,6 +278,11 @@ export interface SessionRecord {
   model?: string | null;
   /** The session that started this one, once proven (see `Fleet.linkParents`). */
   parent?: string | null;
+  /** When the fleet stopped it for sitting idle (`Fleet.parkIdle`); null once
+   *  it runs again, or once you stop it yourself. */
+  parkedAt?: number | null;
+  /** Teammates whose panes were stopped with it. */
+  parkedMates?: string[] | null;
 }
 
 type SessionRow = {
@@ -281,6 +291,7 @@ type SessionRow = {
   origin: string; tmux: string | null; transcript_path: string | null; started_at: number;
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
+  parked_at: number | null; parked_mates: string | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -304,6 +315,8 @@ function rowToRecord(r: SessionRow): SessionRecord {
     effort: r.effort ?? null,
     model: r.model ?? null,
     parent: r.parent ?? null,
+    parkedAt: r.parked_at ?? null,
+    parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
   };
 }
 
@@ -328,13 +341,15 @@ const RECORD_COLUMNS = {
   effort: "effort",
   model: "model",
   parent: "parent",
+  parkedAt: "parked_at",
+  parkedMates: "parked_mates",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;
 
 function recordToSql(key: RecordKey, value: unknown): string | number | null {
   if (value === undefined || value === null) return null;
-  if (key === "facts" || key === "launch") return JSON.stringify(value);
+  if (key === "facts" || key === "launch" || key === "parkedMates") return JSON.stringify(value);
   if (typeof value === "boolean") return value ? 1 : 0;
   return value as string | number;
 }
@@ -667,6 +682,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   theme: "system",
   boardDays: 3,
   autoApprove: true,
+  parkIdleMin: 60,
   models: { claude: "", codex: "", devin: "", omp: "" },
   balancer: DEFAULT_BALANCER,
 };

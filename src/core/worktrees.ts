@@ -166,7 +166,9 @@ export async function scanWorktrees(scope: WorktreeScope = "all", sessions: Sess
   }
   const liveOf = (path: string) => {
     const s = byPath.get(path);
-    return s ? s.host !== "none" : false;
+    // A parked session is only waiting for its next message, which resumes
+    // it here: its worktree is as much in use as a running one's.
+    return s ? s.host !== "none" || s.parkedAt !== null : false;
   };
 
   // ---- phase one: what is out there, and what does GitHub say about it

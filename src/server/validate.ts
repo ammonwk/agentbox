@@ -61,7 +61,7 @@ export function asObject(v: unknown, label: string): Record<string, unknown> {
  * setting nothing reads.
  */
 export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch {
-  const known = ["theme", "boardDays", "autoApprove", "models", "balancer"];
+  const known = ["theme", "boardDays", "autoApprove", "parkIdleMin", "models", "balancer"];
   for (const key of Object.keys(body)) {
     if (!known.includes(key)) throw new HttpError(400, `unknown setting: ${key}`);
   }
@@ -76,6 +76,13 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
   }
   if (body.boardDays !== undefined) patch.boardDays = requirePositiveInt(body, "boardDays");
   if (body.autoApprove !== undefined) patch.autoApprove = requireBoolean(body, "autoApprove");
+  if (body.parkIdleMin !== undefined) {
+    const v = body.parkIdleMin;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 7 * 24 * 60) {
+      throw new HttpError(400, "parkIdleMin must be a whole number of minutes from 0 (never) to 10080");
+    }
+    patch.parkIdleMin = v;
+  }
 
   if (body.models !== undefined) {
     const m = asObject(body.models, "models");

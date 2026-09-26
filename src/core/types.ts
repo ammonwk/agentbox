@@ -286,6 +286,15 @@ export interface Session {
   lastActivityAt: number;
   /** When you closed it; null while it is on the list. */
   closedAt: number | null;
+  /**
+   * When the fleet stopped its process for sitting idle. A parked session is
+   * still shown as `waiting` — it is still your move — and the next message
+   * resumes it. Null for one that is running or that you stopped yourself.
+   */
+  parkedAt: number | null;
+  /** Idle past `parkIdleMin` but kept running, and why: "a background command
+   *  is running (…)", "a /loop wakeup is due in 12m", "teammate x is mid-turn". */
+  parkHold: string | null;
 }
 
 export interface TokenTotals {
@@ -368,6 +377,9 @@ export interface AgentSettings {
   boardDays: number;
   /** Skip permission prompts (each provider's bypass flag). */
   autoApprove: boolean;
+  /** Stop a Claude session's process after this many minutes idle with
+   *  nothing holding it up (src/core/park.ts); 0 never does. */
+  parkIdleMin: number;
   /** Default model per provider; empty means the provider's own default. */
   models: Record<ProviderId, string>;
   balancer: BalancerSettings;

@@ -20,7 +20,7 @@
 
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { owners } from "./accounts/homes";
 import { place, type AccountState } from "./balancer";
@@ -50,7 +50,23 @@ import type {
   TranscriptReader,
   TranscriptRef,
 } from "./providers/types";
-import { argvOf, environOf, isAlive, withProcessScan } from "./providers/procs";
+import { argvOf, environOf, isAlive, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
+import { clockHz, describe, isToolShell, readProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
+import {
+  classifyShell,
+  minutes,
+  ompWorking,
+  PARK_CHECK_MS,
+  PARK_STARTUP_MS,
+  shellCommand,
+  normalCommand,
+  shellHold,
+  STALE_TURN_MS,
+  SUBAGENT_QUIET_MS,
+  subagentsLastWrite,
+  WakeScan,
+} from "./park";
+import { read as readLive } from "../subagents/live";
 import { carryEnv, type Launch } from "./launch";
 import { weeklyWindow } from "./balancer";
 import type {
@@ -186,6 +202,21 @@ export class Fleet extends EventEmitter {
   /** Home → the account it belongs to (see `owners`), as of the last pass. */
   private owner = new Map<string, string>();
   private coldAfterMs = 60 * 60_000;
+  /** Each session's own status, before archive masks it. */
+  private liveStatus = new Map<string, SessionStatus>();
+  /** Idle sessions kept running, and why (see src/core/park.ts). */
+  private parkHolds = new Map<string, string>();
+  /** By transcript path. */
+  private wakeScans = new Map<string, WakeScan>();
+  /** Sessions found parkable at the last check (see `parkIdle`). */
+  private parkClean = new Map<string, ParkCheck>();
+  /** Parked processes that may outlive their tmux session (see reapParked). */
+  private dying = new Map<number, { since: number; start: number | null; termed: boolean }>();
+  /** Per session: the action under way (see `serial`), and when you last
+   *  did anything to it. */
+  private busy = new Map<string, Promise<void>>();
+  private touched = new Map<string, number>();
+  private nextParkCheck: number;
   readonly ready: Promise<void>;
   private markReady!: () => void;
 
@@ -193,6 +224,7 @@ export class Fleet extends EventEmitter {
     super();
     this.adapters = new Map(deps.adapters.map((a) => [a.id, a]));
     this.now = deps.now ?? Date.now;
+    this.nextParkCheck = this.now() + PARK_STARTUP_MS;
     this.ready = new Promise((r) => (this.markReady = r));
   }
 
@@ -354,7 +386,9 @@ export class Fleet extends EventEmitter {
     this.linkParents(since);
     this.observeUsage(now);
     this.reapDeadPanes(now);
+    this.reapParked(now);
     this.rebuildViews(since, now);
+    await this.parkIdle(now, settings.parkIdleMin);
   }
 
   private track(adapter: ProviderAdapter, ref: TranscriptRef): void {
@@ -633,6 +667,251 @@ export class Fleet extends EventEmitter {
     }
   }
 
+  // -------------------------------------------------------------- parking
+
+  /**
+   * Stop the process of every Claude session in our tmux that has sat idle
+   * for `idleMin` with nothing holding it up (src/core/park.ts says what
+   * holds). The session stays on the board as waiting, and a message or a
+   * resume brings it back — with the prompt cache cold after this long, a
+   * resume costs no more than keeping it would have.
+   *
+   * The unit is the tmux session: a lead's teammates run as panes in it and
+   * go with it, so every pane must be idle too. Nothing is stopped before
+   * its resume is proven (directory and transcript), as with adopt.
+   *
+   * "Running" counts too once the turn has been silent for `STALE_TURN_MS`:
+   * Claude's status file stays "busy" for days on a lead with teammates. A
+   * session showing a permission prompt ("blocked") is never parked — it is
+   * waiting on you for something a resume would lose.
+   */
+  private async parkIdle(now: number, idleMin: number): Promise<void> {
+    if (!idleMin) {
+      this.parkHolds.clear();
+      this.parkClean.clear();
+      return;
+    }
+    if (now < this.nextParkCheck) return;
+    this.nextParkCheck = now + PARK_CHECK_MS;
+    const idleMs = idleMin * 60_000;
+    const project = this.deps.projectSession?.() ?? null;
+    const candidates = [...this.views.values()].filter(
+      (v) =>
+        v.provider === "claude" &&
+        v.host === "tmux" &&
+        v.tmux &&
+        v.id !== project &&
+        (this.liveStatus.get(v.id) === "waiting"
+          ? now - v.lastActivityAt >= idleMs
+          : this.liveStatus.get(v.id) === "running" && now - v.lastActivityAt >= Math.max(idleMs, STALE_TURN_MS)),
+    );
+    const holds = new Map<string, string>();
+    const clean = new Map<string, ParkCheck>();
+    if (candidates.length > 0) {
+      const table = await readProcTable().catch(() => null);
+      const panes = new Map<string, PaneInfo[]>();
+      for (const p of this.deps.runtime.listPanes()) panes.set(p.name, [...(panes.get(p.name) ?? []), p]);
+      const live = readLive().filter((e) => ompWorking(e.text));
+      let parked = false;
+      for (const v of candidates) {
+        // Let the server answer between candidates.
+        await Bun.sleep(0);
+        try {
+          if (!table) {
+            holds.set(v.id, "the process table could not be read");
+            continue;
+          }
+          const check = await this.parkHold(v, table, panes.get(v.tmux!) ?? [], live, now, idleMs);
+          if (typeof check === "string") {
+            holds.set(v.id, check);
+            continue;
+          }
+          // Clean twice in a row, a check apart, with nothing moved in
+          // between: one look can land in the gap between two rounds of
+          // anything.
+          const prev = this.parkClean.get(v.id);
+          clean.set(v.id, check);
+          if (!prev || prev.activity !== check.activity) {
+            holds.set(v.id, "idle; parked at the next check if it still is");
+            continue;
+          }
+          const cores = (check.cpuTicks - prev.cpuTicks) / clockHz() / Math.max(1, (check.at - prev.at) / 1000);
+          if (cores > BUSY_CORES_PER_AGENT * check.agents) {
+            clean.delete(v.id);
+            holds.set(v.id, `it is using ${Math.round(cores * 100)}% of a core`);
+            continue;
+          }
+          // Checked last and fresh: you may have sent it something, stopped
+          // it or resumed it while the checks above ran.
+          const touched = this.touched.get(v.id) ?? 0;
+          if (this.busy.has(v.id) || this.now() - touched < idleMs) {
+            holds.set(v.id, `you acted on it ${minutes(this.now() - touched)} ago`);
+            continue;
+          }
+          const rec = getSessionRecord(v.id);
+          if (!rec?.agentSessionId || !rec.transcriptPath || !existsSync(rec.transcriptPath)) {
+            holds.set(v.id, "its transcript is missing, so it could not be resumed");
+            continue;
+          }
+          try {
+            if (!existsSync(this.resumeCwd(rec))) throw new Error("gone");
+          } catch {
+            holds.set(v.id, "it could not be proven to resume, so it is left running");
+            continue;
+          }
+          // The last look, just before the kill: a transcript that grew or a
+          // shell that appeared since the first check means something woke.
+          if (stirred(prev, check)) {
+            clean.delete(v.id);
+            holds.set(v.id, "something stirred since the last check");
+            continue;
+          }
+          for (const pid of check.agentPids) this.dying.set(pid, { since: this.now(), start: startedAtOf(pid), termed: false });
+          this.deps.runtime.killSession(v.tmux!);
+          clean.delete(v.id);
+          updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null });
+          // The board says so now, not a tick from now: a message sent in
+          // between must resume it, not type into a pane that is gone.
+          this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null });
+          parked = true;
+          const team = check.mates.length ? `, with teammates ${check.mates.join(", ")}` : "";
+          console.log(`agentbox: parked ${v.id} (${v.title}) after ${minutes(now - v.lastActivityAt)} idle${team}`);
+        } catch (e) {
+          console.error(`agentbox: parking ${v.id} failed:`, e);
+        }
+      }
+      if (parked) this.emit("sessions");
+    }
+    this.parkClean = clean;
+    for (const path of this.wakeScans.keys()) if (!this.tracked.has(path)) this.wakeScans.delete(path);
+    this.parkHolds = holds;
+  }
+
+  /**
+   * A parked Claude that outlives its tmux session — it ignored the hangup,
+   * or is slow to shut its MCP servers down — gets SIGTERM after 10s and
+   * SIGKILL after two minutes: a process left behind is what parking is for.
+   * The start time guards against a recycled pid.
+   */
+  private reapParked(now: number): void {
+    for (const [pid, d] of this.dying) {
+      if (!isAlive(pid) || startedAtOf(pid) !== d.start) {
+        this.dying.delete(pid);
+        continue;
+      }
+      try {
+        if (now - d.since > 120_000) {
+          process.kill(pid, "SIGKILL");
+          this.dying.delete(pid);
+        } else if (now - d.since > 10_000 && !d.termed) {
+          process.kill(pid, "SIGTERM");
+          d.termed = true;
+        }
+      } catch {
+        this.dying.delete(pid);
+      }
+    }
+  }
+
+  /**
+   * Why an idle session must keep running — or, when nothing holds it, what
+   * it looked like, for the next check to compare against.
+   */
+  private async parkHold(
+    v: Session,
+    table: ProcTable,
+    panes: PaneInfo[],
+    live: { owner: string }[],
+    now: number,
+    idleMs: number,
+  ): Promise<string | ParkCheck> {
+    const quiet = now - v.lastActivityAt;
+    if (panes.some((p) => p.clients > 0)) return "a terminal or browser is attached to it";
+    const own = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
+    if (!own?.facts) return "its transcript has not been read yet";
+
+    // Every pane is an agent: the lead, and teammates, which name their team
+    // and themselves on the command line.
+    const agents: { pid: number; team: string | null; name: string | null }[] = [];
+    for (const pane of panes) {
+      if (pane.dead) continue;
+      const argv = argvOf(pane.pid);
+      if (!argv) continue; // exited since the listing
+      if (!runsCli(argv, "claude")) return `a pane runs ${basename(argv[0] ?? "?")}, not claude`;
+      const started = startedAtOf(pane.pid);
+      if (started !== null && now - started < idleMs) return `started ${minutes(now - started)} ago`;
+      const flag = (f: string) => {
+        const i = argv.indexOf(f);
+        return i === -1 ? null : (argv[i + 1] ?? null);
+      };
+      agents.push({ pid: pane.pid, team: flag("--team-name"), name: flag("--agent-name") });
+    }
+
+    // The conversations: its own, and every member's of a team with a pane
+    // here — found by team, not by the lead's record of what it led, which a
+    // `/clear` or a fork loses.
+    const teams = new Set(agents.map((a) => a.team).filter((t): t is string => !!t));
+    const family: { name: string; t: Tracked }[] = [{ name: "it", t: own }];
+    for (const [path, t] of this.tracked) {
+      if (t !== own && !this.ignored.has(path) && t.facts?.team && teams.has(t.facts.team)) {
+        family.push({ name: `teammate ${t.facts.title ?? t.facts.agentSessionId.slice(0, 8)}`, t });
+      }
+    }
+    for (const team of teams) {
+      if (!family.some((m) => m.t.facts?.team === team)) return `its teammates' transcripts (${team}) have not been found`;
+    }
+    const monitors = new Set<string>();
+    for (const { name, t } of family) {
+      const f = t.facts!;
+      const at = f.lastActivityAt ?? 0;
+      if (t !== own) {
+        if (f.turnOpen && now - at < STALE_TURN_MS) return `${name} is mid-turn`;
+        if (now - at < idleMs) return `${name} was active ${minutes(now - at)} ago`;
+      }
+      let scan = this.wakeScans.get(t.ref.path);
+      if (!scan) this.wakeScans.set(t.ref.path, (scan = new WakeScan(t.ref.path)));
+      const wake = await scan.hold(now);
+      if (wake) return name === "it" ? wake : `${name}: ${wake}`;
+      for (const m of scan.monitors) monitors.add(m);
+      const sub = subagentsLastWrite(t.ref.path, f.agentSessionId);
+      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) return `${name === "it" ? "its" : `${name}'s`} subagents are working`;
+    }
+
+    // What runs under each agent.
+    const shells: number[] = [];
+    let cpuTicks = 0;
+    for (const a of agents) {
+      const owners = [`pid:${a.pid}`, ...family.map((m) => m.t.facts!.agentSessionId)];
+      if (live.some((e) => owners.includes(e.owner))) return "omp subagents are running";
+      cpuTicks += subtreeCpuTicks(subtree(table, a.pid));
+      for (const kid of table.children.get(a.pid) ?? []) {
+        const cmd = argvOf(kid)?.join(" ");
+        if (!cmd || !isToolShell(cmd)) continue; // an MCP server
+        shells.push(kid);
+        const command = shellCommand(cmd);
+        const label = describe({ ...table.byPid.get(kid)!, cmd });
+        // A monitor's every line of output is a message to the session.
+        if (monitors.has(normalCommand(command))) return `a monitor is running (${label})`;
+        const running = subtree(table, kid)
+          .filter((r) => r.pid !== kid)
+          .map((r) => argvOf(r.pid)?.join(" ") ?? r.comm)
+          .filter((c) => !bareShell(c));
+        const hold = shellHold(classifyShell(command, running), label, quiet);
+        if (hold) return hold;
+      }
+    }
+    return {
+      at: now,
+      activity: v.lastActivityAt,
+      cpuTicks,
+      agents: Math.max(1, agents.length),
+      agentPids: agents.map((a) => a.pid),
+      shells,
+      sizes: new Map(family.map((m) => [m.t.ref.path, sizeOf(m.t.ref.path)])),
+      mates: agents.filter((a) => a.team && a.name).map((a) => a.name!),
+    };
+  }
+
   // ---------------------------------------------------------------- views
 
   private rebuildViews(since: number, now: number): void {
@@ -643,6 +922,12 @@ export class Fleet extends EventEmitter {
       const view = this.viewOf(rec, now);
       if (!view) continue;
       seen.add(rec.id);
+      // Running again, however it got there (a resume here, or `claude
+      // --resume` in some terminal): no longer parked.
+      if (rec.parkedAt && view.host !== "none") {
+        updateSessionRecord(rec.id, { parkedAt: null });
+        view.parkedAt = null;
+      }
       const fp = JSON.stringify(view);
       if (this.fingerprints.get(rec.id) !== fp) {
         this.fingerprints.set(rec.id, fp);
@@ -653,6 +938,7 @@ export class Fleet extends EventEmitter {
     for (const id of [...this.views.keys()]) {
       if (!seen.has(id)) {
         this.views.delete(id);
+        this.liveStatus.delete(id);
         this.fingerprints.delete(id);
         dirty = true;
       }
@@ -673,13 +959,16 @@ export class Fleet extends EventEmitter {
     if (pane && !pane.dead) {
       host = "tmux";
       pid = pane.pid;
-    } else if (proc && isAlive(proc.pid)) {
+    } else if (proc && isAlive(proc.pid) && !(rec.parkedAt && proc.startedAt <= rec.parkedAt)) {
+      // (A process older than the parking is the parked one, still exiting.)
       host = "external";
       pid = proc.pid;
     }
 
     let status: SessionStatus;
-    if (host === "none") status = "stopped";
+    // Parked is still your move: the fleet stopped the process, not you, and
+    // the next message resumes it.
+    if (host === "none") status = rec.parkedAt ? "waiting" : "stopped";
     else {
       const busy = proc?.busy;
       status = (busy ?? f?.turnOpen) ? "running" : "waiting";
@@ -709,6 +998,7 @@ export class Fleet extends EventEmitter {
     // ignored SIGTERM, a pane restarted by hand), until you send it
     // something (persistFacts).
     const live = status;
+    this.liveStatus.set(rec.id, live);
     if (rec.archivedAt) status = "closed";
 
     const cwd = f?.cwd || rec.cwd;
@@ -758,6 +1048,8 @@ export class Fleet extends EventEmitter {
       // activity: a session resumed and left alone is as idle as before.
       lastActivityAt,
       closedAt: rec.archivedAt,
+      parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
+      parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
     };
   }
 
@@ -1012,11 +1304,44 @@ export class Fleet extends EventEmitter {
     return f?.cwd || rec.cwd;
   }
 
-  async resume(id: string, prompt?: string): Promise<Session> {
+  /**
+   * Run `fn` once any action already under way on the session is done. Two
+   * messages to a parked session must not each resume it: the second start
+   * kills the first's process, and its message with it.
+   */
+  private serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    this.touched.set(id, this.now());
+    const run = (this.busy.get(id) ?? Promise.resolve()).then(fn);
+    const tail = run.then(
+      () => {},
+      () => {},
+    );
+    this.busy.set(id, tail);
+    void tail.then(() => {
+      if (this.busy.get(id) === tail) this.busy.delete(id);
+    });
+    return run;
+  }
+
+  /** Is the tmux session up right now? Asked of tmux, not the last pass. */
+  private paneAlive(name: string | null | undefined): boolean {
+    return !!name && this.deps.runtime.listPanes().some((p) => p.name === name && !p.dead);
+  }
+
+  resume(id: string, prompt?: string): Promise<Session> {
+    return this.serial(id, () => this.resumeNow(id, prompt));
+  }
+
+  private async resumeNow(id: string, prompt?: string): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
-    if (view.host !== "none") throw new FleetError(409, `session is already running (${view.host})`);
+    if (view.host !== "none" || this.paneAlive(rec.tmux)) throw new FleetError(409, `session is already running (${view.host === "none" ? "tmux" : view.host})`);
+    // Its teammates were stopped with it and do not come back; say so, or it
+    // will message them and wait for answers that never come.
+    if (prompt && rec.parkedAt && rec.parkedMates?.length) {
+      prompt = `[agentbox: this session was parked while idle, and its teammates (${rec.parkedMates.join(", ")}) were stopped with it — they are no longer running.]\n\n${prompt}`;
+    }
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to resume");
     const account = rec.accountId ? getAccount(rec.accountId) : null;
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
@@ -1185,7 +1510,7 @@ export class Fleet extends EventEmitter {
     // The account's variables win over the launching shell's.
     const env = { ...rec.launch?.env, ...cmd.env };
     this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env, unset: cmd.unset });
-    updateSessionRecord(rec.id, { tmux: name, archivedAt: null });
+    updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null });
     this.startedAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
   }
@@ -1237,11 +1562,31 @@ export class Fleet extends EventEmitter {
   }
 
   /** Type into the session. A cold one wakes where there is room, which may
-   *  mean restarting it on another account with `text` as its prompt. */
-  async send(id: string, text: string): Promise<void> {
+   *  mean restarting it on another account with `text` as its prompt; a
+   *  parked one resumes with `text` as its prompt. */
+  send(id: string, text: string): Promise<void> {
+    return this.serial(id, () => this.sendNow(id, text));
+  }
+
+  private async sendNow(id: string, text: string): Promise<void> {
     const s = this.get(id);
+    if (s.host === "none") {
+      const rec = getSessionRecord(id);
+      // Back already — an earlier message resumed it, and the board lags
+      // a pass behind.
+      if (rec?.tmux && this.paneAlive(rec.tmux)) {
+        await this.untilReady(id);
+        return this.deps.runtime.sendText(rec.tmux, text);
+      }
+      // Parked by the fleet, not stopped by you: this is what wakes it.
+      if (rec?.parkedAt) {
+        await this.resumeNow(id, text);
+        return;
+      }
+      throw new FleetError(409, "not running — resume it first");
+    }
     if (s.host !== "tmux" || !s.tmux) {
-      throw new FleetError(409, s.host === "external" ? "running in another terminal — adopt it to type here" : "not running — resume it first");
+      throw new FleetError(409, "running in another terminal — adopt it to type here");
     }
     const rec = s.cold ? getSessionRecord(id) : null;
     const target = rec ? this.wakeTarget(rec, s) : null;
@@ -1259,7 +1604,29 @@ export class Fleet extends EventEmitter {
         return;
       }
     }
+    await this.untilReady(id);
     await this.deps.runtime.sendText(s.tmux, text);
+  }
+
+  /**
+   * A TUI started moments ago drops what is typed before it is up. Wait —
+   * at most 30s from its start — until its process is seen (Claude writes
+   * its session file once running), and a moment more.
+   */
+  private async untilReady(id: string): Promise<void> {
+    const started = this.startedAt.get(id);
+    if (!started) return;
+    const rec = getSessionRecord(id);
+    const key = rec?.agentSessionId ? `${rec.provider}:${rec.agentSessionId}` : null;
+    while (this.now() - started < 30_000) {
+      const p = key ? this.live.get(key) : undefined;
+      if (p && p.startedAt >= started - 5_000) {
+        if (this.now() - started < 8_000) await Bun.sleep(1_500);
+        return;
+      }
+      await Bun.sleep(500);
+      await this.tick();
+    }
   }
 
   /** What the session's terminal shows now, as plain text. */
@@ -1270,6 +1637,7 @@ export class Fleet extends EventEmitter {
   }
 
   keys(id: string, keys: string[]): void {
+    this.touched.set(id, this.now());
     const s = this.get(id);
     if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, "not running in agentbox");
     this.deps.runtime.sendKeys(s.tmux, keys);
@@ -1280,7 +1648,10 @@ export class Fleet extends EventEmitter {
   }
 
   async stopSession(id: string): Promise<void> {
+    this.touched.set(id, this.now());
     const s = this.get(id);
+    // Stopped by you, so shown as stopped rather than as waiting on you.
+    updateSessionRecord(id, { parkedAt: null, parkedMates: null });
     if (s.host === "tmux" && s.tmux) this.deps.runtime.killSession(s.tmux);
     else if (s.host === "external" && s.pid) {
       try {
@@ -1301,7 +1672,9 @@ export class Fleet extends EventEmitter {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     if (closed && this.get(id).host !== "none") await this.stopSession(id);
-    updateSessionRecord(id, { archivedAt: closed ? this.now() : null });
+    // A parked one is stopped already; closing makes that yours, so it
+    // reopens stopped rather than waiting on you.
+    updateSessionRecord(id, closed ? { archivedAt: this.now(), parkedAt: null, parkedMates: null } : { archivedAt: null });
     await this.tick();
   }
 
@@ -1334,6 +1707,63 @@ export class Fleet extends EventEmitter {
 }
 
 // ---------------------------------------------------------------- helpers
+
+/** An idle Claude uses 1–2.5% of a core; more than this per agent over a
+ *  minute is work nothing else caught. */
+const BUSY_CORES_PER_AGENT = 0.1;
+
+/** What a parkable session looked like at one check. */
+interface ParkCheck {
+  at: number;
+  activity: number;
+  cpuTicks: number;
+  agents: number;
+  agentPids: number[];
+  /** Tool shells under the agents. */
+  shells: number[];
+  /** Each family transcript's size. */
+  sizes: Map<string, number>;
+  /** Teammates stopped with it. */
+  mates: string[];
+}
+
+/** Did anything move since `prev`: a transcript written, a shell started? */
+function stirred(prev: ParkCheck, cur: ParkCheck): boolean {
+  for (const [path, size] of cur.sizes) if (sizeOf(path) !== (prev.sizes.get(path) ?? size)) return true;
+  for (const pid of cur.agentPids) {
+    for (const kid of childrenOf(pid)) {
+      if (!prev.shells.includes(kid) && !cur.shells.includes(kid) && isToolShell(argvOf(kid)?.join(" "))) return true;
+    }
+  }
+  return false;
+}
+
+function sizeOf(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return -1;
+  }
+}
+
+function childrenOf(pid: number): number[] {
+  const out: number[] = [];
+  try {
+    for (const tid of readdirSync(`/proc/${pid}/task`)) {
+      const kids = readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
+      if (kids) out.push(...kids.split(/\s+/).map(Number));
+    }
+  } catch {
+    /* gone */
+  }
+  return out;
+}
+
+/** A shell that is only plumbing: the tool-call wrapper, a `-c` subshell or
+ *  a bare shell. `bash migrate.sh` is not — it is the work. */
+function bareShell(c: string): boolean {
+  return isToolShell(c) || /^(\S*\/)?(ba|z|da)?sh((\s+-\S*)*\s*$|(\s+-\S+)*\s+-[a-z]*c\b)/.test(c);
+}
 
 /**
  * The model to resume on. A resume without `--model` runs on the CLI's

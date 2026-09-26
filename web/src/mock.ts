@@ -58,6 +58,7 @@ const settings: AgentSettings = {
   theme: "system",
   boardDays: 7,
   autoApprove: false,
+  parkIdleMin: 60,
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "" },
   balancer: {
     claimNormal: 3,
@@ -285,6 +286,8 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     startedAt: T0 - 2 * H,
     lastActivityAt: T0 - 5 * M,
     closedAt: null,
+    parkedAt: null,
+    parkHold: null,
     ...p,
     lastPromptAt: p.lastPromptAt ?? p.lastActivityAt ?? T0 - 5 * M,
   };
