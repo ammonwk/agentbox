@@ -95,7 +95,7 @@ function usage(accountId: string, windows: UsageWindow[], extra: Partial<Account
   return { accountId, at: T0 - 2 * M, windows, stale: null, source: "endpoint", notes: [], ...extra };
 }
 
-type MockAccount = Omit<AccountView, "claims" | "placement" | "twinOf">;
+type MockAccount = Omit<AccountView, "claims" | "placement" | "alsoAt">;
 
 const accounts: MockAccount[] = [
   {
@@ -556,7 +556,7 @@ function placementFor(provider: ProviderId, big: boolean, manual?: string): Plac
 
 function accountViews(): AccountView[] {
   const now = Date.now();
-  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, false, now), twinOf: null }));
+  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, false, now), alsoAt: [] }));
 }
 
 // ------------------------------------------------------------- state

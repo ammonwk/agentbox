@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountView, Placement, Session } from "../../../../src/core/types";
-import { ago, api } from "../../api";
+import { ago, api, fmtTokens } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
@@ -242,6 +242,9 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
   const target = choice !== "auto" ? mine.find((a) => a.id === choice) ?? null : canMove ? auto : null;
   const moves = !!target && target.id !== session.accountId;
   const label = moves ? `Continue on ${target!.label}` : "Continue here";
+  // A move starts the conversation over on a cold cache: all of its context
+  // is sent again, uncached.
+  const resend = session.contextUsed ? `${fmtTokens(session.contextUsed)} tokens of context` : "the whole conversation";
   return (
     <div className="cmp-limit" role="status">
       <Icon.gauge size={15} />
@@ -260,7 +263,7 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
         ) : (
           <span className="cmp-limit-why">
             {moves
-              ? `${choice !== "auto" ? "" : placement?.mode === "overflow" ? `${target!.label} is the least claimed. ` : `${target!.label} has the most room. `}Moving costs one cold cache read; the agent is told “${CONTINUE}”.`
+              ? `${choice !== "auto" ? "" : placement?.mode === "overflow" ? `${target!.label} is the least claimed. ` : `${target!.label} has the most room. `}Moving re-sends ${resend} without the cache; the agent is told “${CONTINUE}”.`
               : choice !== "auto"
                 ? `Stays here; the agent is told “${CONTINUE}”.`
                 : !canMove

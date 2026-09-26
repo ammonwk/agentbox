@@ -33,9 +33,6 @@ export interface AccountState {
   windows: UsageWindow[];
   /** Outstanding weekly points of each active session pinned here. */
   outstanding: number[];
-  /** Logged in as the same login as this account: one usage pool, which
-   *  places and claims under that account only. */
-  sameAs?: string | null;
   /** No login in its home (a new account mid-login, or the CLI logged out). */
   loggedOut?: boolean;
 }
@@ -182,9 +179,6 @@ function evaluate(
   } else if (state.loggedOut) {
     c.eligible = false;
     c.reason = "not logged in";
-  } else if (state.sameAs) {
-    c.eligible = false;
-    c.reason = `same login as ${state.sameAs} — one usage pool, placed there`;
   } else if (atShortLimit(c)) {
     c.eligible = false;
     c.reason = `5-hour limit reached (${c.short}%)`;

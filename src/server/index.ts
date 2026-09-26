@@ -39,7 +39,7 @@ import { optionalString, parseSettingsPatch, requireBoolean, requireString } fro
 import { parseClientMessage } from "./protocol";
 import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
-import { AccountError, AccountsService } from "../core/accounts";
+import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolSessionIds } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
@@ -129,7 +129,9 @@ async function detectProviders(): Promise<void> {
 function accountViews(): AccountView[] {
   const claims = fleet.claims();
   const placements = new Map<string, ReturnType<Fleet["placement"]>>();
-  return accounts.list().map((a) => {
+  const homes = accounts.list();
+  const owner = owners(homes);
+  return homes.filter((a) => owner.get(a.id) === a.id).map((a) => {
     let p = placements.get(a.provider);
     if (!p) {
       try {
@@ -145,6 +147,7 @@ function accountViews(): AccountView[] {
       // days under its account would bury the handful that do.
       claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
       placement: p?.candidates.find((c) => c.accountId === a.id) ?? null,
+      alsoAt: homes.filter((h) => h.id !== a.id && owner.get(h.id) === a.id).map((h) => ({ id: h.id, home: h.home, isDefault: h.isDefault })),
     };
   });
 }

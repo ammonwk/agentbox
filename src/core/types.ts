@@ -75,16 +75,23 @@ export interface AccountAuth {
   detail: string | null;
 }
 
-/** An account with everything the Accounts page and the balancer need. */
+/**
+ * An account — one login — with everything the Accounts page and the
+ * balancer need. The list has one per login: a second credential home on the
+ * same login (your CLI's default home, or a duplicate agentbox home) is not
+ * an account of its own but an entry in `alsoAt`, and sessions in it belong
+ * to this account.
+ */
 export interface AccountView extends Account {
   auth: AccountAuth;
   usage: AccountUsage;
-  /** Active sessions pinned here and what they still claim. */
+  /** Active sessions on this account (in any of its homes) and what they
+   *  still claim. */
   claims: ClaimView[];
   /** The balancer's current view of this account for a normal session. */
   placement: Candidate | null;
-  /** Logged in as the same email as this other account: one usage pool. */
-  twinOf: { id: string; label: string } | null;
+  /** Other homes logged in as this login. */
+  alsoAt: { id: string; home: string; isDefault: boolean }[];
 }
 
 export interface ClaimView {
@@ -213,6 +220,9 @@ export interface Session {
    *  seconds between spawning a provider that cannot be told its id up front
    *  and finding the transcript it wrote. */
   agentSessionId: string | null;
+  /** The account it runs on. Its transcript may live in another home of the
+   *  same login (see `AccountView.alsoAt`); the account is what matters for
+   *  limits, claims and where it can move. */
   accountId: string | null;
   status: SessionStatus;
   host: SessionHost;

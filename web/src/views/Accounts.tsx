@@ -50,13 +50,7 @@ function AccountList({ state }: { state: AppState }) {
       </p>
 
       {providers.map((p) => {
-        const all = state.accounts.filter((a) => a.provider === p);
-        // Your CLI's login on the same email as an account is that account
-        // seen through ~/.claude (one usage pool; see `twinOf`), so it folds
-        // into that account's card instead of repeating it. It gets a card
-        // of its own again the moment the CLI is logged in as anyone else.
-        const cliOf = (a: AccountView) => all.find((x) => x.isDefault && x.twinOf?.id === a.id) ?? null;
-        const accounts = all.filter((a) => !(a.isDefault && a.twinOf && all.some((x) => x.id === a.twinOf!.id)));
+        const accounts = state.accounts.filter((a) => a.provider === p);
         // A login whose account is not listed: one just created (not in the
         // state yet), or a failure worth reading. A finished one whose
         // account was forgotten says nothing true any more.
@@ -104,10 +98,9 @@ function AccountList({ state }: { state: AppState }) {
                   <AccountCard
                     key={a.id}
                     account={a}
-                    cli={cliOf(a)}
                     state={state}
                     home={home}
-                    login={logins.find((l) => l.accountId === a.id || l.accountId === cliOf(a)?.id) ?? null}
+                    login={logins.find((l) => l.accountId === a.id || a.alsoAt.some((h) => h.id === l.accountId)) ?? null}
                     onLogin={(l) => setStarted((s) => [...s.filter((x) => x.accountId !== l.accountId), l])}
                     onDismissLogin={dismiss}
                     onAddOwn={() => setAdding({ provider: p, expect: a.email ?? undefined })}
@@ -145,7 +138,6 @@ function AccountList({ state }: { state: AppState }) {
 
 function AccountCard({
   account: a,
-  cli,
   state,
   home,
   login,
@@ -154,8 +146,6 @@ function AccountCard({
   onAddOwn,
 }: {
   account: AccountView;
-  /** Your CLI's login, when it is logged in as this account (folded in here). */
-  cli: AccountView | null;
   state: AppState;
   home: string | null;
   login: LoginFlow | null;
@@ -168,9 +158,9 @@ function AccountCard({
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(a.label);
   const [forget, setForget] = useState(false);
+  const [forgetHome, setForgetHome] = useState<AccountView["alsoAt"][number] | null>(null);
   const now = useNow(30_000);
-  // Sessions started from the CLI claim against this account's pool.
-  const claims = cli ? [...a.claims, ...cli.claims] : a.claims;
+  const claims = a.claims;
   const outstanding = outstandingOf(claims);
   const windows = sortWindows(a.usage.windows);
   const hue = accountHue(a.id, state.accounts);
@@ -238,28 +228,29 @@ function AccountCard({
       <div className="ac-home mono" title={a.home}>
         {tildify(a.home, home)}
       </div>
-      {cli ? (
-        <p className="ac-cli-too">
-          Your <code>{a.provider}</code> CLI (<span className="mono">{tildify(cli.home, home)}</span>) is logged in as this account too:
-          sessions started from it count here.
-        </p>
-      ) : null}
+      {a.alsoAt.map((h) =>
+        h.isDefault ? (
+          <p key={h.id} className="ac-cli-too">
+            Your <code>{a.provider}</code> CLI (<span className="mono">{tildify(h.home, home)}</span>) is logged in as this account too:
+            sessions started from it count here.
+          </p>
+        ) : (
+          <p key={h.id} className="ac-twin">
+            <Icon.alert size={12} />
+            <span>
+              <span className="mono">{tildify(h.home, home)}</span> is a second agentbox home on this login. One is enough: log it into a
+              different account, or{" "}
+              <button className="linkish" disabled={busy} onClick={() => setForgetHome(h)}>
+                forget it
+              </button>
+              .
+            </span>
+          </p>
+        ),
+      )}
 
       {a.auth.detail && a.auth.state !== "ok" ? <p className="ac-auth-detail">{a.auth.detail}</p> : null}
-      {a.twinOf && a.isDefault ? (
-        <p className="ac-auth-detail">
-          Your CLI is logged in as <strong>{a.twinOf.label}</strong>, which agentbox runs as its own account: new sessions go there, and
-          sessions started from the CLI count against it.
-        </p>
-      ) : a.twinOf ? (
-        <p className="ac-twin">
-          <Icon.alert size={12} />
-          <span>
-            Same login as <strong>{a.twinOf.label}</strong>, so it is one usage pool: new sessions go there, and
-            sessions here claim against it. Log this home into a different account, or forget it.
-          </span>
-        </p>
-      ) : a.isDefault && a.email ? (
+      {a.isDefault && a.email ? (
         <div className="ac-cli-only">
           <p className="ac-cli-only-head">
             <Icon.alert size={12} /> agentbox is borrowing your CLI's login
@@ -414,6 +405,26 @@ function AccountCard({
           </Button>
         )}
       </footer>
+
+      {forgetHome ? (
+        <Confirm
+          title="Forget the second home?"
+          danger
+          confirmLabel="Forget"
+          body={
+            <p>
+              agentbox stops using <span className="mono">{forgetHome.home}</span>. It stays on disk untouched, but sessions whose transcripts
+              are in it cannot be resumed from agentbox until it is imported again.
+            </p>
+          }
+          onCancel={() => setForgetHome(null)}
+          onConfirm={() => {
+            const id = forgetHome.id;
+            setForgetHome(null);
+            void run(() => api.forgetAccount(id));
+          }}
+        />
+      ) : null}
 
       {forget ? (
         <Confirm

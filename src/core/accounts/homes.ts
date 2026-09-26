@@ -160,6 +160,20 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
 }
 
 /**
+ * The account each home belongs to: itself, or — for a twin — the account it
+ * duplicates. The one place "same login" is resolved. The rows are credential
+ * homes; an account is a login, and everything that counts, places or shows
+ * accounts keys on this, so a twin is never an account of its own anywhere.
+ * A session stays pinned to its home (that is where its transcript is and
+ * what resumes it); it belongs to the home's owner.
+ */
+export function owners<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt">>(
+  all: readonly A[],
+): Map<string, string> {
+  return new Map(all.map((a) => [a.id, twinOf(a, all)?.id ?? a.id]));
+}
+
+/**
  * Register the default account of every installed provider CLI. Idempotent: a
  * provider that already has a default account, or whose default home was
  * imported by hand, is left alone.

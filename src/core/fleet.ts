@@ -22,7 +22,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { twinOf } from "./accounts/homes";
+import { owners } from "./accounts/homes";
 import { place, type AccountState } from "./balancer";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import {
@@ -174,6 +174,8 @@ export class Fleet extends EventEmitter {
   /** Providers whose sessions can wake on another account: the adapter can
    *  move a session, and there is another account to move it to. */
   private movable = new Set<ProviderId>();
+  /** Home → the account it belongs to (see `owners`), as of the last pass. */
+  private owner = new Map<string, string>();
   private coldAfterMs = 60 * 60_000;
   readonly ready: Promise<void>;
   private markReady!: () => void;
@@ -230,7 +232,14 @@ export class Fleet extends EventEmitter {
 
     this.panes = new Map(this.deps.runtime.listPanes().map((p) => [p.name, p]));
     this.coldAfterMs = settings.balancer.claimIdleMin * 60_000;
-    this.movable = new Set([...this.adapters.values()].filter((a) => a.moveSession && accountsOf(a.id).length > 1).map((a) => a.id));
+    this.owner = owners(accounts);
+    // Movable means there is another *account* to move to; a second home on
+    // the same login is not one.
+    this.movable = new Set(
+      [...this.adapters.values()]
+        .filter((a) => a.moveSession && new Set(accountsOf(a.id).map((x) => this.ownerOf(x.id))).size > 1)
+        .map((a) => a.id),
+    );
 
     // Processes.
     this.live.clear();
@@ -519,12 +528,12 @@ export class Fleet extends EventEmitter {
     }
 
     if (t.hitsSeen < 0) t.hitsSeen = 0;
-    for (const hit of f.rateLimitHits.slice(t.hitsSeen)) insertRateLimitHit(id, rec.accountId, hit.at, hit.detail);
+    for (const hit of f.rateLimitHits.slice(t.hitsSeen)) insertRateLimitHit(id, rec.accountId && this.ownerOf(rec.accountId), hit.at, hit.detail);
     t.hitsSeen = f.rateLimitHits.length;
 
     if (f.usage && f.usage.at > t.lastUsageAt && rec.accountId) {
       t.lastUsageAt = f.usage.at;
-      this.deps.usage.ingestRollout?.(rec.accountId, f.usage);
+      this.deps.usage.ingestRollout?.(this.ownerOf(rec.accountId), f.usage);
     }
   }
 
@@ -532,11 +541,12 @@ export class Fleet extends EventEmitter {
   private observeUsage(now: number): void {
     const records = listSessionRecords(now - 8 * DAY);
     const accounts = listAccounts();
+    const owner = owners(accounts);
     for (const account of accounts) {
-      // A twin's rises are its primary's rises; attributing both would count
-      // every point twice. The primary takes the twin's sessions instead.
-      if (twinOf(account, accounts)) continue;
-      const pool = new Set([account.id, ...accounts.filter((o) => twinOf(o, accounts)?.id === account.id).map((o) => o.id)]);
+      // A twin's rises are its owner's rises; attributing both would count
+      // every point twice. The owner takes the twin's sessions instead.
+      if (owner.get(account.id) !== account.id) continue;
+      const pool = new Set(accounts.filter((o) => owner.get(o.id) === account.id).map((o) => o.id));
       const usage = this.deps.usage.usageOf(account.id);
       const weekly = usage ? weeklyWindow(usage.windows) : null;
       if (!usage?.at || !weekly) continue;
@@ -656,7 +666,7 @@ export class Fleet extends EventEmitter {
       id: rec.id,
       provider: rec.provider,
       agentSessionId: rec.agentSessionId,
-      accountId: rec.accountId,
+      accountId: rec.accountId ? this.ownerOf(rec.accountId) : null,
       status,
       host,
       title: rec.label || f?.title || headline(f?.firstPrompt) || basename(cwd) || rec.provider,
@@ -781,23 +791,28 @@ export class Fleet extends EventEmitter {
     return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), settings, now);
   }
 
+  /** The account a home belongs to (itself unless it is a twin). */
+  ownerOf(homeId: string): string {
+    return this.owner.get(homeId) ?? homeId;
+  }
+
   /**
-   * The balancer's input. Two accounts on one login are one usage pool: the
-   * twin stays listed (so you can see why it is skipped) but its sessions'
-   * claims count against the account it duplicates.
+   * The balancer's input: one entry per account, not per home. A twin home is
+   * not a candidate, and its sessions' claims are already the owner's (a
+   * session's `accountId` is its home's owner).
    */
   accountStates(provider: ProviderId): AccountState[] {
     const claims = this.claims();
     const all = listAccounts(provider);
-    const twins = new Map(all.map((a) => [a.id, twinOf(a, all)]));
-    const pinned = (id: string) => (claims.get(id) ?? []).map((c) => c.outstanding);
-    return all.map((a) => ({
-      account: a,
-      windows: this.deps.usage.usageOf(a.id)?.windows ?? [],
-      outstanding: [...pinned(a.id), ...all.filter((o) => twins.get(o.id)?.id === a.id).flatMap((o) => pinned(o.id))],
-      sameAs: twins.get(a.id)?.label ?? null,
-      loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
-    }));
+    const owner = owners(all);
+    return all
+      .filter((a) => owner.get(a.id) === a.id)
+      .map((a) => ({
+        account: a,
+        windows: this.deps.usage.usageOf(a.id)?.windows ?? [],
+        outstanding: (claims.get(a.id) ?? []).map((c) => c.outstanding),
+        loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
+      }));
   }
 
   placement(provider: ProviderId, big: boolean, model?: string | null, accountId?: string | null): Placement {
@@ -944,7 +959,9 @@ export class Fleet extends EventEmitter {
   private wakeTarget(rec: SessionRecord, view: Session, accountId?: string | null): { account: Account; placement: Placement } | null {
     if (!this.adapter(rec.provider).moveSession) return null;
     const placement = this.placement(rec.provider, rec.big, view.model, accountId);
-    if (!placement.accountId || placement.mode === "none" || placement.accountId === rec.accountId) return null;
+    // Another home on the same login is the same account: moving there would
+    // cost a cold start and change nothing about the limits.
+    if (!placement.accountId || placement.mode === "none" || placement.accountId === this.ownerOf(rec.accountId ?? "")) return null;
     const account = getAccount(placement.accountId);
     return account ? { account, placement } : null;
   }
@@ -1056,7 +1073,7 @@ export class Fleet extends EventEmitter {
     if (!from) throw new FleetError(409, "this session's account is no longer set up");
     const accountId = opts.accountId && opts.accountId !== "auto" ? opts.accountId : null;
     const target = this.wakeTarget(rec, view, accountId);
-    if (accountId && accountId !== rec.accountId && !target) {
+    if (accountId && accountId !== this.ownerOf(from.id) && !target) {
       throw new FleetError(409, this.adapter(rec.provider).moveSession ? `no ${rec.provider} account ${accountId}` : `${this.adapter(rec.provider).label} sessions cannot change account`);
     }
     if (!target && view.host === "tmux" && view.tmux) {

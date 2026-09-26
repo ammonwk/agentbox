@@ -197,7 +197,9 @@ export function ContextBar({
       <span className="ctx-track" aria-hidden="true">
         <i style={{ width: `${p}%` }} />
       </span>
-      <span className="ctx-num">{Math.round(p)}%</span>
+      {/* The session header has room to say what the bar is and how many
+          tokens that is — which is also what a cold start re-sends. */}
+      <span className="ctx-num">{wide ? `${fmtTokens(used)} of ${fmtTokens(limit)} context` : `${Math.round(p)}%`}</span>
     </span>
   );
 }
