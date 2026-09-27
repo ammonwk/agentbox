@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { AccountView, UsageWindow } from "../../src/core/types";
 import { useMetrics, useNow, type SystemState } from "./api";
-import { accountHue, UsageBar } from "./bits";
+import { accountHue } from "./bits";
 import { fmtCountdown } from "./lib/format";
 import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
 
@@ -303,25 +303,31 @@ function claudeLimits(accounts: readonly AccountView[]): AccountView[] {
  */
 function LimitCell({ account, hue, focused, now }: { account: AccountView; hue: number; focused: boolean; now: number }) {
   const { short, weekly } = headlineWindows(account.usage);
-  const line = (w: UsageWindow | null, name: string) =>
-    w ? `${name}: ${Math.round(usedNow(w, now))}% used, ${resetText(w.resetsAt, now)}` : `${name}: no data`;
-  const title =
-    `${account.label}${account.plan ? ` · ${account.plan}` : ""}${focused ? " · this session's account" : ""}\n` +
-    `${line(short, "5-hour")}\n${line(weekly, "Weekly")}` +
-    (account.usage.stale ? `\nStale: ${account.usage.stale}` : "");
   return (
     <span
       className="sys-limit"
       data-focus={focused || undefined}
       data-stale={account.usage.stale ? true : undefined}
       style={hue >= 0 ? { ["--acct" as string]: `var(--acct-${hue})` } : undefined}
-      title={title}
+      title={limitTitle(account, now, focused)}
     >
       {/* The colour says which account; the name is in the tooltip. */}
       <i className="sys-limit-dot" aria-hidden="true" />
       <LimitRow kind="5h" w={short} now={now} />
       <LimitRow kind="wk" w={weekly} now={now} />
     </span>
+  );
+}
+
+/** An account's windows in words, for the hover. */
+function limitTitle(account: AccountView, now: number, focused = false): string {
+  const { short, weekly } = headlineWindows(account.usage);
+  const line = (w: UsageWindow | null, name: string) =>
+    w ? `${name}: ${Math.round(usedNow(w, now))}% used, ${resetText(w.resetsAt, now)}` : `${name}: no data`;
+  return (
+    `${account.label}${account.plan ? ` · ${account.plan}` : ""}${focused ? " · this session's account" : ""}\n` +
+    `${line(short, "5-hour")}\n${line(weekly, "Weekly")}` +
+    (account.usage.stale ? `\nStale: ${account.usage.stale}` : "")
   );
 }
 
@@ -356,13 +362,19 @@ function SystemDetail({ sys, limits, now }: { sys: SystemState; limits: AccountV
       {limits.length > 0 ? (
         <Block title="claude limits">
           <div className="syslimits">
+            {/* Two lines an account — its name, then both windows side by
+                side — so four accounts are as tall as the other blocks. */}
             {limits.map((a) => {
               const { short, weekly } = headlineWindows(a.usage);
               return (
-                <div key={a.id} className="syslimits-acct">
-                  <span className="muted">{a.label}</span>
-                  {short ? <UsageBar window={short} now={now} compact /> : null}
-                  {weekly ? <UsageBar window={weekly} now={now} compact /> : null}
+                <div key={a.id} className="syslimits-acct" data-stale={a.usage.stale ? true : undefined} title={limitTitle(a, now)}>
+                  <span className="muted syslimits-name">{a.label}</span>
+                  <span className="syslimits-row">
+                    <span className="faint">5h</span>
+                    <LimitRow kind="5h" w={short} now={now} />
+                    <span className="faint syslimits-wk">wk</span>
+                    <LimitRow kind="wk" w={weekly} now={now} />
+                  </span>
                 </div>
               );
             })}

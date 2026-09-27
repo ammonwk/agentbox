@@ -1797,7 +1797,9 @@
 }
 
 .mr {
-  --mr-prompt: var(--accent);
+  /* The accent toned toward grey: a dot per message is many dots, and full
+   * orange down the edge pulled the eye from the conversation. */
+  --mr-prompt: color-mix(in srgb, var(--accent) 60%, var(--faint));
   --mr-answer: var(--info);
   --mr-agent: var(--faint);
   --mr-command: var(--muted);
@@ -1819,7 +1821,7 @@
 }
 /* Beside the terminal, dark whatever the theme, like the terminal. */
 .mr-dark {
-  --mr-prompt: #f97316;
+  --mr-prompt: #ca7a46;
   --mr-answer: #7dd3fc;
   --mr-agent: #85858e;
   --mr-command: #a8a8b0;

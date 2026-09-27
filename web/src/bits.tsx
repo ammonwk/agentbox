@@ -242,12 +242,10 @@ export function UsageBar({
   window: w,
   outstanding = 0,
   now,
-  compact,
 }: {
   window: UsageWindow;
   outstanding?: number;
   now: number;
-  compact?: boolean;
 }) {
   const used = usedNow(w, now);
   const seg = barSegments(used, outstanding);
@@ -256,7 +254,7 @@ export function UsageBar({
   const label = windowLabel(w);
   const claimText = outstanding > 0 ? ` + ${Math.round(outstanding * 10) / 10} claimed = ${Math.round(seg.effective)}` : "";
   return (
-    <div className={`ubar ubar-${w.kind}${w.scope ? " ubar-scoped" : ""}${compact ? " ubar-compact" : ""}`} data-tone={tone}>
+    <div className={`ubar ubar-${w.kind}${w.scope ? " ubar-scoped" : ""}`} data-tone={tone}>
       <div className="ubar-head">
         <span className="ubar-label">{label}</span>
         <span className="ubar-pct">

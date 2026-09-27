@@ -1248,7 +1248,7 @@ textarea,
   .sys-limit {
     grid-template-columns: auto 30px 28px;
   }
-  .sys-limit-reset {
+  .sys-limit .sys-limit-reset {
     display: none;
   }
 }
@@ -1259,16 +1259,43 @@ textarea,
   }
 }
 
+/* One grid for every account, so their bars line up: per account the name
+ * across the top, then 5h, bar, figure, countdown, and the same for the week. */
 .syslimits {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 1px 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
-.syslimits-acct {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.syslimits-acct,
+.syslimits-row {
+  display: contents;
+}
+.syslimits-acct[data-stale] .syslimits-name,
+.syslimits-acct[data-stale] .syslimits-row > * {
+  opacity: 0.55;
+}
+.syslimits-name {
+  grid-column: 1 / -1;
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.syslimits-acct + .syslimits-acct .syslimits-name {
+  margin-top: 4px;
+}
+.syslimits .sys-limit-bar {
+  height: 4px;
+}
+.syslimits .sys-limit-reset {
+  color: var(--faint);
+}
+.syslimits-wk {
+  margin-left: 8px;
 }
 
 /* Throttling is a condition, not a measurement, so it gets a border as well as
@@ -1768,12 +1795,6 @@ button.acct:hover {
   margin-left: -1px;
   background: var(--panel);
   box-shadow: 0 0 0 1px var(--border-strong);
-}
-.ubar-compact .ubar-head {
-  font-size: 11px;
-}
-.ubar-compact .ubar-reset {
-  font-size: 10.5px;
 }
 
 .copy-btn {
