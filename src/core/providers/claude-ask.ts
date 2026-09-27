@@ -218,3 +218,56 @@ export function askStep(raw: string, questions: AskQuestion[], answers: AskAnswe
   if (!submit) return { error: "cannot find Submit under the options" };
   return { keys: [...moves(items, submit), "Enter"], commits: k };
 }
+
+/**
+ * The question itself, read off the dialog, for when the transcript does not
+ * have it: Claude can show an AskUserQuestion it has not written out yet (a
+ * turn a background task's notification started, in a team lead). Only a
+ * single question shown whole: every option numbered from 1 down to "Type
+ * something", nothing scrolled off. Several questions are one tab each, and
+ * only the open tab is on screen, so those wait for the transcript.
+ */
+export function askFromScreen(raw: string): { id: string; questions: AskQuestion[] } | null {
+  const lines = plainScreen(raw).split("\n").map((l) => l.replace(/\s+$/, ""));
+  const footer = lastIndex(lines, (l) => /Enter to select/.test(l));
+  if (footer < 0) return null;
+  const bar = lastIndex(lines.slice(0, footer), (l) => /(^|\s)[☐☒✔] \S/.test(l) && !/^\s*(❯\s+)?\d+\./.test(l));
+  if (bar < 0) return null;
+  const chips = [...lines[bar]!.matchAll(/[☐☒✔]\s+(.+?)(?=\s{2,}|\s*[☐☒✔→]|$)/g)].map((m) => m[1]!.trim()).filter((c) => c !== "Submit");
+  if (chips.length !== 1) return null;
+
+  const text: string[] = [];
+  const options: { label: string; description?: string }[] = [];
+  let multi = false;
+  let other = false;
+  let into: { label: string; description?: string } | null = null;
+  for (const l of lines.slice(bar + 1, footer)) {
+    const t = l.replace(BORDER, "");
+    if (/^[↑↓]/.test(t.trim())) return null; // the list scrolls: some of it is not on screen
+    if (/^─+$/.test(t.trim())) break; // "Chat about this" and the footer's side
+    const m = /^(?:❯\s+)?(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*?)(?:\s+✔)?$/.exec(t);
+    if (m) {
+      if (Number(m[1]) !== options.length + 1) return null;
+      if (m[2] !== undefined) multi = true;
+      if (PLACEHOLDER.test(m[3]!.trim())) {
+        other = true;
+        into = null;
+        continue;
+      }
+      if (other) return null;
+      into = { label: m[3]!.trim() };
+      options.push(into);
+    } else if (/^\s*Submit$/.test(t)) {
+      into = null;
+    } else if (into && t.trim()) {
+      into.description = norm(`${into.description ?? ""} ${t}`);
+    } else if (!options.length && t.trim()) {
+      text.push(t.trim());
+    }
+  }
+  if (!other || !options.length || !text.length) return null;
+  const question = norm(text.join(" "));
+  let h = 2166136261;
+  for (let i = 0; i < question.length; i++) h = Math.imul(h ^ question.charCodeAt(i), 16777619);
+  return { id: `screen-${(h >>> 0).toString(36)}`, questions: [{ question, header: chips[0]!, multiSelect: multi, options }] };
+}

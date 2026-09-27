@@ -193,6 +193,23 @@ export function setZoom(name: string, on: boolean): boolean {
   return tmux(["resize-pane", "-Z", "-t", `=${name}:`]).code === 0;
 }
 
+/**
+ * Give a window nobody is looking at a desk-sized screen again. With
+ * `window-size latest` a window keeps the size of the last client to show it,
+ * so a phone that looked at the terminal leaves it 43 columns wide, and a
+ * dialog drawn at that size cannot be read off it. Resizing pins the size
+ * (`window-size manual`); unsetting that hands it back to the next client.
+ */
+export function unsquash(name: string, min = { cols: 80, rows: 24 }, to = { cols: 140, rows: 45 }): boolean {
+  const r = tmux(["display-message", "-p", "-t", `=${name}:`, "#{session_attached} #{window_width} #{window_height}"]);
+  if (r.code !== 0) return false;
+  const [attached, cols, rows] = r.stdout.trim().split(" ").map(Number);
+  if (attached !== 0 || (cols! >= min.cols && rows! >= min.rows)) return false;
+  if (tmux(["resize-window", "-t", `=${name}:`, "-x", String(to.cols), "-y", String(to.rows)]).code !== 0) return false;
+  tmux(["set-option", "-w", "-u", "-t", `=${name}:`, "window-size"]);
+  return true;
+}
+
 export function killSession(name: string): void {
   tmux(["kill-session", "-t", `=${name}`]);
 }

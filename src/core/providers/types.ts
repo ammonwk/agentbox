@@ -251,6 +251,10 @@ export interface ProviderAdapter {
   /** The next keys to press toward answering an AskUserQuestion dialog on
    *  `screen` (see claude-ask.ts). `visited` is kept by the caller across steps. */
   answerStep?(screen: string, questions: AskQuestion[], answers: AskAnswer[], visited: ReadonlySet<number>): AskStep;
+
+  /** The AskUserQuestion dialog on `screen`, read whole, for when the
+   *  transcript has not recorded it — or null. */
+  askOnScreen?(screen: string): { id: string; questions: AskQuestion[] } | null;
 }
 
 /**

@@ -34,7 +34,7 @@ import { JsonlTranscriptReader } from "./jsonl-reader";
 import { claudeFormat, ClaudeTokenFold } from "./claude-transcript";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
 import { pickOption, plainScreen } from "./tui-screen";
-import { askStep } from "./claude-ask";
+import { askFromScreen, askStep } from "./claude-ask";
 import type {
   Command,
   LiveProcess,
@@ -694,4 +694,5 @@ export const claudeAdapter: ProviderAdapter = {
   autoAnswer: claudeAutoAnswer,
   blockedOn: claudeBlockedOn,
   answerStep: askStep,
+  askOnScreen: askFromScreen,
 };

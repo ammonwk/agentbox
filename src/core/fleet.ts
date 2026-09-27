@@ -108,6 +108,8 @@ export interface Runtime {
   capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
   killSession(name: string): void;
   setZoom?(name: string, on: boolean): boolean;
+  /** A window left at a gone client's small size back to a readable one; whether it changed. */
+  unsquash?(name: string): boolean;
 }
 
 export interface UsageSource {
@@ -194,6 +196,8 @@ export class Fleet extends EventEmitter {
   private startedAt = new Map<string, number>();
   private answered = new Map<string, { sig: string; at: number; tries: number }>();
   private blocked = new Map<string, string>();
+  /** A question read off the screen, for a session whose transcript does not have it (yet). */
+  private screenAsks = new Map<string, { id: string; questions: AskQuestion[] }>();
   private tokenSampled = new Map<string, { at: number; costEquiv: number; turnOpen: boolean }>();
   /** `${session}:${pid}` whose process ancestry has been looked at. */
   private ancestryChecked = new Set<string>();
@@ -1082,6 +1086,14 @@ export class Fleet extends EventEmitter {
             status = "blocked";
             this.blocked.set(rec.id, why);
           } else this.blocked.delete(rec.id);
+          // A question the transcript does not have: read it off the screen,
+          // at a size it can be read at (the next look sees the redraw).
+          const ask = why === "asking a question" && !f?.pendingAsk && screen && adapter.askOnScreen ? adapter.askOnScreen(screen) : null;
+          if (ask) this.screenAsks.set(rec.id, ask);
+          else {
+            this.screenAsks.delete(rec.id);
+            if (why === "asking a question" && !f?.pendingAsk) this.deps.runtime.unsquash?.(pane.name);
+          }
         }
       }
       this.autoAnswer(rec, pane, adapter, now);
@@ -1133,7 +1145,7 @@ export class Fleet extends EventEmitter {
       limitHit,
       // Only while the dialog is up: a call recorded but not yet answered is
       // also what a session interrupted mid-question leaves behind.
-      question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? null) : null,
+      question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,
       origin: rec.origin,
       parent: rec.parent ?? null,
       pid,
