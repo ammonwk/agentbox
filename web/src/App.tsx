@@ -9,6 +9,7 @@ import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./compon
 import { needsYou, titleOf } from "./lib/board";
 import { hrefOf, navOf, parseHash, type NavId, type Route } from "./route";
 import { openingTab } from "./lib/phone";
+import { useUpdateReady } from "./lib/update";
 import { SystemBar } from "./SystemBar";
 import { SessionView } from "./views/session/SessionView";
 import { isRecurring } from "../../src/core/schedule";
@@ -173,6 +174,7 @@ export function App() {
             <span><kbd>/</kbd> search</span>
             <span><kbd>j</kbd><kbd>k</kbd> move</span>
           </div>
+          <UpdateReady />
           <ConnectionChip />
           <ThemeControl value={theme.pref} onChange={theme.set} />
         </aside>
@@ -310,6 +312,23 @@ function useCountdown(to: number | null): number | null {
     subscribeToClock,
     () => (to === null ? null : Math.max(0, Math.ceil((to - clockNow()) / 1000))),
     () => null,
+  );
+}
+
+/** A rebuild this page is not running yet; it reloads by itself when that is safe (lib/update.ts). */
+function UpdateReady() {
+  const ready = useUpdateReady();
+  if (!ready) return null;
+  return (
+    <button
+      type="button"
+      className="nav-item nav-update"
+      title="agentbox was rebuilt. Reload to run the new version (it reloads by itself next time you leave the page)"
+      onClick={() => location.reload()}
+    >
+      <Icon.refresh />
+      <span className="nav-label">Update</span>
+    </button>
   );
 }
 

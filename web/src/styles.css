@@ -419,6 +419,13 @@ code {
 .nav-new kbd {
   margin-left: auto;
 }
+.nav-update {
+  color: var(--accent);
+}
+.nav-update:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 
 /* Collapsed, the count is a badge on the icon's corner; open, it moves to the
  * end of the row. */

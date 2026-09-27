@@ -797,6 +797,8 @@ export type ServerMessage =
       before?: string | null;
     }
   | { type: "metrics"; state: MetricsState }
+  /** The UI build on disk (its entry script's name); a page on another reloads. */
+  | { type: "build"; entry: string | null }
   | { type: "error"; message: string };
 
 /** Client → server. A client watches at most one session's timeline. */

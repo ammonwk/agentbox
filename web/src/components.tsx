@@ -18,6 +18,7 @@ import {
   type Ref,
 } from "react";
 import { ago, clockNow, subscribeToClock } from "./api";
+import { isMissingChunk, reloadForMissingChunk } from "./lib/update";
 
 // ------------------------------------------------------------------ icons
 
@@ -219,12 +220,29 @@ export class ErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    if (isMissingChunk(error) && reloadForMissingChunk()) return;
     console.error(`agentbox: ${this.props.label ?? "view"} crashed`, error, info.componentStack);
   }
 
   render() {
     const { error } = this.state;
     if (!error) return this.props.children;
+    // Trying again cannot help: React keeps the failed import. Only a reload
+    // fetches the build that replaced it.
+    if (isMissingChunk(error)) {
+      return (
+        <Empty
+          title="agentbox was updated"
+          action={
+            <Button icon={Icon.refresh} onClick={() => location.reload()}>
+              Reload
+            </Button>
+          }
+        >
+          <p>This page is from the previous build, and part of it is gone. Reload to use the new one.</p>
+        </Empty>
+      );
+    }
     return (
       <Empty
         title={`${this.props.label ?? "This view"} crashed`}

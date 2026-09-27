@@ -41,6 +41,7 @@ import type {
   WorktreeScan,
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
+import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
@@ -364,6 +365,7 @@ class Wire {
         return;
       }
       if (msg.type === "error") this.setStatus({ lastError: msg.message });
+      else if (msg.type === "build") noteServerBuild(msg.entry);
       this.emit(msg);
     };
 

@@ -17,6 +17,8 @@
  * session, bytes both ways. Closing it detaches; the agent keeps running.
  */
 
+import { statSync } from "node:fs";
+import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { DEFAULT_PORT, webDist } from "../core/paths";
 import { Fleet, FleetError } from "../core/fleet";
@@ -41,7 +43,7 @@ import type { Conversation } from "../voice/conversation";
 import { HttpError, Router, fail, json, readBody } from "./router";
 import { optionalString, parseAnswers, parseSettingsPatch, requireBoolean, requireString } from "./validate";
 import { parseClientMessage } from "./protocol";
-import { fileResponse, notBuiltPage, resolveStatic } from "./static";
+import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
 import { AGENT_SENT_MARK } from "../core/providers/types";
 import { AccountError, AccountsService, owners } from "../core/accounts";
@@ -68,6 +70,7 @@ const HOST = process.env.AGENTBOX_HOST ?? "127.0.0.1";
 const HOT_COALESCE_MS = 250;
 const COLD_DEBOUNCE_MS = 500;
 const SLOW_REFRESH_MS = 60_000;
+const BUILD_POLL_MS = 2_000;
 const TIMELINE_PAGE = 200;
 const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 
@@ -756,6 +759,32 @@ const router = new Router(mapError)
     return fileResponse(webDist, found.path, req);
   });
 
+// ----------------------------------------------------------- UI build
+
+/**
+ * `bun run web:build` replaces `web/dist` while the server keeps running, and
+ * deletes the chunks an open page has not fetched yet. Say so, so the page can
+ * reload at a moment that loses nothing. A poll rather than `fs.watch`: the
+ * build empties the directory, and a watcher does not survive its removal.
+ */
+let uiBuild = builtEntry(webDist);
+let uiBuildMtime = 0;
+function checkBuild(): void {
+  let mtime = 0;
+  try {
+    mtime = statSync(join(webDist, "index.html")).mtimeMs;
+  } catch {
+    // No index.html: mid-build or never built; nothing to announce.
+  }
+  if (mtime === uiBuildMtime) return;
+  const entry = builtEntry(webDist);
+  if (entry === null) return; // not complete yet; look again next poll
+  uiBuildMtime = mtime;
+  if (entry === uiBuild) return;
+  uiBuild = entry;
+  broadcast({ type: "build", entry });
+}
+
 // ------------------------------------------------------------------ boot
 
 export async function startServer(): Promise<void> {
@@ -776,6 +805,8 @@ export async function startServer(): Promise<void> {
   scheduler.start();
   void refreshSlow();
   setInterval(() => void refreshSlow(), SLOW_REFRESH_MS).unref?.();
+  checkBuild();
+  setInterval(checkBuild, BUILD_POLL_MS).unref?.();
 
   fleet.on("sessions", () => {
     scheduleHot();
@@ -821,6 +852,7 @@ export async function startServer(): Promise<void> {
       lastCold = JSON.stringify(cold);
       send(ws, { type: "cold", state: cold });
       send(ws, { type: "metrics", state: metricsSnapshot() });
+      send(ws, { type: "build", entry: uiBuild });
       setMetricsWatchers(clients.size);
     },
     message(ws, raw) {

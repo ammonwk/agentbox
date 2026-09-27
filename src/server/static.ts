@@ -1,6 +1,6 @@
 /** Serving the built web UI, and saying so clearly when it isn't built. */
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, sep, extname } from "node:path";
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -131,6 +131,26 @@ export function fileResponse(root: string, filePath: string, req: Request): Resp
     }
   }
   return new Response(Bun.file(filePath), { headers });
+}
+
+/**
+ * Which build `index.html` loads: its entry script's file name, e.g.
+ * `index-D3v4lAc3.js`, or null when there is no complete build.
+ *
+ * A page compares this with the entry it was itself loaded from to learn that
+ * `web/dist` has been rebuilt under it. The entry must be on disk too, so a
+ * build caught halfway through is not announced before its bundle exists.
+ */
+export function builtEntry(root: string): string | null {
+  let html: string;
+  try {
+    html = readFileSync(resolve(root, "index.html"), "utf8");
+  } catch {
+    return null;
+  }
+  const m = /<script[^>]*\bsrc="\/assets\/(index-[A-Za-z0-9_-]+\.js)"/.exec(html);
+  if (!m) return null;
+  return isFile(resolve(root, "assets", m[1]!)) ? m[1]! : null;
 }
 
 /** A real page, not a 200 with plain text the browser renders as if it were the app. */

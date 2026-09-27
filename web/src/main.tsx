@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
 import { isPhone } from "./lib/phone";
+import { reloadForMissingChunk } from "./lib/update";
 
 // On a phone the app is lifted by the on-screen keyboard's height, so the
 // keyboard shrinks it rather than panning the page (iOS never resizes the
@@ -39,6 +40,9 @@ addEventListener("focusin", fit);
 // its place. Hold the typing layout until the tap's click has gone through.
 addEventListener("focusout", () => setTimeout(fit, 350));
 fit();
+
+// A lazy chunk that will not load is one a rebuild deleted (lib/update.ts).
+addEventListener("vite:preloadError", () => void reloadForMissingChunk());
 
 // Installable as an app (Add to Home Screen); service workers need HTTPS.
 if ("serviceWorker" in navigator && window.isSecureContext && location.port !== "5173") {
