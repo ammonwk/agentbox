@@ -24,6 +24,8 @@ import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
 import { prBaseFor } from "../../lib/prlinks";
 import { PrBase } from "./prbase";
+import { TermRail } from "./MessageRail";
+import { jumpInTimeline } from "./jump";
 import "./session.css";
 
 const Terminal = lazy(() => import("./Terminal"));
@@ -302,6 +304,8 @@ function Detail({
   const sessionIds = useMemo(() => new Set(state.sessions.map((s) => s.id)), [state.sessions]);
   const openSession = (id: string) => (location.hash = hrefOf({ page: "session", id, tab }));
   const prBase = useMemo(() => prBaseFor(session, state), [session, state]);
+  const flashRow = useRef<((row: number) => void) | null>(null);
+  const [termScrolled, setTermScrolled] = useState(0);
 
   return (
     <div className="sv-main">
@@ -484,9 +488,26 @@ function Detail({
       <div className="sv-body" role="tabpanel" aria-label={TAB_LABEL[tab]}>
         {tab === "terminal" ? (
           session.host === "tmux" ? (
-            <Suspense fallback={<Empty title="Loading the terminal…" />}>
-              <Terminal sessionId={session.id} sessionIds={sessionIds} prBase={prBase} />
-            </Suspense>
+            <div className="sv-split">
+              <Suspense fallback={<Empty title="Loading the terminal…" />}>
+                <Terminal
+                  sessionId={session.id}
+                  sessionIds={sessionIds}
+                  prBase={prBase}
+                  flashRef={flashRow}
+                  onScrolled={() => setTermScrolled((n) => n + 1)}
+                />
+              </Suspense>
+              <TermRail
+                session={session}
+                flash={flashRow}
+                scrolled={termScrolled}
+                onElsewhere={(t, why) => {
+                  jumpInTimeline(session.id, { turnId: t.id, note: `${why} Showing it in the timeline instead.` });
+                  onTab("timeline");
+                }}
+              />
+            </div>
           ) : (
             <TranscriptInstead session={session} busy={busy} onAdopt={() => void run(() => api.adopt(session.id))} onResume={() => void run(() => api.resume(session.id))} />
           )

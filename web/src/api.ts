@@ -38,6 +38,7 @@ import type {
   SkillResult,
   TimelineEvent,
   TimelinePage,
+  TurnList,
   WorktreeScan,
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
@@ -207,6 +208,13 @@ export const api = {
     const qs = q.toString();
     return get<TimelinePage>(`/api/sessions/${enc(id)}/timeline${qs ? `?${qs}` : ""}`);
   },
+  /** Everything you said to the session, for the message rail. */
+  turns: (id: string) => get<TurnList>(`/api/sessions/${enc(id)}/turns`),
+  /** Page the live terminal to one of your messages; `row` is where it landed on screen. */
+  termSeek: (id: string, turnId: string) =>
+    post<{ found: true; row: number } | { found: false; reason: string }>(`/api/sessions/${enc(id)}/term/seek`, { turnId }),
+  termBottom: (id: string) => post<null>(`/api/sessions/${enc(id)}/term/bottom`),
+  termWhere: (id: string) => get<{ turnId: string | null; bottom: boolean }>(`/api/sessions/${enc(id)}/term/where`),
   diff: (id: string) => get<SessionDiff>(`/api/sessions/${enc(id)}/diff`),
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
   load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
@@ -501,7 +509,7 @@ export interface TimelineState {
  * first older page, if one ever exists, is asked for by the oldest held
  * event's id.
  */
-export function useTimeline(sessionId: string): TimelineState & { loadOlder: () => void } {
+export function useTimeline(sessionId: string): TimelineState & { loadOlder: (limit?: number) => void } {
   const [st, setSt] = useState<TimelineState>({
     events: [],
     ready: false,
@@ -539,7 +547,8 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: () 
     };
   }, [sessionId]);
 
-  const loadOlder = useCallback(() => {
+  /** A bigger `limit` for a jump far back; the server caps it at 1000. */
+  const loadOlder = useCallback((limit: number = OLDER_PAGE) => {
     if (busy.current) return;
     const held = eventsRef.current;
     if (before.current === null || held.length === 0) return;
@@ -547,7 +556,7 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: () 
     busy.current = true;
     setSt((s) => ({ ...s, loadingOlder: true, error: null }));
     api
-      .timeline(sessionId, { before: cursor, limit: OLDER_PAGE })
+      .timeline(sessionId, { before: cursor, limit })
       .then((page) => {
         before.current = page.before;
         eventsRef.current = mergeTimeline(eventsRef.current, page.events, "prepend");

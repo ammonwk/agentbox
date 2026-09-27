@@ -799,7 +799,9 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+}
+.tl-wrap > .tl {
+  min-width: 0;
 }
 .tl {
   padding-top: 8px;
@@ -1779,4 +1781,283 @@
 .sd-facts .sd-repo {
   width: auto;
   max-width: 260px;
+}
+
+/* ------------------------------------------------------- message rail */
+
+/* The terminal or timeline, with the rail of your messages beside it. */
+.sv-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.sv-split > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.mr {
+  --mr-prompt: var(--accent);
+  --mr-answer: var(--info);
+  --mr-agent: var(--faint);
+  --mr-command: var(--muted);
+  --mr-line: var(--border);
+  --mr-bg: var(--panel);
+  --mr-card: var(--raised);
+  --mr-card-border: var(--border-strong);
+  --mr-text: var(--text);
+  --mr-muted: var(--muted);
+  --mr-faint: var(--faint);
+  --mr-hover: var(--hover);
+  flex: none;
+  width: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  border-left: 1px solid var(--border);
+  background: var(--mr-bg);
+}
+/* Beside the terminal, dark whatever the theme, like the terminal. */
+.mr-dark {
+  --mr-prompt: #f97316;
+  --mr-answer: #7dd3fc;
+  --mr-agent: #85858e;
+  --mr-command: #a8a8b0;
+  --mr-line: #26262b;
+  --mr-bg: #0e0e11;
+  --mr-card: #1c1c20;
+  --mr-card-border: #3a3a40;
+  --mr-text: #f4f4f5;
+  --mr-muted: #a8a8b0;
+  --mr-faint: #85858e;
+  --mr-hover: rgba(255, 255, 255, 0.06);
+  border-left-color: #222227;
+}
+
+.mr-step {
+  flex: none;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--mr-faint);
+  cursor: pointer;
+}
+.mr-step:hover:not(:disabled) {
+  color: var(--mr-text);
+  background: var(--mr-hover);
+}
+.mr-step:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.mr-track {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  cursor: pointer;
+}
+.mr-line {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 50%;
+  width: 1px;
+  background: var(--mr-line);
+}
+
+.mr-dot {
+  --dot: var(--mr-prompt);
+  position: absolute;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--dot);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+/* The dots are small; what a click or a tap lands on is not. */
+.mr-dot::before {
+  content: "";
+  position: absolute;
+  inset: -5px -9px;
+}
+.mr-dot[data-kind="answer"] {
+  --dot: var(--mr-answer);
+}
+.mr-dot[data-kind="agent"] {
+  --dot: var(--mr-agent);
+  background: var(--mr-bg);
+  box-shadow: inset 0 0 0 1.5px var(--dot);
+}
+.mr-dot[data-kind="command"] {
+  --dot: var(--mr-command);
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+}
+.mr-dot.is-hover {
+  transform: scale(1.6);
+}
+/* Where you are: a ring on the dot and a hairline across the rail. */
+.mr-dot.is-current {
+  outline: 1.5px solid var(--dot);
+  outline-offset: 2.5px;
+}
+.mr-dot.is-current::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -11px;
+  width: 4px;
+  height: 1.5px;
+  margin-top: -0.75px;
+  border-radius: 1px;
+  background: var(--dot);
+}
+.mr-dot.is-busy {
+  animation: pulse 0.9s ease-in-out infinite;
+}
+.mr-dot:focus-visible {
+  outline: 2px solid var(--dot);
+  outline-offset: 3px;
+}
+
+.mr-card {
+  --dot: var(--mr-prompt);
+  position: absolute;
+  right: calc(100% + 10px);
+  z-index: 20;
+  width: 320px;
+  max-width: 45vw;
+  padding: 9px 12px 8px;
+  border: 1px solid var(--mr-card-border);
+  border-left: 3px solid var(--dot);
+  border-radius: var(--radius-sm);
+  background: var(--mr-card);
+  color: var(--mr-text);
+  box-shadow: var(--shadow-md);
+  font-size: 12.5px;
+  line-height: 1.45;
+  pointer-events: none;
+  cursor: default;
+}
+.mr-card[data-kind="answer"] {
+  --dot: var(--mr-answer);
+}
+.mr-card[data-kind="agent"] {
+  --dot: var(--mr-agent);
+}
+.mr-card[data-kind="command"] {
+  --dot: var(--mr-command);
+}
+.mr-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+  font-size: 11px;
+  color: var(--mr-muted);
+}
+.mr-swatch {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dot);
+}
+.mr-card-kind {
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.mr-card-when {
+  margin-left: auto;
+  color: var(--mr-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.mr-card-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 9;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mr-card-body p {
+  margin: 0;
+}
+.mr-question {
+  color: var(--mr-muted);
+}
+.mr-answer {
+  font-weight: 600;
+}
+.mr-card-foot {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--mr-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The message a jump landed on. */
+.mr-flash {
+  animation: mr-flash 1.8s ease-out;
+}
+@keyframes mr-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+.term-flash {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  border-left: 3px solid #f97316;
+  background: rgba(249, 115, 22, 0.2);
+  animation: term-flash 1.8s ease-out forwards;
+}
+@keyframes term-flash {
+  0%,
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Said once when a jump lands somewhere other than where it was asked for;
+ * at the bottom, since the message it jumped to is at the top. */
+.tl-note {
+  position: absolute;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: min(560px, 90%);
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .mr {
+    display: none;
+  }
 }

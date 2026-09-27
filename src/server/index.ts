@@ -43,6 +43,8 @@ import type { Conversation } from "../voice/conversation";
 import { HttpError, Router, fail, json, readBody } from "./router";
 import { optionalString, parseAnswers, parseSettingsPatch, requireBoolean, requireString } from "./validate";
 import { parseClientMessage } from "./protocol";
+import { TurnIndex } from "../core/turns";
+import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
 import { AGENT_SENT_MARK } from "../core/providers/types";
@@ -91,6 +93,20 @@ export const fleet = new Fleet({
 setMetricsSource(() => fleet.sessions());
 /** Sessions to start later; on the board and in Settings, so cold state. */
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
+const turnIndex = new TurnIndex(fleet);
+/** The newest seek per session; an older one still paging sees it and stops. */
+const seeks = new Map<string, number>();
+
+/** The terminal of a session whose TUI pages with PageUp/PageDown (src/core/termseek.ts). */
+function seekable(id: string): { io: SeekIO; claude: boolean } {
+  const s = fleet.get(id);
+  if (s.provider !== "claude" && s.provider !== "codex") {
+    throw new HttpError(409, `The ${s.provider} terminal cannot be scrolled from here.`);
+  }
+  fleet.tmuxOf(id);
+  const io: SeekIO = { capture: () => fleet.screen(id), keys: (k) => fleet.keys(id, k), sleep: (ms) => Bun.sleep(ms) };
+  return { io, claude: s.provider === "claude" };
+}
 /** Hands-free mode (src/voice); made once the fleet is up. */
 let voice: VoiceHub;
 
@@ -561,6 +577,35 @@ const router = new Router(mapError)
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));
     return json(await fleet.timeline(params.id!, url.searchParams.get("before"), limit));
+  })
+  .add("GET", "/api/sessions/:id/turns", async ({ params }) => {
+    fleet.get(params.id!);
+    if (!fleet.hasTranscript(params.id!)) return json({ turns: [], total: 0 });
+    return json(await turnIndex.list(params.id!));
+  })
+  .add("POST", "/api/sessions/:id/term/seek", async ({ req, params }) => {
+    const id = params.id!;
+    const turnId = requireString(await readBody(req), "turnId");
+    const { io, claude } = seekable(id);
+    const { turns } = await turnIndex.list(id);
+    const target = turns.findIndex((t) => t.id === turnId);
+    if (target === -1) throw new HttpError(404, "no such message in this session");
+    const token = (seeks.get(id) ?? 0) + 1;
+    seeks.set(id, token);
+    return json(await seekTurn(io, turns, target, { claude, cancelled: () => seeks.get(id) !== token }));
+  })
+  .add("POST", "/api/sessions/:id/term/bottom", async ({ params }) => {
+    const id = params.id!;
+    const { io, claude } = seekable(id);
+    seeks.set(id, (seeks.get(id) ?? 0) + 1);
+    await seekBottom(io, { claude });
+    return json(null);
+  })
+  .add("GET", "/api/sessions/:id/term/where", async ({ params }) => {
+    const id = params.id!;
+    const { io } = seekable(id);
+    const { turns } = await turnIndex.list(id);
+    return json(whereOnScreen(io.capture(), turns));
   })
   .add("GET", "/api/sessions/:id/diff", ({ params }) => json(diffOf(fleet.get(params.id!))))
   .add("GET", "/api/sessions/:id/load", async ({ params }) => {

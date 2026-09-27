@@ -65,6 +65,7 @@ export const Icon = {
   chevronRight: I("M9 5l7 7-7 7"),
   chevronLeft: I("M15 5l-7 7 7 7"),
   chevronDown: I("M5 9l7 7 7-7"),
+  chevronUp: I("M5 15l7-7 7 7"),
   arrowDown: I("M12 4v15M6 13l6 6 6-6"),
   arrowUp: I("M12 20V5M6 11l6-6 6 6"),
   mic: I("M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z", "M5 11a7 7 0 0 0 14 0M12 18v3"),

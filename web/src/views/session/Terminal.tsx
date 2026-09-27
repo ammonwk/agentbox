@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -52,13 +52,24 @@ export default function Terminal({
   sessionId,
   sessionIds,
   prBase,
+  flashRef,
+  onScrolled,
 }: {
   sessionId: string;
   sessionIds: ReadonlySet<string>;
   /** `https://github.com/owner/repo` for PR numbers on screen, or null. */
   prBase: string | null;
+  /** Set to a function that lights up one screen row: where a jump landed. */
+  flashRef?: MutableRefObject<((row: number) => void) | null>;
+  /** You scrolled the TUI yourself (wheel or PageUp/PageDown), settled. */
+  onScrolled?: () => void;
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<XTerm | null>(null);
+  const [flash, setFlash] = useState<{ top: number; height: number; key: number } | null>(null);
+  const scrolled = useRef(onScrolled);
+  scrolled.current = onScrolled;
   // Read by the link provider on hover; a ref so the board changing does not
   // tear the terminal down.
   const ids = useRef(sessionIds);
@@ -85,6 +96,16 @@ export default function Terminal({
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(box);
+    termRef.current = term;
+
+    // The TUI scrolls itself; say so once it has stopped moving.
+    let settle: ReturnType<typeof setTimeout> | null = null;
+    const moved = () => {
+      if (settle) clearTimeout(settle);
+      settle = setTimeout(() => scrolled.current?.(), 350);
+    };
+    // Capture: xterm stops the wheel it turns into mouse reports for tmux.
+    box.addEventListener("wheel", moved, { passive: true, capture: true });
 
     let alive = true;
     let chan: TermChannel | null = null;
@@ -166,6 +187,7 @@ export default function Terminal({
     // xterm.js sends a plain ^H, one character). The keypress and keyup of the
     // same combination are swallowed too, or the Enter would still submit.
     term.attachCustomKeyEventHandler((e) => {
+      if (e.type === "keydown" && (e.key === "PageUp" || e.key === "PageDown")) moved();
       if (e.altKey || e.metaKey) return true;
       const seq =
         e.key === "Enter" && e.shiftKey && !e.ctrlKey ? "\x1b\r" : e.key === "Backspace" && e.ctrlKey && !e.shiftKey ? "\x17" : null;
@@ -188,6 +210,9 @@ export default function Terminal({
 
     return () => {
       alive = false;
+      termRef.current = null;
+      if (settle) clearTimeout(settle);
+      box.removeEventListener("wheel", moved, { capture: true });
       if (retry) clearTimeout(retry);
       cancelAnimationFrame(raf);
       ro.disconnect();
@@ -200,9 +225,28 @@ export default function Terminal({
     };
   }, [sessionId, kick]);
 
+  useEffect(() => {
+    if (!flashRef) return;
+    flashRef.current = (row) => {
+      const term = termRef.current;
+      const screen = boxRef.current?.querySelector<HTMLElement>(".xterm-screen");
+      const wrap = wrapRef.current;
+      if (!term || !screen || !wrap || term.rows === 0) return;
+      const height = screen.clientHeight / term.rows;
+      const top = screen.getBoundingClientRect().top - wrap.getBoundingClientRect().top + row * height;
+      setFlash({ top, height, key: Date.now() });
+    };
+    return () => {
+      flashRef.current = null;
+    };
+  }, [flashRef]);
+
   return (
-    <div className="term-wrap">
+    <div className="term-wrap" ref={wrapRef}>
       <div className="term-box" ref={boxRef} aria-label="Session terminal" />
+      {flash ? (
+        <div key={flash.key} className="term-flash" style={{ top: flash.top, height: flash.height }} onAnimationEnd={() => setFlash(null)} />
+      ) : null}
       {phase.kind !== "live" ? (
         <div className="term-overlay" role="status">
           {phase.kind === "connecting" ? (

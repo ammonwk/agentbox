@@ -1,5 +1,5 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Session, TimelineEvent } from "../../../../src/core/types";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { fmtClock, useTimeline } from "../../api";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline } from "../../lib/timeline";
@@ -7,8 +7,12 @@ import { Markdown } from "./Markdown";
 import { AskRow } from "./Question";
 import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
+import { MessageRail, useTurns } from "./MessageRail";
+import { takeJump } from "./jump";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
+
+const NO_TURNS: Turn[] = [];
 
 /**
  * The conversation as the provider's transcript records it, folded into
@@ -38,6 +42,101 @@ export function Timeline({ session }: { session: Session }) {
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
   }, [events, pinned, echoes.length]);
 
+  // ---- the message rail: where you are, and going to one of them
+  const turnList = useTurns(session.id, session.lastActivityAt);
+  const turns = turnList?.turns ?? NO_TURNS;
+  const turnIds = useMemo(() => new Set(turns.map((t) => t.id)), [turns]);
+  const [current, setCurrent] = useState<string | null>(null);
+  const [jump, setJump] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const rowOf = useCallback(
+    (id: string) => boxRef.current?.querySelector<HTMLElement>(`[data-ev="${CSS.escape(id)}"]`) ?? null,
+    [],
+  );
+
+  // The message you are reading: the last of yours that starts at or above
+  // the top of the view — where a jump puts one.
+  const frame = useRef(0);
+  const findCurrent = useCallback(() => {
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => {
+      const box = boxRef.current;
+      if (!box) return;
+      const line = box.getBoundingClientRect().top + 48;
+      let cur: string | null = null;
+      for (const el of box.querySelectorAll<HTMLElement>("[data-ev]")) {
+        if (!turnIds.has(el.dataset.ev!)) continue;
+        if (el.getBoundingClientRect().top > line) break;
+        cur = el.dataset.ev!;
+      }
+      setCurrent(cur);
+    });
+  }, [turnIds]);
+  useEffect(findCurrent, [findCurrent, events]);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+
+  // One handed over from the terminal's rail.
+  useEffect(() => {
+    const j = takeJump(session.id);
+    if (j) {
+      setJump(j.turnId);
+      setNote(j.note ?? null);
+    }
+  }, [session.id]);
+  useEffect(() => {
+    if (!note) return;
+    const t = setTimeout(() => setNote(null), 6000);
+    return () => clearTimeout(t);
+  }, [note]);
+
+  // Go to it once it is rendered, paging older history in until it is.
+  useEffect(() => {
+    if (!jump || !ready) return;
+    const box = boxRef.current;
+    const el = rowOf(jump);
+    if (box && el) {
+      box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - 12;
+      el.classList.remove("mr-flash");
+      void el.offsetWidth; // restart the animation on a second jump to the same row
+      el.classList.add("mr-flash");
+      setTimeout(() => el.classList.remove("mr-flash"), 1900);
+      setJump(null);
+      return;
+    }
+    if (exhausted || error) setJump(null);
+    else if (!loadingOlder) loadOlder(1000);
+  }, [jump, ready, events, exhausted, error, loadingOlder, loadOlder, rowOf]);
+
+  const toLatest = () => {
+    const el = boxRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setPinned(true);
+  };
+
+  const step = (dir: -1 | 1) => {
+    const box = boxRef.current;
+    if (!box) return;
+    const top = box.getBoundingClientRect().top;
+    if (dir === -1) {
+      // The last message that starts above the view. One not loaded yet is
+      // older than everything that is, so above it too.
+      let to: Turn | null = null;
+      for (const t of turns) {
+        const el = rowOf(t.id);
+        if (!el || el.getBoundingClientRect().top < top + 4) to = t;
+      }
+      if (to) setJump(to.id);
+    } else {
+      const to = turns.find((t) => {
+        const el = rowOf(t.id);
+        return el && el.getBoundingClientRect().top > top + 20;
+      });
+      if (to) setJump(to.id);
+      else toLatest();
+    }
+  };
+
   const onScroll = () => {
     const el = boxRef.current;
     if (!el) return;
@@ -46,6 +145,7 @@ export function Timeline({ session }: { session: Session }) {
     const nowPinned = isPinnedToBottom(el);
     if (nowPinned !== pinned) setPinned(nowPinned);
     if (isAtTop(el) && !exhausted && !loadingOlder) loadOlder();
+    findCurrent();
   };
 
   if (!ready) {
@@ -78,14 +178,14 @@ export function Timeline({ session }: { session: Session }) {
           ) : error ? (
             <>
               Could not load earlier events: {error}{" "}
-              <button className="linkish" onClick={loadOlder}>
+              <button className="linkish" onClick={() => loadOlder()}>
                 retry
               </button>
             </>
           ) : exhausted ? (
             "Start of the conversation"
           ) : (
-            <button className="linkish" onClick={loadOlder}>
+            <button className="linkish" onClick={() => loadOlder()}>
               Load earlier
             </button>
           )}
@@ -112,19 +212,24 @@ export function Timeline({ session }: { session: Session }) {
       </div>
       {!pinned ? (
         <div className="tl-jump">
-          <Button
-            size="sm"
-            icon={Icon.arrowDown}
-            onClick={() => {
-              const el = boxRef.current;
-              if (el) el.scrollTop = el.scrollHeight;
-              setPinned(true);
-            }}
-          >
+          <Button size="sm" icon={Icon.arrowDown} onClick={toLatest}>
             Latest
           </Button>
         </div>
       ) : null}
+      {note ? (
+        <div className="tl-note" role="status">
+          {note}
+        </div>
+      ) : null}
+      <MessageRail
+        turns={turns}
+        total={turnList?.total ?? 0}
+        current={pinned && current === turns[turns.length - 1]?.id ? null : current}
+        busy={jump}
+        onJump={(t) => setJump(t.id)}
+        onStep={step}
+      />
     </div>
   );
 }
@@ -151,7 +256,7 @@ const EventRow = memo(function EventRow({ ev }: { ev: Exclude<TimelineEvent, Too
   switch (ev.kind) {
     case "user":
       return (
-        <div className="tl-user" title={fmtClock(ev.at)}>
+        <div className="tl-user" title={fmtClock(ev.at)} data-ev={ev.id}>
           <div className="tl-who">
             <Icon.user size={13} /> You
             {ev.images ? <span className="faint"> · {ev.images} image{ev.images === 1 ? "" : "s"}</span> : null}
@@ -210,6 +315,7 @@ const ToolRow = memo(function ToolRow({ ev }: { ev: ToolEvent }) {
     <>
       <button
         className={`sx-tool ${ev.status}`}
+        data-ev={ev.id}
         aria-expanded={hasDetail ? open : undefined}
         disabled={!hasDetail}
         onClick={() => setOpen(!open)}
