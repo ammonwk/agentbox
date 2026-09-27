@@ -13,7 +13,7 @@
 
 import { basename, dirname, sep } from "node:path";
 import { addUsage, emptyTotals } from "../pricing";
-import type { TimelineEvent, TokenTotals } from "../types";
+import type { AskQuestion, TimelineEvent, TokenTotals } from "../types";
 import { cap, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 
@@ -220,6 +220,34 @@ export function summarizeClaudeTool(name: string, input: any): string {
   }
 }
 
+/** AskUserQuestion's questions, or null for input that is not that shape. */
+export function askQuestionsOf(input: any): AskQuestion[] | null {
+  const qs = input?.questions;
+  if (!Array.isArray(qs) || qs.length === 0) return null;
+  const out: AskQuestion[] = [];
+  for (const q of qs) {
+    if (typeof q?.question !== "string" || !Array.isArray(q.options)) return null;
+    out.push({
+      question: q.question,
+      header: typeof q.header === "string" ? q.header : "",
+      multiSelect: q.multiSelect === true,
+      options: q.options
+        .filter((o: any) => typeof o?.label === "string")
+        .map((o: any) => (typeof o.description === "string" && o.description ? { label: o.label, description: o.description } : { label: o.label })),
+    });
+  }
+  return out;
+}
+
+/** The answers Claude recorded for an AskUserQuestion, question → answer. */
+function askAnswersOf(r: any): Record<string, string> | undefined {
+  const a = r?.toolUseResult?.answers;
+  if (!a || typeof a !== "object") return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(a)) if (typeof v === "string") out[k] = v;
+  return out;
+}
+
 /** A tool_result's content as text. Images become a marker. */
 export function toolResultText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -357,6 +385,8 @@ export class ClaudeFold {
   private startedAt: number | null = null;
   private lastActivityAt: number | null = null;
   private turnOpen = false;
+  /** An AskUserQuestion still waiting for its answer. */
+  private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
   private contextUsed: number | null = null;
   private observedMax = 0;
   private autoCompactPre = 0;
@@ -500,6 +530,7 @@ export class ClaudeFold {
     const kind0 = r.origin?.kind;
     const content = r.message?.content;
     if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_result")) {
+      if (this.pendingAsk && content.some((b: any) => b?.type === "tool_result" && b.tool_use_id === this.pendingAsk!.id)) this.pendingAsk = null;
       // A tool finished; the model is about to continue.
       this.turnOpen = true;
       return;
@@ -557,6 +588,13 @@ export class ClaudeFold {
       if (used > 0) {
         this.contextUsed = used;
         if (used > this.observedMax) this.observedMax = used;
+      }
+    }
+    if (Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (b?.type !== "tool_use" || b.name !== "AskUserQuestion" || typeof b.id !== "string") continue;
+        const questions = askQuestionsOf(b.input);
+        if (questions) this.pendingAsk = { id: b.id, questions };
       }
     }
     const text = blocksText(m.content).trim();
@@ -624,6 +662,7 @@ export class ClaudeFold {
       parentId: sub.parent,
       team: this.team,
       teamsLed: [...this.teamsLed],
+      pendingAsk: this.pendingAsk,
     };
   }
 }
@@ -656,7 +695,7 @@ export function claudePieces(r: any, index: number): Piece[] {
       const texts: string[] = [];
       content.forEach((b: any, i: number) => {
         if (b?.type === "tool_result" && typeof b.tool_use_id === "string") {
-          out.push({ kind: "result", callId: b.tool_use_id, output: cap(toolResultText(b.content), OUTPUT_CAP), error: b.is_error === true });
+          out.push({ kind: "result", callId: b.tool_use_id, output: cap(toolResultText(b.content), OUTPUT_CAP), error: b.is_error === true, answers: askAnswersOf(r) });
         } else if (b?.type === "image" || b?.type === "document") images++;
         else if (b?.type === "text" && typeof b.text === "string") {
           const kind = classifyUserText(b.text);
@@ -698,6 +737,8 @@ export function claudePieces(r: any, index: number): Piece[] {
             input: cap(JSON.stringify(b.input ?? {}), INPUT_CAP),
             status: "running",
           };
+          const questions = name === "AskUserQuestion" ? askQuestionsOf(b.input) : null;
+          if (questions) ev.ask = { id: String(b.id), questions };
           out.push({ kind: "call", callId: String(b.id), event: ev });
         } else if (typeof b?.type === "string" && b.type.endsWith("_tool_result") && typeof b.tool_use_id === "string") {
           // Server tools (web search) answer inside the same message.

@@ -179,6 +179,20 @@ export function capture(name: string, opts: { ansi?: boolean; scrollback?: numbe
   return r.code === 0 ? r.stdout : null;
 }
 
+/**
+ * Zoom the session's active pane to the whole window, or undo that. Claude
+ * splits its window into a pane per teammate, which can leave the lead a
+ * column wide — too narrow to read a dialog off. Returns whether anything
+ * changed, so a caller undoes only its own zoom.
+ */
+export function setZoom(name: string, on: boolean): boolean {
+  const r = tmux(["display-message", "-p", "-t", `=${name}:`, "#{window_panes} #{window_zoomed_flag}"]);
+  if (r.code !== 0) return false;
+  const [panes, zoomed] = r.stdout.trim().split(" ");
+  if (Number(panes) <= 1 || (zoomed === "1") === on) return false;
+  return tmux(["resize-pane", "-Z", "-t", `=${name}:`]).code === 0;
+}
+
 export function killSession(name: string): void {
   tmux(["kill-session", "-t", `=${name}`]);
 }

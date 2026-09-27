@@ -8,6 +8,7 @@ import { AccountPicker } from "../newsession/AccountPicker";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { echoSent } from "./echo";
+import { QuestionCard } from "./Question";
 
 /** What the composer can do for a session, and the sentence that says so. */
 export type ComposerMode =
@@ -104,7 +105,9 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
         </div>
       ) : null}
 
-      {session.status === "blocked" && mode.kind === "send" ? (
+      {session.question && mode.kind === "send" ? (
+        <QuestionCard key={session.question.id} sessionId={session.id} ask={session.question} />
+      ) : session.status === "blocked" && mode.kind === "send" ? (
         <div className="cmp-keys" role="group" aria-label="Answer the prompt">
           <span className="cmp-keys-label">
             <Icon.alert size={13} /> The agent is showing a prompt — answer it in the terminal, or send a key:

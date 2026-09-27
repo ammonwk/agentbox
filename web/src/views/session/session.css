@@ -68,6 +68,9 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* The terminal keeps its size until it refits; a composer that grew (a
+     question card) must not end up under it. */
+  overflow: hidden;
 }
 
 /* -------------------------------------------------------------------- rail */
@@ -1225,6 +1228,180 @@
 }
 .keycap:disabled {
   opacity: 0.5;
+}
+
+/* ------------------------------------------------------------- questions */
+
+/* AskUserQuestion: answerable above the composer, and a record in the timeline. */
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+}
+.cmp > .ask {
+  max-height: min(55vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ask-q {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ask-legend {
+  padding: 0;
+  font-size: 13.5px;
+  font-weight: 550;
+  line-height: 1.4;
+  color: var(--text);
+}
+.ask-chip {
+  display: inline-block;
+  margin-right: 7px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 17px;
+  color: var(--muted);
+  vertical-align: 1px;
+}
+.ask-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ask-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ask-opt:hover:not(:disabled) {
+  background: var(--hover);
+}
+.ask-opt[aria-checked="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+.ask-opt:disabled,
+.ask-q:disabled .ask-opt {
+  cursor: default;
+  opacity: 0.7;
+}
+.ask-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1.5px solid var(--border-strong);
+  color: var(--bg);
+}
+.ask-mark.radio { border-radius: 50%; }
+.ask-mark.checkbox { border-radius: 4px; }
+.ask-opt[aria-checked="true"] .ask-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.ask-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.ask-label {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.ask-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ask-other {
+  align-items: center;
+  cursor: text;
+}
+.ask-other > .ask-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: 13.5px;
+  color: inherit;
+  outline: none;
+}
+.ask-other > .ask-input:focus,
+.ask-other > .ask-input:focus-visible {
+  box-shadow: none;
+  outline: none;
+}
+.ask-other:focus-within {
+  border-color: var(--accent);
+}
+.ask-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.ask-foot > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ask-error {
+  color: var(--danger);
+}
+.ask-past {
+  gap: 8px;
+}
+.ask-past .ask-q {
+  gap: 3px;
+}
+.ask-answer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--accent);
+}
+.ask-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ask-past.running .ask-status {
+  color: var(--accent);
+}
+@media (max-width: 900px) {
+  /* 16px keeps iOS from zooming into the field. */
+  .ask-other > .ask-input { font-size: 16px; }
+  .ask-opt { min-height: 44px; }
 }
 
 /* ------------------------------------------------------------------ narrow */

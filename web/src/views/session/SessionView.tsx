@@ -457,7 +457,8 @@ function Detail({
               </>
             ) : (
               <>
-                <Icon.alert size={13} /> {session.attention.reason}. The Terminal tab shows the prompt.
+                <Icon.alert size={13} /> {session.attention.reason}.{" "}
+                {session.question ? "Answer it below." : "The Terminal tab shows the prompt."}
               </>
             )}
           </div>

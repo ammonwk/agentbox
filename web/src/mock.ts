@@ -15,6 +15,7 @@ import type {
   AccountUsage,
   AccountView,
   AgentSettings,
+  AskAnswer,
   AppState,
   Attention,
   AttentionKind,
@@ -294,6 +295,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     effort: null,
     cold: false,
     limitHit: null,
+    question: null,
     origin: "agentbox",
     parent: null,
     pid: live ? 40000 + Math.floor(Math.random() * 20000) : null,
@@ -332,6 +334,40 @@ const sessions: MockSession[] = [
     contextUsed: 71_000, contextLimit: 200_000,
     tokens: { input: 22_000, output: 9_800, cacheRead: 610_000, cacheWrite: 41_000, costEquiv: 3.18 },
     startedAt: T0 - 1.5 * H, lastActivityAt: T0 - 2 * M,
+  }),
+  sess({
+    id: "q7k2", provider: "claude", accountId: "cl-work", status: "blocked", host: "tmux",
+    title: "Pick a retention policy for old transcripts", cwd: AB, repoRoot: AB, branch: "main", model: "claude-opus-5-5",
+    firstPrompt: "Old transcripts pile up in every account home. Propose a retention policy and ask me before deleting anything.",
+    lastMessage: "Before I write the cleanup, two choices are yours.",
+    contextUsed: 38_000, contextLimit: 200_000,
+    tokens: { input: 9_000, output: 3_100, cacheRead: 210_000, cacheWrite: 18_000, costEquiv: 1.02 },
+    startedAt: T0 - 25 * M, lastActivityAt: T0 - 40 * 1000,
+    question: {
+      id: "toolu_mock_q7k2",
+      questions: [
+        {
+          question: "How long should a transcript be kept after its session was last active?",
+          header: "Keep for",
+          multiSelect: false,
+          options: [
+            { label: "30 days", description: "Enough to resume anything recent; frees the most space" },
+            { label: "90 days (Recommended)", description: "Covers a quarter of work; what most sessions ever need" },
+            { label: "Forever", description: "Never delete; only compress" },
+          ],
+        },
+        {
+          question: "Which sessions should never be deleted, whatever their age?",
+          header: "Exempt",
+          multiSelect: true,
+          options: [
+            { label: "Labelled", description: "Any session you gave a label" },
+            { label: "With a PR", description: "Sessions whose branch has a pull request" },
+            { label: "Project", description: "The pinned Project session" },
+          ],
+        },
+      ],
+    },
   }),
   sess({
     id: "a81c", provider: "codex", accountId: "cx-main", status: "waiting", host: "tmux",
@@ -433,7 +469,7 @@ const sessions: MockSession[] = [
 ];
 
 const REASON: Record<AttentionKind, (s: Session) => string> = {
-  blocked: () => "Waiting on a permission prompt",
+  blocked: (s) => (s.question ? "Asking a question" : "Waiting on a permission prompt"),
   waiting: (s) => (s.host === "external" ? "Turn over, in another terminal" : "Turn over — your move"),
   running: () => "Working",
   stopped: () => "No process — resumable",
@@ -734,7 +770,9 @@ function makeTimeline(s: Session): TimelineEvent[] {
     });
     if (r === 4) ev.push({ id: id(), at: step(500), kind: "meta", text: "Context compacted — 142k → 38k tokens", tone: "info" });
   }
-  if (s.status === "blocked") {
+  if (s.question) {
+    ev.push({ id: id(), at: step(1500), kind: "tool", name: "AskUserQuestion", summary: s.question.questions[0]!.question, status: "running", ask: s.question });
+  } else if (s.status === "blocked") {
     ev.push({ id: id(), at: step(1500), kind: "tool", name: "Bash", summary: "rm -rf ~/.local/share/agentbox/test-db", input: "rm -rf ~/.local/share/agentbox/test-db", status: "running" });
     ev.push({ id: id(), at: step(200), kind: "meta", text: "Permission requested: Bash(rm -rf ~/.local/share/agentbox/test-db)", tone: "warn" });
   }
@@ -1080,7 +1118,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
 
   if (head === "sessions" && id) {
     const s = mustSession(id);
-    const x = body<{ label: string | null; big: boolean; text: string; keys: string[]; prompt: string; closed: boolean }>(b);
+    const x = body<{ label: string | null; big: boolean; text: string; keys: string[]; prompt: string; closed: boolean; question: string; answers: AskAnswer[] }>(b);
     switch (method === "PATCH" ? "patch" : action) {
       case "patch":
         if ("label" in x) s.label = x.label?.trim() ? x.label.trim() : null;
@@ -1095,6 +1133,26 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
         if (watching === id) emit({ type: "timeline", sessionId: id, events: [tl[tl.length - 1]], cursor: "", reset: false });
         s.status = "running";
         s.lastPrompt = x.text ?? null;
+        s.lastActivityAt = Date.now();
+        break;
+      }
+      case "answer": {
+        const q = s.question;
+        if (!q || q.id !== x.question) throw new Error("that question is no longer waiting for an answer");
+        const answers: Record<string, string> = {};
+        q.questions.forEach((qq, i) => {
+          const a = x.answers?.[i] ?? { labels: [] };
+          answers[qq.question] = [...a.labels, ...(a.other ? [a.other] : [])].join(", ");
+        });
+        const tl = timelineOf(id);
+        const i = tl.findIndex((e) => e.kind === "tool" && e.ask?.id === q.id);
+        if (i >= 0) {
+          const e = tl[i] as Extract<TimelineEvent, { kind: "tool" }>;
+          tl[i] = { ...e, status: "ok", ask: { ...e.ask!, answers } };
+          if (watching === id) emit({ type: "timeline", sessionId: id, events: [tl[i]], cursor: "", reset: false });
+        }
+        s.question = null;
+        s.status = "running";
         s.lastActivityAt = Date.now();
         break;
       }

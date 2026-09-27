@@ -272,6 +272,9 @@ export interface Session {
   /** The provider's latest "you hit your limit", when that is the last thing
    *  the session did — it stopped there and is waiting to be continued. */
   limitHit: { at: number; detail: string } | null;
+  /** The AskUserQuestion dialog it is showing, while it shows one: answer it
+   *  with `POST /api/sessions/:id/answer`. */
+  question: { id: string; questions: AskQuestion[] } | null;
   /** Where this session came from. */
   origin: "agentbox" | "external";
   /**
@@ -342,9 +345,26 @@ export type TimelineEvent = { id: string; at: number } & (
       input?: string;
       output?: string;
       status: "running" | "ok" | "error";
+      /** AskUserQuestion: what was asked, uncapped, and what was answered. */
+      ask?: { id: string; questions: AskQuestion[]; answers?: Record<string, string> };
     }
   | { kind: "meta"; text: string; tone?: "info" | "warn" | "error" }
 );
+
+/** One question of an AskUserQuestion call, as the agent asked it. */
+export interface AskQuestion {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: { label: string; description?: string }[];
+}
+
+/** Your answer to one question: the options picked (at most one unless
+ *  multi-select), and text of your own ("Type something"). */
+export interface AskAnswer {
+  labels: string[];
+  other?: string;
+}
 
 export interface TimelinePage {
   events: TimelineEvent[];

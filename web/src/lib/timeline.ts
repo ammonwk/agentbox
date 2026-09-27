@@ -58,12 +58,16 @@ function sameEvent(a: TimelineEvent | undefined, b: TimelineEvent): boolean {
 /** A run of consecutive tool events renders as one box; everything else alone. */
 export type TimelineRow =
   | { type: "event"; event: Exclude<TimelineEvent, { kind: "tool" }> }
-  | { type: "tools"; id: string; events: Extract<TimelineEvent, { kind: "tool" }>[] };
+  | { type: "tools"; id: string; events: Extract<TimelineEvent, { kind: "tool" }>[] }
+  /** AskUserQuestion: a card of its own, not a line in a run of tools. */
+  | { type: "ask"; event: Extract<TimelineEvent, { kind: "tool" }> & { ask: NonNullable<Extract<TimelineEvent, { kind: "tool" }>["ask"]> } };
 
 export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = [];
   for (const ev of events) {
-    if (ev.kind === "tool") {
+    if (ev.kind === "tool" && ev.ask) {
+      rows.push({ type: "ask", event: { ...ev, ask: ev.ask } });
+    } else if (ev.kind === "tool") {
       const last = rows[rows.length - 1];
       if (last?.type === "tools") last.events.push(ev);
       else rows.push({ type: "tools", id: ev.id, events: [ev] });

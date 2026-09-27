@@ -13,6 +13,7 @@ import type {
   Account,
   AccountUsage,
   AgentSettings,
+  AskAnswer,
   AppState,
   BalancerSettings,
   CalibrationReport,
@@ -183,6 +184,8 @@ export const api = {
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
   keys: (id: string, keys: string[]) => post<unknown>(`/api/sessions/${enc(id)}/keys`, { keys }),
+  /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
+  answer: (id: string, question: string, answers: AskAnswer[]) => post<unknown>(`/api/sessions/${enc(id)}/answer`, { question, answers }),
   interrupt: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/interrupt`),
   resume: (id: string, prompt?: string) =>
     post<Session>(`/api/sessions/${enc(id)}/resume`, prompt ? { prompt } : {}),

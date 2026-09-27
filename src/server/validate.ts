@@ -10,6 +10,7 @@
  */
 
 import type { SettingsPatch } from "../core/db";
+import type { AskAnswer } from "../core/types";
 import { HttpError } from "./router";
 
 export function requireString(obj: Record<string, unknown>, key: string, label = key): string {
@@ -117,4 +118,19 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
   }
 
   return patch;
+}
+
+/** `answers` of POST /api/sessions/:id/answer: one `{ labels, other? }` per
+ *  question. Text of your own is one line: it is typed into a one-line
+ *  field, where a newline would be Enter. */
+export function parseAnswers(v: unknown): AskAnswer[] {
+  if (!Array.isArray(v) || v.length === 0 || v.length > 10) throw new HttpError(400, "answers must be a list, one per question");
+  return v.map((x, i) => {
+    const o = asObject(x, `answers[${i}]`);
+    const labels = o.labels ?? [];
+    if (!Array.isArray(labels) || !labels.every((l) => typeof l === "string")) throw new HttpError(400, `answers[${i}].labels must be a list of option labels`);
+    const other = optionalString(o, "other", `answers[${i}].other`)?.replace(/\s+/g, " ").trim();
+    if (other && other.length > 2000) throw new HttpError(400, `answers[${i}].other is too long`);
+    return other ? { labels, other } : { labels };
+  });
 }

@@ -34,6 +34,7 @@ import { JsonlTranscriptReader } from "./jsonl-reader";
 import { claudeFormat, ClaudeTokenFold } from "./claude-transcript";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
 import { pickOption, plainScreen } from "./tui-screen";
+import { askStep } from "./claude-ask";
 import type {
   Command,
   LiveProcess,
@@ -467,7 +468,12 @@ export function claudeBlockedOn(raw: string): string | null {
     const title = /(Bash command|Edit file|Create file|Read file|Write file|Tool use|Fetch|MCP tool|Web search)/.exec(s)?.[1];
     return title ? `permission: ${title.toLowerCase()}` : "permission prompt";
   }
-  if (/Enter to select/.test(s) && /Esc to cancel/.test(s) && /↑\/↓ to navigate/.test(s)) return "question";
+  // Its footer says "↑/↓ to navigate" for one question and "Tab/Arrow keys to
+  // navigate" for several, and wraps in a narrow pane.
+  const flat = s.replace(/\s+/g, " ");
+  if (/Enter to select/.test(flat) && /Esc to cancel/.test(flat) && /to navigate/.test(flat)) return "asking a question";
+  // Its last tab, which has no footer.
+  if (/Review your answers/.test(flat) && /Submit answers/.test(flat)) return "asking a question";
   return null;
 }
 
@@ -687,4 +693,5 @@ export const claudeAdapter: ProviderAdapter = {
   headless: isHeadless,
   autoAnswer: claudeAutoAnswer,
   blockedOn: claudeBlockedOn,
+  answerStep: askStep,
 };

@@ -73,6 +73,8 @@ import { weeklyWindow } from "./balancer";
 import type {
   Account,
   AccountUsage,
+  AskAnswer,
+  AskQuestion,
   ClaimView,
   Placement,
   ProviderId,
@@ -105,6 +107,7 @@ export interface Runtime {
   sendKeys(name: string, keys: string[]): void;
   capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
   killSession(name: string): void;
+  setZoom?(name: string, on: boolean): boolean;
 }
 
 export interface UsageSource {
@@ -1128,6 +1131,9 @@ export class Fleet extends EventEmitter {
       effort: rec.effort ?? null,
       cold,
       limitHit,
+      // Only while the dialog is up: a call recorded but not yet answered is
+      // also what a session interrupted mid-question leaves behind.
+      question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? null) : null,
       origin: rec.origin,
       parent: rec.parent ?? null,
       pid,
@@ -1754,6 +1760,65 @@ export class Fleet extends EventEmitter {
     this.keys(id, ["Escape"]);
   }
 
+  /**
+   * Answer the AskUserQuestion dialog the session is showing (`question`,
+   * the call's id, says which). Driven off the screen one step at a time
+   * (claude-ask.ts), so a dialog the terminal is answering too, or one that
+   * is no longer up, stops it with an error instead of a wrong answer.
+   */
+  answer(id: string, question: string, answers: AskAnswer[]): Promise<void> {
+    return this.serial(id, async () => {
+      const s = this.get(id);
+      if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, "not running in agentbox");
+      const open = s.question;
+      if (!open || open.id !== question) throw new FleetError(409, "that question is no longer waiting for an answer");
+      const step = this.adapter(s.provider).answerStep;
+      if (!step) throw new FleetError(409, `${s.provider} questions cannot be answered from here`);
+      checkAnswers(open.questions, answers);
+
+      const pane = s.tmux;
+      const rt = this.deps.runtime;
+      let screen = rt.capture(pane) ?? "";
+      // A lead squeezed beside its teammates' panes is read zoomed, once it
+      // has redrawn at the new size.
+      const zoomed = rt.setZoom?.(pane, true) ?? false;
+      if (zoomed) screen = await this.settled(pane, screen);
+      try {
+        const visited = new Set<number>();
+        for (let n = 0; n < 60; n++) {
+          const next = step(screen, open.questions, answers, visited);
+          if ("done" in next) {
+            if (n === 0) throw new FleetError(409, "the terminal is not showing the question");
+            this.touched.set(id, this.now());
+            return;
+          }
+          if ("error" in next) throw new FleetError(409, next.error);
+          if ("type" in next) rt.sendKeys(pane, ["-l", "--", next.type]);
+          else {
+            rt.sendKeys(pane, next.keys);
+            if (next.commits !== undefined) visited.add(next.commits);
+          }
+          screen = await this.settled(pane, screen);
+        }
+        throw new FleetError(409, "the dialog did not end up answered; the Terminal tab shows where it stopped");
+      } finally {
+        if (zoomed) rt.setZoom?.(pane, false);
+      }
+    });
+  }
+
+  /** The screen once it has changed from `before` and held still a moment. */
+  private async settled(pane: string, before: string): Promise<string> {
+    let last = before;
+    for (let t = 0; t < 2_000; t += 50) {
+      await Bun.sleep(50);
+      const now = this.deps.runtime.capture(pane) ?? "";
+      if (now !== before && now === last) return now;
+      last = now;
+    }
+    return last;
+  }
+
   async stopSession(id: string): Promise<void> {
     this.touched.set(id, this.now());
     const s = this.get(id);
@@ -1901,6 +1966,21 @@ export function newSessionId(): string {
   let id = "";
   for (const b of bytes) id += alphabet[b % alphabet.length];
   return id;
+}
+
+/** Answers that fit the questions: one each, naming options that exist, one
+ *  option at most unless multi-select, and not empty. */
+function checkAnswers(questions: AskQuestion[], answers: AskAnswer[]): void {
+  if (answers.length !== questions.length) throw new FleetError(400, `${questions.length} answers needed, got ${answers.length}`);
+  questions.forEach((q, i) => {
+    const a = answers[i]!;
+    for (const l of a.labels) {
+      if (!q.options.some((o) => o.label === l)) throw new FleetError(400, `“${l}” is not an option of “${q.question}”`);
+    }
+    const picks = a.labels.length + (a.other ? 1 : 0);
+    if (picks === 0) throw new FleetError(400, `no answer for “${q.question}”`);
+    if (!q.multiSelect && picks > 1) throw new FleetError(400, `“${q.question}” takes one answer`);
+  });
 }
 
 /** What the database keeps of the facts: enough to draw the board before the

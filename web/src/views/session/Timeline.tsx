@@ -4,6 +4,7 @@ import { fmtClock, useTimeline } from "../../api";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline } from "../../lib/timeline";
 import { Markdown } from "./Markdown";
+import { AskRow } from "./Question";
 import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 
@@ -91,7 +92,13 @@ export function Timeline({ session }: { session: Session }) {
         </div>
         <div className="tl-stream">
           {rows.map((r) =>
-            r.type === "tools" ? <ToolRun key={r.id} events={r.events} /> : <EventRow key={r.event.id} ev={r.event} />,
+            r.type === "tools" ? (
+              <ToolRun key={r.id} events={r.events} />
+            ) : r.type === "ask" ? (
+              <AskRow key={r.event.id} ev={r.event} live={session.question?.id === r.event.ask.id} />
+            ) : (
+              <EventRow key={r.event.id} ev={r.event} />
+            ),
           )}
           {echoes.map((e) => (
             <div key={e.at} className="tl-user tl-echo" title="Sent; the agent has not recorded it yet">

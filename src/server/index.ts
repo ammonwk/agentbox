@@ -39,7 +39,7 @@ import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
 import type { Conversation } from "../voice/conversation";
 import { HttpError, Router, fail, json, readBody } from "./router";
-import { optionalString, parseSettingsPatch, requireBoolean, requireString } from "./validate";
+import { optionalString, parseAnswers, parseSettingsPatch, requireBoolean, requireString } from "./validate";
 import { parseClientMessage } from "./protocol";
 import { fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
@@ -443,6 +443,13 @@ const router = new Router(mapError)
       throw new HttpError(400, "keys must be a list of tmux key names");
     }
     fleet.keys(params.id!, b.keys as string[]);
+    return json(null);
+  })
+  .add("POST", "/api/sessions/:id/answer", async ({ req, params }) => {
+    const b = await readBody(req);
+    const question = requireString(b, "question");
+    await fleet.answer(params.id!, question, parseAnswers(b.answers));
+    scheduleHot();
     return json(null);
   })
   .add("POST", "/api/sessions/:id/interrupt", ({ params }) => {

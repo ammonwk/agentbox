@@ -25,7 +25,7 @@ export type Piece =
   /** A tool call, still without its result. `event.id` must be stable. */
   | { kind: "call"; callId: string; event: ToolEvent }
   /** The result of an earlier (or same-record) call. */
-  | { kind: "result"; callId: string; output: string; error: boolean };
+  | { kind: "result"; callId: string; output: string; error: boolean; answers?: Record<string, string> };
 
 export interface TranscriptFormat {
   /** Fold one record into the running facts. Called once per record, in order. */
@@ -168,7 +168,9 @@ export class JsonlTranscriptReader implements TranscriptReader {
 
   private withResult(ev: ToolEvent, r: Extract<Piece, { kind: "result" }> | null): ToolEvent {
     if (!r) return ev;
-    return { ...ev, output: r.output, status: r.error ? "error" : "ok" };
+    const done: ToolEvent = { ...ev, output: r.output, status: r.error ? "error" : "ok" };
+    if (ev.ask && r.answers) done.ask = { ...ev.ask, answers: r.answers };
+    return done;
   }
 
   /** Events of records `[from, to)`, grouped by record. Results are folded

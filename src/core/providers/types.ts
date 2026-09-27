@@ -12,8 +12,11 @@
  * transcript is the reader's job and is incremental.
  */
 
+import type { AskStep } from "./claude-ask";
 import type {
   Account,
+  AskAnswer,
+  AskQuestion,
   ProviderId,
   TimelineEvent,
   TimelinePage,
@@ -103,6 +106,8 @@ export interface TranscriptFacts {
    */
   team?: string | null;
   teamsLed?: string[];
+  /** An AskUserQuestion call (claude) still waiting for its answer. */
+  pendingAsk?: { id: string; questions: AskQuestion[] } | null;
 }
 
 /** An incremental reader over one transcript. Holds its own offsets. */
@@ -242,6 +247,10 @@ export interface ProviderAdapter {
   /** Given the visible terminal text, what the session is waiting on a human
    *  for (a permission prompt, a login), in a few words — or null. */
   blockedOn?(screen: string): string | null;
+
+  /** The next keys to press toward answering an AskUserQuestion dialog on
+   *  `screen` (see claude-ask.ts). `visited` is kept by the caller across steps. */
+  answerStep?(screen: string, questions: AskQuestion[], answers: AskAnswer[], visited: ReadonlySet<number>): AskStep;
 }
 
 /**
