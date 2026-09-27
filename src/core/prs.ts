@@ -34,7 +34,9 @@ export function listPrs(repos: Repo[], sessions: Session[]): PrScan {
       "--repo", slug,
       "--state", "open",
       "--json", "number,title,headRefName,state,isDraft,url,createdAt,updatedAt,author",
-      "--limit", "50",
+      // Every open PR, not the newest few: a busy repo has well over 50, and a
+      // PR past the cut is invisible to the prompt and the session's PR badge.
+      "--limit", "500",
     ]);
     if (r.code !== 0) {
       const message = ghErrorMessage(r);

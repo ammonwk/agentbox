@@ -15,6 +15,7 @@ import {
   reposByRecency,
   savePrefs,
   skillsFor,
+  worktreeDefault,
   type NewSessionPrefs,
 } from "../lib/newsession";
 import { AccountPicker } from "./newsession/AccountPicker";
@@ -177,6 +178,19 @@ export function NewSession({
   }, [mentionedKey]);
   const wtFromPrompt = !worktree && autoWt.current !== null && wtText === autoWt.current;
 
+  // Picking a repo sets the box to where that repo's sessions usually run —
+  // only on the switch, so unticking it afterwards sticks. A PR the prompt
+  // names wins: the effect above puts the session on it.
+  function pickRepo(id: string) {
+    setRepoId(id);
+    const next = state.repos.find((r) => r.id === id);
+    if (!next || promptPrs(prompt, prsOf(state.prs, next), next.fullName).length > 0) return;
+    const def = worktreeDefault(next);
+    if (def === null) return;
+    setWorktree(def);
+    setWtText("");
+  }
+
   // Remember everything as it changes, so Cancel keeps it too.
   const draftImages = images.saved();
   const draftImagesKey = JSON.stringify(draftImages);
@@ -314,7 +328,7 @@ export function NewSession({
         {where === "repo" ? (
           <>
             <div className="ns-where">
-              <select aria-label="Repository" value={repoId} onChange={(e) => setRepoId(e.target.value)}>
+              <select aria-label="Repository" value={repoId} onChange={(e) => pickRepo(e.target.value)}>
                 {repos.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.displayName} — {r.fullName ?? r.ref}

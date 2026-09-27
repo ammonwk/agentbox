@@ -218,6 +218,18 @@ export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string
 }
 
 /** The open PRs of one repo. */
+/**
+ * Where a session in this repo usually runs, applied when the repo is picked:
+ * agentbox in its main checkout (the server runs from it), widget in a new
+ * worktree. Null leaves the box as it is.
+ */
+export function worktreeDefault(repo: Pick<Repo, "displayName" | "ref">): boolean | null {
+  const name = (repo.displayName || repo.ref.split("/").pop() || "").toLowerCase();
+  if (name === "agentbox") return false;
+  if (name.startsWith("widget")) return true;
+  return null;
+}
+
 export function prsOf(prs: readonly PrInfo[], repo: Repo | null): PrInfo[] {
   if (!repo?.fullName) return [];
   return prs.filter((p) => p.repo === repo.fullName);
