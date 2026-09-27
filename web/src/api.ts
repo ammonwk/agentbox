@@ -262,11 +262,18 @@ export interface Connection {
   retryAt: number | null;
   attempts: number;
   lastError: string | null;
+  /**
+   * Down for real: a retry has failed too, or it has been down past
+   * `GRACE_MS`. A phone that suspended the PWA hands back a closed socket
+   * every time it is opened; one drop that the next attempt heals is not news.
+   */
+  failing: boolean;
 }
 
 const BACKOFF_MIN = 500;
 const BACKOFF_MAX = 15_000;
 const HEARTBEAT_MS = 25_000;
+const GRACE_MS = 3_000;
 
 /** Exponential with jitter: many tabs, one server. Exported for the terminal socket. */
 export function backoffMs(attempts: number): number {
@@ -279,10 +286,11 @@ class Wire {
   private ws: WebSocket | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private grace: ReturnType<typeof setTimeout> | null = null;
   private mockStarted = false;
   private messageListeners = new Set<(m: ServerMessage) => void>();
   private statusListeners = new Set<() => void>();
-  private status: Connection = { connected: false, downSince: null, retryAt: null, attempts: 0, lastError: null };
+  private status: Connection = { connected: false, downSince: null, retryAt: null, attempts: 0, lastError: null, failing: false };
   /** The single session subscription, replayed verbatim after a reconnect. */
   private watching: string | null = null;
 
@@ -309,6 +317,14 @@ class Wire {
   watchingId(): string | null {
     return this.watching;
   }
+
+  /**
+   * Back in the foreground, or back online: skip whatever backoff is left.
+   * Only while waiting on the timer; a socket already connecting is left be.
+   */
+  wake = (): void => {
+    if (!this.status.connected && this.timer) this.retryNow();
+  };
 
   /** Skip the backoff — the "retry now" button. */
   retryNow(): void {
@@ -341,7 +357,7 @@ class Wire {
         this.mockStarted = true;
         void loadMock().then((m) => {
           m.mockServer.connect((msg) => this.emit(msg));
-          this.setStatus({ connected: true, downSince: null, retryAt: null, attempts: 0, lastError: null });
+          this.setStatus(UP);
           if (this.watching) this.send({ type: "watch", sessionId: this.watching });
         });
       }
@@ -356,7 +372,9 @@ class Wire {
     this.ws = ws;
 
     ws.onopen = () => {
-      this.setStatus({ connected: true, downSince: null, retryAt: null, attempts: 0, lastError: null });
+      if (this.grace) clearTimeout(this.grace);
+      this.grace = null;
+      this.setStatus(UP);
       // The server replays hot, cold and metrics on connect; we only restate
       // the watch, and the server answers it with a fresh `reset` frame.
       if (this.watching) this.send({ type: "watch", sessionId: this.watching });
@@ -388,12 +406,16 @@ class Wire {
       if (this.heartbeat) clearInterval(this.heartbeat);
       this.heartbeat = null;
       const attempts = this.status.attempts + 1;
-      const delay = backoffMs(attempts);
+      // The first drop retries at once: it is nearly always a socket the OS
+      // closed while the page was in the background, and the server is fine.
+      const delay = attempts === 1 ? 0 : backoffMs(attempts - 1);
+      if (attempts === 1) this.grace = setTimeout(() => this.setStatus({ failing: true }), GRACE_MS);
       this.setStatus({
         connected: false,
         downSince: this.status.downSince ?? Date.now(),
         retryAt: Date.now() + delay,
         attempts,
+        failing: this.status.failing || attempts > 1,
       });
       this.timer = setTimeout(() => {
         this.timer = null;
@@ -403,7 +425,13 @@ class Wire {
   }
 }
 
+const UP = { connected: true, downSince: null, retryAt: null, attempts: 0, lastError: null, failing: false } as const;
+
 const wire = new Wire();
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && wire.wake());
+  window.addEventListener("online", wire.wake);
+}
 
 export function useConnection(): Connection & { retryNow: () => void } {
   const status = useSyncExternalStore(wire.onStatus, wire.getStatus, wire.getStatus);

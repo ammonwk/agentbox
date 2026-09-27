@@ -333,10 +333,10 @@ function UpdateReady() {
 }
 
 function ConnectionChip() {
-  const { connected, downSince } = useConnection();
-  const label = connected ? (MOCK ? "Mock data" : "Live") : downSince ? "Offline" : "Connecting…";
+  const { connected, downSince, failing } = useConnection();
+  const label = connected ? (MOCK ? "Mock data" : "Live") : failing ? "Offline" : downSince ? "Reconnecting…" : "Connecting…";
   return (
-    <div className={`conn ${connected ? "on" : "off"}`} title={`Connection: ${label}`} role="status">
+    <div className={`conn ${connected ? "on" : failing ? "off" : ""}`} title={`Connection: ${label}`} role="status">
       <span className="dot" aria-hidden="true" />
       <span className="conn-label nav-label">{label}</span>
     </div>
@@ -345,9 +345,9 @@ function ConnectionChip() {
 
 /** The app keeps rendering the last state it had; this says so out loud. */
 function StaleBanner() {
-  const { connected, downSince, retryAt, attempts, lastError, retryNow } = useConnection();
+  const { connected, downSince, retryAt, attempts, lastError, failing, retryNow } = useConnection();
   const secs = useCountdown(retryAt);
-  if (connected || downSince === null) return null;
+  if (connected || downSince === null || !failing) return null;
   const downFor = Math.round((Date.now() - downSince) / 1000);
   return (
     <Banner tone="danger" icon={Icon.wifiOff}>

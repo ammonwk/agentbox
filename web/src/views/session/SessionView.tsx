@@ -299,7 +299,6 @@ function Detail({
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
   // openPrs (src/core/prs.ts) matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
-  const attach = `agentbox attach ${session.id}`;
   const isProject = session.id === state.project.sessionId;
   const sessionIds = useMemo(() => new Set(state.sessions.map((s) => s.id)), [state.sessions]);
   const openSession = (id: string) => (location.hash = hrefOf({ page: "session", id, tab }));
@@ -351,7 +350,8 @@ function Detail({
                 </Button>
               </>
             ) : null}
-            {session.host === "tmux" ? <CopyButton text={attach} label={attach} className="attach-copy" /> : null}
+            {/* The provider's own id: what `claude -r` (or `codex resume`) takes. */}
+            {session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null}
             <button
               type="button"
               className="sx-big"

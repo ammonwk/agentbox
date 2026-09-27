@@ -579,7 +579,7 @@
 .copy-btn.sx-id:hover {
   border-color: var(--border-strong);
 }
-.attach-copy span {
+.resume-copy span {
   font-family: var(--mono);
   font-size: 11.5px;
 }
@@ -1430,7 +1430,7 @@
 .copy-btn.sx-id:hover {
   border-color: var(--border-strong);
 }
-.attach-copy span { display: none; }
+.resume-copy span { display: none; }
   .sx-header-top { flex-wrap: wrap; }
   .cmp-row { flex-wrap: wrap; }
   .cmp textarea { flex-basis: 100%; }
@@ -1577,7 +1577,7 @@
     font-size: 16px;
   }
   .copy-btn.sx-id,
-  .copy-btn.attach-copy {
+  .copy-btn.resume-copy {
     display: none;
   }
   .sx-header-actions {

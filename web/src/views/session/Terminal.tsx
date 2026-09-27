@@ -111,6 +111,7 @@ export default function Terminal({
     let chan: TermChannel | null = null;
     let attempts = 0;
     let retry: ReturnType<typeof setTimeout> | null = null;
+    let grace: ReturnType<typeof setTimeout> | null = null;
 
     const safeFit = () => {
       // fit() throws on a zero-size container (a hidden tab); skip until visible.
@@ -122,11 +123,18 @@ export default function Terminal({
       }
     };
 
-    const connect = () => {
-      setPhase({ kind: "connecting" });
+    // `quiet`: the first retry after a drop keeps the screen as it was, and
+    // only says so if it has not reattached within a few seconds. Opening the
+    // PWA from the background always finds the socket closed.
+    const connect = (quiet = false) => {
+      retry = null;
+      if (quiet) grace = setTimeout(() => setPhase({ kind: "connecting" }), 3_000);
+      else setPhase({ kind: "connecting" });
       chan = openTerm(sessionId, {
         onOpen: () => {
           if (!alive) return;
+          if (grace) clearTimeout(grace);
+          grace = null;
           attempts = 0;
           setPhase({ kind: "live" });
           safeFit();
@@ -137,7 +145,13 @@ export default function Terminal({
         onClose: (reason) => {
           if (!alive) return;
           attempts += 1;
-          const delay = backoffMs(attempts);
+          if (attempts === 1) {
+            retry = setTimeout(() => connect(true), 0);
+            return;
+          }
+          if (grace) clearTimeout(grace);
+          grace = null;
+          const delay = backoffMs(attempts - 1);
           setPhase({ kind: "down", retryAt: Date.now() + delay, reason });
           retry = setTimeout(connect, delay);
         },
@@ -207,6 +221,13 @@ export default function Terminal({
     ro.observe(box);
     safeFit();
     connect();
+    // Back in the foreground: skip whatever backoff is left.
+    const wake = () => {
+      if (document.visibilityState !== "visible" || !retry) return;
+      clearTimeout(retry);
+      connect(attempts === 1);
+    };
+    document.addEventListener("visibilitychange", wake);
 
     return () => {
       alive = false;
@@ -214,6 +235,8 @@ export default function Terminal({
       if (settle) clearTimeout(settle);
       box.removeEventListener("wheel", moved, { capture: true });
       if (retry) clearTimeout(retry);
+      if (grace) clearTimeout(grace);
+      document.removeEventListener("visibilitychange", wake);
       cancelAnimationFrame(raf);
       ro.disconnect();
       input.dispose();
