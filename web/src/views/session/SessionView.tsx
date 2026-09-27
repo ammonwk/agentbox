@@ -297,7 +297,7 @@ function Detail({
   const [confirmClose, setConfirmClose] = useState(false);
   const close = () => onClose(session);
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
-  // listPrs matched it by branch; the newest-updated one wins if there are several.
+  // openPrs (src/core/prs.ts) matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
   const attach = `agentbox attach ${session.id}`;
   const isProject = session.id === state.project.sessionId;

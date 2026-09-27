@@ -666,8 +666,8 @@ export interface WorktreeInfo {
 export interface WorktreeScan {
   scannedAt: number;
   items: WorktreeInfo[];
-  /** `gh` was needed to judge at least one branch and never answered, so every
-   *  PR state below is a guess. */
+  /** A repo's PRs were needed to judge at least one branch and are not loaded
+   *  from GitHub yet (src/core/prs.ts), so every PR state below is a guess. */
   ghUnavailable: boolean;
 }
 

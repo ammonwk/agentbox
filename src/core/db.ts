@@ -196,6 +196,38 @@ const MIGRATIONS: string[] = [
     last_error      TEXT
   );
   `,
+  // 9 — every pull request of the repos agentbox tracks, kept current from
+  // GitHub (src/core/prs.ts), and how far each repo's copy has got.
+  `
+  CREATE TABLE prs (
+    repo         TEXT NOT NULL,
+    number       INTEGER NOT NULL,
+    title        TEXT NOT NULL,
+    head_ref     TEXT NOT NULL,
+    base_ref     TEXT NOT NULL,
+    state        TEXT NOT NULL,
+    draft        INTEGER NOT NULL,
+    author       TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    merge_commit TEXT,
+    PRIMARY KEY (repo, number)
+  );
+  CREATE INDEX prs_state ON prs (repo, state);
+
+  -- etag: of the newest-updated page, so an unchanged one answers 304.
+  -- updated_to: the newest updated_at seen; the next sync reads down to it.
+  -- open_at: when every open PR was last read; 0 for never.
+  -- history_page: the next page of the oldest-first walk; 0 once it is done.
+  CREATE TABLE pr_sync (
+    repo         TEXT PRIMARY KEY,
+    etag         TEXT,
+    updated_to   TEXT,
+    open_at      INTEGER NOT NULL DEFAULT 0,
+    history_page INTEGER NOT NULL DEFAULT 1
+  );
+  `,
 ];
 
 function migrate(d: Database) {
@@ -507,6 +539,126 @@ export function updateSchedule(id: string, patch: Partial<Schedule>): void {
 
 export function deleteSchedule(id: string): void {
   getDb().run("DELETE FROM schedules WHERE id = ?", [id]);
+}
+
+// ---------------------------------------------------------------- pull requests
+
+/** A pull request as the table keeps it (src/core/prs.ts). */
+export interface StoredPr {
+  repo: string;
+  number: number;
+  title: string;
+  headRef: string;
+  baseRef: string;
+  state: "OPEN" | "MERGED" | "CLOSED";
+  isDraft: boolean;
+  author: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+  /** The commit it landed as, once merged. */
+  mergeCommit: string | null;
+}
+
+interface PrRow {
+  repo: string;
+  number: number;
+  title: string;
+  head_ref: string;
+  base_ref: string;
+  state: StoredPr["state"];
+  draft: number;
+  author: string;
+  url: string;
+  created_at: string;
+  updated_at: string;
+  merge_commit: string | null;
+}
+
+function rowToPr(r: PrRow): StoredPr {
+  return {
+    repo: r.repo,
+    number: r.number,
+    title: r.title,
+    headRef: r.head_ref,
+    baseRef: r.base_ref,
+    state: r.state,
+    isDraft: r.draft === 1,
+    author: r.author,
+    url: r.url,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    mergeCommit: r.merge_commit,
+  };
+}
+
+/** Insert or refresh, keeping whichever copy of a PR is newer: the history
+ *  walk can read one after the catch-up already has a later version. */
+export function upsertPrs(prs: readonly StoredPr[]): void {
+  if (prs.length === 0) return;
+  const d = getDb();
+  const q = d.prepare(
+    `INSERT INTO prs (repo,number,title,head_ref,base_ref,state,draft,author,url,created_at,updated_at,merge_commit)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT (repo, number) DO UPDATE SET
+       title = excluded.title, head_ref = excluded.head_ref, base_ref = excluded.base_ref,
+       state = excluded.state, draft = excluded.draft, author = excluded.author, url = excluded.url,
+       created_at = excluded.created_at, updated_at = excluded.updated_at, merge_commit = excluded.merge_commit
+     WHERE excluded.updated_at >= prs.updated_at`,
+  );
+  d.transaction(() => {
+    for (const p of prs) {
+      q.run(p.repo, p.number, p.title, p.headRef, p.baseRef, p.state, p.isDraft ? 1 : 0, p.author, p.url, p.createdAt, p.updatedAt, p.mergeCommit);
+    }
+  })();
+}
+
+/** The open PRs of these repos, most recently updated first. */
+export function listOpenPrs(repos: readonly string[]): StoredPr[] {
+  if (repos.length === 0) return [];
+  const rows = getDb()
+    .query(`SELECT * FROM prs WHERE state = 'OPEN' AND repo IN (${repos.map(() => "?").join(",")}) ORDER BY updated_at DESC`)
+    .all(...repos) as PrRow[];
+  return rows.map(rowToPr);
+}
+
+export function getPr(repo: string, number: number): StoredPr | null {
+  const row = getDb().query("SELECT * FROM prs WHERE repo = ? AND number = ?").get(repo, number) as PrRow | null;
+  return row ? rowToPr(row) : null;
+}
+
+/** Every PR of a repo, open or not, as branch and state. */
+export function prBranchesOf(repo: string): { headRef: string; state: StoredPr["state"] }[] {
+  return getDb().query("SELECT head_ref AS headRef, state FROM prs WHERE repo = ?").all(repo) as {
+    headRef: string;
+    state: StoredPr["state"];
+  }[];
+}
+
+export interface PrSync {
+  etag: string | null;
+  updatedTo: string | null;
+  openAt: number;
+  historyPage: number;
+}
+
+export function getPrSync(repo: string): PrSync | null {
+  const r = getDb().query("SELECT * FROM pr_sync WHERE repo = ?").get(repo) as {
+    etag: string | null;
+    updated_to: string | null;
+    open_at: number;
+    history_page: number;
+  } | null;
+  return r ? { etag: r.etag, updatedTo: r.updated_to, openAt: r.open_at, historyPage: r.history_page } : null;
+}
+
+export function savePrSync(repo: string, s: PrSync): void {
+  getDb().run(
+    `INSERT INTO pr_sync (repo,etag,updated_to,open_at,history_page) VALUES (?,?,?,?,?)
+     ON CONFLICT (repo) DO UPDATE SET etag = excluded.etag, updated_to = excluded.updated_to,
+       open_at = excluded.open_at, history_page = excluded.history_page`,
+    [repo, s.etag, s.updatedTo, s.openAt, s.historyPage],
+  );
 }
 
 // ---------------------------------------------------------------- metrics

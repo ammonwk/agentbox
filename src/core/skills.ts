@@ -148,9 +148,9 @@ export interface SkillScan {
 /**
  * Every SKILL.md under the known roots.
  *
- * This walks the filesystem and reads every file it finds, so like `listPrs`
- * it belongs to the cold refresh only — it was previously recomputed on every
- * 400ms broadcast.
+ * This walks the filesystem and reads every file it finds, so it belongs to
+ * the cold refresh only — it was previously recomputed on every 400ms
+ * broadcast.
  */
 export function listSkills(roots: SkillRoot[] = skillRoots()): SkillScan {
   const skills: SkillInfo[] = [];

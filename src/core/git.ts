@@ -53,7 +53,7 @@ export const MISSING_BINARY = 127;
  * asks the same question of a hundred and fifty directories, and those are
  * independent I/O-bound subprocesses. Run serially they took 45 seconds.
  */
-async function runAsync(
+export async function runAsync(
   cmd: string[],
   cwd?: string,
   env?: Record<string, string>,
@@ -441,68 +441,6 @@ export async function diskBytesOf(path: string): Promise<number> {
 }
 
 // ------------------------------------------------------------- github
-
-/**
- * What GitHub thinks of a branch, closed and merged PRs included. Reclaiming
- * disk asks whether a branch is *finished with*, and a merged PR is the
- * strongest possible yes. `unknown` covers both "gh could not answer" and "gh
- * is not here", and the reclaim path must never read it as "finished".
- */
-export type PrState = "open" | "merged" | "closed" | "none" | "unknown";
-
-/**
- * Every branch of a repo that has ever had a PR, and what became of it.
- *
- * One call for the whole repo rather than one per branch. Asking per branch
- * meant a network round trip for each of a few dozen worktrees, which is most
- * of what made a scan take minutes.
- *
- * Returns null — not an empty map — when gh could not answer, because the two
- * mean opposite things: an empty map says "this repo has no PRs, so nothing is
- * finished on GitHub", and null says "we do not know". Reading the second as
- * the first is how a reclaim deletes a merged branch's worktree... or worse,
- * decides an open PR's worktree is stale.
- */
-export async function prStatesOf(
-  repoFullName: string,
-  limit = 300,
-): Promise<Map<string, PrState> | null> {
-  if (!repoFullName) return null;
-  const r = await runAsync([
-    "gh", "pr", "list",
-    "--repo", repoFullName,
-    "--state", "all",
-    "--json", "headRefName,state",
-    "--limit", String(limit),
-  ]);
-  if (r.code !== 0) return null;
-
-  let rows: { headRefName?: unknown; state?: unknown }[];
-  try {
-    rows = JSON.parse(r.stdout) as { headRefName?: unknown; state?: unknown }[];
-  } catch {
-    return null;
-  }
-
-  // A branch can carry several PRs over its life. Open outranks everything —
-  // reopening is a thing people do, and reclaiming under an open PR surprises
-  // someone. Merged outranks closed for the same reason in reverse: it is the
-  // stronger statement that the work landed.
-  const rank: Record<string, number> = { OPEN: 3, MERGED: 2, CLOSED: 1 };
-  const best = new Map<string, string>();
-  for (const row of rows) {
-    const branch = typeof row.headRefName === "string" ? row.headRefName : null;
-    if (!branch) continue;
-    const state = String(row.state ?? "").toUpperCase();
-    if ((rank[state] ?? 0) > (rank[best.get(branch) ?? ""] ?? 0)) best.set(branch, state);
-  }
-
-  const out = new Map<string, PrState>();
-  for (const [branch, state] of best) {
-    out.set(branch, state === "OPEN" ? "open" : state === "MERGED" ? "merged" : "closed");
-  }
-  return out;
-}
 
 /** Turn a failed `gh` invocation into something a human can act on. */
 export function ghErrorMessage(r: CmdResult): string {

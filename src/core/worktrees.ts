@@ -8,12 +8,11 @@ import {
   isDirty,
   listWorktreesOf,
   mapPool,
-  prStatesOf,
   removeWorktreeAt,
   repoCheckoutPath,
   SCAN_CONCURRENCY,
-  type PrState,
 } from "./git";
+import { branchStatesOf, type PrState } from "./prs";
 import { worktreeRoot } from "./paths";
 import type { ReclaimResult, Session, WorktreeInfo, WorktreeScan, WorktreeVerdict } from "./types";
 
@@ -147,8 +146,8 @@ interface Candidate {
  * Walk every registered repo and report what is on disk.
  *
  * Two phases, and the split is the whole performance story. Finding the
- * candidates is cheap — one `git worktree list` per repo plus one `gh pr list`
- * per repo, both trivially small. Judging them is not: a `git status`, a `git
+ * candidates is cheap — one `git worktree list` per repo, and what became of
+ * each branch's PR from the PR copy (prs.ts). Judging them is not: a `git status`, a `git
  * rev-list` and a `du` for each of a hundred and fifty directories. Those are
  * independent and I/O-bound, so phase two runs them `SCAN_CONCURRENCY` at a
  * time. Serially the same work took 45 seconds.
@@ -176,10 +175,9 @@ export async function scanWorktrees(scope: WorktreeScope = "all", sessions: Sess
   const repos = listRepos().filter((r) => existsSync(repoCheckoutPath(r)));
   const perRepo = await mapPool(repos, SCAN_CONCURRENCY, async (repo) => {
     const worktrees = listWorktreesOf(repoCheckoutPath(repo));
-    // One gh call for the repo rather than one per branch, and only when it has
-    // a linked worktree to ask about.
+    // Only when it has a linked worktree to ask about.
     const asked = repo.fullName !== null && worktrees.some((w) => !w.isMain && w.branch);
-    const prs = asked ? await prStatesOf(repo.fullName!) : null;
+    const prs = asked ? branchStatesOf(repo.fullName!) : null;
     return { repo, worktrees, asked, prs };
   });
 

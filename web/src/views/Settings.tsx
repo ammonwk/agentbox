@@ -500,8 +500,7 @@ function Repositories({ repos, sessions }: { repos: Repo[]; sessions: AppState["
  * read what is about to go.
  *
  * Nothing on this screen runs on its own. The scan shells out to git several
- * times per worktree and to `gh` once per branch, which is far too expensive to
- * put behind a render.
+ * times per worktree, which is far too expensive to put behind a render.
  */
 function Disk() {
   const [scope, setScope] = useState<"all" | "agentbox">("all");
@@ -595,7 +594,8 @@ function Disk() {
 
       {scan && scan.ghUnavailable && (
         <p className="warn">
-          <Icon.alert size={15} /> <code>gh</code> could not be reached, so no
+          <Icon.alert size={15} /> The pull requests of a repo here are not loaded
+          from GitHub yet (see the warnings if <code>gh</code> is the reason), so no
           branch could be checked for a merged or closed pull request. Only
           worktrees that are clean <em>and</em> have nothing their base branch is
           missing count as safe below.

@@ -32,7 +32,7 @@ import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, write
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getSettings, listRepos, listSchedules, mergeSettings, saveSettings } from "../core/db";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
-import { listPrs } from "../core/prs";
+import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { clearProject, compactProject, ensureProject, followProject, projectState } from "../core/project";
@@ -124,7 +124,8 @@ function hotState(): HotState {
 const slow = {
   prs: [] as PrInfo[],
   skills: [] as SkillInfo[],
-  warnings: [] as string[],
+  skillWarnings: [] as string[],
+  tmuxMissing: false,
   providers: [] as ColdState["providers"],
 };
 
@@ -135,14 +136,32 @@ async function refreshSlow(): Promise<void> {
   const repos = listRepos();
   const skills = listSkills(skillRoots(localRepoDirs(repos)));
   slow.skills = skills.skills;
+  slow.skillWarnings = skills.warnings;
   await detectProviders();
-  // `gh` runs here and nowhere else: one call per repo, once a minute.
-  const prs = listPrs(repos, fleet.sessions());
-  slow.prs = prs.prs;
-  const warnings = [...skills.warnings, ...prs.warnings];
-  if (!tmux.tmuxVersion()) warnings.unshift("tmux is not installed — agentbox runs every session in tmux, so nothing can be started.");
-  slow.warnings = warnings;
+  // From the database: sessions come and go, and which PR is whose with them.
+  slow.prs = openPrs(fleet.sessions());
+  slow.tmuxMissing = !tmux.tmuxVersion();
   scheduleCold();
+}
+
+/** The PR copy (src/core/prs.ts) syncs on its own clock, so a slow GitHub
+ *  never holds up skills or providers. */
+async function refreshPrs(): Promise<void> {
+  const changed = await syncPrs().catch((e: unknown) => {
+    console.error("agentbox: pull requests:", e);
+    return false;
+  });
+  if (!changed) return;
+  slow.prs = openPrs(fleet.sessions());
+  scheduleCold();
+}
+
+function warnings(): string[] {
+  return [
+    ...(slow.tmuxMissing ? ["tmux is not installed — agentbox runs every session in tmux, so nothing can be started."] : []),
+    ...slow.skillWarnings,
+    ...prWarnings(),
+  ];
 }
 
 async function detectProviders(): Promise<void> {
@@ -190,7 +209,7 @@ function coldState(): ColdState {
     skills: slow.skills,
     settings: getSettings(),
     providers: slow.providers,
-    warnings: slow.warnings,
+    warnings: warnings(),
     project: projectState(),
     schedules: listSchedules(),
   };
@@ -742,6 +761,7 @@ const router = new Router(mapError)
       throw new HttpError(400, e.message);
     });
     void refreshSlow();
+    void refreshPrs();
     return json(repo, 201);
   })
   .add("DELETE", "/api/repos/:id", ({ params }) => {
@@ -850,6 +870,8 @@ export async function startServer(): Promise<void> {
   scheduler.start();
   void refreshSlow();
   setInterval(() => void refreshSlow(), SLOW_REFRESH_MS).unref?.();
+  void refreshPrs();
+  setInterval(() => void refreshPrs(), SLOW_REFRESH_MS).unref?.();
   checkBuild();
   setInterval(checkBuild, BUILD_POLL_MS).unref?.();
 

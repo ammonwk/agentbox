@@ -9,22 +9,24 @@
  * once when it is back — late rather than never — and a recurring schedule
  * then carries on from now instead of catching up on every run it missed.
  *
- * "When PR 6644 merges" is a one-time one with no time: its PR is asked about
- * (`gh pr view`) once a minute, and it starts when GitHub says merged — and,
- * for a new worktree, once the merge is in the `origin/<default>` it will be
- * cut from, so the session has it in its history.
+ * "When PR 6644 merges" is a one-time one with no time: its PR is looked up in
+ * the PR copy (prs.ts, synced from GitHub once a minute) and it starts when
+ * that says merged — and, for a new worktree, once the merge is in the
+ * `origin/<default>` it will be cut from, so the session has it in its history.
+ * GitHub is asked directly only once, when the rule is made.
  */
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { deleteSchedule, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
+import { deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
 import { FleetError, newSessionId, type Fleet } from "./fleet";
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
 import { describeRule, isRecurring, nextRun, parseWhen, type ScheduleRule } from "./schedule";
 import type { Schedule, ScheduleSpec } from "./types";
 
 const TICK_MS = 15_000;
-/** How often a PR waited on is asked about: GitHub's rate limit is shared. */
+/** How often a PR waited on is looked at: the copy it reads syncs once a
+ *  minute, and a merge not yet in origin costs a `git fetch` each time. */
 const MERGE_CHECK_MS = 60_000;
 /** No account had room: try again this much later. */
 const RETRY_MS = 10 * 60_000;
@@ -149,25 +151,23 @@ export class Scheduler {
     }
   }
 
-  /** Each PR waited on, asked about once. A retry already set (no account had
+  /** Each PR waited on, looked up once. A retry already set (no account had
    *  room when it merged) is left to the clock. */
   private async checkMerges(now: number): Promise<void> {
     for (const s of listSchedules()) {
       if (!s.enabled || s.rule.kind !== "merge" || s.nextAt !== null) continue;
       const { pr, repo } = s.rule;
       if (!repo) continue;
-      let state: PrState;
-      try {
-        state = await prState(repo, pr);
-      } catch (e) {
-        // GitHub unreachable or gh logged out: say so, keep asking.
-        const message = (e as Error).message;
-        if (s.lastError !== message) {
-          updateSchedule(s.id, { lastError: message });
-          this.changed();
-        }
-        continue;
-      }
+      // Not in the copy yet: a repo only a merge rule tracks is loaded on the
+      // next sync, and one GitHub will not show says so in the warnings.
+      const got = getPr(repo, pr);
+      if (!got) continue;
+      const state: PrState = {
+        state: got.state,
+        title: got.title,
+        baseRefName: got.baseRef,
+        mergeCommit: got.mergeCommit ? { oid: got.mergeCommit } : null,
+      };
       if (state.state === "MERGED") {
         const missing = await notYetIn(s.spec, state);
         if (missing) {
