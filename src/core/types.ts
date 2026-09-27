@@ -7,6 +7,9 @@
  * docs/v2.md is the map of how these relate.
  */
 
+import type { ScheduleRule } from "./schedule";
+export type { ScheduleRule };
+
 // -------------------------------------------------------------- providers
 
 export type ProviderId = "claude" | "codex" | "devin" | "omp";
@@ -120,8 +123,6 @@ export interface BalancerSettings {
   claimIdleMin: number;
   /** A short window this close to resetting is treated as partly fresh. */
   resetHorizonMin: number;
-  /** Leg room within this many points of the best counts as a tie. */
-  tieBand: number;
 }
 
 /** One account, as the balancer saw it when placing a session. */
@@ -143,6 +144,11 @@ export interface Candidate {
   legRoom: number | null;
   /** Weekly points left per hour until the weekly reset. */
   weeklyPerHour: number | null;
+  /** 5-hour points an hour at the pace of the last readings; null when there
+   *  are too few to say. */
+  shortPace: number | null;
+  /** When the 5-hour window runs out at that pace, when that is before it resets. */
+  shortRunsOutAt: number | null;
   outstanding: number;
   /** Room before it is floored at 0 (below zero: how far claims overrun
    *  it); what orders accounts that all have none. -Number.MAX_VALUE when
@@ -682,9 +688,49 @@ export interface ColdState {
   /** Set when something is missing, so the UI can say so instead of failing. */
   warnings: string[];
   project: ProjectState;
+  schedules: Schedule[];
 }
 
 export interface AppState extends HotState, ColdState {}
+
+// ------------------------------------------------------------- schedules
+
+/** What a scheduled session starts with: the new-session request, as asked. */
+export interface ScheduleSpec {
+  provider: ProviderId;
+  cwd?: string;
+  repoId?: string;
+  worktree?: boolean;
+  branch?: string;
+  pr?: number;
+  prompt?: string;
+  model?: string;
+  effort?: string;
+  big?: boolean;
+  /** `auto` or none: the balancer picks when it starts, not when it was asked. */
+  accountId?: string | null;
+}
+
+/**
+ * A session to start later (src/core/scheduler.ts). A one-time one is shown as
+ * a session and starts under its own id, so a link to it keeps working; a
+ * recurring one starts a new session each time.
+ */
+export interface Schedule {
+  id: string;
+  rule: ScheduleRule;
+  spec: ScheduleSpec;
+  label: string | null;
+  /** Off: a recurring one paused, or a one-time one whose start failed. */
+  enabled: boolean;
+  /** The next start; null when there is none coming. */
+  nextAt: number | null;
+  createdAt: number;
+  lastRunAt: number | null;
+  /** The session the last start made. */
+  lastSessionId: string | null;
+  lastError: string | null;
+}
 
 // ----------------------------------------------------------------- health
 

@@ -39,6 +39,7 @@ import {
   listClosedRecords,
   listSessionRecords,
   updateSessionRecord,
+  usageSamplesSince,
   type SessionRecord,
 } from "./db";
 import { createWorktree, run, worktreeForBranch } from "./git";
@@ -166,6 +167,8 @@ export interface SpawnRequest {
   /** The process asking (the CLI, the fleet MCP). A session it runs under
    *  becomes the new session's parent. */
   callerPid?: number;
+  /** Start under this id: a scheduled session keeps the one it was shown under. */
+  id?: string;
 }
 
 export class Fleet extends EventEmitter {
@@ -199,6 +202,11 @@ export class Fleet extends EventEmitter {
   /** Providers whose sessions can wake on another account: the adapter can
    *  move a session, and there is another account to move it to. */
   private movable = new Set<ProviderId>();
+  /** Limit hits already acted on (`continueStalled`): session → the hit's time. */
+  private stallsMoved = new Map<string, number>();
+  /** Sessions waiting out a 5-hour reset: tell them to go on at `at`, if still
+   *  stopped at the hit `hitAt`. */
+  private resumeAfterReset = new Map<string, { hitAt: number; at: number }>();
   /** Home → the account it belongs to (see `owners`), as of the last pass. */
   private owner = new Map<string, string>();
   private coldAfterMs = 60 * 60_000;
@@ -389,6 +397,66 @@ export class Fleet extends EventEmitter {
     this.reapParked(now);
     this.rebuildViews(since, now);
     await this.parkIdle(now, settings.parkIdleMin);
+    this.continueStalled(now);
+  }
+
+  /**
+   * A session that stopped at its account's limit carries on.
+   *
+   * A 5-hour window that resets within `RESET_WAIT_MS` is waited out: moving
+   * costs a cold start and a fresh claim elsewhere, and the window is nearly
+   * back. The session is told to go on a minute after the reset, where it is.
+   *
+   * Otherwise — a weekly limit, or a 5-hour one with more than that to go — it
+   * continues on another account with room: what the "limits reset" button
+   * does, done for you. Only when the balancer's pick is another account, and
+   * never for one that has led an agent team: its teammates run inside it and
+   * would not come back. The move proves the resume before it stops anything
+   * (`wake`).
+   *
+   * Either way only for a fresh hit — a restart does not act on what stalled
+   * hours ago — and once per hit.
+   */
+  private continueStalled(now: number): void {
+    for (const [id, w] of this.resumeAfterReset) {
+      if (now < w.at) continue;
+      this.resumeAfterReset.delete(id);
+      const v = this.views.get(id);
+      // Still stopped at that same hit, and nobody has written to it since.
+      if (!v || v.limitHit?.at !== w.hitAt || v.status !== "waiting" || v.host !== "tmux") continue;
+      console.log(`agentbox: ${id} (${v.title}): its 5-hour window has reset; telling it to carry on`);
+      void this.send(id, "[agentbox: the 5-hour usage limit has reset. Carry on where you left off.]").catch((e) =>
+        console.error(`agentbox: continuing ${id} after its reset failed:`, e),
+      );
+    }
+    for (const v of this.views.values()) {
+      const hit = v.limitHit;
+      if (!hit || now - hit.at > STALL_FRESH_MS || this.stallsMoved.get(v.id) === hit.at) continue;
+      if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
+      const rec = getSessionRecord(v.id);
+      if (!rec) continue;
+      this.stallsMoved.set(v.id, hit.at);
+      const windows = rec.accountId ? this.deps.usage.usageOf(this.ownerOf(rec.accountId))?.windows ?? [] : [];
+      const weekly = weeklyWindow(windows);
+      const short = windows.find((w) => w.kind === "short" && !w.scope);
+      const weeklyOut = !!weekly && weekly.usedPct >= 100 && (weekly.resetsAt === null || weekly.resetsAt > now);
+      if (!weeklyOut && short?.resetsAt && short.resetsAt > now && short.resetsAt - now <= RESET_WAIT_MS) {
+        this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
+        console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
+        continue;
+      }
+      if (!this.movable.has(v.provider)) continue;
+      const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
+      if (t?.facts?.teamsLed?.length) continue;
+      const target = this.wakeTarget(rec, v);
+      if (!target) continue;
+      const from = rec.accountId ? getAccount(rec.accountId)?.label ?? rec.accountId : "its account";
+      const prompt = `[agentbox: ${from} hit its usage limit, so this session moved to ${target.account.label}. Carry on where you left off.]`;
+      console.log(`agentbox: ${v.id} (${v.title}) stopped at its limit on ${from}; continuing it on ${target.account.label}`);
+      void this.serial(v.id, () => this.moveAndContinue(v.id, { accountId: target.account.id, prompt })).catch((e) =>
+        console.error(`agentbox: moving ${v.id} after its limit failed:`, e),
+      );
+    }
   }
 
   private track(adapter: ProviderAdapter, ref: TranscriptRef): void {
@@ -1170,6 +1238,10 @@ export class Fleet extends EventEmitter {
     for (const s of this.views.values()) {
       // A closed session with a process still alive can still spend.
       if (!s.accountId || (s.status === "closed" && s.host === "none")) continue;
+      // A teammate, or a run another session started: the balancer never
+      // placed it and its parent's claim already counts it. What it really
+      // spends shows in the account's measured pace.
+      if (s.parent && s.origin !== "agentbox") continue;
       inputs.push({
         sessionId: s.id,
         accountId: s.accountId,
@@ -1197,14 +1269,25 @@ export class Fleet extends EventEmitter {
     const claims = this.claims();
     const all = listAccounts(provider);
     const owner = owners(all);
+    const since = this.now() - 90 * 60_000;
     return all
       .filter((a) => owner.get(a.id) === a.id)
-      .map((a) => ({
-        account: a,
-        windows: this.deps.usage.usageOf(a.id)?.windows ?? [],
-        outstanding: (claims.get(a.id) ?? []).map((c) => c.outstanding),
-        loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
-      }));
+      .map((a) => {
+        const windows = this.deps.usage.usageOf(a.id)?.windows ?? [];
+        const short = windows.find((w) => w.kind === "short" && !w.scope);
+        return {
+          account: a,
+          windows,
+          // For its pace: how fast the 5-hour window is really filling.
+          shortSamples: short
+            ? usageSamplesSince(since, a.id)
+                .filter((r) => r.windowId === short.id)
+                .map((r) => ({ at: r.at, usedPct: r.usedPct, resetsAt: r.resetsAt }))
+            : [],
+          outstanding: (claims.get(a.id) ?? []).map((c) => c.outstanding),
+          loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
+        };
+      });
   }
 
   placement(provider: ProviderId, big: boolean, model?: string | null, accountId?: string | null): Placement {
@@ -1230,7 +1313,8 @@ export class Fleet extends EventEmitter {
     const account = getAccount(placement.accountId);
     if (!account) throw new FleetError(404, `no account ${placement.accountId}`);
 
-    const id = newSessionId();
+    if (req.id && getSessionRecord(req.id)) throw new FleetError(409, `there is already a session ${req.id}`);
+    const id = req.id ?? newSessionId();
     let cwd = req.cwd ? expandHome(req.cwd) : "";
     let worktree: string | null = null;
     if (req.repoId) {
@@ -1733,6 +1817,12 @@ export class Fleet extends EventEmitter {
 
 /** An idle Claude uses 1–2.5% of a core; more than this per agent over a
  *  minute is work nothing else caught. */
+/** A limit hit older than this is not moved on its own: it stalled before we
+ *  were watching, and its account may well have reset since. */
+const STALL_FRESH_MS = 15 * 60_000;
+/** A 5-hour window resetting within this is waited out, not moved away from. */
+const RESET_WAIT_MS = 60 * 60_000;
+
 const BUSY_CORES_PER_AGENT = 0.1;
 
 /** What a parkable session looked like at one check. */

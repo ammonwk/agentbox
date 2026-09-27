@@ -292,3 +292,70 @@
   font-size: 12.5px;
   font-weight: 650;
 }
+
+/* Scheduled sessions: one per row, its editor folding out under it. */
+.sched-list {
+  list-style: none;
+}
+.sched-item {
+  padding: 10px 0;
+}
+.sched-item + .sched-item {
+  border-top: 1px solid var(--border);
+}
+.sched-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.sched-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+}
+.sched-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 12px;
+  color: var(--info);
+}
+.sched-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+  flex: none;
+}
+.sched-item[data-off] .sched-name,
+.sched-item[data-off] .sched-rule {
+  color: var(--faint);
+}
+.sched-meta {
+  margin: 4px 0 0 46px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sched-item > .error {
+  margin: 6px 0 0 46px;
+}
+.sched-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 12px 0 4px 46px;
+}
+.sched-prompt {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+}
+.sched-edit-actions {
+  display: flex;
+  gap: 8px;
+}

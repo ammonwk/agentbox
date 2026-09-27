@@ -17,6 +17,7 @@ import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
 import { ApiError, apiClient, serverBase } from "../client";
 import * as verbs from "./sessions";
+import * as schedules from "./schedules";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 
 const BASE = serverBase();
@@ -264,6 +265,14 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   stop <id>...          end its process; it stays resumable
   resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not
   label <id> [name]     rename it on the board (no name clears)
+
+scheduled sessions (one-time ones show in the app as sessions; recurring ones in Settings):
+  schedule <when> [--agent claude] [--cwd DIR] [--big] [--account A] [--model M] [--effort E] [--name N] <prompt…|->
+                        start one later, in DIR (default: here). <when> is one quoted
+                        argument: "in 4 hours", "tomorrow at 9am", "friday 5pm",
+                        "every weekday at 8:30", "every 2 hours"
+  schedules [--json]    what is set to start, soonest first
+  unschedule <id>...    delete one; it will not start (sessions it started stay)
   mcp                   run the fleet MCP server on stdio (for a conductor session)
   subagent-mcp          run the omp subagent MCP server on stdio (needs no server)
   doctor                check that everything agentbox needs is present
@@ -304,6 +313,15 @@ export async function main(argv: string[]): Promise<number | null> {
         await ensureServer();
         return await verbs.each(api, cmd, argv.slice(1));
       // The old names, for scripts and agents that learnt them.
+      case "schedule":
+        await ensureServer();
+        return await schedules.schedule(api, argv.slice(1));
+      case "schedules":
+        await ensureServer();
+        return await schedules.list(api, argv.slice(1));
+      case "unschedule":
+        await ensureServer();
+        return await schedules.unschedule(api, argv.slice(1));
       case "archive":
       case "unarchive":
         await ensureServer();

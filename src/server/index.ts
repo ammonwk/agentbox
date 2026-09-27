@@ -28,7 +28,8 @@ import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetric
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
-import { addRepo, deleteRepo, getSettings, listRepos, mergeSettings, saveSettings } from "../core/db";
+import { addRepo, deleteRepo, getSettings, listRepos, listSchedules, mergeSettings, saveSettings } from "../core/db";
+import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { listPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
@@ -85,6 +86,8 @@ export const fleet = new Fleet({
   projectSession: () => projectState().sessionId,
 });
 setMetricsSource(() => fleet.sessions());
+/** Sessions to start later; on the board and in Settings, so cold state. */
+export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** Hands-free mode (src/voice); made once the fleet is up. */
 let voice: VoiceHub;
 
@@ -170,6 +173,7 @@ function coldState(): ColdState {
     providers: slow.providers,
     warnings: slow.warnings,
     project: projectState(),
+    schedules: listSchedules(),
   };
 }
 
@@ -493,6 +497,51 @@ const router = new Router(mapError)
     scheduleHot();
     return json(null);
   })
+  // ----- scheduled sessions (src/core/scheduler.ts)
+  .add("POST", "/api/schedules", async ({ req }) => {
+    const b = await readBody(req);
+    const spec = (b.spec && typeof b.spec === "object" ? b.spec : {}) as Record<string, unknown>;
+    const s = await scheduler.create({
+      when: requireString(b, "when"),
+      label: optionalString(b, "label") ?? null,
+      spec: {
+        provider: provider(spec.provider),
+        cwd: optionalString(spec, "cwd"),
+        repoId: optionalString(spec, "repoId"),
+        worktree: spec.worktree === true,
+        branch: optionalString(spec, "branch"),
+        pr: typeof spec.pr === "number" && Number.isInteger(spec.pr) && spec.pr > 0 ? spec.pr : undefined,
+        prompt: typeof spec.prompt === "string" && spec.prompt.trim() ? spec.prompt : undefined,
+        model: optionalString(spec, "model"),
+        effort: optionalString(spec, "effort"),
+        big: spec.big === true,
+        accountId: optionalString(spec, "accountId") ?? null,
+      },
+    });
+    return json(s, 201);
+  })
+  .add("PATCH", "/api/schedules/:id", async ({ req, params }) => {
+    const b = await readBody(req);
+    const edit: ScheduleEdit = {};
+    if (b.when !== undefined) edit.when = requireString(b, "when");
+    if (b.prompt !== undefined) {
+      if (typeof b.prompt !== "string") throw new HttpError(400, "prompt must be a string");
+      edit.prompt = b.prompt;
+    }
+    if (b.label !== undefined) edit.label = b.label === null ? null : requireString(b, "label");
+    if (b.enabled !== undefined) edit.enabled = requireBoolean(b, "enabled");
+    if (b.repoId !== undefined) edit.repoId = requireString(b, "repoId");
+    return json(await scheduler.update(params.id!, edit));
+  })
+  .add("DELETE", "/api/schedules/:id", ({ params }) => {
+    scheduler.remove(params.id!);
+    return json(null);
+  })
+  .add("POST", "/api/schedules/:id/run", async ({ params }) => {
+    const sessionId = await scheduler.runNow(params.id!);
+    scheduleHot();
+    return json({ sessionId });
+  })
   .add("GET", "/api/sessions/closed", ({ url }) => {
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 30));
@@ -717,6 +766,7 @@ export async function startServer(): Promise<void> {
   await accounts.start();
   fleet.start();
   await fleet.ready;
+  scheduler.start();
   void refreshSlow();
   setInterval(() => void refreshSlow(), SLOW_REFRESH_MS).unref?.();
 
@@ -732,6 +782,7 @@ export async function startServer(): Promise<void> {
   metricsEvents.on("metrics", (state: MetricsState) => broadcast({ type: "metrics", state }));
 
   const stop = () => {
+    scheduler.stop();
     fleet.stop();
     accounts.stop();
     process.exit(0);

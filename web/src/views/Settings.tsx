@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentSettings, AppState, BalancerSettings, ReclaimResult, Repo, WorktreeScan } from "../../../src/core/types";
+import type { AgentSettings, AppState, BalancerSettings, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
+import { describeAt, describeRule, isRecurring } from "../../../src/core/schedule";
 import { api, fmtBytes, healthRows, type Health, type SettingsPatch } from "../api";
-import { PROVIDER_LABEL, PROVIDERS } from "../bits";
-import { Button, CommitInput, Confirm, Empty, Field, Icon, Toggle } from "../components";
+import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
+import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle } from "../components";
 import { BALANCER_HELP } from "../lib/balancer";
 import { hrefOf } from "../route";
+import { WhenField } from "./newsession/WhenField";
+import { scheduleTitle } from "./session/Scheduled";
+import { useAction } from "./session/useAction";
 import "./settings.css";
 
 export function Settings({ state }: { state: AppState }) {
@@ -14,6 +18,7 @@ export function Settings({ state }: { state: AppState }) {
 
   return (
     <div className="settings">
+      <Schedules state={state} />
       <General {...section} />
       <Models {...section} installed={state.providers} />
       <Balancer {...section} />
@@ -47,6 +52,149 @@ function ToggleRow({
     </div>
   );
 }
+
+// --------------------------------------------------------------- schedules
+
+/** Recurring sessions. One-time ones are in the session list, like sessions. */
+function Schedules({ state }: { state: AppState }) {
+  const recurring = state.schedules.filter((s) => isRecurring(s.rule));
+  return (
+    <section className="card" id="schedules">
+      <h3>Scheduled sessions</h3>
+      <p className="hint">
+        Sessions that start on their own, each time a new one. Add one from New session: open the ▾ beside Start, pick{" "}
+        <strong>Schedule…</strong>, and say something like “every weekday at 9am” or “every 2 hours”. One-time ones wait in the
+        session list instead.
+      </p>
+      {recurring.length === 0 ? (
+        <Empty title="Nothing recurring yet">Schedule one from New session and it is listed here, to pause, change or delete.</Empty>
+      ) : (
+        <ul className="sched-list">
+          {recurring.map((sc) => (
+            <ScheduleItem key={sc.id} sc={sc} state={state} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
+  const { run, busy, error, clear } = useAction();
+  const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [label, setLabel] = useState(sc.label ?? "");
+  const [when, setWhen] = useState(describeRule(sc.rule));
+  const [prompt, setPrompt] = useState(sc.spec.prompt ?? "");
+  const repo = sc.spec.repoId ? state.repos.find((r) => r.id === sc.spec.repoId) : null;
+  const where = repo ? repo.displayName : sc.spec.cwd ?? "";
+  const startEdit = () => {
+    setLabel(sc.label ?? "");
+    setWhen(describeRule(sc.rule));
+    setPrompt(sc.spec.prompt ?? "");
+    clear();
+    setEditing(true);
+  };
+  const save = () =>
+    void run(async () => {
+      await api.patchSchedule(sc.id, {
+        ...(label.trim() !== (sc.label ?? "") ? { label: label.trim() || null } : {}),
+        ...(when.trim() !== describeRule(sc.rule) ? { when } : {}),
+        ...(prompt !== (sc.spec.prompt ?? "") ? { prompt } : {}),
+      });
+      setEditing(false);
+    });
+
+  return (
+    <li className="sched-item" data-off={!sc.enabled || undefined}>
+      <div className="sched-row">
+        <Toggle
+          checked={sc.enabled}
+          label={sc.enabled ? "On" : "Paused"}
+          labelHidden
+          disabled={busy}
+          onChange={(on) => void run(() => api.patchSchedule(sc.id, { enabled: on }))}
+        />
+        <ProviderBadge provider={sc.spec.provider} short />
+        <span className="sched-name" title={sc.spec.prompt}>
+          {scheduleTitle(sc)}
+        </span>
+        <span className="sched-rule">
+          <Icon.repeat size={12} /> {describeRule(sc.rule)}
+        </span>
+        <span className="sched-actions">
+          <Button size="sm" icon={Icon.play} disabled={busy} title="Start one now; the schedule carries on as it was" onClick={() => void run(() => api.runSchedule(sc.id))}>
+            Run now
+          </Button>
+          <Button size="sm" icon={Icon.edit} disabled={busy} aria-label={`Edit ${scheduleTitle(sc)}`} onClick={() => (editing ? setEditing(false) : startEdit())} />
+          <Button size="sm" variant="danger" icon={Icon.trash} disabled={busy} aria-label={`Delete ${scheduleTitle(sc)}`} onClick={() => setConfirming(true)} />
+        </span>
+      </div>
+      <p className="sched-meta">
+        {sc.enabled && sc.nextAt ? <>Next {lowerFirst(describeAt(sc.nextAt))}</> : "Paused"}
+        {where ? <> · <span className="mono">{where}</span></> : null}
+        {sc.lastRunAt ? (
+          <>
+            {" "}
+            · last ran <RelativeTime ts={sc.lastRunAt} />
+            {sc.lastSessionId && !sc.lastError ? (
+              <>
+                {" "}
+                (<a href={hrefOf({ page: "session", id: sc.lastSessionId, tab: "terminal" })}>{sc.lastSessionId}</a>)
+              </>
+            ) : null}
+          </>
+        ) : null}
+      </p>
+      {sc.lastError ? (
+        <p className="error" role="alert">
+          Last time it did not start: {sc.lastError}
+        </p>
+      ) : null}
+      {editing ? (
+        <div className="sched-edit">
+          <label className="field">
+            <span className="field-label">Name</span>
+            <input className="input" value={label} placeholder={scheduleTitle({ ...sc, label: null })} onChange={(e) => setLabel(e.target.value)} />
+          </label>
+          <WhenField value={when} onChange={setWhen} />
+          <label className="field">
+            <span className="field-label">Prompt</span>
+            <textarea className="sched-prompt" value={prompt} rows={6} onChange={(e) => setPrompt(e.target.value)} />
+          </label>
+          <div className="sched-edit-actions">
+            <Button variant="primary" disabled={busy || !prompt.trim()} onClick={save}>
+              Save
+            </Button>
+            <Button disabled={busy} onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {confirming ? (
+        <Confirm
+          title={`Delete “${scheduleTitle(sc)}”?`}
+          confirmLabel="Delete"
+          danger
+          body={<p>It stops starting new sessions. Sessions it already started are not touched.</p>}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            void run(() => api.deleteSchedule(sc.id));
+          }}
+        />
+      ) : null}
+    </li>
+  );
+}
+
+const lowerFirst = (s: string) => (/^(Today|Tomorrow)/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
 // ----------------------------------------------------------------- general
 

@@ -1,0 +1,40 @@
+/* The When field (WhenField.tsx): in the new-session dialog, a scheduled
+   session's page and Settings. */
+.ns-when input {
+  width: 100%;
+}
+.ns-when-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ns-chip {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ns-chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.ns-chip[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.ns-when-read {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ns-when-read[data-state="error"] {
+  color: var(--danger);
+}
+.ns-when-read[data-state="once"],
+.ns-when-read[data-state="repeat"] {
+  color: var(--text);
+}

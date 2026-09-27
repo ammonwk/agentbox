@@ -12,6 +12,7 @@ import type {
   Candidate,
   ProviderId,
   Repo,
+  Schedule,
   TokenTotals,
   UsageWindow,
 } from "./types";
@@ -180,6 +181,21 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE sessions ADD COLUMN parked_at INTEGER;`,
   // 7 — the teammates stopped with it, JSON; told to it when it resumes.
   `ALTER TABLE sessions ADD COLUMN parked_mates TEXT;`,
+  // 8 — sessions to start later (src/core/scheduler.ts). `rule` and `spec` are JSON.
+  `
+  CREATE TABLE schedules (
+    id              TEXT PRIMARY KEY,
+    rule            TEXT NOT NULL,
+    spec            TEXT NOT NULL,
+    label           TEXT,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    next_at         INTEGER,
+    created_at      INTEGER NOT NULL,
+    last_run_at     INTEGER,
+    last_session_id TEXT,
+    last_error      TEXT
+  );
+  `,
 ];
 
 function migrate(d: Database) {
@@ -409,6 +425,88 @@ export function listClosedRecords(): SessionRecord[] {
     .query("SELECT * FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC")
     .all() as SessionRow[];
   return rows.map(rowToRecord);
+}
+
+// -------------------------------------------------------------- schedules
+
+type ScheduleRow = {
+  id: string; rule: string; spec: string; label: string | null; enabled: number; next_at: number | null;
+  created_at: number; last_run_at: number | null; last_session_id: string | null; last_error: string | null;
+};
+
+function rowToSchedule(r: ScheduleRow): Schedule {
+  return {
+    id: r.id,
+    rule: parseJson(r.rule) as Schedule["rule"],
+    spec: parseJson(r.spec) as Schedule["spec"],
+    label: r.label,
+    enabled: r.enabled === 1,
+    nextAt: r.next_at,
+    createdAt: r.created_at,
+    lastRunAt: r.last_run_at,
+    lastSessionId: r.last_session_id,
+    lastError: r.last_error,
+  };
+}
+
+const SCHEDULE_COLUMNS = {
+  rule: "rule",
+  spec: "spec",
+  label: "label",
+  enabled: "enabled",
+  nextAt: "next_at",
+  createdAt: "created_at",
+  lastRunAt: "last_run_at",
+  lastSessionId: "last_session_id",
+  lastError: "last_error",
+} as const satisfies Record<Exclude<keyof Schedule, "id">, string>;
+
+type ScheduleKey = keyof typeof SCHEDULE_COLUMNS;
+
+function scheduleToSql(key: ScheduleKey, value: unknown): string | number | null {
+  if (value === undefined || value === null) return null;
+  if (key === "rule" || key === "spec") return JSON.stringify(value);
+  if (typeof value === "boolean") return value ? 1 : 0;
+  return value as string | number;
+}
+
+/** The soonest first; those with nothing coming last. */
+export function listSchedules(): Schedule[] {
+  const rows = getDb()
+    .query("SELECT * FROM schedules ORDER BY next_at IS NULL, next_at, created_at")
+    .all() as ScheduleRow[];
+  return rows.map(rowToSchedule);
+}
+
+export function getSchedule(id: string): Schedule | null {
+  const row = getDb().query("SELECT * FROM schedules WHERE id = ?").get(id) as ScheduleRow | null;
+  return row ? rowToSchedule(row) : null;
+}
+
+export function insertSchedule(s: Schedule): void {
+  const keys = Object.keys(SCHEDULE_COLUMNS) as ScheduleKey[];
+  const cols = ["id", ...keys.map((k) => SCHEDULE_COLUMNS[k])];
+  getDb().run(
+    `INSERT INTO schedules (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
+    [s.id, ...keys.map((k) => scheduleToSql(k, s[k]))],
+  );
+}
+
+export function updateSchedule(id: string, patch: Partial<Schedule>): void {
+  const sets: string[] = [];
+  const vals: (string | number | null)[] = [];
+  for (const key of Object.keys(patch) as (keyof Schedule)[]) {
+    if (key === "id" || !(key in SCHEDULE_COLUMNS)) continue;
+    const k = key as ScheduleKey;
+    sets.push(`${SCHEDULE_COLUMNS[k]} = ?`);
+    vals.push(scheduleToSql(k, patch[key]));
+  }
+  if (sets.length === 0) return;
+  getDb().run(`UPDATE schedules SET ${sets.join(", ")} WHERE id = ?`, [...vals, id]);
+}
+
+export function deleteSchedule(id: string): void {
+  getDb().run("DELETE FROM schedules WHERE id = ?", [id]);
 }
 
 // ---------------------------------------------------------------- metrics
@@ -675,7 +773,6 @@ export const DEFAULT_BALANCER: BalancerSettings = {
   shortWindowInWeekly: 24,
   claimIdleMin: 60,
   resetHorizonMin: 60,
-  tieBand: 10,
 };
 
 export const DEFAULT_SETTINGS: AgentSettings = {

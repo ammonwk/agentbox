@@ -4,13 +4,48 @@
 /* ------------------------------------------------------------------ layout */
 
 .sv {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
 }
 .sv[data-rail="on"] {
-  grid-template-columns: 264px minmax(0, 1fr);
+  grid-template-columns: var(--rail-w, 264px) minmax(0, 1fr);
+}
+/* The list's right edge: a few pixels either side of the border to grab. */
+.rail-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--rail-w, 264px) - 4px);
+  z-index: 5;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.rail-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.rail-resize:hover::after,
+.rail-resize:focus-visible::after,
+.rail-resize[data-dragging]::after {
+  background: var(--accent);
+}
+.rail-resize:focus-visible {
+  outline: none;
+}
+/* No text selection, and the resize cursor everywhere, while dragging. */
+.sv:has(.rail-resize[data-dragging]) {
+  cursor: col-resize;
+  user-select: none;
 }
 /* With nothing open on a narrow screen, the list is the page. */
 .sv[data-rail="full"] .rail {
@@ -376,6 +411,26 @@
   color: var(--faint);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+/* CPU over memory, for the session's whole process tree. The column keeps
+   its width when empty, so the times stay in line. */
+.rail-load {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: 30px;
+  font-size: 9px;
+  line-height: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rail-load[data-idle] {
+  color: var(--faint);
+}
+.rail-load[data-hot] > :first-child {
+  color: var(--warning);
 }
 /* Close from the list: the ✕ takes the time's place under the pointer. Not on
    touch screens, which have no hover to reveal it. */
@@ -1452,4 +1507,99 @@
     gap: 6px;
     padding: 0 8px 6px;
   }
+}
+
+/* ------------------------------------------------ scheduled (Scheduled.tsx) */
+
+.rail-sec[data-kind="scheduled"] .rail-label {
+  color: var(--info);
+}
+.rail-sched-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 10px;
+  color: var(--info);
+}
+.rail-sched[data-failed] .rail-sched-icon {
+  color: var(--danger);
+}
+.rail-sched .rail-title {
+  color: var(--muted);
+}
+.rail-sched[aria-current="page"] .rail-title {
+  color: var(--text);
+}
+.pill-scheduled {
+  color: var(--info);
+}
+.sd-title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 650;
+}
+.sd-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 760px;
+  padding: 20px 24px 32px;
+}
+.sd-failed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: 13px;
+}
+.sd-prompt {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.sd-save {
+  display: flex;
+  gap: 8px;
+  margin-top: -6px;
+}
+.sd-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.sd-facts dt {
+  color: var(--faint);
+}
+.sd-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sd-repo {
+  margin-right: 6px;
+  padding: 2px 6px;
+  font-size: 13px;
+}
+.sd-facts .sd-repo {
+  width: auto;
+  max-width: 260px;
 }

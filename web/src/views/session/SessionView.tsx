@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import type { AppState, ProviderId } from "../../../../src/core/types";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
 import {
   AccountChip,
@@ -13,7 +13,9 @@ import {
 import { Button, Confirm, Empty, Icon } from "../../components";
 import { filterSessions, neighbourId, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
-import { closeNow, forget, useClosing } from "./closing";
+import { closeNow, forget, hideWhile, useClosing } from "./closing";
+import { ScheduledDetail, scheduleTitle } from "./Scheduled";
+import { isRecurring } from "../../../../src/core/schedule";
 import { hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
 import { DiffPanel } from "./DiffPanel";
@@ -59,7 +61,9 @@ export function SessionView({
   // fetches, or is looked up by id for a link straight to it.
   const [, found] = useState(0);
   const session = id ? state.sessions.find((s) => s.id === id) ?? closedSessions.get(id) ?? null : null;
-  const missing = !!id && !session;
+  // Not started yet: the same id, before there is a session under it.
+  const sched = id && !session ? state.schedules.find((s) => s.id === id && !isRecurring(s.rule)) ?? null : null;
+  const missing = !!id && !session && !sched;
   useEffect(() => {
     if (!missing || !id) return;
     let live = true;
@@ -95,6 +99,31 @@ export function SessionView({
     return sectionsOf(rows, (x) => open.has(x) || above.has(x), sort);
   }, [state.sessions, state.project.sessionId, session?.parent, filter, sort, open, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
+  const scheduled = useMemo(() => {
+    const q = filter.query.trim().toLowerCase();
+    return state.schedules
+      .filter((s) => !isRecurring(s.rule) && !closing.has(s.id))
+      .filter((s) => !q || `${s.label ?? ""} ${s.spec.prompt ?? ""} ${s.id}`.toLowerCase().includes(q))
+      .sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity));
+  }, [state.schedules, filter.query, closing]);
+  const cancelSchedule = (sc: Schedule) => {
+    hideWhile(sc.id, scheduleTitle(sc), "cancel", api.deleteSchedule(sc.id));
+    if (sc.id !== id) return;
+    const next = scheduled.find((s) => s.id !== sc.id)?.id ?? ordered[0]?.id;
+    if (next) onOpen(next);
+    else location.hash = hrefOf({ page: "sessions" });
+  };
+
+  // Closing the open one opens the row that takes its place: the one below
+  // it, or the one above at the bottom of the list.
+  const close = (s: SessionRow) => {
+    const i = ordered.findIndex((x) => x.id === s.id);
+    const next = i === -1 ? null : (ordered[i + 1] ?? ordered[i - 1] ?? null);
+    closeNow(s.id, titleOf(s));
+    if (s.id !== id) return;
+    if (next) onOpen(next.id);
+    else location.hash = hrefOf({ page: "sessions" });
+  };
 
   // j/k switch sessions and ←/→ fold, from anywhere that is not a text field
   // or the terminal; 1–4 pick a tab.
@@ -130,13 +159,17 @@ export function SessionView({
     return () => removeEventListener("keydown", onKey);
   });
 
+  const [railW, setRailW] = useRailWidth();
   const showRail = !narrow || !id;
   const showMain = !narrow || !!id;
   return (
-    <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"}>
-      {showRail ? <Rail sections={sections} state={state} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} /> : null}
+    <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
+      {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
+      {showRail ? <Rail sections={sections} state={state} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
       {!showMain ? null : session ? (
-        <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} />
+        <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
+      ) : sched ? (
+        <ScheduledDetail key={sched.id} sc={sched} state={state} onCancel={cancelSchedule} />
       ) : id ? (
         <div className="sv-main">
           <Empty title="No such session" action={<a className="btn" href={hrefOf({ page: "sessions" })}>Back to sessions</a>}>
@@ -148,7 +181,7 @@ export function SessionView({
         </div>
       ) : (
         <div className="sv-main sv-none">
-          {state.sessions.length === 0 ? (
+          {state.sessions.length === 0 && scheduled.length === 0 ? (
             <Empty
               title="No sessions yet"
               action={
@@ -169,6 +202,79 @@ export function SessionView({
   );
 }
 
+// ------------------------------------------------------------ rail width
+
+const RAIL_W_KEY = "agentbox.railWidth";
+const RAIL_W = 264;
+const clampRail = (w: number) => Math.round(Math.max(200, Math.min(w, 640, innerWidth * 0.6)));
+
+/** The list's width, as you last dragged it. */
+function useRailWidth(): [number, (w: number, save?: boolean) => void] {
+  const [w, setW] = useState(() => {
+    const v = Number(localStorage.getItem(RAIL_W_KEY));
+    return v > 0 ? clampRail(v) : RAIL_W;
+  });
+  const set = (next: number, save = true) => {
+    const c = clampRail(next);
+    setW(c);
+    if (!save) return;
+    if (c === RAIL_W) localStorage.removeItem(RAIL_W_KEY);
+    else localStorage.setItem(RAIL_W_KEY, String(c));
+  };
+  return [w, set];
+}
+
+/**
+ * The list's right edge, draggable. Double-click puts it back; ← → nudge it
+ * when focused. Saved when the drag ends, not on every move.
+ */
+function RailResizer({ width, onWidth }: { width: number; onWidth: (w: number, save?: boolean) => void }) {
+  const drag = useRef<{ x: number; w: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  return (
+    <div
+      className="rail-resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the session list"
+      aria-valuenow={width}
+      tabIndex={0}
+      title="Drag to resize · double-click to reset"
+      data-dragging={dragging || undefined}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { x: e.clientX, w: width };
+        setDragging(true);
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        if (d) onWidth(d.w + e.clientX - d.x, false);
+      }}
+      onPointerUp={(e) => {
+        const d = drag.current;
+        if (!d) return;
+        drag.current = null;
+        setDragging(false);
+        onWidth(d.w + e.clientX - d.x);
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
+        setDragging(false);
+      }}
+      onDoubleClick={() => onWidth(RAIL_W)}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        // Not the page's h/l, j/k handling: this is a control of its own.
+        e.stopPropagation();
+        onWidth(width + (e.key === "ArrowLeft" ? -16 : 16));
+      }}
+    />
+  );
+}
+
 // ------------------------------------------------------------------ detail
 
 function Detail({
@@ -176,20 +282,18 @@ function Detail({
   state,
   tab,
   onTab,
+  onClose,
 }: {
   session: SessionRow;
   state: AppState;
   tab: SessionTab;
   onTab: (t: SessionTab) => void;
+  onClose: (s: SessionRow) => void;
 }) {
   const { run, busy, error, clear } = useAction();
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
-  const close = () => {
-    closeNow(session.id, titleOf(session));
-    // Gone from the list: back to the empty pane, not a view of what you just closed.
-    location.hash = hrefOf({ page: "sessions" });
-  };
+  const close = () => onClose(session);
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
   // listPrs matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;

@@ -43,8 +43,11 @@ import type {
   TimelinePage,
   UsageWindow,
   WorktreeScan,
+  Schedule,
+  ScheduleSpec,
 } from "../../src/core/types";
 import type { TermChannel, TermHandlers } from "./api";
+import { nextRun, parseWhen } from "../../src/core/schedule";
 
 const M = 60_000;
 const H = 60 * M;
@@ -66,7 +69,6 @@ const settings: AgentSettings = {
     shortWindowInWeekly: 24,
     claimIdleMin: 60,
     resetHorizonMin: 60,
-    tieBand: 10,
   },
 };
 
@@ -233,6 +235,20 @@ let logins: LoginFlow[] = [
 ];
 
 // ------------------------------------------------------------- repos etc
+
+const schedules: Schedule[] = [
+  {
+    id: "s9x4", rule: { kind: "once", at: T0 + 3 * H }, label: null, enabled: true, nextAt: T0 + 3 * H, createdAt: T0 - 20 * M,
+    spec: { provider: "claude", repoId: "r-agentbox", worktree: true, prompt: "Re-run the balancer calibration once tonight's usage samples are in, and open a PR if the suggested claims moved." },
+    lastRunAt: null, lastSessionId: null, lastError: null,
+  },
+  {
+    id: "d7w2", rule: { kind: "weekly", days: [1, 2, 3, 4, 5], minute: 9 * 60 }, label: "Morning PR sweep", enabled: true,
+    nextAt: nextRun({ kind: "weekly", days: [1, 2, 3, 4, 5], minute: 9 * 60 }, T0), createdAt: T0 - 6 * 24 * H,
+    spec: { provider: "claude", repoId: "r-agentbox", worktree: false, prompt: "Go through open PRs: rebase what is stale, answer review comments, and list what needs me." },
+    lastRunAt: T0 - 24 * H, lastSessionId: "k9d1", lastError: null,
+  },
+];
 
 const repos: Repo[] = [
   { id: "r-agentbox", ref: `${HOME}/Documents/agentbox`, kind: "local", displayName: "agentbox", fullName: "you/agentbox", defaultBranch: "v2", addedAt: T0 - 90 * D },
@@ -499,6 +515,8 @@ function candidateFor(a: MockAccount, big: boolean, now: number): Candidate {
     weekly,
     weeklyEffective,
     weeklyResetsAt: weeklyW?.resetsAt ?? null,
+    shortPace: null,
+    shortRunsOutAt: null,
     short,
     shortEffective,
     shortResetsAt: shortW?.resetsAt ?? null,
@@ -562,8 +580,8 @@ function placementFor(provider: ProviderId, big: boolean, manual?: string): Plac
   const second = [...candidates].filter((c) => c.eligible && c.accountId !== best.accountId).sort((a, b) => b.score - a.score)[0];
   const why =
     provider === "claude" && best.legRoom != null
-      ? second && second.legRoom != null && Math.abs(second.legRoom - best.legRoom) <= settings.balancer.tieBand
-        ? `${best.label} and ${second.label} are within ${settings.balancer.tieBand} points of 5-hour room; ${best.label} has more weekly left per hour until its reset.`
+      ? second && second.legRoom != null && best.legRoom >= 12.5 && second.legRoom >= 12.5
+        ? `${best.label} has the most weekly to use before it resets, and room in its 5-hour window.`
         : `${best.label} has the most 5-hour room after claims (${Math.round(best.legRoom)} vs ${second?.legRoom != null ? Math.round(second.legRoom) : "—"}).`
       : `${best.label} has the most weekly left per hour until its reset (${best.weeklyPerHour?.toFixed(2)}/h).`;
   return { provider, accountId: best.accountId, mode: "auto", big, claim, candidates, why };
@@ -602,6 +620,7 @@ function cold(): ColdState {
     ],
     warnings: [],
     project: { provider: "claude", sessionId: null, canCompact: true },
+    schedules: structuredClone(schedules),
   };
 }
 
@@ -1002,6 +1021,41 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   if (head === "placement") {
     const x = body<{ provider: ProviderId; big: boolean }>(b);
     return placementFor(x.provider ?? "claude", !!x.big);
+  }
+
+  if (head === "schedules") {
+    const x = body<{ when: string; spec: ScheduleSpec; label: string | null; prompt: string; enabled: boolean }>(b);
+    const rule = (when: string) => {
+      const p = parseWhen(when, Date.now());
+      if ("error" in p) throw new Error(p.error);
+      return p.rule;
+    };
+    if (!id) {
+      const r = rule(x.when ?? "");
+      const sc: Schedule = {
+        id: Math.random().toString(36).slice(2, 6), rule: r, spec: x.spec!, label: x.label ?? null, enabled: true,
+        nextAt: nextRun(r, Date.now()), createdAt: Date.now(), lastRunAt: null, lastSessionId: null, lastError: null,
+      };
+      schedules.push(sc);
+      pushCold();
+      return sc;
+    }
+    const i = schedules.findIndex((z) => z.id === id);
+    if (i === -1) throw new Error(`no scheduled session ${id}`);
+    const sc = schedules[i]!;
+    if (method === "DELETE") schedules.splice(i, 1);
+    else if (action === "run") {
+      if (sc.rule.kind === "once") schedules.splice(i, 1);
+      else sc.lastRunAt = Date.now();
+    } else {
+      if (x.when !== undefined) sc.rule = rule(x.when);
+      if (x.prompt !== undefined) sc.spec = { ...sc.spec, prompt: x.prompt || undefined };
+      if (x.label !== undefined) sc.label = x.label;
+      if (x.enabled !== undefined) sc.enabled = x.enabled;
+      sc.nextAt = sc.enabled ? nextRun(sc.rule, Date.now()) : null;
+    }
+    pushCold();
+    return action === "run" ? { sessionId: id } : method === "DELETE" ? null : sc;
   }
 
   if (head === "sessions" && !id) {

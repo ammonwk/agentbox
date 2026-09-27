@@ -21,5 +21,4 @@ export const BALANCER_HELP: Record<keyof BalancerSettings, { label: string; unit
     unit: "min",
     help: "A 5-hour window this close to resetting counts as partly fresh.",
   },
-  tieBand: { label: "Tie band", unit: "pts", help: "Accounts within this much 5-hour room of the best (at most half the best's room) are tied; ties go to weekly left per hour." },
 };

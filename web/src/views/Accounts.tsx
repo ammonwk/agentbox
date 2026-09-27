@@ -360,9 +360,14 @@ function AccountCard({
           {c.eligible ? (
             <span>
               Balancer: <strong>eligible</strong>
-              {c.legRoom != null ? <> · room {fmtPts(c.legRoom)}</> : null}
+              {c.legRoom != null ? <> · 5-hour room {fmtPts(c.legRoom)}</> : null}
+              {c.shortPace != null ? (
+                <span title="How fast its 5-hour window has been filling over the last 45 minutes, in that window's percent an hour">
+                  {" "}
+                  · filling {fmtPts(c.shortPace)}%/h
+                </span>
+              ) : null}
               {c.weeklyPerHour != null ? <> · {c.weeklyPerHour.toFixed(2)} wk/h left</> : null}
-              {c.legRoom != null ? <> · score {c.score.toFixed(1)}</> : null}
             </span>
           ) : (
             <span>

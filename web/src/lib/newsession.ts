@@ -188,10 +188,13 @@ export function parseWorktreeRef(text: string, prs: readonly PrInfo[]): Worktree
 }
 
 /**
- * The PRs a prompt names, once each, in order: `#6759`, `PR 6759`, a pull
- * URL of this repo, or a bare number — the last only when it is one of the
- * repo's open PRs (a bare four-digit number is as often a port or a count),
- * or when the PR list is unknown.
+ * The PRs a prompt names, once each, in order: `PR 6759`, a pull URL of this
+ * repo, or `#6759` or a bare number that is one of the repo's open PRs.
+ *
+ * Stricter than the links in agent output (prlinks.ts), because this one acts:
+ * it picks the branch the session starts on. Issues share PRs' numbering, so
+ * "read issue #6724" is not a PR, and a `#` alone is not enough to guess one —
+ * a wrong guess fails the start on a branch that does not exist.
  */
 export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string | null): number[] {
   const out: number[] = [];
@@ -204,8 +207,10 @@ export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string
   }
   const known = new Set(prs.map((p) => p.number));
   for (const r of prRefs(text)) {
-    const bare = /^\d/.test(text.slice(r.start, r.end));
-    if (bare && prs.length > 0 && !known.has(r.number)) continue;
+    const explicit = /^pr/i.test(text.slice(r.start, r.end));
+    const before = text.slice(Math.max(0, r.start - 16), r.start);
+    if (/\b(issues?|tickets?|bugs?|tasks?|stor(y|ies))\s*$/i.test(before)) continue;
+    if (!explicit && !known.has(r.number)) continue;
     found.push({ at: r.start, n: r.number });
   }
   for (const f of found.sort((a, b) => a.at - b.at)) add(f.n);

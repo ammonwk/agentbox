@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppState, ModelOption, Placement, PrInfo, ProviderId } from "../../../src/core/types";
+import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Schedule } from "../../../src/core/types";
+import { parseWhen } from "../../../src/core/schedule";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
 import { AttachButton, useAttachments } from "../attachments";
@@ -21,6 +22,8 @@ import { ModelPicker } from "./newsession/ModelPicker";
 import { EffortPicker } from "./newsession/EffortPicker";
 import { PromptBox } from "./newsession/PromptBox";
 import { WorktreeField } from "./newsession/WorktreeField";
+import { WhenField } from "./newsession/WhenField";
+import { useDismiss, useFloating } from "./newsession/popover";
 import "./newsession.css";
 
 /**
@@ -33,10 +36,12 @@ export function NewSession({
   state,
   onClose,
   onCreated,
+  onScheduled,
 }: {
   state: AppState;
   onClose: () => void;
   onCreated: (id: string) => void;
+  onScheduled: (s: Schedule) => void;
 }) {
   const [prefs] = useState<NewSessionPrefs>(loadPrefs);
   const installed = state.providers.filter((p) => p.installed).map((p) => p.id);
@@ -70,6 +75,13 @@ export function NewSession({
   const [catalog, setCatalog] = useState<ModelOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Start it now, or later: the ▾ beside Start switches. */
+  const [mode, setMode] = useState<"now" | "schedule">("now");
+  const [when, setWhen] = useState("");
+  const whenRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (mode === "schedule") whenRef.current?.focus();
+  }, [mode]);
 
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const images = useAttachments({ text: prompt, setText: setPrompt, textareaRef: promptRef, initial: prefs.draftImages });
@@ -184,7 +196,11 @@ export function NewSession({
 
   const noEligible = !manual && placement?.mode === "none";
   const whereOk = where === "repo" ? !!repoId : path.trim().length > 0;
-  const canSubmit = whereOk && !busy && !noEligible && installed.includes(provider);
+  // Later, the balancer places it when it starts: no account with room now is
+  // not a reason not to schedule it.
+  const whenOk = mode === "now" || (!!when.trim() && !("error" in parseWhen(when)));
+  const canSubmit =
+    whereOk && !busy && installed.includes(provider) && (mode === "now" ? !noEligible : whenOk && prompt.trim().length > 0);
 
   async function submit() {
     if (!canSubmit) return;
@@ -214,6 +230,12 @@ export function NewSession({
       accountId,
     };
     try {
+      if (mode === "schedule") {
+        const sc = await api.createSchedule({ when, spec: input });
+        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider });
+        onScheduled(sc);
+        return;
+      }
       const r = await api.createSession(input);
       savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider });
       onCreated(r.session.id);
@@ -224,7 +246,6 @@ export function NewSession({
   }
 
   const defaultModel = state.settings.models[provider] ? `Default (${state.settings.models[provider]})` : `${PROVIDER_LABEL[provider]}'s default`;
-  const landing = manual ?? accounts.find((a) => a.id === placement?.accountId) ?? null;
 
   return (
     <Modal title="New session" onClose={onClose} wide>
@@ -336,7 +357,7 @@ export function NewSession({
           <label className="field-head ns-prompt-head" htmlFor="ns-prompt">
             <span className="field-label">Prompt</span>
             <span className="field-hint">
-              Optional. <kbd>/</kbd> for skills{skills.length ? ` (${skills.length})` : ""}, paste images.
+              {mode === "schedule" ? "Needed to schedule." : "Optional."} <kbd>/</kbd> for skills{skills.length ? ` (${skills.length})` : ""}, paste images.
               <AttachButton a={images} />
               {prompt ? (
                 <button type="button" className="ns-linkbtn" onClick={() => setPrompt("")}>
@@ -390,6 +411,8 @@ export function NewSession({
           </label>
         </div>
 
+        {mode === "schedule" ? <WhenField value={when} onChange={setWhen} inputRef={whenRef} /> : null}
+
         {error ? (
           <p className="error-line" role="alert">
             {error}
@@ -398,16 +421,80 @@ export function NewSession({
 
         <div className="modal-actions">
           <span className="ns-foot-hint faint">
-            <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start
+            {mode === "schedule" && !prompt.trim() ? (
+              "A scheduled session needs a prompt"
+            ) : (
+              <>
+                <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to {mode === "now" ? "start" : "schedule"}
+              </>
+            )}
           </span>
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary" icon={Icon.play} loading={busy} disabled={!canSubmit}>
-            Start {PROVIDER_LABEL[provider]}
-            {landing ? <span className="ns-start-on"> on {landing.label}</span> : null}
-          </Button>
+          <StartButton mode={mode} onMode={setMode} busy={busy} disabled={!canSubmit} />
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** Start, with a ▾ beside it for Schedule. */
+function StartButton({
+  mode,
+  onMode,
+  busy,
+  disabled,
+}: {
+  mode: "now" | "schedule";
+  onMode: (m: "now" | "schedule") => void;
+  busy: boolean;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  useDismiss(open, () => setOpen(false), [wrap, menu]);
+  const style = useFloating(wrap, open, 200, 250, "end");
+  const pick = (m: "now" | "schedule") => {
+    onMode(m);
+    setOpen(false);
+  };
+  return (
+    <div className="ns-split" ref={wrap} data-busy={busy || undefined}>
+      <Button type="submit" variant="primary" icon={mode === "now" ? Icon.play : Icon.clock} loading={busy} disabled={disabled}>
+        {mode === "now" ? "Start" : "Schedule"}
+      </Button>
+      <button
+        type="button"
+        className="ns-split-caret"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Start now or schedule for later"
+        title="Start now or schedule for later"
+        disabled={busy}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon.chevronDown size={12} />
+      </button>
+      {open ? (
+        <div className="ns-split-menu" role="menu" ref={menu} style={style}>
+          {(
+            [
+              ["now", Icon.play, "Start now", "Starts as soon as you click."],
+              ["schedule", Icon.clock, "Schedule…", "Later, or every so often."],
+            ] as const
+          ).map(([m, Glyph, title, sub]) => (
+            <button key={m} type="button" role="menuitemradio" aria-checked={mode === m} onClick={() => pick(m)}>
+              <Glyph size={14} />
+              <span>
+                <strong>{title}</strong>
+                <span>{sub}</span>
+              </span>
+              <span className="ns-split-check">{mode === m ? <Icon.check size={13} /> : null}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

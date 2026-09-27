@@ -30,6 +30,7 @@ import type {
   ProviderId,
   ReclaimResult,
   Repo,
+  Schedule,
   ServerMessage,
   Session,
   SessionDiff,
@@ -170,6 +171,12 @@ export const api = {
   compactProject: () => post<null>("/api/project/compact"),
   /** What `--model` can be on this account, newest release first. */
   models: (accountId: string) => get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}`),
+  /** Start one later: `when` is plain words ("in 4 hours", "every weekday at 9am"). */
+  createSchedule: (input: { when: string; spec: NewSessionInput; label?: string }) => post<Schedule>("/api/schedules", input),
+  patchSchedule: (id: string, patch: { when?: string; prompt?: string; label?: string | null; enabled?: boolean; repoId?: string }) =>
+    request<Schedule>("PATCH", `/api/schedules/${enc(id)}`, patch),
+  deleteSchedule: (id: string) => request<null>("DELETE", `/api/schedules/${enc(id)}`),
+  runSchedule: (id: string) => post<{ sessionId: string }>(`/api/schedules/${enc(id)}/run`),
   createSession: (input: NewSessionInput) =>
     post<{ session: Session; placement: Placement }>("/api/sessions", input),
   patchSession: (id: string, patch: { label?: string | null; big?: boolean }) =>
@@ -426,6 +433,7 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               providers: s.providers,
               warnings: s.warnings,
               project: s.project,
+              schedules: s.schedules,
             },
         );
       },

@@ -11,6 +11,7 @@ import { hrefOf, navOf, parseHash, type NavId, type Route } from "./route";
 import { openingTab } from "./lib/phone";
 import { SystemBar } from "./SystemBar";
 import { SessionView } from "./views/session/SessionView";
+import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
 import { Skills } from "./views/Skills";
@@ -264,6 +265,11 @@ export function App() {
             onCreated={(id) => {
               setNewOpen(false);
               navigate({ page: "session", id, tab: openingTab() });
+            }}
+            onScheduled={(sc) => {
+              setNewOpen(false);
+              // A one-time one waits in the list like a session; a recurring one lives in Settings.
+              navigate(!isRecurring(sc.rule) ? { page: "session", id: sc.id, tab: openingTab() } : { page: "settings" });
             }}
           />
         </ErrorBoundary>

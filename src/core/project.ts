@@ -139,6 +139,12 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox adopt <id>... --detach # move a session from another terminal into agentbox
     agentbox label <id> 'name'      # rename it on the board
     agentbox claude|codex|omp|devin --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
+    agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
+                                    # start one later: 'in 4 hours', 'tomorrow at 9am',
+                                    # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.
+                                    # Prints the id and when it was understood to start
+    agentbox schedules              # what is set to start: id  in  when · agent · title
+    agentbox unschedule <id>...     # it will not start
 
 ## Conventions
 

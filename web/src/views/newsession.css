@@ -528,13 +528,92 @@
 }
 
 /* footer */
-.ns-start-on {
-  font-weight: 500;
-  opacity: 0.85;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Start, and the ▾ for Schedule: one button with a hairline in it, not two. */
+.ns-split {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: var(--radius-sm);
+}
+.ns-split > .btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 12px;
+}
+.ns-split-caret {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.ns-split-caret::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background: color-mix(in srgb, var(--on-accent) 35%, transparent);
+}
+.ns-split-caret:hover:not(:disabled),
+.ns-split-caret[aria-expanded="true"] {
+  background: var(--accent-hover);
+}
+.ns-split-caret:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.ns-split-menu {
+  z-index: 60;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+.ns-split-menu button {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 8px 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.ns-split-menu button:hover {
+  background: var(--hover);
+}
+.ns-split-menu button > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.ns-split-menu strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ns-split-menu span > span {
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.ns-split-check {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  margin-left: auto;
+  align-self: center;
+  color: var(--accent);
 }
 .ns-foot-hint {
   margin-right: auto;
@@ -549,8 +628,7 @@
   .ns-row2 {
     grid-template-columns: minmax(0, 1fr);
   }
-  .ns-foot-hint,
-  .ns-start-on {
+  .ns-foot-hint {
     display: none;
   }
   /* A phone is too narrow for label, plan, two bars and a tag on one line:

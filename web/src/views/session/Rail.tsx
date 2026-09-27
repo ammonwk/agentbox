@@ -3,7 +3,7 @@
  *  with nothing open it is the page. */
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type Ref } from "react";
-import type { AppState, ProviderId } from "../../../../src/core/types";
+import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
 import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
 import { Icon, RelativeTime } from "../../components";
 import {
@@ -22,13 +22,14 @@ import {
   type Shape,
   type SortKey,
 } from "../../lib/board";
-import { baseName } from "../../lib/format";
+import { baseName, fmtBytes } from "../../lib/format";
 import { openingTab } from "../../lib/phone";
-import { api } from "../../api";
+import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
 import { useDismiss } from "../newsession/popover";
 import { useOpenProject } from "../project";
-import { closeNow, useClosing } from "./closing";
+import { useClosing } from "./closing";
+import { ScheduledRow } from "./Scheduled";
 
 // ------------------------------------------------------------------- state
 
@@ -92,12 +93,19 @@ export function Rail({
   current,
   list,
   onOpenFirst,
+  onClose,
+  scheduled,
+  onCancelSchedule,
 }: {
   sections: Section<Nested<SessionRow>>[];
   state: AppState;
   current: string | null;
   list: ListState;
   onOpenFirst: () => void;
+  onClose: (s: SessionRow) => void;
+  /** One-time scheduled sessions, soonest first. */
+  scheduled: Schedule[];
+  onCancelSchedule: (sc: Schedule) => void;
 }) {
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const usual = useMemo(() => usualProvider(rows), [rows]);
@@ -149,7 +157,17 @@ export function Rail({
 
       <div className="rail-scroll">
         <CloseFailure />
-        {rows.length === 0 ? (
+        {scheduled.length ? (
+          <div className="rail-sec" data-kind="scheduled">
+            <div className="rail-label">
+              Scheduled <span>{scheduled.length}</span>
+            </div>
+            {scheduled.map((sc) => (
+              <ScheduledRow key={sc.id} sc={sc} current={sc.id === current} onCancel={onCancelSchedule} />
+            ))}
+          </div>
+        ) : null}
+        {rows.length === 0 && scheduled.length === 0 ? (
           <p className="rail-none">{filter.query ? "Nothing open matches." : state.sessions.length ? "Nothing open." : "No sessions yet."}</p>
         ) : null}
         {sections.map((sec) => (
@@ -171,6 +189,7 @@ export function Rail({
                 shape={shapes.get(repoKey(s))}
                 open={list.open.has(s.id)}
                 onToggle={() => list.setOpen(s.id, !list.open.has(s.id))}
+                onClose={onClose}
               />
             ))}
           </div>
@@ -190,6 +209,7 @@ function Row({
   shape,
   open,
   onToggle,
+  onClose,
 }: {
   s: Nested<SessionRow>;
   current: boolean;
@@ -199,6 +219,7 @@ function Row({
   shape: Shape | undefined;
   open: boolean;
   onToggle: () => void;
+  onClose: (s: SessionRow) => void;
 }) {
   const said = snippetOf(s);
   return (
@@ -238,7 +259,8 @@ function Row({
       <span className="rail-when">
         <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
       </span>
-      <CloseX s={s} current={current} />
+      <RowLoad id={s.id} />
+      <CloseX s={s} onClose={onClose} />
     </a>
   );
 }
@@ -248,7 +270,7 @@ function Row({
  * the list. One mid-turn asks first — a second click within a few seconds —
  * since closing stops it and cuts the turn short.
  */
-function CloseX({ s, current }: { s: SessionRow; current: boolean }) {
+function CloseX({ s, onClose }: { s: SessionRow; onClose: (s: SessionRow) => void }) {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     if (!armed) return;
@@ -267,12 +289,35 @@ function CloseX({ s, current }: { s: SessionRow; current: boolean }) {
         e.preventDefault();
         e.stopPropagation();
         if (s.status === "running" && !armed) return setArmed(true);
-        closeNow(s.id, titleOf(s));
-        if (current) location.hash = hrefOf({ page: "sessions" });
+        onClose(s);
       }}
     >
       {armed ? "Stop?" : <Icon.x size={12} />}
     </button>
+  );
+}
+
+/**
+ * What its processes hold now: CPU over memory. A subscription of its own, so
+ * a metrics frame (every 2s) re-renders these figures and not the list. A
+ * session with no process has none.
+ */
+function RowLoad({ id }: { id: string }) {
+  const load = useMetrics().metrics?.load[id];
+  if (!load) return <span className="rail-load" />;
+  const cpu = load.cpuPct < 1 ? "0%" : `${Math.round(load.cpuPct)}%`;
+  const gb = load.memBytes / 2 ** 30;
+  const mem = gb >= 1 ? `${gb.toFixed(1)}G` : `${Math.round(load.memBytes / 2 ** 20)}M`;
+  return (
+    <span
+      className="rail-load"
+      data-idle={load.cpuPct < 1 || undefined}
+      data-hot={load.cpuPct >= 80 || undefined}
+      title={`CPU ${cpu} (100% is one core) · memory ${fmtBytes(load.memBytes)}${load.memKind === "rss" ? " (RSS, overstated until the next measure)" : ""} · ${load.procs} process${load.procs === 1 ? "" : "es"}`}
+    >
+      <span>{cpu}</span>
+      <span>{mem}</span>
+    </span>
   );
 }
 
@@ -282,7 +327,7 @@ function CloseFailure() {
   if (!failure) return null;
   return (
     <p className="rail-err" role="alert">
-      Could not close “{failure.title}”: {failure.message}{" "}
+      Could not {failure.verb ?? "close"} “{failure.title}”: {failure.message}{" "}
       <button type="button" className="linkish" onClick={dismiss}>
         dismiss
       </button>

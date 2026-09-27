@@ -6,7 +6,14 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 
-export function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean, maxHeight = 340, minWidth = 0): CSSProperties {
+export function useFloating(
+  anchor: RefObject<HTMLElement | null>,
+  open: boolean,
+  maxHeight = 340,
+  minWidth = 0,
+  /** `end` lines the list's right edge up with the anchor's, for a control at the right. */
+  align: "start" | "end" = "start",
+): CSSProperties {
   const [style, setStyle] = useState<CSSProperties>({ display: "none" });
   useLayoutEffect(() => {
     if (!open) return;
@@ -21,7 +28,7 @@ export function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean
       const width = Math.max(r.width, minWidth);
       setStyle({
         position: "fixed",
-        left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)),
+        left: Math.max(8, Math.min(align === "end" ? r.right - width : r.left, window.innerWidth - width - 8)),
         width,
         ...(up
           ? { bottom: window.innerHeight - r.top + 4, maxHeight: Math.min(maxHeight, above) }
@@ -35,7 +42,7 @@ export function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open, anchor, maxHeight, minWidth]);
+  }, [open, anchor, maxHeight, minWidth, align]);
   return style;
 }
 

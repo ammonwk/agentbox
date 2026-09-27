@@ -8,7 +8,8 @@ import { api } from "../../api";
 
 /** Ids asked to close whose close the app state does not show yet. */
 let pending: ReadonlySet<string> = new Set();
-let failure: { id: string; title: string; message: string } | null = null;
+/** The last thing that could not be done, and to what: "close" unless said. */
+let failure: { id: string; title: string; message: string; verb?: string } | null = null;
 const listeners = new Set<() => void>();
 
 function set(next: ReadonlySet<string>, f = failure): void {
@@ -38,6 +39,18 @@ export function closeNow(id: string, title: string): void {
     (e: Error) => {
       forget(id);
       set(pending, { id, title, message: e.message });
+    },
+  );
+}
+
+/** Hidden now, gone for good once `act` settles; back, with the reason said, if it fails. */
+export function hideWhile(id: string, title: string, verb: string, act: Promise<unknown>): void {
+  set(new Set(pending).add(id), failure?.id === id ? null : failure);
+  act.then(
+    () => setTimeout(() => forget(id), 5000),
+    (e: Error) => {
+      forget(id);
+      set(pending, { id, title, message: e.message, verb });
     },
   );
 }
