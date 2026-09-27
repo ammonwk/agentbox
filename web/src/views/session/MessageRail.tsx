@@ -7,6 +7,8 @@ import { Icon } from "../../components";
  * Everything you said to a session, as dots down the side of the terminal or
  * the timeline: where each sits in the conversation, what it said on hover,
  * one click to go there. ↑ and ↓ step through them from where you are.
+ * On a touch screen there is no hover: press the rail and drag to read them,
+ * and let go to go there (or slide off it to change your mind).
  *
  * The rail only draws and reports; the view beside it does the going, since
  * a timeline scrolls itself and a terminal is paged by the server.
@@ -24,6 +26,8 @@ const MIN_GAP = 9;
 const PAD = 10;
 /** How far from a dot the pointer still means that dot. */
 const REACH = 14;
+/** How far sideways a finger can slide off the rail before letting go means nothing. */
+const LET_GO = 60;
 
 /** Refetch as the session moves, at most this often. */
 const REFRESH_MS = 2_000;
@@ -98,6 +102,10 @@ export function MessageRail({
   const [height, setHeight] = useState(0);
   const [hover, setHover] = useState<number | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
+  /** A finger on the rail, and the dot it is reading. */
+  const scrub = useRef<{ i: number | null } | null>(null);
+  /** The click that follows a scrub's release is the scrub's, already acted on. */
+  const swallow = useRef(false);
 
   useLayoutEffect(() => {
     const el = trackRef.current;
@@ -118,6 +126,16 @@ export function MessageRail({
     let best: number | null = null;
     ys.forEach((dy, i) => {
       if (Math.abs(dy - y) <= REACH && (best === null || Math.abs(dy - y) < Math.abs(ys[best]! - y))) best = i;
+    });
+    return best;
+  };
+
+  /** The dot nearest a finger, however far: a finger hides the dots it is on. */
+  const closest = (clientY: number): number | null => {
+    const y = clientY - (trackRef.current?.getBoundingClientRect().top ?? 0);
+    let best: number | null = null;
+    ys.forEach((dy, i) => {
+      if (best === null || Math.abs(dy - y) < Math.abs(ys[best]! - y)) best = i;
     });
     return best;
   };
@@ -147,9 +165,41 @@ export function MessageRail({
       <div
         className="mr-track"
         ref={trackRef}
-        onPointerMove={(e: PointerEvent) => e.pointerType === "mouse" && setHover(nearest(e.clientY))}
-        onPointerLeave={() => setHover(null)}
+        onPointerDown={(e: PointerEvent) => {
+          swallow.current = false;
+          if (e.pointerType === "mouse") return;
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            /* a pointer already gone */
+          }
+          scrub.current = { i: closest(e.clientY) };
+          setHover(scrub.current.i);
+        }}
+        onPointerMove={(e: PointerEvent) => {
+          if (e.pointerType === "mouse") setHover(nearest(e.clientY));
+          else if (scrub.current) setHover((scrub.current.i = closest(e.clientY)));
+        }}
+        onPointerUp={(e: PointerEvent) => {
+          const s = scrub.current;
+          if (!s) return;
+          scrub.current = null;
+          swallow.current = true;
+          setHover(null);
+          const box = e.currentTarget.getBoundingClientRect();
+          const off = Math.max(box.left - e.clientX, e.clientX - box.right);
+          if (s.i !== null && off < LET_GO) onJump(turns[s.i]!);
+        }}
+        onPointerCancel={() => {
+          scrub.current = null;
+          setHover(null);
+        }}
+        onPointerLeave={(e: PointerEvent) => e.pointerType === "mouse" && setHover(null)}
         onClick={(e) => {
+          if (swallow.current) {
+            swallow.current = false;
+            return;
+          }
           // Anywhere near a dot is that dot: the dots are small, the rail is not.
           if ((e.target as HTMLElement).closest(".mr-dot")) return;
           const i = nearest(e.clientY);
@@ -167,7 +217,7 @@ export function MessageRail({
             aria-label={`${KIND_LABEL[t.kind]}, ${when(t.at)}: ${t.text.slice(0, 120)}`}
             aria-current={i === currentIdx ? "location" : undefined}
             tabIndex={i === (currentIdx === -1 ? turns.length - 1 : currentIdx) ? 0 : -1}
-            onClick={() => onJump(t)}
+            onClick={() => !swallow.current && onJump(t)}
             // A click focuses the dot too; only a keyboard's focus keeps its card up.
             onFocus={(e) => e.currentTarget.matches(":focus-visible") && setFocus(i)}
             onBlur={() => setFocus(null)}

@@ -13,7 +13,7 @@
 
 import { basename, dirname, sep } from "node:path";
 import { addUsage, emptyTotals } from "../pricing";
-import type { AskQuestion, TimelineEvent, TokenTotals } from "../types";
+import type { AskQuestion, MateMessage, TimelineEvent, TokenTotals } from "../types";
 import { cap, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 
@@ -117,12 +117,62 @@ export function commandLine(s: string): string {
   return args ? `${n} ${args}` : n;
 }
 
-/** The text of a background-task notification or a teammate's message, for a one-line meta event. */
+/** The text of a background-task notification, for a one-line meta event. */
 function notificationLine(s: string): string {
-  const mate = /<teammate-message teammate_id="([^"]*)"[^>]*>([\s\S]*?)(?:<\/teammate-message>|$)/.exec(s);
-  if (mate) return `from teammate ${mate[1]}: ${oneLine(mate[2]!, 200)}`;
   const summary = tag(s, "summary") ?? tag(s, "status") ?? "";
   return `background task: ${oneLine(summary || s.replace(/<[^>]+>/g, " "), 200)}`;
+}
+
+const MATE_BLOCK = /<teammate-message\s([^>]*)>([\s\S]*?)(?:<\/teammate-message>|$)/g;
+const MATE_BODY_CAP = 8000;
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+const attr = (attrs: string, name: string): string | undefined => {
+  const v = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1];
+  return v === undefined ? undefined : v.replace(/&(amp|lt|gt|quot|apos);/g, (_, e: string) => ENTITIES[e]!);
+};
+
+/**
+ * The teammate messages in one record: a plain message, with the sender's
+ * summary, or a JSON notice — `idle_notification` each time a teammate's turn
+ * ends, carrying what it reported, and the shutdown handshake. A teammate
+ * delivered several at once gets one record holding them all.
+ */
+export function mateMessages(s: string): MateMessage[] {
+  const out: MateMessage[] = [];
+  for (const m of s.matchAll(MATE_BLOCK)) {
+    const name = attr(m[1]!, "teammate_id");
+    if (!name) continue;
+    const msg: MateMessage = { name, body: m[2]!.trim() };
+    const color = attr(m[1]!, "color");
+    const summary = attr(m[1]!, "summary");
+    if (color) msg.color = color;
+    if (summary) msg.summary = summary;
+    if (msg.body.startsWith("{")) {
+      try {
+        const j = JSON.parse(msg.body);
+        if (j && typeof j.type === "string") {
+          if (j.type === "idle_notification") {
+            msg.idle = [j.idleReason ?? "idle", j.failureReason].filter((x) => typeof x === "string" && x).join(": ");
+            // Claude drops what it reported once a drain of them runs long.
+            msg.body = typeof j.result === "string" && !j.result.startsWith("[result truncated") ? j.result : "";
+          } else {
+            msg.summary ??= j.type.replace(/_/g, " ");
+            msg.body = typeof j.reason === "string" ? j.reason : typeof j.content === "string" ? j.content : "";
+          }
+        }
+      } catch {
+        /* a message that happens to start with a brace */
+      }
+    }
+    if (msg.body.length > MATE_BODY_CAP) msg.body = `${msg.body.slice(0, MATE_BODY_CAP - 1)}…`;
+    out.push(msg);
+  }
+  return out;
+}
+
+function mateLine(m: MateMessage): string {
+  const said = m.summary ?? oneLine(m.body, 200);
+  return m.idle !== undefined ? `${m.name} went idle (${m.idle})${said ? `: ${said}` : ""}` : `from teammate ${m.name}: ${said}`;
 }
 
 const stripTags = (s: string) => s.replace(/<\/?[a-z][a-z0-9_-]*>/g, "").trim();
@@ -816,8 +866,14 @@ function userStringPieces(s: string, id: string, at: number): Piece[] {
       const text = oneLine(stripTags(s).replace(/\x1b\[[0-9;]*m/g, ""), 300);
       return text ? [meta(id, at, text)] : [];
     }
-    case "notification":
-      return [meta(id, at, notificationLine(s))];
+    case "notification": {
+      const mates = mateMessages(s);
+      if (!mates.length) return [meta(id, at, notificationLine(s))];
+      return mates.map((m, i) => ({
+        kind: "event",
+        event: { id: i ? `${id}:m${i}` : id, at, kind: "meta", text: mateLine(m), tone: m.idle?.startsWith("failed") ? "warn" : "info", mate: m },
+      }));
+    }
     case "interrupted":
       return [meta(id, at, "interrupted", "warn")];
     default:

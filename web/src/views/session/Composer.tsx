@@ -239,6 +239,8 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [placeErr, setPlaceErr] = useState<string | null>(null);
   const [choice, setChoice] = useState("auto");
+  /** Phones show one line and the button; the why and the picker are behind this. */
+  const [more, setMore] = useState(false);
   const hit = session.limitHit!;
   useEffect(() => {
     let cancelled = false;
@@ -270,12 +272,17 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
   // A move starts the conversation over on a cold cache: all of its context
   // is sent again, uncached.
   const resend = session.contextUsed ? `${fmtTokens(session.contextUsed)} tokens of context` : "the whole conversation";
+  // "You've hit your weekly limit · resets Sep 30, 11am (America/Denver)" → "Weekly limit · resets Sep 30, 11am"
+  const short = hit.detail.replace(/^you've hit your /i, "").replace(/\s*\([^)]*\)\s*$/, "");
   return (
-    <div className="cmp-limit" role="status">
+    <div className="cmp-limit" role="status" data-more={more || undefined}>
       <Icon.gauge size={15} />
       <div className="cmp-limit-body">
-        <strong>
+        <strong className="cmp-limit-long">
           Stopped at {here ? `${here.label}'s` : "its account's"} limit {ago(hit.at)}
+        </strong>
+        <strong className="cmp-limit-short" title={`${hit.detail}, on ${here?.label ?? "its account"}`}>
+          {short.charAt(0).toUpperCase() + short.slice(1)} · {ago(hit.at)}
         </strong>
         <span className="cmp-limit-detail">{hit.detail}</span>
         {error ? (
@@ -310,8 +317,11 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
         title={choice === "auto" ? placement?.why : undefined}
         onClick={() => void run(() => api.move(session.id, { accountId: moves ? target!.id : session.accountId ?? "auto", prompt: CONTINUE }))}
       >
-        {label}
+        <span className="cmp-limit-label">{label}</span>
       </Button>
+      <button type="button" className="cmp-limit-more" aria-expanded={more} aria-label={more ? "Less" : "Why, and pick an account"} onClick={() => setMore(!more)}>
+        <Icon.chevronDown size={14} className={more ? "rot" : undefined} />
+      </button>
       {canMove ? (
         <div className="cmp-limit-pick">
           <AccountPicker

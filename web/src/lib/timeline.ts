@@ -60,7 +60,14 @@ export type TimelineRow =
   | { type: "event"; event: Exclude<TimelineEvent, { kind: "tool" }> }
   | { type: "tools"; id: string; events: Extract<TimelineEvent, { kind: "tool" }>[] }
   /** AskUserQuestion: a card of its own, not a line in a run of tools. */
-  | { type: "ask"; event: Extract<TimelineEvent, { kind: "tool" }> & { ask: NonNullable<Extract<TimelineEvent, { kind: "tool" }>["ask"]> } };
+  | { type: "ask"; event: Extract<TimelineEvent, { kind: "tool" }> & { ask: NonNullable<Extract<TimelineEvent, { kind: "tool" }>["ask"]> } }
+  /** Teammates going idle with nothing to report, back to back: one line. */
+  | { type: "idle"; id: string; events: IdleEvent[] };
+
+type IdleEvent = Extract<TimelineEvent, { kind: "meta" }> & { mate: NonNullable<Extract<TimelineEvent, { kind: "meta" }>["mate"]> };
+
+/** A teammate's turn ended and it said nothing with it. A lead hears one per turn per teammate. */
+const quietIdle = (ev: TimelineEvent): ev is IdleEvent => ev.kind === "meta" && !!ev.mate && ev.mate.idle === "available" && !ev.mate.body;
 
 export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = [];
@@ -71,6 +78,10 @@ export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
       const last = rows[rows.length - 1];
       if (last?.type === "tools") last.events.push(ev);
       else rows.push({ type: "tools", id: ev.id, events: [ev] });
+    } else if (quietIdle(ev)) {
+      const last = rows[rows.length - 1];
+      if (last?.type === "idle") last.events.push(ev);
+      else rows.push({ type: "idle", id: ev.id, events: [ev] });
     } else {
       rows.push({ type: "event", event: ev });
     }

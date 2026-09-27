@@ -348,8 +348,22 @@ export type TimelineEvent = { id: string; at: number } & (
       /** AskUserQuestion: what was asked, uncapped, and what was answered. */
       ask?: { id: string; questions: AskQuestion[]; answers?: Record<string, string> };
     }
-  | { kind: "meta"; text: string; tone?: "info" | "warn" | "error" }
+  | { kind: "meta"; text: string; tone?: "info" | "warn" | "error"; mate?: MateMessage }
 );
+
+/** A message between the members of a Claude agent team, as the one receiving it recorded it. */
+export interface MateMessage {
+  /** Who sent it: a teammate's name (its session's title), or `team-lead`. */
+  name: string;
+  /** The colour Claude gave the sender: blue, red, … */
+  color?: string;
+  /** The sender's one-line summary of what it sent. */
+  summary?: string;
+  /** What it said, clipped; empty for an idle notice that reported nothing. */
+  body: string;
+  /** An idle notice rather than a message: why it stopped (`available`, or `failed: …`). */
+  idle?: string;
+}
 
 /** One question of an AskUserQuestion call, as the agent asked it. */
 export interface AskQuestion {

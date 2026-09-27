@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Session, TimelineEvent, Turn } from "../../../../src/core/types";
+import type { MateMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { fmtClock, useTimeline } from "../../api";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline } from "../../lib/timeline";
@@ -9,6 +9,10 @@ import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { MessageRail, useTurns } from "./MessageRail";
 import { takeJump } from "./jump";
+import { useFamily } from "./family";
+import { StatusDot } from "../../bits";
+import { titleOf } from "../../lib/board";
+import { hrefOf } from "../../route";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -194,6 +198,8 @@ export function Timeline({ session }: { session: Session }) {
           {rows.map((r) =>
             r.type === "tools" ? (
               <ToolRun key={r.id} events={r.events} />
+            ) : r.type === "idle" ? (
+              <IdleRow key={r.id} events={r.events} />
             ) : r.type === "ask" ? (
               <AskRow key={r.event.id} ev={r.event} live={session.question?.id === r.event.ask.id} />
             ) : (
@@ -274,6 +280,7 @@ const EventRow = memo(function EventRow({ ev }: { ev: Exclude<TimelineEvent, Too
     case "thinking":
       return <Thinking text={ev.text} at={ev.at} />;
     case "meta":
+      if (ev.mate) return <MateRow mate={ev.mate} at={ev.at} />;
       return (
         <div className={`tl-meta tone-${ev.tone ?? "info"}`} title={fmtClock(ev.at)}>
           {ev.tone === "warn" || ev.tone === "error" ? <Icon.alert size={12} /> : null}
@@ -282,6 +289,79 @@ const EventRow = memo(function EventRow({ ev }: { ev: Exclude<TimelineEvent, Too
       );
   }
 });
+
+/**
+ * A message from another member of the agent team. The name opens its
+ * session; what it said opens in place. An idle notice that reported nothing
+ * is one quiet line — a lead hears one every time a teammate's turn ends.
+ */
+function MateRow({ mate, at }: { mate: MateMessage; at: number }) {
+  const [open, setOpen] = useState(false);
+  const { byName, tab } = useFamily();
+  const to = byName.get(mate.name) ?? null;
+  const failed = mate.idle?.startsWith("failed") ?? false;
+  const name = to && mate.name === "team-lead" ? `${titleOf(to)} (lead)` : mate.name;
+  const who = (
+    <span className="tl-mate-who" data-color={mate.color}>
+      {to ? <StatusDot status={to.status} /> : <span className="tl-mate-swatch" aria-hidden="true" />}
+      {to ? (
+        <a href={hrefOf({ page: "session", id: to.id, tab })} title={`Open ${titleOf(to)}`} onClick={(e) => e.stopPropagation()}>
+          {name}
+        </a>
+      ) : (
+        <span>{name}</span>
+      )}
+    </span>
+  );
+  const said = mate.summary ?? firstLine(mate.body);
+  if (!mate.body) {
+    return (
+      <div className={`tl-mate tl-mate-quiet${failed ? " is-failed" : ""}`} title={fmtClock(at)}>
+        {who}
+        <span className="tl-mate-said">{mate.idle !== undefined ? (failed ? mate.idle.replace(/^failed: ?/, "stopped: ") : "is idle") : said}</span>
+      </div>
+    );
+  }
+  return (
+    <div className={`tl-mate${failed ? " is-failed" : ""}`}>
+      <button className="tl-mate-head" aria-expanded={open} onClick={() => setOpen(!open)} title={fmtClock(at)}>
+        {who}
+        <span className="tl-mate-said">
+          {mate.idle !== undefined ? <span className="faint">finished · </span> : null}
+          {said}
+        </span>
+        <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
+      </button>
+      {open ? (
+        <div className="tl-mate-body">
+          <Markdown text={mate.body} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Teammates that finished a turn with nothing to say, each named once and linked. */
+function IdleRow({ events }: { events: { at: number; mate: MateMessage }[] }) {
+  const { byName, tab } = useFamily();
+  const names = [...new Set(events.map((e) => e.mate.name))];
+  return (
+    <div className="tl-mate tl-mate-quiet" title={fmtClock(events[events.length - 1]!.at)}>
+      <span className="tl-mate-said">
+        {names.map((n, i) => {
+          const to = byName.get(n);
+          return (
+            <span key={n}>
+              {i ? ", " : null}
+              {to ? <a href={hrefOf({ page: "session", id: to.id, tab })}>{n}</a> : n}
+            </span>
+          );
+        })}{" "}
+        {names.length === 1 ? "is" : "are"} idle
+      </span>
+    </div>
+  );
+}
 
 function Thinking({ text, at }: { text: string; at: number }) {
   const [open, setOpen] = useState(false);

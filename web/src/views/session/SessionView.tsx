@@ -26,6 +26,7 @@ import { prBaseFor } from "../../lib/prlinks";
 import { PrBase } from "./prbase";
 import { TermRail } from "./MessageRail";
 import { jumpInTimeline } from "./jump";
+import { FamilyContext, FamilyStrip, useFamilyOf } from "./family";
 import "./session.css";
 
 const Terminal = lazy(() => import("./Terminal"));
@@ -305,6 +306,9 @@ function Detail({
   const prBase = useMemo(() => prBaseFor(session, state), [session, state]);
   const flashRow = useRef<((row: number) => void) | null>(null);
   const [termScrolled, setTermScrolled] = useState(0);
+  const family = useFamilyOf(session, state.sessions, tab);
+  // The list beside the session shows the family as a tree; a phone has no room for it.
+  const narrow = useIsNarrow();
 
   return (
     <div className="sv-main">
@@ -484,6 +488,8 @@ function Detail({
         </div>
       </header>
 
+      <FamilyContext.Provider value={family}>
+      {narrow ? <FamilyStrip /> : null}
       <PrBase.Provider value={prBase}>
       <div className="sv-body" role="tabpanel" aria-label={TAB_LABEL[tab]}>
         {tab === "terminal" ? (
@@ -522,6 +528,7 @@ function Detail({
         )}
       </div>
       </PrBase.Provider>
+      </FamilyContext.Provider>
 
       <Composer session={session} accounts={state.accounts} claimIdleMin={state.settings.balancer.claimIdleMin} />
 
