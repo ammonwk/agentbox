@@ -728,6 +728,12 @@ export interface ModelOption {
   label: string;
   /** "2026-09-01", from the models.dev catalog when it knows the model. */
   releasedAt: string | null;
+  /** A detail worth a column — a cost tier, a flag ("beta"). Shown only when
+   *  the row has no recency or release to display. */
+  note?: string;
+  /** Reasoning-effort levels this model takes, lowest first, when the catalog
+   *  knows them per model (codex). Overrides the provider's `efforts`. */
+  efforts?: string[];
 }
 
 // ------------------------------------------------------------- skills

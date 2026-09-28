@@ -586,11 +586,18 @@ const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
     { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", releasedAt: "2025-10-15" },
   ],
   codex: [
-    { id: "gpt-6-astra", label: "GPT-6-Astra", releasedAt: "2026-09-04" },
-    { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", releasedAt: "2026-07-09" },
+    { id: "gpt-6-astra", label: "GPT-6-Astra", releasedAt: "2026-09-04", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", releasedAt: "2026-07-09", efforts: ["low", "medium", "high", "xhigh", "max"] },
   ],
   omp: [{ id: "opencode-go/deepseek-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
-  devin: [],
+  devin: [
+    { id: "swe", label: "SWE-2 (latest)", releasedAt: null },
+    { id: "swe-2-max", label: "SWE-2 Max", releasedAt: null, note: "Free" },
+    { id: "swe-2-high", label: "SWE-2 High", releasedAt: null, note: "Free" },
+    { id: "opus", label: "Claude Opus 5 (latest)", releasedAt: null },
+    { id: "claude-opus-5-max", label: "Claude Opus 5 Max", releasedAt: null, note: "High cost" },
+    { id: "claude-opus-5-high-fast", label: "Claude Opus 5 High Fast", releasedAt: null, note: "High cost" },
+  ],
 };
 
 function placementFor(provider: ProviderId, big: boolean, manual?: string): Placement {

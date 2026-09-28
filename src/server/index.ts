@@ -699,10 +699,10 @@ const router = new Router(mapError)
 
   // ---- accounts
   .add("GET", "/api/accounts", () => json(accountViews()))
-  .add("GET", "/api/models", ({ url }) => {
+  .add("GET", "/api/models", async ({ url }) => {
     const a = accounts.get(url.searchParams.get("accountId") ?? "");
     if (!a) throw new HttpError(404, "no such account");
-    return json(modelOptions(a));
+    return json(await modelOptions(a));
   })
   .add("POST", "/api/accounts", async ({ req }) => {
     const b = await readBody(req);

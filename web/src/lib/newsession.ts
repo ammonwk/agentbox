@@ -75,9 +75,10 @@ export function rankModels(
     used.set(s.model, Math.max(used.get(s.model) ?? 0, s.lastActivityAt));
   }
   const byId = new Map(catalog.map((m) => [m.id, m]));
-  const recent: ModelChoice[] = [...used]
-    .sort((a, b) => b[1] - a[1])
-    .map(([id, at]) => ({ id, label: byId.get(id)?.label ?? modelName(id), releasedAt: byId.get(id)?.releasedAt ?? null, lastUsedAt: at }));
+  const recent: ModelChoice[] = [...used].sort((a, b) => b[1] - a[1]).map(([id, at]) => {
+    const cat = byId.get(id);
+    return { ...cat, id, label: cat?.label ?? modelName(id), releasedAt: cat?.releasedAt ?? null, lastUsedAt: at };
+  });
   const rest = catalog.filter((m) => !used.has(m.id)).map((m) => ({ ...m, lastUsedAt: null }));
   return [...recent, ...rest];
 }
@@ -91,14 +92,20 @@ export function modelName(id: string): string {
   return `Claude ${family} ${m[2]}${m[3] ? `.${m[3]}` : ""}`;
 }
 
-/** Case-insensitive, on id or label; every word must hit. */
-export function filterModels(models: readonly ModelChoice[], query: string): ModelChoice[] {
+/** Case-insensitive, on id or label; every word must hit. Some catalogs are
+ *  hundreds of rows (devin bakes effort into the model id, so every level is
+ *  its own entry), so the answer is capped — `hidden` counts what the cap
+ *  dropped, for the "keep typing" hint. */
+export function filterModels(models: readonly ModelChoice[], query: string, limit = 150): { rows: ModelChoice[]; hidden: number } {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [...models];
-  return models.filter((m) => {
-    const hay = `${m.id} ${m.label}`.toLowerCase();
-    return words.every((w) => hay.includes(w));
-  });
+  const all =
+    words.length === 0
+      ? [...models]
+      : models.filter((m) => {
+          const hay = `${m.id} ${m.label}`.toLowerCase();
+          return words.every((w) => hay.includes(w));
+        });
+  return { rows: all.slice(0, limit), hidden: Math.max(0, all.length - limit) };
 }
 
 // ----------------------------------------------------------------- skills

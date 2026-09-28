@@ -33,7 +33,7 @@ export function ModelPicker({
   const style = useFloating(wrapRef, open, 360);
   useDismiss(open, () => setOpen(false), [wrapRef, listRef]);
 
-  const shown = filterModels(models, query ?? "");
+  const { rows: shown, hidden } = filterModels(models, query ?? "");
   // Row 0 is always "default"; models follow.
   const rows: (ModelChoice | null)[] = [null, ...shown];
   const firstUnused = shown.findIndex((m) => m.lastUsedAt == null);
@@ -133,7 +133,7 @@ export function ModelPicker({
                     <span className="ns-model-label">{m.label}</span>
                     {m.label !== m.id ? <span className="ns-model-id mono">{m.id}</span> : null}
                     <span className="ns-model-when">
-                      {m.lastUsedAt != null ? ago(m.lastUsedAt) : m.releasedAt ? fmtRelease(m.releasedAt) : ""}
+                      {m.lastUsedAt != null ? ago(m.lastUsedAt) : m.releasedAt ? fmtRelease(m.releasedAt) : (m.note ?? "")}
                     </span>
                   </>
                 ) : (
@@ -143,6 +143,7 @@ export function ModelPicker({
             </div>
           ))}
           {shown.length === 0 && query ? <div className="ns-pop-empty">No match — “{query}” will be passed as is.</div> : null}
+          {hidden > 0 ? <div className="ns-pop-empty">{hidden} more — keep typing to filter.</div> : null}
         </div>
       ) : null}
     </div>

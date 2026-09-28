@@ -64,9 +64,7 @@ export function NewSession({
   const [perProvider, setPerProvider] = useState(prefs.perProvider ?? {});
   const model = perProvider[provider]?.model ?? "";
   const accountId = perProvider[provider]?.accountId ?? "auto";
-  const efforts = state.providers.find((p) => p.id === provider)?.efforts ?? [];
-  const effortPref = perProvider[provider]?.effort ?? "";
-  const effort = efforts.includes(effortPref) ? effortPref : "";
+  const providerEfforts = state.providers.find((p) => p.id === provider)?.efforts ?? [];
   const setChoice = (patch: { model?: string; accountId?: string; effort?: string }) =>
     setPerProvider((p) => ({ ...p, [provider]: { ...p[provider], ...patch } }));
 
@@ -143,6 +141,11 @@ export function NewSession({
     () => rankModels(catalog, state.sessions, provider),
     [catalog, state.sessions, provider],
   );
+  // A catalog entry can pin its own levels (codex's models_cache names them
+  // per model); the picked model's list wins over the provider's static one.
+  const efforts = models.find((m) => m.id === model)?.efforts ?? providerEfforts;
+  const effortPref = perProvider[provider]?.effort ?? "";
+  const effort = efforts.includes(effortPref) ? effortPref : "";
   const repo = state.repos.find((r) => r.id === repoId) ?? null;
   const repoPrs = useMemo(() => prsOf(state.prs, repo), [state.prs, repo]);
   const wt = parseWorktreeRef(wtText, repoPrs);
