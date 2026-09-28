@@ -35,7 +35,7 @@
  * (checked against the per-message metrics in sessions.db, which split them).
  */
 
-import type { TimelineEvent, TokenTotals } from "../types";
+import type { AskQuestion, TimelineEvent, TokenTotals } from "../types";
 import type { TranscriptFacts } from "./types";
 import { askQuestionsOf } from "./ask";
 import { addUsage, emptyTotals } from "../pricing";
@@ -263,7 +263,7 @@ export interface DevinNodeInput {
   metadata: string | null;
 }
 
-function parseMessage(json: string): any {
+export function parseMessage(json: string): any {
   try {
     const m = JSON.parse(json);
     return m && typeof m === "object" ? m : null;
@@ -499,6 +499,8 @@ export interface DevinFactsInput {
   prompts: DevinPrompt[];
   atif: AtifParse | null;
   rateLimitHits: { at: number; detail: string }[];
+  /** An ask_user_question call still waiting for its answer. */
+  pendingAsk?: { id: string; questions: AskQuestion[] } | null;
 }
 
 export function devinFacts(i: DevinFactsInput): TranscriptFacts {
@@ -537,5 +539,6 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     rateLimitHits: i.rateLimitHits,
     isSubagent: false,
     parentId: null,
+    pendingAsk: i.pendingAsk ?? null,
   };
 }

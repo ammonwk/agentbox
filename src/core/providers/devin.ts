@@ -32,7 +32,7 @@ import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync } fr
 import { join } from "node:path";
 import { userHome } from "../paths";
 import { cliVersion } from "./cli-version";
-import type { Account, TimelineEvent, TimelinePage } from "../types";
+import type { Account, AskQuestion, TimelineEvent, TimelinePage } from "../types";
 import * as db from "./devin-db";
 import {
   devinFacts,
@@ -43,12 +43,15 @@ import {
   liveHead,
   parseAtif,
   parseDevinRateLimits,
+  parseMessage,
   pendingPromptEvents,
   type AtifParse,
   type ChainLink,
   type DevinNode,
 } from "./devin-transcript";
 import { cwdOf, environOf, findProcesses, runsCli, startedAtOf } from "./procs";
+import { askFromScreen, askStep } from "./devin-ask";
+import { askQuestionsOf } from "./ask";
 import type {
   Command,
   LiveProcess,
@@ -280,6 +283,8 @@ class DevinReader implements TranscriptReader {
   private hitKeys = new Set<string>();
   private log: { pid: number; path: string | null; offset: number; lookedAt: number } | null = null;
   private dirty = true;
+  /** An ask_user_question call still waiting for its answer, from the chain. */
+  private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
 
   constructor(
     readonly ref: TranscriptRef,
@@ -316,6 +321,7 @@ class DevinReader implements TranscriptReader {
       this.answerOf = new Map();
       for (const { node } of this.chain) if (node.answers) this.answerOf.set(node.answers, node);
       this.atif = this.chain.length > 0 ? chainFacts(this.chain) : null;
+      this.pendingAsk = this.chainPendingAsk();
       this.chainSig = sig;
       changed = true;
     }
@@ -410,8 +416,28 @@ class DevinReader implements TranscriptReader {
     return added;
   }
 
+  /**
+   * The ask_user_question the conversation ends on, unanswered: the head is
+   * an assistant message whose newest such call has no tool answer yet — the
+   * dialog is up. An answer (or an interrupt, which lands as one) clears it.
+   */
+  private chainPendingAsk(): { id: string; questions: AskQuestion[] } | null {
+    const last = this.chain.at(-1)?.node ?? null;
+    if (!last || last.role !== "assistant" || last.calls.length === 0) return null;
+    const m = parseMessage(db.messagesByRow(this.paths.db, [last.rowId])?.get(last.rowId) ?? "");
+    const calls: any[] = Array.isArray(m?.tool_calls) ? m.tool_calls : [];
+    for (let i = calls.length - 1; i >= 0; i--) {
+      const c = calls[i]!;
+      if (c?.name !== "ask_user_question" || typeof c.id !== "string") continue;
+      if (this.answerOf.has(c.id)) return null;
+      const questions = askQuestionsOf(c.arguments);
+      return questions ? { id: c.id, questions } : null;
+    }
+    return null;
+  }
+
   private facts(): TranscriptFacts {
-    return devinFacts({ id: this.id, row: this.row, prompts: this.prompts, atif: this.atif, rateLimitHits: [...this.hits] });
+    return devinFacts({ id: this.id, row: this.row, prompts: this.prompts, atif: this.atif, rateLimitHits: [...this.hits], pendingAsk: this.pendingAsk });
   }
 
   async refresh(): Promise<{ changed: boolean; facts: TranscriptFacts }> {
@@ -666,8 +692,14 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
       if (/Yes, implement plan/.test(screen)) return "plan approval";
       if (/Not logged in/.test(screen)) return "login";
       if (/Quota exhausted|Usage limit reached/.test(screen)) return "usage limit";
+      // Its question dialog: the footer is the picker's, plus the help hint.
+      if (/↵ select/.test(screen) && /esc cancel/.test(screen) && /help me out/.test(screen)) return "asking a question";
       return null;
     },
+
+    answerStep: askStep,
+
+    askOnScreen: askFromScreen,
   };
 }
 
