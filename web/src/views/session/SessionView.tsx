@@ -23,7 +23,9 @@ import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
 import { prBaseFor } from "../../lib/prlinks";
+import { buildSessionIndex } from "../../lib/sessionrefs";
 import { PrBase } from "./prbase";
+import { SessionLinks } from "./sessionlinks";
 import { TermRail } from "./MessageRail";
 import { jumpInTimeline } from "./jump";
 import { FamilyContext, FamilyStrip, useFamilyOf } from "./family";
@@ -333,7 +335,8 @@ function Detail({
   // openPrs (src/core/prs.ts) matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
   const isProject = session.id === state.project.sessionId;
-  const sessionIds = useMemo(() => new Set(state.sessions.map((s) => s.id)), [state.sessions]);
+  const links = useMemo(() => buildSessionIndex(state.sessions), [state.sessions]);
+  const linkCtx = useMemo(() => ({ index: links, self: session.id }), [links, session.id]);
   const openSession = (id: string) => (location.hash = hrefOf({ page: "session", id, tab }));
   const prBase = useMemo(() => prBaseFor(session, state), [session, state]);
   const flashRow = useRef<((row: number) => void) | null>(null);
@@ -523,6 +526,7 @@ function Detail({
       <FamilyContext.Provider value={family}>
       {narrow ? <FamilyStrip /> : null}
       <PrBase.Provider value={prBase}>
+      <SessionLinks.Provider value={linkCtx}>
       <div className="sv-body" role="tabpanel" aria-label={TAB_LABEL[tab]}>
         {tab === "terminal" ? (
           session.host === "tmux" ? (
@@ -530,7 +534,7 @@ function Detail({
               <Suspense fallback={<Empty title="Loading the terminal…" />}>
                 <Terminal
                   sessionId={session.id}
-                  sessionIds={sessionIds}
+                  index={links}
                   prBase={prBase}
                   flashRef={flashRow}
                   onScrolled={() => setTermScrolled((n) => n + 1)}
@@ -559,6 +563,7 @@ function Detail({
           <LoadPanel sessionId={session.id} />
         )}
       </div>
+      </SessionLinks.Provider>
       </PrBase.Provider>
       </FamilyContext.Provider>
 

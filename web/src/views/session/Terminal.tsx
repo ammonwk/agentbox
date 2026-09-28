@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { hrefOf } from "../../route";
 import { prRefs, prUrl } from "../../lib/prlinks";
+import { sessionRefs, type SessionIndex } from "../../lib/sessionrefs";
 import { backoffMs, openTerm, type TermChannel } from "../../api";
 import { Button, Icon } from "../../components";
 
@@ -45,18 +46,16 @@ const THEME: ITheme = {
 
 type Phase = { kind: "connecting" } | { kind: "live" } | { kind: "down"; retryAt: number; reason: string | null };
 
-/** agentbox session ids (src/core/fleet.ts `newSessionId`), as whole words. */
-const SESSION_ID = /(?<![\w-])[2-9a-km-z]{8}(?![\w-])/g;
-
 export default function Terminal({
   sessionId,
-  sessionIds,
+  index,
   prBase,
   flashRef,
   onScrolled,
 }: {
   sessionId: string;
-  sessionIds: ReadonlySet<string>;
+  /** The board, for the other sessions this one names on screen. */
+  index: SessionIndex;
   /** `https://github.com/owner/repo` for PR numbers on screen, or null. */
   prBase: string | null;
   /** Set to a function that lights up one screen row: where a jump landed. */
@@ -72,8 +71,8 @@ export default function Terminal({
   scrolled.current = onScrolled;
   // Read by the link provider on hover; a ref so the board changing does not
   // tear the terminal down.
-  const ids = useRef(sessionIds);
-  ids.current = sessionIds;
+  const idx = useRef(index);
+  idx.current = index;
   const pr = useRef(prBase);
   pr.current = prBase;
   const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
@@ -158,20 +157,21 @@ export default function Terminal({
       });
     };
 
-    // Another session's id on screen — the Project session names them all
-    // the time — is a link to that session. Only ids that exist, so an
-    // ordinary eight-letter word never lights up.
+    // Another session named on screen — its id, tmux name, provider id or
+    // worktree path, which the Project session and the fleet's own agents
+    // print all the time — is a link to it. Only names that are on the board,
+    // so an ordinary eight-letter word never lights up.
     const links = term.registerLinkProvider({
       provideLinks(y, callback) {
         const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
-        const found = [...text.matchAll(SESSION_ID)]
-          .filter((m) => m[0] !== sessionId && ids.current.has(m[0]))
-          .map((m) => ({
-            range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } },
-            text: m[0],
+        const found = sessionRefs(text, idx.current)
+          .filter((r) => r.id !== sessionId)
+          .map((r) => ({
+            range: { start: { x: r.start + 1, y }, end: { x: r.end, y } },
+            text: text.slice(r.start, r.end),
             decorations: { pointerCursor: true, underline: true },
             activate: () => {
-              location.hash = hrefOf({ page: "session", id: m[0], tab: "terminal" });
+              location.hash = hrefOf({ page: "session", id: r.id, tab: "terminal" });
             },
           }));
         callback(found.length ? found : undefined);
