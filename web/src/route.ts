@@ -2,7 +2,8 @@
  *  the back button works; App.tsx is the only runtime consumer. */
 
 export type SessionTab = "terminal" | "timeline" | "diff" | "load";
-export const SESSION_TABS: readonly SessionTab[] = ["terminal", "timeline", "diff", "load"];
+/** The tabs as they appear, left to right. The first is the default. */
+export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "diff", "load"];
 
 export type Route =
   | { page: "sessions" }
@@ -32,7 +33,7 @@ export function parseHash(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
   if (head === "s" && a) {
-    const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "terminal";
+    const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
     return { page: "session", id: a, tab };
   }
   if (head === "accounts") return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
@@ -45,7 +46,7 @@ export function parseHash(hash: string): Route {
 export function hrefOf(route: Route): string {
   switch (route.page) {
     case "session":
-      return `#/s/${encodeURIComponent(route.id)}${route.tab === "terminal" ? "" : `/${route.tab}`}`;
+      return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
     case "accounts":
       return route.sub === "calibration" ? "#/accounts/calibration" : "#/accounts";
     default:

@@ -11,18 +11,18 @@
  *                                    conversation to …" in devin's log)
  *
  * The ATIF export is the readable one — a flat list of steps, each agent step
- * with its reasoning, tool calls, their observations and token metrics — so it
- * is the timeline's source when there is one. Its one weakness is that it is
- * only written at a turn's end; the prompt that STARTED the current turn is
- * already in `prompt_history`, and is shown as a pending user event until the
- * export catches up.
+ * with its reasoning, tool calls, their observations and token metrics — but it
+ * is only written at a turn's end, so reading it freezes a working session's
+ * timeline until the turn finishes. The forest is written message by message as
+ * the turn runs, so it is the timeline's source (`chainTo`, `chainFacts`,
+ * `chainEvents`): the chain from the session's `main_chain_id` back to a root,
+ * OpenAI-style chat messages. A compaction starts a new chain whose summary
+ * node's `summarized_from` is the old chain's last node, so following it gives
+ * the whole conversation, not just the part since the last one. The export is
+ * the fallback, for a session the database has no nodes for at all.
  *
- * A session run over ACP (`devin acp`, as the subagent MCP runs it) writes
- * no export and no prompt_history, so its timeline is read from the forest
- * instead (`chainTo`, `chainFacts`, `chainEvents`): the chain from the session's `main_chain_id` back
- * to a root, OpenAI-style chat messages. A compaction starts a new chain whose
- * summary node's `summarized_from` is the old chain's last node, so following
- * it gives the whole conversation, not just the part since the last one.
+ * The prompt that STARTED the current turn is in `prompt_history` as soon as it
+ * is sent, and is shown as a pending user event until the forest has its node.
  *
  * Step shape (confirmed across 70 local transcripts):
  *   { step_id, timestamp, source: "system" | "user" | "agent", message,

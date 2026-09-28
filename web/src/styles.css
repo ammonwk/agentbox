@@ -1167,7 +1167,7 @@ textarea,
   display: block;
 }
 
-/* Claude limits: per account a name, then 5-hour over weekly as hairline bars
+/* Subscriptions: per account a name, then 5-hour over weekly as hairline bars
  * with the figure and the countdown to reset. Deliberately quieter than the
  * machine cells — muted until a window is actually close to full. */
 .sys-limits {

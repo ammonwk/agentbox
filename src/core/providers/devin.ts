@@ -262,8 +262,9 @@ function logOfPid(logsDir: string, pid: number): string | null {
 class DevinReader implements TranscriptReader {
   private atif: AtifParse | null = null;
   private jsonSig = "";
-  /** The forest, for a session with no export (ACP): read incrementally by
-   *  row id, and paged from the database rather than held as events. */
+  /** Reading from the message forest (the live store) rather than the export:
+   *  read incrementally by row id, and paged from the database rather than
+   *  held as events. True whenever the database has nodes for the session. */
   private forest = false;
   private nodes = new Map<number, DevinNode>();
   private lastRowId = 0;
@@ -297,34 +298,40 @@ class DevinReader implements TranscriptReader {
       changed = true;
     }
 
-    const jsonPath = join(this.paths.transcripts, `${this.id}.json`);
-    const st = stat(jsonPath);
-    this.forest = !st;
-    if (st) {
-      const sig = `${st.mtimeMs}:${st.size}`;
-      if (sig !== this.jsonSig) {
-        try {
-          this.atif = parseAtif(JSON.parse(readFileSync(jsonPath, "utf8")));
-          this.jsonSig = sig;
-          changed = true;
-        } catch {
-          // Caught mid-rewrite; the next poll sees the finished file.
+    // The message forest is the live store — written node by node as a turn
+    // runs — so it is the timeline's source. The ATIF export is only written
+    // at a turn's end, so reading it would freeze a working session's timeline
+    // until the turn finished; it is a fallback for a session the database has
+    // no nodes for at all.
+    for (const r of db.nodesAfter(this.paths.db, this.id, this.lastRowId) ?? []) {
+      const n = devinNode(r);
+      if (n) this.nodes.set(n.id, n);
+      this.lastRowId = r.row_id;
+    }
+    const sig = `${this.lastRowId}:${this.row?.main_chain_id ?? ""}`;
+    if (sig !== this.chainSig) {
+      this.chain = chainTo(this.nodes, this.row?.main_chain_id ?? null);
+      this.answerOf = new Map();
+      for (const { node } of this.chain) if (node.answers) this.answerOf.set(node.answers, node);
+      this.atif = this.chain.length > 0 ? chainFacts(this.chain) : null;
+      this.chainSig = sig;
+      changed = true;
+    }
+    this.forest = this.chain.length > 0;
+    if (!this.forest) {
+      const jsonPath = join(this.paths.transcripts, `${this.id}.json`);
+      const st = stat(jsonPath);
+      if (st) {
+        const jsig = `${st.mtimeMs}:${st.size}`;
+        if (jsig !== this.jsonSig) {
+          try {
+            this.atif = parseAtif(JSON.parse(readFileSync(jsonPath, "utf8")));
+            this.jsonSig = jsig;
+            changed = true;
+          } catch {
+            // Caught mid-rewrite; the next poll sees the finished file.
+          }
         }
-      }
-    } else {
-      for (const r of db.nodesAfter(this.paths.db, this.id, this.lastRowId) ?? []) {
-        const n = devinNode(r);
-        if (n) this.nodes.set(n.id, n);
-        this.lastRowId = r.row_id;
-      }
-      const sig = `${this.lastRowId}:${this.row?.main_chain_id ?? ""}`;
-      if (sig !== this.chainSig) {
-        this.chain = chainTo(this.nodes, this.row?.main_chain_id ?? null);
-        this.answerOf = new Map();
-        for (const { node } of this.chain) if (node.answers) this.answerOf.set(node.answers, node);
-        this.atif = this.chain.length > 0 ? chainFacts(this.chain) : null;
-        this.chainSig = sig;
-        changed = true;
       }
     }
 

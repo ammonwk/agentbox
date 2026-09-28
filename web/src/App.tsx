@@ -227,7 +227,7 @@ export function App() {
               <SessionView
                 state={state}
                 id={route.page === "session" ? route.id : null}
-                tab={route.page === "session" ? route.tab : "terminal"}
+                tab={route.page === "session" ? route.tab : "timeline"}
                 onTab={(tab) => route.page === "session" && navigate({ page: "session", id: route.id, tab }, true)}
                 onOpen={(id) =>
                   navigate({
@@ -255,7 +255,7 @@ export function App() {
         </main>
 
         <ErrorBoundary label="The system bar">
-          <SystemBar accounts={state?.accounts ?? []} focusAccount={focusAccount} />
+          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} />
         </ErrorBoundary>
       </div>
 

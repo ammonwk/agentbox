@@ -170,11 +170,26 @@ export function listPanes(): PaneInfo[] {
   return out;
 }
 
+/** The pause after a short paste, before Enter: an Enter that arrives inside
+ *  the paste is taken as a newline in the prompt by some TUIs. */
+const PASTE_SETTLE_MS = 120;
+/** Poll cadence and cap while waiting for a longer paste to be taken. */
+const PASTE_POLL_MS = 30;
+const PASTE_WAIT_MS = 1_500;
+/** Below this, the message is too short to recognise on screen. */
+const PASTE_PROBE_MIN = 12;
+
 /**
  * Type `text` into the session as one prompt: a bracketed paste (so a
  * multi-line message is not submitted line by line), then Enter on its own.
- * The pause matters — an Enter that arrives inside the paste is taken as a
- * newline in the prompt by some TUIs.
+ *
+ * The Enter must be read *after* the paste, or the TUI takes it as part of the
+ * paste — a newline, or nothing — and the message sits unsent in its input box.
+ * A short message settles within the fixed pause; a long one is still being
+ * ingested after it (Devin especially), so wait until the pane shows the
+ * pasted text before pressing Enter. A TUI that collapses a long paste (Claude
+ * shows `[Pasted text #1]`) never echoes it, so the wait gives up after
+ * `PASTE_WAIT_MS` and presses Enter anyway.
  */
 export async function sendText(name: string, text: string): Promise<void> {
   const buffer = `ab-${process.pid}-${Date.now()}`;
@@ -182,8 +197,29 @@ export async function sendText(name: string, text: string): Promise<void> {
   if (load.code !== 0) throw new Error(`tmux load-buffer failed: ${load.stderr.trim()}`);
   const paste = tmux(["paste-buffer", "-p", "-d", "-b", buffer, "-t", `=${name}:`]);
   if (paste.code !== 0) throw new Error(`tmux paste failed: ${paste.stderr.trim()}`);
-  await Bun.sleep(120);
+  await settlePaste(name, text);
   sendKeys(name, ["Enter"]);
+}
+
+/**
+ * Wait for the pasted text to appear in the pane. The head and the tail of the
+ * message are looked for (the tail, because a TUI whose input box scrolls shows
+ * the end of a long paste), with all whitespace flattened so wrapping and
+ * indentation do not hide it.
+ */
+async function settlePaste(name: string, text: string): Promise<void> {
+  await Bun.sleep(PASTE_SETTLE_MS);
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length < PASTE_PROBE_MIN) return;
+  const probes = [...new Set([flat.slice(0, 32), flat.slice(-32)])];
+  const deadline = Date.now() + PASTE_WAIT_MS;
+  for (;;) {
+    const screen = capture(name) ?? "";
+    const seen = screen.replace(/\s+/g, " ");
+    if (probes.some((p) => seen.includes(p))) return;
+    if (Date.now() >= deadline) return;
+    await Bun.sleep(PASTE_POLL_MS);
+  }
 }
 
 /** The paste buffers' names, newest first. A TUI that copies inside tmux adds one (`load-buffer`). */

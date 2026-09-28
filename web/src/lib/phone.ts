@@ -9,12 +9,11 @@ export function isPhone(): boolean {
 }
 
 /**
- * The tab a session opens on. The terminal on a desktop; on a phone the
- * timeline, which reflows to the width — and attaching a phone-sized terminal
- * would shrink the agent's tmux window for the desktop too (`window-size
- * latest`). A blocked session still opens on the terminal: the prompt it is
- * waiting on is only there.
+ * The tab a session opens on: the timeline, which reads top to bottom and
+ * reflows to any width (a phone-sized terminal would also shrink the agent's
+ * tmux window for the desktop, `window-size latest`). A blocked session still
+ * opens on the terminal: the prompt it is waiting on is only there.
  */
 export function openingTab(status?: string): SessionTab {
-  return isPhone() && status !== "blocked" ? "timeline" : "terminal";
+  return status === "blocked" ? "terminal" : "timeline";
 }

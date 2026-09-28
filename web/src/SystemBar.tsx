@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
-import type { AccountView, UsageWindow } from "../../src/core/types";
+import type { AccountView, Session, UsageWindow } from "../../src/core/types";
 import { useMetrics, useNow, type SystemState } from "./api";
-import { accountHue } from "./bits";
+import { accountHue, PROVIDER_LABEL } from "./bits";
 import { fmtCountdown } from "./lib/format";
 import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
 
@@ -19,9 +19,10 @@ import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
  * and throttling. Standing conditions (disk, battery) sit last, after a spacer,
  * because they are context rather than news.
  *
- * After the machine, the Claude subscriptions: each account's 5-hour and weekly
- * window, because "which account has room" is the other thing you glance down
- * for before starting work.
+ * After the machine, the subscriptions you are actually spending: the enabled
+ * accounts across every provider, newest activity first, each with its 5-hour
+ * and weekly window — because "which account has room" is the other thing you
+ * glance down for before starting work.
  *
  * Every cell is conditional on its own field. On a kernel without PSI, a
  * desktop with no battery, or a chip whose sensors we cannot name, the cell is
@@ -33,12 +34,20 @@ function gb(n: number): string {
   return g >= 100 ? `${Math.round(g)}G` : `${g.toFixed(1)}G`;
 }
 
-export function SystemBar({ accounts, focusAccount }: { accounts: readonly AccountView[]; focusAccount: string | null }) {
+export function SystemBar({
+  accounts,
+  sessions,
+  focusAccount,
+}: {
+  accounts: readonly AccountView[];
+  sessions: readonly Session[];
+  focusAccount: string | null;
+}) {
   const { metrics, stale } = useMetrics();
   const [open, setOpen] = useState(false);
   const now = useNow(30_000);
   const sys = metrics?.system;
-  const limits = claudeLimits(accounts);
+  const limits = recentAccounts(accounts, sessions, focusAccount);
 
   // Nothing to say: not Linux, or the first sweep has not landed. An empty
   // strip would be a permanent piece of furniture claiming a measurement.
@@ -290,11 +299,37 @@ export function SystemBar({ accounts, focusAccount }: { accounts: readonly Accou
   );
 }
 
-/** Enabled Claude accounts, in the order their colours were handed out. */
-function claudeLimits(accounts: readonly AccountView[]): AccountView[] {
-  return accounts
-    .filter((a) => a.provider === "claude" && a.enabled)
-    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+/** How many subscriptions the bar carries: the ones in use, newest first. */
+const LIMIT_CELLS = 6;
+
+/**
+ * The subscriptions along the bottom: every enabled account across every
+ * provider, most recently active first — a session on it (started or touched),
+ * or else its last usage reading. The open session's account is always among
+ * them, and the list is capped so a fleet of accounts cannot crowd out the
+ * machine figures.
+ */
+function recentAccounts(
+  accounts: readonly AccountView[],
+  sessions: readonly Session[],
+  focusAccount: string | null,
+): AccountView[] {
+  const active = new Map<string, number>();
+  for (const s of sessions) {
+    if (!s.accountId) continue;
+    const at = Math.max(s.lastActivityAt, s.startedAt);
+    if (at > (active.get(s.accountId) ?? 0)) active.set(s.accountId, at);
+  }
+  const recency = (a: AccountView) => Math.max(active.get(a.id) ?? 0, a.usage.at ?? 0);
+  const ranked = accounts
+    .filter((a) => a.enabled)
+    .sort((a, b) => recency(b) - recency(a) || a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    .slice(0, LIMIT_CELLS);
+  if (focusAccount && !ranked.some((a) => a.id === focusAccount)) {
+    const focused = accounts.find((a) => a.id === focusAccount);
+    if (focused) ranked.splice(Math.max(0, ranked.length - 1), 1, focused);
+  }
+  return ranked;
 }
 
 /**
@@ -319,16 +354,27 @@ function LimitCell({ account, hue, focused, now }: { account: AccountView; hue: 
   );
 }
 
-/** An account's windows in words, for the hover. */
+/**
+ * An account's windows in words, for the hover. The first line names the
+ * service and the login it is showing usage for — several providers and
+ * several logins on one of them are otherwise a row of identical-looking bars.
+ */
 function limitTitle(account: AccountView, now: number, focused = false): string {
   const { short, weekly } = headlineWindows(account.usage);
   const line = (w: UsageWindow | null, name: string) =>
     w ? `${name}: ${Math.round(usedNow(w, now))}% used, ${resetText(w.resetsAt, now)}` : `${name}: no data`;
   return (
-    `${account.label}${account.plan ? ` · ${account.plan}` : ""}${focused ? " · this session's account" : ""}\n` +
+    `${whoOf(account)}${focused ? " · this session's account" : ""}\n` +
     `${line(short, "5-hour")}\n${line(weekly, "Weekly")}` +
     (account.usage.stale ? `\nStale: ${account.usage.stale}` : "")
   );
+}
+
+/** "Claude · dev@example.com · max" — service, login, plan. */
+function whoOf(account: AccountView): string {
+  const name = account.label || account.email || account.id;
+  const email = account.email && account.email !== name ? ` · ${account.email}` : "";
+  return `${PROVIDER_LABEL[account.provider]} · ${name}${email}${account.plan ? ` · ${account.plan}` : ""}`;
 }
 
 /** 5-hour on top in blue, weekly under it in grey — the Accounts page's
@@ -360,7 +406,7 @@ function SystemDetail({ sys, limits, now }: { sys: SystemState; limits: AccountV
   return (
     <div className="sysdetail">
       {limits.length > 0 ? (
-        <Block title="claude limits">
+        <Block title="subscriptions">
           <div className="syslimits">
             {/* Two lines an account — its name, then both windows side by
                 side — so four accounts are as tall as the other blocks. */}
@@ -368,7 +414,7 @@ function SystemDetail({ sys, limits, now }: { sys: SystemState; limits: AccountV
               const { short, weekly } = headlineWindows(a.usage);
               return (
                 <div key={a.id} className="syslimits-acct" data-stale={a.usage.stale ? true : undefined} title={limitTitle(a, now)}>
-                  <span className="muted syslimits-name">{a.label}</span>
+                  <span className="muted syslimits-name">{whoOf(a)}</span>
                   <span className="syslimits-row">
                     <span className="faint">5h</span>
                     <LimitRow kind="5h" w={short} now={now} />
