@@ -15,7 +15,7 @@ export function Markdown({ text }: { text: string }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);
   const plugins = useMemo(
-    () => [remarkGfm, remarkFileRefs, ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links)],
+    () => [remarkGfm, remarkFileRefs(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links)],
     [base, links],
   );
   return (
