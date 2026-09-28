@@ -126,6 +126,8 @@ export function SessionView({
 
   // Closing one that runs subagents stops them mid-task, so that is asked first.
   const [closingParent, setClosingParent] = useState<SessionRow | null>(null);
+  // Ctrl+W on a mid-turn session asks first, as the Close button does.
+  const [confirmCloseRow, setConfirmCloseRow] = useState<SessionRow | null>(null);
   const close = (s: SessionRow) => (runningSubagents(s, state.sessions).length > 0 ? setClosingParent(s) : closeRow(s));
   // Closing the open one opens the row that takes its place: the one below
   // it, or the one above at the bottom of the list.
@@ -138,10 +140,42 @@ export function SessionView({
     else location.hash = hrefOf({ page: "sessions" });
   };
 
+  // Ctrl+Shift+T: the most recently closed session, from all of history —
+  // reopen it and open it. Pressed again it reopens the one before, since
+  // the one just reopened is closed no more.
+  const reopenLast = () => {
+    api.closed("", 0, 1).then((page) => {
+      const s = page.sessions[0];
+      if (!s) return;
+      forget(s.id);
+      api.close(s.id, false).then(
+        () => onOpen(s.id),
+        () => undefined,
+      );
+    }, () => undefined);
+  };
+
   // j/k switch sessions and ←/→ fold, from anywhere that is not a text field
-  // or the terminal; 1–4 pick a tab.
+  // or the terminal; 1–4 pick a tab. Ctrl+W closes the open session and
+  // Ctrl+Shift+T reopens the most recently closed one, Chrome-style.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
+        const t = e.target as HTMLElement | null;
+        if (e.key === "w" && !e.shiftKey) {
+          // The terminal owns Ctrl+W: in a shell it deletes a word.
+          if (t?.closest(".xterm")) return;
+          const row = id ? state.sessions.find((s) => s.id === id) : null;
+          if (!row || row.status === "closed") return;
+          e.preventDefault();
+          if (row.status === "running" && runningSubagents(row, state.sessions).length === 0) setConfirmCloseRow(row);
+          else close(row);
+        } else if (e.shiftKey && e.key === "T") {
+          e.preventDefault();
+          reopenLast();
+        }
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.closest(".xterm") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
@@ -229,7 +263,30 @@ export function SessionView({
           }}
         />
       ) : null}
+      {confirmCloseRow ? (
+        <ConfirmClose
+          session={confirmCloseRow}
+          onCancel={() => setConfirmCloseRow(null)}
+          onConfirm={() => {
+            closeRow(confirmCloseRow);
+            setConfirmCloseRow(null);
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/** Asked before closing a session that is mid-turn: the turn would be cut short. */
+function ConfirmClose({ session, onCancel, onConfirm }: { session: SessionRow; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <Confirm
+      title={`Close “${titleOf(session)}”?`}
+      confirmLabel="Close"
+      body={<p>It is mid-turn. Closing stops it now, so this turn is cut short. The conversation is kept, and See closed finds it to reopen or resume.</p>}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
   );
 }
 
@@ -541,10 +598,8 @@ function Detail({
       <Composer session={session} accounts={state.accounts} claimIdleMin={state.settings.balancer.claimIdleMin} />
 
       {confirmClose ? (
-        <Confirm
-          title={`Close “${titleOf(session)}”?`}
-          confirmLabel="Close"
-          body={<p>It is mid-turn. Closing stops it now, so this turn is cut short. The conversation is kept, and See closed finds it to reopen or resume.</p>}
+        <ConfirmClose
+          session={session}
           onCancel={() => setConfirmClose(false)}
           onConfirm={() => {
             setConfirmClose(false);

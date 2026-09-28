@@ -186,6 +186,7 @@ export function App() {
           <div className="sidebar-keys nav-label" aria-hidden="true">
             <span><kbd>/</kbd> search</span>
             <span><kbd>j</kbd><kbd>k</kbd> move</span>
+            <span><kbd>^W</kbd> close</span>
           </div>
           <UpdateReady />
           <ConnectionChip />
