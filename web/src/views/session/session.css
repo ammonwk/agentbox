@@ -87,6 +87,7 @@
   min-height: 0;
   overflow-y: auto;
   padding-bottom: 16px;
+  scrollbar-gutter: stable;
 }
 /* Search and the sort menu, above everything that scrolls. */
 .rail-top {
@@ -709,6 +710,7 @@
   overflow-y: auto;
   padding: 16px 18px;
   position: relative;
+  scrollbar-gutter: stable;
 }
 
 .sx-error {

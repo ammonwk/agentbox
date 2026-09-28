@@ -572,6 +572,9 @@ code {
   min-height: 0;
   overflow: auto;
   padding: 20px 24px 40px;
+  /* The styled scrollbar takes layout space; without a reserved gutter every
+   * page that crosses the viewport height shifts 10px when it starts scrolling. */
+  scrollbar-gutter: stable;
 }
 .content:focus {
   outline: none;
