@@ -1,6 +1,6 @@
 /** Where an agent is working, said out loud.
  *
- * An omp subagent runs in a directory it did not choose and its caller did not
+ * A subagent runs in a directory it did not choose and its caller did not
  * necessarily look at. `cwd` defaults to the MCP server's own working
  * directory — whatever the client was started in, fixed for the life of the
  * process — so a caller that has since moved into a worktree has no way to

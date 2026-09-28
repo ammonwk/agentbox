@@ -68,8 +68,6 @@ export interface ToolCall {
   endedAt: number | null;
 }
 
-export type AdvisorySeverity = "nit" | "concern" | "blocker";
-
 /** One tool call as a subagent keeps it, for `transcript` and the loop
  *  detector: the fields clipped, the timing on our own clock. */
 export interface ToolRecord {

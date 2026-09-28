@@ -1,5 +1,5 @@
-/** The omp subagent MCP server (`agentbox subagent-mcp`): `agent` and
- * `send_message`, backed by omp.
+/** The subagent MCP server (`agentbox subagent-mcp`): `agent` and
+ * `send_message`, backed by omp or devin.
  *
  * This is a different product from `fleet.ts`. That one hands a conductor the
  * fleet — every session on the machine, each a TUI with an account and a human
@@ -28,6 +28,7 @@ import {
   type TurnReport,
 } from "../subagents/pool";
 import { describePlace, renderPlace } from "../subagents/place";
+import { SUBAGENT_PROVIDERS, backendFor } from "../subagents/backend";
 import { budget, healthWord, renderBudget, verdict, type Verdict } from "../subagents/health";
 import * as live from "../subagents/live";
 import {
@@ -169,7 +170,7 @@ function publisher(
 /**
  * Narrate one agent's turn for as long as a call is blocked on it.
  *
- * `agent` and `send_message` block for up to an hour on a single omp process
+ * `agent` and `send_message` block for up to an hour on a single agent process
  * and, until now, said nothing at all in the meantime — so a client showed a
  * spinner and a tool name, and a watcher could not tell a subagent reading
  * its way through a repository from one that died three minutes in. The
@@ -268,12 +269,13 @@ function renderTurn(r: TurnReport): string {
         ];
   const stats = [
     r.name,
+    r.provider,
     renderPlace(describePlace(r.cwd)),
     `turn ${r.turn}`,
     r.state,
     `${r.toolCalls} tool call${r.toolCalls === 1 ? "" : "s"}`,
     `${Math.round(r.durationMs / 1000)}s`,
-    // Cost and context are omitted when omp never reported them. A column of
+    // Cost and context are omitted when the CLI never reported them. A column of
     // em-dashes in every report teaches the reader to skip the whole line,
     // which is the line that says whether the agent did any work at all.
     ...(r.costUsd === null ? [] : [`$${r.costUsd.toFixed(4)} total`]),
@@ -455,7 +457,20 @@ export async function runSubagentMcp(): Promise<void> {
     return { content: [{ type: "text" as const, text: `${body}${mailboxNotice()}` }] };
   }
 
-  const server = new McpServer({ name: "omp", version: VERSION });
+  const server = new McpServer({ name: "subagents", version: VERSION });
+
+  /** Named in the descriptions with the model each runs on, which is the
+   *  whole difference between them from a caller's side. */
+  const providers = SUBAGENT_PROVIDERS.map(
+    (id) => `${id} (${backendFor(id).model() ?? "its own configured default model"})`,
+  ).join(", ");
+  const providerArg = z
+    .enum(SUBAGENT_PROVIDERS)
+    .optional()
+    .describe(
+      `The agent CLI to run: ${providers}. Defaults to omp. Each takes the same brief ` +
+        `and works the same way here; they differ in the model behind them.`,
+    );
 
   /** The wall clock a caller may set on one turn, in hours. */
   const turnHoursArg = z
@@ -484,9 +499,9 @@ export async function runSubagentMcp(): Promise<void> {
   server.registerTool(
     "agent",
     {
-      title: "Delegate a task to an omp subagent",
+      title: "Delegate a task to a subagent",
       description:
-        `Runs an omp agent on \`prompt\` and blocks until it answers. Unless you pass ` +
+        `Runs an agent (omp unless you pass \`provider\`) on \`prompt\` and blocks until it answers. Unless you pass ` +
         `\`cwd\`, it runs in ${renderPlace(HERE)} — see \`cwd\` below, and check it against ` +
         `where you are actually working before you delegate anything that writes. The agent ` +
         "sees that repository exactly as you would, uncommitted changes included: this is not " +
@@ -541,10 +556,10 @@ export async function runSubagentMcp(): Promise<void> {
           .boolean()
           .optional()
           .describe(
-            "Hard-enforce read-only: the harness denies every tool call that edits, moves, " +
-              "deletes or executes — including shell — so the agent cannot touch your tree no " +
-              "matter what its model decides. The agent is told, and each denial appears in its " +
-              "report's errors. Set it on any agent that only needs to look: audits, searches, " +
+            "Hard-enforce read-only: the agent is started without any tool that edits, moves, " +
+              "deletes or executes — including shell — so it cannot touch your tree no matter " +
+              "what its model decides. The agent is told. Set it on any agent that only needs to " +
+              "look: audits, searches, " +
               "reviews, fan-outs. Defaults to FALSE here, because a single deliberate delegation " +
               "is often meant to change something; inside a `workflow` it defaults to true.",
           ),
@@ -560,14 +575,16 @@ export async function runSubagentMcp(): Promise<void> {
               "get past a refusal that is telling the truth.",
           ),
         max_turn_hours: turnHoursArg,
+        provider: providerArg,
       },
     },
-    async ({ prompt, name, role, cwd, read_only, allow_outside_cwd, max_turn_hours }, extra) => {
+    async ({ prompt, name, role, cwd, read_only, allow_outside_cwd, max_turn_hours, provider }, extra) => {
       const agent = await pool.spawn({
         prompt,
         name,
         role,
         cwd,
+        provider,
         readOnly: read_only,
         allowOutsideCwd: allow_outside_cwd,
         maxTurnMs: max_turn_hours === undefined ? undefined : max_turn_hours * 3_600_000,
@@ -772,7 +789,7 @@ export async function runSubagentMcp(): Promise<void> {
         const snap = a.snapshot(now);
         const v = verdict(snap, now);
         const head =
-          `${snap.name}  ${renderPlace(a.place)}  [${healthWord(v, snap).toUpperCase()}]` +
+          `${snap.name}  ${snap.provider}  ${renderPlace(a.place)}  [${healthWord(v, snap).toUpperCase()}]` +
           (snap.readOnly ? "  read-only" : "") +
           (snap.uncollected > 0 ? `  ${snap.uncollected} UNCOLLECTED` : "");
         const lines = [head];
@@ -891,7 +908,7 @@ export async function runSubagentMcp(): Promise<void> {
     {
       title: "Run many subagents from one script",
       description:
-        "Runs a JavaScript script in which `agent(prompt, opts)` spawns an omp subagent and " +
+        "Runs a JavaScript script in which `agent(prompt, opts)` spawns a subagent and " +
         "returns its answer. One call, however many agents. Only what your script RETURNS comes " +
         "back to you — a hundred agents' reports cost you nothing unless you keep them.\n\n" +
         "Use it when you want several agents at once, or agents whose work feeds other agents. " +
@@ -901,8 +918,8 @@ export async function runSubagentMcp(): Promise<void> {
         "HOOKS (all available as bare identifiers; the body is an async function, so `await` and " +
         "`return` work at the top level):\n" +
         "  • `agent(prompt, opts?)` → the agent's answer as a string. `opts`: `label`, `role`, " +
-        "`cwd`, `allowOutsideCwd`, `readOnly` (**defaults to true** — pass `false` deliberately " +
-        "for an agent meant to edit files), and `schema`.\n" +
+        "`cwd`, `allowOutsideCwd`, `provider` (overrides the workflow's), `readOnly` (**defaults " +
+        "to true** — pass `false` deliberately for an agent meant to edit files), and `schema`.\n" +
         "  • `agent(prompt, {schema})` → returns a PARSED VALUE, not prose. Pass a plain example " +
         "object describing the shape you want. This is the point of a workflow: a value can be " +
         "counted, filtered and branched on by the script; prose can only be fed to another model.\n" +
@@ -962,9 +979,10 @@ export async function runSubagentMcp(): Promise<void> {
           .describe(`How many agents run at once. Default ${DEFAULT_CONCURRENCY}.`),
         deadline_seconds: z.number().int().min(30).max(7200).optional(),
         cwd: cwdArg,
+        provider: providerArg,
       },
     },
-    async ({ script, args, concurrency, deadline_seconds, cwd }, extra) => {
+    async ({ script, args, concurrency, deadline_seconds, cwd, provider }, extra) => {
       const out = publisher("workflow", true, extra);
       let r;
       try {
@@ -973,6 +991,7 @@ export async function runSubagentMcp(): Promise<void> {
           args: parseJsonArgs(args),
           concurrency,
           cwd,
+          provider,
           // `progress`/`total` and not just prose: a client handed both renders
           // a percentage of its own. Both grow during the run, because the
           // script decides how many agents there are as it goes.
@@ -1003,7 +1022,7 @@ export async function runSubagentMcp(): Promise<void> {
   );
 
   /** The agents are children of this process. Leaving them running after it goes
-   *  would strand omp processes nobody can address or see. */
+   *  would strand agent processes nobody can address or see. */
   function shutdown() {
     for (const id of publishing) live.retract(id);
     pool.stopAll();
@@ -1019,7 +1038,7 @@ export async function runSubagentMcp(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(
-    `omp subagent MCP server ${VERSION} ready (cwd: ${process.cwd()})` +
+    `subagent MCP server ${VERSION} ready (cwd: ${process.cwd()})` +
       (pruned > 0 ? ` · pruned ${pruned} old transcript${pruned === 1 ? "" : "s"}` : ""),
   );
 }

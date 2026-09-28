@@ -1,4 +1,4 @@
-/** omp subagents: agents a *calling agent* owns, not the fleet.
+/** Subagents: agents a *calling agent* owns, not the fleet.
  *
  * A fleet session is a piece of work with a life of its own — a TUI in tmux,
  * a pinned account, a human who can attach to it, a row that outlives the
@@ -9,7 +9,7 @@
  *
  * So these deliberately do not go through the fleet. They have no tmux
  * session, no account, no claim and no database row; each is one long-lived
- * `omp acp` process (`AcpRunner`), one turn at a time.
+ * ACP process (`AcpRunner`) of whichever CLI it was asked for, one turn at a time.
  *
  * Lifetime is the MCP server process. When it goes, so do the agents — that is
  * correct for something whose only purpose is to answer its caller, and it is
@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { AcpRunner, messageOf, type AcpEvents, type LaunchOptions } from "./acp";
+import { backendFor, type AcpBackend, type SubagentProvider } from "./backend";
 import {
   describePlace,
   foreignRepoPaths,
@@ -44,13 +45,8 @@ import {
 import { readSubagentPrompt } from "./prompt";
 import { STOPPED_BY_CALLER, type ToolCall, type ToolRecord } from "./types";
 
-/** The omp model a subagent runs on unless `AGENTBOX_SUBAGENT_MODEL` names
- *  another. Its own constant, not the fleet's per-provider setting: the MCP
- *  server must work without the database. */
-export const DEFAULT_MODEL = "opencode-go-responses/muse-spark-1.3-contributor";
-
 /** `running` — mid-turn. `idle` — turn over, conversation alive, resumable.
- *  `dead` — the omp process is gone and this agent cannot be talked to again. */
+ *  `dead` — the agent process is gone and this agent cannot be talked to again. */
 export type SubagentState = "running" | "idle" | "dead";
 
 /** Recent tool calls kept per agent, for `transcript`. Bounded because a long
@@ -64,7 +60,7 @@ export const MAX_REPORT = 20_000;
 /**
  * How long an abnormally-ended turn waits before being handed back.
  *
- * When omp dies mid-turn the pending prompt request rejects *first* and the
+ * When the agent dies mid-turn the pending prompt request rejects *first* and the
  * process exit is reported a beat later — so deciding "is this agent still
  * usable" at the instant the turn fails gets the answer wrong, and hands the
  * caller a dead agent labelled `idle` to go on talking to. Nothing observable
@@ -74,10 +70,10 @@ export const MAX_REPORT = 20_000;
 const DEATH_GRACE_MS = 300;
 
 /**
- * How long `omp acp` gets to start and negotiate a session.
+ * How long an agent's ACP server gets to start and negotiate a session.
  *
  * Nothing below this has a deadline: the ACP handshake resolves on success or
- * failure and never on time, so an omp that starts but wedges — a stale auth
+ * failure and never on time, so a CLI that starts but wedges — a stale auth
  * prompt, a hung updater, a network that neither answers nor refuses — blocks
  * the spawn forever. That outlasts the caller's timeout AND its client's,
  * with no handle to collect and nothing to interrupt, which is the one way
@@ -95,7 +91,7 @@ const LAUNCH_TIMEOUT_MS = 60_000;
  * a 429, a 500, a dropped socket. Reporting it as a completed turn is the
  * worst reading available: the caller gets a truncated answer wearing the
  * costume of a finished one, and the work up to that point is thrown away
- * because the agent is never asked to go on. omp keeps its context across the
+ * because the agent is never asked to go on. The agent keeps its context across the
  * failure, so resuming costs one message and salvages the whole turn.
  *
  * Bounded, because the same reasoning inverts when the error is permanent —
@@ -137,15 +133,15 @@ export const DEFAULT_TIMING: PoolTiming = {
 const MAX_TURN_MS = 4 * 60 * 60 * 1000;
 
 /**
- * How long an agent may sit idle before its omp process is stopped.
+ * How long an agent may sit idle before its process is stopped.
  *
- * An idle agent is not free. `omp acp` is a whole runtime, a few hundred
+ * An idle agent is not free. An ACP server is a whole runtime, a few hundred
  * megabytes at rest, and callers rarely stop the agents they are done with:
  * twenty-two were once found alive under one machine's Claude sessions,
  * nineteen of them idle for over an hour and some for days. Everything a
  * caller reads back — the mailbox, the history, the transcript ring — lives on
- * this object and not in omp, so stopping it costs nothing until the next
- * `send`, which resumes the same omp conversation in a new process.
+ * this object and not in the process, so stopping it costs nothing until the
+ * next `send`, which resumes the same conversation in a new process.
  *
  * Not immediate, because a report is so often followed straight away by a
  * question about it, and every resume is seconds of startup the caller pays.
@@ -168,6 +164,7 @@ const CONTINUE_MESSAGE =
 /** One completed turn: everything the caller learns from a `settle`. */
 export interface TurnReport {
   name: string;
+  provider: SubagentProvider;
   /** Where the agent ran. On the report because a report that does not say
    *  where it happened is the one thing a caller cannot check. */
   cwd: string;
@@ -202,7 +199,7 @@ export interface TurnReport {
   report: string;
   /** ACP's end_turn/max_tokens/refusal/cancelled, or agentbox's own `error`. */
   stopReason: string;
-  /** The model's context window, when omp reported it. With `contextTokens`
+  /** The model's context window, when the CLI reported it. With `contextTokens`
    *  beside it this is a budget rather than a bare number. */
   contextSize: number | null;
   /** Tool calls in this turn — the cheapest signal that it did real work. */
@@ -210,7 +207,7 @@ export interface TurnReport {
   durationMs: number;
   costUsd: number | null;
   contextTokens: number | null;
-  /** Anything omp wrote to stderr, or a failed prompt request. Empty is normal. */
+  /** Anything the CLI wrote to stderr, or a failed prompt request. Empty is normal. */
   errors: string[];
 }
 
@@ -285,14 +282,15 @@ export interface SpawnOptions {
   /** Suppress this agent's own live status line. Set by the workflow runner,
    *  which publishes one roster line for the whole fan-out instead. */
   quiet?: boolean;
-  model?: string;
+  /** The CLI to run. Defaults to omp. */
+  provider?: SubagentProvider;
   /** Extra system-prompt text appended below the subagent contract, for
    *  role-shaping ("you only write tests", "answer in French"). */
   role?: string;
   /**
-   * Enforced read-only: permission requests for anything but reading are
-   * DENIED at the permission layer, not merely discouraged in the prompt.
-   * Prose in `role` is a request to a model; this is a rule of the harness.
+   * Enforced read-only: the CLI is started without writing tools, and any
+   * permission request for more than reading is denied. Prose in `role` is a
+   * request to a model; this is a rule of the harness.
    */
   readOnly?: boolean;
 }
@@ -322,28 +320,9 @@ function clipReport(s: string): string {
 }
 
 /**
- * A model id for a subagent, in order of specificity.
- *
- * There is deliberately no read of agentbox's settings database here: the MCP
- * server must work when the agentbox server has never been run.
- *
- * `explicit` is no longer reachable from the MCP tools. Calling models kept
- * passing the names they know — "sonnet", "opus" — which are not omp model ids
- * and are not rejected either: `omp acp --model sonnet` starts perfectly
- * happily and only fails later, at the first prompt, as a provider error that
- * reads like the agent's own failure. A knob whose wrong values are both easy
- * to reach and hard to diagnose is not worth its own existence. The operator's
- * `AGENTBOX_SUBAGENT_MODEL` remains, because whoever sets that can also read
- * `omp models`.
- */
-export function resolveModel(explicit?: string): string {
-  return explicit || process.env.AGENTBOX_SUBAGENT_MODEL || DEFAULT_MODEL;
-}
-
-/**
  * The slice of `AcpRunner` a subagent actually uses.
  *
- * It exists so tests can stand in for the omp process. Everything interesting
+ * It exists so tests can stand in for the agent process. Everything interesting
  * in this file is about *ordering* — a turn failing a beat before the process
  * exit is reported, two messages queued behind one another — and none of that
  * can be provoked reliably against a live model, which is exactly why the bugs
@@ -361,12 +340,13 @@ export interface Runner {
 
 export type RunnerFactory = (
   id: string,
+  backend: AcpBackend,
   events: AcpEvents,
   autoApprove: () => boolean,
 ) => Runner;
 
-const ompRunner: RunnerFactory = (id, events, autoApprove) =>
-  new AcpRunner(id, events, autoApprove);
+const acpRunner: RunnerFactory = (id, backend, events, autoApprove) =>
+  new AcpRunner(id, backend, events, autoApprove);
 
 /**
  * Tool kinds a read-only agent may use. ACP has no tool names on the wire,
@@ -426,28 +406,31 @@ function placeSection(place: Place, readOnly: boolean): string {
 }
 
 /**
- * One omp subagent: an `omp acp` process, a conversation, and a mailbox of
- * turns its caller has not collected yet.
+ * One subagent: an ACP process, a conversation, and a mailbox of turns its
+ * caller has not collected yet.
  */
 export class Subagent {
   readonly name: string;
   readonly cwd: string;
-  readonly model: string;
+  readonly provider: SubagentProvider;
+  /** Null runs the CLI's own configured default. */
+  readonly model: string | null;
   readonly dir: string;
   readonly createdAt = Date.now();
 
   private runner: Runner;
+  private readonly backend: AcpBackend;
   private readonly makeRunner: RunnerFactory;
   /** Which runner's events count; see `newRunner`. */
   private generation = 0;
-  /** omp's id for this conversation, so a new process can pick it back up. */
-  private ompSessionId: string | null = null;
+  /** The CLI's id for this conversation, so a new process can pick it back up. */
+  private sessionId: string | null = null;
   /** The system prompt as launched, in case a resume finds its file gone. */
   private systemPrompt = "";
-  /** When omp was stopped for sitting idle. Null while omp is running. */
+  /** When the process was stopped for sitting idle. Null while it is running. */
   private parkedAt: number | null = null;
-  /** Messages sent to a parked agent while its omp comes back, in order. Null
-   *  when no wake is in flight. */
+  /** Messages sent to a parked agent while its process comes back, in order.
+   *  Null when no wake is in flight. */
   private waking: string[] | null = null;
   private launched = false;
   /** Assistant prose of the turn in flight. */
@@ -541,9 +524,9 @@ export class Subagent {
   constructor(
     name: string,
     cwd: string,
-    model: string,
+    backend: AcpBackend,
     dir: string,
-    makeRunner: RunnerFactory = ompRunner,
+    makeRunner: RunnerFactory = acpRunner,
     readOnly = false,
     maxTurnMs = MAX_TURN_MS,
     quiet = false,
@@ -551,7 +534,9 @@ export class Subagent {
   ) {
     this.name = name;
     this.cwd = cwd;
-    this.model = model;
+    this.backend = backend;
+    this.provider = backend.id;
+    this.model = backend.model();
     this.dir = dir;
     this.readOnly = readOnly;
     this.maxTurnMs = maxTurnMs;
@@ -563,7 +548,7 @@ export class Subagent {
   /**
    * A runner wired to this agent, replacing whichever came before.
    *
-   * Events count only from the newest one. A parked agent's omp is stopped on
+   * Events count only from the newest one. A parked agent's process is stopped on
    * purpose, and its exit — arriving whenever it arrives, possibly after a new
    * process has already picked the conversation up — would otherwise read as
    * the agent dying.
@@ -573,6 +558,7 @@ export class Subagent {
     const current = () => generation === this.generation;
     return this.makeRunner(
       this.name,
+      this.backend,
       {
         onText: (_id, text) => {
           if (!current()) return;
@@ -586,7 +572,6 @@ export class Subagent {
         onToolEnd: (_id, call) => {
           if (current()) this.recordTool(call);
         },
-        onAdvisory: () => {},
         onTurnEnd: (_id, stopReason) => {
           if (current()) this.finishTurn(stopReason);
         },
@@ -606,7 +591,7 @@ export class Subagent {
         // request is answered immediately, by rule. Ordinary agents approve
         // everything (autoApprove short-circuits this handler); a read-only
         // agent lands here and is judged by tool kind. A denial is an answer,
-        // not a hang: omp is told no and the turn continues, so the agent can
+        // not a hang: the agent is told no and the turn continues, so it can
         // report what it was not allowed to do.
         onPermission: (_id, info) => {
           if (!current()) return;
@@ -625,7 +610,7 @@ export class Subagent {
           this.log({ type: "error", message });
         },
         onExit: (_id, code) => {
-          if (current()) this.die(`omp exited with code ${code}`);
+          if (current()) this.die(`${this.provider} exited with code ${code}`);
         },
       },
       // A read-only agent routes every request through the handler above so
@@ -642,7 +627,7 @@ export class Subagent {
     return this.runner.pid;
   }
 
-  /** Whether omp is still there, or parked and able to come back. The
+  /** Whether the process is still there, or parked and able to come back. The
    *  authority on liveness — `state` is a summary that can lag it by a tick. */
   get alive(): boolean {
     return this.parkedAt !== null || this.waking !== null || this.runner.alive;
@@ -659,7 +644,7 @@ export class Subagent {
     return this.lastAnsweredAt;
   }
 
-  /** What the agent has cost so far, as omp last reported it. Exposed because
+  /** What the agent has cost so far, as its CLI last reported it. Exposed because
    *  a runaway turn is only visible while it is still running. */
   get costUsd(): number | null {
     return this.cost;
@@ -683,6 +668,7 @@ export class Subagent {
       name: this.name,
       cwd: this.cwd,
       branch: this.place.branch,
+      provider: this.provider,
       model: this.model,
       readOnly: this.readOnly,
       state: this._state,
@@ -736,6 +722,7 @@ export class Subagent {
       state: this._state,
       cwd: this.cwd,
       branch: this.place.branch ?? undefined,
+      provider: this.provider,
       model: this.model,
       readOnly: this.readOnly || undefined,
       turns: this.turns,
@@ -766,7 +753,7 @@ export class Subagent {
     const now = Date.now();
     return {
       // Before the first event there is genuinely nothing to report but the
-      // fact that omp is booting, which is worth saying — a blank line reads
+      // fact that the agent is booting, which is worth saying — a blank line reads
       // as a hang.
       action: this.lastAction || (this._state === "running" ? "starting" : "idle"),
       idleMs: this.lastActivityAt ? now - this.lastActivityAt : 0,
@@ -788,18 +775,19 @@ export class Subagent {
     return this.tools.slice(-limit);
   }
 
-  /** Launch omp and send the first message. Throws if omp will not start. */
+  /** Launch the agent and send the first message. Throws if it will not start. */
   async start(prompt: string, role?: string): Promise<void> {
     mkdirSync(this.dir, { recursive: true });
     const promptFile = join(this.dir, "system.md");
     const place = describePlace(this.cwd, { dirty: true });
     this.placeCache = place;
     // Identity, written before anything can go wrong with the launch. An agent
-    // whose omp never started is exactly the one somebody will want to look up.
+    // whose process never started is exactly the one somebody will want to look up.
     const meta: RecordMeta = {
       name: this.name,
       cwd: this.cwd,
       branch: place.branch,
+      provider: this.provider,
       model: this.model,
       readOnly: this.readOnly,
       startedAt: this.createdAt,
@@ -811,8 +799,8 @@ export class Subagent {
     const parts = [readSubagentPrompt(), placeSection(place, this.readOnly)];
     if (this.readOnly) {
       parts.push(
-        "This agent is READ-ONLY, enforced by the harness: any tool call that " +
-          "edits, moves, deletes or executes will be denied automatically. Work " +
+        "This agent is READ-ONLY, enforced by the harness: it has no tool that " +
+          "edits, moves, deletes or executes, and any such call is denied. Work " +
           "within that — read, search and report.",
       );
     }
@@ -820,17 +808,17 @@ export class Subagent {
     this.systemPrompt = `${parts.join("\n\n---\n\n")}\n`;
     writeFileSync(promptFile, this.systemPrompt);
 
-    this.ompSessionId = await this.launchRunner(null);
-    // Again, now that omp has named the conversation: its transcript is in
-    // omp's own store, and this is what ties it back to this agent. A resume
-    // reopens the same id, so this is the only time it changes.
-    writeMeta(this.dir, { ...meta, ompSessionId: this.ompSessionId });
+    this.sessionId = await this.launchRunner(null);
+    // Again, now that the CLI has named the conversation: its transcript is in
+    // the CLI's own store, and this is what ties it back to this agent. A
+    // resume reopens the same id, so this is the only time it changes.
+    writeMeta(this.dir, { ...meta, sessionId: this.sessionId });
     this.launched = true;
     this.send(prompt);
   }
 
   /** Start `this.runner` on a new conversation, or back on this agent's own,
-   *  within `LAUNCH_TIMEOUT_MS`. Resolves with omp's session id. */
+   *  within `LAUNCH_TIMEOUT_MS`. Resolves with the session id. */
   private async launchRunner(resumeSessionId: string | null): Promise<string> {
     const promptFile = join(this.dir, "system.md");
     // Only a launch argument, so if anything has removed it since, write it
@@ -843,7 +831,7 @@ export class Subagent {
       worktree: this.cwd,
       model: this.model,
       promptFile,
-      advisor: false,
+      readOnly: this.readOnly,
       resumeSessionId,
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -855,8 +843,9 @@ export class Subagent {
             () =>
               reject(
                 new Error(
-                  `omp did not finish starting within ${LAUNCH_TIMEOUT_MS / 1000}s ` +
-                    `(cwd ${this.cwd}, model ${this.model}) — check \`omp acp\` runs by hand`,
+                  `${this.provider} did not finish starting within ${LAUNCH_TIMEOUT_MS / 1000}s ` +
+                    `(cwd ${this.cwd}, model ${this.model ?? "its default"}) — check ` +
+                    `\`${this.provider} acp\` runs by hand`,
                 ),
               ),
             LAUNCH_TIMEOUT_MS,
@@ -872,18 +861,18 @@ export class Subagent {
   }
 
   /**
-   * Stop omp if this agent has sat idle for `IDLE_PARK_MS`. Returns whether
+   * Stop the process if this agent has sat idle for `IDLE_PARK_MS`. Returns whether
    * it did.
    *
    * The caller is not told, because nothing it can observe changes: the agent
    * stays `idle`, its answers stay collectable, and the next `send` resumes the
    * conversation. Only an agent with nothing in flight qualifies — no turn, no
    * turn waiting out a grace window or a resume backoff — and only one whose
-   * conversation omp can find again.
+   * conversation its CLI can find again.
    */
   maybePark(now = Date.now()): boolean {
     if (this._state !== "idle" || this.parkedAt !== null || this.waking !== null) return false;
-    if (!this.launched || this.ompSessionId === null || !this.runner.alive) return false;
+    if (!this.launched || this.sessionId === null || !this.runner.alive) return false;
     if (this.owed > 0 || this.pending.length > 0) return false;
     const since = Math.max(this.lastActivityAt, this.lastAnsweredAt);
     if (now - since < IDLE_PARK_MS) return false;
@@ -897,7 +886,7 @@ export class Subagent {
   }
 
   /**
-   * Bring a parked agent's omp back onto its conversation and deliver what was
+   * Bring a parked agent's process back onto its conversation and deliver what was
    * sent meanwhile. Messages that arrive during the launch queue behind the
    * first, in order, as they would behind a turn on a live process.
    */
@@ -910,12 +899,12 @@ export class Subagent {
     const parkedMs = this.parkedAt === null ? 0 : Date.now() - this.parkedAt;
     const started = Date.now();
     this.runner = this.newRunner();
-    void this.launchRunner(this.ompSessionId).then(
+    void this.launchRunner(this.sessionId).then(
       () => {
         const queued = this.waking ?? [];
         this.waking = null;
         this.parkedAt = null;
-        // Stopped by the caller while omp was starting.
+        // Stopped by the caller while the process was starting.
         if (this._state === "dead") {
           this.runner.kill();
           return;
@@ -933,18 +922,18 @@ export class Subagent {
     );
   }
 
-  /** Queue a message. omp delivers it now if idle, at the next turn boundary
+  /** Queue a message. The agent takes it now if idle, at the next turn boundary
    *  if not. Returns the turn
    *  number this message claimed, so the caller can wait for *its* answer. */
   send(text: string): number {
     if (!this.launched) throw new Error(`subagent ${this.name} has not started`);
-    // `alive` beats `_state`. When omp dies mid-turn the connection closes
+    // `alive` beats `_state`. When the process dies mid-turn the connection closes
     // before the exit is reported, so for a moment the failed turn has already
     // landed as `idle` while the process is gone — and a caller that trusted
     // `_state` there would queue a message into a corpse and wait out its whole
     // timeout for a reply that cannot come.
     if (!this.alive) {
-      this.die("omp is gone");
+      this.die(`${this.provider} is gone`);
       throw new Error(
         `subagent ${this.name} is dead — its process is gone and its context with it. ` +
           `Start a fresh agent.`,
@@ -1074,8 +1063,8 @@ export class Subagent {
    *  would be a lie it might act on. */
   interrupt(): boolean {
     if (this._state !== "running") return false;
-    // Messages waiting on a parked agent's omp to come back have not reached
-    // omp, so omp cannot cancel them. Answer them here and send nothing.
+    // Messages waiting on a parked agent's process to come back have not
+    // reached it, so it cannot cancel them. Answer them here and send nothing.
     if (this.waking?.length) {
       const cancelled = this.waking.length;
       this.waking = [];
@@ -1084,9 +1073,9 @@ export class Subagent {
     }
     // Two independent things can be in flight, and a caller reaching for
     // `interrupt` means to stop both. A turn waiting out a grace window or a
-    // resume backoff is waiting on OUR timer, and passing a cancel to omp
-    // would do nothing for it. A turn the caller queued behind it really is
-    // running inside omp, and only omp can stop that one.
+    // resume backoff is waiting on OUR timer, and passing a cancel to the
+    // agent would do nothing for it. A turn the caller queued behind it really
+    // is running inside the agent, and only the agent can stop that one.
     const waiting = this.pending.splice(0);
     for (const p of waiting) clearTimeout(p.timer);
     for (const p of waiting) p.abandon("cancelled");
@@ -1206,7 +1195,7 @@ export class Subagent {
       this._state === "running" &&
       // Only when this turn is the only one outstanding, both then and now.
       // A caller who has queued a follow-up is steering, and their message is
-      // already running inside omp — a `Continue` would queue behind it and
+      // already running inside the agent — a `Continue` would queue behind it and
       // the two turns' prose would interleave.
       owedAtEnd === 1 &&
       this.owed === 1 &&
@@ -1216,7 +1205,7 @@ export class Subagent {
   }
 
   /**
-   * Carry the interrupted turn's prose forward and ask omp to go on.
+   * Carry the interrupted turn's prose forward and ask the agent to go on.
    *
    * The salvage is *carried*, never written back into `buf`. Chunks from the
    * failed turn can still be in flight and land in the buffer during the
@@ -1267,7 +1256,7 @@ export class Subagent {
     this.continues = 0;
     // Nothing is owed, so nothing is running: the clock has no turn to bound.
     if (this.owed === 0) this.clearTurnClock();
-    // The interrupt the wall clock fired reaches omp as an ordinary cancel,
+    // The interrupt the wall clock fired reaches the agent as an ordinary cancel,
     // and a caller cannot tell that from its own `interrupt` unless we say so.
     let reason = stopReason;
     if (this.deadlineHit) {
@@ -1293,6 +1282,7 @@ export class Subagent {
     }
     const report: TurnReport = {
       name: this.name,
+      provider: this.provider,
       turn: ++this.answeredTurns,
       cwd: this.cwd,
       state: gone ? "dead" : "idle",
@@ -1322,7 +1312,7 @@ export class Subagent {
    * Start the wall clock for the turn in flight, if it is not already running.
    *
    * One clock per agent rather than one per queued message: pipelined turns
-   * run inside a single omp process one after another, and there is only ever
+   * run inside a single process one after another, and there is only ever
    * one of them actually executing. It is disarmed when the agent stops owing
    * anything.
    */
@@ -1411,6 +1401,7 @@ export class Subagent {
       this.turns++;
       this.deliver({
         name: this.name,
+        provider: this.provider,
         cwd: this.cwd,
         turn: ++this.answeredTurns,
         state: "dead",
@@ -1629,7 +1620,7 @@ export class SubagentPool {
   /** `defaultCwd` is the MCP server's cwd — the caller's repository. */
   constructor(
     private defaultCwd: string,
-    private makeRunner: RunnerFactory = ompRunner,
+    private makeRunner: RunnerFactory = acpRunner,
     private timing: PoolTiming = DEFAULT_TIMING,
   ) {}
 
@@ -1677,11 +1668,10 @@ export class SubagentPool {
       if (foreign.length > 0) throw new Error(foreignPromptError(foreign, cwd));
     }
     const name = this.nameFor(opts.name);
-    const model = resolveModel(opts.model);
     const agent = new Subagent(
       name,
       cwd,
-      model,
+      backendFor(opts.provider ?? "omp"),
       subagentDirFor(`${process.pid}-${++this.spawns}-${name}`),
       this.makeRunner,
       opts.readOnly ?? false,
@@ -1691,7 +1681,7 @@ export class SubagentPool {
     );
     // Registered BEFORE the await, not after. Two same-name spawns in one
     // message both used to pass the name check during the first one's launch;
-    // the second's set() then overwrote the first, leaving a live omp process
+    // the second's set() then overwrote the first, leaving a live agent process
     // addressable by nothing. Registering synchronously makes the collision
     // check and the claim atomic; a failed launch releases the claim below —
     // but only if this agent still holds it, so a slow failure cannot evict
@@ -1702,7 +1692,7 @@ export class SubagentPool {
     } catch (err) {
       agent.stop();
       if (this.agents.get(name) === agent) this.agents.delete(name);
-      throw new Error(`could not start omp: ${messageOf(err)}`);
+      throw new Error(`could not start ${agent.provider}: ${messageOf(err)}`);
     }
     // Every agent, quiet or not: the tick maintains the record, and only the
     // status line cares about `quiet`.

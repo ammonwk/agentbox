@@ -274,7 +274,7 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
   schedules [--json]    what is set to start, soonest first
   unschedule <id>...    delete one; it will not start (sessions it started stay)
   mcp                   run the fleet MCP server on stdio (for a conductor session)
-  subagent-mcp          run the omp subagent MCP server on stdio (needs no server)
+  subagent-mcp          run the omp/devin subagent MCP server on stdio (needs no server)
   doctor                check that everything agentbox needs is present
   version               print the version`;
 
@@ -343,7 +343,7 @@ export async function main(argv: string[]): Promise<number | null> {
         await runMcp(BASE);
         return null;
       }
-      // Not a client of the server, unlike `mcp`: it owns its omp agents
+      // Not a client of the server, unlike `mcp`: it owns its agents
       // itself and must work whether or not `agentbox serve` is running.
       case "subagent-mcp": {
         const { runSubagentMcp } = await import("../mcp/subagent");

@@ -92,8 +92,9 @@ table and tmux on its first tick.
 - `src/server/` — HTTP + WebSockets. `src/mcp/fleet.ts` — the conductor's MCP;
   it and the CLI share one HTTP client, `src/client.ts`.
 - `src/mcp/subagent.ts` — the subagent MCP (`agentbox subagent-mcp`), over
-  `src/subagents/`: a pool of `omp acp` processes it owns, their records and
-  live status lines. Independent of the server and the database.
+  `src/subagents/`: a pool of `omp acp` / `devin acp` processes it owns
+  (`backend.ts` says how each CLI is started), their records and live status
+  lines. Independent of the server and the database.
 - `src/cli/index.ts` — `agentbox claude|codex|…`, `attach`, `usage`, `mcp`,
   `subagent-mcp`, `doctor`; `src/cli/sessions.ts` — the Unix-shaped session
   verbs (`ls`, `show`, `log`, `grep`, `screen`, `diff`, `send`, `watch`, `close`,

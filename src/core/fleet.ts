@@ -56,7 +56,7 @@ import { clockHz, describe, isToolShell, readProcTable, subtree, subtreeCpuTicks
 import {
   classifyShell,
   minutes,
-  ompWorking,
+  subagentWorking,
   PARK_CHECK_MS,
   PARK_STARTUP_MS,
   shellCommand,
@@ -68,6 +68,7 @@ import {
   WakeScan,
 } from "./park";
 import { read as readLive } from "../subagents/live";
+import { poolKey } from "../subagents/record";
 import { carryEnv, type Launch } from "./launch";
 import { weeklyWindow } from "./balancer";
 import type {
@@ -124,9 +125,9 @@ export interface FleetDeps {
   adapters: ProviderAdapter[];
   runtime: Runtime;
   usage: UsageSource;
-  /** omp session ids that belong to the subagent MCP's pool. Their
-   *  transcripts land in omp's store like any other, but they are calls, not
-   *  sessions, and a fan-out would bury the board. */
+  /** `poolKey`s of the subagent MCP's agents. Their transcripts land in
+   *  their CLI's store like any other, but they are calls, not sessions, and
+   *  a fan-out would bury the board. */
   poolSessions?: () => ReadonlySet<string>;
   /** The Project session's id. It launches top-level work, so it is never
    *  recorded as anyone's parent. */
@@ -476,7 +477,7 @@ export class Fleet extends EventEmitter {
   }
 
   private isPoolAgent(provider: ProviderId, agentSessionId: string): boolean {
-    return provider === "omp" && this.pool.has(agentSessionId);
+    return this.pool.has(poolKey(provider, agentSessionId));
   }
 
   private hasTranscriptFor(provider: ProviderId, agentSessionId: string): boolean {
@@ -788,7 +789,7 @@ export class Fleet extends EventEmitter {
       const table = await readProcTable().catch(() => null);
       const panes = new Map<string, PaneInfo[]>();
       for (const p of this.deps.runtime.listPanes()) panes.set(p.name, [...(panes.get(p.name) ?? []), p]);
-      const live = readLive().filter((e) => ompWorking(e.text));
+      const live = readLive().filter((e) => subagentWorking(e.text));
       let parked = false;
       for (const v of candidates) {
         // Let the server answer between candidates.
@@ -981,7 +982,7 @@ export class Fleet extends EventEmitter {
       // The subagent MCP names its owner by the `--session-id` its client was
       // started with, which a `/clear` does not change.
       const owners = [`pid:${a.pid}`, ...(a.sessionId ? [a.sessionId] : []), ...family.map((m) => m.t.facts!.agentSessionId)];
-      if (live.some((e) => owners.includes(e.owner))) return "omp subagents are running";
+      if (live.some((e) => owners.includes(e.owner))) return "MCP subagents are running";
       cpuTicks += subtreeCpuTicks(subtree(table, a.pid));
       for (const kid of table.children.get(a.pid) ?? []) {
         const cmd = argvOf(kid)?.join(" ");

@@ -1,4 +1,4 @@
-/** An `omp acp` process, driven over the Agent Client Protocol.
+/** An agent CLI's ACP server (`omp acp`, `devin acp`), driven over stdio.
  *
  * One long-lived process per subagent, one turn at a time: prompts queue and
  * go out as turns end, tool calls are assembled from ACP's start/update pair,
@@ -7,7 +7,7 @@
  */
 
 import { isAbsolute } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   client,
   ndJsonStream,
@@ -17,7 +17,8 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk";
-import type { AdvisorySeverity, SubagentProgress, ToolCall, ToolKind, ToolStatus } from "./types";
+import type { AcpBackend } from "./backend";
+import type { SubagentProgress, ToolCall, ToolKind, ToolStatus } from "./types";
 
 /** Upper bound on the tool output kept for one call. omp's own session log
  *  keeps the whole `rawOutput`. */
@@ -47,8 +48,6 @@ export interface AcpEvents {
   onToolUpdate: (sessionId: string, call: ToolCall) => void;
   /** A tool call reached a terminal status. `raw` is ACP's whole rawOutput. */
   onToolEnd: (sessionId: string, call: ToolCall, raw: unknown) => void;
-  /** An advisor note, parsed out of a user_message_chunk. */
-  onAdvisory: (sessionId: string, severity: AdvisorySeverity, text: string) => void;
   /**
    * A turn finished. stopReason is one of ACP's end_turn/max_tokens/refusal/
    * cancelled — plus `error`, which is agentbox's own and means the prompt
@@ -61,7 +60,7 @@ export interface AcpEvents {
    * each report replaces the last.
    */
   onContext: (sessionId: string, used: number, size: number) => void;
-  /** Cumulative session cost in USD. omp reports it as a running total, and it
+  /** Cumulative session cost in USD. It is reported as a running total that
    *  survives a resume into a new process, so it is set rather than added. */
   onUsage: (sessionId: string, costUsd: number) => void;
   /** The agent asked for permission and we are not auto-approving. */
@@ -72,20 +71,13 @@ export interface AcpEvents {
 
 export interface LaunchOptions {
   worktree: string;
-  model: string;
-  /**
-   * Absolute path to the file passed as `--append-system-prompt`.
-   *
-   * omp treats a value containing a newline as literal prompt text and
-   * otherwise tries to read it as a file — falling back to the raw string
-   * *silently* when the read fails. A missing file therefore does not error,
-   * it just runs the agent with a path as its system prompt. Hence the
-   * assertions in `launch`.
-   */
+  /** Null runs the CLI's own configured default. */
+  model: string | null;
+  /** Absolute path to the system prompt. Asserted to exist in `launch`: omp
+   *  silently runs with the path itself as its prompt when it cannot read it. */
   promptFile: string;
-  /** Pass `--advisor`, enabling omp's advisor runtime. */
-  advisor: boolean;
-  /** Resume this omp conversation instead of opening a new one. */
+  readOnly: boolean;
+  /** Resume this conversation instead of opening a new one. */
   resumeSessionId: string | null;
 }
 
@@ -351,31 +343,6 @@ export class ToolCallTracker {
   }
 }
 
-// -------------------------------------------------------------- advisories
-
-const ADVISORY_TAG = /<advisory\b([^>]*)>([\s\S]*?)<\/advisory>/gi;
-const SEVERITY_ATTR = /severity\s*=\s*["']?([a-z]+)/i;
-const SEVERITIES = new Set<AdvisorySeverity>(["nit", "concern", "blocker"]);
-
-/**
- * Parse omp advisor notes out of a chunk. They arrive as `user_message_chunk`,
- * which otherwise means "the human said this" — so without this they would
- * read as the human talking.
- */
-export function parseAdvisories(text: string): { severity: AdvisorySeverity; text: string }[] {
-  const out: { severity: AdvisorySeverity; text: string }[] = [];
-  for (const m of text.matchAll(ADVISORY_TAG)) {
-    const sev = m[1]?.match(SEVERITY_ATTR)?.[1]?.toLowerCase();
-    const body = (m[2] ?? "").trim();
-    if (!body) continue;
-    out.push({
-      severity: SEVERITIES.has(sev as AdvisorySeverity) ? (sev as AdvisorySeverity) : "concern",
-      text: body,
-    });
-  }
-  return out;
-}
-
 // ------------------------------------------------------------------ runner
 
 function approveOption(options: { id: string; name: string }[]) {
@@ -391,9 +358,9 @@ interface PendingPermission {
 }
 
 /**
- * One persistent, interactive omp ACP session.
+ * One persistent, interactive ACP session.
  *
- * A single `omp acp` process serves the whole conversation: prompts are
+ * A single agent process serves the whole conversation: prompts are
  * delivered one turn at a time, a message sent mid-turn waits for the turn to
  * end, the agent can ask for permission (blocking until answered), and turns
  * can be interrupted. The process stays alive between turns, so "waiting" is
@@ -401,13 +368,17 @@ interface PendingPermission {
  */
 export class AcpRunner {
   readonly id: string;
+  private readonly backend: AcpBackend;
   private events: AcpEvents;
   private proc: Bun.Subprocess | null = null;
   private ctx: ClientContext | null = null;
-  private ompSessionId: string | null = null;
+  private sessionId: string | null = null;
   private busy = false;
   /** Messages waiting for the turn in flight to end, oldest first. */
   private queue: string[] = [];
+  /** The system prompt, for a backend with no flag for one, until it has led
+   *  a new conversation's first message. */
+  private preamble: string | null = null;
   private pendingPerm: PendingPermission | null = null;
   private autoApprove: () => boolean;
   private closed = false;
@@ -416,8 +387,9 @@ export class AcpRunner {
   private exitReported = false;
   private tools = new ToolCallTracker();
 
-  constructor(id: string, events: AcpEvents, autoApprove: () => boolean) {
+  constructor(id: string, backend: AcpBackend, events: AcpEvents, autoApprove: () => boolean) {
     this.id = id;
+    this.backend = backend;
     this.events = events;
     this.autoApprove = autoApprove;
   }
@@ -430,47 +402,28 @@ export class AcpRunner {
     return !!this.proc && !this.closed;
   }
 
-  /** The omp conversation this runner is attached to, once it has opened one. */
-  get ompSession(): string | null {
-    return this.ompSessionId;
-  }
-
-  /** Launch `omp acp` and open (or resume) an ACP session. Returns its id. */
+  /** Launch the agent's ACP server and open (or resume) a session. Returns its id. */
   async launch(opts: LaunchOptions): Promise<string> {
     if (this.closed) throw new Error("runner closed");
     if (!isAbsolute(opts.promptFile)) {
       throw new Error(`system prompt path must be absolute, got "${opts.promptFile}"`);
     }
     if (!existsSync(opts.promptFile)) {
-      // omp would silently use the path itself as the prompt text.
       throw new Error(`system prompt file is missing: ${opts.promptFile}`);
     }
+    if (!this.backend.systemPromptFlag && opts.resumeSessionId === null) {
+      this.preamble = readFileSync(opts.promptFile, "utf8").trim();
+    }
 
-    const argv = [
-      "omp", "acp",
-      "--model", opts.model,
-      "--append-system-prompt", opts.promptFile,
-    ];
-    if (opts.advisor) argv.push("--advisor");
-
-    const env: Record<string, string | undefined> = { ...process.env, AGENTBOX_OMP_SESSION: this.id };
-
-    const proc = Bun.spawn(argv, {
-      // NOTE: no --session-dir here. omp's ACP session list/resume look up
-      // sessions in the default cwd-derived store (~/.omp/agent/sessions/<cwd>/),
-      // which is also why the fleet lists a subagent's transcript as an
-      // external omp session.
+    // Each CLI keeps the conversation in its own default store, where a
+    // resume looks for it and where the fleet finds it (and leaves it off the
+    // board, by the session id in the agent's record).
+    const proc = Bun.spawn(this.backend.argv(opts.model, opts.promptFile, opts.readOnly), {
       cwd: opts.worktree,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      // AGENTBOX_OMP_SESSION is the conversation id opencode.ai asks for on
-      // every request (`x-opencode-session`). agentbox never speaks to them —
-      // omp holds the HTTP client — so the id rides in on the environment and
-      // ~/.omp/agent/models.yml maps it onto the header for the opencode
-      // providers. `this.id` is the subagent's name, which is stable across a
-      // relaunch and a resume, so one conversation keeps one id for its life.
-      env,
+      env: { ...process.env, ...this.backend.env(this.id) },
     });
     this.proc = proc;
 
@@ -510,7 +463,7 @@ export class AcpRunner {
 
     app.onNotification("session/update", async (req: { params: SessionNotification }) => {
       const n = req.params;
-      if (this.ompSessionId === n.sessionId) this.handleUpdate(n.update);
+      if (this.sessionId === n.sessionId) this.handleUpdate(n.update);
     });
 
     app.onRequest(
@@ -552,12 +505,12 @@ export class AcpRunner {
       this.ctx = ctx;
       let sid: string;
       try {
-        sid = await this.openSession(ctx, opts.worktree, opts.resumeSessionId);
+        sid = await this.openSession(ctx, opts);
       } catch (err) {
-        rejectSid(new Error(`failed to open omp session: ${messageOf(err)}`));
+        rejectSid(new Error(`failed to open ${this.backend.id} session: ${messageOf(err)}`));
         throw err;
       }
-      this.ompSessionId = sid;
+      this.sessionId = sid;
       resolveSid(sid);
       return new Promise<void>(() => {}); // hold the connection open until the process exits
     });
@@ -573,32 +526,23 @@ export class AcpRunner {
     return await sidP;
   }
 
-  private async openSession(
-    ctx: ClientContext,
-    worktree: string,
-    resumeSessionId: string | null
-  ): Promise<string> {
-    if (!resumeSessionId) {
-      const res = await ctx.request("session/new", { cwd: worktree, mcpServers: [] });
-      return res.sessionId;
+  private async openSession(ctx: ClientContext, opts: LaunchOptions): Promise<string> {
+    await ctx.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+    const sid = opts.resumeSessionId ?? (await ctx.request("session/new", { cwd: opts.worktree, mcpServers: [] })).sessionId;
+    if (opts.resumeSessionId !== null) {
+      const params = { sessionId: sid, cwd: opts.worktree, mcpServers: [] };
+      try {
+        await ctx.request("session/resume", params);
+      } catch {
+        // devin and older omp builds only implement session/load, which
+        // replays the history as updates; `sessionId` is not set until this
+        // returns, so the replay is not mistaken for a new turn.
+        await ctx.request("session/load", params);
+      }
     }
-    try {
-      await ctx.request("session/resume", {
-        sessionId: resumeSessionId,
-        cwd: worktree,
-        mcpServers: [],
-      });
-    } catch {
-      // Older omp builds only implement session/load.
-      await ctx.request("session/load", {
-        sessionId: resumeSessionId,
-        cwd: worktree,
-        mcpServers: [],
-      });
-    }
-    // Neither response carries a session id — they only echo modes and config
-    // options — so the id we resumed is the id we have.
-    return resumeSessionId;
+    const mode = this.backend.mode(opts.readOnly);
+    if (mode !== null) await ctx.request("session/set_mode", { sessionId: sid, modeId: mode });
+    return sid;
   }
 
   private handleUpdate(update: SessionUpdate) {
@@ -612,14 +556,6 @@ export class AcpRunner {
         // Reasoning, not output. It would read as assistant prose and it is
         // long, so it stays out of the transcript entirely.
         break;
-      case "user_message_chunk": {
-        // Normally omp echoing back the prompt we just sent, which we already
-        // logged. The exception is the advisor, whose notes arrive this way.
-        for (const a of parseAdvisories(textOfBlock(update.content))) {
-          this.events.onAdvisory(this.id, a.severity, a.text);
-        }
-        break;
-      }
       case "tool_call": {
         const call = this.tools.start(update as unknown as Record<string, unknown>);
         if (call) {
@@ -655,20 +591,22 @@ export class AcpRunner {
   /** Queue a prompt. Delivered immediately when idle, else as the next turn —
    *  one turn per message. */
   send(text: string) {
-    if (this.closed || !this.ctx || !this.ompSessionId) throw new Error("session is not connected");
+    if (this.closed || !this.ctx || !this.sessionId) throw new Error("session is not connected");
     this.queue.push(text);
     this.pump();
   }
 
   private pump() {
-    if (this.busy || this.closed || !this.ctx || !this.ompSessionId) return;
+    if (this.busy || this.closed || !this.ctx || !this.sessionId) return;
     const next = this.queue.shift();
     if (next === undefined) return;
     this.busy = true;
+    const text = this.preamble === null ? next : `${this.preamble}\n\n---\n\n# Your task\n\n${next}`;
+    this.preamble = null;
     this.ctx
       .request("session/prompt", {
-        sessionId: this.ompSessionId,
-        prompt: [{ type: "text", text: next }],
+        sessionId: this.sessionId,
+        prompt: [{ type: "text", text }],
       })
       .then((res) => {
         // The turn is done. stopReason is authoritative even when updates raced ahead.
@@ -690,14 +628,14 @@ export class AcpRunner {
 
   /** Interrupt the current turn. Queue survives; the turn stops with `cancelled`. */
   interrupt() {
-    if (!this.ctx || !this.ompSessionId) return;
+    if (!this.ctx || !this.sessionId) return;
     if (this.pendingPerm) {
       const p = this.pendingPerm;
       this.pendingPerm = null;
       p.resolve(false);
     }
     void this.ctx
-      .notify("session/cancel", { sessionId: this.ompSessionId })
+      .notify("session/cancel", { sessionId: this.sessionId })
       .catch((err: unknown) => this.events.onError(this.id, `cancel failed: ${messageOf(err)}`));
   }
 
@@ -724,7 +662,7 @@ export class AcpRunner {
     this.events.onExit(this.id, code);
   }
 
-  /** Stop the omp process. The conversation survives via its omp session id. */
+  /** Stop the agent process. The conversation survives via its session id. */
   kill() {
     this.closed = true;
     try {

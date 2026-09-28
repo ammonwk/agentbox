@@ -10,8 +10,8 @@
  *
  * So the record is self-describing, in three files per agent:
  *
- *   meta.json        identity: name, directory, branch, model, the brief it
- *                    was given, and omp's session id once omp has one.
+ *   meta.json        identity: name, directory, branch, CLI, model, the brief
+ *                    it was given, and the CLI's session id once it has one.
  *   state.json       the live snapshot, rewritten every couple of seconds by
  *                    whoever owns the agent, and once more when it ends.
  *   transcript.jsonl the event log, appended forever. The history.
@@ -22,7 +22,7 @@
  * finished agent from one whose process was killed mid-turn.
  *
  * The one reader in the app is the fleet, which needs `meta.json`'s
- * `ompSessionId` to keep pool agents off the board (`poolSessionIds`).
+ * `sessionId` to keep pool agents off the board (`poolSessionIds`).
  * Everything else here is for a person reading the directory.
  */
 
@@ -36,13 +36,16 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { subagentRoot } from "../core/paths";
+import type { SubagentProvider } from "./backend";
 import type { AgentSnapshot } from "./health";
 
 export interface RecordMeta {
   name: string;
   cwd: string;
   branch: string | null;
-  model: string;
+  provider: SubagentProvider;
+  /** Null when the CLI ran its own configured default. */
+  model: string | null;
   readOnly: boolean;
   startedAt: number;
   /** The process that owns the agent, so a reader can say who to blame. */
@@ -53,14 +56,16 @@ export interface RecordMeta {
    *  looking at the right agent, not for re-reading the whole prompt. */
   prompt: string;
   /**
-   * omp's id for the conversation, once omp has opened one; absent until
-   * then, and on an agent whose omp never started.
+   * The CLI's id for the conversation, once it has opened one; absent until
+   * then, and on an agent whose process never started.
    *
-   * The agent's omp runs without `--session-dir`, so its transcript lands in
-   * omp's own store beside every other omp session, and the fleet lists it as
-   * an external omp session. This is what ties that transcript back to a
-   * subagent.
+   * The transcript lands in the CLI's own store beside every other session
+   * of that CLI, and the fleet lists it as an external session. This is what
+   * ties that transcript back to a subagent.
    */
+  sessionId?: string;
+  /** How MCP servers started before `provider` existed wrote an omp agent's
+   *  `sessionId`. They keep running until their client restarts. */
   ompSessionId?: string;
 }
 
@@ -110,20 +115,31 @@ function readJson<T>(path: string): T | null {
   }
 }
 
-/** Per directory: omp's session id once meta.json has one, else when the
- *  agent started (it is re-read until it has one, for a while). */
+/** Per directory: the pool key once meta.json has a session id, else when
+ *  the agent started (it is re-read until it has one, for a while). */
 const seen = new Map<string, string | number>();
 
-/** Give up on a directory whose omp never opened a conversation after this. */
+/** Give up on a directory whose CLI never opened a conversation after this. */
 const ID_WINDOW_MS = 10 * 60_000;
 
+/** How the fleet names a pool agent's session. */
+export function poolKey(provider: string, sessionId: string): string {
+  return `${provider}:${sessionId}`;
+}
+
+function keyOf(meta: RecordMeta | null): string | null {
+  if (meta?.sessionId) return poolKey(meta.provider, meta.sessionId);
+  if (meta?.ompSessionId) return poolKey("omp", meta.ompSessionId);
+  return null;
+}
+
 /**
- * omp session ids that belong to pool agents.
+ * `poolKey`s of the sessions that belong to pool agents.
  *
- * Their transcripts sit in omp's own store beside every other omp session, and
- * nothing inside one says it came from here, so the fleet asks this before
- * showing an omp session on the board. Cheap on the fleet's clock: one readdir,
- * and a meta.json is read only until it yields an id.
+ * Their transcripts sit in each CLI's own store beside every other session,
+ * and nothing inside one says it came from here, so the fleet asks this before
+ * showing a session on the board. Cheap on the fleet's clock: one readdir, and
+ * a meta.json is read only until it yields an id.
  */
 export function poolSessionIds(now = Date.now()): Set<string> {
   const root = subagentRoot();
@@ -143,9 +159,10 @@ export function poolSessionIds(now = Date.now()): Set<string> {
     }
     if (typeof known === "number" && now - known > ID_WINDOW_MS) continue;
     const meta = readJson<RecordMeta>(join(dir, "meta.json"));
-    if (meta?.ompSessionId) {
-      seen.set(dir, meta.ompSessionId);
-      ids.add(meta.ompSessionId);
+    const key = keyOf(meta);
+    if (key !== null) {
+      seen.set(dir, key);
+      ids.add(key);
     } else {
       seen.set(dir, meta?.startedAt ?? now);
     }

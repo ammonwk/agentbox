@@ -389,7 +389,7 @@ export function subagentsLastWrite(transcriptPath: string, agentSessionId: strin
   return newest;
 }
 
-// ---------------------------------------------------------------- omp
+// ---------------------------------------------------------- subagents
 
 /**
  * Is this subagent-MCP status line (src/subagents/pool.ts `renderAgentLine`)
@@ -397,7 +397,7 @@ export function subagentsLastWrite(transcriptPath: string, agentSessionId: strin
  * collected — worth showing, but nothing will come of keeping its caller up;
  * those were holding sessions for twenty hours.
  */
-export function ompWorking(text: string): boolean {
+export function subagentWorking(text: string): boolean {
   return !/ · finished\b.*\bUNCOLLECTED\b/.test(text);
 }
 

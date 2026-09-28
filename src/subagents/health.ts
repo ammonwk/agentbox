@@ -22,6 +22,7 @@
  * actually asking, which is "let it run, or kill it".
  */
 
+import type { SubagentProvider } from "./backend";
 import { STOPPED_BY_CALLER, type ToolRecord } from "./types";
 
 /** No observable event at all, while not inside a tool call. The agent is
@@ -96,7 +97,9 @@ export interface AgentSnapshot {
   name: string;
   cwd: string;
   branch: string | null;
-  model: string;
+  provider: SubagentProvider;
+  /** Null when the CLI ran its own configured default. */
+  model: string | null;
   readOnly: boolean;
   state: "running" | "idle" | "dead";
   /** ms since epoch. */
@@ -111,7 +114,7 @@ export interface AgentSnapshot {
   totalToolCalls: number;
   uncollected: number;
   contextUsed: number | null;
-  /** The model's window, as omp reported it. Null when it never did. */
+  /** The model's window, as the CLI reported it. Null when it never did. */
   contextSize: number | null;
   costUsd: number | null;
   maxTurnMs: number;

@@ -1,4 +1,4 @@
-/** Workflows: orchestrating many omp subagents from one script.
+/** Workflows: orchestrating many subagents from one script.
  *
  * A single subagent call is a function call — you ask, you block, you get an
  * answer. That is the right shape for one question, and the wrong shape for
@@ -21,9 +21,10 @@
  * costs money — concurrency, agent count, and wall clock.
  */
 
+import { SUBAGENT_PROVIDERS, type SubagentProvider } from "./backend";
 import { SubagentPool, type Subagent, type TurnReport } from "./pool";
 
-/** Concurrent omp processes. Each is a real process with a real context
+/** Concurrent agent processes. Each is a real process with a real context
  *  window, so this is a memory bound as much as a rate limit. */
 export const DEFAULT_CONCURRENCY = 6;
 
@@ -43,6 +44,8 @@ export interface AgentOptions {
   allowOutsideCwd?: boolean;
   /** Standing system-prompt text for this agent. */
   role?: string;
+  /** The CLI to run it on. Defaults to the workflow's own `provider`. */
+  provider?: SubagentProvider;
   /**
    * Enforced read-only. Defaults to TRUE inside workflows: a fan-out is
    * usually a survey, the agents share one working tree, and parallel writers
@@ -218,7 +221,7 @@ const SCHEMA_INSTRUCTION =
 
 /**
  * A limited semaphore. Workflows fan out wider than the machine can run, and
- * the excess has to queue rather than spawn 80 omp processes at once.
+ * the excess has to queue rather than spawn 80 agent processes at once.
  */
 class Gate {
   private active = 0;
@@ -273,6 +276,8 @@ export interface RunOptions {
   deadlineMs?: number;
   /** Where agents run. Defaults to the pool's own default. */
   cwd?: string;
+  /** The CLI agents run on unless one says otherwise. Defaults to omp. */
+  provider?: SubagentProvider;
   /**
    * Live observer of the workflow's roster, on every change and on a
    * heartbeat between changes. The MCP layer forwards these as
@@ -331,10 +336,10 @@ export async function runWorkflow(pool: SubagentPool, opts: RunOptions): Promise
         label: s.label,
         state: s.state,
         ms: now - s.startedAt,
-        // There is no agent to ask for the first few seconds — omp is still
-        // being started. Saying so beats a bare clock, which reads as a hang
-        // at exactly the moment nothing is wrong.
-        action: a?.action ?? "launching omp",
+        // There is no agent to ask for the first few seconds — its process is
+        // still being started. Saying so beats a bare clock, which reads as a
+        // hang at exactly the moment nothing is wrong.
+        action: a?.action ?? "launching",
         idleMs: a?.idleMs,
       };
     });
@@ -381,6 +386,10 @@ export async function runWorkflow(pool: SubagentPool, opts: RunOptions): Promise
     if (++count > MAX_AGENTS) {
       throw new WorkflowLimit(`workflow tried to run more than ${MAX_AGENTS} agents`);
     }
+    // The script is untyped, so this is the boundary for its options.
+    if (o.provider !== undefined && !SUBAGENT_PROVIDERS.includes(o.provider)) {
+      throw new Error(`unknown provider "${o.provider}"; use one of ${SUBAGENT_PROVIDERS.join(", ")}`);
+    }
     const label = o.label ?? preview(prompt);
     const index = count;
     const slot: Live = { label, state: "queued", startedAt: 0, ranMs: 0 };
@@ -406,6 +415,7 @@ export async function runWorkflow(pool: SubagentPool, opts: RunOptions): Promise
           name: `wf-${index}-${label.replace(/[^a-z0-9]+/gi, "-").slice(0, 20)}`,
           cwd: o.cwd ?? opts.cwd,
           role: o.role,
+          provider: o.provider ?? opts.provider,
           allowOutsideCwd: o.allowOutsideCwd,
           // Read-only unless the script says otherwise — see AgentOptions.
           readOnly: o.readOnly ?? true,
@@ -465,7 +475,7 @@ export async function runWorkflow(pool: SubagentPool, opts: RunOptions): Promise
         // finished agent is worse than no line at all.
         slot.sub = undefined;
         // Agents are single-shot inside a workflow: the script has its answer,
-        // and an idle omp process holding a whole context window open is a
+        // and an idle agent process holding a whole context window open is a
         // real cost when a fan-out has just made eighty of them.
         if (sub) pool.remove(sub.name);
       }

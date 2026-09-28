@@ -85,7 +85,7 @@ export function agentboxBin(): string {
 }
 
 /** The subagent MCP's scratch: one directory per spawned agent, holding the
- *  system prompt omp is launched with and that agent's record (meta.json,
+ *  system prompt it is launched with and that agent's record (meta.json,
  *  state.json, transcript.jsonl). Nothing here is a fleet session. */
 export const subagentRoot = (): string => join(agentboxHome(), "subagents");
 
