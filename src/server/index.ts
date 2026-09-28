@@ -435,7 +435,7 @@ const router = new Router(mapError)
   // ---- sessions
   .add("POST", "/api/placement", async ({ req }) => {
     const b = await readBody(req);
-    return json(fleet.placement(provider(b.provider), b.big === true, optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null));
+    return json(fleet.placement(provider(b.provider), b.big === true, optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null, optionalString(b, "effort") ?? null));
   })
   .add("POST", "/api/sessions", async ({ req }) => {
     const b = await readBody(req);

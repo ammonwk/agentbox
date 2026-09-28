@@ -24,6 +24,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { basename, dirname } from "node:path";
 import { owners } from "./accounts/homes";
 import { place, type AccountState } from "./balancer";
+import { claimFor } from "./claim";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import {
   failUnfinishedBtw,
@@ -82,6 +83,7 @@ import type {
   AccountUsage,
   AskAnswer,
   AskQuestion,
+  BalancerSettings,
   Btw,
   ClaimView,
   Placement,
@@ -411,7 +413,7 @@ export class Fleet extends EventEmitter {
     // Every transcript gets a record; changed ones get their record refreshed.
     for (const [path, t] of this.tracked) {
       if (!t.facts || this.ignored.has(path)) continue;
-      const id = this.recordFor(t, settings.balancer.claimNormal, now);
+      const id = this.recordFor(t, settings.balancer, now);
       if (!changed.has(path)) continue;
       this.persistFacts(id, t, now);
       this.collectMetrics(id, t, now);
@@ -610,7 +612,7 @@ export class Fleet extends EventEmitter {
     return undefined;
   }
 
-  private recordFor(t: Tracked, claimNormal: number, now: number): string {
+  private recordFor(t: Tracked, settings: BalancerSettings, now: number): string {
     const f = t.facts!;
     const key = `${t.ref.provider}:${f.agentSessionId}`;
     const cached = this.byAgentId.get(key);
@@ -632,8 +634,9 @@ export class Fleet extends EventEmitter {
       label: null,
       big: false,
       // A session started outside agentbox still uses its account, so it
-      // claims like any other; it just was not placed.
-      claim: claimNormal,
+      // claims like any other; it just was not placed. Its model is known
+      // from its transcript, so the claim is the model's.
+      claim: claimFor({ model: f.model, big: false }, settings),
       origin: "external",
       tmux: null,
       transcriptPath: t.ref.path,
@@ -715,6 +718,12 @@ export class Fleet extends EventEmitter {
     // that was set too late; an mtime is only a guess and may only move it on.
     if (f.lastActivityAt !== null ? last !== rec.lastActivityAt : last > rec.lastActivityAt) patch.lastActivityAt = Math.min(last, now);
     if (f.cwd && !rec.cwd) patch.cwd = f.cwd;
+    // A model switch (/model) changes what the session costs: its claim
+    // follows. A wake's claim already counts what was consumed before it, so
+    // only a real change rewrites it, never the same model re-read.
+    if (f.model && f.model !== (rec.facts as Partial<TranscriptFacts> | null)?.model) {
+      patch.claim = claimFor({ model: f.model, effort: rec.effort ?? null, big: rec.big }, getSettings().balancer);
+    }
     // A message from you to a closed session means you went back to it.
     // Its own activity does not: an agent still finishing, or one another
     // agent wrote to, stays where you put it.
@@ -1399,12 +1408,13 @@ export class Fleet extends EventEmitter {
       });
   }
 
-  placement(provider: ProviderId, big: boolean, model?: string | null, accountId?: string | null): Placement {
+  placement(provider: ProviderId, big: boolean, model?: string | null, accountId?: string | null, effort?: string | null): Placement {
     this.adapter(provider);
     return place({
       provider,
       big,
       model: model || getSettings().models[provider] || null,
+      effort: effort ?? null,
       accountId: accountId && accountId !== "auto" ? accountId : null,
       accounts: this.accountStates(provider),
       settings: getSettings().balancer,
@@ -1417,7 +1427,11 @@ export class Fleet extends EventEmitter {
   async spawn(req: SpawnRequest): Promise<{ session: Session; placement: Placement }> {
     const adapter = this.adapter(req.provider);
     const settings = getSettings();
-    const placement = this.placement(req.provider, !!req.big, req.model, req.accountId);
+    if (req.effort && !adapter.efforts.includes(req.effort)) {
+      throw new FleetError(400, `${adapter.label} takes no effort "${req.effort}"${adapter.efforts.length ? ` (${adapter.efforts.join(", ")})` : ""}`);
+    }
+    const effort = req.effort || undefined;
+    const placement = this.placement(req.provider, !!req.big, req.model, req.accountId, effort);
     if (!placement.accountId) throw new FleetError(409, placement.why, placement);
     const account = getAccount(placement.accountId);
     if (!account) throw new FleetError(404, `no account ${placement.accountId}`);
@@ -1447,10 +1461,6 @@ export class Fleet extends EventEmitter {
     if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);
 
     const model = req.model || settings.models[req.provider] || undefined;
-    if (req.effort && !adapter.efforts.includes(req.effort)) {
-      throw new FleetError(400, `${adapter.label} takes no effort "${req.effort}"${adapter.efforts.length ? ` (${adapter.efforts.join(", ")})` : ""}`);
-    }
-    const effort = req.effort || undefined;
     const cmd = adapter.spawnCommand({ account, cwd, prompt: req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
     const now = this.now();
     const name = tmuxName(id);
@@ -1579,7 +1589,7 @@ export class Fleet extends EventEmitter {
    */
   private wakeTarget(rec: SessionRecord, view: Session, accountId?: string | null): { account: Account; placement: Placement } | null {
     if (!this.adapter(rec.provider).moveSession) return null;
-    const placement = this.placement(rec.provider, rec.big, view.model, accountId);
+    const placement = this.placement(rec.provider, rec.big, view.model, accountId, rec.effort ?? null);
     // Another home on the same login is the same account: moving there would
     // cost a cold start and change nothing about the limits.
     if (!placement.accountId || placement.mode === "none" || placement.accountId === this.ownerOf(rec.accountId ?? "")) return null;
@@ -1624,7 +1634,10 @@ export class Fleet extends EventEmitter {
     }
     const settings = getSettings();
     const consumed = consumedBy([rec.id]).get(rec.id) ?? 0;
-    const claim = Math.round((consumed + (rec.big ? settings.balancer.claimBig : settings.balancer.claimNormal)) * 100) / 100;
+    // It claims afresh, and the claim is its model's: what it used before it
+    // went cold was used, and the balancer should count what it is about to.
+    const fresh = claimFor({ model: view.model, effort: rec.effort ?? null, big: rec.big }, settings.balancer);
+    const claim = Math.round((consumed + fresh) * 100) / 100;
     const patch: Partial<SessionRecord> = { claim };
     if (account.id !== from.id) {
       patch.accountId = account.id;
@@ -2057,7 +2070,10 @@ export class Fleet extends EventEmitter {
     if (p.label !== undefined) patch.label = p.label?.trim() || null;
     if (p.big !== undefined && p.big !== rec.big) {
       patch.big = p.big;
-      patch.claim = p.big ? settings.claimBig : settings.claimNormal;
+      patch.claim = claimFor(
+        { model: this.views.get(id)?.model ?? rec.model ?? null, effort: rec.effort ?? null, big: p.big },
+        settings,
+      );
     }
     updateSessionRecord(id, patch);
     await this.tick();

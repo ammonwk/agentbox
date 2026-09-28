@@ -1,12 +1,13 @@
 /** What each session still claims, and how observed usage is split among them.
  *
- * A session claims `claimNormal` or `claimBig` weekly points when it is
- * placed. As it runs, the account's weekly percentage rises, and that rise is
- * apportioned across the account's sessions by how much each did in the same
- * interval (token-weighted cost, see pricing.ts). What a session has been
- * apportioned is its consumption; its outstanding claim is what is left of its
- * estimate. Without this the balancer would count every session's usage twice:
- * once in the live percentage and again in the claim.
+ * A session claims weekly points when it is placed — what its model is
+ * expected to use (`claimFor` in claim.ts), or `claimNormal`/`claimBig` when
+ * the model is unknown. As it runs, the account's weekly percentage rises,
+ * and that rise is apportioned across the account's sessions by how much each
+ * did in the same interval (token-weighted cost, see pricing.ts). What a
+ * session has been apportioned is its consumption; its outstanding claim is
+ * what is left of its estimate. Without this the balancer would count every
+ * session's usage twice: once in the live percentage and again in the claim.
  *
  * The apportioned amounts are also the calibration data: after a week, the
  * distribution of what sessions actually consumed says what the claim sizes

@@ -25,6 +25,7 @@
  * its claim. The last readings say how fast the window is really filling.
  */
 
+import { claimFor } from "./claim";
 import type {
   Account,
   BalancerSettings,
@@ -49,6 +50,8 @@ export interface PlaceRequest {
   provider: ProviderId;
   big: boolean;
   model?: string | null;
+  /** The reasoning effort it starts with; scales the claim. */
+  effort?: string | null;
   /** A specific account instead of the balancer's pick. */
   accountId?: string | null;
   accounts: AccountState[];
@@ -284,7 +287,9 @@ function needOf(claim: number, settings: BalancerSettings): number {
 }
 
 export function place(req: PlaceRequest): Placement {
-  const claim = req.big ? req.settings.claimBig : req.settings.claimNormal;
+  // The claim is the model's, not one number for everything: a GLM-Flash
+  // session and a Fable one are not the same guest (see claim.ts).
+  const claim = claimFor({ model: req.model, effort: req.effort, big: req.big }, req.settings);
   const candidates = req.accounts.map((a) => evaluate(a, req));
   const need = needOf(claim, req.settings);
   const ordered = rank(candidates, need);
