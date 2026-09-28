@@ -247,6 +247,10 @@ export class Fleet extends EventEmitter {
   private movable = new Set<ProviderId>();
   /** Limit hits already acted on (`continueStalled`): session → the hit's time. */
   private stallsMoved = new Map<string, number>();
+  /** Sessions nudged past an error screen (`nudgeErrored`): the spell's start
+   *  and how many nudges it has had. */
+  private nudges = new Map<string, { firstAt: number; tries: number }>();
+  private nextNudgeAt = 0;
   /** Sessions waiting out a 5-hour reset: tell them to go on at `at`, if still
    *  stopped at the hit `hitAt`. */
   private resumeAfterReset = new Map<string, { hitAt: number; at: number }>();
@@ -472,6 +476,7 @@ export class Fleet extends EventEmitter {
     this.rebuildViews(since, now);
     await this.parkIdle(now, settings.parkIdleMin);
     this.continueStalled(now);
+    this.nudgeErrored(now);
     await this.refreshWork(now);
     await this.watchStarts(now);
     this.checkCrash(now);
@@ -535,6 +540,35 @@ export class Fleet extends EventEmitter {
       void this.serial(v.id, () => this.moveAndContinue(v.id, { accountId: target.account.id, prompt })).catch((e) =>
         console.error(`agentbox: moving ${v.id} after its limit failed:`, e),
       );
+    }
+  }
+
+  /**
+   * A session whose turn died on an error the CLI left on screen ("Send a
+   * message to retry") is told to go on once the error's reset window has
+   * passed. One nudge across the fleet at a time — several sessions retaking
+   * one rate-limited account in lockstep is what stuck them — a few per
+   * spell, then it is yours. A cold session's nudge is `send`'s to place:
+   * it wakes where there is room, which is the point when the account it
+   * sits on is the one that is out.
+   */
+  private nudgeErrored(now: number): void {
+    if (now < this.nextNudgeAt) return;
+    for (const v of this.views.values()) {
+      if (v.status !== "blocked" || v.host !== "tmux" || this.busy.has(v.id)) continue;
+      const why = this.blocked.get(v.id);
+      if (why !== "rate limit" && why !== "error") continue;
+      if (now - v.lastActivityAt < NUDGE_QUIET_MS) continue;
+      const prev = this.nudges.get(v.id);
+      const spell = prev && now - prev.firstAt < NUDGE_SPELL_MS ? prev : { firstAt: now, tries: 0 };
+      if (spell.tries >= NUDGE_MAX_TRIES) continue;
+      this.nudges.set(v.id, { firstAt: spell.firstAt, tries: spell.tries + 1 });
+      this.nextNudgeAt = now + NUDGE_STAGGER_MS;
+      console.log(`agentbox: ${v.id} (${v.title}) ${why === "rate limit" ? "hit a rate limit" : "stopped on an error"}; nudging it on (${spell.tries + 1}/${NUDGE_MAX_TRIES})`);
+      void this.send(v.id, "[agentbox: your turn stopped on an error; this message retries it. Carry on where you left off.]").catch((e) =>
+        console.error(`agentbox: nudging ${v.id} failed:`, e),
+      );
+      return;
     }
   }
 
@@ -1490,6 +1524,11 @@ export class Fleet extends EventEmitter {
       // A pool agent's server knows whether its turn is open; its transcript can lag.
       const busy = host === "subagent" ? pooled?.running : proc?.busy;
       status = (busy ?? f?.turnOpen) ? "running" : "waiting";
+      // A turn open but silent for STALE_TURN_MS is over, whatever the
+      // transcript still says: the CLI died mid-turn without closing it.
+      // Only where no provider flag says otherwise — Claude's status file
+      // stays "busy" for days on a lead with teammates (see parkIdle).
+      if (status === "running" && !busy && host !== "subagent" && now - (f?.lastActivityAt ?? now) >= STALE_TURN_MS) status = "waiting";
       // Claude says so itself while a permission dialog is up, which is the
       // only way to know it for a session in some other terminal.
       if (proc?.waitingOn) {
@@ -1539,10 +1578,11 @@ export class Fleet extends EventEmitter {
     const live = status;
     this.liveStatus.set(rec.id, live);
     if (rec.archivedAt) status = "closed";
-    // A stopped pool agent was a call in its caller's run: listed while that
-    // run goes on, then history (See closed, resumable), never stranded at
-    // the root of the board or piled under a caller that has stopped.
-    else if (agent && host === "none" && !(rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
+    // A stopped child was a call in its parent's run — a pool agent, a
+    // teammate, a `codex exec` from a Bash tool: listed while that run goes
+    // on, then history (resumable by id), never stranded at the root of the
+    // board or piled under a caller that has stopped.
+    else if (rec.parent && host === "none" && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
       status = "closed";
     }
 
@@ -2442,15 +2482,61 @@ export class Fleet extends EventEmitter {
    * Close: stop its process, then take it off the list. The transcript and
    * worktree stay, and a resume or a message brings it back. Reopening only
    * puts it back on the list; it stays stopped until you resume it.
+   * Closing takes the sessions it started, at any depth, off the list with
+   * it: they were calls in its run, and a parent gone from the board leaves
+   * them stranded at the root. Running ones are stopped first, the parent
+   * before its children — its death takes its MCP servers, and the pool
+   * agents they run, with it.
    */
   async close(id: string, closed: boolean): Promise<void> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
-    if (closed && this.get(id).host !== "none") await this.stopSession(id);
+    if (!closed) {
+      updateSessionRecord(id, { archivedAt: null });
+      await this.tick();
+      return;
+    }
+    const target = this.get(id);
+    if (target.host === "subagent") throw this.callersAgent(target);
+    const family = [id, ...this.openDescendants(id)];
+    for (const sid of family) {
+      let s: Session;
+      try {
+        s = sid === id ? target : this.get(sid);
+      } catch {
+        continue; // not viewable (its transcript is ignored): archive it below, stop nothing
+      }
+      if (s.host === "subagent") continue;
+      this.touched.set(sid, this.now());
+      if (s.host === "tmux" && s.tmux) this.killTmux(s.tmux);
+      else if (s.host === "external" && s.pid) {
+        try {
+          process.kill(s.pid, "SIGTERM");
+        } catch {
+          /* gone */
+        }
+      } else if (s.tmux) this.killTmux(s.tmux);
+    }
     // A parked one is stopped already; closing makes that yours, so it
     // reopens stopped rather than waiting on you.
-    updateSessionRecord(id, closed ? { archivedAt: this.now(), parkedAt: null, parkedMates: null, parkedWhy: null } : { archivedAt: null });
+    const at = this.now();
+    for (const sid of family) updateSessionRecord(sid, { archivedAt: at, parkedAt: null, parkedMates: null, parkedWhy: null });
     await this.tick();
+  }
+
+  /** The sessions `id` started, at any depth, still open: what closing it takes with it. */
+  private openDescendants(id: string): string[] {
+    const kids = new Map<string, string[]>();
+    for (const r of listSessionRecords(0)) {
+      if (r.archivedAt || !r.parent || r.parent === r.id) continue;
+      kids.set(r.parent, [...(kids.get(r.parent) ?? []), r.id]);
+    }
+    const out: string[] = [];
+    const walk = (p: string) => {
+      for (const c of kids.get(p) ?? []) if (!out.includes(c)) { out.push(c); walk(c); }
+    };
+    walk(id);
+    return out;
   }
 
   async patch(id: string, p: { label?: string | null; big?: boolean }): Promise<Session> {
@@ -2493,6 +2579,16 @@ export class Fleet extends EventEmitter {
 const STALL_FRESH_MS = 15 * 60_000;
 /** A 5-hour window resetting within this is waited out, not moved away from. */
 const RESET_WAIT_MS = 60 * 60_000;
+/** A session stuck on an error screen is nudged once the error's reset window
+ *  ("will reset in N seconds") has passed: this long after it last moved. */
+const NUDGE_QUIET_MS = 5 * 60_000;
+/** One nudge across the fleet this often: several sessions retaking one
+ *  rate-limited account in lockstep is what stuck them. */
+const NUDGE_STAGGER_MS = 90_000;
+/** Nudges per spell before a stuck session is left for you. */
+const NUDGE_MAX_TRIES = 3;
+/** How long a spell lasts: after this quiet, the count starts over. */
+const NUDGE_SPELL_MS = 60 * 60_000;
 
 const BUSY_CORES_PER_AGENT = 0.1;
 

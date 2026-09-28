@@ -205,7 +205,7 @@ export async function runMcp(base: string): Promise<void> {
     "close",
     {
       title: "Close or reopen a session",
-      description: "Close stops a finished session's process and takes it off the fleet; it stays resumable. closed: false reopens it (back on the list, still stopped).",
+      description: "Close stops a finished session's process and takes it, and every session it started (at any depth), off the fleet; they stay resumable. Running ones are stopped, so ask before closing a session whose children are running. closed: false reopens it (back on the list, still stopped).",
       inputSchema: { id: z.string(), closed: z.boolean().optional() },
     },
     async ({ id, closed }) => {

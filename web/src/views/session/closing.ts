@@ -29,15 +29,16 @@ export function useClosing(): { pending: ReadonlySet<string>; failure: typeof fa
   return { pending: p, failure: f, dismiss: () => set(pending, null) };
 }
 
-/** Hide it now; the server stops and closes it behind the scenes. */
-export function closeNow(id: string, title: string): void {
-  set(new Set(pending).add(id), failure?.id === id ? null : failure);
+/** Hide it and the sessions it started now; the server stops and closes them behind the scenes. */
+export function closeNow(id: string, title: string, family: readonly string[] = []): void {
+  const ids = [id, ...family.filter((x) => x !== id)];
+  set(new Set([...pending, ...ids]), failure && ids.includes(failure.id) ? null : failure);
   api.close(id, true).then(
-    // Held a little past the answer: the state push that shows it closed can
-    // land just after, and the row should not blink back in between.
-    () => setTimeout(() => forget(id), 5000),
+    // Held a little past the answer: the state push that shows them closed can
+    // land just after, and the rows should not blink back in between.
+    () => setTimeout(() => ids.forEach(forget), 5000),
     (e: Error) => {
-      forget(id);
+      ids.forEach(forget);
       set(pending, { id, title, message: e.message });
     },
   );

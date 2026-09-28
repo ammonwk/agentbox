@@ -296,7 +296,7 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once]
                         a line each time one starts asking, finishes its turn
                         (with the end of its last message), or stops; until killed
-  close <id>...         stop it and take it off the list; resumable
+  close <id>...         stop it and take it, and the sessions it started, off the list; resumable
   reopen <id>...        put a closed one back on the list (still stopped)
   stop <id>...          end its process; it stays resumable
   resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not

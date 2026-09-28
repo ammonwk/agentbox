@@ -11,7 +11,7 @@ import {
   StatusPill,
 } from "../../bits";
 import { Button, Confirm, Empty, Icon } from "../../components";
-import { filterSessions, neighbourId, runningSubagents, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
+import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
@@ -124,17 +124,17 @@ export function SessionView({
     else location.hash = hrefOf({ page: "sessions" });
   };
 
-  // Closing one that runs subagents stops them mid-task, so that is asked first.
+  // Closing one that runs sessions of its own stops them mid-task, so that is asked first.
   const [closingParent, setClosingParent] = useState<SessionRow | null>(null);
   // Ctrl+W on a mid-turn session asks first, as the Close button does.
   const [confirmCloseRow, setConfirmCloseRow] = useState<SessionRow | null>(null);
-  const close = (s: SessionRow) => (runningSubagents(s, state.sessions).length > 0 ? setClosingParent(s) : closeRow(s));
+  const close = (s: SessionRow) => (runningDescendants(s, state.sessions).length > 0 ? setClosingParent(s) : closeRow(s));
   // Closing the open one opens the row that takes its place: the one below
   // it, or the one above at the bottom of the list.
   const closeRow = (s: SessionRow) => {
     const i = ordered.findIndex((x) => x.id === s.id);
     const next = i === -1 ? null : (ordered[i + 1] ?? ordered[i - 1] ?? null);
-    closeNow(s.id, titleOf(s));
+    closeNow(s.id, titleOf(s), descendantsOf(s, state.sessions).map((c) => c.id));
     if (s.id !== id) return;
     if (next) onOpen(next.id);
     else location.hash = hrefOf({ page: "sessions" });
@@ -168,7 +168,7 @@ export function SessionView({
           const row = id ? state.sessions.find((s) => s.id === id) : null;
           if (!row || row.status === "closed") return;
           e.preventDefault();
-          if (row.status === "running" && runningSubagents(row, state.sessions).length === 0) setConfirmCloseRow(row);
+          if (row.status === "running" && runningDescendants(row, state.sessions).length === 0) setConfirmCloseRow(row);
           else close(row);
         } else if (e.shiftKey && e.key === "T") {
           e.preventDefault();
@@ -251,9 +251,8 @@ export function SessionView({
           confirmLabel="Close"
           body={
             <p>
-              {closingParent.status === "running" ? "It is mid-turn, and it" : "It"} runs{" "}
-              <SubagentNames session={closingParent} sessions={state.sessions} />. Closing stops the session and every one of them,
-              mid-task; answers they have not handed back are lost. The conversations are kept, and See closed finds them.
+              Closing takes it, and every session it started, off the board. <RunningFamily session={closingParent} sessions={state.sessions} />
+              The conversations are kept, and See closed finds them.
             </p>
           }
           onCancel={() => setClosingParent(null)}
@@ -296,6 +295,19 @@ function SubagentNames({ session, sessions }: { session: SessionRow; sessions: A
   return (
     <>
       {subs.length === 1 ? "a subagent" : `${subs.length} subagents`} ({subs.map((c) => c.subagent?.name ?? c.title).join(", ")})
+    </>
+  );
+}
+
+/** "2 of them (a, b) are still running — closing stops them mid-task…" — the
+ *  sessions a close would cut short, at any depth under `session`. */
+function RunningFamily({ session, sessions }: { session: SessionRow; sessions: AppState["sessions"] }) {
+  const rows = runningDescendants(session, sessions);
+  const one = rows.length === 1;
+  return (
+    <>
+      {one ? "One of them" : `${rows.length} of them`} ({rows.map((c) => c.subagent?.name ?? c.title).join(", ")}) {one ? "is" : "are"} still
+      running — closing stops {one ? "it" : "them"} mid-task, and answers {one ? "it has" : "they have"} not handed back are lost.{" "}
     </>
   );
 }

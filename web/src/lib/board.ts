@@ -87,6 +87,29 @@ export function runningSubagents<T extends Pick<Session, "parent" | "host">>(s: 
   return sessions.filter((c) => c.parent === s.id && c.host === "subagent");
 }
 
+/** The sessions `s` started, at any depth, still on the board: closing it takes them with it. */
+export function descendantsOf<T extends Pick<Session, "id" | "parent" | "status">>(s: Pick<Session, "id">, sessions: readonly T[]): T[] {
+  const kids = new Map<string, T[]>();
+  for (const c of sessions) {
+    if (c.status === "closed" || !c.parent || c.parent === c.id) continue;
+    kids.set(c.parent, [...(kids.get(c.parent) ?? []), c]);
+  }
+  const out: T[] = [];
+  const walk = (p: string) => {
+    for (const c of kids.get(p) ?? []) if (!out.includes(c)) { out.push(c); walk(c.id); }
+  };
+  walk(s.id);
+  return out;
+}
+
+/** Those of them with a process left: closing `s` stops them mid-task. */
+export function runningDescendants<T extends Pick<Session, "id" | "parent" | "status" | "host">>(
+  s: Pick<Session, "id">,
+  sessions: readonly T[],
+): T[] {
+  return descendantsOf(s, sessions).filter((c) => c.host !== "none");
+}
+
 /** A row placed in the tree: how deep it sits under the session that started
  *  it, and how many sessions it started are here under it. */
 export type Nested<T> = T & { depth: number; kids: number };

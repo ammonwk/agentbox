@@ -59,13 +59,17 @@ also reads them from stdin with `-`, so pipes and xargs work.
 - Repo is the repository, also for a session in a worktree; the branch says
   which worktree (agentbox's own are `ab/<id>`).
 - Closing is cheap and reversible, but it stops the process first, so a
-  session mid-turn loses that turn: ask before closing a running one.
+  session mid-turn loses that turn: ask before closing a running one, and
+  before closing a parent whose children are running — closing takes the
+  sessions it started, at any depth, with it.
 - Stopping a running session interrupts its work, and a message sent to one
   lands mid-turn. Ask before stopping or sending to a running session.
 - A session another one started (a teammate, a `codex exec` run from a
   Bash tool, an agent of its subagent MCP) is listed right after its parent
   with its title indented `└`, and `show` names its parent and children.
-  Every verb acts on exactly the ids it is given: closing or stopping a parent
+  Every verb acts on exactly the ids it is given, except close: closing a
+  parent closes the sessions it started, at any depth, with it (running ones
+  are stopped, and the app asks first when any are). Stopping a parent
   leaves its children alone, so list them (`ls | grep`, or `ls --json | jq`
   on `.parent`) to act on them too. The exception is subagents (host
   `sub`): the parent runs them, so stopping or closing it stops every one
