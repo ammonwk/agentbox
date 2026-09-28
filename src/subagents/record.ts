@@ -32,6 +32,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -52,6 +53,13 @@ export interface RecordMeta {
   pid: number;
   /** The client session that asked for it, when it could be determined. */
   owner: string;
+  /**
+   * The agentbox session that asked for it (`AGENTBOX_SESSION`, which
+   * agentbox sets on every process it starts). Unlike `owner`, the same
+   * across that session's resumes: it is how a resumed session's MCP finds
+   * the agents its last run left unfinished (`SubagentPool.revive`).
+   */
+  session?: string;
   /** The brief. Clipped: this is for a person deciding whether they are
    *  looking at the right agent, not for re-reading the whole prompt. */
   prompt: string;
@@ -106,7 +114,15 @@ export function writeState(dir: string, snapshot: AgentSnapshot): void {
   writeAtomic(join(dir, "state.json"), JSON.stringify({ at: Date.now(), snapshot }));
 }
 
-function readJson<T>(path: string): T | null {
+/** Name the agentbox session an agent belongs to, on a record written before
+ *  `session` was recorded. Never overwrites one that says otherwise. */
+export function claimRecord(dir: string, session: string): void {
+  const meta = readJson<RecordMeta>(join(dir, "meta.json"));
+  if (!meta || meta.session) return;
+  writeAtomic(join(dir, "meta.json"), JSON.stringify({ ...meta, session }, null, 2));
+}
+
+export function readJson<T>(path: string): T | null {
   try {
     return JSON.parse(readFileSync(path, "utf8")) as T;
   } catch {
@@ -130,9 +146,10 @@ export interface PoolAgent {
   serverPid: number;
 }
 
-/** Per directory: the agent once meta.json has a session id, else when the
- *  agent started (it is re-read until it has one, for a while). */
-const seen = new Map<string, { key: string; agent: PoolAgent } | number>();
+/** Per directory: the agent once meta.json has a session id, and the file's
+ *  mtime then (a revived agent's record is rewritten naming its new server);
+ *  else when the agent started (it is re-read until it has one, for a while). */
+const seen = new Map<string, { key: string; agent: PoolAgent; mtimeMs: number } | number>();
 
 /** Give up on a directory whose CLI never opened a conversation after this. */
 const ID_WINDOW_MS = 10 * 60_000;
@@ -163,7 +180,13 @@ export function poolAgents(now = Date.now()): Map<string, PoolAgent> {
   for (const name of entries) {
     const dir = join(root, name);
     const known = seen.get(dir);
-    if (typeof known === "object") {
+    let mtimeMs = 0;
+    try {
+      mtimeMs = statSync(join(dir, "meta.json")).mtimeMs;
+    } catch {
+      /* not written yet */
+    }
+    if (typeof known === "object" && known.mtimeMs === mtimeMs) {
       agents.set(known.key, known.agent);
       continue;
     }
@@ -172,7 +195,7 @@ export function poolAgents(now = Date.now()): Map<string, PoolAgent> {
     const key = keyOf(meta);
     if (key !== null && meta) {
       const agent = { dir, name: meta.name, owner: meta.owner, serverPid: meta.pid };
-      seen.set(dir, { key, agent });
+      seen.set(dir, { key, agent, mtimeMs });
       agents.set(key, agent);
     } else {
       seen.set(dir, meta?.startedAt ?? now);

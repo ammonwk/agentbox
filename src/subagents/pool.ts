@@ -17,7 +17,7 @@
  */
 
 import {
-  appendFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { AcpRunner, messageOf, type AcpEvents, type LaunchOptions } from "./acp";
@@ -32,7 +32,7 @@ import {
   type Place,
 } from "./place";
 import * as live from "./live";
-import { writeMeta, writeState, type RecordMeta } from "./record";
+import { readJson, writeMeta, writeState, type RecordMeta } from "./record";
 import { subagentDirFor, subagentRoot } from "../core/paths";
 import { isProviderError } from "./provider-error";
 import {
@@ -43,7 +43,7 @@ import {
   type Verdict,
 } from "./health";
 import { readSubagentPrompt } from "./prompt";
-import { STOPPED_BY_CALLER, type ToolCall, type ToolRecord } from "./types";
+import { CALLER_GONE, STOPPED_BY_CALLER, type ToolCall, type ToolRecord } from "./types";
 
 /** `running` — mid-turn. `idle` — turn over, conversation alive, resumable.
  *  `dead` — the agent process is gone and this agent cannot be talked to again. */
@@ -131,6 +131,18 @@ export const DEFAULT_TIMING: PoolTiming = {
  * it was doing and send it a correction.
  */
 const MAX_TURN_MS = 4 * 60 * 60 * 1000;
+
+/** A record older than this is not revived: its work has moved on without it. */
+const REVIVE_MAX_MS = 3 * 24 * 3_600_000;
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * How long an agent may sit idle before its process is stopped.
@@ -429,6 +441,8 @@ export class Subagent {
   private systemPrompt = "";
   /** When the process was stopped for sitting idle. Null while it is running. */
   private parkedAt: number | null = null;
+  /** What its caller's last session left unfinished (see AgentSnapshot.unfinished). */
+  private unfinished: { running: boolean; uncollected: number } | null = null;
   /** Messages sent to a parked agent while its process comes back, in order.
    *  Null when no wake is in flight. */
   private waking: string[] | null = null;
@@ -531,12 +545,14 @@ export class Subagent {
     maxTurnMs = MAX_TURN_MS,
     quiet = false,
     private readonly timing: PoolTiming = DEFAULT_TIMING,
+    /** The model it runs on, when not the backend's current default (a revived agent keeps its own). */
+    model?: string | null,
   ) {
     this.name = name;
     this.cwd = cwd;
     this.backend = backend;
     this.provider = backend.id;
-    this.model = backend.model();
+    this.model = model !== undefined ? model : backend.model();
     this.dir = dir;
     this.readOnly = readOnly;
     this.maxTurnMs = maxTurnMs;
@@ -687,6 +703,7 @@ export class Subagent {
       inFlightToolMs: oldest === null ? null : Math.max(0, now - oldest),
       endedReason: this.endReason,
       partial: this.partial(400),
+      unfinished: this.unfinished,
     };
   }
 
@@ -793,6 +810,7 @@ export class Subagent {
       startedAt: this.createdAt,
       pid: process.pid,
       owner: live.owner(),
+      ...(process.env.AGENTBOX_SESSION ? { session: process.env.AGENTBOX_SESSION } : {}),
       prompt,
     };
     writeMeta(this.dir, meta);
@@ -950,6 +968,8 @@ export class Subagent {
     this.armTurnClock();
     this.continues = 0;
     const turn = ++this.sentTurns;
+    // Spoken to: whatever a crash left unfinished is its caller's business now.
+    this.unfinished = null;
     this.messages.push({ turn, text: clip(text, 300), sentAt: Date.now() });
     if (this.messages.length > MESSAGE_LOG) this.messages.shift();
     this.log({ type: "message", turn, text });
@@ -1088,6 +1108,74 @@ export class Subagent {
     // `die` clears the pending waits; without it a backoff would outlive the
     // agent and hold the event loop open past `stopAll()`.
     this.die(STOPPED_BY_CALLER);
+  }
+
+  /** End because its caller's session did, noting what that left unfinished
+   *  — before dying turns an owed turn into a death report — so the
+   *  session's next run can bring it back (`SubagentPool.revive`). */
+  endWithCaller(): void {
+    const running = this._state === "running" || this.owed > 0;
+    if (running || this.uncollected > 0) this.unfinished = { running, uncollected: this.uncollected };
+    this.runner.kill();
+    this.die(CALLER_GONE);
+  }
+
+  /**
+   * An agent a previous run of its caller's session left unfinished, rebuilt
+   * from its record as a parked agent: same name, same conversation, same
+   * system prompt, same model — the next `send` resumes its CLI on all four,
+   * exactly as after an idle park. Answers it produced that were never
+   * collected go back in its mailbox. Null when the record cannot support it.
+   */
+  static revived(meta: RecordMeta, dir: string, last: AgentSnapshot, makeRunner: RunnerFactory, timing: PoolTiming): Subagent | null {
+    if (!meta.sessionId) return null;
+    let systemPrompt: string;
+    try {
+      systemPrompt = readFileSync(join(dir, "system.md"), "utf8");
+    } catch {
+      return null;
+    }
+    const a = new Subagent(meta.name, meta.cwd, backendFor(meta.provider), dir, makeRunner, meta.readOnly, MAX_TURN_MS, false, timing, meta.model);
+    a.sessionId = meta.sessionId;
+    a.systemPrompt = systemPrompt;
+    a.launched = true;
+    a.parkedAt = Date.now();
+    a.lastActivityAt = last.lastEventAt;
+    a.lastAction = last.lastAction;
+    a.totalTools = last.totalToolCalls;
+    a.unfinished = last.unfinished ?? { running: last.state === "running", uncollected: last.uncollected };
+    // Turn numbers carry on from the record, and unread answers are restored from it.
+    const reports: TurnReport[] = [];
+    try {
+      for (const line of readFileSync(join(dir, "transcript.jsonl"), "utf8").split("\n")) {
+        if (!line.includes('"type":"message"') && !line.includes('"type":"turn"')) continue;
+        let e: { type?: string; turn?: number; report?: TurnReport };
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (e.type === "message" && typeof e.turn === "number") a.sentTurns = Math.max(a.sentTurns, e.turn);
+        else if (e.type === "turn" && e.report && typeof e.report.turn === "number") {
+          a.answeredTurns = Math.max(a.answeredTurns, e.report.turn);
+          if (e.report.stopReason !== "died") reports.push(e.report);
+        }
+      }
+    } catch {
+      /* no transcript: start the count over */
+    }
+    const unread = a.unfinished.uncollected;
+    if (unread > 0) {
+      a.mailbox = reports.slice(-unread);
+      a.lastAnsweredAt = last.lastEventAt;
+    }
+    a.log({ type: "revived", after: CALLER_GONE, running: a.unfinished.running, restoredAnswers: a.mailbox.length });
+    return a;
+  }
+
+  /** What its caller's last session left unfinished, until it is next spoken to. */
+  get leftUnfinished(): { running: boolean; uncollected: number } | null {
+    return this.unfinished;
   }
 
   // ------------------------------------------------------------- internals
@@ -1710,9 +1798,12 @@ export class SubagentPool {
     if (this.agents.size === 0) this.stopTicking();
   }
 
-  stopAll(): void {
+  /** Stop every agent. `callerGone`: because this server is shutting down
+   *  with its client, not because the caller is done with them. */
+  stopAll(callerGone = false): void {
     for (const a of this.agents.values()) {
-      a.stop();
+      if (callerGone) a.endWithCaller();
+      else a.stop();
       this.seal(a);
       this.retract(a.name);
     }
@@ -1809,6 +1900,50 @@ export class SubagentPool {
     this.ticker = null;
     for (const id of this.published) live.retract(id);
     this.published.clear();
+  }
+
+  /**
+   * Bring back, parked, the agents a previous run of `session` (an agentbox
+   * session id) left unfinished: ended mid-turn, or holding answers nobody
+   * collected — whether its MCP server was killed in a crash or shut down
+   * with its client. One per name, the newest. Finished agents stay finished.
+   */
+  revive(session: string, now = Date.now()): Subagent[] {
+    let entries: string[];
+    try {
+      entries = readdirSync(subagentRoot());
+    } catch {
+      return [];
+    }
+    const newest = new Map<string, { meta: RecordMeta; dir: string; last: AgentSnapshot }>();
+    for (const entry of entries) {
+      const dir = join(subagentRoot(), entry);
+      const meta = readJson<RecordMeta>(join(dir, "meta.json"));
+      if (!meta || meta.session !== session || !meta.sessionId || meta.pid === process.pid) continue;
+      const state = readJson<{ at: number; snapshot: AgentSnapshot }>(join(dir, "state.json"));
+      const last = state?.snapshot;
+      if (!state || !last || now - state.at > REVIVE_MAX_MS) continue;
+      // Its server still running means it is not ours to take.
+      if (last.state !== "dead" && processAlive(meta.pid)) continue;
+      const left =
+        last.endedReason === CALLER_GONE || last.state !== "dead"
+          ? (last.unfinished ?? { running: last.state === "running", uncollected: last.uncollected })
+          : null;
+      if (!left || (!left.running && left.uncollected === 0)) continue;
+      const held = newest.get(meta.name);
+      if (!held || held.meta.startedAt < meta.startedAt) newest.set(meta.name, { meta, dir, last });
+    }
+    const revived: Subagent[] = [];
+    for (const { meta, dir, last } of newest.values()) {
+      if (this.agents.has(meta.name)) continue;
+      const a = Subagent.revived(meta, dir, last, this.makeRunner, this.timing);
+      if (!a) continue;
+      this.agents.set(a.name, a);
+      writeMeta(dir, { ...meta, pid: process.pid, owner: live.owner() });
+      revived.push(a);
+    }
+    if (revived.length) this.startTicking();
+    return revived;
   }
 
   private nameFor(requested?: string): string {

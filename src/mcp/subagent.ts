@@ -400,6 +400,9 @@ export async function runSubagentMcp(): Promise<void> {
   const HERE = describePlace(process.cwd());
 
   const pool = new SubagentPool(process.cwd());
+  // A resumed session gets back the agents its last run left unfinished —
+  // cut off mid-turn by a crash, or holding answers it never collected.
+  const revived = new Set(process.env.AGENTBOX_SESSION ? pool.revive(process.env.AGENTBOX_SESSION).map((a) => a.name) : []);
 
   // One sweep at startup. Transcripts are per-spawn and nothing else removes
   // them; a client that starts this server every session is exactly the thing
@@ -453,8 +456,33 @@ export async function runSubagentMcp(): Promise<void> {
     return lines.join("\n");
   }
 
+  /**
+   * Agents brought back from this session's last run, until each is spoken
+   * to or stopped. Said on every result for the same reason as the mailbox:
+   * a caller resumed after a crash does not know to ask.
+   */
+  function revivedNotice(): string {
+    const waiting = pool.list().filter((a) => revived.has(a.name) && a.leftUnfinished);
+    for (const name of revived) if (!waiting.some((a) => a.name === name)) revived.delete(name);
+    if (waiting.length === 0) return "";
+    const lines = [
+      ``,
+      `---`,
+      `↺ Restored: this session's last run ended with ${waiting.length} agent${waiting.length === 1 ? "" : "s"} unfinished. ` +
+        `Each is back under its name, parked with its conversation: \`send_message\` to carry on, \`stop_agent\` to let it go.`,
+    ];
+    for (const a of waiting) {
+      const left = a.leftUnfinished!;
+      const what = [left.running ? "was mid-turn" : "", left.uncollected ? `${left.uncollected} answer${left.uncollected === 1 ? "" : "s"} to collect` : ""]
+        .filter(Boolean)
+        .join("; ");
+      lines.push(`- "${a.name}" — ${what} (${renderPlace(a.place)})`);
+    }
+    return lines.join("\n");
+  }
+
   function text(body: string) {
-    return { content: [{ type: "text" as const, text: `${body}${mailboxNotice()}` }] };
+    return { content: [{ type: "text" as const, text: `${body}${mailboxNotice()}${revivedNotice()}` }] };
   }
 
   const server = new McpServer({ name: "subagents", version: VERSION });
@@ -1025,14 +1053,14 @@ export async function runSubagentMcp(): Promise<void> {
    *  would strand agent processes nobody can address or see. */
   function shutdown() {
     for (const id of publishing) live.retract(id);
-    pool.stopAll();
+    pool.stopAll(true);
     process.exit(0);
   }
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   process.on("beforeExit", () => {
     for (const id of publishing) live.retract(id);
-    pool.stopAll();
+    pool.stopAll(true);
   });
 
   const transport = new StdioServerTransport();

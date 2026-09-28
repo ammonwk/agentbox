@@ -94,3 +94,11 @@ export interface ToolRecord {
  * it is the only thing that actually knows.
  */
 export const STOPPED_BY_CALLER = "stopped by the caller";
+/**
+ * Why every agent of an MCP server ends when the server itself is shut down —
+ * its client exited, or was stopped with everything else. Not the caller
+ * being done with them: an agent that ends this way mid-turn, or holding an
+ * answer nobody read, is brought back when that session resumes
+ * (`SubagentPool.revive`).
+ */
+export const CALLER_GONE = "its caller's session ended";

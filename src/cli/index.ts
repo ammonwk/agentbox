@@ -19,6 +19,7 @@ import { ApiError, apiClient, serverBase } from "../client";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
+import type { RecoveryReport } from "../core/recovery";
 
 const BASE = serverBase();
 const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
@@ -46,26 +47,32 @@ async function reachable(): Promise<boolean> {
 }
 
 /**
- * Start the server in the background if it is not already up. Detached into
- * its own session, so closing the terminal that happened to start it does not
- * take the board down with it — and, where systemd is there, into its own
- * scope (the one AGENTS.md restarts it in), with SERVER_WEIGHT.
+ * Start the server in the background if it is not already up: its service
+ * when that is installed, else detached into its own session, so closing the
+ * terminal that happened to start it does not take the board down with it —
+ * and, where systemd is there, into its own scope, with SERVER_WEIGHT.
  */
 async function ensureServer(): Promise<void> {
   if (await reachable()) return;
   ensureDirs();
   const logDir = join(agentboxHome(), "logs");
   mkdirSync(logDir, { recursive: true });
-  const log = openSync(join(logDir, "server.log"), "a");
-  const serve = ["setsid", "bun", agentboxBin(), "serve"];
-  const scoped = Bun.which("systemd-run")
-    ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-serve", ...SERVER_WEIGHT.flatMap((w) => ["-p", w])]
-    : [];
-  const p = Bun.spawn([...scoped, ...serve], {
-    stdio: ["ignore", log, log],
-    env: process.env,
-  });
-  p.unref();
+  // The service (systemd/agentbox.service), where it is installed: started
+  // there, the server has the environment it has at boot, not this shell's.
+  const service = Bun.which("systemctl") && Bun.spawnSync(["systemctl", "--user", "cat", "agentbox.service"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  if (service) Bun.spawnSync(["systemctl", "--user", "start", "agentbox.service"], { stdout: "ignore", stderr: "inherit" });
+  else {
+    const log = openSync(join(logDir, "server.log"), "a");
+    const serve = ["setsid", "bun", agentboxBin(), "serve"];
+    const scoped = Bun.which("systemd-run")
+      ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-serve", ...SERVER_WEIGHT.flatMap((w) => ["-p", w])]
+      : [];
+    const p = Bun.spawn([...scoped, ...serve], {
+      stdio: ["ignore", log, log],
+      env: process.env,
+    });
+    p.unref();
+  }
   process.stderr.write("starting agentbox server…");
   for (let i = 0; i < 40; i++) {
     await Bun.sleep(250);
@@ -239,6 +246,34 @@ function doctor(): number {
 
 // --------------------------------------------------------------------- main
 
+/** One recovery step per line: what was done to each session, and why. */
+function printReport(r: RecoveryReport): void {
+  const when = (at: number) => new Date(at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  console.log(`${r.dryRun ? "would recover" : "recovered"} after ${r.cause} · last seen ${when(r.lastSeen)}${r.dryRun ? "" : ` · at ${when(r.at)}`}`);
+  if (r.steps.length === 0) console.log("  nothing to do");
+  // Only an outcome that is not what the action says: a resume that failed.
+  const expected: Record<string, string> = { resume: "resumed", park: "parked", revive: "comes back with its caller", leave: "nothing to bring back" };
+  for (const s of r.steps) {
+    const outcome = s.outcome && s.outcome !== expected[s.action] ? ` [${s.outcome}]` : "";
+    console.log(`  ${s.id}  ${s.action.padEnd(6)}  ${s.title.slice(0, 60)} — ${s.why}${outcome}`);
+  }
+  for (const t of r.trouble) console.log(`  ! ${t.id} came back unable to act: ${t.what}`);
+}
+
+async function recover(args: string[]): Promise<number> {
+  const ids = args.filter((a) => !a.startsWith("-"));
+  if (ids.length) {
+    printReport(await api<RecoveryReport>("POST", "/api/recovery", { ids, dryRun: args.includes("--dry-run") }));
+    return 0;
+  }
+  const { last, preview } = await api<{ last: RecoveryReport | null; preview: RecoveryReport }>("GET", "/api/recovery");
+  if (args.includes("--last")) {
+    if (!last) console.log("agentbox has not recovered from a crash yet");
+    else printReport(last);
+  } else printReport(preview);
+  return 0;
+}
+
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
   claude|codex|devin|omp [--big] [--account NAME] [--model M] [--detach] [prompt…]
@@ -265,6 +300,10 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   stop <id>...          end its process; it stays resumable
   resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not
   label <id> [name]     rename it on the board (no name clears)
+  recover [--last | --dry-run] [<id>...]
+                        after a crash agentbox resumes what was working and parks
+                        the rest by itself; this shows the last recovery (--last),
+                        what one would do now (no ids), or recovers stopped ids
 
 scheduled sessions (one-time ones show in the app as sessions; recurring ones in Settings):
   schedule <when> [--agent claude] [--cwd DIR] [--big] [--account A] [--model M] [--effort E] [--name N] <prompt…|->
@@ -334,6 +373,9 @@ export async function main(argv: string[]): Promise<number | null> {
         await ensureServer();
         return await verbs.each(api, cmd, rest.filter((a) => a !== "--detach"));
       }
+      case "recover":
+        await ensureServer();
+        return await recover(argv.slice(1));
       case "usage":
         return await usage();
       case "attach":

@@ -245,6 +245,9 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX btw_session ON btw (session_id, asked_at);
   `,
+  // 11 — why a session was parked when it was not for sitting idle (a crash
+  // took its process; src/core/recovery.ts); told to it when it resumes.
+  `ALTER TABLE sessions ADD COLUMN parked_why TEXT;`,
 ];
 
 function migrate(d: Database) {
@@ -348,6 +351,9 @@ export interface SessionRecord {
   parkedAt?: number | null;
   /** Teammates whose panes were stopped with it. */
   parkedMates?: string[] | null;
+  /** Why it is parked, when that is not idleness: its process was lost in a
+   *  crash while it waited on you (src/core/recovery.ts). */
+  parkedWhy?: string | null;
 }
 
 type SessionRow = {
@@ -356,7 +362,7 @@ type SessionRow = {
   origin: string; tmux: string | null; transcript_path: string | null; started_at: number;
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
-  parked_at: number | null; parked_mates: string | null;
+  parked_at: number | null; parked_mates: string | null; parked_why: string | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -382,6 +388,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     parent: r.parent ?? null,
     parkedAt: r.parked_at ?? null,
     parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
+    parkedWhy: r.parked_why ?? null,
   };
 }
 
@@ -408,6 +415,7 @@ const RECORD_COLUMNS = {
   parent: "parent",
   parkedAt: "parked_at",
   parkedMates: "parked_mates",
+  parkedWhy: "parked_why",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;

@@ -88,6 +88,14 @@ export interface TranscriptFacts {
   startedAt: number | null;
   lastActivityAt: number | null;
   /**
+   * When the model last answered: the newest model call the transcript
+   * records, not the newest line. Claude writes bookkeeping lines (a
+   * background task's notification queued, a title) with no call behind them,
+   * so `lastActivityAt` can be minutes old while the prompt cache went cold
+   * hours ago. Absent when the provider cannot tell the two apart.
+   */
+  lastTurnAt?: number | null;
+  /**
    * True when the transcript shows a turn in progress: the newest thing is a
    * prompt or a tool call, not an end of turn. Combined with process liveness
    * by the fleet; on its own it cannot tell a working agent from a killed one.
@@ -228,6 +236,14 @@ export interface ProviderAdapter {
   spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null };
 
   resumeCommand(opts: ResumeOptions): Command;
+
+  /**
+   * Anything the CLI keeps outside its argv that must be right before
+   * `resumeCommand` runs. Devin resumes in the permission mode it saved for
+   * the session and ignores `--permission-mode`, so a session first opened
+   * over ACP in its "normal" mode comes back rejecting every command.
+   */
+  prepareResume?(opts: ResumeOptions): void;
 
   /**
    * Re-home a stopped session's transcript under another account of this

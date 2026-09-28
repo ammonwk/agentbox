@@ -1,4 +1,4 @@
-/** Read-only access to devin's `sessions.db`.
+/** Access to devin's `sessions.db`: read-only, but for `setAgentMode`.
  *
  * The database is written by every live devin process (it is 2.4 GB on a
  * working machine, WAL mode), so everything here is a small indexed query on a
@@ -166,6 +166,24 @@ export function messagesByRow(path: string, rowIds: readonly number[]): Map<numb
     }
     return out;
   });
+}
+
+/**
+ * Save a session's permission mode — the one write agentbox makes here.
+ * `devin -r` resumes in the mode saved for the session and ignores
+ * `--permission-mode`, so a session first opened over ACP (a subagent,
+ * saved as "normal") comes back in a terminal nobody watches, where every
+ * command it tries is rejected as skipped. Its own short-lived connection, so
+ * the pollers' read-only handles stay read-only. Whether a row changed.
+ */
+export function setAgentMode(path: string, id: string, mode: string): boolean {
+  const db = new Database(path);
+  try {
+    db.exec("PRAGMA busy_timeout = 3000");
+    return db.query("UPDATE sessions SET agent_mode = ? WHERE id = ? AND agent_mode != ?").run(mode, id, mode).changes > 0;
+  } finally {
+    db.close();
+  }
 }
 
 /** For tests: drop cached handles so a fixture can be deleted. */

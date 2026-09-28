@@ -21,7 +21,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { owners } from "./accounts/homes";
 import { place, type AccountState } from "./balancer";
 import { claimFor } from "./claim";
@@ -74,8 +74,29 @@ import {
   WakeScan,
 } from "./park";
 import { read as readLive } from "../subagents/live";
-import { poolKey, poolState, type PoolAgent } from "../subagents/record";
+import { claimRecord, poolKey, poolState, type PoolAgent } from "../subagents/record";
 import { carryEnv, type Launch } from "./launch";
+import {
+  bootTime,
+  crashCause,
+  decide,
+  lastReport,
+  managerIncarnation,
+  MAX_AUTO_RESUME_MS,
+  parkedWhy,
+  readSnapshot,
+  resumePrompt,
+  saveReport,
+  summarize,
+  tookWith,
+  writeSnapshot,
+  type Incarnation,
+  type LiveEntry,
+  type LiveSnapshot,
+  type RecoveryReport,
+  type Step,
+} from "./recovery";
+import { agentboxBin } from "./paths";
 import { weeklyWindow } from "./balancer";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
@@ -253,6 +274,29 @@ export class Fleet extends EventEmitter {
   private btwWatching = new Map<string, Promise<void>>();
   private btwHistory = new BtwHistory();
   private nextParkCheck: number;
+  /** With its turn over: what a live session is still waiting on (`refreshWork`). */
+  private work = new Map<string, string>();
+  private nextWorkCheck = 0;
+  /** The snapshot recovery would start from: the previous run's until this
+   *  run has checked it, then this run's own (`recordLive`). */
+  private snapshot: LiveSnapshot | null = null;
+  private snapshotSig = "";
+  /** Every session as last seen running, for recovering one by hand. */
+  private lastSeen = new Map<string, LiveEntry & { at: number }>();
+  /** Your user's systemd, as of start (see recovery.ts `crashCause`). */
+  private manager: Incarnation | null = null;
+  /** How each process in another terminal was launched, by pid; undefined
+   *  for a scripted one-shot, which nothing should ever resume. */
+  private launches = new Map<number, Launch | null | undefined>();
+  /** tmux sessions this fleet stopped, and when: gone by our hand, not a crash. */
+  private killedAt = new Map<string, number>();
+  private recovering: Promise<RecoveryReport> | null = null;
+  private lastRecovery: RecoveryReport | null = null;
+  /** Sessions started a moment ago, watched for coming back unable to act. */
+  private watches = new Map<string, Watch>();
+  private nextWatchCheck = 0;
+  /** What the watch found, by session, while it stands. */
+  private trouble = new Map<string, string>();
   readonly ready: Promise<void>;
   private markReady!: () => void;
 
@@ -266,6 +310,10 @@ export class Fleet extends EventEmitter {
 
   start(): void {
     if (this.timer) return;
+    // Before the first pass writes this run's: the previous run's snapshot is
+    // what a crash left, and the first pass checks it.
+    this.snapshot = readSnapshot();
+    this.manager = managerIncarnation();
     for (const id of failUnfinishedBtw("agentbox restarted before it answered", this.now())) this.emit("btw", id);
     void this.tick();
     this.timer = setInterval(() => void this.tick(), TICK_MS);
@@ -427,6 +475,10 @@ export class Fleet extends EventEmitter {
     this.rebuildViews(since, now);
     await this.parkIdle(now, settings.parkIdleMin);
     this.continueStalled(now);
+    await this.refreshWork(now);
+    await this.watchStarts(now);
+    this.checkCrash(now);
+    this.recordLive(now);
     for (const b of this.btwHistory.read(accountsOf("claude").map((a) => a.home))) this.watchTerminalBtw(b);
   }
 
@@ -792,7 +844,7 @@ export class Fleet extends EventEmitter {
       }
       const since = this.deadSince.get(pane.name) ?? now;
       this.deadSince.set(pane.name, since);
-      if (now - since > DEAD_PANE_MS && pane.clients === 0) this.deps.runtime.killSession(pane.name);
+      if (now - since > DEAD_PANE_MS && pane.clients === 0) this.killTmux(pane.name);
     }
   }
 
@@ -900,14 +952,14 @@ export class Fleet extends EventEmitter {
             continue;
           }
           const starts = check.agentPids.map((pid) => [pid, startedAtOf(pid)] as const);
-          this.deps.runtime.killSession(v.tmux!);
+          this.killTmux(v.tmux!);
           clean.delete(v.id);
           if (this.paneAlive(v.tmux)) {
             holds.set(v.id, "tmux did not stop it");
             continue;
           }
           for (const [pid, start] of starts) this.dying.set(pid, { since: this.now(), start, termed: false });
-          updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null });
+          updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null, parkedWhy: null });
           // The board says so now, not a tick from now: a message sent in
           // between must resume it, not type into a pane that is gone.
           this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null });
@@ -1035,21 +1087,9 @@ export class Fleet extends EventEmitter {
       const owners = [`pid:${a.pid}`, ...(a.sessionId ? [a.sessionId] : []), ...family.map((m) => m.t.facts!.agentSessionId)];
       if (live.some((e) => owners.includes(e.owner))) return "MCP subagents are running";
       cpuTicks += subtreeCpuTicks(subtree(table, a.pid));
-      for (const kid of table.children.get(a.pid) ?? []) {
-        const cmd = argvOf(kid)?.join(" ");
-        if (!cmd || !isToolShell(cmd)) continue; // an MCP server
-        shells.push(kid);
-        const command = shellCommand(cmd);
-        const label = describe({ ...table.byPid.get(kid)!, cmd });
-        // A monitor's every line of output is a message to the session.
-        if (monitors.has(normalCommand(command))) return `a monitor is running (${label})`;
-        const running = subtree(table, kid)
-          .filter((r) => r.pid !== kid)
-          .map((r) => argvOf(r.pid)?.join(" ") ?? r.comm)
-          .filter((c) => !bareShell(c));
-        const hold = shellHold(classifyShell(command, running), label, quiet);
-        if (hold) return hold;
-      }
+      const found = shellWork(table, a.pid, monitors, quiet, true);
+      shells.push(...found.shells);
+      if (found.hold) return found.hold;
     }
     return {
       at: now,
@@ -1061,6 +1101,336 @@ export class Fleet extends EventEmitter {
       sizes: new Map(family.map((m) => [m.t.ref.path, sizeOf(m.t.ref.path)])),
       mates: agents.filter((a) => a.team && a.name).map((a) => a.name!),
     };
+  }
+
+  // ------------------------------------------------------------- recovery
+
+  /**
+   * For every live session whose turn is over: the work it is still waiting
+   * on, which a crash would kill — a background command, a monitor, a
+   * wakeup, subagents. What decides, after a crash, between resuming it and
+   * leaving it for you (src/core/recovery.ts). Every `WORK_CHECK_MS`.
+   */
+  private async refreshWork(now: number): Promise<void> {
+    if (now < this.nextWorkCheck) return;
+    this.nextWorkCheck = now + WORK_CHECK_MS;
+    const idle = [...this.views.values()].filter((v) => (v.host === "tmux" || v.host === "external") && this.liveStatus.get(v.id) === "waiting");
+    if (idle.length === 0) {
+      this.work.clear();
+      return;
+    }
+    const table = await readProcTable().catch(() => null);
+    if (!table) return;
+    const live = readLive().filter((e) => subagentWorking(e.text));
+    const work = new Map<string, string>();
+    for (const v of idle) {
+      // Let the server answer between sessions.
+      await Bun.sleep(0);
+      const why = await this.workOf(v, table, live, now).catch(() => null);
+      if (why) work.set(v.id, why);
+    }
+    this.work = work;
+  }
+
+  private async workOf(v: Session, table: ProcTable, live: { owner: string }[], now: number): Promise<string | null> {
+    const kids = [...this.views.values()].filter((c) => c.parent === v.id && c.host === "subagent" && c.status === "running");
+    if (kids.length) return `its subagents were working (${kids.map((k) => k.subagent?.name ?? k.id).join(", ")})`;
+    const pane = v.tmux ? this.panes.get(v.tmux) : undefined;
+    const pid = (pane ? this.processUnder(pane.pid, v.provider)?.pid : undefined) ?? v.pid;
+    if (!pid) return null;
+    // The subagent MCP names its owner by the client's --session-id, else its pid.
+    const argv = argvOf(pid) ?? [];
+    const flag = argv.indexOf("--session-id");
+    const owners = [`pid:${pid}`, ...(flag !== -1 && argv[flag + 1] ? [argv[flag + 1]!] : []), ...(v.agentSessionId ? [v.agentSessionId] : [])];
+    if (live.some((e) => owners.includes(e.owner))) return "its subagents were working";
+    const monitors = new Set<string>();
+    const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
+    if (v.provider === "claude" && t?.facts) {
+      let scan = this.wakeScans.get(t.ref.path);
+      if (!scan) this.wakeScans.set(t.ref.path, (scan = new WakeScan(t.ref.path)));
+      const wake = await scan.hold(now, startedAtOf(pid) ?? now);
+      if (wake) return wake;
+      for (const m of scan.monitors) monitors.add(m);
+      const sub = subagentsLastWrite(t.ref.path, t.facts.agentSessionId);
+      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) return "its in-process subagents were working";
+    }
+    return shellWork(table, pid, monitors, now - v.lastActivityAt, false).hold;
+  }
+
+  /**
+   * Write down what every running session is doing, for recovery to start
+   * from. Rewritten whenever that changes — a crash straight after a session
+   * starts must still find it — and once a minute regardless, so the time it
+   * was last seen stays close to the time it died.
+   */
+  private recordLive(now: number): void {
+    const project = this.deps.projectSession?.() ?? null;
+    const entries: LiveEntry[] = [];
+    const external = new Set<number>();
+    for (const v of this.views.values()) {
+      if (v.host === "none" || v.status === "closed" || v.id === project) continue;
+      // A run another session started — a teammate, a `claude -p`, a `codex
+      // exec` — comes back with that session or not at all.
+      if (v.host === "external" && v.parent) continue;
+      if (v.host === "external" && v.pid) external.add(v.pid);
+      const launch = v.host === "external" && v.pid ? this.launchOf(v, v.pid) : null;
+      if (launch === undefined) continue;
+      const status = this.liveStatus.get(v.id) ?? v.status;
+      const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
+      const entry: LiveEntry = {
+        id: v.id,
+        provider: v.provider,
+        title: v.title,
+        host: v.host,
+        status,
+        blockedOn: status === "blocked" ? (this.blocked.get(v.id) ?? null) : null,
+        work: status === "waiting" ? (this.work.get(v.id) ?? null) : null,
+        parent: v.parent,
+        subagent: v.subagent ? { name: v.subagent.name, answerWaiting: v.subagent.answerWaiting } : null,
+        lastActivityAt: v.lastActivityAt,
+        lastTurnAt: t?.facts?.lastTurnAt ?? null,
+        launch,
+      };
+      entries.push(entry);
+      this.lastSeen.set(v.id, { ...entry, at: now });
+    }
+    for (const pid of this.launches.keys()) if (!external.has(pid)) this.launches.delete(pid);
+    for (const [id, e] of this.lastSeen) if (now - e.at > DAY) this.lastSeen.delete(id);
+    for (const [name, at] of this.killedAt) if (now - at > DAY) this.killedAt.delete(name);
+
+    const tmux = this.tmuxServer();
+    const sig = JSON.stringify([tmux, entries.map((e) => [e.id, e.host, e.status, e.work, e.blockedOn, e.subagent?.answerWaiting])]);
+    if (sig === this.snapshotSig && this.snapshot && now - this.snapshot.at < SNAPSHOT_HEARTBEAT_MS) return;
+    this.snapshotSig = sig;
+    this.snapshot = { at: now, tmux, manager: this.manager, entries };
+    writeSnapshot(this.snapshot);
+  }
+
+  /** The tmux server our sessions are on, as of this pass; null with none running. */
+  private tmuxServer(): Incarnation | null {
+    for (const p of this.panes.values()) if (p.server?.pid) return p.server;
+    return null;
+  }
+
+  /** How a process in another terminal was launched — its flags and its
+   *  shell's variables — read once per process; undefined for a scripted
+   *  one-shot (`claude -p`), which something is waiting on and nothing should resume. */
+  private launchOf(v: Session, pid: number): Launch | null | undefined {
+    if (this.launches.has(pid)) return this.launches.get(pid);
+    const adapter = this.adapters.get(v.provider);
+    const argv = argvOf(pid);
+    let launch: Launch | null | undefined = null;
+    if (argv && adapter?.headless?.(argv)) launch = undefined;
+    else if (argv && adapter) {
+      const env = environOf(pid);
+      launch = { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} };
+    }
+    this.launches.set(pid, launch);
+    return launch;
+  }
+
+  /**
+   * Has something bigger than one session gone away since the snapshot —
+   * the machine, your user's systemd, our tmux server? Then recover what went
+   * with it. Checked at start against the previous run's snapshot, and on
+   * every pass after, since the tmux server can die while we run.
+   */
+  private checkCrash(now: number): void {
+    const prev = this.snapshot;
+    if (this.recovering || !prev || prev.entries.length === 0) return;
+    // Your user's systemd as of start: one that has changed since took us with it.
+    const crash = crashCause(prev, { boot: bootTime(now), tmux: this.tmuxServer(), manager: this.manager });
+    if (!crash) return;
+    const { cause } = crash;
+    const dead = prev.entries.filter((e) => tookWith(e, prev.entries, crash.tookAll) && this.diedWith(e, prev.at));
+    // Whatever happens next, this snapshot has been answered.
+    this.snapshot = null;
+    this.snapshotSig = "";
+    if (dead.length === 0) return;
+    console.log(`agentbox: ${cause}; ${dead.length} session${dead.length === 1 ? "" : "s"} stopped with it`);
+    void this.recover(dead, cause, prev.at).catch((e) => console.error("agentbox: recovery failed:", e));
+  }
+
+  /** Did this session stop with everything else, rather than being stopped —
+   *  by you or by us — or picked up again since? */
+  private diedWith(e: LiveEntry, lastSeen: number): boolean {
+    const rec = getSessionRecord(e.id);
+    if (!rec || rec.archivedAt || rec.parkedAt) return false;
+    const v = this.views.get(e.id);
+    if (v && v.host !== "none") return false;
+    if ((this.touched.get(e.id) ?? 0) > lastSeen - 5_000) return false;
+    if (rec.tmux && (this.killedAt.get(rec.tmux) ?? 0) > lastSeen - 5_000) return false;
+    return true;
+  }
+
+  /** Decide what to do with each of `dead`, and do it unless `dryRun`. */
+  recover(dead: LiveEntry[], cause: string, lastSeen: number, dryRun = false): Promise<RecoveryReport> {
+    const run = this.recoverNow(dead, cause, lastSeen, dryRun);
+    if (dryRun) return run;
+    this.recovering = run;
+    void run.finally(() => {
+      if (this.recovering === run) this.recovering = null;
+    });
+    return run;
+  }
+
+  private async recoverNow(dead: LiveEntry[], cause: string, lastSeen: number, dryRun: boolean): Promise<RecoveryReport> {
+    const now = this.now();
+    const byId = new Map(dead.map((e) => [e.id, e]));
+    const late = now - lastSeen > MAX_AUTO_RESUME_MS;
+    const steps: Step[] = dead.map((e) => {
+      const d = decide(e, byId, lastSeen);
+      if (late && d.action === "resume") {
+        return { id: e.id, title: e.title, provider: e.provider, action: "park", why: `${d.why}, but that was ${minutes(now - lastSeen)} ago, so it waits for you` };
+      }
+      return { id: e.id, title: e.title, provider: e.provider, ...d };
+    });
+    // Resumes last, warmest cache first: a minute's wait can be the difference.
+    const rank = { leave: 0, park: 1, revive: 2, resume: 3 } as const;
+    const warmth = (s: Step) => byId.get(s.id)!.lastTurnAt ?? byId.get(s.id)!.lastActivityAt;
+    steps.sort((a, b) => rank[a.action] - rank[b.action] || warmth(b) - warmth(a));
+    const report: RecoveryReport = { at: now, cause, lastSeen, dryRun, steps, trouble: [] };
+    if (dryRun) return report;
+
+    for (const s of steps) {
+      const e = byId.get(s.id)!;
+      // Resumed here, now or at your next message, a session from another
+      // terminal keeps its flags and its shell's variables.
+      const rec = getSessionRecord(s.id);
+      if (e.host === "external" && rec && !rec.launch && e.launch) updateSessionRecord(s.id, { launch: e.launch });
+      if (s.action === "leave") s.outcome = "nothing to bring back";
+      else if (s.action === "revive") {
+        this.claimForCaller(e);
+        s.outcome = "comes back with its caller";
+      } else if (s.action === "park") {
+        updateSessionRecord(s.id, { parkedAt: lastSeen, parkedMates: null, parkedWhy: parkedWhy(e, cause, lastSeen) });
+        s.outcome = "parked";
+      }
+    }
+    this.emit("sessions");
+    for (const s of steps) {
+      if (s.action !== "resume") continue;
+      const e = byId.get(s.id)!;
+      const revived = dead.filter((c) => c.parent === e.id && steps.find((x) => x.id === c.id)?.action === "revive");
+      try {
+        await this.resume(s.id, resumePrompt(e, s.why, cause, lastSeen, revived));
+        s.outcome = "resumed";
+        const w = this.watches.get(s.id);
+        if (w) w.recovery = report.at;
+      } catch (err) {
+        s.outcome = `could not resume: ${err instanceof Error ? err.message : String(err)}`;
+        updateSessionRecord(s.id, { parkedAt: lastSeen, parkedMates: null, parkedWhy: null });
+      }
+      await Bun.sleep(RESUME_GAP_MS);
+    }
+    saveReport(report);
+    this.lastRecovery = report;
+    const summary = summarize(report);
+    console.log(`agentbox: ${summary}`);
+    notify(summary);
+    this.emit("sessions");
+    return report;
+  }
+
+  /** A subagent's record names the session whose MCP may bring it back —
+   *  records written before that was recorded name it here, from the fleet's own link. */
+  private claimForCaller(e: LiveEntry): void {
+    const rec = getSessionRecord(e.id);
+    const agent = rec ? this.poolAgentOf(rec) : undefined;
+    if (agent && e.parent) claimRecord(agent.dir, e.parent);
+  }
+
+  /** What recovery would do if every running session died now. */
+  recoveryPreview(): Promise<RecoveryReport> {
+    const entries = [...this.lastSeen.values()].filter((e) => this.views.get(e.id)?.host !== "none" && this.now() - e.at < 60_000);
+    return this.recover(entries, "a crash (a preview: nothing was done)", this.now(), true);
+  }
+
+  /** The newest recovery carried out: this run's, else the newest on disk. */
+  lastRecoveryReport(): RecoveryReport | null {
+    return this.lastRecovery ?? lastReport();
+  }
+
+  /** Recover sessions by hand, from how they were last seen running. Each
+   *  must be stopped now; `dryRun` only says what would happen. */
+  async recoverByHand(ids: string[], dryRun = false): Promise<RecoveryReport> {
+    const entries: LiveEntry[] = [];
+    let at = 0;
+    for (const id of ids) {
+      const e = this.lastSeen.get(id);
+      if (!e) throw new FleetError(404, `${id} has not been seen running since agentbox started`);
+      if (this.views.get(id)?.host !== "none") throw new FleetError(409, `${id} is running`);
+      const { at: seen, ...entry } = e;
+      entries.push(entry);
+      at = Math.max(at, seen);
+    }
+    return this.recover(entries, "you asked for it", at, dryRun);
+  }
+
+  /**
+   * Sessions started in the last `WATCH_MS`: one whose tool calls are being
+   * refused came back unable to act, which nothing else would notice — it
+   * reads the refusals, concludes it cannot do its job, and stops. A devin
+   * session is repaired (its saved permission mode; see `prepareResume`)
+   * and resumed once; anything else is shown as blocked on you, and a
+   * recovery's report says so.
+   */
+  private async watchStarts(now: number): Promise<void> {
+    if (now < this.nextWatchCheck || this.watches.size === 0) return;
+    this.nextWatchCheck = now + WATCH_CHECK_MS;
+    for (const [id, w] of this.watches) {
+      if (now - w.since > WATCH_MS) {
+        this.watches.delete(id);
+        continue;
+      }
+      if (w.flagged) continue;
+      const rec = getSessionRecord(id);
+      const t = rec?.transcriptPath ? this.tracked.get(rec.transcriptPath) : undefined;
+      if (!rec || !t) continue;
+      let events: TimelineEvent[];
+      try {
+        events = (await t.reader.timeline({ limit: 80 })).events;
+      } catch {
+        continue;
+      }
+      const refused = events.filter((e) => e.kind === "tool" && e.status === "error" && e.at >= w.since - 5_000 && REFUSED.test(e.output ?? ""));
+      if (refused.length < REFUSALS) continue;
+      w.flagged = true;
+      const last = refused.at(-1) as Extract<TimelineEvent, { kind: "tool" }>;
+      const what = `its tool calls are being refused (${refused.length} since it started): ${oneLine(last.output ?? "", 90)}`;
+      const title = this.views.get(id)?.title ?? id;
+      console.log(`agentbox: ${id} (${title}) came back unable to act: ${what}`);
+      if (rec.provider === "devin" && !w.repaired) {
+        this.repairPermissions(id);
+        continue;
+      }
+      this.trouble.set(id, what);
+      if (w.recovery !== null) this.noteTrouble(w.recovery, id, title, what);
+    }
+  }
+
+  /** Stop a devin session whose commands are all refused and resume it,
+   *  its saved permission mode set on the way (the devin adapter's `prepareResume`). */
+  private repairPermissions(id: string): void {
+    void this.serial(id, async () => {
+      const rec = getSessionRecord(id);
+      const account = rec?.accountId ? getAccount(rec.accountId) : null;
+      const view = this.get(id);
+      if (!rec || !account || view.host !== "tmux") return;
+      const recovery = this.watches.get(id)?.recovery ?? null;
+      await this.stopAndWait(rec, view);
+      this.startTmux(rec, account, this.resumeCwd(rec), REFUSED_NOTE);
+      this.watches.set(id, { since: this.now(), flagged: false, repaired: true, recovery });
+      console.log(`agentbox: ${id}: stopped it, set its permission mode, and resumed it`);
+    }).catch((e) => console.error(`agentbox: repairing ${id} failed:`, e));
+  }
+
+  private noteTrouble(reportAt: number, id: string, title: string, what: string): void {
+    const report = this.lastRecovery?.at === reportAt ? this.lastRecovery : null;
+    if (!report) return;
+    report.trouble.push({ id, title, what });
+    saveReport(report);
+    notify(`After agentbox's recovery, ${title} (${id}) came back unable to act: ${what}. It is marked blocked on the board.`);
   }
 
   // ---------------------------------------------------------------- views
@@ -1077,7 +1447,7 @@ export class Fleet extends EventEmitter {
       // Running again, however it got there (a resume here, or `claude
       // --resume` in some terminal): no longer parked.
       if (rec.parkedAt && view.host !== "none") {
-        updateSessionRecord(rec.id, { parkedAt: null });
+        updateSessionRecord(rec.id, { parkedAt: null, parkedWhy: null });
         view.parkedAt = null;
       }
       const fp = JSON.stringify(view);
@@ -1163,6 +1533,12 @@ export class Fleet extends EventEmitter {
         }
       }
       this.autoAnswer(rec, pane, adapter, now);
+      // Came back unable to act (`watchStarts`) and stopped trying: it needs you.
+      const trouble = host === "tmux" ? this.trouble.get(rec.id) : undefined;
+      if (trouble && status === "waiting") {
+        status = "blocked";
+        this.blocked.set(rec.id, trouble);
+      }
     }
     // Closed is your word, not the process's: a session you closed stays
     // closed even if a process outlived the stop (an external one that
@@ -1184,11 +1560,14 @@ export class Fleet extends EventEmitter {
     // odd bookkeeping line written in the same breath.
     const hit = f?.rateLimitHits?.at(-1) ?? null;
     const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? hit : null;
+    // The cache goes cold from the last model call, not the last line: a
+    // session watching background work writes notification lines for hours
+    // without calling the model once.
     const cold =
       this.movable.has(rec.provider) &&
       (live === "waiting" || live === "stopped") &&
       (host === "tmux" || host === "none") &&
-      now - lastActivityAt > this.coldAfterMs;
+      now - (f?.lastTurnAt ?? lastActivityAt) > this.coldAfterMs;
     return {
       id: rec.id,
       provider: rec.provider,
@@ -1504,12 +1883,13 @@ export class Fleet extends EventEmitter {
     });
 
     try {
-      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env: cmd.env, unset: cmd.unset });
+      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env: { ...cmd.env, ...sessionEnv(id) }, unset: cmd.unset });
     } catch (e) {
       updateSessionRecord(id, { tmux: null });
       throw new FleetError(500, (e as Error).message);
     }
     this.startedAt.set(id, now);
+    this.watches.set(id, { since: now, flagged: false, repaired: false, recovery: null });
     await this.tick();
     return { session: this.get(id), placement };
   }
@@ -1548,6 +1928,12 @@ export class Fleet extends EventEmitter {
     return run;
   }
 
+  /** Stop a tmux session, noting that we did: its session did not die in a crash. */
+  private killTmux(name: string): void {
+    this.killedAt.set(name, this.now());
+    this.deps.runtime.killSession(name);
+  }
+
   /** Is the tmux session up right now? Asked of tmux, not the last pass. */
   private paneAlive(name: string | null | undefined): boolean {
     return !!name && this.deps.runtime.listPanes().some((p) => p.name === name && !p.dead);
@@ -1568,6 +1954,8 @@ export class Fleet extends EventEmitter {
     if (prompt && rec.parkedAt && rec.parkedMates?.length) {
       prompt = `[agentbox: this session was parked while idle, and its teammates (${rec.parkedMates.join(", ")}) were stopped with it — they are no longer running.]\n\n${prompt}`;
     }
+    // Parked by a crash rather than for idling: what it lost, before what you say.
+    if (prompt && rec.parkedAt && rec.parkedWhy) prompt = `[agentbox: ${rec.parkedWhy}]\n\n${prompt}`;
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to resume");
     const account = rec.accountId ? getAccount(rec.accountId) : null;
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
@@ -1671,7 +2059,7 @@ export class Fleet extends EventEmitter {
   private async stopAndWait(rec: SessionRecord, view: Session): Promise<void> {
     const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
     const pid = (pane ? this.processUnder(pane.pid, rec.provider)?.pid : undefined) ?? view.pid;
-    if (rec.tmux) this.deps.runtime.killSession(rec.tmux);
+    if (rec.tmux) this.killTmux(rec.tmux);
     if (!pid) return;
     const start = this.now();
     let termed = false;
@@ -1724,7 +2112,8 @@ export class Fleet extends EventEmitter {
 
   private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string): void {
     const settings = getSettings();
-    const cmd = this.adapter(rec.provider).resumeCommand({
+    const adapter = this.adapter(rec.provider);
+    const opts = {
       account,
       agentSessionId: rec.agentSessionId!,
       cwd,
@@ -1733,16 +2122,26 @@ export class Fleet extends EventEmitter {
       ...(resumeModel(rec) ? { model: resumeModel(rec)! } : {}),
       autoApprove: settings.autoApprove,
       ...(rec.launch ? { carry: rec.launch.args } : {}),
-    });
+    };
+    try {
+      adapter.prepareResume?.(opts);
+    } catch (e) {
+      // Resume anyway: the health watch catches a session that comes back unable to act.
+      console.error(`agentbox: preparing ${rec.id}'s resume failed:`, e);
+    }
+    const cmd = adapter.resumeCommand(opts);
     const name = tmuxName(rec.id);
     // A dead pane from the last run holds the name.
-    this.deps.runtime.killSession(name);
+    this.killTmux(name);
     // The account's variables win over the launching shell's.
-    const env = { ...rec.launch?.env, ...cmd.env };
+    const env = { ...rec.launch?.env, ...cmd.env, ...sessionEnv(rec.id) };
     this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env, unset: cmd.unset });
-    updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null });
+    updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
+    this.trouble.delete(rec.id);
+    const prev = this.watches.get(rec.id);
+    this.watches.set(rec.id, { since: this.now(), flagged: false, repaired: prev?.repaired ?? false, recovery: prev?.recovery ?? null });
   }
 
   /**
@@ -2025,15 +2424,15 @@ export class Fleet extends EventEmitter {
     if (s.host === "subagent") throw this.callersAgent(s);
     this.touched.set(id, this.now());
     // Stopped by you, so shown as stopped rather than as waiting on you.
-    updateSessionRecord(id, { parkedAt: null, parkedMates: null });
-    if (s.host === "tmux" && s.tmux) this.deps.runtime.killSession(s.tmux);
+    updateSessionRecord(id, { parkedAt: null, parkedMates: null, parkedWhy: null });
+    if (s.host === "tmux" && s.tmux) this.killTmux(s.tmux);
     else if (s.host === "external" && s.pid) {
       try {
         process.kill(s.pid, "SIGTERM");
       } catch {
         /* gone */
       }
-    } else if (s.tmux) this.deps.runtime.killSession(s.tmux);
+    } else if (s.tmux) this.killTmux(s.tmux);
     await this.tick();
   }
 
@@ -2058,7 +2457,7 @@ export class Fleet extends EventEmitter {
     if (closed && this.get(id).host !== "none") await this.stopSession(id);
     // A parked one is stopped already; closing makes that yours, so it
     // reopens stopped rather than waiting on you.
-    updateSessionRecord(id, closed ? { archivedAt: this.now(), parkedAt: null, parkedMates: null } : { archivedAt: null });
+    updateSessionRecord(id, closed ? { archivedAt: this.now(), parkedAt: null, parkedMates: null, parkedWhy: null } : { archivedAt: null });
     await this.tick();
   }
 
@@ -2104,6 +2503,52 @@ const STALL_FRESH_MS = 15 * 60_000;
 const RESET_WAIT_MS = 60 * 60_000;
 
 const BUSY_CORES_PER_AGENT = 0.1;
+
+/** How often live sessions are checked for work a crash would kill. */
+const WORK_CHECK_MS = 30_000;
+/** The live-sessions snapshot is rewritten at least this often. */
+const SNAPSHOT_HEARTBEAT_MS = 60_000;
+/** Between one recovered session's resume and the next. */
+const RESUME_GAP_MS = 3_000;
+/** How long a started session is watched for coming back unable to act, and how often. */
+const WATCH_MS = 10 * 60_000;
+const WATCH_CHECK_MS = 10_000;
+/** Refused tool calls, since it started, that say it cannot act. One is a
+ *  prompt it was right to be refused; two is a setting. */
+const REFUSALS = 2;
+/** A tool call refused by a permission rule, in the words each CLI uses. */
+const REFUSED = /User skipped this tool call|Tool execution was rejected|The user doesn't want to proceed with this tool use|permission (was )?denied by the user/i;
+const REFUSED_NOTE =
+  '[agentbox: your tool calls were being refused ("User skipped this tool call"). That was a permission setting, not a person, and it is fixed now. Anything you concluded from those refusals — that you cannot run commands, check CI, push or edit — was wrong: redo what failed and carry on.]';
+
+/** A session started a moment ago, watched by `watchStarts`. */
+interface Watch {
+  since: number;
+  /** Found unable to act; not looked at again. */
+  flagged: boolean;
+  /** Already stopped and resumed once for it. */
+  repaired: boolean;
+  /** The recovery that started it, to tell if it came back broken. */
+  recovery: number | null;
+}
+
+/** Tell you, on your phone, through the repo's Telegram skill — when it is
+ *  set up, and not turned off (`AGENTBOX_NOTIFY=0`, for a test instance). */
+function notify(text: string): void {
+  if (process.env.AGENTBOX_NOTIFY === "0") return;
+  const script = join(dirname(dirname(agentboxBin())), ".claude", "skills", "telegram", "send.ts");
+  if (!existsSync(script)) return;
+  try {
+    Bun.spawn(["bun", script, text], { cwd: dirname(script), stdio: ["ignore", "ignore", "ignore"] }).unref();
+  } catch (e) {
+    console.error("agentbox: sending the recovery message failed:", e);
+  }
+}
+
+function oneLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
 
 /** What a parkable session looked like at one check. */
 interface ParkCheck {
@@ -2152,6 +2597,34 @@ function childrenOf(pid: number): number[] {
   return out;
 }
 
+/**
+ * The tool shells running under an agent's process, and the first that
+ * holds it up (park.ts `shellHold`), if any. `services` says whether a dev
+ * server counts: it holds a session up, but a crash that killed one is not a
+ * reason to resume the session that started it.
+ */
+function shellWork(table: ProcTable, pid: number, monitors: ReadonlySet<string>, quietMs: number, services: boolean): { shells: number[]; hold: string | null } {
+  const shells: number[] = [];
+  for (const kid of table.children.get(pid) ?? []) {
+    const cmd = argvOf(kid)?.join(" ");
+    if (!cmd || !isToolShell(cmd)) continue; // an MCP server
+    shells.push(kid);
+    const command = shellCommand(cmd);
+    const label = describe({ ...table.byPid.get(kid)!, cmd });
+    // A monitor's every line of output is a message to the session.
+    if (monitors.has(normalCommand(command))) return { shells, hold: `a monitor is running (${label})` };
+    const running = subtree(table, kid)
+      .filter((r) => r.pid !== kid)
+      .map((r) => argvOf(r.pid)?.join(" ") ?? r.comm)
+      .filter((c) => !bareShell(c));
+    const kind = classifyShell(command, running);
+    if (kind === "service" && !services) continue;
+    const hold = shellHold(kind, label, quietMs);
+    if (hold) return { shells, hold };
+  }
+  return { shells, hold: null };
+}
+
 /** A shell that is only plumbing: the tool-call wrapper, a `-c` subshell or
  *  a bare shell. `bash migrate.sh` is not — it is the work. */
 function bareShell(c: string): boolean {
@@ -2172,6 +2645,15 @@ function resumeModel(rec: SessionRecord): string | null {
   // An alias (`opus`) resolves to a full id; that is not a switch.
   if (!base.includes("-") && latest.includes(base)) return rec.model;
   return latest;
+}
+
+/**
+ * What every process agentbox starts is told about itself. The subagent MCP
+ * a session runs inherits it, which is how a resumed session's MCP finds the
+ * agents its last run left behind (src/subagents/pool.ts `revive`).
+ */
+function sessionEnv(id: string): Record<string, string> {
+  return { AGENTBOX_SESSION: id };
 }
 
 /** Short, URL-safe, unambiguous: no 0/o/1/l. */
@@ -2212,6 +2694,7 @@ function compactFacts(f: TranscriptFacts): Partial<TranscriptFacts> {
     model: f.model,
     gitBranch: f.gitBranch,
     lastActivityAt: f.lastActivityAt,
+    lastTurnAt: f.lastTurnAt ?? null,
     turnOpen: f.turnOpen,
     contextUsed: f.contextUsed,
     contextLimit: f.contextLimit,

@@ -11,34 +11,44 @@ run `bun run web:build` and refresh (or use `bun run web:dev` on :5173).
 
 After changing `src/`, restart the server — Bun does not hot-reload:
 
-    systemctl --user stop agentbox-serve.scope 2>/dev/null
-    kill $(ss -tlnp | grep 4479 | grep -o 'pid=[0-9]*' | cut -d= -f2) 2>/dev/null
-    while systemctl --user list-units --all --no-legend agentbox-serve.scope | grep -q .; do sleep 0.5; done
-    systemd-run --user --scope --collect --unit=agentbox-serve \
-      -p CPUWeight=2000 -p IOWeight=1000 \
-      setsid bun bin/agentbox serve >> ~/.local/share/agentbox/logs/server.log 2>&1 < /dev/null &
+    systemctl --user restart agentbox
 
-Its own systemd scope, so it does not die with the terminal (or the agent
-session) that happened to start it: a process started from a terminal lives
-in that terminal's cgroup scope, and `setsid` alone does not leave it. The
-wait matters: `systemd-run` refuses the unit name while the old scope is
-still stopping. Then check `/api/health`, and that `/api/state` has as many
-sessions as before. The weights put it ahead of the agents: each tmux pane is a
-scope of its own at the default 100, and with a hundred busy the unweighted
+It is a service of your user's systemd (`systemd/agentbox.service`, enabled
+with `systemctl --user enable --now ~/Documents/agentbox/systemd/agentbox.service`),
+so it starts at boot — before anyone logs in, since lingering is on — and it
+does not die with the terminal or agent session that restarted it. It runs in
+a login shell's environment rather than whatever shell restarted it; every
+agent inherits that environment through tmux. Then check `/api/health`, and
+that `/api/state` has as many sessions as before. Never kill the process on
+:4479 and start another by hand (the old `agentbox-serve.scope` recipe): the
+service sees a clean exit and stays down, so the board runs outside it until
+the next boot. `CPUWeight=2000` puts it ahead of the agents: each tmux pane is
+a scope of its own at the default 100, and with a hundred busy the unweighted
 server took seconds to answer anything. `ensureServer` (src/cli/index.ts)
-starts it the same way.
+starts the service when the server is down, and the old scope only where the
+service is not installed.
 
 The tmux server runs in a scope of its own, `agentbox-tmux.scope`
 (`src/core/tmux.ts` starts it through `systemd-run`). This is what makes a
 restart safe: tmux puts each pane in a `tmux-spawn-*.scope` that is `PartOf`
 whatever unit the tmux server was in when the pane started, so a tmux server
-living in `agentbox-serve.scope` meant stopping the server stopped every
+living in the server's own unit meant stopping the server stopped every
 agent. Check with `systemctl --user show <pane scope> -p PartOf`.
 
 Restarting loses nothing. The server owns no agents: they run in
 `tmux -L agentbox` (one tmux session per agent session, `ab-<id>`) or in your
 own terminals, and the fleet rebuilds the board from transcripts, the process
 table and tmux on its first tick.
+
+A crash is another matter — the machine restarting, your user's systemd being
+stopped (a logout, or a stray SIGTERM: `who-sigtermed` names the sender), the
+tmux server dying — and it recovers by itself (`src/core/recovery.ts`,
+`docs/v2.md` "Crash recovery"): what was working is resumed and told what
+happened, what was idle or waiting on you is parked, and subagents come back
+through their callers. `agentbox recover` shows what it would do now,
+`agentbox recover --last` what it did. The server keeps the live-sessions
+snapshot this starts from in `~/.local/share/agentbox/live-sessions.json`,
+and each recovery's report in `recovery/`.
 
 ## Rules that are easy to break
 

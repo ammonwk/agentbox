@@ -66,13 +66,33 @@ export interface NewSession {
   rows?: number;
 }
 
+/**
+ * Variables that say which session a process belongs to. The tmux server
+ * keeps the environment of whatever started it — the agentbox server, which
+ * an agent's shell may have started — and hands it to every pane, so each
+ * agent would otherwise think it runs inside that one agent's session.
+ */
+const INHERITED_IDENTITY = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_CODE_SSE_PORT",
+  "CLAUDE_PID",
+  "AGENTBOX_SESSION",
+];
+
 /** Start `argv` in a new detached tmux session. Returns the pane's pid — the
  *  agent itself, since `env` execs it. */
 export function newSession(s: NewSession): number {
   // `env -u` rather than tmux's `-e`: tmux can add variables but not remove
   // one the server inherited, and a stray CLAUDE_CONFIG_DIR from the shell
   // that started agentbox would put the session on the wrong account.
-  let cmd = ["env", ...(s.unset ?? []).flatMap((v) => ["-u", v]), ...Object.entries(s.env ?? {}).map(([k, v]) => `${k}=${v}`), ...s.argv];
+  const unset = [...new Set([...INHERITED_IDENTITY.filter((v) => !(v in (s.env ?? {}))), ...(s.unset ?? [])])];
+  let cmd = ["env", ...unset.flatMap((v) => ["-u", v]), ...Object.entries(s.env ?? {}).map(([k, v]) => `${k}=${v}`), ...s.argv];
   const launcher = cmd.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0) > MAX_INLINE ? writeLauncher(s.name, cmd) : null;
   if (launcher) cmd = ["sh", launcher];
   const args: string[] = ["start-server"];
@@ -143,6 +163,9 @@ export interface PaneInfo {
   clients: number;
   width: number;
   height: number;
+  /** The tmux server it is on — its pid and start (epoch ms). A different one
+   *  later means this one died, and every session with it (src/core/recovery.ts). */
+  server: { pid: number; start: number };
 }
 
 /** Every agentbox session on our tmux server. Empty when the server is not
@@ -150,12 +173,12 @@ export interface PaneInfo {
 export function listPanes(): PaneInfo[] {
   const r = tmux([
     "list-panes", "-a", "-F",
-    "#{session_name}\t#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}\t#{session_attached}\t#{pane_width}\t#{pane_height}",
+    "#{session_name}\t#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}\t#{session_attached}\t#{pane_width}\t#{pane_height}\t#{pid}\t#{start_time}",
   ]);
   if (r.code !== 0) return [];
   const out: PaneInfo[] = [];
   for (const line of r.stdout.split("\n")) {
-    const [name, pid, dead, status, clients, w, h] = line.split("\t");
+    const [name, pid, dead, status, clients, w, h, serverPid, serverStart] = line.split("\t");
     if (!name?.startsWith("ab-")) continue;
     out.push({
       name,
@@ -165,6 +188,7 @@ export function listPanes(): PaneInfo[] {
       clients: Number(clients) || 0,
       width: Number(w) || 0,
       height: Number(h) || 0,
+      server: { pid: Number(serverPid) || 0, start: (Number(serverStart) || 0) * 1000 },
     });
   }
   return out;

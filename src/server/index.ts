@@ -542,6 +542,17 @@ const router = new Router(mapError)
     scheduleHot();
     return json(s);
   })
+  // ----- crash recovery (src/core/recovery.ts)
+  .add("GET", "/api/recovery", async () => json({ last: fleet.lastRecoveryReport(), preview: await fleet.recoveryPreview() }))
+  .add("POST", "/api/recovery", async ({ req }) => {
+    const b = await readBody(req);
+    if (!Array.isArray(b.ids) || b.ids.length === 0 || !b.ids.every((id) => typeof id === "string")) {
+      throw new HttpError(400, "ids: the sessions to recover, which must have stopped");
+    }
+    const report = await fleet.recoverByHand(b.ids as string[], b.dryRun === true);
+    scheduleHot();
+    return json(report);
+  })
   .add("POST", "/api/sessions/:id/stop", async ({ params }) => {
     await fleet.stopSession(params.id!);
     scheduleHot();

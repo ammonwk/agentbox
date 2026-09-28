@@ -642,6 +642,16 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
       };
     },
 
+    // `--permission-mode dangerous` on a resume is not enough: devin runs in
+    // the mode it saved for the session ("bypass" is how it saves dangerous).
+    prepareResume(opts: ResumeOptions) {
+      const at = opts.carry?.indexOf("--permission-mode") ?? -1;
+      if (opts.carry ? opts.carry[at + 1] !== "dangerous" || at === -1 : !opts.autoApprove) return;
+      if (db.setAgentMode(paths().db, opts.agentSessionId, "bypass")) {
+        console.log(`agentbox: devin ${opts.agentSessionId} was saved in a mode that asks before commands; set to bypass for its resume`);
+      }
+    },
+
     autoAnswer(screen) {
       // The folder-trust dialog lists "Yes, trust …" first and "No, exit"
       // second; Enter takes the highlighted first choice.

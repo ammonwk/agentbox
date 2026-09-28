@@ -128,6 +128,13 @@ export interface AgentSnapshot {
   endedReason?: string | null;
   /** The prose of the turn in flight, if the reader captured any. */
   partial?: string;
+  /**
+   * Work its caller's session left unfinished: mid-turn, or answers nobody
+   * collected. Set as the agent ends with that session (`CALLER_GONE`), and
+   * kept on a revived agent until it is next spoken to, so a second crash
+   * before then loses nothing either.
+   */
+  unfinished?: { running: boolean; uncollected: number } | null;
 }
 
 export interface Budget {

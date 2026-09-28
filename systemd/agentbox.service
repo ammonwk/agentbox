@@ -1,0 +1,32 @@
+# agentbox's server as a service of your user's systemd, so it starts at boot
+# (with lingering on, before anyone logs in) and a crash is recovered from
+# without anyone there to restart it (src/core/recovery.ts).
+#
+#   systemctl --user enable --now ~/Documents/agentbox/systemd/agentbox.service
+#
+# Its own unit, so it does not die with the terminal or agent that started it.
+# The tmux server every agent runs in is started into a scope of its own
+# (src/core/tmux.ts), so stopping or restarting this leaves every agent up.
+# A login shell's environment, not the service manager's: every agent inherits
+# it through tmux, and it is the one your terminals have (PATH, nvm, GH_TOKEN).
+
+[Unit]
+Description=agentbox: the board, the balancer and crash recovery for your agents
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/agentbox
+ExecStart=/bin/bash -lc 'exec bun bin/agentbox serve'
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+# Ahead of the agents: each tmux pane is a scope of its own at the default 100.
+CPUWeight=2000
+IOWeight=1000
+StandardOutput=append:%h/.local/share/agentbox/logs/server.log
+StandardError=append:%h/.local/share/agentbox/logs/server.log
+
+[Install]
+WantedBy=default.target
