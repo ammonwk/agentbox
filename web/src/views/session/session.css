@@ -1251,6 +1251,7 @@
   line-height: 1.45;
 }
 .sx-md pre code { background: none; border: none; padding: 0; }
+.sx-md code.sx-fileref { color: var(--muted); cursor: default; }
 .sx-md blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .sx-md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .sx-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }

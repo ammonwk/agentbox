@@ -15,7 +15,7 @@ export function Markdown({ text }: { text: string }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);
   const plugins = useMemo(
-    () => [remarkGfm, ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links)],
+    () => [remarkGfm, remarkFileRefs, ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links)],
     [base, links],
   );
   return (
@@ -23,7 +23,16 @@ export function Markdown({ text }: { text: string }) {
       <ReactMarkdown
         remarkPlugins={plugins}
         components={{
-          a: ({ node: _node, ...props }) => <a {...props} target={props.href?.startsWith("#/") ? undefined : "_blank"} rel="noreferrer" />,
+          a: ({ node: _node, children, href, ...rest }) => {
+            if (href?.startsWith("fileref:")) {
+              return (
+                <code className="sx-fileref" title={href.slice("fileref:".length)}>
+                  {children}
+                </code>
+              );
+            }
+            return <a {...rest} href={href} target={href?.startsWith("#/") ? undefined : "_blank"} rel="noreferrer">{children}</a>;
+          },
         }}
       >
         {text}
@@ -59,6 +68,48 @@ function remarkSessionLinks({ index, self }: SessionLinksValue) {
       ),
     );
   };
+}
+
+/** `<ref_file file="…" />` and `<ref_snippet file="…" lines="…" />` — the
+ *  agent's file citations — become a quiet chip naming the file; the full
+ *  path stays in the tooltip. Runs first, so the raw tag never reaches the
+ *  session-link pass (a tag's path can name a worktree). */
+const FILE_REF = /<ref_(?:file|snippet)\b[^>]*?\/>/g;
+
+function remarkFileRefs() {
+  return () => (tree: Root) => {
+    const walk = (node: Parent) => {
+      node.children = node.children.flatMap((child: RootContent): RootContent[] => {
+        if (child.type === "text") return splitFileRefs(child.value, false);
+        if (child.type === "inlineCode") return splitFileRefs(child.value, true);
+        if ("children" in child) walk(child);
+        return [child];
+      }) as typeof node.children;
+    };
+    walk(tree);
+  };
+}
+
+function splitFileRefs(text: string, code: boolean): PhrasingContent[] {
+  const plain = (value: string): PhrasingContent => (code ? { type: "inlineCode", value } : { type: "text", value });
+  if (!text.includes("<ref_")) return [plain(text)];
+  const out: PhrasingContent[] = [];
+  let at = 0;
+  for (const m of text.matchAll(FILE_REF)) {
+    const start = m.index!;
+    if (start > at) out.push(plain(text.slice(at, start)));
+    const file = /(?:file|path)="([^"]*)"/.exec(m[0])?.[1] ?? "";
+    const lines = /lines="([^"]*)"/.exec(m[0])?.[1];
+    const name = file.split("/").pop() || file;
+    out.push({
+      type: "link",
+      url: `fileref:${file}`,
+      children: [plain(lines ? `${name}:${lines}` : name)],
+    });
+    at = start + m[0].length;
+  }
+  if (at < text.length) out.push(plain(text.slice(at)));
+  return out;
 }
 
 /** Apply `split` to every text node (and to inline code, when `intoCode`),
