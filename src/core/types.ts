@@ -351,6 +351,24 @@ export type TimelineEvent = { id: string; at: number } & (
   | { kind: "meta"; text: string; tone?: "info" | "warn" | "error"; mate?: MateMessage }
 );
 
+/**
+ * A side question (Claude's /btw) and its answer. Claude keeps these only in
+ * the running process's memory, never in the transcript, so agentbox keeps
+ * them: asked from the Timeline, or seen asked in the terminal.
+ */
+export interface Btw {
+  id: number;
+  sessionId: string;
+  question: string;
+  /** The answer's markdown, as Claude's panel copies it. */
+  answer: string | null;
+  error: string | null;
+  status: "asking" | "answered" | "failed";
+  source: "timeline" | "terminal";
+  askedAt: number;
+  answeredAt: number | null;
+}
+
 /** A message between the members of a Claude agent team, as the one receiving it recorded it. */
 export interface MateMessage {
   /** Who sent it: a teammate's name (its session's title), or `team-lead`. */
@@ -837,6 +855,8 @@ export type ServerMessage =
       before?: string | null;
     }
   | { type: "metrics"; state: MetricsState }
+  /** The watched session's side questions, all of them, oldest first; sent on watch and on every change. */
+  | { type: "btw"; sessionId: string; items: Btw[] }
   /** The UI build on disk (its entry script's name); a page on another reloads. */
   | { type: "build"; entry: string | null }
   | { type: "error"; message: string };

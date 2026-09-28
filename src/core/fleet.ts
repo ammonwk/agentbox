@@ -26,16 +26,20 @@ import { owners } from "./accounts/homes";
 import { place, type AccountState } from "./balancer";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import {
+  failUnfinishedBtw,
   findSessionRecord,
+  finishBtw,
   getAccount,
   getRepoById,
   getSessionRecord,
   getSettings,
   insertAssignment,
+  insertBtw,
   insertRateLimitHit,
   insertSessionRecord,
   insertTokenSample,
   listAccounts,
+  listBtw,
   listClosedRecords,
   listSessionRecords,
   updateSessionRecord,
@@ -71,11 +75,13 @@ import { read as readLive } from "../subagents/live";
 import { poolKey } from "../subagents/record";
 import { carryEnv, type Launch } from "./launch";
 import { weeklyWindow } from "./balancer";
+import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
   Account,
   AccountUsage,
   AskAnswer,
   AskQuestion,
+  Btw,
   ClaimView,
   Placement,
   ProviderId,
@@ -111,6 +117,8 @@ export interface Runtime {
   setZoom?(name: string, on: boolean): boolean;
   /** A window left at a gone client's small size back to a readable one; whether it changed. */
   unsquash?(name: string): boolean;
+  bufferNames?(): string[];
+  takeBuffer?(buffer: string): string | null;
 }
 
 export interface UsageSource {
@@ -234,6 +242,9 @@ export class Fleet extends EventEmitter {
    *  did anything to it. */
   private busy = new Map<string, Promise<void>>();
   private touched = new Map<string, number>();
+  /** Side questions asked in the terminal whose answer is being waited for, by session. */
+  private btwWatching = new Map<string, Promise<void>>();
+  private btwHistory = new BtwHistory();
   private nextParkCheck: number;
   readonly ready: Promise<void>;
   private markReady!: () => void;
@@ -248,6 +259,7 @@ export class Fleet extends EventEmitter {
 
   start(): void {
     if (this.timer) return;
+    for (const id of failUnfinishedBtw("agentbox restarted before it answered", this.now())) this.emit("btw", id);
     void this.tick();
     this.timer = setInterval(() => void this.tick(), TICK_MS);
   }
@@ -408,6 +420,7 @@ export class Fleet extends EventEmitter {
     this.rebuildViews(since, now);
     await this.parkIdle(now, settings.parkIdleMin);
     this.continueStalled(now);
+    for (const b of this.btwHistory.read(accountsOf("claude").map((a) => a.home))) this.watchTerminalBtw(b);
   }
 
   /**
@@ -1735,6 +1748,7 @@ export class Fleet extends EventEmitter {
       // a pass behind.
       if (rec?.tmux && this.paneAlive(rec.tmux)) {
         await this.untilReady(id);
+        if (s.provider === "claude") await this.clearBtw(id, rec.tmux);
         return this.deps.runtime.sendText(rec.tmux, text);
       }
       // Parked by the fleet, not stopped by you: this is what wakes it.
@@ -1764,6 +1778,7 @@ export class Fleet extends EventEmitter {
       }
     }
     await this.untilReady(id);
+    if (s.provider === "claude") await this.clearBtw(id, s.tmux);
     await this.deps.runtime.sendText(s.tmux, text);
   }
 
@@ -1852,6 +1867,82 @@ export class Fleet extends EventEmitter {
         if (zoomed) rt.setZoom?.(pane, false);
       }
     });
+  }
+
+  // ------------------------------------------------------ side questions
+
+  /**
+   * Ask Claude a side question (/btw) in its pane (src/core/btw.ts). Returns
+   * at once with the question recorded as asking; the answer, or why there is
+   * none, follows as a `btw` event.
+   */
+  askBtw(id: string, question: string): Btw {
+    const s = this.get(id);
+    if (s.provider !== "claude") throw new FleetError(409, `/btw is Claude's; this is a ${s.provider} session`);
+    if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, s.host === "external" ? "running in another terminal — adopt it to ask here" : "not running — resume it first");
+    if (s.status === "blocked") throw new FleetError(409, "it is showing a prompt; answer that first");
+    const q = question.trim();
+    const row = insertBtw({ sessionId: id, question: q, source: "timeline", askedAt: this.now() });
+    this.emit("btw", id);
+    const asked = this.serial(id, async () => {
+      const pane = this.get(id).tmux;
+      if (!pane) throw new Error("it stopped before the question was asked");
+      const rt = this.deps.runtime;
+      await this.clearBtw(id, pane);
+      await rt.sendText(pane, `/btw ${q}`);
+      try {
+        await awaitAnswer(rt, pane, q, 10_000);
+        return await copyAnswer(rt, pane);
+      } finally {
+        await closePanel(rt, pane);
+      }
+    });
+    this.settleBtw(id, row.id, asked);
+    return row;
+  }
+
+  /**
+   * A /btw typed in the terminal: take its answer when the panel shows it,
+   * and leave the panel to whoever is reading it. Not queued behind the
+   * session's other actions (it types nothing); they wait for it instead
+   * (`clearBtw`).
+   */
+  private watchTerminalBtw(b: HistoryBtw): void {
+    const id = this.byAgentId.get(`claude:${b.agentSessionId}`);
+    const pane = id ? this.views.get(id)?.tmux : null;
+    if (!id || !pane) return;
+    // One asked from the Timeline lands in the history too.
+    if (listBtw(id).some((x) => x.source === "timeline" && x.question === b.question && Math.abs(x.askedAt - b.at) < 5 * 60_000)) return;
+    const row = insertBtw({ sessionId: id, question: b.question, source: "terminal", askedAt: b.at });
+    this.emit("btw", id);
+    const rt = this.deps.runtime;
+    const answer = (this.btwWatching.get(id) ?? Promise.resolve())
+      .then(() => awaitAnswer(rt, pane, b.question, 10_000))
+      .then(() => copyAnswer(rt, pane));
+    const done = answer.then(
+      () => {},
+      () => {},
+    );
+    this.btwWatching.set(id, done);
+    void done.then(() => {
+      if (this.btwWatching.get(id) === done) this.btwWatching.delete(id);
+    });
+    this.settleBtw(id, row.id, answer);
+  }
+
+  private settleBtw(id: string, rowId: number, answer: Promise<string>): void {
+    void answer
+      .then(
+        (text) => finishBtw(rowId, { answer: text }, this.now()),
+        (e) => finishBtw(rowId, { error: e instanceof Error ? e.message : String(e) }, this.now()),
+      )
+      .finally(() => this.emit("btw", id));
+  }
+
+  /** Before typing into a Claude pane: its /btw panel out of the way, once any answer in it is kept. */
+  private async clearBtw(id: string, pane: string): Promise<void> {
+    await this.btwWatching.get(id);
+    await clearPanel(this.deps.runtime, pane);
   }
 
   /** The screen once it has changed from `before` and held still a moment. */

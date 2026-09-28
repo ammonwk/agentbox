@@ -45,6 +45,8 @@ table and tmux on its first tick.
 - **The provider's transcript is the record.** Never write a copy of a
   conversation. The database holds only what the provider cannot know: the
   account pin, the claim, the tmux session, a label, when it was closed, metrics.
+  And Claude's /btw side questions: Claude keeps those only in the process's
+  memory, so the `btw` table is their one record (`src/core/btw.ts`).
 - **A warm session never changes account.** Switching accounts invalidates
   the provider's prompt cache, so while a session has been active within
   `claimIdleMin` (60) resume and adopt use its pinned account. Once it is idle

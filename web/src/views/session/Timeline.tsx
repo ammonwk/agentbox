@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { MateMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
-import { fmtClock, useTimeline } from "../../api";
+import type { Btw, MateMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
+import { fmtClock, useBtw, useTimeline } from "../../api";
 import { Button, Empty, Icon, Spinner } from "../../components";
-import { firstLine, groupTimeline } from "../../lib/timeline";
+import { firstLine, groupTimeline, withBtw } from "../../lib/timeline";
 import { Markdown } from "./Markdown";
 import { AskRow } from "./Question";
 import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
@@ -25,7 +25,8 @@ const NO_TURNS: Turn[] = [];
  */
 export function Timeline({ session }: { session: Session }) {
   const { events, ready, loadingOlder, exhausted, error, loadOlder } = useTimeline(session.id);
-  const rows = useMemo(() => groupTimeline(events), [events]);
+  const btw = useBtw(session.id);
+  const rows = useMemo(() => withBtw(groupTimeline(events), btw, exhausted), [events, btw, exhausted]);
   const echoes = useEchoes(session.id, events);
 
   const boxRef = useRef<HTMLDivElement>(null);
@@ -44,7 +45,7 @@ export function Timeline({ session }: { session: Session }) {
       el.scrollTop = el.scrollHeight;
     }
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
-  }, [events, pinned, echoes.length]);
+  }, [events, pinned, echoes.length, btw]);
 
   // ---- the message rail: where you are, and going to one of them
   const turnList = useTurns(session.id, session.lastActivityAt);
@@ -200,6 +201,8 @@ export function Timeline({ session }: { session: Session }) {
               <ToolRun key={r.id} events={r.events} />
             ) : r.type === "idle" ? (
               <IdleRow key={r.id} events={r.events} />
+            ) : r.type === "btw" ? (
+              <BtwCard key={`btw-${r.btw.id}`} btw={r.btw} />
             ) : r.type === "ask" ? (
               <AskRow key={r.event.id} ev={r.event} live={session.question?.id === r.event.ask.id} />
             ) : (
@@ -337,6 +340,36 @@ function MateRow({ mate, at }: { mate: MateMessage; at: number }) {
           <Markdown text={mate.body} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A side question and its answer. Beside the conversation, not in it: Claude
+ * answered it from what it knew then, and the agent never saw it.
+ */
+function BtwCard({ btw }: { btw: Btw }) {
+  return (
+    <div className={`tl-btw is-${btw.status}`} title={fmtClock(btw.askedAt)}>
+      <div className="tl-who">
+        <span className="tl-btw-tag">/btw</span> You
+        {btw.source === "terminal" ? <span className="faint"> · in the terminal</span> : null}
+        <time className="tl-time">{fmtClock(btw.askedAt)}</time>
+      </div>
+      <div className="tl-btw-q">{btw.question}</div>
+      <div className="tl-btw-a">
+        {btw.status === "asking" ? (
+          <span className="faint">
+            <Spinner size={11} /> Answering…
+          </span>
+        ) : btw.status === "failed" ? (
+          <span className="tl-btw-err">
+            <Icon.alert size={12} /> No answer: {btw.error}
+          </span>
+        ) : (
+          <Markdown text={btw.answer ?? ""} />
+        )}
+      </div>
     </div>
   );
 }

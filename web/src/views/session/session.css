@@ -865,6 +865,44 @@
   padding: 2px 2px;
 }
 
+/* A side question (/btw): an aside, not a turn — set in from the
+ * conversation, in the warning hue Claude's panel draws /btw in. */
+.tl-btw {
+  margin-left: 18px;
+  border: 1px dashed var(--border-strong);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px 10px;
+}
+.tl-btw-tag {
+  color: var(--warning);
+  font-family: var(--mono);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.tl-btw-q {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: 8px;
+}
+.tl-btw-a {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.tl-btw-a .faint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tl-btw-err {
+  color: var(--danger);
+}
+@media (max-width: 640px) {
+  .tl-btw {
+    margin-left: 8px;
+  }
+}
+
 .tl-thinking {
   border-left: 2px solid var(--border-strong);
   padding-left: 10px;

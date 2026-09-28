@@ -1,6 +1,6 @@
 /** Folding timeline frames into what the client holds. Pure. */
 
-import type { TimelineEvent } from "../../../src/core/types";
+import type { Btw, TimelineEvent } from "../../../src/core/types";
 
 /**
  * Merge incoming events into what is held, keyed by `id`.
@@ -62,7 +62,9 @@ export type TimelineRow =
   /** AskUserQuestion: a card of its own, not a line in a run of tools. */
   | { type: "ask"; event: Extract<TimelineEvent, { kind: "tool" }> & { ask: NonNullable<Extract<TimelineEvent, { kind: "tool" }>["ask"]> } }
   /** Teammates going idle with nothing to report, back to back: one line. */
-  | { type: "idle"; id: string; events: IdleEvent[] };
+  | { type: "idle"; id: string; events: IdleEvent[] }
+  /** A side question (Claude's /btw): not in the transcript, placed by when it was asked. */
+  | { type: "btw"; btw: Btw };
 
 type IdleEvent = Extract<TimelineEvent, { kind: "meta" }> & { mate: NonNullable<Extract<TimelineEvent, { kind: "meta" }>["mate"]> };
 
@@ -87,6 +89,27 @@ export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
     }
   }
   return rows;
+}
+
+const rowAt = (r: TimelineRow): number =>
+  r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
+
+/**
+ * Side questions placed among the rows by when they were asked, after the
+ * row they followed. One older than everything loaded waits for the page it
+ * belongs on, unless `all` (the start of the conversation is loaded).
+ */
+export function withBtw(rows: TimelineRow[], items: readonly Btw[], all: boolean): TimelineRow[] {
+  if (items.length === 0) return rows;
+  const from = rows.length && !all ? rowAt(rows[0]!) : -Infinity;
+  const out = [...rows];
+  for (const btw of items) {
+    if (btw.askedAt < from) continue;
+    let i = out.length;
+    while (i > 0 && rowAt(out[i - 1]!) > btw.askedAt) i--;
+    out.splice(i, 0, { type: "btw", btw });
+  }
+  return out;
 }
 
 /** The first non-empty line, trimmed to `max` — the collapsed thinking row. */

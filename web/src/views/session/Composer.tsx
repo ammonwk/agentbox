@@ -46,6 +46,8 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
   const ref = useRef<HTMLTextAreaElement>(null);
   const provider = PROVIDER_LABEL[session.provider];
   const images = useAttachments({ text, setText, textareaRef: ref });
+  /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
+  const btw = mode.kind === "send" && session.provider === "claude" ? BTW.exec(text) : null;
 
   // Grow with the text up to a cap, then scroll.
   useEffect(() => {
@@ -60,7 +62,9 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
     if (mode.kind === "send" && !text.trim()) return;
     const ok = await run(async () => {
       const body = (await images.resolve(text)).trim();
-      if (mode.kind === "send") {
+      const side = mode.kind === "send" && session.provider === "claude" ? BTW.exec(body) : null;
+      if (side) await api.btw(session.id, side[1]!);
+      else if (mode.kind === "send") {
         await api.send(session.id, body);
         echoSent(session.id, body);
       }
@@ -84,7 +88,7 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
     <div className="cmp" data-mode={mode.kind}>
       {error ? (
         <div className="cmp-error" role="alert">
-          <Icon.alert size={13} /> {mode.kind === "resume" ? "Could not resume" : "Not sent"}: {error}
+          <Icon.alert size={13} /> {mode.kind === "resume" ? "Could not resume" : btw ? "Not asked" : "Not sent"}: {error}
           <button className="linkish" onClick={clear}>
             dismiss
           </button>
@@ -205,7 +209,9 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
       ) : null}
       {/* Enter / Shift+Enter is what every chat box does; it lives in the
           textarea's tooltip rather than a permanent line under it. */}
-      {session.cold && mode.kind !== "adopt" ? (
+      {btw ? (
+        <div className="cmp-hint">A side question: Claude answers from what it already knows, without tools and without stopping its work. The answer shows in the Timeline.</div>
+      ) : session.cold && mode.kind !== "adopt" ? (
         <div className="cmp-hint">
           Idle since {ago(session.lastActivityAt)}, so its cache is cold: {mode.kind === "send" ? "a message" : "resuming"} wakes it on whichever account has
           room{lastOn ? ` (last on ${lastOn})` : ""}{mode.kind === "send" ? ", restarting it there if that is another one" : ""}.
@@ -216,6 +222,8 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
     </div>
   );
 }
+
+const BTW = /^\/btw\s+(\S[\s\S]*)$/;
 
 /** Pressing Send leaves the box focused, so the keyboard stays up for the next
  *  message, as every phone chat does. */

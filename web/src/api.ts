@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type {
+  Btw,
   Account,
   AccountUsage,
   AgentSettings,
@@ -189,6 +190,8 @@ export const api = {
   /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
   answer: (id: string, question: string, answers: AskAnswer[]) => post<unknown>(`/api/sessions/${enc(id)}/answer`, { question, answers }),
   interrupt: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/interrupt`),
+  /** Ask Claude a side question (/btw); the answer arrives over the watch as a `btw` frame. */
+  btw: (id: string, question: string) => post<Btw>(`/api/sessions/${enc(id)}/btw`, { question }),
   resume: (id: string, prompt?: string) =>
     post<Session>(`/api/sessions/${enc(id)}/resume`, prompt ? { prompt } : {}),
   adopt: (id: string) => post<Session>(`/api/sessions/${enc(id)}/adopt`),
@@ -604,6 +607,21 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
   }, [sessionId]);
 
   return { ...st, loadOlder };
+}
+
+/**
+ * The watched session's side questions (Claude's /btw), oldest first. They
+ * come with the watch `useTimeline` holds, so use them beside it.
+ */
+export function useBtw(sessionId: string): readonly Btw[] {
+  const [items, setItems] = useState<readonly Btw[]>([]);
+  useEffect(() => {
+    setItems([]);
+    return wire.onMessage((msg) => {
+      if (msg.type === "btw" && msg.sessionId === sessionId) setItems(msg.items);
+    });
+  }, [sessionId]);
+  return items;
 }
 
 // ---------------------------------------------------------------- terminal

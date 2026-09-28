@@ -9,6 +9,7 @@ import type {
   Account,
   AgentSettings,
   BalancerSettings,
+  Btw,
   Candidate,
   ProviderId,
   Repo,
@@ -227,6 +228,22 @@ const MIGRATIONS: string[] = [
     open_at      INTEGER NOT NULL DEFAULT 0,
     history_page INTEGER NOT NULL DEFAULT 1
   );
+  `,
+  // 10 — side questions (Claude's /btw) and their answers: Claude keeps them
+  // only in the process's memory, so this is their one record.
+  `
+  CREATE TABLE btw (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL,
+    question    TEXT NOT NULL,
+    answer      TEXT,
+    error       TEXT,
+    status      TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    asked_at    INTEGER NOT NULL,
+    answered_at INTEGER
+  );
+  CREATE INDEX btw_session ON btw (session_id, asked_at);
   `,
 ];
 
@@ -801,6 +818,40 @@ export function rateLimitHitsSince(sinceMs: number): { sessionId: string; accoun
     session_id: string; account_id: string | null; at: number; detail: string;
   }[];
   return rows.map((r) => ({ sessionId: r.session_id, accountId: r.account_id, at: r.at, detail: r.detail }));
+}
+
+// -------------------------------------------------------------------- btw
+
+type BtwRow = {
+  id: number; session_id: string; question: string; answer: string | null; error: string | null;
+  status: string; source: string; asked_at: number; answered_at: number | null;
+};
+
+const rowToBtw = (r: BtwRow): Btw => ({
+  id: r.id, sessionId: r.session_id, question: r.question, answer: r.answer, error: r.error,
+  status: r.status as Btw["status"], source: r.source as Btw["source"], askedAt: r.asked_at, answeredAt: r.answered_at,
+});
+
+export function insertBtw(b: Pick<Btw, "sessionId" | "question" | "source" | "askedAt">): Btw {
+  const r = getDb()
+    .query("INSERT INTO btw (session_id,question,status,source,asked_at) VALUES (?,?,'asking',?,?) RETURNING *")
+    .get(b.sessionId, b.question, b.source, b.askedAt) as BtwRow;
+  return rowToBtw(r);
+}
+
+export function finishBtw(id: number, done: { answer: string } | { error: string }, at: number): void {
+  if ("answer" in done) getDb().run("UPDATE btw SET status='answered', answer=?, error=NULL, answered_at=? WHERE id=?", [done.answer, at, id]);
+  else getDb().run("UPDATE btw SET status='failed', error=?, answered_at=? WHERE id=?", [done.error, at, id]);
+}
+
+export function listBtw(sessionId: string): Btw[] {
+  return (getDb().query("SELECT * FROM btw WHERE session_id = ? ORDER BY asked_at, id").all(sessionId) as BtwRow[]).map(rowToBtw);
+}
+
+/** Ones still asking when the server stopped: nothing is waiting on them any more. */
+export function failUnfinishedBtw(error: string, at: number): string[] {
+  const rows = getDb().query("UPDATE btw SET status='failed', error=?, answered_at=? WHERE status='asking' RETURNING session_id").all(error, at) as { session_id: string }[];
+  return [...new Set(rows.map((r) => r.session_id))];
 }
 
 // ------------------------------------------------------------------ repos

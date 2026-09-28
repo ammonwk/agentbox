@@ -163,6 +163,20 @@ export async function sendText(name: string, text: string): Promise<void> {
   sendKeys(name, ["Enter"]);
 }
 
+/** The paste buffers' names, newest first. A TUI that copies inside tmux adds one (`load-buffer`). */
+export function bufferNames(): string[] {
+  const r = tmux(["list-buffers", "-F", "#{buffer_name}"]);
+  return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
+}
+
+/** A paste buffer's contents, and the buffer gone. */
+export function takeBuffer(buffer: string): string | null {
+  const r = tmux(["show-buffer", "-b", buffer]);
+  if (r.code !== 0) return null;
+  tmux(["delete-buffer", "-b", buffer]);
+  return r.stdout;
+}
+
 /** Press keys by tmux name: `Enter`, `Escape`, `C-c`, `Down`, or literal text. */
 export function sendKeys(name: string, keys: string[]): void {
   if (keys.length === 0) return;

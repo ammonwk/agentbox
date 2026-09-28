@@ -11,7 +11,7 @@
  *     something they depend on moves, pushed only when the result differs.
  *   - `metrics`: machine and per-session load, every two seconds while anyone
  *     is connected, never suppressed.
- * Plus `timeline`, only to the socket watching that session.
+ * Plus `timeline` and `btw`, only to the socket watching that session.
  *
  * `/ws/term/:id` is a live terminal: a PTY running `tmux attach` on the
  * session, bytes both ways. Closing it detaches; the agent keeps running.
@@ -30,7 +30,7 @@ import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetric
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
-import { addRepo, deleteRepo, getSettings, listRepos, listSchedules, mergeSettings, saveSettings } from "../core/db";
+import { addRepo, deleteRepo, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings } from "../core/db";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
@@ -319,6 +319,13 @@ function onTranscript(sessionId: string): void {
   }
 }
 
+/** The watched session's side questions (Claude's /btw), whole, on watch and on every change. */
+function onBtw(sessionId: string): void {
+  for (const ws of clients) {
+    if (ws.data.kind === "app" && ws.data.watching === sessionId) send(ws, { type: "btw", sessionId, items: listBtw(sessionId) });
+  }
+}
+
 function handleAppMessage(ws: Socket, raw: string | Buffer): void {
   const parsed = parseClientMessage(raw);
   if (!parsed.ok) {
@@ -329,6 +336,7 @@ function handleAppMessage(ws: Socket, raw: string | Buffer): void {
   if (msg.type === "ping" || ws.data.kind !== "app") return;
   ws.data.watching = msg.sessionId;
   ws.data.cursor = null;
+  if (msg.sessionId) send(ws, { type: "btw", sessionId: msg.sessionId, items: listBtw(msg.sessionId) });
   void pumpTimeline(ws);
 }
 
@@ -489,6 +497,10 @@ const router = new Router(mapError)
     await fleet.answer(params.id!, question, parseAnswers(b.answers));
     scheduleHot();
     return json(null);
+  })
+  .add("POST", "/api/sessions/:id/btw", async ({ req, params }) => {
+    const b = await readBody(req);
+    return json(fleet.askBtw(params.id!, requireString(b, "question")), 201);
   })
   .add("POST", "/api/sessions/:id/interrupt", ({ params }) => {
     fleet.interrupt(params.id!);
@@ -881,6 +893,7 @@ export async function startServer(): Promise<void> {
     scheduleCold();
   });
   fleet.on("transcript", onTranscript);
+  fleet.on("btw", onBtw);
   voice = new VoiceHub(fleet);
   followProject(fleet, scheduleCold);
   accounts.on("change", scheduleCold);
