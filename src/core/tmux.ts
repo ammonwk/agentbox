@@ -11,7 +11,9 @@
  * because the agentbox id in them is not.
  */
 
-import { tmuxSocket } from "./paths";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { agentboxHome, tmuxSocket } from "./paths";
 
 export interface TmuxResult {
   code: number;
@@ -70,7 +72,9 @@ export function newSession(s: NewSession): number {
   // `env -u` rather than tmux's `-e`: tmux can add variables but not remove
   // one the server inherited, and a stray CLAUDE_CONFIG_DIR from the shell
   // that started agentbox would put the session on the wrong account.
-  const cmd = ["env", ...(s.unset ?? []).flatMap((v) => ["-u", v]), ...Object.entries(s.env ?? {}).map(([k, v]) => `${k}=${v}`), ...s.argv];
+  let cmd = ["env", ...(s.unset ?? []).flatMap((v) => ["-u", v]), ...Object.entries(s.env ?? {}).map(([k, v]) => `${k}=${v}`), ...s.argv];
+  const launcher = cmd.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0) > MAX_INLINE ? writeLauncher(s.name, cmd) : null;
+  if (launcher) cmd = ["sh", launcher];
   const args: string[] = ["start-server"];
   for (const g of GLOBALS) args.push(";", ...g);
   args.push(
@@ -81,10 +85,29 @@ export function newSession(s: NewSession): number {
     "--", ...cmd,
   );
   const r = tmux(["list-sessions"]).code === 0 ? tmux(args) : startServer(args);
+  if (r.code !== 0 && launcher) rmSync(launcher, { force: true });
   if (r.code !== 0) throw new Error(`tmux could not start the session: ${r.stderr.trim() || r.stdout.trim()}`);
   const pid = Number(r.stdout.trim().split("\n").pop());
   if (!Number.isFinite(pid) || pid <= 0) throw new Error(`tmux started the session but reported no pid: ${r.stdout}`);
   return pid;
+}
+
+/**
+ * tmux sends a command to its server as one message of at most 16 KiB, so a
+ * long prompt in the argv fails with "command too long". Past this, the
+ * command goes in a script instead and tmux only runs `sh <script>`.
+ */
+const MAX_INLINE = 8192;
+
+/** A script that deletes itself and execs `cmd`, so the pane's pid is still
+ *  the agent's. Private: the prompt is in it until the agent starts. */
+function writeLauncher(name: string, cmd: string[]): string {
+  const dir = join(agentboxHome(), "launch");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const path = join(dir, `${name}.sh`);
+  const quote = (a: string) => `'${a.replaceAll("'", `'\\''`)}'`;
+  writeFileSync(path, `rm -f -- "$0"\nexec ${cmd.map(quote).join(" ")}\n`, { mode: 0o600 });
+  return path;
 }
 
 /**
