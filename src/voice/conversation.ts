@@ -12,13 +12,13 @@
  * cut it off mid-sentence.
  *
  * The conversation outlives its socket for a while (phones drop connections),
- * and keeps what arrives meanwhile — a Project answer — for when you are back.
+ * and keeps what arrives meanwhile — a watch line — for when you are back.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { VoiceConfig } from "./config";
 import { Listener, Speaker, type TurnEvent } from "./deepgram";
-import { CLI_GUIDE } from "../core/project";
+import { CLI_GUIDE } from "../core/cli-guide";
 import { TOOLS, type VoiceTools } from "./tools";
 
 export type VoiceState = "connecting" | "listening" | "thinking" | "speaking";
@@ -51,9 +51,9 @@ Everything you write is spoken aloud. Write the way people talk: plain sentences
 
 What you can do:
 
-- bash runs a command on his machine and gives you its output. The agentbox CLI (below) is on its PATH: use it for anything about his sessions, like what one said (agentbox show, agentbox log | tail), what is waiting, or typing his answer into one (agentbox send). Each call is a fresh shell in the Project's directory, and is killed after 90 seconds. The board in brief comes with his messages whenever it has changed, so for "what needs me?" you usually know already.
+- bash runs a command on his machine and gives you its output. The agentbox CLI (below) is on its PATH: use it for anything about his sessions, like what one said (agentbox show, agentbox log | tail), what is waiting, or typing his answer into one (agentbox send). Each call is a fresh shell, and is killed after 90 seconds. The board in brief comes with his messages whenever it has changed, so for "what needs me?" you usually know already.
 - watch runs a command in the background, and every line it prints comes back to you as a message starting [watch name]. Use it when he asks to be told about something: "tell me when the payments session finishes" is agentbox watch <id> --once, a CI run is gh run watch, a reminder is sleep then echo. A watch keeps running when he hangs up; unwatch stops it.
-- ask_project hands real work to Project, a full agent session that manages every other session: investigating, writing code, anything that takes several steps or judgement. Write the request out fully with his context, because Project did not hear the conversation. Tell him in a few words that it is on it, and never claim to have done what you only handed off. When a message arrives saying Project finished, give him the gist in a sentence or two and offer the details. When he asks for Project by name, hand it to Project.
+- Real work — anything that takes several steps or judgement — you do not do yourself: start a session for it (agentbox claude --detach, from the directory it should work in, with the request written out fully since it did not hear the conversation), then watch it (agentbox watch <id> --once) so its answer comes back to you to relay. Tell him in a few words that it is on it, and never claim to have done what you only handed off.
 
 Before a call that takes a moment, say a few words first, like "Let me look."
 
@@ -84,7 +84,6 @@ const NOTE: Record<string, (input: Record<string, unknown>) => string> = {
   bash: (i) => `$ ${String(i.command ?? "").slice(0, 200)}`,
   watch: (i) => `Watching (${String(i.name ?? "")}): ${String(i.command ?? "").slice(0, 160)}`,
   unwatch: (i) => `Stopped watching ${String(i.name ?? "")}`,
-  ask_project: () => "Handing it to Project…",
 };
 
 const clock = () => new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -179,7 +178,7 @@ export class Conversation {
     }
   }
 
-  /** A line from the system — a Project answer, a board change — for the model to relay or not. */
+  /** A line from the system — a watch line, a board change — for the model to relay or not. */
   inject(text: string): void {
     this.inbox.push(`[${clock()}] ${text}`);
     if (this.sink && !this.generating) void this.run();

@@ -748,15 +748,6 @@ export interface HotState {
   serverTime: number;
 }
 
-/** The Project session pinned atop the board (src/core/project.ts). */
-export interface ProjectState {
-  provider: ProviderId;
-  /** Null until it is first opened, or when its row is gone. */
-  sessionId: string | null;
-  /** The harness has a compact command. */
-  canCompact: boolean;
-}
-
 /** One line of `GET /api/grep`. */
 export interface GrepHit {
   sessionId: string;
@@ -778,7 +769,6 @@ export interface ColdState {
   providers: { id: ProviderId; installed: boolean; version: string | null; efforts: string[] }[];
   /** Set when something is missing, so the UI can say so instead of failing. */
   warnings: string[];
-  project: ProjectState;
   schedules: Schedule[];
 }
 

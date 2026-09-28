@@ -297,9 +297,10 @@ export interface ProviderAdapter {
 /**
  * A message an agent typed into a session, rather than you. `agentbox send`
  * (the CLI and the fleet MCP, which is how agents message each other) marks
- * what it types at the source; the Project session also signs its own. Such a
- * message is still shown as a prompt, but it is not you writing to the
- * session, which is what the board sorts by.
+ * what it types at the source; the removed Project session signed its own,
+ * and old transcripts still carry that form. Such a message is still shown
+ * as a prompt, but it is not you writing to the session, which is what the
+ * board sorts by.
  */
 export const AGENT_SENT_MARK = "[via agentbox send]";
 export const isAgentSent = (text: string): boolean => /^\s*\[(via agentbox send|Project session)\]/.test(text);

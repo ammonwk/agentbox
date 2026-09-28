@@ -12,7 +12,7 @@ export const SAMPLE_RATE = 24_000;
 /** Flux asks for 80 ms chunks; the browser sends 20 ms frames. */
 const FLUX_CHUNK_BYTES = (SAMPLE_RATE * 2 * 80) / 1000;
 /** Words it should expect to hear. */
-const KEYTERMS = ["agentbox", "Dev", "Project", "Claude", "Codex", "Widget", "PR", "merge"];
+const KEYTERMS = ["agentbox", "Dev", "Claude", "Codex", "Widget", "PR", "merge"];
 
 export type TurnEvent = {
   event: "StartOfTurn" | "Update" | "EagerEndOfTurn" | "TurnResumed" | "EndOfTurn";

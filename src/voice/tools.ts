@@ -1,17 +1,14 @@
-/** What the voice agent can do: a shell with the `agentbox` CLI on it (the
- *  same powers the Project session has), background watches whose output
- *  comes back to it as news, and handing real work to the Project session.
+/** What the voice agent can do: a shell with the `agentbox` CLI on it, and
+ *  background watches whose output comes back to it as news.
  *
- * The voice agent is the fast half of a pair. It answers in a sentence what a
- * command or two can tell it, and anything that needs thought, code or
- * digging goes to Project — an ordinary agent session — whose answer comes
- * back through `ProjectRelay` to be spoken.
+ * The voice agent answers in a sentence what a command or two can tell it.
+ * Anything bigger it starts as its own detached session (`agentbox claude
+ * --detach`) and watches for the answer.
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { attentionOf } from "../core/attention";
 import type { Fleet } from "../core/fleet";
-import { ensureProject, projectState } from "../core/project";
 import type { Session } from "../core/types";
 import { runShell, type Watches } from "./shell";
 
@@ -53,17 +50,6 @@ export const TOOLS: Anthropic.ToolUnion[] = [
       additionalProperties: false,
     },
   },
-  {
-    name: "ask_project",
-    description:
-      "Hand a task or question to Project, the agent session that manages every session and can do real work: research, code, start and steer sessions, check PRs. It works in the background and its answer is brought back to you to relay. Write the request fully, with the context the user gave; Project did not hear the conversation.",
-    input_schema: {
-      type: "object",
-      properties: { request: { type: "string" } },
-      required: ["request"],
-      additionalProperties: false,
-    },
-  },
 ];
 
 const clip = (s: string | null | undefined, n: number) => {
@@ -80,13 +66,11 @@ const BASH_TIMEOUT_MS = 90_000;
 export class VoiceTools {
   constructor(
     private fleet: Fleet,
-    private relay: ProjectRelay,
     readonly watches: Watches,
   ) {}
 
   private live(): Session[] {
-    const project = projectState().sessionId;
-    return this.fleet.sessions().filter((s) => s.id !== project && s.status !== "closed");
+    return this.fleet.sessions().filter((s) => s.status !== "closed");
   }
 
   /** The tool's output, or a thrown error for `is_error`. */
@@ -101,8 +85,6 @@ export class VoiceTools {
         return this.watches.start(String(input.name ?? ""), String(input.command ?? ""));
       case "unwatch":
         return this.watches.stop(String(input.name ?? ""));
-      case "ask_project":
-        return this.relay.ask(String(input.request ?? ""));
       default:
         throw new Error(`unknown tool ${name}`);
     }
@@ -121,77 +103,7 @@ export class VoiceTools {
     for (const s of blocked) out.push(`needs an answer: ${s.id} "${clip(titleOf(s), 60)}" — ${attentionOf(s, this.fleet.blockedReason(s.id)).reason}`);
     for (const s of waiting) out.push(`your turn: ${s.id} "${clip(titleOf(s), 60)}" — ${clip(s.lastMessage, 140)}`);
     if (running.length) out.push(`running: ${running.map((s) => `${s.id} "${clip(titleOf(s), 40)}"`).join(", ")}`);
-    const pending = this.relay.pending();
-    if (pending) out.push(`Project is working on: ${clip(pending, 160)}`);
     out.push(...this.watches.list());
     return out.join("\n") || "nothing active";
-  }
-}
-
-/**
- * Hands requests to the Project session and brings its answers back.
- *
- * A request is typed into Project with a note that the answer will be read
- * aloud. When Project has been working and comes back to rest — its turn over —
- * everything it said since the request is its answer. One request at a time is
- * tracked; a second one while the first is out simply joins it, since Project
- * reads them in order anyway.
- */
-export class ProjectRelay {
-  private out: { request: string; since: number; sawWork: boolean } | null = null;
-
-  constructor(
-    private fleet: Fleet,
-    private onAnswer: (answer: string, request: string) => void,
-  ) {
-    fleet.on("sessions", () => void this.check());
-    fleet.on("transcript", (id: string) => {
-      if (id === projectState().sessionId) void this.check();
-    });
-  }
-
-  pending(): string | null {
-    return this.out?.request ?? null;
-  }
-
-  async ask(request: string): Promise<string> {
-    const s = await ensureProject(this.fleet);
-    const note =
-      "[From the voice assistant — the user is away from the screen and your reply will be read aloud to them. " +
-      "Do the work as usual; then end with a short plain-speech answer first (one to three sentences, no tables or code), details after.]";
-    await this.fleet.send(s.id, `${note}\n\n${request}`);
-    const since = this.out ? this.out.since : Date.now();
-    this.out = { request: this.out ? `${this.out.request}; ${request}` : request, since, sawWork: false };
-    return "Sent to Project. It is working on it; its answer will come back to you when it is done.";
-  }
-
-  private checking = false;
-  private async check(): Promise<void> {
-    const out = this.out;
-    const id = projectState().sessionId;
-    if (!out || !id || this.checking) return;
-    let s: Session;
-    try {
-      s = this.fleet.get(id);
-    } catch {
-      return;
-    }
-    if (s.status === "running" || s.status === "blocked") {
-      out.sawWork = true;
-      return;
-    }
-    // Not working. Only an answer if it worked since the request (or the
-    // request is old enough that we missed the running tick).
-    if (!out.sawWork && Date.now() - out.since < 15_000) return;
-    this.checking = true;
-    try {
-      const page = await this.fleet.timeline(id, null, 80);
-      const said = page.events.filter((e) => e.kind === "assistant" && e.at >= out.since - 2_000).map((e) => (e as { text: string }).text);
-      if (!said.length) return;
-      this.out = null;
-      this.onAnswer(said.join("\n\n"), out.request);
-    } finally {
-      this.checking = false;
-    }
   }
 }

@@ -1,7 +1,6 @@
-/** The session verbs of the CLI, shaped like Unix tools so an agent (the
- *  Project session, see src/core/project.ts) can drive the fleet with pipes:
- *  plain text out, the session id first on every line, and every verb that
- *  takes ids also reads them from stdin with `-`. */
+/** The session verbs of the CLI, shaped like Unix tools so an agent can drive
+ *  the fleet with pipes: plain text out, the session id first on every line,
+ *  and every verb that takes ids also reads them from stdin with `-`. */
 
 import type { Api } from "../client";
 import { CHANGE_KINDS, ChangeWatcher, changeLine, type ChangeKind } from "../core/changes";
@@ -145,10 +144,7 @@ export async function ls(api: Api, args: string[]): Promise<number> {
   const provider = oneOf("provider", str(flags.get("provider"))?.split(","), PROVIDERS);
   const s = await state(api);
   const now = s.serverTime;
-  const board = s.sessions
-    // Its own row is left out, so a pipe into close/stop cannot take it down.
-    .filter((x) => x.id !== s.project.sessionId)
-    .filter((x) => flags.has("all") || x.status !== "closed");
+  const board = s.sessions.filter((x) => flags.has("all") || x.status !== "closed");
   const onBoard = new Set(board.map((x) => x.id));
   const sorted = board
     .filter((x) => !flags.has("roots") || !x.parent || !onBoard.has(x.parent))
@@ -303,7 +299,7 @@ export async function diff(api: Api, args: string[]): Promise<number> {
  * end of its last message), started working (running), stopped. Nothing for
  * the board as it is when it starts. `--once` exits after the first line, so
  * `agentbox watch <id> --once` waits for that session. Default: blocked,
- * waiting and stopped, every session but the Project's. */
+ * waiting and stopped, every session. */
 export async function watch(api: Api, args: string[]): Promise<number> {
   const { flags, rest } = parseArgs(args, ["status"], ["once"]);
   const kinds: readonly ChangeKind[] = oneOf("status", str(flags.get("status"))?.split(","), CHANGE_KINDS) ?? ["blocked", "waiting", "stopped"];
@@ -317,8 +313,7 @@ export async function watch(api: Api, args: string[]): Promise<number> {
       // The server restarting is not the end of a watch.
     }
     if (s) {
-      const project = s.project.sessionId;
-      const rows = s.sessions.filter((x) => (only ? only.has(x.id) : x.id !== project)).map((x) => ({ ...x, reason: x.attention.reason }));
+      const rows = s.sessions.filter((x) => !only || only.has(x.id)).map((x) => ({ ...x, reason: x.attention.reason }));
       for (const c of watcher.next(rows)) {
         if (!kinds.includes(c.kind)) continue;
         console.log(changeLine(c));

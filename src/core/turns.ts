@@ -15,7 +15,8 @@ import { devinAskAnswers } from "./providers/devin-transcript";
 
 /** The provider tools that ask you something; their result is your answer. */
 const QUESTION_TOOLS = new Set(["AskUserQuestion", "ask_user_question", "request_user_input", "request_user_input_async"]);
-/** How the Project session opens a message it writes for you while you are away. */
+/** How the Project session (removed) opened a message it wrote for you while
+ *  you were away; kept so old transcripts still read right. */
 const FROM_PROJECT = /^\[From the Project session\b/;
 const TEXT_CAP = 600;
 const FULL_PAGE = 1000;

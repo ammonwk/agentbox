@@ -35,7 +35,6 @@ import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
-import { clearProject, compactProject, ensureProject, followProject, projectState } from "../core/project";
 import { checkRequest } from "./csrf";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
@@ -88,7 +87,6 @@ export const fleet = new Fleet({
     ingestRollout: (id, reading) => void accounts.ingestRollout(id, reading),
   },
   poolAgents: () => poolAgents(),
-  projectSession: () => projectState().sessionId,
 });
 setMetricsSource(() => fleet.sessions());
 /** Sessions to start later; on the board and in Settings, so cold state. */
@@ -210,7 +208,6 @@ function coldState(): ColdState {
     settings: getSettings(),
     providers: slow.providers,
     warnings: warnings(),
-    project: projectState(),
     schedules: listSchedules(),
   };
 }
@@ -560,7 +557,6 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions/:id/close", async ({ req, params }) => {
     const b = await readBody(req);
-    if (requireBoolean(b, "closed") && params.id === projectState().sessionId) throw new HttpError(409, "the Project session is not closed; clear it instead");
     await fleet.close(params.id!, requireBoolean(b, "closed"));
     scheduleHot();
     return json(null);
@@ -686,26 +682,6 @@ const router = new Router(mapError)
       if (hits.length >= 5000) break;
     }
     return json(hits);
-  })
-
-  // ---- the Project session
-  .add("GET", "/api/project", () => json(projectState()))
-  .add("POST", "/api/project", async ({ req }) => {
-    const b = await readBody(req);
-    const s = await ensureProject(fleet, b.provider === undefined ? undefined : provider(b.provider));
-    scheduleHot();
-    scheduleCold();
-    return json(s);
-  })
-  .add("POST", "/api/project/clear", async () => {
-    const s = await clearProject(fleet);
-    scheduleHot();
-    scheduleCold();
-    return json(s);
-  })
-  .add("POST", "/api/project/compact", async () => {
-    await compactProject(fleet);
-    return json(null);
   })
 
   // ---- accounts
@@ -906,7 +882,6 @@ export async function startServer(): Promise<void> {
   fleet.on("transcript", onTranscript);
   fleet.on("btw", onBtw);
   voice = new VoiceHub(fleet);
-  followProject(fleet, scheduleCold);
   accounts.on("change", scheduleCold);
   metricsEvents.on("metrics", (state: MetricsState) => broadcast({ type: "metrics", state }));
 

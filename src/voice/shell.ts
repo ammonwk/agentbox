@@ -1,17 +1,16 @@
-/** Voice mode's hands: a shell, the same one the Project session drives the
- *  fleet with, and long-running commands whose output comes back as news.
+/** Voice mode's hands: a shell and long-running commands whose output comes
+ *  back as news.
  *
- * Every command runs in a fresh `bash -c` in the Project's directory, with
- * this checkout's `agentbox` first on PATH. It runs as a process group of its
- * own (`setsid`), so a timeout or an unwatch takes everything it started with
- * it. `AGENTBOX_SEND_AS=you`: what voice mode types into a session is you,
+ * Every command runs in a fresh `bash -c` in the voice directory, with this
+ * checkout's `agentbox` first on PATH. It runs as a process group of its own
+ * (`setsid`), so a timeout or an unwatch takes everything it started with it.
+ * `AGENTBOX_SEND_AS=you`: what voice mode types into a session is you,
  * spoken, and counts as your message (src/cli/sessions.ts `send`).
  */
 
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { agentboxBin } from "../core/paths";
-import { projectDir } from "../core/project";
+import { dirname, join } from "node:path";
+import { agentboxBin, agentboxHome } from "../core/paths";
 
 const OUT_MAX = 8_000;
 /** A watch printing more than this many lines a minute is stopped: every batch is a model turn. */
@@ -20,8 +19,12 @@ const MAX_WATCHES = 8;
 /** Lines are gathered this long and delivered as one. */
 const BATCH_MS = 1_500;
 
+function voiceDir(): string {
+  return join(agentboxHome(), "voice");
+}
+
 function spawn(command: string) {
-  const cwd = projectDir();
+  const cwd = voiceDir();
   mkdirSync(cwd, { recursive: true });
   return Bun.spawn(["setsid", "bash", "-c", command], {
     cwd,

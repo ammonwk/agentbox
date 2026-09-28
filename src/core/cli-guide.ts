@@ -1,109 +1,7 @@
-/** The Project session: one agent pinned to the top of the board whose job is
- *  the other sessions.
- *
- * It is an ordinary session — same tmux, same transcript, same account pin —
- * that runs in a directory of its own, where a CLAUDE.md / AGENTS.md teaches it
- * the `agentbox` CLI. Which session it is, and on which harness, is kept in the
- * kv table; "clear" starts a fresh one and closes the old, so a clean slate
- * works the same on every provider.
- */
+/** The `agentbox` CLI, for an agent driving the fleet with it: printed by
+ *  `agentbox guide`, committed to docs/cli.md by `bun run docs:cli`, and in
+ *  the voice mode prompt (src/voice). */
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { getKv, getSessionRecord, setKv } from "./db";
-import { FleetError, type Fleet } from "./fleet";
-import { agentboxHome } from "./paths";
-import type { ProjectState, ProviderId, Session } from "./types";
-
-const KEY = "project";
-
-/** How each harness compacts its own context; absent means it cannot. */
-const COMPACT: Partial<Record<ProviderId, string>> = { claude: "/compact", codex: "/compact", omp: "/compact" };
-
-export function projectDir(): string {
-  return join(agentboxHome(), "project");
-}
-
-export function projectState(): ProjectState {
-  const s = getKv<ProjectState>(KEY);
-  const sessionId = s?.sessionId && getSessionRecord(s.sessionId) ? s.sessionId : null;
-  return { provider: s?.provider ?? "claude", sessionId, canCompact: !!COMPACT[s?.provider ?? "claude"] };
-}
-
-function save(provider: ProviderId, sessionId: string | null): void {
-  setKv(KEY, { provider, sessionId });
-}
-
-/** Rewritten on every start, so the guide follows the CLI as it changes. */
-function writeGuide(): string {
-  const dir = projectDir();
-  mkdirSync(dir, { recursive: true });
-  for (const name of ["CLAUDE.md", "AGENTS.md"]) writeFileSync(join(dir, name), GUIDE());
-  return dir;
-}
-
-/** Keep the pointer on the conversation when a `/clear` or `/resume` inside
- *  the TUI moves the pane to a new session row. */
-export function followProject(fleet: Fleet, onChange: () => void): void {
-  fleet.on("paneMoved", (from: string, to: string) => {
-    const p = projectState();
-    if (p.sessionId !== from) return;
-    save(p.provider, to);
-    onChange();
-  });
-}
-
-/** The Project session, running: resumed if stopped, started if there is none
- *  or the harness changed (the old one is closed). */
-export async function ensureProject(fleet: Fleet, provider?: ProviderId): Promise<Session> {
-  const p = projectState();
-  const want = provider ?? p.provider;
-  if (p.sessionId && want === p.provider) {
-    const s = fleet.get(p.sessionId);
-    if (s.host !== "none") return s;
-    try {
-      return await fleet.resume(p.sessionId);
-    } catch {
-      // Never got as far as a conversation, or its account is gone: start over.
-    }
-  }
-  return fresh(fleet, want, p.sessionId);
-}
-
-/** A clean slate: close the current one, start a new one. */
-export async function clearProject(fleet: Fleet): Promise<Session> {
-  const p = projectState();
-  return fresh(fleet, p.provider, p.sessionId);
-}
-
-export async function compactProject(fleet: Fleet): Promise<void> {
-  const p = projectState();
-  const cmd = COMPACT[p.provider];
-  if (!cmd) throw new FleetError(409, `${p.provider} has no compact command; clear it instead`);
-  if (!p.sessionId || fleet.get(p.sessionId).host !== "tmux") throw new FleetError(409, "the Project session is not running");
-  await fleet.send(p.sessionId, cmd);
-}
-
-async function fresh(fleet: Fleet, provider: ProviderId, old: string | null): Promise<Session> {
-  if (old) {
-    await fleet.close(old, true);
-  }
-  const { session } = await fleet.spawn({ provider, cwd: writeGuide() });
-  save(provider, session.id);
-  return fleet.patch(session.id, { label: "Project" });
-}
-
-const GUIDE = () => `# Project
-
-You are the Project session in agentbox: the user's agent for seeing and
-managing all of their other coding-agent sessions (Claude Code, Codex, Devin,
-omp) across accounts. You do not work on code here; you look at, sort, nudge
-and tidy the sessions that do.
-
-${CLI_GUIDE}`;
-
-/** The \`agentbox\` CLI, for an agent driving the fleet with it: the Project
- *  session, and voice mode (src/voice), which runs it through bash. */
 export const CLI_GUIDE = `Everything goes through the \`agentbox\` CLI. It behaves like a Unix tool: plain
 text out, the session id in the first column, and every verb that takes ids
 also reads them from stdin with \`-\`, so pipes and xargs work.
@@ -164,8 +62,6 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
   session mid-turn loses that turn: ask before closing a running one.
 - Stopping a running session interrupts its work, and a message sent to one
   lands mid-turn. Ask before stopping or sending to a running session.
-- \`ls\` and \`watch\` leave out the Project session (labelled "Project"), so
-  piping their output into close or stop cannot take it down.
 - A session another one started (a teammate, a \`codex exec\` run from a
   Bash tool, an agent of its subagent MCP) is listed right after its parent
   with its title indented \`└\`, and \`show\` names its parent and children.

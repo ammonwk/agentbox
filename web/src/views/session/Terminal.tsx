@@ -158,8 +158,8 @@ export default function Terminal({
     };
 
     // Another session named on screen — its id, tmux name, provider id or
-    // worktree path, which the Project session and the fleet's own agents
-    // print all the time — is a link to it. Only names that are on the board,
+    // worktree path, which the fleet's own agents print all the time — is a
+    // link to it. Only names that are on the board,
     // so an ordinary eight-letter word never lights up.
     const links = term.registerLinkProvider({
       provideLinks(y, callback) {

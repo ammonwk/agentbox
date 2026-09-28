@@ -16,6 +16,7 @@ import { listRepos } from "../core/db";
 import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
 import { ApiError, apiClient, serverBase } from "../client";
+import { CLI_GUIDE } from "../core/cli-guide";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
@@ -315,6 +316,7 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
   mcp                   run the fleet MCP server on stdio (for a conductor session)
   subagent-mcp          run the omp/devin subagent MCP server on stdio (needs no server)
   doctor                check that everything agentbox needs is present
+  guide                 how an agent drives the fleet with this CLI
   version               print the version`;
 
 export async function main(argv: string[]): Promise<number | null> {
@@ -394,6 +396,9 @@ export async function main(argv: string[]): Promise<number | null> {
       }
       case "doctor":
         return doctor();
+      case "guide":
+        console.log(CLI_GUIDE);
+        return 0;
       case "version":
       case "--version":
       case "-v":

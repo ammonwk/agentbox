@@ -364,7 +364,6 @@ const sessions: MockSession[] = [
           options: [
             { label: "Labelled", description: "Any session you gave a label" },
             { label: "With a PR", description: "Sessions whose branch has a pull request" },
-            { label: "Project", description: "The pinned Project session" },
           ],
         },
       ],
@@ -677,7 +676,6 @@ function cold(): ColdState {
       { id: "omp", installed: false, version: null, efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
     ],
     warnings: [],
-    project: { provider: "claude", sessionId: null, canCompact: true },
     schedules: structuredClone(schedules),
   };
 }

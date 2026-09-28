@@ -12,6 +12,7 @@
     "build": "bun run web:build",
     "typecheck": "tsc --noEmit",
     "doctor": "bun bin/agentbox doctor",
+    "docs:cli": "bun scripts/docs-cli.ts",
     "test": "bun test"
   },
   "dependencies": {

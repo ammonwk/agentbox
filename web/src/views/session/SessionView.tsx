@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
+import type { AppState, Schedule } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
 import {
   AccountChip,
@@ -91,18 +91,23 @@ export function SessionView({
   const { filter, sort, open, setOpen } = list;
   const closing = useClosing().pending;
 
+  // The open session's ancestors, held open so it is never folded out of sight.
+  const above = useMemo(() => {
+    const byId = new Map(state.sessions.map((s) => [s.id, s]));
+    const set = new Set<string>();
+    for (let p = session?.parent; p && !set.has(p); p = byId.get(p)?.parent) set.add(p);
+    return set;
+  }, [state.sessions, session?.parent]);
+
   // Folded as the user left it, but never with the open session folded out of
   // sight. Closed ones are not here: they have their own list at the bottom.
   const sections = useMemo(() => {
-    const byId = new Map(state.sessions.map((s) => [s.id, s]));
-    const above = new Set<string>();
-    for (let p = session?.parent; p && !above.has(p); p = byId.get(p)?.parent) above.add(p);
     const rows = filterSessions(
-      state.sessions.filter((s) => s.id !== state.project.sessionId && s.status !== "closed" && !closing.has(s.id)),
+      state.sessions.filter((s) => s.status !== "closed" && !closing.has(s.id)),
       filter,
     );
     return sectionsOf(rows, (x) => open.has(x) || above.has(x), sort);
-  }, [state.sessions, state.project.sessionId, session?.parent, filter, sort, open, closing]);
+  }, [state.sessions, above, filter, sort, open, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
@@ -173,7 +178,7 @@ export function SessionView({
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
-      {showRail ? <Rail sections={sections} state={state} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
+      {showRail ? <Rail sections={sections} state={state} current={id} forcedOpen={above} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
       {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
       ) : sched ? (
@@ -334,10 +339,8 @@ function Detail({
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
   // openPrs (src/core/prs.ts) matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
-  const isProject = session.id === state.project.sessionId;
   const links = useMemo(() => buildSessionIndex(state.sessions), [state.sessions]);
   const linkCtx = useMemo(() => ({ index: links, self: session.id }), [links, session.id]);
-  const openSession = (id: string) => (location.hash = hrefOf({ page: "session", id, tab }));
   const prBase = useMemo(() => prBaseFor(session, state), [session, state]);
   const flashRow = useRef<((row: number) => void) | null>(null);
   const [termScrolled, setTermScrolled] = useState(0);
@@ -357,38 +360,6 @@ function Detail({
           {session.host === "external" || session.host === "subagent" ? <HostBadge host={session.host} /> : null}
 
           <div className="sx-header-actions">
-            {isProject ? (
-              <>
-                <select
-                  className="sx-harness"
-                  aria-label="Project harness"
-                  title="Which agent runs the Project. Changing it starts a fresh one."
-                  value={state.project.provider}
-                  disabled={busy}
-                  onChange={(e) => void run(async () => openSession((await api.project(e.target.value as ProviderId)).id))}
-                >
-                  {state.providers.filter((p) => p.installed).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {PROVIDER_LABEL[p.id]}
-                    </option>
-                  ))}
-                </select>
-                {state.project.canCompact && session.host === "tmux" ? (
-                  <Button size="sm" icon={Icon.move} disabled={busy} title="Summarise the conversation so far to free context" onClick={() => void run(() => api.compactProject())}>
-                    Compact
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  icon={Icon.refresh}
-                  disabled={busy}
-                  title="Start a fresh Project conversation; this one is closed"
-                  onClick={() => void run(async () => openSession((await api.clearProject()).id))}
-                >
-                  Clear
-                </Button>
-              </>
-            ) : null}
             {/* The provider's own id: what `claude -r` (or `codex resume`) takes. */}
             {session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null}
             <button
@@ -416,7 +387,7 @@ function Detail({
                 Stop
               </Button>
             ) : null}
-            {isProject || session.host === "subagent" ? null : session.status === "closed" ? (
+            {session.host === "subagent" ? null : session.status === "closed" ? (
               <Button
                 size="sm"
                 variant="ghost"

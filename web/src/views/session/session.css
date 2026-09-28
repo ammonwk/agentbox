@@ -243,35 +243,6 @@
   font-size: 12.5px;
   color: var(--muted);
 }
-/* The Project session, above the scroll so it never moves. */
-.rail-project {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex: none;
-  margin: 8px 8px 2px;
-  padding: 7px 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-.rail-project svg {
-  color: var(--accent);
-  flex: none;
-}
-.rail-project .rail-title {
-  flex: 1;
-}
-.rail-project:hover {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
-}
-.rail-project[aria-current="page"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
-}
 .rail-label {
   position: sticky;
   top: 0;
@@ -1631,14 +1602,6 @@
   .sx-header-top { flex-wrap: wrap; }
   .cmp-row { flex-wrap: wrap; }
   .cmp textarea { flex-basis: 100%; }
-}
-
-/* The Project session's harness picker, sized like the header's buttons. */
-.sx-harness {
-  width: auto;
-  min-height: 28px;
-  padding: 2px 8px;
-  font-size: 12.5px;
 }
 
 /* The Terminal tab of a session with no terminal: its transcript, under a

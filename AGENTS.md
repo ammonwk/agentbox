@@ -115,16 +115,16 @@ and each recovery's report in `recovery/`.
 - `src/voice/` — hands-free mode (the Voice page, `/ws/voice`): Deepgram Flux
   hears, Claude (`claude-opus-5-5`, low effort, on the API key in
   `<agentbox home>/voice.env`) decides and may `stay_silent`, Deepgram Aura
-  speaks. Its tools are a shell with the `agentbox` CLI on it (the Project's
-  guide, `CLI_GUIDE` in src/core/project.ts, is in its prompt), background
-  `watch`es whose output lines come back to it as messages, and `ask_project`
-  for real work. It speaks up on its own from those lines and from board news
-  (`src/core/changes.ts`, the same changes `agentbox watch` prints).
+  speaks. Its tools are a shell with the `agentbox` CLI on it (the CLI guide,
+  `CLI_GUIDE` in src/core/cli-guide.ts, is in its prompt) and background
+  `watch`es whose output lines come back to it as messages; for real work it
+  starts a detached session and watches it. It speaks up on its own from those
+  lines and from board news (`src/core/changes.ts`, the same changes
+  `agentbox watch` prints).
 - `.claude/skills/telegram/` — Telegram Dev (a personal Telegram bot) with a link back
   to the session; for sessions working in this checkout.
-- `src/core/project.ts` — the Project session pinned atop the board: an
-  ordinary session in `<agentbox home>/project`, whose CLAUDE.md/AGENTS.md
-  (written from here on every start) teaches it the CLI.
+- `src/core/cli-guide.ts` — the `agentbox` CLI guide for agents: `agentbox
+  guide` prints it and `bun run docs:cli` writes it to `docs/cli.md`.
 
 ## Tests
 

@@ -27,7 +27,6 @@ import { openingTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
 import { useDismiss } from "../newsession/popover";
-import { useOpenProject } from "../project";
 import { useClosing } from "./closing";
 import { ScheduledRow } from "./Scheduled";
 
@@ -91,6 +90,7 @@ export function Rail({
   sections,
   state,
   current,
+  forcedOpen,
   list,
   onOpenFirst,
   onClose,
@@ -100,6 +100,8 @@ export function Rail({
   sections: Section<Nested<SessionRow>>[];
   state: AppState;
   current: string | null;
+  /** Ancestors of the open session, held open so it is never folded away. */
+  forcedOpen: ReadonlySet<string>;
   list: ListState;
   onOpenFirst: () => void;
   onClose: (s: SessionRow) => void;
@@ -153,8 +155,6 @@ export function Rail({
         <SortMenu list={list} />
       </div>
 
-      <RailProject state={state} current={current} />
-
       <div className="rail-scroll">
         <CloseFailure />
         {scheduled.length ? (
@@ -187,8 +187,13 @@ export function Rail({
                 usual={usual}
                 sort={sort}
                 shape={shapes.get(repoKey(s))}
-                open={list.open.has(s.id)}
-                onToggle={() => list.setOpen(s.id, !list.open.has(s.id))}
+                open={list.open.has(s.id) || forcedOpen.has(s.id)}
+                onToggle={() => {
+                  // A parent held open only because the open session is under it
+                  // cannot fold while that session stays open: deselect it first.
+                  if (forcedOpen.has(s.id)) location.hash = hrefOf({ page: "sessions" });
+                  list.setOpen(s.id, !(list.open.has(s.id) || forcedOpen.has(s.id)));
+                }}
                 onClose={onClose}
               />
             ))}
@@ -490,26 +495,5 @@ function ClosedList({ query, current, stamp, shapes }: { query: string; current:
         </>
       ) : null}
     </div>
-  );
-}
-
-/** The Project session, pinned above the list's scroll so it is one click
- *  from anywhere. */
-function RailProject({ state, current }: { state: AppState; current: string | null }) {
-  const p = useOpenProject(state, (id) => (location.hash = hrefOf({ page: "session", id, tab: openingTab(p.session?.status) })));
-  return (
-    <button
-      type="button"
-      className="rail-project"
-      aria-current={p.session && p.session.id === current ? "page" : undefined}
-      disabled={p.busy}
-      title={p.error ?? "The Project session: sees and manages every session"}
-      onClick={() => void p.open()}
-    >
-      <StatusDot status={p.running ? p.session!.status : "stopped"} />
-      <Icon.sessions size={13} />
-      <span className="rail-title">Project</span>
-      <ProviderBadge provider={state.project.provider} short />
-    </button>
   );
 }

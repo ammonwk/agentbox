@@ -1,15 +1,14 @@
 /** The server's side of voice mode: conversations by id (a phone that drops
- *  its connection comes back to the same one), Project's answers, the
- *  watches the voice agent started, and news from the board. */
+ *  its connection comes back to the same one), the watches the voice agent
+ *  started, and news from the board. */
 
 import { attentionOf } from "../core/attention";
 import { ChangeWatcher, changeLine } from "../core/changes";
 import type { Fleet } from "../core/fleet";
-import { projectState } from "../core/project";
 import { voiceConfig } from "./config";
 import { Conversation, type VoiceClientMessage, type VoiceSink } from "./conversation";
 import { Watches } from "./shell";
-import { ProjectRelay, VoiceTools } from "./tools";
+import { VoiceTools } from "./tools";
 
 /** A conversation nobody has come back to in this long is over. */
 const KEEP_MS = 30 * 60_000;
@@ -19,17 +18,14 @@ const NEWS_MS = 20_000;
 export class VoiceHub {
   private convs = new Map<string, Conversation>();
   private tools: VoiceTools;
-  /** Project answers and watch output that came with no conversation to tell. */
+  /** Watch output that came with no conversation to tell. */
   private unheard: string[] = [];
   private changes = new ChangeWatcher();
   private news: string[] = [];
   private newsTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private fleet: Fleet) {
-    const relay = new ProjectRelay(fleet, (answer, request) =>
-      this.tell(`Project finished the request "${request.slice(0, 300)}". Its answer, for you to relay:\n${answer.slice(0, 8000)}`),
-    );
-    this.tools = new VoiceTools(fleet, relay, new Watches((text) => this.tell(text)));
+    this.tools = new VoiceTools(fleet, new Watches((text) => this.tell(text)));
     fleet.on("sessions", () => this.watch());
     setInterval(() => this.reap(), 60_000).unref?.();
   }
@@ -85,10 +81,8 @@ export class VoiceHub {
   /** Sessions that just finished their turn or started asking something:
    *  the same changes `agentbox watch` prints, gathered and told as one. */
   private watch(): void {
-    const project = projectState().sessionId;
     const rows = this.fleet
       .sessions()
-      .filter((s) => s.id !== project)
       .map((s) => ({ ...s, reason: attentionOf(s, this.fleet.blockedReason(s.id)).reason }));
     for (const c of this.changes.next(rows)) if (c.kind === "blocked" || c.kind === "waiting") this.news.push(changeLine(c));
     if (this.news.length && !this.newsTimer) {

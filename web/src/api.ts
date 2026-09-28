@@ -170,9 +170,6 @@ export const api = {
   // sessions
   placement: (input: { provider: ProviderId; big: boolean; model?: string }) =>
     post<Placement>("/api/placement", input),
-  project: (provider?: ProviderId) => post<Session>("/api/project", provider ? { provider } : {}),
-  clearProject: () => post<Session>("/api/project/clear"),
-  compactProject: () => post<null>("/api/project/compact"),
   /** What `--model` can be on this account, newest release first. */
   models: (accountId: string) => get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}`),
   /** Start one later: `when` is plain words ("in 4 hours", "every weekday at 9am"). */
@@ -476,7 +473,6 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               settings: s.settings,
               providers: s.providers,
               warnings: s.warnings,
-              project: s.project,
               schedules: s.schedules,
             },
         );

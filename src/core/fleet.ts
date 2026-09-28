@@ -161,9 +161,6 @@ export interface FleetDeps {
    *  CLI's store like any other; this is what makes each a child of the
    *  session that asked for it rather than a session of its own. */
   poolAgents?: () => ReadonlyMap<string, PoolAgent>;
-  /** The Project session's id. It launches top-level work, so it is never
-   *  recorded as anyone's parent. */
-  projectSession?: () => string | null;
   now?: () => number;
 }
 
@@ -713,10 +710,9 @@ export class Fleet extends EventEmitter {
    *   a session merely resumed from inside another one is not claimed by it.
    *
    * - A subagent-MCP pool agent names the session that asked for it in its
-   *   record, whatever process it runs under — even the Project's.
+   *   record, whatever process it runs under.
    *
-   * Sessions started through the API are given theirs at spawn. The Project
-   * session launches top-level work, so it is otherwise never a parent.
+   * Sessions started through the API are given theirs at spawn.
    */
   private linkParents(since: number): void {
     const leads = new Map<string, string>();
@@ -725,7 +721,6 @@ export class Fleet extends EventEmitter {
       const lead = this.byAgentId.get(`${t.ref.provider}:${t.facts.agentSessionId}`);
       if (lead) for (const team of t.facts.teamsLed) leads.set(team, lead);
     }
-    const project = this.deps.projectSession?.() ?? null;
     for (const rec of listSessionRecords(since)) {
       if (rec.parent) continue;
       const agent = this.poolAgentOf(rec);
@@ -741,7 +736,7 @@ export class Fleet extends EventEmitter {
         this.ancestryChecked.add(`${rec.id}:${proc.pid}`);
         if (rec.startedAt >= proc.startedAt - 5_000) parent = this.sessionAbove(proc.pid);
       }
-      if (parent && parent !== rec.id && parent !== project) updateSessionRecord(rec.id, { parent });
+      if (parent && parent !== rec.id) updateSessionRecord(rec.id, { parent });
     }
   }
 
@@ -875,13 +870,11 @@ export class Fleet extends EventEmitter {
     if (now < this.nextParkCheck) return;
     this.nextParkCheck = now + PARK_CHECK_MS;
     const idleMs = idleMin * 60_000;
-    const project = this.deps.projectSession?.() ?? null;
     const candidates = [...this.views.values()].filter(
       (v) =>
         v.provider === "claude" &&
         v.host === "tmux" &&
         v.tmux &&
-        v.id !== project &&
         (this.liveStatus.get(v.id) === "waiting"
           ? now - v.lastActivityAt >= idleMs
           : this.liveStatus.get(v.id) === "running" && now - v.lastActivityAt >= Math.max(idleMs, STALE_TURN_MS)),
@@ -1164,11 +1157,10 @@ export class Fleet extends EventEmitter {
    * was last seen stays close to the time it died.
    */
   private recordLive(now: number): void {
-    const project = this.deps.projectSession?.() ?? null;
     const entries: LiveEntry[] = [];
     const external = new Set<number>();
     for (const v of this.views.values()) {
-      if (v.host === "none" || v.status === "closed" || v.id === project) continue;
+      if (v.host === "none" || v.status === "closed") continue;
       // A run another session started — a teammate, a `claude -p`, a `codex
       // exec` — comes back with that session or not at all.
       if (v.host === "external" && v.parent) continue;
@@ -1865,7 +1857,7 @@ export class Fleet extends EventEmitter {
       createdAt: now,
       effort: effort ?? null,
       model: model ?? null,
-      parent: parent && parent !== this.deps.projectSession?.() ? parent : null,
+      parent: parent ?? null,
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     insertAssignment({

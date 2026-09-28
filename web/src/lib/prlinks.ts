@@ -35,7 +35,7 @@ export function prRefs(text: string): PrRef[] {
 /**
  * The `https://github.com/owner/repo` a session's numbers refer to: its own
  * repo when that is a registered GitHub one; for a session outside any repo
- * (the Project session, a scratch dir) the repo most sessions work in. A
+ * (a scratch dir) the repo most sessions work in. A
  * session in some other, unregistered repo gets none — linking its numbers
  * to a different project would be wrong every time.
  */
