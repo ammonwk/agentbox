@@ -29,9 +29,18 @@ export interface TranscriptRef {
   provider: ProviderId;
   accountId: string;
   agentSessionId: string;
+  /** Names one session's transcript: its file, or `<file>#<session id>` when
+   *  one file holds many (devin's database). The fleet tracks by this, so it
+   *  must be unique; stat or open it through `transcriptFile`. */
   path: string;
   mtimeMs: number;
   size: number;
+}
+
+/** The file on disk behind a `TranscriptRef.path`. */
+export function transcriptFile(path: string): string {
+  const at = path.indexOf("#");
+  return at === -1 ? path : path.slice(0, at);
 }
 
 /** A running provider process, attributed to an account and a session where

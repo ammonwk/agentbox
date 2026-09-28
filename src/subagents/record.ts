@@ -21,9 +21,9 @@
  * not what is *still* happening, so only a timestamped snapshot can tell a
  * finished agent from one whose process was killed mid-turn.
  *
- * The one reader in the app is the fleet, which needs `meta.json`'s
- * `sessionId` to keep pool agents off the board (`poolSessionIds`).
- * Everything else here is for a person reading the directory.
+ * The one reader in the app is the fleet (`poolAgents`), which shows each
+ * agent as a child of the session that asked for it. Everything else here is
+ * for a person reading the directory.
  */
 
 import {
@@ -115,17 +115,27 @@ function readJson<T>(path: string): T | null {
   }
 }
 
-/** Per directory: the pool key once meta.json has a session id, else when
- *  the agent started (it is re-read until it has one, for a while). */
-const seen = new Map<string, string | number>();
-
-/** Give up on a directory whose CLI never opened a conversation after this. */
-const ID_WINDOW_MS = 10 * 60_000;
-
 /** How the fleet names a pool agent's session. */
 export function poolKey(provider: string, sessionId: string): string {
   return `${provider}:${sessionId}`;
 }
+
+/** What the fleet knows of a pool agent, keyed by `poolKey`. */
+export interface PoolAgent {
+  dir: string;
+  name: string;
+  /** `RecordMeta.owner`: the asking client's session id, or `pid:<n>`. */
+  owner: string;
+  /** The MCP server that owns the agent; its agents die with it. */
+  serverPid: number;
+}
+
+/** Per directory: the agent once meta.json has a session id, else when the
+ *  agent started (it is re-read until it has one, for a while). */
+const seen = new Map<string, { key: string; agent: PoolAgent } | number>();
+
+/** Give up on a directory whose CLI never opened a conversation after this. */
+const ID_WINDOW_MS = 10 * 60_000;
 
 function keyOf(meta: RecordMeta | null): string | null {
   if (meta?.sessionId) return poolKey(meta.provider, meta.sessionId);
@@ -134,38 +144,46 @@ function keyOf(meta: RecordMeta | null): string | null {
 }
 
 /**
- * `poolKey`s of the sessions that belong to pool agents.
+ * Every pool agent that has opened a conversation, by `poolKey`.
  *
  * Their transcripts sit in each CLI's own store beside every other session,
- * and nothing inside one says it came from here, so the fleet asks this before
- * showing a session on the board. Cheap on the fleet's clock: one readdir, and
- * a meta.json is read only until it yields an id.
+ * and nothing inside one says it came from here, so the fleet asks this to
+ * tell a pool agent from a session. Cheap on the fleet's clock: one readdir,
+ * and a meta.json is read only until it yields an id.
  */
-export function poolSessionIds(now = Date.now()): Set<string> {
+export function poolAgents(now = Date.now()): Map<string, PoolAgent> {
   const root = subagentRoot();
   let entries: string[];
   try {
     entries = readdirSync(root);
   } catch {
-    return new Set(); // nothing has ever run
+    return new Map(); // nothing has ever run
   }
-  const ids = new Set<string>();
+  const agents = new Map<string, PoolAgent>();
   for (const name of entries) {
     const dir = join(root, name);
     const known = seen.get(dir);
-    if (typeof known === "string") {
-      ids.add(known);
+    if (typeof known === "object") {
+      agents.set(known.key, known.agent);
       continue;
     }
     if (typeof known === "number" && now - known > ID_WINDOW_MS) continue;
     const meta = readJson<RecordMeta>(join(dir, "meta.json"));
     const key = keyOf(meta);
-    if (key !== null) {
-      seen.set(dir, key);
-      ids.add(key);
+    if (key !== null && meta) {
+      const agent = { dir, name: meta.name, owner: meta.owner, serverPid: meta.pid };
+      seen.set(dir, { key, agent });
+      agents.set(key, agent);
     } else {
       seen.set(dir, meta?.startedAt ?? now);
     }
   }
-  return ids;
+  return agents;
+}
+
+/** What the agent's owner last published: mid-turn or not, and whether it
+ *  holds a finished turn its caller has not collected. Null when unreadable. */
+export function poolState(agent: PoolAgent): { running: boolean; answerWaiting: boolean } | null {
+  const snap = readJson<{ snapshot?: Pick<AgentSnapshot, "state" | "uncollected"> }>(join(agent.dir, "state.json"))?.snapshot;
+  return snap ? { running: snap.state === "running", answerWaiting: snap.uncollected > 0 } : null;
 }

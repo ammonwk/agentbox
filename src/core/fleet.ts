@@ -48,12 +48,13 @@ import {
 } from "./db";
 import { createWorktree, run, worktreeForBranch } from "./git";
 import { attachArgv, tmuxName, type NewSession, type PaneInfo } from "./tmux";
-import type {
-  LiveProcess,
-  ProviderAdapter,
-  TranscriptFacts,
-  TranscriptReader,
-  TranscriptRef,
+import {
+  transcriptFile,
+  type LiveProcess,
+  type ProviderAdapter,
+  type TranscriptFacts,
+  type TranscriptReader,
+  type TranscriptRef,
 } from "./providers/types";
 import { argvOf, environOf, isAlive, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
 import { clockHz, describe, isToolShell, readProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
@@ -72,7 +73,7 @@ import {
   WakeScan,
 } from "./park";
 import { read as readLive } from "../subagents/live";
-import { poolKey } from "../subagents/record";
+import { poolKey, poolState, type PoolAgent } from "../subagents/record";
 import { carryEnv, type Launch } from "./launch";
 import { weeklyWindow } from "./balancer";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
@@ -133,10 +134,10 @@ export interface FleetDeps {
   adapters: ProviderAdapter[];
   runtime: Runtime;
   usage: UsageSource;
-  /** `poolKey`s of the subagent MCP's agents. Their transcripts land in
-   *  their CLI's store like any other, but they are calls, not sessions, and
-   *  a fan-out would bury the board. */
-  poolSessions?: () => ReadonlySet<string>;
+  /** The subagent MCP's agents by `poolKey`. Their transcripts land in their
+   *  CLI's store like any other; this is what makes each a child of the
+   *  session that asked for it rather than a session of its own. */
+  poolAgents?: () => ReadonlyMap<string, PoolAgent>;
   /** The Project session's id. It launches top-level work, so it is never
    *  recorded as anyone's parent. */
   projectSession?: () => string | null;
@@ -191,9 +192,13 @@ export class Fleet extends EventEmitter {
 
   /** By transcript path. */
   private tracked = new Map<string, Tracked>();
-  /** Transcripts that turned out to be subagents or pool agents; never sessions. */
+  /** Transcripts that turned out to be in-process subagents; never sessions. */
   private ignored = new Set<string>();
-  private pool: ReadonlySet<string> = new Set();
+  private pool: ReadonlyMap<string, PoolAgent> = new Map();
+  /** What each pool agent's MCP server says of it, while that server runs it. */
+  private poolStates = new Map<string, NonNullable<ReturnType<typeof poolState>>>();
+  /** Session ids on the list (not closed), as of this pass. */
+  private openIds = new Set<string>();
   /** `${provider}:${agentSessionId}` → session id. */
   private byAgentId = new Map<string, string>();
   private views = new Map<string, Session>();
@@ -345,12 +350,12 @@ export class Fleet extends EventEmitter {
           for (const ref of refs) this.track(adapter, ref);
         }
       }
-      // A pool agent's id reaches its record a moment after its transcript
-      // appears, so one already tracked is dropped here once it is known.
-      this.pool = this.deps.poolSessions?.() ?? this.pool;
-      for (const [path, t] of this.tracked) {
-        if (t.facts && this.isPoolAgent(t.ref.provider, t.facts.agentSessionId)) this.ignored.add(path);
-      }
+      this.pool = this.deps.poolAgents?.() ?? this.pool;
+    }
+    this.poolStates.clear();
+    for (const [key, a] of this.pool) {
+      const state = this.live.has(key) && isAlive(a.serverPid) ? poolState(a) : null;
+      if (state) this.poolStates.set(key, state);
     }
 
     // A live session whose transcript is older than the window (resumed
@@ -366,7 +371,7 @@ export class Fleet extends EventEmitter {
     // And so is every open agentbox session, so its board row has facts.
     for (const rec of listSessionRecords(since)) {
       if (!rec.transcriptPath || this.tracked.has(rec.transcriptPath) || !rec.accountId) continue;
-      if (!existsSync(rec.transcriptPath)) continue;
+      if (!existsSync(transcriptFile(rec.transcriptPath))) continue;
       const account = accounts.find((a) => a.id === rec.accountId);
       if (!account || !rec.agentSessionId) continue;
       const ref = await this.adapter(rec.provider).findTranscript(account, rec.agentSessionId).catch(() => null);
@@ -378,7 +383,7 @@ export class Fleet extends EventEmitter {
     for (const [path, t] of this.tracked) {
       if (this.ignored.has(path)) continue;
       try {
-        const st = statSync(path);
+        const st = statSync(transcriptFile(path));
         // A live session is re-read every tick even when its own file has not
         // moved: its subagents write elsewhere, and their tokens are its tokens.
         const live = this.live.has(`${t.ref.provider}:${t.ref.agentSessionId}`);
@@ -390,7 +395,7 @@ export class Fleet extends EventEmitter {
       try {
         const r = await t.reader.refresh();
         t.facts = r.facts;
-        if (r.facts.isSubagent || this.isPoolAgent(t.ref.provider, r.facts.agentSessionId)) {
+        if (r.facts.isSubagent) {
           this.ignored.add(path);
           continue;
         }
@@ -489,8 +494,23 @@ export class Fleet extends EventEmitter {
     this.tracked.set(ref.path, { ref: { ...ref, mtimeMs: -1 }, reader: adapter.reader(ref), facts: null, hitsSeen: -1, lastUsageAt: 0 });
   }
 
-  private isPoolAgent(provider: ProviderId, agentSessionId: string): boolean {
-    return this.pool.has(poolKey(provider, agentSessionId));
+  private poolAgentOf(rec: Pick<SessionRecord, "provider" | "agentSessionId">): PoolAgent | undefined {
+    return rec.agentSessionId ? this.pool.get(poolKey(rec.provider, rec.agentSessionId)) : undefined;
+  }
+
+  /** The session a pool agent's `owner` names: a client's `--session-id`, or
+   *  the pid of a client that had none. */
+  private sessionOfOwner(owner: string): string | null {
+    const pid = /^pid:(\d+)$/.exec(owner)?.[1];
+    if (pid) {
+      const p = this.livePids.get(Number(pid));
+      return p?.agentSessionId ? (this.byAgentId.get(`${p.provider}:${p.agentSessionId}`) ?? null) : null;
+    }
+    for (const provider of this.adapters.keys()) {
+      const id = this.byAgentId.get(`${provider}:${owner}`) ?? findSessionRecord(provider, owner)?.id;
+      if (id) return id;
+    }
+    return null;
   }
 
   private hasTranscriptFor(provider: ProviderId, agentSessionId: string): boolean {
@@ -521,7 +541,7 @@ export class Fleet extends EventEmitter {
         let best: Tracked | null = null;
         for (const t of this.tracked.values()) {
           const f = t.facts;
-          if (!f || f.isSubagent || t.ref.provider !== rec.provider) continue;
+          if (!f || f.isSubagent || t.ref.provider !== rec.provider || this.pool.has(poolKey(rec.provider, f.agentSessionId))) continue;
           // Devin records no account per session, so its adapter lists every
           // transcript under the default account; a session we started on
           // another account still matches there.
@@ -637,8 +657,11 @@ export class Fleet extends EventEmitter {
    *   while it runs, and only when its conversation began under that process:
    *   a session merely resumed from inside another one is not claimed by it.
    *
+   * - A subagent-MCP pool agent names the session that asked for it in its
+   *   record, whatever process it runs under — even the Project's.
+   *
    * Sessions started through the API are given theirs at spawn. The Project
-   * session launches top-level work, so it is never a parent.
+   * session launches top-level work, so it is otherwise never a parent.
    */
   private linkParents(since: number): void {
     const leads = new Map<string, string>();
@@ -650,6 +673,12 @@ export class Fleet extends EventEmitter {
     const project = this.deps.projectSession?.() ?? null;
     for (const rec of listSessionRecords(since)) {
       if (rec.parent) continue;
+      const agent = this.poolAgentOf(rec);
+      if (agent) {
+        const owner = this.sessionOfOwner(agent.owner);
+        if (owner && owner !== rec.id) updateSessionRecord(rec.id, { parent: owner });
+        continue;
+      }
       const team = rec.transcriptPath ? this.tracked.get(rec.transcriptPath)?.facts?.team : null;
       let parent = team ? leads.get(team) ?? null : null;
       const proc = rec.agentSessionId ? this.live.get(`${rec.provider}:${rec.agentSessionId}`) : undefined;
@@ -840,7 +869,7 @@ export class Fleet extends EventEmitter {
             continue;
           }
           const rec = getSessionRecord(v.id);
-          if (!rec?.agentSessionId || !rec.transcriptPath || !existsSync(rec.transcriptPath)) {
+          if (!rec?.agentSessionId || !rec.transcriptPath || !existsSync(transcriptFile(rec.transcriptPath))) {
             holds.set(v.id, "its transcript is missing, so it could not be resumed");
             continue;
           }
@@ -1029,6 +1058,7 @@ export class Fleet extends EventEmitter {
 
   private rebuildViews(since: number, now: number): void {
     const records = listSessionRecords(since);
+    this.openIds = new Set(records.filter((r) => !r.archivedAt).map((r) => r.id));
     const seen = new Set<string>();
     let dirty = false;
     for (const rec of records) {
@@ -1067,6 +1097,8 @@ export class Fleet extends EventEmitter {
 
     const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
     const proc = rec.agentSessionId ? this.live.get(`${rec.provider}:${rec.agentSessionId}`) : undefined;
+    const agent = this.poolAgentOf(rec);
+    const pooled = agent ? this.poolStates.get(poolKey(rec.provider, rec.agentSessionId!)) : undefined;
     let host: SessionHost = "none";
     let pid: number | null = null;
     if (pane && !pane.dead) {
@@ -1074,7 +1106,8 @@ export class Fleet extends EventEmitter {
       pid = pane.pid;
     } else if (proc && isAlive(proc.pid) && !(rec.parkedAt && proc.startedAt <= rec.parkedAt)) {
       // (A process older than the parking is the parked one, still exiting.)
-      host = "external";
+      // One its MCP server outlived is nobody's, so it can be adopted.
+      host = agent && isAlive(agent.serverPid) ? "subagent" : "external";
       pid = proc.pid;
     }
 
@@ -1083,7 +1116,8 @@ export class Fleet extends EventEmitter {
     // the next message resumes it.
     if (host === "none") status = rec.parkedAt ? "waiting" : "stopped";
     else {
-      const busy = proc?.busy;
+      // A pool agent's server knows whether its turn is open; its transcript can lag.
+      const busy = host === "subagent" ? pooled?.running : proc?.busy;
       status = (busy ?? f?.turnOpen) ? "running" : "waiting";
       // Claude says so itself while a permission dialog is up, which is the
       // only way to know it for a session in some other terminal.
@@ -1128,6 +1162,12 @@ export class Fleet extends EventEmitter {
     const live = status;
     this.liveStatus.set(rec.id, live);
     if (rec.archivedAt) status = "closed";
+    // A stopped pool agent was a call in its caller's run: listed while that
+    // run goes on, then history (See closed, resumable), never stranded at
+    // the root of the board or piled under a caller that has stopped.
+    else if (agent && host === "none" && !(rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
+      status = "closed";
+    }
 
     const cwd = f?.cwd || rec.cwd;
     const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;
@@ -1138,7 +1178,7 @@ export class Fleet extends EventEmitter {
     const cold =
       this.movable.has(rec.provider) &&
       (live === "waiting" || live === "stopped") &&
-      host !== "external" &&
+      (host === "tmux" || host === "none") &&
       now - lastActivityAt > this.coldAfterMs;
     return {
       id: rec.id,
@@ -1147,7 +1187,7 @@ export class Fleet extends EventEmitter {
       accountId: rec.accountId ? this.ownerOf(rec.accountId) : null,
       status,
       host,
-      title: rec.label || f?.title || headline(f?.firstPrompt) || basename(cwd) || rec.provider,
+      title: rec.label || agent?.name || f?.title || headline(f?.firstPrompt) || basename(cwd) || rec.provider,
       label: rec.label,
       cwd,
       repoRoot: repoRootOf(cwd),
@@ -1171,6 +1211,9 @@ export class Fleet extends EventEmitter {
       question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,
       origin: rec.origin,
       parent: rec.parent ?? null,
+      subagent: agent
+        ? { name: agent.name, answerWaiting: host === "subagent" && !!pooled?.answerWaiting }
+        : null,
       pid,
       tmux: host === "tmux" || (pane && pane.dead) ? rec.tmux : null,
       transcriptPath: rec.transcriptPath,
@@ -1304,10 +1347,10 @@ export class Fleet extends EventEmitter {
     for (const s of this.views.values()) {
       // A closed session with a process still alive can still spend.
       if (!s.accountId || (s.status === "closed" && s.host === "none")) continue;
-      // A teammate, or a run another session started: the balancer never
+      // A teammate, a pool agent, or a run another session started: the balancer never
       // placed it and its parent's claim already counts it. What it really
       // spends shows in the account's measured pace.
-      if (s.parent && s.origin !== "agentbox") continue;
+      if ((s.parent && s.origin !== "agentbox") || s.subagent) continue;
       inputs.push({
         sessionId: s.id,
         accountId: s.accountId,
@@ -1508,6 +1551,7 @@ export class Fleet extends EventEmitter {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
+    if (view.host === "subagent") throw this.callersAgent(view);
     if (view.host !== "none" || this.paneAlive(rec.tmux)) throw new FleetError(409, `session is already running (${view.host === "none" ? "tmux" : view.host})`);
     // Its teammates were stopped with it and do not come back; say so, or it
     // will message them and wait for answers that never come.
@@ -1562,7 +1606,7 @@ export class Fleet extends EventEmitter {
     prompt?: string,
   ): Promise<void> {
     const adapter = this.adapter(rec.provider);
-    if (target && (!rec.transcriptPath || !existsSync(rec.transcriptPath))) {
+    if (target && (!rec.transcriptPath || !existsSync(transcriptFile(rec.transcriptPath)))) {
       throw new FleetError(409, "its transcript is missing, so it cannot be moved to another account");
     }
     if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
@@ -1643,6 +1687,7 @@ export class Fleet extends EventEmitter {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
+    if (view.host === "subagent") throw this.callersAgent(view);
     if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
     if (view.status === "running") throw new FleetError(409, "it is mid-turn; interrupt it first");
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
@@ -1697,13 +1742,14 @@ export class Fleet extends EventEmitter {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
+    if (view.host === "subagent") throw this.callersAgent(view);
     if (view.host !== "external" || !view.pid) throw new FleetError(409, "only a session running in another terminal can be adopted");
     if (!rec.agentSessionId) throw new FleetError(409, "cannot tell which conversation that process is");
     const account = rec.accountId ? getAccount(rec.accountId) : null;
     if (!account) throw new FleetError(409, "this session's account is not set up in agentbox");
     const cwd = this.resumeCwd(rec);
     if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
-    if (!rec.transcriptPath || !existsSync(rec.transcriptPath)) throw new FleetError(409, "its transcript is missing, so a resume would start empty");
+    if (!rec.transcriptPath || !existsSync(transcriptFile(rec.transcriptPath))) throw new FleetError(409, "its transcript is missing, so a resume would start empty");
 
     const pid = view.pid;
     // Read how it was launched before it is gone: the resume keeps its flags
@@ -1758,6 +1804,7 @@ export class Fleet extends EventEmitter {
       }
       throw new FleetError(409, "not running — resume it first");
     }
+    if (s.host === "subagent") throw this.callersAgent(s);
     if (s.host !== "tmux" || !s.tmux) {
       throw new FleetError(409, "running in another terminal — adopt it to type here");
     }
@@ -1807,6 +1854,7 @@ export class Fleet extends EventEmitter {
   /** What the session's terminal shows now, as plain text. */
   screen(id: string): string {
     const s = this.get(id);
+    if (s.host === "subagent") throw this.callersAgent(s);
     if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, s.host === "external" ? "running in another terminal; its screen is not ours to read" : "not running");
     return this.deps.runtime.capture(s.tmux) ?? "";
   }
@@ -1879,6 +1927,7 @@ export class Fleet extends EventEmitter {
   askBtw(id: string, question: string): Btw {
     const s = this.get(id);
     if (s.provider !== "claude") throw new FleetError(409, `/btw is Claude's; this is a ${s.provider} session`);
+    if (s.host === "subagent") throw this.callersAgent(s);
     if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, s.host === "external" ? "running in another terminal — adopt it to ask here" : "not running — resume it first");
     if (s.status === "blocked") throw new FleetError(409, "it is showing a prompt; answer that first");
     const q = question.trim();
@@ -1958,8 +2007,10 @@ export class Fleet extends EventEmitter {
   }
 
   async stopSession(id: string): Promise<void> {
-    this.touched.set(id, this.now());
     const s = this.get(id);
+    // Killing it under its MCP server would look to its caller like a crash.
+    if (s.host === "subagent") throw this.callersAgent(s);
+    this.touched.set(id, this.now());
     // Stopped by you, so shown as stopped rather than as waiting on you.
     updateSessionRecord(id, { parkedAt: null, parkedMates: null });
     if (s.host === "tmux" && s.tmux) this.deps.runtime.killSession(s.tmux);
@@ -1971,6 +2022,16 @@ export class Fleet extends EventEmitter {
       }
     } else if (s.tmux) this.deps.runtime.killSession(s.tmux);
     await this.tick();
+  }
+
+  /** Why a running pool agent is not ours to drive: its caller's MCP server
+   *  holds its conversation open and would take a stop for a crash. */
+  private callersAgent(s: Session): FleetError {
+    const caller = s.parent ? `“${this.views.get(s.parent)?.title ?? s.parent}”` : "another session";
+    return new FleetError(
+      409,
+      `a subagent run by ${caller}: steer or stop it through that session's subagent tools; it can be resumed here once it has stopped`,
+    );
   }
 
   /**

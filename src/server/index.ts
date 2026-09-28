@@ -49,7 +49,7 @@ import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static"
 import { adapters } from "../core/providers";
 import { AGENT_SENT_MARK } from "../core/providers/types";
 import { AccountError, AccountsService, owners } from "../core/accounts";
-import { poolSessionIds } from "../subagents/record";
+import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import type {
@@ -87,7 +87,7 @@ export const fleet = new Fleet({
     authOf: (id) => accounts.authState(id),
     ingestRollout: (id, reading) => void accounts.ingestRollout(id, reading),
   },
-  poolSessions: () => poolSessionIds(),
+  poolAgents: () => poolAgents(),
   projectSession: () => projectState().sessionId,
 });
 setMetricsSource(() => fleet.sessions());

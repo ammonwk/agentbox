@@ -5,6 +5,7 @@ import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
+import { hrefOf } from "../../route";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { echoSent } from "./echo";
@@ -14,11 +15,13 @@ import { QuestionCard } from "./Question";
 export type ComposerMode =
   | { kind: "send" }
   | { kind: "resume" }
-  | { kind: "adopt" };
+  | { kind: "adopt" }
+  | { kind: "subagent" };
 
 export function composerMode(s: Pick<Session, "host" | "status">): ComposerMode {
   if (s.host === "tmux") return { kind: "send" };
   if (s.host === "external") return { kind: "adopt" };
+  if (s.host === "subagent") return { kind: "subagent" };
   return { kind: "resume" };
 }
 
@@ -109,6 +112,19 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
         </div>
       ) : null}
 
+      {mode.kind === "subagent" ? (
+        <div className="cmp-note">
+          <Icon.external size={14} />
+          <span>
+            {session.subagent?.answerWaiting ? "Finished, and its answer is waiting to be collected. " : null}
+            A subagent its{" "}
+            {session.parent ? <a href={hrefOf({ page: "session", id: session.parent, tab: "terminal" })}>parent session</a> : "parent session"} runs
+            through its subagent MCP, so it is read-only here: steer or stop it through the parent. It stops when the parent does,
+            and can be resumed here after that.
+          </span>
+        </div>
+      ) : null}
+
       {session.question && mode.kind === "send" ? (
         <QuestionCard key={session.question.id} sessionId={session.id} ask={session.question} />
       ) : session.status === "blocked" && mode.kind === "send" ? (
@@ -132,7 +148,7 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
 
       {session.limitHit ? <LimitBanner session={session} accounts={accounts} claimIdleMin={claimIdleMin} /> : null}
 
-      {mode.kind !== "adopt" ? (
+      {mode.kind === "send" || mode.kind === "resume" ? (
       <div className="cmp-row">
         <label className="sr-only" htmlFor={`cmp-${session.id}`}>
           {mode.kind === "resume" ? "Prompt to resume with" : "Message to the agent"}

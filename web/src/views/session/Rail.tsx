@@ -260,7 +260,7 @@ function Row({
         <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
       </span>
       <RowLoad id={s.id} />
-      <CloseX s={s} onClose={onClose} />
+      {s.host === "subagent" ? null : <CloseX s={s} onClose={onClose} />}
     </a>
   );
 }
@@ -335,9 +335,9 @@ function CloseFailure() {
   );
 }
 
-/** What it last said, or what it is asking. */
+/** What it last said, what it is asking, or that its answer is waiting. */
 function snippetOf(s: SessionRow): string {
-  const said = s.status === "blocked" ? s.attention.reason : s.lastMessage ?? s.lastPrompt ?? s.firstPrompt;
+  const said = s.status === "blocked" || s.subagent?.answerWaiting ? s.attention.reason : s.lastMessage ?? s.lastPrompt ?? s.firstPrompt;
   return said ? said.replace(/\s+/g, " ").trim() : "";
 }
 

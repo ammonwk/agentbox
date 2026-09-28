@@ -215,6 +215,9 @@ export type SessionHost =
   | "tmux"
   /** A process we did not start, in some other terminal: read-only until adopted. */
   | "external"
+  /** A pool agent of another session's subagent MCP: read-only, and it stops
+   *  when that session does. Resumable here only once it has stopped. */
+  | "subagent"
   /** No process. */
   | "none";
 
@@ -285,6 +288,10 @@ export interface Session {
    * is closed or gone; the board shows such a child at the root.
    */
   parent: string | null;
+  /** Set when this is an agent a session started through the subagent MCP
+   *  (its `parent`); `answerWaiting` while that session has not collected a
+   *  finished turn. */
+  subagent: { name: string; answerWaiting: boolean } | null;
 
   pid: number | null;
   /** tmux session name, when host is "tmux". */

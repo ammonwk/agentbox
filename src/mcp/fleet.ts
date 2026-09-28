@@ -40,7 +40,7 @@ const clip = (s: string | null | undefined, n: number): string => {
 /** A session in three lines: who and where, what it was asked, what it said. */
 export function brief(s: Session & { attention?: { reason: string } }, accountLabel: string, now: number): string {
   const ctx = s.contextUsed && s.contextLimit ? ` ctx ${Math.round((s.contextUsed / s.contextLimit) * 100)}%` : "";
-  const where = s.host === "tmux" ? "" : s.host === "external" ? " (other terminal)" : "";
+  const where = s.host === "tmux" ? "" : s.host === "external" ? " (other terminal)" : s.host === "subagent" ? " (subagent)" : "";
   const place = [s.repoRoot ? s.repoRoot.split("/").pop() : s.cwd, s.branch].filter(Boolean).join("@");
   const lines = [
     `[${s.id}] ${s.status}${where} · ${s.provider}/${accountLabel}${s.big ? " · BIG" : ""} · ${place} · ${ago(s.lastActivityAt, now)} ago${ctx}`,

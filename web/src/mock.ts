@@ -298,6 +298,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     question: null,
     origin: "agentbox",
     parent: null,
+    subagent: null,
     pid: live ? 40000 + Math.floor(Math.random() * 20000) : null,
     tmux: p.host === "tmux" ? `ab-${p.id}` : null,
     transcriptPath: null,
@@ -466,11 +467,25 @@ const sessions: MockSession[] = [
     title: "Review the tie-break change", cwd: `${AB}/.worktrees/balancer-ties`, repoRoot: `${AB}/.worktrees/balancer-ties`,
     lastMessage: "No findings.", lastActivityAt: T0 - 40 * M,
   }),
+  // Agents 7fk2 runs through its subagent MCP: one working, one done and not yet collected.
+  sess({
+    id: "p5c6", provider: "omp", accountId: null, status: "running", host: "subagent", origin: "external", parent: "7fk2",
+    subagent: { name: "calibration-audit", answerWaiting: false }, title: "calibration-audit", cwd: `${AB}/.worktrees/balancer-ties`,
+    lastMessage: "Replaying the last week of placements against the new tie band.", lastActivityAt: T0 - 1 * M,
+  }),
+  sess({
+    id: "p7d8", provider: "devin", accountId: null, status: "waiting", host: "subagent", origin: "external", parent: "7fk2",
+    subagent: { name: "docs-sweep", answerWaiting: true }, title: "docs-sweep", cwd: `${AB}/.worktrees/balancer-ties`,
+    lastMessage: "docs/v2.md now describes the tie band; report ready.", lastActivityAt: T0 - 12 * M,
+  }),
 ];
 
 const REASON: Record<AttentionKind, (s: Session) => string> = {
   blocked: (s) => (s.question ? "Asking a question" : "Waiting on a permission prompt"),
-  waiting: (s) => (s.host === "external" ? "Turn over, in another terminal" : "Turn over — your move"),
+  waiting: (s) =>
+    s.host === "subagent"
+      ? s.subagent?.answerWaiting ? "Finished — its answer waits for its caller" : "Idle — its caller's turn"
+      : s.host === "external" ? "Turn over, in another terminal" : "Turn over — your move",
   running: () => "Working",
   stopped: () => "No process — resumable",
   closed: () => "Closed",

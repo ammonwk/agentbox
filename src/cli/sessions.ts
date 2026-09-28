@@ -168,7 +168,7 @@ export async function ls(api: Api, args: string[]): Promise<number> {
       console.log(x.id);
       continue;
     }
-    const host = x.host === "tmux" ? "box" : x.host === "external" ? "ext" : "-";
+    const host = x.host === "tmux" ? "box" : x.host === "external" ? "ext" : x.host === "subagent" ? "sub" : "-";
     const where = `${repoName(x)}${x.branch ? `@${x.branch}` : ""}`;
     console.log(
       [x.id, x.status.padEnd(8), ageOf(now - x.lastActivityAt).padStart(4), host.padEnd(3), x.provider.padEnd(6), where.slice(0, 40).padEnd(40), (depth ? `${"  ".repeat(depth - 1)}└ ` : "") + (x.label ?? x.title).replace(/\s+/g, " ").slice(0, 90)].join("  "),

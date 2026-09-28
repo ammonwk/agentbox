@@ -11,7 +11,7 @@ import {
   StatusPill,
 } from "../../bits";
 import { Button, Confirm, Empty, Icon } from "../../components";
-import { filterSessions, neighbourId, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
+import { filterSessions, neighbourId, runningSubagents, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
@@ -117,9 +117,12 @@ export function SessionView({
     else location.hash = hrefOf({ page: "sessions" });
   };
 
+  // Closing one that runs subagents stops them mid-task, so that is asked first.
+  const [closingParent, setClosingParent] = useState<SessionRow | null>(null);
+  const close = (s: SessionRow) => (runningSubagents(s, state.sessions).length > 0 ? setClosingParent(s) : closeRow(s));
   // Closing the open one opens the row that takes its place: the one below
   // it, or the one above at the bottom of the list.
-  const close = (s: SessionRow) => {
+  const closeRow = (s: SessionRow) => {
     const i = ordered.findIndex((x) => x.id === s.id);
     const next = i === -1 ? null : (ordered[i + 1] ?? ordered[i - 1] ?? null);
     closeNow(s.id, titleOf(s));
@@ -201,7 +204,35 @@ export function SessionView({
           )}
         </div>
       )}
+      {closingParent ? (
+        <Confirm
+          title={`Close “${titleOf(closingParent)}”?`}
+          confirmLabel="Close"
+          body={
+            <p>
+              {closingParent.status === "running" ? "It is mid-turn, and it" : "It"} runs{" "}
+              <SubagentNames session={closingParent} sessions={state.sessions} />. Closing stops the session and every one of them,
+              mid-task; answers they have not handed back are lost. The conversations are kept, and See closed finds them.
+            </p>
+          }
+          onCancel={() => setClosingParent(null)}
+          onConfirm={() => {
+            closeRow(closingParent);
+            setClosingParent(null);
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/** "3 subagents (a, b, c)" — what stops with `session`. */
+function SubagentNames({ session, sessions }: { session: SessionRow; sessions: AppState["sessions"] }) {
+  const subs = runningSubagents(session, sessions);
+  return (
+    <>
+      {subs.length === 1 ? "a subagent" : `${subs.length} subagents`} ({subs.map((c) => c.subagent?.name ?? c.title).join(", ")})
+    </>
   );
 }
 
@@ -297,6 +328,7 @@ function Detail({
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const close = () => onClose(session);
+  const subagents = runningSubagents(session, state.sessions);
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
   // openPrs (src/core/prs.ts) matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
@@ -319,7 +351,7 @@ function Detail({
           <CopyButton text={session.id} label={session.id} className="sx-id" />
           <StatusPill status={session.status} />
           {/* tmux is the normal case; only say where it runs when it is not ours. */}
-          {session.host === "external" ? <HostBadge host={session.host} /> : null}
+          {session.host === "external" || session.host === "subagent" ? <HostBadge host={session.host} /> : null}
 
           <div className="sx-header-actions">
             {isProject ? (
@@ -376,12 +408,12 @@ function Detail({
                 Resume
               </Button>
             ) : null}
-            {session.host !== "none" ? (
+            {session.host === "tmux" || session.host === "external" ? (
               <Button size="sm" icon={Icon.stop} disabled={busy} onClick={() => setConfirmStop(true)}>
                 Stop
               </Button>
             ) : null}
-            {isProject ? null : session.status === "closed" ? (
+            {isProject || session.host === "subagent" ? null : session.status === "closed" ? (
               <Button
                 size="sm"
                 variant="ghost"
@@ -402,7 +434,7 @@ function Detail({
                 icon={Icon.x}
                 disabled={busy}
                 title="Stop it and take it off the list. The transcript and worktree stay; See closed finds it, and it can be resumed."
-                onClick={() => (session.status === "running" ? setConfirmClose(true) : void close())}
+                onClick={() => (session.status === "running" && subagents.length === 0 ? setConfirmClose(true) : void close())}
               >
                 Close
               </Button>
@@ -553,6 +585,13 @@ function Detail({
               Ends the {PROVIDER_LABEL[session.provider]} process
               {session.host === "external" ? " running in your other terminal" : " and its tmux session"}. The conversation is kept and Resume
               continues it — on the same account while its cache is warm, on whichever has room once it has been idle an hour.
+              {subagents.length > 0 ? (
+                <>
+                  {" "}
+                  It also stops <SubagentNames session={session} sessions={state.sessions} /> mid-task; answers they have not handed
+                  back are lost.
+                </>
+              ) : null}
             </p>
           }
           onCancel={() => setConfirmStop(false)}
@@ -583,6 +622,22 @@ function TranscriptInstead({
   onResume: () => void;
 }) {
   const external = session.host === "external";
+  if (session.host === "subagent") {
+    return (
+      <div className="term-transcript">
+        <div className="term-transcript-bar">
+          <Icon.terminal size={13} />
+          <span>
+            Run by its parent session&apos;s subagent MCP, so there is no terminal here — this is its transcript. It can be resumed here
+            once it stops.
+          </span>
+        </div>
+        <Suspense fallback={<Empty title="Loading the transcript…" />}>
+          <Timeline session={session} />
+        </Suspense>
+      </div>
+    );
+  }
   return (
     <div className="term-transcript">
       <div className="term-transcript-bar">

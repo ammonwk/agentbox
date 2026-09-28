@@ -456,7 +456,7 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
       provider: "devin",
       accountId: account.id,
       agentSessionId: id,
-      path: js ? json : p.db,
+      path: js ? json : `${p.db}#${id}`,
       mtimeMs,
       size: js?.size ?? 0,
     };

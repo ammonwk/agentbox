@@ -167,11 +167,14 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
 - \`ls\` and \`watch\` leave out the Project session (labelled "Project"), so
   piping their output into close or stop cannot take it down.
 - A session another one started (a teammate, a \`codex exec\` run from a
-  Bash tool) is listed right after its parent with its title indented \`└\`,
-  and \`show\` names its parent and children. Every verb acts on exactly the
-  ids it is given: closing or stopping a parent leaves its children alone,
-  so list them (\`ls | grep\`, or \`ls --json | jq\` on \`.parent\`) to act on
-  them too. What you start with \`agentbox claude|codex --detach\` is
+  Bash tool, an agent of its subagent MCP) is listed right after its parent
+  with its title indented \`└\`, and \`show\` names its parent and children.
+  Every verb acts on exactly the ids it is given: closing or stopping a parent
+  leaves its children alone, so list them (\`ls | grep\`, or \`ls --json | jq\`
+  on \`.parent\`) to act on them too. The exception is subagents (host
+  \`sub\`): the parent runs them, so stopping or closing it stops every one
+  mid-task, and none can be stopped, sent to or adopted on its own. Ask before
+  stopping a session that has running subagents. What you start with \`agentbox claude|codex --detach\` is
   top-level, never your child.
 - Prefer reading \`show\` and the tail of \`log\` over whole transcripts; they
   are long.

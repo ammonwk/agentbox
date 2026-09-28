@@ -174,17 +174,18 @@ export function StatusDot({ status, shape, repo }: { status: SessionStatus; shap
   );
 }
 
-const HOST_LABEL: Record<SessionHost, string> = { tmux: "tmux", external: "external", none: "no process" };
+const HOST_LABEL: Record<SessionHost, string> = { tmux: "tmux", external: "external", subagent: "subagent", none: "no process" };
 const HOST_TITLE: Record<SessionHost, string> = {
   tmux: "In agentbox's tmux — attach from a terminal or type here",
   external: "Running in a terminal agentbox did not start — read-only until adopted",
+  subagent: "Run by its parent session's subagent MCP — read-only, and it stops when the parent does",
   none: "No live process",
 };
 
 export function HostBadge({ host }: { host: SessionHost }) {
   return (
     <span className={`host host-${host}`} title={HOST_TITLE[host]}>
-      {host === "tmux" ? <Icon.terminal size={12} /> : host === "external" ? <Icon.external size={12} /> : null}
+      {host === "tmux" ? <Icon.terminal size={12} /> : host === "external" || host === "subagent" ? <Icon.external size={12} /> : null}
       {HOST_LABEL[host]}
     </span>
   );

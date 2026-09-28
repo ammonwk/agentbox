@@ -82,6 +82,11 @@ export function sortTime(s: Pick<Session, "lastPromptAt" | "lastActivityAt">, so
   return sort === "all" ? s.lastActivityAt : s.lastPromptAt;
 }
 
+/** The subagents `s` runs right now: they stop, mid-task, when it does. */
+export function runningSubagents<T extends Pick<Session, "parent" | "host">>(s: Pick<Session, "id">, sessions: readonly T[]): T[] {
+  return sessions.filter((c) => c.parent === s.id && c.host === "subagent");
+}
+
 /** A row placed in the tree: how deep it sits under the session that started
  *  it, and how many sessions it started are here under it. */
 export type Nested<T> = T & { depth: number; kids: number };

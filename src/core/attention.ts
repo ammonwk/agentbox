@@ -16,7 +16,14 @@ export function attentionOf(s: Session, blockedReason: string | null = null): At
       return {
         kind: "waiting",
         rank: RANK.waiting,
-        reason: s.host === "external" ? "your turn (in another terminal)" : "your turn",
+        reason:
+          s.host === "subagent"
+            ? s.subagent?.answerWaiting
+              ? "finished; its answer waits for its caller to collect"
+              : "idle; its caller's turn"
+            : s.host === "external"
+              ? "your turn (in another terminal)"
+              : "your turn",
       };
     case "running":
       return { kind: "running", rank: RANK.running, reason: "working" };
