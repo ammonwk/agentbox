@@ -337,7 +337,8 @@ function CloseFailure() {
 
 /** What it last said, what it is asking, or that its answer is waiting. */
 function snippetOf(s: SessionRow): string {
-  const said = s.status === "blocked" || s.subagent?.answerWaiting ? s.attention.reason : s.lastMessage ?? s.lastPrompt ?? s.firstPrompt;
+  const said =
+    s.status === "blocked" || (s.status === "waiting" && s.subagent?.answerWaiting) ? s.attention.reason : s.lastMessage ?? s.lastPrompt ?? s.firstPrompt;
   return said ? said.replace(/\s+/g, " ").trim() : "";
 }
 

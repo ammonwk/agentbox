@@ -116,7 +116,11 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
         <div className="cmp-note">
           <Icon.external size={14} />
           <span>
-            {session.subagent?.answerWaiting ? "Finished, and its answer is waiting to be collected. " : null}
+            {session.subagent?.answerWaiting
+              ? session.status === "running"
+                ? "An earlier answer is still waiting to be collected. "
+                : "Finished, and its answer is waiting to be collected. "
+              : null}
             A subagent its{" "}
             {session.parent ? <a href={hrefOf({ page: "session", id: session.parent, tab: "terminal" })}>parent session</a> : "parent session"} runs
             through its subagent MCP, so it is read-only here: steer or stop it through the parent. It stops when the parent does,

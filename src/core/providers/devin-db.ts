@@ -7,8 +7,11 @@
  *
  * Tables used (devin 3000.11):
  *   sessions(id, working_directory, model, agent_mode, created_at,
- *            last_activity_at, title, hidden, …)   — times in epoch SECONDS
+ *            last_activity_at, title, hidden, main_chain_id, …)
+ *                                                  — times in epoch SECONDS
  *   prompt_history(id, content, timestamp, session_id, is_shell)
+ *   message_nodes(row_id, session_id, node_id, parent_node_id, chat_message,
+ *            created_at)  — append-only; `main_chain_id` is the head node
  *
  * `prompt_history` is written when a prompt is SENT, while the transcript
  * export and `last_activity_at` land when the turn ends — which is what lets
@@ -25,6 +28,19 @@ export interface DevinSessionRow {
   created_at: number;
   last_activity_at: number;
   title: string | null;
+  /** The node the conversation currently ends at; null before its first message. */
+  main_chain_id: number | null;
+}
+
+export interface DevinNodeRow {
+  row_id: number;
+  node_id: number;
+  parent_node_id: number | null;
+  created_at: number;
+  /** An OpenAI-style chat message, as JSON. */
+  chat_message: string;
+  /** JSON; `summarized_from` on a compaction's summary names the old chain's end. */
+  metadata: string | null;
 }
 
 export interface DevinPrompt {
@@ -76,7 +92,7 @@ function q<T>(path: string, fn: (db: Database) => T): T | null {
   }
 }
 
-const SESSION_COLS = "id, working_directory, model, created_at, last_activity_at, title";
+const SESSION_COLS = "id, working_directory, model, created_at, last_activity_at, title, main_chain_id";
 
 export function sessionsSince(path: string, sinceSec: number): DevinSessionRow[] | null {
   return q(path, (db) =>
@@ -121,6 +137,35 @@ export function promptsOf(path: string, id: string): DevinPrompt[] | null {
         .query("SELECT id, content, timestamp FROM prompt_history WHERE session_id = ? AND is_shell = 0 ORDER BY id")
         .all(id) as DevinPrompt[],
   );
+}
+
+/** A session's message nodes written after `afterRowId`, oldest first. The
+ *  forest only grows, so a reader keeps what it has and asks for the rest. */
+export function nodesAfter(path: string, id: string, afterRowId: number): DevinNodeRow[] | null {
+  return q(
+    path,
+    (db) =>
+      db
+        .query(
+          "SELECT row_id, node_id, parent_node_id, created_at, chat_message, metadata FROM message_nodes WHERE session_id = ? AND row_id > ? ORDER BY row_id",
+        )
+        .all(id, afterRowId) as DevinNodeRow[],
+  );
+}
+
+/** Messages by row id, for the nodes a timeline page shows. */
+export function messagesByRow(path: string, rowIds: readonly number[]): Map<number, string> | null {
+  return q(path, (db) => {
+    const out = new Map<number, string>();
+    for (let i = 0; i < rowIds.length; i += 500) {
+      const ids = rowIds.slice(i, i + 500);
+      const rows = db
+        .query(`SELECT row_id, chat_message FROM message_nodes WHERE row_id IN (${ids.map(() => "?").join(",")})`)
+        .all(...ids) as { row_id: number; chat_message: string }[];
+      for (const r of rows) out.set(r.row_id, r.chat_message);
+    }
+    return out;
+  });
 }
 
 /** For tests: drop cached handles so a fixture can be deleted. */

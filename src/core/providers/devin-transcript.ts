@@ -12,10 +12,17 @@
  *
  * The ATIF export is the readable one — a flat list of steps, each agent step
  * with its reasoning, tool calls, their observations and token metrics — so it
- * is the timeline's source. Its one weakness is that it is only written at a
- * turn's end; the prompt that STARTED the current turn is already in
- * `prompt_history`, and is shown as a pending user event until the export
- * catches up.
+ * is the timeline's source when there is one. Its one weakness is that it is
+ * only written at a turn's end; the prompt that STARTED the current turn is
+ * already in `prompt_history`, and is shown as a pending user event until the
+ * export catches up.
+ *
+ * A session run over ACP (`devin acp`, as the subagent MCP runs it) writes
+ * no export and no prompt_history, so its timeline is read from the forest
+ * instead (`chainTo`, `chainFacts`, `chainEvents`): the chain from the session's `main_chain_id` back
+ * to a root, OpenAI-style chat messages. A compaction starts a new chain whose
+ * summary node's `summarized_from` is the old chain's last node, so following
+ * it gives the whole conversation, not just the part since the last one.
  *
  * Step shape (confirmed across 70 local transcripts):
  *   { step_id, timestamp, source: "system" | "user" | "agent", message,
@@ -87,6 +94,9 @@ export interface AtifParse {
   lastStepAt: number | null;
   /** User messages in order, for when prompt_history is unreadable. */
   userPrompts: string[];
+  /** Whether the conversation ends mid-turn; null when the source cannot say
+   *  (the export is only written between turns). */
+  turnOpen: boolean | null;
 }
 
 export function parseAtif(doc: unknown): AtifParse {
@@ -99,6 +109,7 @@ export function parseAtif(doc: unknown): AtifParse {
     firstStepAt: null,
     lastStepAt: null,
     userPrompts: [],
+    turnOpen: null,
   };
   const d = (doc ?? {}) as { steps?: unknown; agent?: { model_name?: unknown } };
   const steps = Array.isArray(d.steps) ? (d.steps as any[]) : [];
@@ -183,6 +194,195 @@ export function parseAtif(doc: unknown): AtifParse {
   return out;
 }
 
+/** What is kept of one message-forest node: enough to walk the chain and fold
+ *  its facts. Its text is read back from the database when a page shows it,
+ *  so memory follows the node count, not the forest's tens of megabytes. */
+export interface DevinNode {
+  id: number;
+  rowId: number;
+  parent: number | null;
+  /** The previous chain's last node, on a compaction's summary. */
+  summarizedFrom: number | null;
+  at: number;
+  role: string;
+  /** A user message whole (the prompts); an assistant's tail, for `lastMessage`. */
+  said: string;
+  model: string | null;
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null;
+  /** On an assistant message: the tool calls it made. */
+  calls: string[];
+  /** On a tool message: the call it answers. */
+  answers: string | null;
+  /** The assistant stopped to run tools rather than to hand the turn back. */
+  wantsTools: boolean;
+}
+
+export interface DevinNodeInput {
+  row_id: number;
+  node_id: number;
+  parent_node_id: number | null;
+  created_at: number;
+  chat_message: string;
+  metadata: string | null;
+}
+
+function parseMessage(json: string): any {
+  try {
+    const m = JSON.parse(json);
+    return m && typeof m === "object" ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+function tail(s: string): string {
+  const t = s.trim();
+  return t.length > 300 ? `…${t.slice(-299)}` : t;
+}
+
+/** Parse one `message_nodes` row. Null for a row that is not a message. */
+export function devinNode(row: DevinNodeInput): DevinNode | null {
+  const m = parseMessage(row.chat_message);
+  if (!m) return null;
+  const meta = row.metadata ? parseMessage(row.metadata) : null;
+  const md = m.metadata ?? {};
+  const metrics = md.metrics;
+  const calls: any[] = Array.isArray(m.tool_calls) ? m.tool_calls : [];
+  const text = m.role === "user" || m.role === "assistant" ? textOf(m.content) : "";
+  return {
+    id: row.node_id,
+    rowId: row.row_id,
+    parent: row.parent_node_id,
+    summarizedFrom: typeof meta?.summarized_from === "number" ? meta.summarized_from : null,
+    at: ts(md.created_at) ?? row.created_at * 1000,
+    role: typeof m.role === "string" ? m.role : "",
+    said: m.role === "assistant" ? tail(text) : text,
+    model: typeof md.generation_model === "string" && md.generation_model ? md.generation_model : null,
+    usage:
+      metrics && typeof metrics === "object"
+        ? {
+            input: num(metrics.input_tokens),
+            output: num(metrics.output_tokens),
+            cacheRead: num(metrics.cache_read_tokens),
+            cacheWrite: num(metrics.cache_creation_tokens),
+          }
+        : null,
+    calls: calls.map((c) => (c && typeof c.id === "string" ? c.id : "")).filter(Boolean),
+    answers: m.role === "tool" && typeof m.tool_call_id === "string" ? m.tool_call_id : null,
+    wantsTools: m.role === "assistant" && (calls.length > 0 || md.finish_reason === "tool_calls"),
+  };
+}
+
+/** A node on the conversation, and whether a compaction happened just before it. */
+export interface ChainLink {
+  node: DevinNode;
+  compacted: boolean;
+}
+
+/** The conversation ending at `head`, oldest first, through every compaction. */
+export function chainTo(nodes: ReadonlyMap<number, DevinNode>, head: number | null): ChainLink[] {
+  const out: ChainLink[] = [];
+  const seen = new Set<number>();
+  let compacted = false;
+  for (let at: number | null = head; at !== null && !seen.has(at); ) {
+    seen.add(at);
+    const n = nodes.get(at);
+    if (!n) break;
+    out.push({ node: n, compacted });
+    compacted = false;
+    if (n.summarizedFrom !== null && nodes.has(n.summarizedFrom)) {
+      compacted = true;
+      at = n.summarizedFrom;
+    } else at = n.parent;
+  }
+  return out.reverse();
+}
+
+/** The chain's facts, as the export's would be (no events: those are read per page). */
+export function chainFacts(chain: readonly ChainLink[]): AtifParse {
+  const out: AtifParse = {
+    events: [],
+    tokens: emptyTotals(),
+    model: null,
+    lastMessage: null,
+    contextUsed: null,
+    firstStepAt: null,
+    lastStepAt: null,
+    userPrompts: [],
+    turnOpen: null,
+  };
+  for (const { node: n } of chain) {
+    if (n.role !== "user" && n.role !== "assistant") continue;
+    out.firstStepAt ??= n.at;
+    out.lastStepAt = Math.max(out.lastStepAt ?? 0, n.at);
+    if (n.role === "user") {
+      if (n.said.trim()) out.userPrompts.push(n.said.trim());
+      continue;
+    }
+    if (n.model) out.model = n.model;
+    if (n.usage) {
+      addUsage(out.tokens, out.model, n.usage);
+      out.contextUsed = n.usage.input + n.usage.cacheRead + n.usage.cacheWrite + n.usage.output;
+    }
+    if (n.said) out.lastMessage = n.said;
+  }
+  // The forest is written message by message: a turn is over only when the
+  // assistant last spoke without asking for tools.
+  const last = chain.at(-1)?.node ?? null;
+  out.turnOpen = last !== null && (last.role !== "assistant" || last.wantsTools);
+  return out;
+}
+
+/** The timeline events of `links`, from their messages as read back from the
+ *  database (`messages`, by row id), each call joined to its answer. */
+export function chainEvents(
+  links: readonly ChainLink[],
+  messages: ReadonlyMap<number, string>,
+  answerOf: ReadonlyMap<string, DevinNode>,
+): TimelineEvent[] {
+  const out: TimelineEvent[] = [];
+  for (const { node: n, compacted } of links) {
+    const base = `n${n.id}`;
+    if (compacted) out.push({ id: `${base}.c`, at: n.at, kind: "meta", text: "Context compacted; the conversation continues from a summary." });
+    if (n.role !== "user" && n.role !== "assistant") continue;
+    const m = parseMessage(messages.get(n.rowId) ?? "");
+    if (!m) continue;
+    if (n.role === "user") {
+      out.push({ id: `${base}.u`, at: n.at, kind: "user", text: textOf(m.content) });
+      continue;
+    }
+    const thinking = m.thinking?.thinking;
+    if (typeof thinking === "string" && thinking.trim()) out.push({ id: `${base}.r`, at: n.at, kind: "thinking", text: thinking });
+    const said = textOf(m.content);
+    if (said.trim()) out.push({ id: `${base}.m`, at: n.at, kind: "assistant", text: said });
+    const calls: any[] = Array.isArray(m.tool_calls) ? m.tool_calls : [];
+    calls.forEach((c, i) => {
+      if (!c || typeof c !== "object") return;
+      const answer = typeof c.id === "string" ? answerOf.get(c.id) : undefined;
+      const result = answer ? parseMessage(messages.get(answer.rowId) ?? "") : null;
+      const ev: TimelineEvent = {
+        id: `${base}.t${i}`,
+        at: n.at,
+        kind: "tool",
+        name: typeof c.name === "string" ? c.name : "tool",
+        summary: devinToolSummary(c.arguments),
+        status: !answer ? "running" : result?.metadata?.extensions?.["chisel/tool_result_meta"]?.success === false ? "error" : "ok",
+      };
+      if (c.arguments !== undefined) {
+        try {
+          ev.input = clip(typeof c.arguments === "string" ? c.arguments : JSON.stringify(c.arguments, null, 2), 4000);
+        } catch {
+          /* unserialisable */
+        }
+      }
+      const output = result ? textOf(result.content) : "";
+      if (output) ev.output = clip(output, 4000);
+      out.push(ev);
+    });
+  }
+  return out;
+}
+
 /** Prompts newer than the export, as user events: the turn in progress. */
 export function pendingPromptEvents(prompts: DevinPrompt[], afterMs: number | null): TimelineEvent[] {
   return prompts
@@ -238,8 +438,9 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
   // no export at all, compare against the row (seconds, so >=: a fresh
   // session's first prompt lands in the same second it is created).
   const turnOpen =
-    lastPromptAt !== null &&
-    (atif?.lastStepAt != null ? lastPromptAt > atif.lastStepAt : activity === null || lastPromptAt >= activity);
+    atif?.turnOpen ??
+    (lastPromptAt !== null &&
+      (atif?.lastStepAt != null ? lastPromptAt > atif.lastStepAt : activity === null || lastPromptAt >= activity));
   const times = [activity, lastPromptAt, atif?.lastStepAt ?? null].filter((x): x is number => x !== null);
   return {
     agentSessionId: i.id,

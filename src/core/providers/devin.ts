@@ -36,10 +36,16 @@ import type { Account, TimelineEvent, TimelinePage } from "../types";
 import * as db from "./devin-db";
 import {
   devinFacts,
+  chainEvents,
+  chainFacts,
+  chainTo,
+  devinNode,
   parseAtif,
   parseDevinRateLimits,
   pendingPromptEvents,
   type AtifParse,
+  type ChainLink,
+  type DevinNode,
 } from "./devin-transcript";
 import { cwdOf, environOf, findProcesses, runsCli, startedAtOf } from "./procs";
 import type {
@@ -54,6 +60,8 @@ import type {
 } from "./types";
 
 const DEFAULT_PAGE = 50;
+/** Past this many forest nodes behind, `since` sends a fresh page instead. */
+const MAX_SINCE_NODES = 1_000;
 
 interface DevinPaths {
   cli: string;
@@ -254,6 +262,14 @@ function logOfPid(logsDir: string, pid: number): string | null {
 class DevinReader implements TranscriptReader {
   private atif: AtifParse | null = null;
   private jsonSig = "";
+  /** The forest, for a session with no export (ACP): read incrementally by
+   *  row id, and paged from the database rather than held as events. */
+  private forest = false;
+  private nodes = new Map<number, DevinNode>();
+  private lastRowId = 0;
+  private chainSig = "";
+  private chain: ChainLink[] = [];
+  private answerOf = new Map<string, DevinNode>();
   private row: db.DevinSessionRow | null = null;
   private prompts: db.DevinPrompt[] = [];
   private promptSig = "";
@@ -275,15 +291,18 @@ class DevinReader implements TranscriptReader {
   private pull(): boolean {
     let changed = false;
 
+    const row = db.sessionById(this.paths.db, this.id);
+    if (row && JSON.stringify(row) !== JSON.stringify(this.row)) {
+      this.row = row;
+      changed = true;
+    }
+
     const jsonPath = join(this.paths.transcripts, `${this.id}.json`);
     const st = stat(jsonPath);
-    const sig = st ? `${st.mtimeMs}:${st.size}` : "";
-    if (sig !== this.jsonSig) {
-      if (!st) {
-        this.atif = null;
-        this.jsonSig = "";
-        changed = true;
-      } else {
+    this.forest = !st;
+    if (st) {
+      const sig = `${st.mtimeMs}:${st.size}`;
+      if (sig !== this.jsonSig) {
         try {
           this.atif = parseAtif(JSON.parse(readFileSync(jsonPath, "utf8")));
           this.jsonSig = sig;
@@ -292,12 +311,21 @@ class DevinReader implements TranscriptReader {
           // Caught mid-rewrite; the next poll sees the finished file.
         }
       }
-    }
-
-    const row = db.sessionById(this.paths.db, this.id);
-    if (row && JSON.stringify(row) !== JSON.stringify(this.row)) {
-      this.row = row;
-      changed = true;
+    } else {
+      for (const r of db.nodesAfter(this.paths.db, this.id, this.lastRowId) ?? []) {
+        const n = devinNode(r);
+        if (n) this.nodes.set(n.id, n);
+        this.lastRowId = r.row_id;
+      }
+      const sig = `${this.lastRowId}:${this.row?.main_chain_id ?? ""}`;
+      if (sig !== this.chainSig) {
+        this.chain = chainTo(this.nodes, this.row?.main_chain_id ?? null);
+        this.answerOf = new Map();
+        for (const { node } of this.chain) if (node.answers) this.answerOf.set(node.answers, node);
+        this.atif = this.chain.length > 0 ? chainFacts(this.chain) : null;
+        this.chainSig = sig;
+        changed = true;
+      }
     }
 
     const head = db.promptHead(this.paths.db, this.id);
@@ -385,10 +413,48 @@ class DevinReader implements TranscriptReader {
   }
 
   private cursor(): string {
+    if (this.forest) {
+      for (let i = this.chain.length - 1; i >= 0; i--) {
+        const n = this.chain[i]!.node;
+        if (n.role === "user" || n.role === "assistant") return `n${n.id}`;
+      }
+      return "";
+    }
     return this.events.length > 0 ? this.events[this.events.length - 1]!.id : "";
   }
 
+  /** Events of chain links [from, to), their messages read back from the database. */
+  private forestEvents(from: number, to: number): TimelineEvent[] {
+    const links = this.chain.slice(from, to);
+    const rows = links.map((l) => l.node.rowId);
+    for (const l of links) for (const c of l.node.calls) {
+      const a = this.answerOf.get(c);
+      if (a) rows.push(a.rowId);
+    }
+    return chainEvents(links, db.messagesByRow(this.paths.db, rows) ?? new Map(), this.answerOf);
+  }
+
+  /** The chain index of the node an event id or cursor names (`n<node>…`). */
+  private linkIndex(id: string): number {
+    const node = /^n(\d+)/.exec(id)?.[1];
+    return node === undefined ? -1 : this.chain.findIndex((l) => l.node.id === Number(node));
+  }
+
+  /** Whole nodes, newest last, until `limit` events or the start. */
+  private forestPage(before: string | null, limit: number): TimelinePage {
+    const k = before ? this.linkIndex(before) : -1;
+    let start = k >= 0 ? k : this.chain.length;
+    let events: TimelineEvent[] = [];
+    while (start > 0 && events.length < limit) {
+      const from = Math.max(0, start - limit);
+      events = [...this.forestEvents(from, start), ...events];
+      start = from;
+    }
+    return { events, before: start > 0 && events.length > 0 ? events[0]!.id : null, cursor: this.cursor() };
+  }
+
   private page(before: string | null, limit: number): TimelinePage {
+    if (this.forest) return this.forestPage(before, limit);
     let end = this.events.length;
     if (before) {
       const k = this.events.findIndex((e) => e.id === before);
@@ -409,6 +475,15 @@ class DevinReader implements TranscriptReader {
    *  export has since replaced) is a reset. */
   async since(cursor: string): Promise<{ events: TimelineEvent[]; cursor: string; reset: boolean }> {
     this.pull();
+    if (this.forest) {
+      const k = this.linkIndex(cursor);
+      if ((cursor !== "" && k < 0) || this.chain.length - Math.max(0, k) > MAX_SINCE_NODES) {
+        const page = this.page(null, DEFAULT_PAGE);
+        return { events: page.events, cursor: page.cursor, reset: true };
+      }
+      // From the cursor's own node: its calls may have been answered since.
+      return { events: this.forestEvents(Math.max(0, k), this.chain.length), cursor: this.cursor(), reset: false };
+    }
     if (cursor === "") return { events: [...this.events], cursor: this.cursor(), reset: false };
     const k = this.events.findIndex((e) => e.id === cursor);
     if (k < 0) {
