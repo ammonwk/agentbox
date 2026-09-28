@@ -14,6 +14,7 @@
 import { basename, dirname, sep } from "node:path";
 import { addUsage, emptyTotals } from "../pricing";
 import type { AskQuestion, MateMessage, TimelineEvent, TokenTotals } from "../types";
+import { askQuestionsOf } from "./ask";
 import { cap, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 
@@ -270,25 +271,6 @@ export function summarizeClaudeTool(name: string, input: any): string {
   }
 }
 
-/** AskUserQuestion's questions, or null for input that is not that shape. */
-export function askQuestionsOf(input: any): AskQuestion[] | null {
-  const qs = input?.questions;
-  if (!Array.isArray(qs) || qs.length === 0) return null;
-  const out: AskQuestion[] = [];
-  for (const q of qs) {
-    if (typeof q?.question !== "string" || !Array.isArray(q.options)) return null;
-    out.push({
-      question: q.question,
-      header: typeof q.header === "string" ? q.header : "",
-      multiSelect: q.multiSelect === true,
-      options: q.options
-        .filter((o: any) => typeof o?.label === "string")
-        .map((o: any) => (typeof o.description === "string" && o.description ? { label: o.label, description: o.description } : { label: o.label })),
-    });
-  }
-  return out;
-}
-
 /** The answers Claude recorded for an AskUserQuestion, question → answer. */
 function askAnswersOf(r: any): Record<string, string> | undefined {
   const a = r?.toolUseResult?.answers;
@@ -434,6 +416,8 @@ export class ClaudeFold {
   private gitBranch: string | null = null;
   private startedAt: number | null = null;
   private lastActivityAt: number | null = null;
+  /** The newest model call on the main chain (see TranscriptFacts.lastTurnAt). */
+  private lastTurnAt: number | null = null;
   private turnOpen = false;
   /** An AskUserQuestion still waiting for its answer. */
   private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
@@ -638,6 +622,7 @@ export class ClaudeFold {
     if (m.model) this.model = m.model;
     if (m.usage) {
       const u = m.usage;
+      if (at !== null && (this.lastTurnAt === null || at > this.lastTurnAt)) this.lastTurnAt = at;
       const used = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       if (used > 0) {
         this.contextUsed = used;
@@ -706,6 +691,7 @@ export class ClaudeFold {
       gitBranch: this.gitBranch,
       startedAt: this.startedAt,
       lastActivityAt: this.lastActivityAt,
+      lastTurnAt: this.lastTurnAt,
       turnOpen: this.turnOpen,
       contextUsed: this.contextUsed,
       contextLimit: this.contextUsed === null && !this.model ? null : contextLimitFor(this.model, this.observedMax, this.autoCompactPre),

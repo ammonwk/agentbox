@@ -11,9 +11,10 @@
 
 import type { TimelineEvent, TimelinePage, Turn, TurnList } from "./types";
 import { isAgentSent } from "./providers/types";
+import { devinAskAnswers } from "./providers/devin-transcript";
 
 /** The provider tools that ask you something; their result is your answer. */
-const QUESTION_TOOLS = new Set(["AskUserQuestion", "request_user_input", "request_user_input_async"]);
+const QUESTION_TOOLS = new Set(["AskUserQuestion", "ask_user_question", "request_user_input", "request_user_input_async"]);
 /** How the Project session opens a message it writes for you while you are away. */
 const FROM_PROJECT = /^\[From the Project session\b/;
 const TEXT_CAP = 600;
@@ -52,18 +53,24 @@ function questionsOf(input: string | undefined): string[] | null {
  * The questions and what you chose. Claude's result reads `User has answered
  * your questions: "Which?"="This one", "And?"="That". You can now continue…`,
  * quotes inside unescaped, so each answer is found after its known question.
- * Anything else is shown as it came.
+ * devin's reads `User answered your questions:` and a JSON object, which
+ * `devinAskAnswers` parses. Anything else is shown as it came.
  */
 export function answerText(questions: readonly string[], output: string): string {
-  const out: string[] = [];
+  const json = devinAskAnswers(output);
+  if (json) {
+    const out = questions.map((q) => (json[q] !== undefined ? `${q}\n→ ${json[q]}` : null)).filter((x): x is string => x !== null);
+    if (out.length) return out.join("\n");
+  }
+  const lines: string[] = [];
   for (const q of questions) {
     const at = output.indexOf(`"${q}"="`);
     if (at === -1) continue;
     const rest = output.slice(at + q.length + 4);
     const end = [rest.indexOf('", "'), rest.indexOf('". '), rest.lastIndexOf('"')].filter((i) => i >= 0);
-    out.push(`${q}\n→ ${rest.slice(0, end.length ? Math.min(...end) : undefined)}`);
+    lines.push(`${q}\n→ ${rest.slice(0, end.length ? Math.min(...end) : undefined)}`);
   }
-  return out.length ? out.join("\n") : `${questions.join("\n")}\n${output.trim()}`;
+  return lines.length ? lines.join("\n") : `${questions.join("\n")}\n${output.trim()}`;
 }
 
 function cap(s: string): string {

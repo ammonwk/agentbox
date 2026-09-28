@@ -37,6 +37,7 @@
 
 import type { TimelineEvent, TokenTotals } from "../types";
 import type { TranscriptFacts } from "./types";
+import { askQuestionsOf } from "./ask";
 import { addUsage, emptyTotals } from "../pricing";
 import type { DevinPrompt, DevinSessionRow } from "./devin-db";
 
@@ -75,11 +76,43 @@ function imagesIn(content: unknown): number {
 export function devinToolSummary(args: unknown): string {
   if (!args || typeof args !== "object") return typeof args === "string" ? oneLine(args, 200) : "";
   const a = args as Record<string, unknown>;
+  if (Array.isArray(a.questions)) return oneLine((a.questions[0] as any)?.question ?? "asked a question", 200);
   for (const k of ["command", "file_path", "path", "pattern", "query", "url", "profile", "task", "name"]) {
     const v = a[k];
     if (typeof v === "string" && v.trim()) return oneLine(v, 200);
   }
   return "";
+}
+
+/**
+ * The answers in an ask_user_question result. It reads
+ * `User answered your questions:\n{ "<question>": { "selected": [...],
+ * "custom_text"?, "skipped" } }` — the labels you picked, or the text you
+ * typed, one line per question. Null for anything else (a cancel reads
+ * "Canceled due to user interrupt").
+ */
+export function devinAskAnswers(output: string): Record<string, string> | undefined {
+  if (!output.startsWith("User answered your questions:")) return undefined;
+  const at = output.indexOf("{");
+  if (at < 0) return undefined;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(output.slice(at, output.lastIndexOf("}") + 1));
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const out: Record<string, string> = {};
+  for (const [q, v] of Object.entries(parsed)) {
+    if (!v || typeof v !== "object") continue;
+    const a = v as { selected?: unknown; custom_text?: unknown; skipped?: unknown };
+    const parts = (Array.isArray(a.selected) ? a.selected : []).filter((l): l is string => typeof l === "string" && l !== "Other");
+    const other = typeof a.custom_text === "string" ? a.custom_text.trim() : "";
+    if (other) parts.push(other);
+    if (parts.length) out[q] = parts.join(", ");
+    else if (a.skipped === true) out[q] = "skipped";
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export interface AtifParse {
@@ -186,6 +219,10 @@ export function parseAtif(doc: unknown): AtifParse {
         } catch {
           /* unserialisable */
         }
+      }
+      if (typeof c.function_name === "string" && c.function_name === "ask_user_question") {
+        const questions = askQuestionsOf(c.arguments);
+        if (questions) ev.ask = { id: String(c.tool_call_id ?? `${base}.t${i}`), questions, answers: output ? devinAskAnswers(output) : undefined };
       }
       if (output) ev.output = clip(output, 4000);
       out.events.push(ev);
@@ -399,6 +436,11 @@ export function chainEvents(
         summary: devinToolSummary(c.arguments),
         status: !answer ? "running" : result?.metadata?.extensions?.["chisel/tool_result_meta"]?.success === false ? "error" : "ok",
       };
+      const output = result ? textOf(result.content) : "";
+      if (typeof c.name === "string" && c.name === "ask_user_question") {
+        const questions = askQuestionsOf(c.arguments);
+        if (questions) ev.ask = { id: String(c.id ?? `${base}.t${i}`), questions, answers: output ? devinAskAnswers(output) : undefined };
+      }
       if (c.arguments !== undefined) {
         try {
           ev.input = clip(typeof c.arguments === "string" ? c.arguments : JSON.stringify(c.arguments, null, 2), 4000);
@@ -406,7 +448,6 @@ export function chainEvents(
           /* unserialisable */
         }
       }
-      const output = result ? textOf(result.content) : "";
       if (output) ev.output = clip(output, 4000);
       out.push(ev);
     });
