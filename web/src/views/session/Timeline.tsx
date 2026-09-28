@@ -28,6 +28,11 @@ export function Timeline({ session }: { session: Session }) {
   const btw = useBtw(session.id);
   const rows = useMemo(() => withBtw(groupTimeline(events), btw, exhausted), [events, btw, exhausted]);
   const echoes = useEchoes(session.id, events);
+  // The turn is open but nothing has landed: the agent is thinking (a running
+  // tool has a row of its own, spinning, so this is only for the gap before
+  // the next step is written). The terminal shows the same state.
+  const lastEv = events[events.length - 1];
+  const thinking = session.status === "running" && !(lastEv?.kind === "tool" && lastEv.status === "running");
 
   const boxRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
@@ -45,7 +50,7 @@ export function Timeline({ session }: { session: Session }) {
       el.scrollTop = el.scrollHeight;
     }
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
-  }, [events, pinned, echoes.length, btw]);
+  }, [events, pinned, echoes.length, btw, thinking]);
 
   // ---- the message rail: where you are, and going to one of them
   const turnList = useTurns(session.id, session.lastActivityAt);
@@ -217,6 +222,11 @@ export function Timeline({ session }: { session: Session }) {
               <Markdown text={e.text} />
             </div>
           ))}
+          {thinking ? (
+            <div className="tl-live" role="status" title="The turn is running and its next step has not landed in the transcript yet">
+              <Spinner size={12} /> Thinking…
+            </div>
+          ) : null}
         </div>
       </div>
       {!pinned ? (

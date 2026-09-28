@@ -835,6 +835,16 @@
 .tl-echo {
   opacity: 0.6;
 }
+
+/* The turn is running and its next step has not landed yet. */
+.tl-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+  font-size: 12px;
+  padding: 2px 2px 4px;
+}
 .tl-user {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);

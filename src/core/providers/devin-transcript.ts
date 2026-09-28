@@ -279,6 +279,37 @@ export interface ChainLink {
   compacted: boolean;
 }
 
+/** Whether `node` reaches `ancestor` by parent (or a compaction's summary). */
+function descendsFrom(nodes: ReadonlyMap<number, DevinNode>, node: DevinNode, ancestor: number): boolean {
+  const seen = new Set<number>();
+  for (let at: number | null = node.parent; at !== null && !seen.has(at); ) {
+    if (at === ancestor) return true;
+    seen.add(at);
+    const n = nodes.get(at);
+    at = n?.summarizedFrom ?? n?.parent ?? null;
+  }
+  return false;
+}
+
+/**
+ * The node the conversation is really at. `main_chain_id` is the last
+ * *committed* node: the assistant's tool call is written as soon as it decides
+ * to make it, and its result lands when the tool finishes, so the step in
+ * flight — the thinking and the command being run — is a descendant the session
+ * has not moved its head to yet. Follow the newest such descendant, so the
+ * timeline shows a running command while it runs instead of only its result.
+ */
+export function liveHead(nodes: ReadonlyMap<number, DevinNode>, committed: number | null): number | null {
+  const at = committed === null ? null : nodes.get(committed);
+  if (!at) return committed;
+  let best: DevinNode | null = null;
+  for (const n of nodes.values()) {
+    if (n.rowId <= at.rowId || (best && n.rowId <= best.rowId)) continue;
+    if (descendsFrom(nodes, n, at.id)) best = n;
+  }
+  return best ? best.id : committed;
+}
+
 /** The conversation ending at `head`, oldest first, through every compaction. */
 export function chainTo(nodes: ReadonlyMap<number, DevinNode>, head: number | null): ChainLink[] {
   const out: ChainLink[] = [];

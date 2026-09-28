@@ -40,6 +40,7 @@ import {
   chainFacts,
   chainTo,
   devinNode,
+  liveHead,
   parseAtif,
   parseDevinRateLimits,
   pendingPromptEvents,
@@ -308,9 +309,10 @@ class DevinReader implements TranscriptReader {
       if (n) this.nodes.set(n.id, n);
       this.lastRowId = r.row_id;
     }
-    const sig = `${this.lastRowId}:${this.row?.main_chain_id ?? ""}`;
+    const chainHead = liveHead(this.nodes, this.row?.main_chain_id ?? null);
+    const sig = `${this.lastRowId}:${chainHead ?? ""}`;
     if (sig !== this.chainSig) {
-      this.chain = chainTo(this.nodes, this.row?.main_chain_id ?? null);
+      this.chain = chainTo(this.nodes, chainHead);
       this.answerOf = new Map();
       for (const { node } of this.chain) if (node.answers) this.answerOf.set(node.answers, node);
       this.atif = this.chain.length > 0 ? chainFacts(this.chain) : null;
