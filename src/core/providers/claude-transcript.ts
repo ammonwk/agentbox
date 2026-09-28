@@ -437,6 +437,8 @@ export class ClaudeFold {
   private turnOpen = false;
   /** An AskUserQuestion still waiting for its answer. */
   private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
+  /** The newest `permission-mode` record's (or prompt's) mode. */
+  private permissionMode: string | null = null;
   private contextUsed: number | null = null;
   private observedMax = 0;
   private autoCompactPre = 0;
@@ -477,6 +479,8 @@ export class ClaudeFold {
     }
     // Sidechain tokens are this session's spend, recorded in this file.
     this.tokens.add(r);
+
+    if (!side && typeof r.permissionMode === "string" && (r.type === "permission-mode" || r.type === "user")) this.permissionMode = r.permissionMode;
 
     switch (r.type) {
       case "custom-title":
@@ -713,6 +717,7 @@ export class ClaudeFold {
       team: this.team,
       teamsLed: [...this.teamsLed],
       pendingAsk: this.pendingAsk,
+      skipsPermissions: this.permissionMode === "bypassPermissions",
     };
   }
 }

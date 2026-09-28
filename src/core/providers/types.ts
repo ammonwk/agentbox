@@ -108,6 +108,9 @@ export interface TranscriptFacts {
   teamsLed?: string[];
   /** An AskUserQuestion call (claude) still waiting for its answer. */
   pendingAsk?: { id: string; questions: AskQuestion[] } | null;
+  /** The session is in its CLI's skip-every-permission mode as of its latest
+   *  record (claude: `bypassPermissions`, which shift+tab can leave). */
+  skipsPermissions?: boolean;
 }
 
 /** An incremental reader over one transcript. Holds its own offsets. */
@@ -243,6 +246,15 @@ export interface ProviderAdapter {
    * under) widens that where it makes a dialog's question moot.
    */
   autoAnswer?(screen: string, ctx?: { bypassPermissions: boolean }): string[] | null;
+
+  /**
+   * Given the visible terminal text of a session that skips permissions
+   * (`TranscriptFacts.skipsPermissions`), the keys that allow the permission
+   * prompt it is showing anyway, once — or null. Claude still asks about some
+   * commands in bypass mode (an `rm` on a path it cannot resolve); the mode
+   * you chose is the answer.
+   */
+  approvePrompt?(screen: string): string[] | null;
 
   /** Given the visible terminal text, what the session is waiting on a human
    *  for (a permission prompt, a login), in a few words — or null. */

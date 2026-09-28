@@ -195,6 +195,8 @@ export class Fleet extends EventEmitter {
   private deadSince = new Map<string, number>();
   private startedAt = new Map<string, number>();
   private answered = new Map<string, { sig: string; at: number; tries: number }>();
+  /** Permission prompts `approvePrompt` has pressed Yes on, by session. */
+  private approved = new Map<string, { sig: string; at: number; tries: number }>();
   private blocked = new Map<string, string>();
   /** A question read off the screen, for a session whose transcript does not have it (yet). */
   private screenAsks = new Map<string, { id: string; questions: AskQuestion[] }>();
@@ -1081,11 +1083,18 @@ export class Fleet extends EventEmitter {
         // screen when it has been quiet for a moment.
         if (quietFor > 2_500 || status === "waiting") {
           const screen = this.deps.runtime.capture(pane.name);
-          const why = screen ? adapter.blockedOn(screen) : null;
+          const shown = screen ? adapter.blockedOn(screen) : null;
+          if (!shown) this.approved.delete(rec.id);
+          // A session told to skip permissions is not waiting on you for one.
+          const allowed = !!shown && !!screen && !!f?.skipsPermissions && this.approvePrompt(rec.id, pane.name, adapter, screen, shown, now);
+          const why = allowed ? null : shown;
           if (why) {
             status = "blocked";
             this.blocked.set(rec.id, why);
-          } else this.blocked.delete(rec.id);
+          } else {
+            this.blocked.delete(rec.id);
+            if (allowed) status = "running";
+          }
           // A question the transcript does not have: read it off the screen,
           // at a size it can be read at (the next look sees the redraw).
           const ask = why === "asking a question" && !f?.pendingAsk && screen && adapter.askOnScreen ? adapter.askOnScreen(screen) : null;
@@ -1185,6 +1194,31 @@ export class Fleet extends EventEmitter {
     } catch {
       /* the pane went away between capture and keys */
     }
+  }
+
+  /**
+   * Allow the permission prompt a skip-permissions session is showing anyway.
+   * True while it is being handled: keys went in, or went in a moment ago and
+   * the screen has not caught up. A dialog that ignores them gets a few
+   * tries and is then left to you, like `autoAnswer`'s.
+   */
+  private approvePrompt(id: string, pane: string, adapter: ProviderAdapter, screen: string, what: string, now: number): boolean {
+    const keys = adapter.approvePrompt?.(screen);
+    if (!keys) return false;
+    const sig = screen.trim().slice(-400);
+    const prev = this.approved.get(id);
+    if (prev && prev.sig === sig) {
+      if (prev.tries >= 3) return false;
+      if (now - prev.at < 1_500) return true;
+    }
+    this.approved.set(id, { sig, at: now, tries: prev && prev.sig === sig ? prev.tries + 1 : 1 });
+    try {
+      this.deps.runtime.sendKeys(pane, keys);
+    } catch {
+      return false; // the pane went away between capture and keys
+    }
+    console.log(`agentbox: ${id} skips permissions; allowed its prompt (${what})`);
+    return true;
   }
 
   // --------------------------------------------------------------- reading

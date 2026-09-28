@@ -448,6 +448,34 @@ export function claudeAutoAnswer(raw: string, ctx: { bypassPermissions: boolean 
   return null;
 }
 
+/** The question a permission dialog ends on. */
+const PERMISSION_QUESTION =
+  /Do you want to (?:proceed|make this edit to \S+|create \S+)\?|Do you want to allow (?:Claude to fetch this content|this connection)\?/;
+
+/**
+ * The keys that allow the permission prompt on screen, for a session in
+ * bypass mode. The dialog must be the live thing at the foot of the screen,
+ * not one quoted higher up in the conversation: its question among the last
+ * lines, its "Esc to cancel" footer below that, and no input box (whose
+ * footer is the mode line) under it. "Yes" is allowing this once; the "don't
+ * ask again" options would write rules to the project's settings.
+ */
+export function claudeApprovePrompt(raw: string): string[] | null {
+  if (!claudeBlockedOn(raw)?.startsWith("permission")) return null;
+  const lines = plainScreen(raw).trimEnd().split("\n");
+  let q = -1;
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
+    if (PERMISSION_QUESTION.test(lines[i]!)) {
+      q = i;
+      break;
+    }
+  }
+  if (q < 0) return null;
+  const tail = lines.slice(q).join("\n");
+  if (!/Esc to cancel/.test(tail) || /shift\+tab to cycle|\? for shortcuts/.test(tail)) return null;
+  return pickOption(tail, /^Yes$/);
+}
+
 /** What a Claude screen is waiting on you for, in a few words. */
 export function claudeBlockedOn(raw: string): string | null {
   const s = plainScreen(raw);
@@ -692,6 +720,7 @@ export const claudeAdapter: ProviderAdapter = {
   carryOver: claudeCarryOver,
   headless: isHeadless,
   autoAnswer: claudeAutoAnswer,
+  approvePrompt: claudeApprovePrompt,
   blockedOn: claudeBlockedOn,
   answerStep: askStep,
   askOnScreen: askFromScreen,
