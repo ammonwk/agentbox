@@ -150,10 +150,12 @@ function moves(items: Item[], to: Item): string[] | null {
 /**
  * The next thing to do to get the dialog to `answers`. Questions are answered
  * in order — committing one advances to the next tab, and committing the last
- * submits — so the driver always works on the first question the tab bar
- * shows unanswered, switching tabs back to it when the terminal is elsewhere.
- * `visited` is accepted for the adapter's shape; the tab bar's ✓ chips say
- * which questions are still open.
+ * submits — so the driver works on the first question the tab bar shows
+ * unanswered, switching tabs back to it when the terminal is elsewhere. An
+ * open text field outranks all of that: it belongs to the tab showing, and
+ * its ✓ chip is already up (it marks a question with text in the field, not
+ * a committed answer), while ←→ would only move the cursor.
+ * `visited` is accepted for the adapter's shape.
  */
 export function askStep(raw: string, questions: AskQuestion[], answers: AskAnswer[], _visited: ReadonlySet<number>): AskStep {
   const s = readAskScreen(raw);
@@ -161,6 +163,19 @@ export function askStep(raw: string, questions: AskQuestion[], answers: AskAnswe
 
   const active = questions.findIndex((q) => same(s.text, q.question));
   if (active < 0) return { error: `the terminal is showing a different question: “${s.text}”` };
+
+  // The text field open on the active tab is this question's to finish — the
+  // tab bar's ✓ is no guide here, because it marks a question with text in
+  // the field before that text is committed, and ←→ while typing move the
+  // cursor, not the tabs.
+  if (s.input !== null) {
+    const a = answers[active]!;
+    if (!a.other) return { keys: ["Escape"] }; // cancel typing; the next pass fixes the box
+    if (s.input === a.other) return { keys: ["Enter"] };
+    if (s.input) return { keys: Array<string>(Math.min(s.input.length + 2, 400)).fill("BSpace") };
+    return { type: a.other };
+  }
+
   let k = questions.findIndex((_, i) => s.chips[i] !== undefined && !s.chips[i]!.endsWith("✓"));
   if (k < 0) k = active;
   if (k !== active) {
@@ -174,14 +189,6 @@ export function askStep(raw: string, questions: AskQuestion[], answers: AskAnswe
   const a = answers[k]!;
   const { items } = s;
   const other = items.find((i) => i.other) ?? null;
-
-  if (s.input !== null) {
-    // The text field is open: land the text, then Enter commits it.
-    if (!a.other) return { keys: ["Escape"] }; // cancel typing; the next pass fixes the box
-    if (s.input === a.other) return { keys: ["Enter"] };
-    if (s.input) return { keys: Array<string>(Math.min(s.input.length + 2, 400)).fill("BSpace") };
-    return { type: a.other };
-  }
 
   if (q.multiSelect) {
     for (let i = 0; i < q.options.length; i++) {
