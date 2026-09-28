@@ -103,6 +103,8 @@ async function modelsDev(): Promise<ModelsDev> {
   if (!selfM || Date.now() - selfM > DEV_TTL_MS) void refreshModelsDev();
   const data = readCached<ModelsDev>(selfM >= mtime(alt) ? self : alt, (t) => JSON.parse(t) as ModelsDev);
   if (data) return data;
+  // A fresh file that will not parse is worth one retry too.
+  if (!devInflight) void refreshModelsDev();
   await devInflight;
   return readCached<ModelsDev>(self, (t) => JSON.parse(t) as ModelsDev) ?? {};
 }
