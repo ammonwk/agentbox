@@ -2309,16 +2309,29 @@ export class Fleet extends EventEmitter {
   /**
    * Devin holds a message typed mid-turn until the turn ends, and a turn can
    * run for hours, so a course correction would arrive after the work it was
-   * meant to steer. Enter on its empty prompt delivers the queue now.
+   * meant to steer. Enter on its empty prompt delivers the queue now — and
+   * the footer going away is the proof it went. If the footer survives two
+   * Enters (a modal dialog eats them), say so: the message is typed and
+   * queued, and a blind resend would queue it twice.
    */
   private async deliverDevinQueue(pane: string): Promise<void> {
+    const queued = (): number => devinQueuedCount(this.deps.runtime.capture(pane) ?? "");
     for (let i = 0; i < 6; i++) {
       await Bun.sleep(500);
-      if (devinQueuedCount(this.deps.runtime.capture(pane) ?? "") > 0) {
-        this.deps.runtime.sendKeys(pane, ["Enter"]);
-        return;
+      if (queued() > 0) break;
+      if (i === 5) return; // no footer: idle, the message went straight through
+    }
+    for (let i = 0; i < 2; i++) {
+      this.deps.runtime.sendKeys(pane, ["Enter"]);
+      for (let j = 0; j < 12; j++) {
+        await Bun.sleep(250);
+        if (queued() === 0) return;
       }
     }
+    throw new FleetError(
+      409,
+      "typed and queued, but the pane never took the flush Enter (a dialog may be up) — do not send again; press Enter there or clear the pane",
+    );
   }
 
   /**
