@@ -1,6 +1,6 @@
 /** The phone's end of voice mode: the mic in, the agent's voice out.
  *
- * After widget-platform's practice call (utils/practiceCallAudio.ts): one
+ * From agentbox's own practice calls, which measured it: one
  * AudioContext at 24 kHz for both, so nothing is resampled, created inside the
  * tap that starts it (Safari only lets a context start from a gesture), and a
  * mic with echo cancellation — without it the agent hears itself and answers.

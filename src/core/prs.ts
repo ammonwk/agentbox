@@ -40,9 +40,9 @@ const BIG_PAGE = 100;
 /** A page of the minute's catch-up: a PR is ~28 KB of JSON, and a minute
  *  changes a handful. More than this and it reads the next page. */
 const SMALL_PAGE = 30;
-/** How often every open PR is read again: two requests for widget. */
+/** How often every open PR is read again: a couple of requests per pass on a small repo. */
 const OPEN_EVERY_MS = 15 * 60_000;
-/** History pages a sync reads: widget's is seventy, so it takes a while. */
+/** History pages a sync reads: the biggest repo here runs seventy, so a full walk takes a while. */
 const HISTORY_PAGES_PER_SYNC = 5;
 /** The history walk waits while fewer requests than this are left in the
  *  hour: the rest are the agents'. */

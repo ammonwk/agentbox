@@ -1,5 +1,4 @@
-// Microphone → PCM16 frames for voice mode. From widget-platform's practice
-// call (apps/web/public/pcm-capture-worklet.js): it lives in public/ because a
+// Microphone → PCM16 frames for voice mode. It lives in public/ because a
 // bundled small file becomes a data: URL, which WebKit will not load as a
 // worklet. 20 ms frames rather than one message per 128-sample render quantum.
 const FRAME_SAMPLES = 480; // 20 ms at 24 kHz

@@ -10,7 +10,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
 
     agentbox ls                     # one line each: id status idle host provider repo branch title
     agentbox ls --status waiting,blocked --idle '>2h'
-    agentbox ls --repo widget --all   # --all includes closed
+    agentbox ls --repo agentbox --all  # --all includes closed
     agentbox ls --roots             # without the helpers other sessions started
     agentbox ls -q ...              # ids only, for piping
     agentbox ls --json | jq ...     # every field
