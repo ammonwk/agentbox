@@ -926,6 +926,9 @@
 .tl-btw-err {
   color: var(--danger);
 }
+.tl-btw-hint {
+  color: var(--faint);
+}
 @media (max-width: 640px) {
   .tl-btw {
     margin-left: 8px;

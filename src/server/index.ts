@@ -500,6 +500,12 @@ const router = new Router(mapError)
     const b = await readBody(req);
     return json(fleet.askBtw(params.id!, requireString(b, "question")), 201);
   })
+  .add("POST", "/api/sessions/:id/btw/:row/dismiss", ({ params }) => {
+    const row = Number(params.row);
+    if (!Number.isInteger(row) || row <= 0) throw new HttpError(400, "the side question's row must be a positive integer");
+    fleet.dismissBtw(params.id!, row);
+    return json(null);
+  })
   .add("POST", "/api/sessions/:id/interrupt", ({ params }) => {
     fleet.interrupt(params.id!);
     return json(null);

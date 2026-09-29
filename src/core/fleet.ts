@@ -27,6 +27,7 @@ import { place, type AccountState } from "./balancer";
 import { claimFor } from "./claim";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import {
+  dismissBtw,
   failUnfinishedBtw,
   findSessionRecord,
   finishBtw,
@@ -275,6 +276,8 @@ export class Fleet extends EventEmitter {
   /** Side questions asked in the terminal whose answer is being waited for, by session. */
   private btwWatching = new Map<string, Promise<void>>();
   private btwHistory = new BtwHistory();
+  /** Side questions taken back while asking: their watcher's answer is not recorded. */
+  private btwDismissed = new Set<number>();
   private nextParkCheck: number;
   /** With its turn over: what a live session is still waiting on (`refreshWork`). */
   private work = new Map<string, string>();
@@ -2436,10 +2439,32 @@ export class Fleet extends EventEmitter {
   private settleBtw(id: string, rowId: number, answer: Promise<string>): void {
     void answer
       .then(
-        (text) => finishBtw(rowId, { answer: text }, this.now()),
-        (e) => finishBtw(rowId, { error: e instanceof Error ? e.message : String(e) }, this.now()),
+        (text) => {
+          if (!this.btwDismissed.has(rowId)) finishBtw(rowId, { answer: text }, this.now());
+        },
+        (e) => {
+          if (!this.btwDismissed.has(rowId)) finishBtw(rowId, { error: e instanceof Error ? e.message : String(e) }, this.now());
+        },
       )
-      .finally(() => this.emit("btw", id));
+      .finally(() => {
+        this.btwDismissed.delete(rowId);
+        this.emit("btw", id);
+      });
+  }
+
+  /**
+   * Take a side question back: its card leaves the Timeline, and the panel —
+   * still up in the pane, asking or answering — is closed (Esc in the web UI).
+   */
+  dismissBtw(id: string, row: number): void {
+    const s = this.get(id);
+    const b = listBtw(id).find((x) => x.id === row);
+    if (!b) throw new FleetError(404, `no side question #${row} here`);
+    if (b.status !== "asking") throw new FleetError(409, "it has already been answered");
+    this.btwDismissed.add(row);
+    dismissBtw(row, this.now());
+    if (s.tmux) void closePanel(this.deps.runtime, s.tmux).catch(() => {});
+    this.emit("btw", id);
   }
 
   /** Before typing into a Claude pane: its /btw panel out of the way, once any answer in it is kept. */

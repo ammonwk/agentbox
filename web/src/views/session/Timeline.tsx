@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Btw, MateMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
-import { fmtClock, useBtw, useTimeline } from "../../api";
+import { api, fmtClock, useBtw, useTimeline } from "../../api";
 import { fmtDur } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline, withBtw } from "../../lib/timeline";
@@ -64,6 +64,24 @@ export function Timeline({ session }: { session: Session }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
   const prev = useRef({ count: 0, firstId: "", scrollTop: 0, scrollHeight: 0, initial: true });
+
+  // Esc takes a side question back while its card is up: the panel in the pane
+  // closes and the card is dismissed. Not while typing — there Esc just blurs.
+  const asking = useMemo(() => btw.filter((b) => b.status === "asking"), [btw]);
+  useEffect(() => {
+    if (asking.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.repeat) return;
+      // A dialog is open, or you are typing: Esc is theirs, not the card's.
+      if (document.querySelector("[role=dialog]")) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      e.preventDefault();
+      for (const b of asking) void api.btwDismiss(session.id, b.id).catch(() => {});
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [asking, session.id]);
 
   useLayoutEffect(() => {
     const el = boxRef.current;
@@ -414,7 +432,7 @@ function BtwCard({ btw }: { btw: Btw }) {
       <div className="tl-btw-a">
         {btw.status === "asking" ? (
           <span className="faint">
-            <Spinner size={11} /> Answering…
+            <Spinner size={11} /> Answering… <span className="tl-btw-hint">· Esc dismisses</span>
           </span>
         ) : btw.status === "failed" ? (
           <span className="tl-btw-err">
@@ -503,7 +521,7 @@ const ToolRow = memo(function ToolRow({ ev, now }: { ev: ToolEvent; now: number 
         aria-expanded={hasDetail ? open : undefined}
         disabled={!hasDetail}
         onClick={() => setOpen(!open)}
-        title={running && now > 0 ? `${fmtClock(ev.at)} · running for ${fmtDur(now - ev.at)}` : fmtClock(ev.at)}
+        title={running && took !== null ? `${fmtClock(ev.at)} · running for ${fmtDur(took)}` : fmtClock(ev.at)}
       >
         <span className="sx-tool-glyph" aria-hidden="true">
           {running ? <Spinner size={11} /> : ev.status === "error" ? <Icon.x size={13} /> : <Icon.check size={13} />}

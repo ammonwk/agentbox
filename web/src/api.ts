@@ -189,6 +189,8 @@ export const api = {
   interrupt: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/interrupt`),
   /** Ask Claude a side question (/btw); the answer arrives over the watch as a `btw` frame. */
   btw: (id: string, question: string) => post<Btw>(`/api/sessions/${enc(id)}/btw`, { question }),
+  /** Take a side question back: its card leaves the Timeline and the panel in the pane closes. */
+  btwDismiss: (id: string, row: number) => post<unknown>(`/api/sessions/${enc(id)}/btw/${row}/dismiss`),
   resume: (id: string, prompt?: string) =>
     post<Session>(`/api/sessions/${enc(id)}/resume`, prompt ? { prompt } : {}),
   adopt: (id: string) => post<Session>(`/api/sessions/${enc(id)}/adopt`),

@@ -856,6 +856,11 @@ export function listBtw(sessionId: string): Btw[] {
   return (getDb().query("SELECT * FROM btw WHERE session_id = ? ORDER BY asked_at, id").all(sessionId) as BtwRow[]).map(rowToBtw);
 }
 
+/** Taken back before it answered: the card is hidden from the Timeline; the record stays. */
+export function dismissBtw(id: number, at: number): void {
+  getDb().run("UPDATE btw SET status='dismissed', error=NULL, answered_at=? WHERE id=? AND status='asking'", [at, id]);
+}
+
 /** Ones still asking when the server stopped: nothing is waiting on them any more. */
 export function failUnfinishedBtw(error: string, at: number): string[] {
   const rows = getDb().query("UPDATE btw SET status='failed', error=?, answered_at=? WHERE status='asking' RETURNING session_id").all(error, at) as { session_id: string }[];

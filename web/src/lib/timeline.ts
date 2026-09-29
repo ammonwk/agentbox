@@ -100,10 +100,11 @@ const rowAt = (r: TimelineRow): number =>
  * belongs on, unless `all` (the start of the conversation is loaded).
  */
 export function withBtw(rows: TimelineRow[], items: readonly Btw[], all: boolean): TimelineRow[] {
-  if (items.length === 0) return rows;
+  const live = items.filter((b) => b.status !== "dismissed");
+  if (live.length === 0) return rows;
   const from = rows.length && !all ? rowAt(rows[0]!) : -Infinity;
   const out = [...rows];
-  for (const btw of items) {
+  for (const btw of live) {
     if (btw.askedAt < from) continue;
     let i = out.length;
     while (i > 0 && rowAt(out[i - 1]!) > btw.askedAt) i--;

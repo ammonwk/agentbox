@@ -372,7 +372,7 @@ export interface Btw {
   /** The answer's markdown, as Claude's panel copies it. */
   answer: string | null;
   error: string | null;
-  status: "asking" | "answered" | "failed";
+  status: "asking" | "answered" | "failed" | "dismissed";
   source: "timeline" | "terminal";
   askedAt: number;
   answeredAt: number | null;
