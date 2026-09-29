@@ -306,9 +306,20 @@ function blocksText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .filter((b: any) => b?.type === "text" && typeof b.text === "string")
-    .map((b: any) => b.text)
+    .map((b: any) => (b?.type === "text" && typeof b.text === "string" ? b.text : isNarration(b) ? b.thinking : null))
+    .filter((t): t is string => t !== null)
     .join("\n");
+}
+
+/**
+ * What Claude says to you between tool calls ("Found it: …", "Lint passed,
+ * now …") is recorded as a thinking block, told apart only by its signature:
+ * a protobuf whose kind field reads `narration` where thinking reads
+ * `thinking`, near the start. Claude Code shows it as text, and so do we.
+ */
+export function isNarration(b: any): boolean {
+  if (b?.type !== "thinking" || typeof b.thinking !== "string" || !b.thinking.trim() || typeof b.signature !== "string") return false;
+  return Buffer.from(b.signature.slice(0, 96), "base64").includes("\x01B\tnarration", 0, "latin1");
 }
 
 // ------------------------------------------------------------- the fold
@@ -806,8 +817,10 @@ export function claudePieces(r: any, index: number): Piece[] {
         if (b?.type === "text") {
           if (m.model === SYNTHETIC && /^No response requested\.?$/.test(b.text ?? "")) return;
           if (b.text?.trim()) out.push({ kind: "event", event: { id, at, kind: "assistant", text: b.text } });
+        } else if (isNarration(b)) {
+          out.push({ kind: "event", event: { id, at, kind: "assistant", text: b.thinking } });
         } else if (b?.type === "thinking") {
-          // Newer models record thinking as a signature with empty text.
+          // Without --thinking-display summarized, thinking is a signature with empty text.
           if (b.thinking?.trim()) out.push({ kind: "event", event: { id, at, kind: "thinking", text: b.thinking } });
         } else if (b?.type === "tool_use" || b?.type === "server_tool_use") {
           const name = String(b.name ?? "tool");

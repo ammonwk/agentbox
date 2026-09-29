@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { capJson } from "../providers/jsonl-reader";
+import { isNarration } from "../providers/claude-transcript";
 import { inputFields } from "../../../web/src/lib/toolinput";
 
 describe("capJson", () => {
@@ -42,5 +43,19 @@ describe("inputFields", () => {
   test("not a JSON object: shown raw", () => {
     expect(inputFields("*** Begin Patch\n")).toBeNull();
     expect(inputFields('{"command":"ls')).toBeNull();
+  });
+});
+
+describe("isNarration", () => {
+  // Real signature heads: the kind field reads `narration` or `thinking`.
+  const narration = "CAQShAgKEQgSGAI4AUIJbmFycmF0aW9uEgx1CINhv6KrJsHyD0waDJvACKHgePhNs2WxZyIwvAo0vJUg309hUq7dV+pED37Z";
+  const thinking = "CAQSuwYKEAgSGAI4AUIIdGhpbmtpbmcSDFKDe1v1L8ETLHaEPxoMFx8F2zpI0kkGAYvEIjCkIkPGnILZfpYffEw8Uo54X2HL";
+
+  test("text Claude said to the user is narration", () => {
+    expect(isNarration({ type: "thinking", thinking: "Found it.", signature: narration })).toBe(true);
+  });
+  test("thinking stays thinking, and an empty block is neither", () => {
+    expect(isNarration({ type: "thinking", thinking: "Weighing it.", signature: thinking })).toBe(false);
+    expect(isNarration({ type: "thinking", thinking: "", signature: narration })).toBe(false);
   });
 });
