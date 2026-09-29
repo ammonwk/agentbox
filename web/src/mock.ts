@@ -696,9 +696,13 @@ function cold(): ColdState {
     schedules: structuredClone(schedules),
     onboarding: {
       identity: { name: "Dev", email: "dev@example.com", github: "dev", timezone: "UTC", context: "" },
-      hasAccount: true,
+      depsOk: true,
+      ghReady: true,
+      accountsReady: true,
       voiceReady: false,
       serviceInstalled: null,
+      lingering: null,
+      pwaInstalled: false,
     },
   };
 }
@@ -1369,7 +1373,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
 
   if (head === "onboarding") {
     await sleep(400);
-    return { installed: "/home/dev/.config/systemd/user/agentbox.service" };
+    return { installed: "/home/dev/.config/systemd/user/agentbox.service", lingering: true };
   }
 
   if (head === "worktrees") {

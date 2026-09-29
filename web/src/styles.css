@@ -596,6 +596,18 @@ code {
   color: var(--danger);
   font-size: 12.5px;
 }
+.ob .ob-note {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.ob .ob-external {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
 
 .content {
   flex: 1;

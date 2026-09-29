@@ -233,7 +233,7 @@ export function App() {
             {w}
           </Banner>
         ))}
-        {state ? <OnboardingCard ob={state.onboarding} /> : null}
+        {state ? <OnboardingCard ob={state.onboarding} sessions={state.sessions} /> : null}
 
         <main className={`content ${(flush || route.page === "skills") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
