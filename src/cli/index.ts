@@ -17,6 +17,7 @@ import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
 import { ApiError, apiClient, serverBase } from "../client";
 import { CLI_GUIDE } from "../core/cli-guide";
+import { fixPwaDesktop } from "../core/pwa";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
@@ -218,6 +219,12 @@ async function onSession(verb: "attach" | "resume" | "adopt", id: string | undef
 
 type Check = { name: string; ok: boolean; detail: string; fatal: boolean };
 
+/** Doctor fixes what it finds, and says so: the PWA entry's launcher class. */
+function pwaDetail(): string {
+  const fixed = fixPwaDesktop();
+  return fixed.length ? `patched ${fixed.join(", ")} (Chrome's Wayland app-id bug)` : "ok";
+}
+
 function doctor(): number {
   ensureDirs();
   const deps = dependencies(true);
@@ -238,6 +245,7 @@ function doctor(): number {
       fatal: false,
     },
     { name: "repos", ok: true, detail: `${listRepos().length} registered`, fatal: false },
+    { name: "pwa", ok: true, detail: pwaDetail(), fatal: false },
   ];
   for (const c of checks) console.log(`${c.ok ? "✓" : "✗"} ${c.name}: ${c.detail}`);
   const fatal = checks.filter((c) => !c.ok && c.fatal);

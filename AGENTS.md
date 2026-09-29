@@ -125,6 +125,11 @@ and each recovery's report in `recovery/`.
   to the session; for sessions working in this checkout.
 - `src/core/cli-guide.ts` — the `agentbox` CLI guide for agents: `agentbox
   guide` prints it and `bun run docs:cli` writes it to `docs/cli.md`.
+- `src/core/pwa.ts` — the board's PWA launcher entry. Chrome writes its
+  .desktop with `StartupWMClass=crx_<id>`, but the Wayland window's app id is
+  `chrome-<id>-<profile>` (the `Icon=` value), so GNOME groups the board with
+  Chrome. The server patches the entry at boot and on a slow poll, and
+  `doctor` fixes and reports it; nothing is touched without a Wayland session.
 
 ## Tests
 

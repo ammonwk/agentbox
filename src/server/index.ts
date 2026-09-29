@@ -28,6 +28,7 @@ import { calibrate } from "../core/calibration";
 import { diffOf } from "../core/diff";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
+import { watchPwaDesktop } from "../core/pwa";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings } from "../core/db";
@@ -873,6 +874,7 @@ export async function startServer(): Promise<void> {
   setInterval(() => void refreshPrs(), SLOW_REFRESH_MS).unref?.();
   checkBuild();
   setInterval(checkBuild, BUILD_POLL_MS).unref?.();
+  watchPwaDesktop();
 
   fleet.on("sessions", () => {
     scheduleHot();
