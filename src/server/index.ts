@@ -28,11 +28,11 @@ import { calibrate } from "../core/calibration";
 import { diffOf } from "../core/diff";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
-import { watchPwaDesktop } from "../core/pwa";
+import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoWorktreeDefault } from "../core/db";
-import { serviceInstalled, installService } from "../core/service";
+import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { openPrs, prWarnings, syncPrs } from "../core/prs";
@@ -129,8 +129,12 @@ const slow = {
   skillWarnings: [] as string[],
   tmuxMissing: false,
   providers: [] as ColdState["providers"],
-  /** A `systemctl is-enabled` spawn; never on the cold path itself. */
+  /** Probes that spawn a process; never on the cold path itself. */
   serviceInstalled: null as boolean | null,
+  lingering: null as boolean | null,
+  pwaInstalled: null as boolean | null,
+  depsOk: false,
+  ghReady: false,
 };
 
 /** Checkouts on this machine; each may carry its own `.claude/skills`. */
@@ -145,7 +149,13 @@ async function refreshSlow(): Promise<void> {
   // From the database: sessions come and go, and which PR is whose with them.
   slow.prs = openPrs(fleet.sessions());
   slow.tmuxMissing = !tmux.tmuxVersion();
+  // Each of these runs a program; none belongs on the cold path.
+  const deps = dependencies(false);
+  slow.depsOk = deps.tmux.state === "ok" && deps.git.state === "ok";
+  slow.ghReady = deps.gh.state === "ok";
   slow.serviceInstalled = serviceInstalled();
+  slow.lingering = lingering();
+  slow.pwaInstalled = pwaInstalled();
   scheduleCold();
 }
 
@@ -206,8 +216,9 @@ function accountViews(): AccountView[] {
 }
 
 function coldState(): ColdState {
+  const views = accountViews();
   return {
-    accounts: accountViews(),
+    accounts: views,
     logins: accounts.loginFlows(),
     repos: listRepos(),
     prs: slow.prs,
@@ -218,9 +229,13 @@ function coldState(): ColdState {
     schedules: listSchedules(),
     onboarding: {
       identity: readUserIdentity(),
-      hasAccount: accounts.list().length > 0,
+      depsOk: slow.depsOk,
+      ghReady: slow.ghReady,
+      accountsReady: views.some((a) => a.auth.state === "ok"),
       voiceReady: !("missing" in voiceConfig()),
       serviceInstalled: slow.serviceInstalled,
+      lingering: slow.lingering,
+      pwaInstalled: slow.pwaInstalled,
     },
   };
 }
@@ -798,10 +813,11 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/onboarding/service", () => {
     try {
-      const path = installService();
+      const done = installService();
       slow.serviceInstalled = serviceInstalled();
+      slow.lingering = lingering();
       scheduleCold();
-      return json({ installed: path });
+      return json({ installed: done.unit, lingering: done.lingering });
     } catch (e) {
       // A missing systemd is an answer, not a bug: 400, not 500.
       throw new HttpError(400, (e as Error).message);
@@ -906,8 +922,11 @@ export async function startServer(): Promise<void> {
   fleet.start();
   await fleet.ready;
   scheduler.start();
-  void refreshSlow();
-  setInterval(() => void refreshSlow(), SLOW_REFRESH_MS).unref?.();
+  // Before the first client connects: cold state's first push would otherwise
+  // carry the slow inputs' defaults — a checklist that says tmux is missing
+  // on a machine that has it, until the first refresh lands a minute later.
+  await refreshSlow().catch((e: unknown) => console.error("agentbox: first slow refresh failed:", e));
+  setInterval(() => refreshSlow().catch((e: unknown) => console.error("agentbox: slow refresh failed:", e)), SLOW_REFRESH_MS).unref?.();
   void refreshPrs();
   setInterval(() => void refreshPrs(), SLOW_REFRESH_MS).unref?.();
   checkBuild();

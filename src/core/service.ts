@@ -12,7 +12,7 @@ import { agentboxHome, userHome, packageRoot } from "./paths";
 
 export const SERVICE_UNIT = "agentbox.service";
 
-/** The unit's name, as `systemctl --user` says it. */
+/** Where the user's own units live. */
 const unitDir = (): string =>
   join(process.env.XDG_CONFIG_HOME || join(userHome(), ".config"), "systemd", "user");
 
@@ -20,6 +20,20 @@ const unitDir = (): string =>
 export function serviceInstalled(): boolean | null {
   if (!Bun.which("systemctl")) return null;
   return Bun.spawnSync(["systemctl", "--user", "is-enabled", SERVICE_UNIT], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+}
+
+/**
+ * Whether this user's systemd starts at boot rather than first login. The
+ * unit alone is half the story: without lingering, `enable` starts the board
+ * at the next login and it dies with that logout — the machine restarting
+ * overnight brings nothing up. Probed, not assumed: it is a per-user setting
+ * the user's machine may or may not have.
+ */
+export function lingering(): boolean | null {
+  if (!Bun.which("loginctl")) return null;
+  const uid = process.getuid?.() ?? 0;
+  const r = Bun.spawnSync(["loginctl", "show-user", String(uid), "--property=Linger"], { stdout: "pipe", stderr: "ignore" });
+  return r.exitCode === 0 && /Linger=yes/.test(r.stdout.toString());
 }
 
 /**
@@ -62,11 +76,12 @@ WantedBy=default.target
 const logPath = (): string => join(agentboxHome(), "logs", "server.log");
 
 /**
- * Write the unit for this checkout and enable it now. Idempotent: rewriting
- * the file and re-enabling an enabled, running service change nothing.
- * Returns the unit path it wrote.
+ * Write the unit for this checkout, enable it now, and turn lingering on so
+ * boot — not first login — starts it. Idempotent: rewriting the file and
+ * re-enabling an enabled, running service change nothing. Returns what was
+ * done, so the caller can say which half needed doing.
  */
-export function installService(): string {
+export function installService(): { unit: string; lingering: boolean } {
   if (!Bun.which("systemctl")) throw new Error("systemd is not available on this machine");
   const dir = unitDir();
   mkdirSync(dir, { recursive: true });
@@ -76,5 +91,15 @@ export function installService(): string {
   if (reload.exitCode !== 0) throw new Error(`daemon-reload failed: ${reload.stderr.toString().trim()}`);
   const enable = Bun.spawnSync(["systemctl", "--user", "enable", "--now", SERVICE_UNIT], { stderr: "pipe" });
   if (enable.exitCode !== 0) throw new Error(`enable --now failed: ${enable.stderr.toString().trim()}`);
-  return path;
+  // Boot-before-login is the point of the unit; a refusal here (some systems
+  // gate it) is reported, not swallowed — the board would otherwise silently
+  // start at first login and die with that logout.
+  if (!Bun.which("loginctl")) {
+    throw new Error("the service is installed, but loginctl is not available, so start-at-boot could not be checked — run `loginctl enable-linger` yourself");
+  }
+  const linger = Bun.spawnSync(["loginctl", "enable-linger"], { stderr: "pipe" });
+  if (linger.exitCode !== 0 && lingering() !== true) {
+    throw new Error(`the service is installed and running, but start-at-boot could not be turned on${linger.stderr.toString().trim() ? ` (${linger.stderr.toString().trim()})` : ""} — run \`loginctl enable-linger\` yourself`);
+  }
+  return { unit: path, lingering: true };
 }

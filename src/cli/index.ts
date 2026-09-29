@@ -12,15 +12,18 @@
 import { existsSync, mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, webDist } from "../core/paths";
-import { listRepos } from "../core/db";
+import { listRepos, listAccounts } from "../core/db";
 import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
 import { ApiError, apiClient, serverBase } from "../client";
 import { CLI_GUIDE } from "../core/cli-guide";
 import { fixPwaDesktop } from "../core/pwa";
 import { deriveIdentity, ensureUserEnv, userEnvPath } from "../core/user";
-import { serviceInstalled } from "../core/service";
+import { serviceInstalled, lingering } from "../core/service";
 import { voiceConfig } from "../voice/config";
+import { pwaInstalled } from "../core/pwa";
+import { identify } from "../core/accounts/identity";
+import { onboardingItems } from "../core/onboarding";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
@@ -224,9 +227,11 @@ async function onSession(verb: "attach" | "resume" | "adopt", id: string | undef
  * Derive who agentbox works for from the machine — git, gh, the passwd entry,
  * the timezone — write what is missing to `user.env`, and report. The point is
  * to ask for nothing the box already knows: every line says where it came
- * from, and the only advice left is what could not be derived.
+ * from, and the only advice left is what could not be derived. The checklist
+ * is the server's own computed state (the same object the board's first-run
+ * card renders), so the two cannot disagree about what is still missing.
  */
-function onboard(): number {
+async function onboard(): Promise<number> {
   ensureDirs();
   // Derive before writing: after ensureUserEnv the file holds every key, and
   // re-deriving would report "user.env" for values that came from git and gh.
@@ -241,18 +246,32 @@ function onboard(): number {
   row("github", identity.github || "—", sources.github);
   row("timezone", identity.timezone, sources.timezone);
   console.log("");
-  const missing: string[] = [];
+  // The checklist is computed from the same probes the server puts on the
+  // cold state — no server needed, so this works before the first serve too.
+  // An account counts only when its credentials read as ok: registered is
+  // not logged in.
   const deps = dependencies(false);
-  for (const n of ["tmux", "git", "gh"] as const) {
-    if (deps[n].state !== "ok") missing.push(`${n}: ${deps[n].detail ?? deps[n].state}`);
+  const accounts = listAccounts();
+  const identities = await Promise.allSettled(accounts.map((a) => identify(a)));
+  const items = onboardingItems({
+    identity,
+    depsOk: deps.tmux.state === "ok" && deps.git.state === "ok",
+    ghReady: deps.gh.state === "ok",
+    accountsReady: accounts.length > 0 && identities.some((r) => r.status === "fulfilled" && r.value.auth.state === "ok"),
+    voiceReady: !("missing" in voiceConfig()),
+    serviceInstalled: serviceInstalled(),
+    lingering: lingering(),
+    pwaInstalled: pwaInstalled(),
+  });
+  for (const it of items) {
+    if (it.notApplicable) continue;
+    console.log(`${it.done ? "✓" : "✗"} ${it.label}`);
   }
-  const voice = voiceConfig();
-  if ("missing" in voice) missing.push(`voice: missing ${voice.missing}`);
-  if (serviceInstalled() === false) missing.push("service: not installed — the board's first-run card can install it");
-  if (!missing.length) console.log("dependencies: all good");
+  const undone = items.filter((it) => !it.done && !it.notApplicable);
+  if (undone.length === 0) console.log("\nnothing left to set up");
   else {
-    console.log("still to set up:");
-    for (const m of missing) console.log(`  ${m}`);
+    console.log("\nstill to set up:");
+    for (const it of undone) console.log(`  ${it.label}`);
   }
   if (!identity.context) {
     console.log(`\noptional: add USER_CONTEXT=<a line about you> to ${userEnvPath()} — the voice agent reads it to know who it is talking to.`);
@@ -277,6 +296,7 @@ function doctor(): number {
   const dep = (name: string, d: DepStatus, fatal: boolean): Check => ({ name, ok: d.state === "ok", detail: d.detail ?? d.state, fatal });
   const which = (bin: string) => Bun.spawnSync(["sh", "-c", `command -v ${bin}`]).exitCode === 0;
 
+  const voice = voiceConfig();
   const checks: Check[] = [
     { name: "data dir", ok: true, detail: agentboxHome(), fatal: false },
     dep("tmux", deps.tmux, true),
@@ -291,6 +311,20 @@ function doctor(): number {
     },
     { name: "repos", ok: true, detail: `${listRepos().length} registered`, fatal: false },
     { name: "pwa", ok: true, detail: pwaDetail(), fatal: false },
+    {
+      name: "service",
+      ok: serviceInstalled() !== false,
+      detail: serviceInstalled() === null ? "systemd not available" : serviceInstalled() ? "installed" : "not installed — the board's first-run card can install it",
+      fatal: false,
+    },
+    { name: "linger", ok: lingering() !== false, detail: lingering() === null ? "no systemd" : lingering() ? "starts at boot" : "off — run `loginctl enable-linger`", fatal: false },
+    { name: "voice", ok: !("missing" in voice), detail: "missing" in voice ? `missing ${voice.missing}` : "keys present", fatal: false },
+    {
+      name: "accounts",
+      ok: listAccounts().length > 0,
+      detail: listAccounts().length ? `${listAccounts().length} registered` : "none — add one in the web UI",
+      fatal: false,
+    },
   ];
   for (const c of checks) console.log(`${c.ok ? "✓" : "✗"} ${c.name}: ${c.detail}`);
   const fatal = checks.filter((c) => !c.ok && c.fatal);

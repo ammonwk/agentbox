@@ -791,15 +791,26 @@ export interface ColdState {
   onboarding: Onboarding;
 }
 
-/** What onboarding knows, all of it derived from the machine (see core/user.ts). */
+/** What onboarding knows, all of it probed from the machine — never assumed.
+ *  Every field has a probe (see core/onboarding.ts for the inventory), and
+ *  the board's first-run card, `agentbox onboard` and `doctor` all render the
+ *  same list from it. */
 export interface Onboarding {
   identity: UserIdentity;
-  /** Any provider account registered. */
-  hasAccount: boolean;
+  /** tmux and git, the two things nothing works without. */
+  depsOk: boolean;
+  /** gh installed and authenticated — PR links and the PR sync read it. */
+  ghReady: boolean;
+  /** An account is registered *and* authenticated, not merely detected. */
+  accountsReady: boolean;
   /** voice.env has its keys. */
   voiceReady: boolean;
   /** The systemd user service is installed and enabled; null where systemd is not. */
   serviceInstalled: boolean | null;
+  /** Boot starts it, not first login; null where systemd is not. */
+  lingering: boolean | null;
+  /** The board is installed as an app; null when there is no way to tell. */
+  pwaInstalled: boolean | null;
 }
 
 export interface AppState extends HotState, ColdState {}

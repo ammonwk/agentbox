@@ -27,31 +27,56 @@ function onWayland(): boolean {
   }
 }
 
+/** The applications dir Chrome writes launcher entries into. */
+const applicationsDir = (): string =>
+  join(process.env.XDG_DATA_HOME || join(userHome(), ".local", "share"), "applications");
+
+/** The agentbox PWA's launcher entries: `chrome-*.desktop` files naming it. */
+function pwaEntries(): string[] | null {
+  let names: string[];
+  try {
+    names = readdirSync(applicationsDir());
+  } catch {
+    return null;
+  }
+  const found: string[] = [];
+  for (const name of names) {
+    if (!name.startsWith("chrome-") || !name.endsWith(".desktop")) continue;
+    try {
+      const text = readFileSync(join(applicationsDir(), name), "utf8");
+      if (/^Name=agentbox$/m.test(text) && text.includes("--app-id=")) found.push(name);
+    } catch {
+      /* unreadable entry: not ours to judge */
+    }
+  }
+  return found;
+}
+
+/** Whether the board is installed as an app; null when there is no way to tell. */
+export function pwaInstalled(): boolean | null {
+  const found = pwaEntries();
+  return found === null ? null : found.length > 0;
+}
+
 /** The agentbox PWA entries fixed by this call; empty when none needed it. */
 export function fixPwaDesktop(): string[] {
   if (!onWayland()) return [];
-  const dir = join(process.env.XDG_DATA_HOME || join(userHome(), ".local", "share"), "applications");
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return [];
-  }
+  const entries = pwaEntries();
+  if (!entries) return [];
   const fixed: string[] = [];
-  for (const name of names) {
-    if (!name.startsWith("chrome-") || !name.endsWith(".desktop")) continue;
+  for (const name of entries) {
     let text: string;
     try {
-      text = readFileSync(join(dir, name), "utf8");
+      text = readFileSync(join(applicationsDir(), name), "utf8");
     } catch {
       continue;
     }
-    if (!/^Name=agentbox$/m.test(text) || !text.includes("--app-id=")) continue;
+    if (!text.includes("--app-id=")) continue;
     const icon = /^Icon=(\S+)$/m.exec(text)?.[1];
     const wmClass = /^StartupWMClass=(\S*)$/m.exec(text)?.[1];
     if (!icon || icon.includes("/") || !wmClass?.startsWith("crx_") || wmClass === icon) continue;
     try {
-      writeFileSync(join(dir, name), text.replace(/^StartupWMClass=.*$/m, `StartupWMClass=${icon}`));
+      writeFileSync(join(applicationsDir(), name), text.replace(/^StartupWMClass=.*$/m, `StartupWMClass=${icon}`));
       fixed.push(name);
     } catch {
       // Unwritable: the entry stays grouped with Chrome until the next pass.
