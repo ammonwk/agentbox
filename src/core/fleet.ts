@@ -100,6 +100,7 @@ import {
 import { agentboxBin } from "./paths";
 import { weeklyWindow } from "./balancer";
 import { readBtwPanel } from "./providers/claude-btw";
+import { devinQueuedCount } from "./providers/devin";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
   Account,
@@ -2302,6 +2303,22 @@ export class Fleet extends EventEmitter {
     await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
     await this.deps.runtime.sendText(s.tmux, text);
+    if (s.provider === "devin") await this.deliverDevinQueue(s.tmux);
+  }
+
+  /**
+   * Devin holds a message typed mid-turn until the turn ends, and a turn can
+   * run for hours, so a course correction would arrive after the work it was
+   * meant to steer. Enter on its empty prompt delivers the queue now.
+   */
+  private async deliverDevinQueue(pane: string): Promise<void> {
+    for (let i = 0; i < 6; i++) {
+      await Bun.sleep(500);
+      if (devinQueuedCount(this.deps.runtime.capture(pane) ?? "") > 0) {
+        this.deps.runtime.sendKeys(pane, ["Enter"]);
+        return;
+      }
+    }
   }
 
   /**

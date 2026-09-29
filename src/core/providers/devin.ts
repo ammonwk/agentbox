@@ -152,6 +152,13 @@ export function devinSubcommand(argv: string[]): string | null {
   return null;
 }
 
+/** How many typed messages Devin is holding until its turn ends — its footer
+ *  reads `── N queued ──` over "Press Enter to send queued messages now". */
+export function devinQueuedCount(screen: string): number {
+  const m = /──\s*(\d+)\s+queued\b/.exec(screen);
+  return m ? Number(m[1]) : 0;
+}
+
 export interface DevinProc {
   pid: number;
   ppid: number;
