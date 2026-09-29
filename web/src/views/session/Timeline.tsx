@@ -65,11 +65,16 @@ export function Timeline({ session }: { session: Session }) {
   const [pinned, setPinned] = useState(true);
   const prev = useRef({ count: 0, firstId: "", scrollTop: 0, scrollHeight: 0, initial: true });
 
-  // Esc takes a side question back while its card is up: the panel in the pane
-  // closes and the card is dismissed. Not while typing — there Esc just blurs.
-  const asking = useMemo(() => btw.filter((b) => b.status === "asking"), [btw]);
+  // Esc puts a side question's card away while it is up: asking (the question
+  // is taken back and the panel in the pane closes) or answered (read, done).
+  // Not while typing — there Esc just blurs.
+  const cards = useMemo(() => {
+    const shown = rows.filter((r) => r.type === "btw").map((r) => r.btw);
+    const ids = new Set(shown.map((b) => b.id));
+    return [...shown, ...btw.filter((b) => b.status === "asking" && !ids.has(b.id))];
+  }, [rows, btw]);
   useEffect(() => {
-    if (asking.length === 0) return;
+    if (cards.length === 0) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.repeat) return;
       // A dialog is open, or you are typing: Esc is theirs, not the card's.
@@ -77,11 +82,11 @@ export function Timeline({ session }: { session: Session }) {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
       e.preventDefault();
-      for (const b of asking) void api.btwDismiss(session.id, b.id).catch(() => {});
+      for (const b of cards) void api.btwDismiss(session.id, b.id).catch(() => {});
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [asking, session.id]);
+  }, [cards, session.id]);
 
   useLayoutEffect(() => {
     const el = boxRef.current;

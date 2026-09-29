@@ -2471,15 +2471,18 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * Take a side question back: its card leaves the Timeline, and the panel —
-   * still up in the pane, asking or answering — is closed (Esc in the web UI).
+   * Take a side question back while it is asking, or put its card away once
+   * it has answered or failed: the card leaves the Timeline, the record
+   * stays. A panel still up in the pane is closed — Escape only on seeing
+   * the panel, so a prompt or a running turn is never touched (Esc in the
+   * web UI).
    */
   dismissBtw(id: string, row: number): void {
     const s = this.get(id);
     const b = listBtw(id).find((x) => x.id === row);
     if (!b) throw new FleetError(404, `no side question #${row} here`);
-    if (b.status !== "asking") throw new FleetError(409, "it has already been answered");
-    this.btwDismissed.add(row);
+    if (b.status === "dismissed") throw new FleetError(409, "it is already dismissed");
+    if (b.status === "asking") this.btwDismissed.add(row);
     dismissBtw(row, this.now());
     if (s.tmux) void closePanel(this.deps.runtime, s.tmux).catch(() => {});
     this.emit("btw", id);

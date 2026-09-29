@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { AccountView, Placement, Session } from "../../../../src/core/types";
-import { ago, api, fmtTokens } from "../../api";
+import { ago, api, fmtTokens, useBtw } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
@@ -53,8 +53,15 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
   const ref = useRef<HTMLTextAreaElement>(null);
   const provider = PROVIDER_LABEL[session.provider];
   const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images });
+  const btwCards = useBtw(session.id);
   /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
   const btw = mode.kind === "send" && session.provider === "claude" ? BTW.exec(text) : null;
+  // Side questions with a card up in the Timeline. Live only while the
+  // timeline's watch is held (this box shows on every tab); elsewhere the
+  // list is empty and Esc goes to the pane, which is what that tab wants.
+  const openCards = useMemo(() => btwCards.filter((b) => b.status !== "dismissed"), [btwCards]);
+  // A prompt showing takes precedence: Esc there cancels it, and the card can wait.
+  const escTakesCard = openCards.length > 0 && session.status !== "blocked";
 
   // Grow with the text up to a cap, then scroll.
   useEffect(() => {
@@ -206,9 +213,16 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
             </Button>
             <Button
               className="cmp-aux"
-              title="Press Escape in the session — cancels the current prompt or menu"
+              title={
+                escTakesCard
+                  ? "Puts the side question's card away; a panel still up in the pane closes with it"
+                  : "Press Escape in the session — cancels the current prompt or menu"
+              }
               disabled={busy}
-              onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
+              onClick={() => {
+                if (escTakesCard) for (const b of openCards) void api.btwDismiss(session.id, b.id).catch(() => {});
+                else void run(() => api.keys(session.id, ["Escape"]));
+              }}
             >
               Esc
             </Button>
