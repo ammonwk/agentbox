@@ -1514,10 +1514,17 @@
 }
 .ask-legend {
   padding: 0;
+  max-width: 100%;
   font-size: 13.5px;
   font-weight: 550;
   line-height: 1.4;
   color: var(--text);
+}
+.ask-text,
+.ask-label,
+.ask-desc {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .ask-chip {
   display: inline-block;

@@ -47,6 +47,7 @@ interface Item {
   /** The digit that picks this item, when it has one. */
   n: number | null;
   label: string;
+  description?: string;
   checked: boolean | null;
   pointer: boolean;
   other: boolean;
@@ -91,8 +92,12 @@ export function readAskScreen(raw: string): AskScreen | null {
 
   const items: Item[] = [];
   const text: string[] = [];
+  const bodyLines = lines.slice(bar + 1, footer);
+  // With Other open, unnumbered options cannot be separated from question
+  // continuations. Keep the first-line prefix for matching that input state.
+  const typing = bodyLines.some((l) => /^└/.test(l.replace(BORDER, "")));
   let input: string | null = null;
-  for (const l of lines.slice(bar + 1, footer)) {
+  for (const l of bodyLines) {
     const t = l.replace(BORDER, "").trim();
     if (/^[─═-]+$/.test(t)) continue;
     if (/^└/.test(t)) {
@@ -113,11 +118,12 @@ export function readAskScreen(raw: string): AskScreen | null {
         pointer,
         other: OTHER.test(rest),
       });
-    } else if (items.length === 0 && t && text.length === 0) {
-      // The question: the first line after the bar (wraps are joined by the
-      // capture). While the Other field is open the items lose their numbers
-      // and would otherwise be swallowed here.
+    } else if (items.length === 0 && t && (!typing || text.length === 0)) {
+      // Devin wraps in its renderer, so tmux's -J cannot join these lines.
       text.push(t);
+    } else if (items.length > 0 && t && !typing) {
+      const item = items[items.length - 1]!;
+      if (!item.other) item.description = norm(`${item.description ?? ""} ${t}`);
     }
   }
   if (!items.length || !text.length) return null;
@@ -238,7 +244,8 @@ export function askFromScreen(raw: string): { id: string; questions: AskQuestion
   const s = readAskScreen(raw);
   if (!s || s.chips.length !== 1) return null;
   const multi = s.items.some((it) => it.checked !== null);
-  const options = s.items.filter((it) => !it.other && it.label).map((it) => ({ label: it.label }));
+  const options = s.items.filter((it) => !it.other && it.label)
+    .map((it) => ({ label: it.label, ...(it.description ? { description: it.description } : {}) }));
   if (!options.length) return null;
   let h = 2166136261;
   for (let i = 0; i < s.text.length; i++) h = Math.imul(h ^ s.text.charCodeAt(i), 16777619);
