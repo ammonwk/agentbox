@@ -98,6 +98,7 @@ import {
 } from "./recovery";
 import { agentboxBin } from "./paths";
 import { weeklyWindow } from "./balancer";
+import { readBtwPanel } from "./providers/claude-btw";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
   Account,
@@ -1530,10 +1531,19 @@ export class Fleet extends EventEmitter {
       // stays "busy" for days on a lead with teammates (see parkIdle).
       if (status === "running" && !busy && host !== "subagent" && now - (f?.lastActivityAt ?? now) >= STALE_TURN_MS) status = "waiting";
       // Claude says so itself while a permission dialog is up, which is the
-      // only way to know it for a session in some other terminal.
+      // only way to know it for a session in some other terminal. Its /btw
+      // panel is a dialog to Claude too, but a prompt to no one: while it
+      // answers the side question the session is working, and with the
+      // answer shown it is the idle prompt it was at, under the panel.
       if (proc?.waitingOn) {
-        status = "blocked";
-        this.blocked.set(rec.id, proc.waitingOn);
+        const panel = pane && rec.provider === "claude" ? readBtwPanel(this.deps.runtime.capture(pane.name) ?? "") : null;
+        if (!panel) {
+          status = "blocked";
+          this.blocked.set(rec.id, proc.waitingOn);
+        } else {
+          status = panel.state === "asking" ? "running" : "waiting";
+          this.blocked.delete(rec.id);
+        }
       }
       if (host === "tmux" && adapter?.blockedOn && pane) {
         const quietFor = now - (f?.lastActivityAt ?? 0);
