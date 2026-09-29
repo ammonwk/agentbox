@@ -549,13 +549,14 @@ export async function runSubagentMcp(): Promise<void> {
         "Bad: \"look at the auth code\". Good: \"Find every caller of refreshToken() under src/ " +
         "and report, as a list of path:line, which ones handle a null return. Read only — change " +
         "nothing.\"\n\n" +
-        "Run several at once by calling this tool several times in one message when the tasks " +
-        "are independent. Each one notifies you separately when it lands, so there is nothing " +
-        "to coordinate. They do share one working tree, though, so fan out writers only when " +
+        "For several independent tasks, use `workflow` with `parallel` and set `concurrency` " +
+        "to the desired fan-out. Some clients (including Devin) serialize blocking MCP calls, " +
+        "so several calls to this tool in one message may run one at a time. Agents share " +
+        "one working tree, so fan out writers only when " +
         "their files cannot collide; parallel readers are always safe (set `read_only` and it " +
         "is guaranteed). To hand an agent context too big for the prompt, write it to a file " +
         "and name the path.\n\n" +
-        "Just call it and let it finish. After about two minutes your client moves the call to " +
+        "In Claude Code, after about two minutes the client moves the call to " +
         "the background, tells you it has, and delivers the answer to you as a notification " +
         "whenever it lands — you keep working in the meantime.\n\n" +
         "You do not have to wonder how it is going. `list_agents` is one small result and no " +
@@ -1002,9 +1003,9 @@ export async function runSubagentMcp(): Promise<void> {
           .number()
           .int()
           .min(1)
-          .max(16)
+          .max(MAX_AGENTS)
           .optional()
-          .describe(`How many agents run at once. Default ${DEFAULT_CONCURRENCY}.`),
+          .describe(`How many agents run at once, up to ${MAX_AGENTS}. Default ${DEFAULT_CONCURRENCY}; set this to the number of independent tasks to start all of them together.`),
         deadline_seconds: z.number().int().min(30).max(7200).optional(),
         cwd: cwdArg,
         provider: providerArg,
