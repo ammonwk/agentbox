@@ -238,7 +238,7 @@ function Row({
       style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
       title={[titleOf(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
     >
-      <StatusDot status={s.status} shape={shape} repo={baseName(repoKey(s))} />
+      <StatusDot status={s.status} shape={shape} repo={baseName(repoKey(s))} copy={s.id} />
       <span className="rail-text">
         <span className="rail-title">{titleOf(s)}</span>
         {said ? <span className={`rail-snippet${s.status === "blocked" ? " blocked" : ""}`}>{said}</span> : null}
@@ -482,7 +482,7 @@ function ClosedList({ query, current, stamp, shapes }: { query: string; current:
               data-status={s.status}
               title={titleOf(s)}
             >
-              <StatusDot status={s.status} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} />
+              <StatusDot status={s.status} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} copy={s.id} />
               <span className="rail-text">
                 <span className="rail-title">{titleOf(s)}</span>
               </span>

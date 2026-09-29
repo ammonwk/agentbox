@@ -337,9 +337,31 @@
   padding-top: 10px;
   padding-bottom: 10px;
 }
-.sv[data-rail="full"] .rail-row > .st-shape,
-.sv[data-rail="full"] .rail-row > .st-dot {
-  margin-top: 4px;
+.sv[data-rail="full"] .rail-row > .rail-dot {
+  margin-top: 1px;
+}
+/* The dot copies the session's id: a button around it, padded out to a hit
+   area a finger finds, the padding paid back in margin so the row is unmoved. */
+.rail-dot {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  margin: -3px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+.rail-dot:hover {
+  background: var(--hover);
+}
+.rail-dot:active {
+  background: var(--active);
+}
+.rail-dot .st-done {
+  color: var(--success);
 }
 .sv[data-rail="full"] .rail-title {
   font-size: 15px;

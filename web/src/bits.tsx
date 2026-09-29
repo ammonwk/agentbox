@@ -162,15 +162,55 @@ export function ShapeMark({ shape }: { shape: Shape }) {
 }
 
 /** Status as a dot: its colour is the status, and given a `shape`, its shape
- *  is the repo — a list sorted by time still says both at a glance. */
-export function StatusDot({ status, shape, repo }: { status: SessionStatus; shape?: Shape; repo?: string }) {
-  const title = `${STATUS_LABEL[status]} — ${STATUS_TITLE[status]}${repo ? `\nIn ${repo}` : ""}`;
-  if (!shape) return <span className={`st-dot st-${status}`} title={title} role="img" aria-label={STATUS_LABEL[status]} />;
+ *  is the repo — a list sorted by time still says both at a glance. With
+ *  `copy` (a session id) clicking it copies the id instead of following the
+ *  row's link, a check says so for a moment. */
+export function StatusDot({ status, shape, repo, copy }: { status: SessionStatus; shape?: Shape; repo?: string; copy?: string }) {
+  const [done, setDone] = useState(false);
+  const t = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (t.current) clearTimeout(t.current);
+  }, []);
+  const title = `${STATUS_LABEL[status]} — ${STATUS_TITLE[status]}${repo ? `\nIn ${repo}` : ""}${copy ? `\nClick to copy ${copy}` : ""}`;
+  if (!copy) {
+    if (!shape) return <span className={`st-dot st-${status}`} title={title} role="img" aria-label={STATUS_LABEL[status]} />;
+    return (
+      <svg className={`st-shape st-${status}`} viewBox="0 0 10 10" width="10" height="10" role="img" aria-label={STATUS_LABEL[status]}>
+        <title>{title}</title>
+        <path d={SHAPE_PATH[shape]} />
+      </svg>
+    );
+  }
   return (
-    <svg className={`st-shape st-${status}`} viewBox="0 0 10 10" width="10" height="10" role="img" aria-label={STATUS_LABEL[status]}>
-      <title>{title}</title>
-      <path d={SHAPE_PATH[shape]} />
-    </svg>
+    <button
+      type="button"
+      className="rail-dot"
+      title={title}
+      aria-label={`Copy id ${copy}`}
+      onClick={(e) => {
+        // Inside the row's link: copy, do not open.
+        e.preventDefault();
+        e.stopPropagation();
+        void copyText(copy).then(
+          () => {
+            setDone(true);
+            if (t.current) clearTimeout(t.current);
+            t.current = setTimeout(() => setDone(false), 1400);
+          },
+          () => window.prompt("Copy this:", copy),
+        );
+      }}
+    >
+      {done ? (
+        <Icon.check size={10} className="st-done" />
+      ) : shape ? (
+        <svg className={`st-shape st-${status}`} viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+          <path d={SHAPE_PATH[shape]} />
+        </svg>
+      ) : (
+        <span className={`st-dot st-${status}`} aria-hidden="true" />
+      )}
+    </button>
   );
 }
 
