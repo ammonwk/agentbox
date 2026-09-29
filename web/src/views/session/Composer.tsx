@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { AccountView, Placement, Session } from "../../../../src/core/types";
 import { ago, api, fmtTokens } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
@@ -6,6 +6,7 @@ import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
 import { hrefOf } from "../../route";
+import { loadDraft, saveDraft } from "./drafts";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { echoSent } from "./echo";
@@ -43,12 +44,15 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * the box is replaced by the Adopt explanation.
  */
 export function Composer({ session, accounts, claimIdleMin }: { session: Session; accounts: readonly AccountView[]; claimIdleMin: number }) {
-  const [text, setText] = useState("");
+  // The draft left here last time (the composer is keyed by session, so this
+  // is read once per session). Sending clears it again.
+  const draft = useMemo(() => loadDraft(session.id), [session.id]);
+  const [text, setText] = useState(draft?.text ?? "");
   const { run, busy, error, clear } = useAction();
   const mode = composerMode(session);
   const ref = useRef<HTMLTextAreaElement>(null);
   const provider = PROVIDER_LABEL[session.provider];
-  const images = useAttachments({ text, setText, textareaRef: ref });
+  const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images });
   /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
   const btw = mode.kind === "send" && session.provider === "claude" ? BTW.exec(text) : null;
 
@@ -59,6 +63,13 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
     el.style.height = "auto";
     el.style.height = `${Math.min(200, el.scrollHeight + 2)}px`;
   }, [text]);
+
+  // Remember the draft as it changes; sending empties the box, which deletes it.
+  const savedImages = images.saved();
+  const savedKey = JSON.stringify(savedImages);
+  useEffect(() => {
+    saveDraft(session.id, text, savedImages);
+  }, [session.id, text, savedKey]);
 
   async function submit() {
     if (busy) return;

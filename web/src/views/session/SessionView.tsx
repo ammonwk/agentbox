@@ -607,7 +607,9 @@ function Detail({
       </PrBase.Provider>
       </FamilyContext.Provider>
 
-      <Composer session={session} accounts={state.accounts} claimIdleMin={state.settings.balancer.claimIdleMin} />
+      {/* Keyed by session: each one keeps its own draft (see drafts.ts),
+          rather than one box carrying its text into the next session. */}
+      <Composer key={session.id} session={session} accounts={state.accounts} claimIdleMin={state.settings.balancer.claimIdleMin} />
 
       {confirmClose ? (
         <ConfirmClose
