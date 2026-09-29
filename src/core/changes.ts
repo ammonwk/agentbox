@@ -16,7 +16,7 @@ export interface Change {
   detail: string;
 }
 
-export type ChangeRow = Pick<Session, "id" | "status" | "label" | "title" | "firstPrompt" | "lastMessage"> & {
+export type ChangeRow = Pick<Session, "id" | "status" | "label" | "title" | "firstPrompt" | "lastMessage" | "turnTruncated"> & {
   /** Why it is blocked, from `attentionOf`. */
   reason?: string;
 };
@@ -33,16 +33,19 @@ const titleOf = (s: ChangeRow) => oneLine(s.label) || oneLine(s.title) || oneLin
 
 function changeOf(was: { status: SessionStatus; lastMessage: string | null }, s: ChangeRow): Change | null {
   const c = (kind: ChangeKind, detail = ""): Change => ({ id: s.id, kind, title: titleOf(s), detail });
+  // A truncated turn's last message is the cut-off tail, not what it meant to
+  // say; the attention reason is the honest line.
+  const waitingDetail = () => (s.turnTruncated && s.reason ? oneLine(s.reason) : tail(s.lastMessage, 400));
   if (s.status === was.status) {
     // A turn short enough to start and end between two looks.
-    return s.status === "waiting" && s.lastMessage && s.lastMessage !== was.lastMessage ? c("waiting", tail(s.lastMessage, 400)) : null;
+    return s.status === "waiting" && s.lastMessage && s.lastMessage !== was.lastMessage ? c("waiting", waitingDetail()) : null;
   }
   switch (s.status) {
     case "blocked":
       return c("blocked", s.reason ?? "waiting on a prompt");
     case "waiting":
       // From stopped it was only resumed; nothing happened.
-      return was.status === "running" || was.status === "blocked" ? c("waiting", tail(s.lastMessage, 400)) : null;
+      return was.status === "running" || was.status === "blocked" ? c("waiting", waitingDetail()) : null;
     case "running":
       return was.status === "closed" ? null : c("running");
     case "stopped":

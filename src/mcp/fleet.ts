@@ -47,6 +47,7 @@ export function brief(s: Session & { attention?: { reason: string } }, accountLa
     `  ${clip(s.title, 100)}`,
   ];
   if (s.lastPrompt && s.lastPrompt !== s.title) lines.push(`  asked: ${clip(s.lastPrompt, 160)}`);
+  if (s.status === "waiting" && s.turnTruncated) lines.push(`  ! its reply was cut off by the output token limit — send a message to continue`);
   if (s.lastMessage) lines.push(`  said: ${clip(s.lastMessage, 220)}`);
   return lines.join("\n");
 }

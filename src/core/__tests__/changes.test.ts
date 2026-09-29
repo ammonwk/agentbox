@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ChangeWatcher, type ChangeRow } from "../changes";
 
 const row = (id: string, status: ChangeRow["status"], lastMessage: string | null = null): ChangeRow => ({
-  id, status, lastMessage, label: id, title: id, firstPrompt: null,
+  id, status, lastMessage, label: id, title: id, firstPrompt: null, turnTruncated: false,
 });
 
 describe("ChangeWatcher", () => {

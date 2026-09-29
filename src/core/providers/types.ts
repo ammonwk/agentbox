@@ -101,6 +101,12 @@ export interface TranscriptFacts {
    * by the fleet; on its own it cannot tell a working agent from a killed one.
    */
   turnOpen: boolean;
+  /**
+   * The turn is over because the model's reply was cut off by the max output
+   * tokens, not because it was done — it sits waiting for a message to
+   * continue. Null when the provider cannot tell.
+   */
+  turnTruncated?: boolean | null;
   contextUsed: number | null;
   contextLimit: number | null;
   /** Cumulative over the whole session, including subagents where the

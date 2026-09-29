@@ -295,6 +295,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     effort: null,
     cold: false,
     limitHit: null,
+    turnTruncated: false,
     question: null,
     origin: "agentbox",
     parent: null,
@@ -407,6 +408,15 @@ const sessions: MockSession[] = [
     startedAt: T0 - 22 * M, lastActivityAt: T0 - 3 * 1000,
   }),
   sess({
+    id: "s6g3", provider: "devin", accountId: "dv-main", status: "waiting", host: "tmux", turnTruncated: true,
+    title: "Trace how the CH projector folds call flags", cwd: `${AB}/.worktrees/ch-flags`, repoRoot: `${AB}/.worktrees/ch-flags`,
+    branch: "feat/ch-call-flags", worktree: `${AB}/.worktrees/ch-flags`, model: "glm-5-3-flash-max",
+    lastMessage: "Let me look at how the CH projector materializes call flags and whether org context is available there.",
+    contextUsed: 346_000, contextLimit: 1_000_000,
+    tokens: { input: 30_000, output: 60_000, cacheRead: 900_000, cacheWrite: 40_000, costEquiv: 2.1 },
+    startedAt: T0 - 17 * M, lastActivityAt: T0 - 3 * M,
+  }),
+  sess({
     id: "b8v7", provider: "codex", accountId: "cx-main", status: "running", host: "tmux", big: true, claim: 20,
     title: "Rewrite the transcript tailer around a record index", cwd: `${AB}/.worktrees/tailer`, repoRoot: `${AB}/.worktrees/tailer`,
     branch: "feat/tailer-index", worktree: `${AB}/.worktrees/tailer`, model: "gpt-5.4-codex",
@@ -484,7 +494,9 @@ const REASON: Record<AttentionKind, (s: Session) => string> = {
   waiting: (s) =>
     s.host === "subagent"
       ? s.subagent?.answerWaiting ? "Finished — its answer waits for its caller" : "Idle — its caller's turn"
-      : s.host === "external" ? "Turn over, in another terminal" : "Turn over — your move",
+      : s.host === "external" ? "Turn over, in another terminal"
+      : s.turnTruncated ? "Its reply was cut off by the output token limit — it waits for a message to continue"
+      : "Turn over — your move",
   running: () => "Working",
   stopped: () => "No process — resumable",
   closed: () => "Closed",

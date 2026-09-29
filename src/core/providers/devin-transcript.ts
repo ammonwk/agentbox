@@ -130,6 +130,11 @@ export interface AtifParse {
   /** Whether the conversation ends mid-turn; null when the source cannot say
    *  (the export is only written between turns). */
   turnOpen: boolean | null;
+  /** The last assistant message was cut off by the model's max output tokens
+   *  (`finish_reason: "max_tokens"`), not finished: it waits for a message to
+   *  continue. Null when the source cannot say (the export has no
+   *  finish_reason). */
+  turnTruncated: boolean | null;
 }
 
 export function parseAtif(doc: unknown): AtifParse {
@@ -143,6 +148,7 @@ export function parseAtif(doc: unknown): AtifParse {
     lastStepAt: null,
     userPrompts: [],
     turnOpen: null,
+    turnTruncated: null,
   };
   const d = (doc ?? {}) as { steps?: unknown; agent?: { model_name?: unknown } };
   const steps = Array.isArray(d.steps) ? (d.steps as any[]) : [];
@@ -252,6 +258,9 @@ export interface DevinNode {
   answers: string | null;
   /** The assistant stopped to run tools rather than to hand the turn back. */
   wantsTools: boolean;
+  /** Why the model stopped: "tool_calls", "stop", or "max_tokens" — its reply
+   *  was cut off mid-write and it waits for a message to continue. */
+  finishReason: string | null;
 }
 
 export interface DevinNodeInput {
@@ -307,6 +316,7 @@ export function devinNode(row: DevinNodeInput): DevinNode | null {
     calls: calls.map((c) => (c && typeof c.id === "string" ? c.id : "")).filter(Boolean),
     answers: m.role === "tool" && typeof m.tool_call_id === "string" ? m.tool_call_id : null,
     wantsTools: m.role === "assistant" && (calls.length > 0 || md.finish_reason === "tool_calls"),
+    finishReason: typeof md.finish_reason === "string" ? md.finish_reason : null,
   };
 }
 
@@ -378,6 +388,7 @@ export function chainFacts(chain: readonly ChainLink[]): AtifParse {
     lastStepAt: null,
     userPrompts: [],
     turnOpen: null,
+    turnTruncated: null,
   };
   for (const { node: n } of chain) {
     if (n.role !== "user" && n.role !== "assistant") continue;
@@ -395,9 +406,12 @@ export function chainFacts(chain: readonly ChainLink[]): AtifParse {
     if (n.said) out.lastMessage = n.said;
   }
   // The forest is written message by message: a turn is over only when the
-  // assistant last spoke without asking for tools.
+  // assistant last spoke without asking for tools. A turn that ended on
+  // "max_tokens" is over too — but its last word was cut off, and the CLI
+  // itself asks for a message to continue.
   const last = chain.at(-1)?.node ?? null;
   out.turnOpen = last !== null && (last.role !== "assistant" || last.wantsTools);
+  out.turnTruncated = last !== null && last.role === "assistant" && last.finishReason === "max_tokens";
   return out;
 }
 
@@ -452,6 +466,15 @@ export function chainEvents(
       if (answer && answer.at > n.at) ev.endedAt = answer.at;
       out.push(ev);
     });
+    if (n.finishReason === "max_tokens") {
+      out.push({
+        id: `${base}.x`,
+        at: n.at,
+        kind: "meta",
+        tone: "warn",
+        text: "Response truncated — it hit the model's max output token limit. Send a message to continue.",
+      });
+    }
   }
   return out;
 }
@@ -533,6 +556,7 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     startedAt: row ? row.created_at * 1000 : (atif?.firstStepAt ?? null),
     lastActivityAt: times.length > 0 ? Math.max(...times) : null,
     turnOpen,
+    turnTruncated: atif?.turnTruncated ?? null,
     contextUsed: atif?.contextUsed ?? null,
     contextLimit: null,
     tokens: atif ? { ...atif.tokens } : emptyTotals(),

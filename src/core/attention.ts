@@ -23,7 +23,9 @@ export function attentionOf(s: Session, blockedReason: string | null = null): At
               : "idle; its caller's turn"
             : s.host === "external"
               ? "your turn (in another terminal)"
-              : "your turn",
+              : s.turnTruncated
+                ? "its reply was cut off by the output token limit — it waits for a message to continue"
+                : "your turn",
       };
     case "running":
       return { kind: "running", rank: RANK.running, reason: "working" };

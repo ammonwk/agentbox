@@ -1639,6 +1639,11 @@ export class Fleet extends EventEmitter {
       effort: rec.effort ?? null,
       cold,
       limitHit,
+      // The transcript's last word was cut off by the output token limit and
+      // nothing has followed it: it stopped without meaning to. Meaningless
+      // mid-turn (the next step rewrites the end of the chain) and after a
+      // prompt (the turn is someone's again).
+      turnTruncated: !!f?.turnTruncated && (live === "waiting" || live === "stopped"),
       // Only while the dialog is up: a call recorded but not yet answered is
       // also what a session interrupted mid-question leaves behind.
       question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,

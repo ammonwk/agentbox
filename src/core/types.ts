@@ -275,6 +275,10 @@ export interface Session {
   /** The provider's latest "you hit your limit", when that is the last thing
    *  the session did — it stopped there and is waiting to be continued. */
   limitHit: { at: number; detail: string } | null;
+  /** Its last reply was cut off by the model's max output tokens, so it
+   *  stopped without meaning to: it waits for a message to continue. Only
+   *  while the turn is over; the next prompt clears it. */
+  turnTruncated: boolean;
   /** The AskUserQuestion dialog it is showing, while it shows one: answer it
    *  with `POST /api/sessions/:id/answer`. */
   question: { id: string; questions: AskQuestion[] } | null;
