@@ -694,6 +694,11 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
       if (/Quota exhausted|Usage limit reached/.test(screen)) return "usage limit";
       // Its question dialog: the footer is the picker's, plus the help hint.
       if (/↵ select/.test(screen) && /esc cancel/.test(screen) && /help me out/.test(screen)) return "asking a question";
+      // A turn that died on an error: the CLI waits for a message to retry,
+      // with the error at the foot of the transcript. Only there — the same
+      // text scrolled up into history is an error the session moved past.
+      const foot = screen.split("\n").slice(-8).join("\n");
+      if (/Send a message to retry/.test(foot)) return /rate.?limit/i.test(foot) ? "rate limit" : "error";
       return null;
     },
 
