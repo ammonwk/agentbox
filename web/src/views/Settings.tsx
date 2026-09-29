@@ -566,7 +566,7 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
 
       <Field
         label="Setup command"
-        hint="Runs in each new worktree alongside the agent, which is told to wait for it before it needs it. Its output is in the agentbox logs, under setup/<session>.log."
+        hint="Runs in each new worktree as the agent starts. Its output is in the agentbox logs, under setup/<session>.log."
       >
         {(id) => (
           <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim() } })} />

@@ -12,7 +12,7 @@ import type { Repo, RepoSetup } from "./types";
  * The command (an install, a build) is the slow part, so it runs alongside the
  * agent rather than ahead of it, in a scope of its own so that restarting the
  * server does not kill it half way through `node_modules`. Its output goes to
- * a log whose last line says it is done — the agent is told where.
+ * a log whose last line says it is done.
  */
 
 /** The last line of a finished setup log. */
@@ -89,18 +89,8 @@ export function setUpWorktree(repo: Repo, worktree: string, sessionId: string): 
     try {
       writeFileSync(log, [...lines, `$ ${run}`, `could not start: ${(e as Error).message}`, `${SETUP_DONE} 127`, ""].join("\n"));
     } catch {
-      /* no log either; the agent is told where to look and finds nothing */
+      /* no log either */
     }
   }
   return log;
-}
-
-/** What the agent is told when setup is still running as it starts. */
-export function setupNote(run: string, log: string): string {
-  return (
-    `\n\n---\nagentbox is setting up this worktree alongside you: \`${run}\`, logging to ${log}. ` +
-    `It is done when the log's last line reads "${SETUP_DONE} <code>" ` +
-    `(\`until grep -q '^${SETUP_DONE}' ${log}; do sleep 5; done\`). ` +
-    `Wait for that before running anything that needs it, and don't start a second install of your own.`
-  );
 }

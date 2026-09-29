@@ -49,7 +49,7 @@ import {
   type SessionRecord,
 } from "./db";
 import { createWorktree, run, worktreeForBranch } from "./git";
-import { setUpWorktree, setupNote } from "./setup";
+import { setUpWorktree } from "./setup";
 import { attachArgv, tmuxName, type NewSession, type PaneInfo } from "./tmux";
 import {
   transcriptFile,
@@ -1884,7 +1884,6 @@ export class Fleet extends EventEmitter {
     const id = req.id ?? newSessionId();
     let cwd = req.cwd ? expandHome(req.cwd) : "";
     let worktree: string | null = null;
-    let prompt = req.prompt || undefined;
     if (req.repoId) {
       const repo = getRepoById(req.repoId);
       if (!repo) throw new FleetError(404, `no repo ${req.repoId}`);
@@ -1902,16 +1901,13 @@ export class Fleet extends EventEmitter {
         throw new FleetError(400, "a GitHub repo needs a worktree (it has no checkout of its own to work in)");
       }
       // Only a checkout cut just now: an existing one was set up by whoever made it.
-      if (worktree) {
-        const log = setUpWorktree(repo, worktree, id);
-        if (log && prompt) prompt += setupNote(repo.setup.run, log);
-      }
+      if (worktree) setUpWorktree(repo, worktree, id);
     }
     if (!cwd) throw new FleetError(400, "say where the session should run: a repo or a directory");
     if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);
 
     const model = req.model || settings.models[req.provider] || undefined;
-    const cmd = adapter.spawnCommand({ account, cwd, prompt, model, effort, autoApprove: settings.autoApprove });
+    const cmd = adapter.spawnCommand({ account, cwd, prompt: req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
     const now = this.now();
     const name = tmuxName(id);
     const parent = req.callerPid ? this.sessionAbove(req.callerPid) : null;
