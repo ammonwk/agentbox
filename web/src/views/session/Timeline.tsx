@@ -4,6 +4,7 @@ import { api, fmtClock, useBtw, useTimeline } from "../../api";
 import { fmtDur } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline, withBtw } from "../../lib/timeline";
+import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
 import { Markdown } from "./Markdown";
 import { AskRow } from "./Question";
 import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
@@ -482,11 +483,13 @@ function Thinking({ text, at, dur }: { text: string; at: number; dur?: number })
         <Icon.brain size={13} />
         <span className="tl-thinking-label">Thinking</span>
         {dur !== undefined ? <span className="tl-dur">{fmtDur(dur)}</span> : null}
-        {!open ? <span className="tl-thinking-peek">{firstLine(text)}</span> : null}
+        <span className="tl-thinking-fill" />
         <Stamp at={at} />
         <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
       </button>
-      {open ? <div className="tl-thinking-body">{text}</div> : null}
+      <div className={`tl-thinking-body${open ? "" : " is-clamped"}`} onClick={open ? undefined : () => setOpen(true)}>
+        {text}
+      </div>
     </div>
   );
 }
@@ -543,6 +546,7 @@ const ToolRow = memo(function ToolRow({ ev, now }: { ev: ToolEvent; now: number 
           {running ? <Spinner size={11} /> : ev.status === "error" ? <Icon.x size={13} /> : <Icon.check size={13} />}
         </span>
         <span className="sx-tool-title">{ev.name}</span>
+        {ev.title ? <span className="sx-tool-desc">{ev.title}</span> : null}
         <span className="sx-tool-sub">{ev.summary}</span>
         <span className={`sx-tool-status ${ev.status}${slow ? " is-slow" : ""}`}>
           {running ? (now > 0 ? fmtDur(now - ev.at) : "running") : ev.status === "error" ? `error${ev.endedAt && ev.endedAt > ev.at ? ` · ${fmtDur(ev.endedAt - ev.at)}` : ""}` : typeof ev.endedAt === "number" && ev.endedAt > ev.at ? fmtDur(ev.endedAt - ev.at) : ""}
@@ -551,12 +555,7 @@ const ToolRow = memo(function ToolRow({ ev, now }: { ev: ToolEvent; now: number 
       </button>
       {open && hasDetail ? (
         <div className="sx-tool-detail">
-          {ev.input ? (
-            <div>
-              <h4>Input</h4>
-              <pre className="sx-pre">{ev.input}</pre>
-            </div>
-          ) : null}
+          {ev.input ? <ToolInput input={ev.input} title={ev.title} /> : null}
           {ev.output ? (
             <div>
               <h4>{ev.status === "error" ? "Error" : "Output"}</h4>
@@ -570,3 +569,40 @@ const ToolRow = memo(function ToolRow({ ev, now }: { ev: ToolEvent; now: number 
     </>
   );
 });
+
+/** The call's input by field: the command as a command, an edit as a diff. */
+function ToolInput({ input, title }: { input: string; title?: string }) {
+  const fields = useMemo(() => inputFields(input, title), [input, title]);
+  if (!fields) {
+    return (
+      <div>
+        <h4>Input</h4>
+        <pre className="sx-pre">{input}</pre>
+      </div>
+    );
+  }
+  if (fields.length === 0) return null;
+  return <dl className="sx-fields">{fields.map((f) => <Field key={f.key} f={f} />)}</dl>;
+}
+
+function Field({ f }: { f: InputField }) {
+  return (
+    <>
+      <dt>{f.kind === "shell" ? "$" : labelOf(f.key)}</dt>
+      <dd>
+        {f.kind === "shell" ? (
+          <pre className="sx-pre sx-shell">{f.text}</pre>
+        ) : f.kind === "diff" ? (
+          <pre className="sx-pre sx-diff">
+            {f.old ? <span className="sx-del">{f.old}</span> : null}
+            {f.new ? <span className="sx-add">{f.new}</span> : null}
+          </pre>
+        ) : f.kind === "block" ? (
+          <pre className="sx-pre">{f.text}</pre>
+        ) : (
+          <code className="sx-inline">{f.text}</code>
+        )}
+      </dd>
+    </>
+  );
+}

@@ -985,22 +985,24 @@
   font-weight: 600;
   flex: none;
 }
-.tl-thinking-peek {
+.tl-thinking-fill {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-style: italic;
 }
 .tl-thinking-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
-  font-style: italic;
   padding: 2px 0 6px;
   line-height: 1.55;
+}
+/* Shown, not hidden behind a click: the first lines, the rest on click. */
+.tl-thinking-body.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  cursor: pointer;
 }
 
 .tl-meta {
@@ -1248,6 +1250,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* What the agent said the call is for: read first, so prose, not mono. */
+.sx-tool-desc {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-tool-desc + .sx-tool-sub {
+  color: var(--faint);
+}
 .sx-tool-status {
   flex: none;
   font-size: 11px;
@@ -1298,6 +1312,50 @@
   max-height: 320px;
   overflow: auto;
   margin: 0;
+}
+
+/* A tool call's input by field: labels in a narrow column, values beside. */
+.sx-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+}
+.sx-fields dt {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+  font-weight: 600;
+  padding-top: 2px;
+}
+.sx-fields dd {
+  margin: 0;
+  min-width: 0;
+}
+.sx-shell {
+  color: var(--text);
+}
+.sx-inline {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.sx-diff > span {
+  display: block;
+  padding-left: 6px;
+  border-left: 2px solid;
+}
+.sx-del {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.sx-add {
+  color: var(--success);
+  border-color: var(--success);
+}
+.sx-del + .sx-add {
+  margin-top: 4px;
 }
 
 /* ------------------------------------------------------ markdown (agent prose) */

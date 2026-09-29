@@ -15,7 +15,7 @@ import { basename, dirname, sep } from "node:path";
 import { addUsage, emptyTotals } from "../pricing";
 import type { AskQuestion, MateMessage, TimelineEvent, TokenTotals } from "../types";
 import { askQuestionsOf } from "./ask";
-import { cap, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
+import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
@@ -269,6 +269,13 @@ export function summarizeClaudeTool(name: string, input: any): string {
       return s === "{}" ? "" : oneLine(s, 100);
     }
   }
+}
+
+/** What the agent said the call is for (Bash's `description`), unless the summary already says it. */
+function claudeToolTitle(summary: string, input: any): string | null {
+  const d = input?.description;
+  if (typeof d !== "string" || !d.trim() || summary.includes(d.trim())) return null;
+  return oneLine(d, 200);
 }
 
 /** The answers Claude recorded for an AskUserQuestion, question → answer. */
@@ -810,9 +817,11 @@ export function claudePieces(r: any, index: number): Piece[] {
             kind: "tool",
             name,
             summary: summarizeClaudeTool(name, b.input),
-            input: cap(JSON.stringify(b.input ?? {}), INPUT_CAP),
+            input: capJson(b.input, INPUT_CAP),
             status: "running",
           };
+          const title = claudeToolTitle(ev.summary, b.input);
+          if (title) ev.title = title;
           const questions = name === "AskUserQuestion" ? askQuestionsOf(b.input) : null;
           if (questions) ev.ask = { id: String(b.id), questions };
           out.push({ kind: "call", callId: String(b.id), event: ev });

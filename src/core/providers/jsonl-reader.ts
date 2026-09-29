@@ -55,6 +55,21 @@ export function cap(s: string, max: number): string {
   return `${s.slice(0, max)}\n… [${s.length - max} more chars]`;
 }
 
+/**
+ * A tool call's input as JSON of at most about `max` chars that still
+ * parses: the longest strings lose their tails, not the JSON its closing
+ * braces, so the timeline can lay the fields out rather than show raw text.
+ */
+export function capJson(value: unknown, max: number): string {
+  const whole = JSON.stringify(value ?? {});
+  if (whole.length <= max) return whole;
+  for (let limit = max >> 1; limit >= 64; limit >>= 1) {
+    const s = JSON.stringify(value, (_k, v) => (typeof v === "string" && v.length > limit ? `${v.slice(0, limit)}… [${v.length - limit} more chars]` : v));
+    if (s.length <= max) return s;
+  }
+  return cap(whole, max);
+}
+
 export class JsonlTranscriptReader implements TranscriptReader {
   private tail: JsonlTail;
   /** Next record index the fold expects; a lower one means the file was replaced. */

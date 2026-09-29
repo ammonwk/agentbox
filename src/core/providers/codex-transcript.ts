@@ -23,7 +23,7 @@
 import { addUsage, emptyTotals } from "../pricing";
 import type { TimelineEvent, TokenTotals, UsageWindow, WindowKind } from "../types";
 import { oneLine, tidyPath } from "./claude-transcript";
-import { cap, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
+import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 
 const ms = (t: unknown): number | null => {
@@ -590,7 +590,7 @@ export function codexPieces(r: any, index: number, fold?: { isInherited(r: any, 
         kind: "tool",
         name,
         summary: name === "tool_search" ? oneLine(String(input?.query ?? "")) : summarizeCodexTool(name, input),
-        input: cap(typeof input === "string" ? input : JSON.stringify(input ?? {}), INPUT_CAP),
+        input: typeof input === "string" ? cap(input, INPUT_CAP) : capJson(input, INPUT_CAP),
         status: "running",
       };
       const callId = p.call_id ?? p.id;

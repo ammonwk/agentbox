@@ -365,6 +365,8 @@ export type TimelineEvent = { id: string; at: number } & (
       name: string;
       /** One line: the command, the file, the pattern. */
       summary: string;
+      /** What the agent said the call is for, in its words (Bash's description), when it said. */
+      title?: string;
       input?: string;
       output?: string;
       status: "running" | "ok" | "error";

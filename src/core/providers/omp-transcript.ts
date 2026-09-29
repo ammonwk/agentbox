@@ -22,6 +22,7 @@
 
 import type { TimelineEvent, TokenTotals } from "../types";
 import { addUsage, emptyTotals } from "../pricing";
+import { capJson } from "./jsonl-reader";
 
 export interface OmpHeader {
   id: string;
@@ -138,7 +139,7 @@ function argsJson(args: unknown): string | undefined {
   const rest = Object.fromEntries(Object.entries(args as Record<string, unknown>).filter(([k]) => k !== "i"));
   if (Object.keys(rest).length === 0) return undefined;
   try {
-    return clip(JSON.stringify(rest, null, 2), 4000);
+    return capJson(rest, 4000);
   } catch {
     return undefined;
   }
@@ -340,6 +341,7 @@ export function ompEvents(
       };
       const input = argsJson(b.arguments);
       if (input) ev.input = input;
+      if (typeof b.intent === "string" && b.intent.trim() && ev.summary !== oneLine(b.intent, 200)) ev.title = oneLine(b.intent, 200);
       if (r?.text) ev.output = clip(r.text, 4000);
       if (typeof r?.at === "number" && r.at > when) ev.endedAt = r.at;
       out.push(ev);
