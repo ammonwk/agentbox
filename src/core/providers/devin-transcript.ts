@@ -134,7 +134,7 @@ export interface AtifParse {
    *  (`finish_reason: "max_tokens"`), not finished: it waits for a message to
    *  continue. Null when the source cannot say (the export has no
    *  finish_reason). */
-  turnTruncated: boolean | null;
+  turnError: { at: number; detail: string } | null;
 }
 
 export function parseAtif(doc: unknown): AtifParse {
@@ -148,7 +148,7 @@ export function parseAtif(doc: unknown): AtifParse {
     lastStepAt: null,
     userPrompts: [],
     turnOpen: null,
-    turnTruncated: null,
+    turnError: null,
   };
   const d = (doc ?? {}) as { steps?: unknown; agent?: { model_name?: unknown } };
   const steps = Array.isArray(d.steps) ? (d.steps as any[]) : [];
@@ -388,7 +388,7 @@ export function chainFacts(chain: readonly ChainLink[]): AtifParse {
     lastStepAt: null,
     userPrompts: [],
     turnOpen: null,
-    turnTruncated: null,
+    turnError: null,
   };
   for (const { node: n } of chain) {
     if (n.role !== "user" && n.role !== "assistant") continue;
@@ -411,7 +411,10 @@ export function chainFacts(chain: readonly ChainLink[]): AtifParse {
   // itself asks for a message to continue.
   const last = chain.at(-1)?.node ?? null;
   out.turnOpen = last !== null && (last.role !== "assistant" || last.wantsTools);
-  out.turnTruncated = last !== null && last.role === "assistant" && last.finishReason === "max_tokens";
+  out.turnError =
+    last !== null && last.role === "assistant" && last.finishReason === "max_tokens"
+      ? { at: last.at, detail: "the reply hit the model's max output token limit" }
+      : null;
   return out;
 }
 
@@ -556,7 +559,7 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     startedAt: row ? row.created_at * 1000 : (atif?.firstStepAt ?? null),
     lastActivityAt: times.length > 0 ? Math.max(...times) : null,
     turnOpen,
-    turnTruncated: atif?.turnTruncated ?? null,
+    turnError: atif?.turnError ? { ...atif.turnError, kind: "output-cap" as const } : null,
     contextUsed: atif?.contextUsed ?? null,
     contextLimit: null,
     tokens: atif ? { ...atif.tokens } : emptyTotals(),

@@ -295,7 +295,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     effort: null,
     cold: false,
     limitHit: null,
-    turnTruncated: false,
+    turnError: null,
     question: null,
     origin: "agentbox",
     parent: null,
@@ -408,7 +408,8 @@ const sessions: MockSession[] = [
     startedAt: T0 - 22 * M, lastActivityAt: T0 - 3 * 1000,
   }),
   sess({
-    id: "s6g3", provider: "devin", accountId: "dv-main", status: "waiting", host: "tmux", turnTruncated: true,
+    id: "s6g3", provider: "devin", accountId: "dv-main", status: "waiting", host: "tmux",
+    turnError: { at: T0 - 3 * M, kind: "output-cap", detail: "the reply hit the model's max output token limit" },
     title: "Trace how the CH projector folds call flags", cwd: `${AB}/.worktrees/ch-flags`, repoRoot: `${AB}/.worktrees/ch-flags`,
     branch: "feat/ch-call-flags", worktree: `${AB}/.worktrees/ch-flags`, model: "glm-5-3-flash-max",
     lastMessage: "Let me look at how the CH projector materializes call flags and whether org context is available there.",
@@ -494,9 +495,13 @@ const REASON: Record<AttentionKind, (s: Session) => string> = {
   waiting: (s) =>
     s.host === "subagent"
       ? s.subagent?.answerWaiting ? "Finished — its answer waits for its caller" : "Idle — its caller's turn"
-      : s.host === "external" ? "Turn over, in another terminal"
-      : s.turnTruncated ? "Its reply was cut off by the output token limit — it waits for a message to continue"
-      : "Turn over — your move",
+      : s.turnError
+        ? s.turnError.kind === "output-cap"
+          ? "Its reply was cut off by the output token limit — it waits for a message to continue"
+          : s.turnError.kind === "transient"
+            ? `Stopped on an error: ${s.turnError.detail} — a retry may get it going`
+            : `Stopped on an error a retry cannot fix: ${s.turnError.detail}`
+        : s.host === "external" ? "Turn over, in another terminal" : "Turn over — your move",
   running: () => "Working",
   stopped: () => "No process — resumable",
   closed: () => "Closed",

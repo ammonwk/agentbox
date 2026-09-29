@@ -102,11 +102,12 @@ export interface TranscriptFacts {
    */
   turnOpen: boolean;
   /**
-   * The turn is over because the model's reply was cut off by the max output
-   * tokens, not because it was done — it sits waiting for a message to
-   * continue. Null when the provider cannot tell.
+   * The turn is over because the provider stopped it, not because it was
+   * done: the reply cut off by the output cap, a transient API error, or
+   * something a retry cannot fix (`kind`). Null when the provider cannot
+   * tell, or a prompt has followed.
    */
-  turnTruncated?: boolean | null;
+  turnError?: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string } | null;
   contextUsed: number | null;
   contextLimit: number | null;
   /** Cumulative over the whole session, including subagents where the

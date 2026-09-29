@@ -318,11 +318,32 @@ const SYNTHETIC = "<synthetic>";
  *   "You're out of usage credits. Run /usage-credits to keep using Fable 5.1 …"
  * The text match is the fallback for versions that did not set `error`.
  */
-const LIMIT_TEXT = /hit your .*limit|out of (usage credits|extra usage)|usage limit reached/i;
+const LIMIT_TEXT = /hit your .*limit|out of (usage credits|extra usage)|usage limit reached|session limit reached/i;
 
 export function isRateLimitRecord(r: any): boolean {
   if (!r?.isApiErrorMessage) return false;
   return r.error === "rate_limit" || LIMIT_TEXT.test(blocksText(r.message?.content));
+}
+
+/**
+ * How an API error that ended the turn classifies, for `turnError`:
+ *   output-cap — the reply was cut off by the output token cap; a message
+ *                continues it ("Claude's response exceeded the 32000 output
+ *                token maximum")
+ *   fatal      — a retry cannot fix it: context too long, the model or the
+ *                subscription is gone, authentication, request shape
+ *   transient  — server and network failures; a retry has a real chance
+ * Anything unrecognized is transient: a bounded retry is cheap, and the
+ * nudge machinery gives up after a few.
+ */
+const OUTPUT_CAP_TEXT = /exceeded the \d+ output token (maximum|limit)|output token maximum/i;
+const FATAL_ERROR_TEXT =
+  /Prompt is too long|organization has disabled|issue with the selected model|does not support this model|not logged in|please run \/login|dimension limit for many-image|Failed to authenticate|exceeds the maximum/i;
+
+export function claudeTurnErrorKind(text: string): "output-cap" | "transient" | "fatal" {
+  if (OUTPUT_CAP_TEXT.test(text)) return "output-cap";
+  if (FATAL_ERROR_TEXT.test(text)) return "fatal";
+  return "transient";
 }
 
 const ms = (t: unknown): number | null => {
@@ -427,6 +448,8 @@ export class ClaudeFold {
   private observedMax = 0;
   private autoCompactPre = 0;
   private hits: { at: number; detail: string }[] = [];
+  /** The API error the turn ended on, until a prompt or a real answer follows. */
+  private turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string } | null = null;
   private sawMain = false;
   private sawSidechain = false;
   private recordSessionId: string | null = null;
@@ -571,6 +594,7 @@ export class ClaudeFold {
       if (this.pendingAsk && content.some((b: any) => b?.type === "tool_result" && b.tool_use_id === this.pendingAsk!.id)) this.pendingAsk = null;
       // A tool finished; the model is about to continue.
       this.turnOpen = true;
+      this.turnError = null;
       return;
     }
     const first = typeof content === "string" ? content : Array.isArray(content) ? (content.find((b: any) => b?.type === "text")?.text ?? "") : "";
@@ -578,11 +602,13 @@ export class ClaudeFold {
     const mine = (kind0 === undefined || kind0 === "human") && !isAgentSent(first);
     if (kind === "interrupted") {
       this.turnOpen = false;
+      this.turnError = null;
       return;
     }
     if (kind === "notification") {
       // Claude answers a finished background task on its own.
       this.turnOpen = true;
+      this.turnError = null;
       return;
     }
     if (kind === "command") {
@@ -600,20 +626,28 @@ export class ClaudeFold {
       if (p.text) this.prompt(p.text);
       if (mine && at !== null) this.lastPromptAt = at;
       this.turnOpen = true;
+      this.turnError = null;
     }
   }
 
   private assistant(r: any, at: number | null): void {
     const m = r.message ?? {};
     if (r.isApiErrorMessage) {
+      const text = blocksText(m.content);
       if (isRateLimitRecord(r)) {
-        this.hits.push({ at: at ?? this.lastActivityAt ?? 0, detail: oneLine(blocksText(m.content), 300) });
+        this.hits.push({ at: at ?? this.lastActivityAt ?? 0, detail: oneLine(text, 300) });
         if (this.hits.length > MAX_HITS) this.hits.shift();
+      } else {
+        // The turn ended on the provider: cut off, or failed. A later prompt,
+        // tool result or real answer clears it; until then it is the reason
+        // the session sits at its prompt.
+        this.turnError = { at: at ?? this.lastActivityAt ?? 0, kind: claudeTurnErrorKind(text), detail: oneLine(text, 300) };
       }
       // The request failed; nothing is running until someone retries.
       this.turnOpen = false;
       return;
     }
+    this.turnError = null;
     if (m.model === SYNTHETIC) return;
     if (this.command) {
       this.prompt(this.command);
@@ -693,6 +727,7 @@ export class ClaudeFold {
       lastActivityAt: this.lastActivityAt,
       lastTurnAt: this.lastTurnAt,
       turnOpen: this.turnOpen,
+      turnError: this.turnError ? { ...this.turnError } : null,
       contextUsed: this.contextUsed,
       contextLimit: this.contextUsed === null && !this.model ? null : contextLimitFor(this.model, this.observedMax, this.autoCompactPre),
       tokens,

@@ -47,7 +47,15 @@ export function brief(s: Session & { attention?: { reason: string } }, accountLa
     `  ${clip(s.title, 100)}`,
   ];
   if (s.lastPrompt && s.lastPrompt !== s.title) lines.push(`  asked: ${clip(s.lastPrompt, 160)}`);
-  if (s.status === "waiting" && s.turnTruncated) lines.push(`  ! its reply was cut off by the output token limit — send a message to continue`);
+  if (s.status === "waiting" && s.turnError) {
+    const why =
+      s.turnError.kind === "output-cap"
+        ? "its reply was cut off by the output token limit — send a message to continue"
+        : s.turnError.kind === "transient"
+          ? `stopped on an error (${clip(s.turnError.detail, 120)}) — send a message to retry`
+          : `stopped on an error a retry cannot fix: ${clip(s.turnError.detail, 120)}`;
+    lines.push(`  ! ${why}`);
+  }
   if (s.lastMessage) lines.push(`  said: ${clip(s.lastMessage, 220)}`);
   return lines.join("\n");
 }

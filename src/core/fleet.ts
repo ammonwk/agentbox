@@ -548,30 +548,41 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * A session whose turn died on an error the CLI left on screen ("Send a
-   * message to retry") is told to go on once the error's reset window has
-   * passed. One nudge across the fleet at a time — several sessions retaking
-   * one rate-limited account in lockstep is what stuck them — a few per
-   * spell, then it is yours. A cold session's nudge is `send`'s to place:
-   * it wakes where there is room, which is the point when the account it
-   * sits on is the one that is out.
+   * A session whose turn died on an error is told to go on once the error's
+   * reset window has passed: either the CLI left the error on screen ("Send
+   * a message to retry" — a rate limit or a failure it is waiting on), or
+   * the transcript ends on a retryable provider error (the reply cut off by
+   * the output cap, a transient API failure; never a fatal one — a retry
+   * cannot fix that, and typing at it only burns tokens). One nudge across
+   * the fleet at a time — several sessions retaking one rate-limited account
+   * in lockstep is what stuck them — a few per spell, then it is yours. A
+   * cold session's nudge is `send`'s to place: it wakes where there is room,
+   * which is the point when the account it sits on is the one that is out.
    */
   private nudgeErrored(now: number): void {
     if (now < this.nextNudgeAt) return;
     for (const v of this.views.values()) {
-      if (v.status !== "blocked" || v.host !== "tmux" || this.busy.has(v.id)) continue;
-      const why = this.blocked.get(v.id);
-      if (why !== "rate limit" && why !== "error") continue;
+      if (v.host !== "tmux" || this.busy.has(v.id)) continue;
       if (now - v.lastActivityAt < NUDGE_QUIET_MS) continue;
+      // A transcript error persists, so only act while it is fresh — a
+      // restart does not retry what died hours before it was watching.
+      const err = v.status === "waiting" && v.turnError && now - v.turnError.at <= STALL_FRESH_MS ? v.turnError : null;
+      const screen = v.status === "blocked" ? this.blocked.get(v.id) : undefined;
+      const retryable = screen === "rate limit" || screen === "error" ? screen : err && err.kind !== "fatal" ? err.kind : null;
+      if (!retryable) continue;
       const prev = this.nudges.get(v.id);
       const spell = prev && now - prev.firstAt < NUDGE_SPELL_MS ? prev : { firstAt: now, tries: 0 };
       if (spell.tries >= NUDGE_MAX_TRIES) continue;
       this.nudges.set(v.id, { firstAt: spell.firstAt, tries: spell.tries + 1 });
       this.nextNudgeAt = now + NUDGE_STAGGER_MS;
-      console.log(`agentbox: ${v.id} (${v.title}) ${why === "rate limit" ? "hit a rate limit" : "stopped on an error"}; nudging it on (${spell.tries + 1}/${NUDGE_MAX_TRIES})`);
-      void this.send(v.id, "[agentbox: your turn stopped on an error; this message retries it. Carry on where you left off.]").catch((e) =>
-        console.error(`agentbox: nudging ${v.id} failed:`, e),
+      const message =
+        err?.kind === "output-cap"
+          ? "[agentbox: your last reply was cut off by the output token limit. Continue where you left off.]"
+          : "[agentbox: your turn stopped on an error; this message retries it. Carry on where you left off.]";
+      console.log(
+        `agentbox: ${v.id} (${v.title}) ${screen ? (screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}`}; nudging it on (${spell.tries + 1}/${NUDGE_MAX_TRIES})`,
       );
+      void this.send(v.id, message).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
       return;
     }
   }
@@ -1639,11 +1650,13 @@ export class Fleet extends EventEmitter {
       effort: rec.effort ?? null,
       cold,
       limitHit,
-      // The transcript's last word was cut off by the output token limit and
-      // nothing has followed it: it stopped without meaning to. Meaningless
-      // mid-turn (the next step rewrites the end of the chain) and after a
-      // prompt (the turn is someone's again).
-      turnTruncated: !!f?.turnTruncated && (live === "waiting" || live === "stopped"),
+      // The transcript's turn ended on the provider and nothing has followed
+      // it: it stopped without meaning to. Meaningless mid-turn (the next
+      // step rewrites the end of the chain) and after a prompt (the turn is
+      // someone's again); stale like a limit hit, a restart does not act on
+      // what died hours ago.
+      turnError:
+        f?.turnError && (live === "waiting" || live === "stopped") && f.turnError.at >= lastActivityAt - 60_000 ? f.turnError : null,
       // Only while the dialog is up: a call recorded but not yet answered is
       // also what a session interrupted mid-question leaves behind.
       question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,

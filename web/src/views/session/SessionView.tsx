@@ -546,8 +546,8 @@ function Detail({
               </>
             )}
           </div>
-        ) : session.status === "waiting" && session.turnTruncated ? (
-          <TruncatedLine session={session} />
+        ) : session.status === "waiting" && session.turnError ? (
+          <TurnErrorLine session={session} />
         ) : null}
 
         <div className="sx-tabs" role="tablist" aria-label="Session views">
@@ -776,16 +776,31 @@ function TitleEdit({ session }: { session: SessionRow }) {
   );
 }
 
-/** A turn the model's output cap cut short: it sits at the prompt without
- *  meaning to. One button sends the message the CLI itself asks for. */
-function TruncatedLine({ session }: { session: SessionRow }) {
+/** A turn the provider ended — the output cap cut its reply off, or an API
+ *  error stopped it — so it sits at the prompt without meaning to. Retryable
+ *  kinds get the button that sends the message the CLI asks for; a fatal one
+ *  only says what is wrong, since a retry cannot fix it. */
+function TurnErrorLine({ session }: { session: SessionRow }) {
   const { run, busy, error, clear } = useAction();
-  const nudge = "[agentbox: your last reply was cut off by the output token limit. Continue where you left off.]";
+  const err = session.turnError!;
+  const retryable = err.kind !== "fatal";
+  const nudge =
+    err.kind === "output-cap"
+      ? "[agentbox: your last reply was cut off by the output token limit. Continue where you left off.]"
+      : "[agentbox: your turn stopped on an error; this message retries it. Carry on where you left off.]";
+  const said =
+    err.kind === "output-cap"
+      ? "Its reply was cut off by the output token limit"
+      : err.kind === "transient"
+        ? "Stopped on an error"
+        : "Stopped on an error a retry cannot fix";
   return (
     <div className="sx-attention-line warn" role="status">
       <Icon.alert size={13} />
       <span>
-        Its reply was cut off by the output token limit{session.lastActivityAt ? ` ${ago(session.lastActivityAt)}` : ""} — it stopped without meaning to.
+        {said}
+        {session.lastActivityAt ? ` ${ago(err.at || session.lastActivityAt)}` : ""}
+        {err.kind !== "output-cap" ? `: ${err.detail}` : " — it stopped without meaning to."}
         {error ? (
           <>
             {" "}
@@ -796,9 +811,11 @@ function TruncatedLine({ session }: { session: SessionRow }) {
           </>
         ) : null}
       </span>
-      <Button size="sm" variant="ghost" icon={Icon.play} loading={busy} onClick={() => void run(() => api.send(session.id, nudge))}>
-        Continue
-      </Button>
+      {retryable ? (
+        <Button size="sm" variant="ghost" icon={Icon.play} loading={busy} onClick={() => void run(() => api.send(session.id, nudge))}>
+          {err.kind === "output-cap" ? "Continue" : "Retry"}
+        </Button>
+      ) : null}
     </div>
   );
 }

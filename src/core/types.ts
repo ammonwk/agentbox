@@ -275,10 +275,16 @@ export interface Session {
   /** The provider's latest "you hit your limit", when that is the last thing
    *  the session did — it stopped there and is waiting to be continued. */
   limitHit: { at: number; detail: string } | null;
-  /** Its last reply was cut off by the model's max output tokens, so it
-   *  stopped without meaning to: it waits for a message to continue. Only
-   *  while the turn is over; the next prompt clears it. */
-  turnTruncated: boolean;
+  /**
+   * The turn ended on the provider rather than finishing — cut off by the
+   * output cap, a transient API error, or something a retry cannot fix —
+   * and nothing has followed it. `kind` says which:
+   *   output-cap — the reply was cut off mid-write; a message continues it
+   *   transient  — a server/network failure; a retry has a real chance
+   *   fatal      — a retry cannot fix it (context too long, model gone, login)
+   * Null while the turn is open or a prompt has followed.
+   */
+  turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string } | null;
   /** The AskUserQuestion dialog it is showing, while it shows one: answer it
    *  with `POST /api/sessions/:id/answer`. */
   question: { id: string; questions: AskQuestion[] } | null;
