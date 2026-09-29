@@ -12,6 +12,16 @@ describe("checkRequest", () => {
     expect(checkRequest(req("POST", { host: "localhost:4479", origin: "http://localhost:5173", "x-agentbox": "1" }), PORT).ok).toBe(true);
   });
 
+  test("a subdomain of localhost is an alias of this machine, on our port only", () => {
+    expect(checkRequest(req("GET", { host: "agentbox.localhost:4479" }), PORT).ok).toBe(true);
+    expect(checkRequest(req("POST", { host: "agentbox.localhost:4479", origin: "http://agentbox.localhost:4479", "x-agentbox": "1" }), PORT).ok).toBe(true);
+    expect(checkRequest(req("GET", { host: "agentbox.localhost:5173" }), PORT).ok).toBe(true);
+    expect(checkRequest(req("GET", { host: "agentbox.localhost:9999" }), PORT).ok).toBe(false);
+    // A lookalike that merely ends in a loopback-looking label is still foreign.
+    expect(checkRequest(req("GET", { host: "evil.example:4479" }), PORT).ok).toBe(false);
+    expect(checkRequest(req("GET", { host: "agentbox.localhost.evil.example:4479" }), PORT).ok).toBe(false);
+  });
+
   test("the CLI: no Origin, header set", () => {
     expect(checkRequest(req("POST", { host: "127.0.0.1:4479", "x-agentbox": "1" }), PORT).ok).toBe(true);
   });

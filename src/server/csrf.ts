@@ -8,6 +8,8 @@
  *
  *   - Host must be a loopback name. Stops DNS rebinding, where a hostile
  *     domain re-resolves to 127.0.0.1 and becomes "same-origin" with us.
+ *     Subdomains of `localhost` count: RFC 6761 gives them to the machine
+ *     itself, so `agentbox.localhost` is an alias, never an attacker's.
  *   - Origin, when the browser sends one, must be loopback on our port or the
  *     vite dev server's. Browsers always send it on WebSocket upgrades and on
  *     cross-origin requests, and WebSockets are not covered by CORS at all.
@@ -26,6 +28,14 @@
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const VITE_DEV_PORT = 5173;
 
+/** `*.localhost` is loopback by RFC 6761: browsers and systemd-resolved
+ *  resolve it to the machine itself and never ask DNS, so a subdomain of it
+ *  (`agentbox.localhost`) is a friendlier alias that no hostile domain can
+ *  rebind to. */
+function isLoopback(name: string): boolean {
+  return LOOPBACK.has(name) || name.endsWith(".localhost");
+}
+
 function hostOk(host: string | null, port: number, extra: readonly string[]): boolean {
   if (!host) return false;
   const m = host.match(/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/);
@@ -33,7 +43,7 @@ function hostOk(host: string | null, port: number, extra: readonly string[]): bo
   const name = m[1]!.toLowerCase();
   const p = m[2] ? Number(m[2]) : 80;
   if (extra.includes(name)) return p === port;
-  return LOOPBACK.has(name) && (p === port || p === VITE_DEV_PORT);
+  return isLoopback(name) && (p === port || p === VITE_DEV_PORT);
 }
 
 function originOk(origin: string | null, port: number, extra: readonly string[]): boolean {
