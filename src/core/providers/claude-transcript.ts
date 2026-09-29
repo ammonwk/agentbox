@@ -314,12 +314,13 @@ function blocksText(content: unknown): string {
 /**
  * What Claude says to you between tool calls ("Found it: …", "Lint passed,
  * now …") is recorded as a thinking block, told apart only by its signature:
- * a protobuf whose kind field reads `narration` where thinking reads
- * `thinking`, near the start. Claude Code shows it as text, and so do we.
+ * a protobuf whose block_kind (field 8, near the start) reads `narration`
+ * where thinking reads `thinking`. Claude Code decodes it and shows the block
+ * as text, and so do we. Matched as field 8's bytes: tag 0x42, length 9.
  */
 export function isNarration(b: any): boolean {
   if (b?.type !== "thinking" || typeof b.thinking !== "string" || !b.thinking.trim() || typeof b.signature !== "string") return false;
-  return Buffer.from(b.signature.slice(0, 96), "base64").includes("\x01B\tnarration", 0, "latin1");
+  return Buffer.from(b.signature.slice(0, 96), "base64").includes("B\tnarration", 0, "latin1");
 }
 
 // ------------------------------------------------------------- the fold
