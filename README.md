@@ -52,6 +52,14 @@ bun run web:build
 bun bin/agentbox serve          # http://127.0.0.1:4479
 ```
 
+`agentbox onboard` derives who agentbox works for from the machine — your git
+and `gh` config, the passwd entry, the timezone — writes it to
+`~/.local/share/agentbox/user.env`, and says what is still missing. The board
+shows the same as a first-run card, with a button for the systemd service.
+Nothing personal lives in the checkout: identity and keys are files in the
+agentbox home, and personal skills live in `~/.claude/skills` or
+`~/.agents/skills`.
+
 From any directory (session commands start the server if it isn't running):
 
 ```bash
