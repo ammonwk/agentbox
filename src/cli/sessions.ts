@@ -292,19 +292,22 @@ export async function diff(api: Api, args: string[]): Promise<number> {
   return 0;
 }
 
-/** `agentbox watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once]`
+/** `agentbox watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once] [--now]`
  *
  * Runs until killed, one line per change as it happens: a session started
  * asking something (blocked, with what), finished its turn (waiting, with the
  * end of its last message), started working (running), stopped. Nothing for
- * the board as it is when it starts. `--once` exits after the first line, so
- * `agentbox watch <id> --once` waits for that session. Default: blocked,
- * waiting and stopped, every session. */
+ * the board as it is when it starts, unless `--now`: then a session already
+ * blocked, waiting or stopped is reported first, so a re-armed watch cannot
+ * miss a turn that ended while it was down. `--once` exits after the first
+ * line, so `agentbox watch <id> --once --now` returns when that session is
+ * idle, at once if it already is. Default: blocked, waiting and stopped,
+ * every session. */
 export async function watch(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["status"], ["once"]);
+  const { flags, rest } = parseArgs(args, ["status"], ["once", "now"]);
   const kinds: readonly ChangeKind[] = oneOf("status", str(flags.get("status"))?.split(","), CHANGE_KINDS) ?? ["blocked", "waiting", "stopped"];
   const only = rest.length ? new Set((await resolveIds(api, rest)).ids) : null;
-  const watcher = new ChangeWatcher();
+  const watcher = new ChangeWatcher({ current: flags.has("now") });
   for (;;) {
     let s: AppState | null = null;
     try {

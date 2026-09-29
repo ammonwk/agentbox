@@ -21,11 +21,16 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox screen <id>            # what its terminal shows right now (tmux sessions)
     agentbox diff <id>              # its worktree's changes
     agentbox usage                  # each account's limits
-    agentbox watch [<id>...] [--status blocked,waiting,running,stopped] [--once]
+    agentbox watch [<id>...] [--status blocked,waiting,running,stopped] [--once] [--now]
                                     # runs until killed: a line each time one starts
                                     # asking (blocked), finishes its turn (waiting, with
                                     # the end of its last message) or stops. --once
-                                    # exits after the first: `watch <id> --once` waits for it
+                                    # exits after the first. --now first reports any
+                                    # already blocked, waiting or stopped; without it a
+                                    # session that is already idle never produces a line.
+                                    # To be woken by sessions you started, keep a
+                                    # background `watch <ids> --once --now` armed and
+                                    # re-arm it after each line you act on.
 
 ## Doing
 

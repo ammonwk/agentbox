@@ -301,7 +301,7 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   screen <id>...        what its terminal shows now
   diff <id>... [--stat] its worktree's changes
   send <id> <text…|->   type a message into it
-  watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once]
+  watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once] [--now]
                         a line each time one starts asking, finishes its turn
                         (with the end of its last message), or stops; until killed
   close <id>...         stop it and take it, and the sessions it started, off the list; resumable

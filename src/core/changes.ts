@@ -53,17 +53,21 @@ function changeOf(was: { status: SessionStatus; lastMessage: string | null }, s:
 }
 
 /** Feed it the board over and over; it answers what changed since last time.
- *  The first look is only a snapshot, and so is a session's first appearance. */
+ *  The first look is only a snapshot, and so is a session's first appearance —
+ *  unless `current`, when the first look also reports where each session
+ *  already stands, so a subscriber that starts after a turn ended still hears it. */
 export class ChangeWatcher {
   private seen = new Map<string, { status: SessionStatus; lastMessage: string | null }>();
   private primed = false;
 
+  constructor(private readonly opts: { current?: boolean } = {}) {}
+
   next(rows: readonly ChangeRow[]): Change[] {
     const out: Change[] = [];
     for (const s of rows) {
-      const was = this.seen.get(s.id);
+      const was = this.seen.get(s.id) ?? (!this.primed && this.opts.current ? { status: "running" as const, lastMessage: null } : undefined);
       this.seen.set(s.id, { status: s.status, lastMessage: s.lastMessage });
-      const c = this.primed && was ? changeOf(was, s) : null;
+      const c = (this.primed || this.opts.current) && was ? changeOf(was, s) : null;
       if (c) out.push(c);
     }
     this.primed = true;
