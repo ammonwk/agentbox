@@ -99,8 +99,9 @@ claude mcp add subagents -e AGENTBOX_SUBAGENT_OMP_MODEL=opencode-go/space-bunny-
 
 ```bash
 bun run typecheck
-bun test                 # just the CSRF guard; see AGENTS.md
+bun test
 bun run web:dev          # vite on :5173, proxying the API on :4479
+bun scripts/fresh-machine.ts   # rehearse a stranger's first two minutes in a sandbox
 ```
 
 `docs/v2.md` is the design and the API contract. `AGENTS.md` has the rules
