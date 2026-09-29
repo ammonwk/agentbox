@@ -242,6 +242,11 @@ export const api = {
   // repos, worktrees
   addRepo: (ref: string) => post<Repo>("/api/repos", { ref }),
   deleteRepo: (id: string) => request<unknown>("DELETE", `/api/repos/${enc(id)}`),
+  /** Remember where this repo's sessions usually run; null clears it. */
+  setRepoWorktreeDefault: (id: string, worktreeDefault: boolean | null) =>
+    request<Repo[]>(`PATCH`, `/api/repos/${enc(id)}`, { worktreeDefault }),
+  /** Write and enable the systemd user service for this checkout. */
+  installService: () => post<{ installed: string }>("/api/onboarding/service"),
   /** Slow by construction — many git and gh calls. Only ever on a button. */
   scanWorktrees: (scope: "all" | "agentbox") => post<WorktreeScan>("/api/worktrees/scan", { scope }),
   reclaimWorktrees: (paths: string[], force = false) =>
@@ -476,6 +481,7 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               providers: s.providers,
               warnings: s.warnings,
               schedules: s.schedules,
+              onboarding: s.onboarding,
             },
         );
       },

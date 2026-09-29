@@ -287,6 +287,16 @@ export function NewSession({
 
   const noEligible = !manual && placement?.mode === "none";
   const whereOk = where === "repo" ? !!repoId : path.trim().length > 0;
+
+  // The pick that just ran becomes the repo's remembered default — but only a
+  // choice the user made: a PR named in the prompt put the session in a
+  // worktree on its own, and a branch or PR picked in the field runs where
+  // that ref lives, which is not where sessions "usually" run either.
+  function rememberRepoDefault() {
+    if (where !== "repo" || !repoId || wtFromPrompt) return;
+    if (!worktree && wt.kind !== "main") return;
+    void api.setRepoWorktreeDefault(repoId, worktree);
+  }
   // Later, the balancer places it when it starts: no account with room now is
   // not a reason not to schedule it.
   const whenOk = mode === "now" || (!!when.trim() && !("error" in parseWhen(when)));
@@ -324,11 +334,13 @@ export function NewSession({
       if (mode === "schedule") {
         const sc = await api.createSchedule({ when, spec: input });
         savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider });
+        rememberRepoDefault();
         onScheduled(sc);
         return;
       }
       const r = await api.createSession(input);
       savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider });
+      rememberRepoDefault();
       onCreated(r.session.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

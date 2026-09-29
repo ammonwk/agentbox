@@ -9,6 +9,8 @@
 
 import type { ScheduleRule } from "./schedule";
 export type { ScheduleRule };
+import type { UserIdentity } from "./user";
+export type { UserIdentity };
 
 // -------------------------------------------------------------- providers
 
@@ -521,6 +523,9 @@ export interface Repo {
   /** Branch new worktrees are cut from. Resolved once at registration. */
   defaultBranch: string;
   addedAt: number;
+  /** Where this repo's sessions usually run, remembered from the last pick:
+   *  true — a worktree; false — the checkout itself; null — never picked. */
+  worktreeDefault: boolean | null;
 }
 
 export interface PrInfo {
@@ -782,6 +787,19 @@ export interface ColdState {
   /** Set when something is missing, so the UI can say so instead of failing. */
   warnings: string[];
   schedules: Schedule[];
+  /** Who agentbox works for and what is still unsetup, for the first-run card. */
+  onboarding: Onboarding;
+}
+
+/** What onboarding knows, all of it derived from the machine (see core/user.ts). */
+export interface Onboarding {
+  identity: UserIdentity;
+  /** Any provider account registered. */
+  hasAccount: boolean;
+  /** voice.env has its keys. */
+  voiceReady: boolean;
+  /** The systemd user service is installed and enabled; null where systemd is not. */
+  serviceInstalled: boolean | null;
 }
 
 export interface AppState extends HotState, ColdState {}

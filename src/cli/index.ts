@@ -18,6 +18,9 @@ import { VERSION } from "../version";
 import { ApiError, apiClient, serverBase } from "../client";
 import { CLI_GUIDE } from "../core/cli-guide";
 import { fixPwaDesktop } from "../core/pwa";
+import { deriveIdentity, ensureUserEnv, userEnvPath } from "../core/user";
+import { serviceInstalled } from "../core/service";
+import { voiceConfig } from "../voice/config";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
@@ -215,6 +218,48 @@ async function onSession(verb: "attach" | "resume" | "adopt", id: string | undef
   }
 }
 
+// ------------------------------------------------------------------ onboarding
+
+/**
+ * Derive who agentbox works for from the machine — git, gh, the passwd entry,
+ * the timezone — write what is missing to `user.env`, and report. The point is
+ * to ask for nothing the box already knows: every line says where it came
+ * from, and the only advice left is what could not be derived.
+ */
+function onboard(): number {
+  ensureDirs();
+  // Derive before writing: after ensureUserEnv the file holds every key, and
+  // re-deriving would report "user.env" for values that came from git and gh.
+  const { identity, sources } = deriveIdentity();
+  const wrote = ensureUserEnv();
+  if (wrote) console.log(wrote);
+  else console.log(`already onboarded: ${userEnvPath()}`);
+  console.log("");
+  const row = (k: string, v: string, from: string) => console.log(`  ${k.padEnd(9)} ${v.padEnd(30)} ${from}`);
+  row("name", identity.name, sources.name);
+  row("email", identity.email || "—", sources.email);
+  row("github", identity.github || "—", sources.github);
+  row("timezone", identity.timezone, sources.timezone);
+  console.log("");
+  const missing: string[] = [];
+  const deps = dependencies(false);
+  for (const n of ["tmux", "git", "gh"] as const) {
+    if (deps[n].state !== "ok") missing.push(`${n}: ${deps[n].detail ?? deps[n].state}`);
+  }
+  const voice = voiceConfig();
+  if ("missing" in voice) missing.push(`voice: missing ${voice.missing}`);
+  if (serviceInstalled() === false) missing.push("service: not installed — the board's first-run card can install it");
+  if (!missing.length) console.log("dependencies: all good");
+  else {
+    console.log("still to set up:");
+    for (const m of missing) console.log(`  ${m}`);
+  }
+  if (!identity.context) {
+    console.log(`\noptional: add USER_CONTEXT=<a line about you> to ${userEnvPath()} — the voice agent reads it to know who it is talking to.`);
+  }
+  return 0;
+}
+
 // ------------------------------------------------------------------- doctor
 
 type Check = { name: string; ok: boolean; detail: string; fatal: boolean };
@@ -324,6 +369,8 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
   mcp                   run the fleet MCP server on stdio (for a conductor session)
   subagent-mcp          run the omp/devin subagent MCP server on stdio (needs no server)
   doctor                check that everything agentbox needs is present
+  onboard               derive who agentbox works for (git, gh, the system),
+                        write user.env, and say what is still missing
   guide                 how an agent drives the fleet with this CLI
   version               print the version`;
 
@@ -333,6 +380,8 @@ export async function main(argv: string[]): Promise<number | null> {
     switch (cmd) {
       case "serve": {
         ensureDirs();
+        const wrote = ensureUserEnv();
+        if (wrote) console.log(`agentbox: ${wrote}`);
         const { startServer } = await import("../server/index");
         await startServer();
         return null;
@@ -404,6 +453,8 @@ export async function main(argv: string[]): Promise<number | null> {
       }
       case "doctor":
         return doctor();
+      case "onboard":
+        return onboard();
       case "guide":
         console.log(CLI_GUIDE);
         return 0;

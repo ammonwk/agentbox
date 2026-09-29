@@ -31,7 +31,9 @@ import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { watchPwaDesktop } from "../core/pwa";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
-import { addRepo, deleteRepo, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings } from "../core/db";
+import { addRepo, deleteRepo, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoWorktreeDefault } from "../core/db";
+import { serviceInstalled, installService } from "../core/service";
+import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
@@ -39,6 +41,7 @@ import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { checkRequest } from "./csrf";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
+import { voiceConfig } from "../voice/config";
 import type { Conversation } from "../voice/conversation";
 import { HttpError, Router, fail, json, readBody } from "./router";
 import { optionalString, parseAnswers, parseSettingsPatch, requireBoolean, requireString } from "./validate";
@@ -126,6 +129,8 @@ const slow = {
   skillWarnings: [] as string[],
   tmuxMissing: false,
   providers: [] as ColdState["providers"],
+  /** A `systemctl is-enabled` spawn; never on the cold path itself. */
+  serviceInstalled: null as boolean | null,
 };
 
 /** Checkouts on this machine; each may carry its own `.claude/skills`. */
@@ -140,6 +145,7 @@ async function refreshSlow(): Promise<void> {
   // From the database: sessions come and go, and which PR is whose with them.
   slow.prs = openPrs(fleet.sessions());
   slow.tmuxMissing = !tmux.tmuxVersion();
+  slow.serviceInstalled = serviceInstalled();
   scheduleCold();
 }
 
@@ -210,6 +216,12 @@ function coldState(): ColdState {
     providers: slow.providers,
     warnings: warnings(),
     schedules: listSchedules(),
+    onboarding: {
+      identity: readUserIdentity(),
+      hasAccount: accounts.list().length > 0,
+      voiceReady: !("missing" in voiceConfig()),
+      serviceInstalled: slow.serviceInstalled,
+    },
   };
 }
 
@@ -774,6 +786,26 @@ const router = new Router(mapError)
     deleteRepo(params.id!);
     void refreshSlow();
     return json(null);
+  })
+  .add("PATCH", "/api/repos/:id", async ({ req, params }) => {
+    const b = await readBody(req);
+    if (!("worktreeDefault" in b) || (b.worktreeDefault !== null && typeof b.worktreeDefault !== "boolean")) {
+      throw new HttpError(400, "worktreeDefault must be true, false or null");
+    }
+    setRepoWorktreeDefault(params.id!, b.worktreeDefault as boolean | null);
+    scheduleCold();
+    return json(listRepos());
+  })
+  .add("POST", "/api/onboarding/service", () => {
+    try {
+      const path = installService();
+      slow.serviceInstalled = serviceInstalled();
+      scheduleCold();
+      return json({ installed: path });
+    } catch (e) {
+      // A missing systemd is an answer, not a bug: 400, not 500.
+      throw new HttpError(400, (e as Error).message);
+    }
   })
   .add("POST", "/api/worktrees/scan", async ({ req }) => {
     const b = await readBody(req);

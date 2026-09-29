@@ -252,9 +252,9 @@ const schedules: Schedule[] = [
 ];
 
 const repos: Repo[] = [
-  { id: "r-agentbox", ref: `${HOME}/Documents/agentbox`, kind: "local", displayName: "agentbox", fullName: "you/agentbox", defaultBranch: "v2", addedAt: T0 - 90 * D },
-  { id: "r-switchyard", ref: `${HOME}/Documents/switchyard`, kind: "local", displayName: "switchyard", fullName: "you/switchyard", defaultBranch: "main", addedAt: T0 - 60 * D },
-  { id: "r-web", ref: "acme/web", kind: "github", displayName: "web", fullName: "acme/web", defaultBranch: "main", addedAt: T0 - 12 * D },
+  { id: "r-agentbox", ref: `${HOME}/Documents/agentbox`, kind: "local", displayName: "agentbox", fullName: "you/agentbox", defaultBranch: "v2", addedAt: T0 - 90 * D, worktreeDefault: false },
+  { id: "r-switchyard", ref: `${HOME}/Documents/switchyard`, kind: "local", displayName: "switchyard", fullName: "you/switchyard", defaultBranch: "main", addedAt: T0 - 60 * D, worktreeDefault: true },
+  { id: "r-web", ref: "acme/web", kind: "github", displayName: "web", fullName: "acme/web", defaultBranch: "main", addedAt: T0 - 12 * D, worktreeDefault: null },
 ];
 
 const skills: SkillInfo[] = [
@@ -694,6 +694,12 @@ function cold(): ColdState {
     ],
     warnings: [],
     schedules: structuredClone(schedules),
+    onboarding: {
+      identity: { name: "Dev", email: "dev@example.com", github: "dev", timezone: "UTC", context: "" },
+      hasAccount: true,
+      voiceReady: false,
+      serviceInstalled: null,
+    },
   };
 }
 
@@ -1340,6 +1346,13 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   }
 
   if (head === "repos") {
+    if (method === "PATCH" && id) {
+      const r = repos.find((x) => x.id === id);
+      const wd = body<{ worktreeDefault: boolean | null }>(b).worktreeDefault;
+      if (r && (wd === null || typeof wd === "boolean")) r.worktreeDefault = wd;
+      pushCold();
+      return repos.slice();
+    }
     if (method === "DELETE" && id) {
       const i = repos.findIndex((r) => r.id === id);
       if (i >= 0) repos.splice(i, 1);
@@ -1348,10 +1361,15 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
     }
     const ref = body<{ ref: string }>(b).ref ?? "";
     await sleep(700);
-    const r: Repo = { id: `r-${Math.random().toString(36).slice(2, 6)}`, ref, kind: ref.startsWith("/") ? "local" : "github", displayName: ref.split("/").pop() || ref, fullName: ref.startsWith("/") ? null : ref, defaultBranch: "main", addedAt: Date.now() };
+    const r: Repo = { id: `r-${Math.random().toString(36).slice(2, 6)}`, ref, kind: ref.startsWith("/") ? "local" : "github", displayName: ref.split("/").pop() || ref, fullName: ref.startsWith("/") ? null : ref, defaultBranch: "main", addedAt: Date.now(), worktreeDefault: null };
     repos.push(r);
     pushCold();
     return r;
+  }
+
+  if (head === "onboarding") {
+    await sleep(400);
+    return { installed: "/home/dev/.config/systemd/user/agentbox.service" };
   }
 
   if (head === "worktrees") {

@@ -16,6 +16,7 @@ import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
 import { Skills } from "./views/Skills";
+import { OnboardingCard } from "./views/Onboarding";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -232,6 +233,7 @@ export function App() {
             {w}
           </Banner>
         ))}
+        {state ? <OnboardingCard ob={state.onboarding} /> : null}
 
         <main className={`content ${(flush || route.page === "skills") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
