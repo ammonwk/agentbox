@@ -511,6 +511,10 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
   return account.isDefault ? { env: {}, unset: ["CLAUDE_CONFIG_DIR"] } : { env: { CLAUDE_CONFIG_DIR: account.home } };
 }
 
+/** Without it newer models record thinking as a bare signature, and the
+ *  timeline has nothing to show. */
+const THINKING = ["--thinking-display", "summarized"];
+
 /** A prompt that starts with `-` would be parsed as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
 
@@ -520,6 +524,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
+  argv.push(...THINKING);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: id };
 }
@@ -531,10 +536,12 @@ function resumeCommand(opts: ResumeOptions): Command {
     argv.push(...opts.carry);
     if (opts.model && !opts.carry.some((a) => a === "--model" || a.startsWith("--model="))) argv.push("--model", opts.model);
     if (opts.effort && !opts.carry.some((a) => a === "--effort" || a.startsWith("--effort="))) argv.push("--effort", opts.effort);
+    if (!opts.carry.some((a) => a === "--thinking-display" || a.startsWith("--thinking-display="))) argv.push(...THINKING);
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
+    argv.push(...THINKING);
   }
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
