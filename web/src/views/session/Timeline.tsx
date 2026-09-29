@@ -273,7 +273,7 @@ export function Timeline({ session }: { session: Session }) {
               <Markdown text={e.text} />
             </div>
           ))}
-          {thinking ? <ThinkingLive since={liveSince} now={now} /> : null}
+          {thinking ? <ThinkingLive since={liveSince} now={now} background={session.background} /> : null}
         </div>
       </div>
       {!pinned ? (
@@ -491,9 +491,20 @@ function Thinking({ text, at, dur }: { text: string; at: number; dur?: number })
   );
 }
 
-/** The gap before the next step lands: thinking, with a live clock that goes red past two minutes. */
-function ThinkingLive({ since, now }: { since: number; now: number }) {
+/**
+ * The gap before the next step lands: thinking, with a live clock that goes
+ * red past two minutes. With the turn over and only background work going,
+ * it is waiting instead, and a long wait is no sign of trouble.
+ */
+function ThinkingLive({ since, now, background }: { since: number; now: number; background: boolean }) {
   const ms = Math.max(0, now - since);
+  if (background) {
+    return (
+      <div className="tl-live" role="status" title="The turn is over; it is waiting on teammates, background agents or shells it started">
+        Waiting… <span className="tl-dur">{fmtDur(ms)}</span>
+      </div>
+    );
+  }
   return (
     <div className={`tl-live${ms > SLOW_MS ? " is-slow" : ""}`} role="status" title="The turn is running and its next step has not landed in the transcript yet">
       <Spinner size={12} /> Thinking… <span className="tl-dur">{fmtDur(ms)}</span>

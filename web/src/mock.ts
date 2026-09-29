@@ -308,6 +308,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     closedAt: null,
     parkedAt: null,
     parkHold: null,
+    background: false,
     ...p,
     lastPromptAt: p.lastPromptAt ?? p.lastActivityAt ?? T0 - 5 * M,
   };

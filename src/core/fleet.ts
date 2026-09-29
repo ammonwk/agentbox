@@ -1006,7 +1006,7 @@ export class Fleet extends EventEmitter {
           updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null, parkedWhy: null });
           // The board says so now, not a tick from now: a message sent in
           // between must resume it, not type into a pane that is gone.
-          this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null });
+          this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null, background: false });
           parked = true;
           const team = check.mates.length ? `, with teammates ${check.mates.join(", ")}` : "";
           console.log(`agentbox: parked ${v.id} (${v.title}) after ${minutes(now - v.lastActivityAt)} idle${team}`);
@@ -1534,6 +1534,7 @@ export class Fleet extends EventEmitter {
     }
 
     let status: SessionStatus;
+    let background = false;
     // Parked is still your move: the fleet stopped the process, not you, and
     // the next message resumes it.
     if (host === "none") status = rec.parkedAt ? "waiting" : "stopped";
@@ -1546,6 +1547,9 @@ export class Fleet extends EventEmitter {
       // Only where no provider flag says otherwise — Claude's status file
       // stays "busy" for days on a lead with teammates (see parkIdle).
       if (status === "running" && !busy && host !== "subagent" && now - (f?.lastActivityAt ?? now) >= STALE_TURN_MS) status = "waiting";
+      // Busy with its own turn over: the CLI is waiting on what it left going
+      // (teammates, background agents, shells), not thinking.
+      background = status === "running" && !!busy && host !== "subagent" && !!f && !f.turnOpen;
       // Claude says so itself while a permission dialog is up, which is the
       // only way to know it for a session in some other terminal. Its /btw
       // panel is a dialog to Claude too, but a prompt to no one: while it
@@ -1677,6 +1681,7 @@ export class Fleet extends EventEmitter {
       closedAt: rec.archivedAt,
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
+      background: background && status === "running",
     };
   }
 

@@ -323,6 +323,10 @@ export interface Session {
   /** Idle past `parkIdleMin` but kept running, and why: "a background command
    *  is running (…)", "a /loop wakeup is due in 12m", "teammate x is mid-turn". */
   parkHold: string | null;
+  /** Running only on work it left going: the provider says busy, but its own
+   *  turn is over and it is waiting on teammates, background agents or
+   *  shells, not thinking. */
+  background: boolean;
 }
 
 export interface TokenTotals {
