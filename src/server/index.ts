@@ -31,7 +31,8 @@ import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
-import { addRepo, deleteRepo, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoWorktreeDefault } from "../core/db";
+import { addRepo, deleteRepo, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
+import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
@@ -65,6 +66,7 @@ import type {
   PrInfo,
   ProviderId,
   Repo,
+  RepoSetup,
   ServerMessage,
   SkillInfo,
   TimelinePage,
@@ -804,10 +806,20 @@ const router = new Router(mapError)
   })
   .add("PATCH", "/api/repos/:id", async ({ req, params }) => {
     const b = await readBody(req);
-    if (!("worktreeDefault" in b) || (b.worktreeDefault !== null && typeof b.worktreeDefault !== "boolean")) {
+    if (!getRepoById(params.id!)) throw new HttpError(404, `no repo ${params.id}`);
+    if ("worktreeDefault" in b && b.worktreeDefault !== null && typeof b.worktreeDefault !== "boolean") {
       throw new HttpError(400, "worktreeDefault must be true, false or null");
     }
-    setRepoWorktreeDefault(params.id!, b.worktreeDefault as boolean | null);
+    let setup: RepoSetup | null = null;
+    if ("setup" in b) {
+      try {
+        setup = parseSetup(b.setup);
+      } catch (e) {
+        throw new HttpError(400, (e as Error).message);
+      }
+    }
+    if ("worktreeDefault" in b) setRepoWorktreeDefault(params.id!, b.worktreeDefault as boolean | null);
+    if (setup) setRepoSetup(params.id!, setup);
     scheduleCold();
     return json(listRepos());
   })

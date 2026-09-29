@@ -41,7 +41,7 @@ export function agentboxHome(): string {
 }
 
 /** `server.log`, when the server is started as AGENTS.md says. */
-const logDir = (): string => join(agentboxHome(), "logs");
+export const logDir = (): string => join(agentboxHome(), "logs");
 
 export const worktreeRoot = (): string => join(agentboxHome(), "worktrees");
 export const repoRoot = (): string => join(agentboxHome(), "repos");

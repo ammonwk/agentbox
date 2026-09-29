@@ -13,6 +13,7 @@ import type {
   Candidate,
   ProviderId,
   Repo,
+  RepoSetup,
   Schedule,
   TokenTotals,
   UsageWindow,
@@ -248,9 +249,11 @@ const MIGRATIONS: string[] = [
   // 11 — why a session was parked when it was not for sitting idle (a crash
   // took its process; src/core/recovery.ts); told to it when it resumes.
   `ALTER TABLE sessions ADD COLUMN parked_why TEXT;`,
-  // 12 — where a repo's sessions usually run, remembered from the last pick.
-  // Null until picked once; no name matching anywhere.
+  // 12 — where a repo's new sessions start (Settings; once the last pick).
+  // Null until set; no name matching anywhere.
   `ALTER TABLE repos ADD COLUMN worktree_default INTEGER;`,
+  // 13 — what a new worktree of the repo is given (RepoSetup, as JSON).
+  `ALTER TABLE repos ADD COLUMN setup TEXT;`,
 ];
 
 function migrate(d: Database) {
@@ -876,6 +879,7 @@ type RepoRow = {
   id: string; ref: string; kind: string; display_name: string;
   full_name: string | null; default_branch: string; added_at: number;
   worktree_default: number | null;
+  setup: string | null;
 };
 
 function rowToRepo(r: RepoRow): Repo {
@@ -883,6 +887,7 @@ function rowToRepo(r: RepoRow): Repo {
     id: r.id, ref: r.ref, kind: r.kind as Repo["kind"], displayName: r.display_name,
     fullName: r.full_name, defaultBranch: r.default_branch, addedAt: r.added_at,
     worktreeDefault: r.worktree_default === null ? null : !!r.worktree_default,
+    setup: r.setup ? (JSON.parse(r.setup) as RepoSetup) : { copy: [], run: "" },
   };
 }
 
@@ -914,9 +919,12 @@ export function deleteRepo(id: string) {
   getDb().run("DELETE FROM repos WHERE id = ?", [id]);
 }
 
-/** Remember where this repo's sessions usually run, from an explicit pick. */
 export function setRepoWorktreeDefault(id: string, value: boolean | null): void {
   getDb().run("UPDATE repos SET worktree_default = ? WHERE id = ?", [value === null ? null : value ? 1 : 0, id]);
+}
+
+export function setRepoSetup(id: string, setup: RepoSetup): void {
+  getDb().run("UPDATE repos SET setup = ? WHERE id = ?", [JSON.stringify(setup), id]);
 }
 
 /**
@@ -961,6 +969,7 @@ function localRepo(path: string): Repo {
     defaultBranch: resolveDefaultBranch(path),
     addedAt: Date.now(),
     worktreeDefault: null,
+    setup: { copy: [], run: "" },
   };
 }
 
@@ -980,6 +989,7 @@ function githubRepo(slug: string): Repo {
     defaultBranch: remoteDefaultBranch(slug),
     addedAt: Date.now(),
     worktreeDefault: null,
+    setup: { copy: [], run: "" },
   };
 }
 

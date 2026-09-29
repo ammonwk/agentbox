@@ -47,7 +47,7 @@ import type {
   Schedule,
   ScheduleSpec,
 } from "../../src/core/types";
-import type { TermChannel, TermHandlers } from "./api";
+import type { RepoPatch, TermChannel, TermHandlers } from "./api";
 import { nextRun, parseWhen } from "../../src/core/schedule";
 
 const M = 60_000;
@@ -252,9 +252,9 @@ const schedules: Schedule[] = [
 ];
 
 const repos: Repo[] = [
-  { id: "r-agentbox", ref: `${HOME}/Documents/agentbox`, kind: "local", displayName: "agentbox", fullName: "you/agentbox", defaultBranch: "v2", addedAt: T0 - 90 * D, worktreeDefault: false },
-  { id: "r-switchyard", ref: `${HOME}/Documents/switchyard`, kind: "local", displayName: "switchyard", fullName: "you/switchyard", defaultBranch: "main", addedAt: T0 - 60 * D, worktreeDefault: true },
-  { id: "r-web", ref: "acme/web", kind: "github", displayName: "web", fullName: "acme/web", defaultBranch: "main", addedAt: T0 - 12 * D, worktreeDefault: null },
+  { id: "r-agentbox", ref: `${HOME}/Documents/agentbox`, kind: "local", displayName: "agentbox", fullName: "you/agentbox", defaultBranch: "v2", addedAt: T0 - 90 * D, worktreeDefault: false, setup: { copy: [], run: "" } },
+  { id: "r-switchyard", ref: `${HOME}/Documents/switchyard`, kind: "local", displayName: "switchyard", fullName: "you/switchyard", defaultBranch: "main", addedAt: T0 - 60 * D, worktreeDefault: true, setup: { copy: [".env", "apps/api/.env"], run: "npm ci --prefer-offline --no-audit --no-fund" } },
+  { id: "r-web", ref: "acme/web", kind: "github", displayName: "web", fullName: "acme/web", defaultBranch: "main", addedAt: T0 - 12 * D, worktreeDefault: null, setup: { copy: [], run: "" } },
 ];
 
 const skills: SkillInfo[] = [
@@ -1352,8 +1352,9 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   if (head === "repos") {
     if (method === "PATCH" && id) {
       const r = repos.find((x) => x.id === id);
-      const wd = body<{ worktreeDefault: boolean | null }>(b).worktreeDefault;
-      if (r && (wd === null || typeof wd === "boolean")) r.worktreeDefault = wd;
+      const patch = body<RepoPatch>(b);
+      if (r && "worktreeDefault" in patch) r.worktreeDefault = patch.worktreeDefault ?? null;
+      if (r && patch.setup) r.setup = patch.setup;
       pushCold();
       return repos.slice();
     }
@@ -1365,7 +1366,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
     }
     const ref = body<{ ref: string }>(b).ref ?? "";
     await sleep(700);
-    const r: Repo = { id: `r-${Math.random().toString(36).slice(2, 6)}`, ref, kind: ref.startsWith("/") ? "local" : "github", displayName: ref.split("/").pop() || ref, fullName: ref.startsWith("/") ? null : ref, defaultBranch: "main", addedAt: Date.now(), worktreeDefault: null };
+    const r: Repo = { id: `r-${Math.random().toString(36).slice(2, 6)}`, ref, kind: ref.startsWith("/") ? "local" : "github", displayName: ref.split("/").pop() || ref, fullName: ref.startsWith("/") ? null : ref, defaultBranch: "main", addedAt: Date.now(), worktreeDefault: null, setup: { copy: [], run: "" } };
     repos.push(r);
     pushCold();
     return r;

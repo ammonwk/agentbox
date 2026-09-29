@@ -147,8 +147,26 @@
   align-items: center;
   gap: 4px;
 }
-.repo-row > :last-child {
+.repo-row > .repo-remove {
   margin-left: auto;
+}
+.repo-setup {
+  flex-basis: 100%;
+  min-width: 0;
+}
+.repo-setup > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repo-setup[open] > summary {
+  margin-bottom: 10px;
+}
+.repo-setup > .field {
+  margin-top: 10px;
 }
 
 /* Reclaim verdict. `keep` is the cautious answer and by far the more common

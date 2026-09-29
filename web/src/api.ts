@@ -102,6 +102,7 @@ const enc = encodeURIComponent;
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 export type SettingsPatch = DeepPartial<AgentSettings>;
+export type RepoPatch = Partial<Pick<Repo, "worktreeDefault" | "setup">>;
 
 /** Body of `POST /api/sessions`. `accountId` absent or "auto" = the balancer. */
 export interface NewSessionInput {
@@ -242,9 +243,8 @@ export const api = {
   // repos, worktrees
   addRepo: (ref: string) => post<Repo>("/api/repos", { ref }),
   deleteRepo: (id: string) => request<unknown>("DELETE", `/api/repos/${enc(id)}`),
-  /** Remember where this repo's sessions usually run; null clears it. */
-  setRepoWorktreeDefault: (id: string, worktreeDefault: boolean | null) =>
-    request<Repo[]>(`PATCH`, `/api/repos/${enc(id)}`, { worktreeDefault }),
+  /** Where the repo's new sessions start, and what its new worktrees are given. */
+  patchRepo: (id: string, patch: RepoPatch) => request<Repo[]>(`PATCH`, `/api/repos/${enc(id)}`, patch),
   /** Write and enable the systemd user service for this checkout, lingering on. */
   installService: () => post<{ installed: string; lingering: boolean }>("/api/onboarding/service"),
   /** Slow by construction — many git and gh calls. Only ever on a button. */

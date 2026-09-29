@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentSettings, AppState, BalancerSettings, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
 import { describeAt, describeRule, isRecurring } from "../../../src/core/schedule";
-import { api, fmtBytes, healthRows, type Health, type SettingsPatch } from "../api";
+import { api, fmtBytes, healthRows, type Health, type RepoPatch, type SettingsPatch } from "../api";
 import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
 import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle } from "../components";
 import { BALANCER_HELP } from "../lib/balancer";
@@ -13,7 +13,7 @@ import "./settings.css";
 
 export function Settings({ state }: { state: AppState }) {
   const { settings, repos, warnings, sessions } = state;
-  const { save, saveStateOf } = useSettingsSave();
+  const { save, track, saveStateOf } = useSettingsSave();
   const section = { settings, save, saveStateOf };
 
   return (
@@ -22,7 +22,7 @@ export function Settings({ state }: { state: AppState }) {
       <General {...section} />
       <Models {...section} installed={state.providers} />
       <Balancer {...section} />
-      <Repositories repos={repos} sessions={sessions} />
+      <Repositories repos={repos} sessions={sessions} track={track} saveStateOf={saveStateOf} />
       <Disk />
       <Diagnostics warnings={warnings} providers={state.providers} />
     </div>
@@ -330,7 +330,17 @@ function Balancer({ settings, save, saveStateOf }: SectionProps) {
 
 // ------------------------------------------------------------ repositories
 
-function Repositories({ repos, sessions }: { repos: Repo[]; sessions: AppState["sessions"] }) {
+function Repositories({
+  repos,
+  sessions,
+  track,
+  saveStateOf,
+}: {
+  repos: Repo[];
+  sessions: AppState["sessions"];
+  track: Track;
+  saveStateOf: SectionProps["saveStateOf"];
+}) {
   const [ref, setRef] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingRef, setPendingRef] = useState("");
@@ -447,9 +457,11 @@ function Repositories({ repos, sessions }: { repos: Repo[]; sessions: AppState["
                 variant="danger"
                 size="sm"
                 icon={Icon.trash}
+                className="repo-remove"
                 aria-label={`Remove ${r.displayName}`}
                 onClick={() => setConfirming(r)}
               />
+              <RepoSetupFields repo={r} track={track} saveStateOf={saveStateOf} />
             </li>
           ))}
         </ul>
@@ -485,6 +497,83 @@ function Repositories({ repos, sessions }: { repos: Repo[]; sessions: AppState["
         />
       )}
     </section>
+  );
+}
+
+const START_IN: [boolean | null, string][] = [
+  [true, "New worktree"],
+  [false, "Main checkout"],
+  [null, "Last used"],
+];
+
+/**
+ * Where the repo's new sessions start, and what a worktree of it needs that git
+ * does not carry. Folded to one line: set once per repo, then only read.
+ */
+function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Track; saveStateOf: SectionProps["saveStateOf"] }) {
+  const key = (field: string) => `repo:${repo.id}:${field}`;
+  const patch = (field: string, p: RepoPatch) => track(key(field), api.patchRepo(repo.id, p));
+  const { copy, run } = repo.setup;
+  const summary = [
+    `Starts in: ${START_IN.find(([v]) => v === repo.worktreeDefault)![1].toLowerCase()}`,
+    copy.length > 0 ? `copies ${copy.length} path${copy.length === 1 ? "" : "s"}` : null,
+    run ? `runs ${run}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <details className="repo-setup">
+      <summary>{summary}</summary>
+
+      <Field label="New sessions start in" hint="What New session picks when this repo is chosen. Last used keeps whatever the previous session did.">
+        {(id) => (
+          <div className="seg" role="group" aria-label="New sessions start in" id={id}>
+            {START_IN.map(([v, label]) => (
+              <button
+                key={label}
+                type="button"
+                aria-pressed={repo.worktreeDefault === v}
+                disabled={v === false && repo.kind === "github"}
+                title={v === false && repo.kind === "github" ? "A GitHub repo has no checkout of its own to work in." : undefined}
+                onClick={() => patch("start", { worktreeDefault: v })}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </Field>
+      <SaveMark state={saveStateOf(key("start"))} />
+
+      <Field
+        label="Copy into new worktrees"
+        hint="Paths from the repo root, one per line, copied from its checkout before the agent starts: what git does not carry, like .env files. One the branch already has is left alone."
+      >
+        {(id) => (
+          <CommitInput
+            id={id}
+            multiline
+            rows={3}
+            mono
+            value={copy.join("\n")}
+            placeholder={".env\napps/api/.env"}
+            onCommit={(v) => patch("copy", { setup: { copy: v.split("\n").map((l) => l.trim()).filter(Boolean), run } })}
+          />
+        )}
+      </Field>
+      <SaveMark state={saveStateOf(key("copy"))} />
+
+      <Field
+        label="Setup command"
+        hint="Runs in each new worktree alongside the agent, which is told to wait for it before it needs it. Its output is in the agentbox logs, under setup/<session>.log."
+      >
+        {(id) => (
+          <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim() } })} />
+        )}
+      </Field>
+      <SaveMark state={saveStateOf(key("run"))} />
+    </details>
   );
 }
 
@@ -795,6 +884,9 @@ function Diagnostics({ warnings, providers }: { warnings: string[]; providers: A
 
 type SaveStatus = { phase: "saving" } | { phase: "saved" } | { phase: "error"; message: string };
 
+/** Show a write's progress next to the control keyed `key`. */
+type Track = (key: string, write: Promise<unknown>) => void;
+
 interface SectionProps {
   settings: AgentSettings;
   save: (key: string, patch: SettingsPatch) => void;
@@ -818,10 +910,9 @@ function useSettingsSave() {
     };
   }, []);
 
-  const save = useCallback((key: string, patch: SettingsPatch) => {
+  const track = useCallback<Track>((key, write) => {
     setStates((s) => ({ ...s, [key]: { phase: "saving" } }));
-    api
-      .saveSettings(patch)
+    write
       .then(() => {
         setStates((s) => ({ ...s, [key]: { phase: "saved" } }));
         const running = timers.current.get(key);
@@ -842,9 +933,10 @@ function useSettingsSave() {
       });
   }, []);
 
+  const save = useCallback((key: string, patch: SettingsPatch) => track(key, api.saveSettings(patch)), [track]);
   const saveStateOf = useCallback((key: string) => states[key], [states]);
 
-  return { save, saveStateOf };
+  return { save, track, saveStateOf };
 }
 
 function SaveMark({ state }: { state: SaveStatus | undefined }) {

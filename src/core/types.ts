@@ -523,9 +523,23 @@ export interface Repo {
   /** Branch new worktrees are cut from. Resolved once at registration. */
   defaultBranch: string;
   addedAt: number;
-  /** Where this repo's sessions usually run, remembered from the last pick:
-   *  true — a worktree; false — the checkout itself; null — never picked. */
+  /** Where this repo's new sessions start, set in Settings: true — a new
+   *  worktree; false — the checkout itself; null — no default. */
   worktreeDefault: boolean | null;
+  /** What a new worktree of this repo is given as it is cut. */
+  setup: RepoSetup;
+}
+
+/**
+ * A fresh worktree has what git tracks and nothing else: no `.env`, no
+ * `node_modules`. `copy` fills in the first before the agent starts; `run`
+ * does the slow part alongside it (src/core/setup.ts).
+ */
+export interface RepoSetup {
+  /** Paths relative to the repo root, copied from its checkout. */
+  copy: string[];
+  /** A shell command run in the new worktree; empty for none. */
+  run: string;
 }
 
 export interface PrInfo {
