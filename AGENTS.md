@@ -121,8 +121,11 @@ and each recovery's report in `recovery/`.
   starts a detached session and watches it. It speaks up on its own from those
   lines and from board news (`src/core/changes.ts`, the same changes
   `agentbox watch` prints).
-- `.claude/skills/telegram/` — Telegram Dev (a personal Telegram bot) with a link back
-  to the session; for sessions working in this checkout.
+- `src/core/user.ts` — who agentbox works for, derived from the machine (git,
+  gh, the passwd entry, the timezone) into `<agentbox home>/user.env` by
+  `agentbox onboard`, and re-derived at boot when that file is missing. The
+  repo never learns a name, an email or a login; personal skills live in
+  `~/.claude/skills` or `~/.agents/skills`, outside any checkout.
 - `src/core/cli-guide.ts` — the `agentbox` CLI guide for agents: `agentbox
   guide` prints it and `bun run docs:cli` writes it to `docs/cli.md`.
 - `src/core/pwa.ts` — the board's PWA launcher entry. Chrome writes its

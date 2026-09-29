@@ -2,9 +2,9 @@
  *  lines, the same shape as a .env. Read on every connection, so an edit
  *  takes effect on the next call without a restart. */
 
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome } from "../core/paths";
+import { readEnvFile } from "../core/envfile";
 
 export interface VoiceConfig {
   deepgramKey: string;
@@ -20,18 +20,11 @@ export interface VoiceConfig {
 export const voiceEnvPath = (): string => join(agentboxHome(), "voice.env");
 
 export function voiceConfig(): VoiceConfig | { missing: string } {
-  const path = voiceEnvPath();
-  const env: Record<string, string> = {};
-  if (existsSync(path)) {
-    for (const line of readFileSync(path, "utf8").split("\n")) {
-      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
-      if (m) env[m[1]!] = m[2]!.replace(/^["']|["']$/g, "");
-    }
-  }
+  const env = readEnvFile(voiceEnvPath());
   const deepgramKey = env.DEEPGRAM_API_KEY || process.env.DEEPGRAM_API_KEY || "";
   const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
-  if (!deepgramKey) return { missing: `DEEPGRAM_API_KEY in ${path}` };
-  if (!anthropicKey) return { missing: `ANTHROPIC_API_KEY in ${path}` };
+  if (!deepgramKey) return { missing: `DEEPGRAM_API_KEY in ${voiceEnvPath()}` };
+  if (!anthropicKey) return { missing: `ANTHROPIC_API_KEY in ${voiceEnvPath()}` };
   return {
     deepgramKey,
     anthropicKey,

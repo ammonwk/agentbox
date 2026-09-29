@@ -65,7 +65,7 @@ export const tmuxSocket = (): string => process.env.AGENTBOX_TMUX_SOCKET ?? "age
  * the built UI was only ever found when the server happened to be started from
  * the repo root. This one is not env-derived, so it stays a constant.
  */
-const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+export const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const webDist = join(packageRoot, "web", "dist");
 
 export const DEFAULT_PORT = 4479;

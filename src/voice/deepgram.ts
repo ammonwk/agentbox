@@ -1,18 +1,19 @@
 /** Deepgram, both ways: Flux to hear, Aura to speak.
  *
- * Settings follow widget-platform's practice call (game-tape
- * practice-call-bridge.ts), which measured them: 24 kHz linear16 end to end so
- * nothing is resampled, and Flux turn-taking at `eot_threshold` 0.7 — 0.6
- * answered sooner but cut people off mid-sentence. The LLM is not
- * Deepgram's here (see conversation.ts), so hearing and speaking are two
- * sockets rather than their Voice Agent.
+ * Settings from agentbox's own practice calls, which measured them: 24 kHz
+ * linear16 end to end so nothing is resampled, and Flux turn-taking at
+ * `eot_threshold` 0.7 — 0.6 answered sooner but cut people off mid-sentence.
+ * The LLM is not Deepgram's here (see conversation.ts), so hearing and
+ * speaking are two sockets rather than their Voice Agent.
  */
 
 export const SAMPLE_RATE = 24_000;
 /** Flux asks for 80 ms chunks; the browser sends 20 ms frames. */
 const FLUX_CHUNK_BYTES = (SAMPLE_RATE * 2 * 80) / 1000;
-/** Words it should expect to hear. */
-const KEYTERMS = ["agentbox", "Dev", "Claude", "Codex", "Widget", "PR", "merge"];
+
+/** The bias list every connection gets, before the personal ones: the box's
+ *  name and the words a fleet conversation is likely to say. */
+const BASE_KEYTERMS = ["agentbox", "Claude", "Codex", "Devin", "PR", "merge"];
 
 export type TurnEvent = {
   event: "StartOfTurn" | "Update" | "EagerEndOfTurn" | "TurnResumed" | "EndOfTurn";
@@ -31,6 +32,9 @@ export class Listener {
 
   constructor(
     private key: string,
+    /** Words it should expect to hear: the user's name and the repos in play,
+     *  passed in per connection rather than known here. */
+    private keyterms: string[],
     private onTurn: (e: TurnEvent) => void,
     private onTrouble: (why: string) => void,
   ) {}
@@ -52,6 +56,11 @@ export class Listener {
     this.queued = [];
   }
 
+  /** user.env changed: the next connect biases toward the new names. */
+  retune(keyterms: string[]): void {
+    this.keyterms = keyterms;
+  }
+
   private connect(): void {
     const q = new URLSearchParams({
       model: "flux-general-en",
@@ -60,7 +69,7 @@ export class Listener {
       eot_threshold: "0.7",
       eot_timeout_ms: "5000",
     });
-    for (const k of KEYTERMS) q.append("keyterm", k);
+    for (const k of [...BASE_KEYTERMS, ...this.keyterms]) q.append("keyterm", k);
     const ws = new WebSocket(`wss://api.deepgram.com/v2/listen?${q}`, {
       headers: { Authorization: `Token ${this.key}` },
     } as unknown as string[]);

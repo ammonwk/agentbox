@@ -5,6 +5,8 @@
 import { attentionOf } from "../core/attention";
 import { ChangeWatcher, changeLine } from "../core/changes";
 import type { Fleet } from "../core/fleet";
+import { listRepos } from "../core/db";
+import { readUserIdentity } from "../core/user";
 import { voiceConfig } from "./config";
 import { Conversation, type VoiceClientMessage, type VoiceSink } from "./conversation";
 import { Watches } from "./shell";
@@ -48,10 +50,12 @@ export class VoiceHub {
   open(id: string, sink: VoiceSink): Conversation | string {
     const cfg = voiceConfig();
     if ("missing" in cfg) return `voice is not set up: missing ${cfg.missing}`;
+    const identity = readUserIdentity();
+    const repos = listRepos().map((r) => r.displayName);
     let c = this.convs.get(id);
-    if (c) c.retune(cfg);
+    if (c) c.retune(cfg, identity, repos);
     else {
-      c = new Conversation(id, cfg, this.tools);
+      c = new Conversation(id, cfg, this.tools, identity, repos);
       this.convs.set(id, c);
       for (const t of this.unheard.splice(0)) c.inject(t);
     }
@@ -93,8 +97,8 @@ export class VoiceHub {
         if (!items.length || !listeners.length) return;
         const text =
           "Board news (id, what happened, title, then what it is asking or the end of its last message). " +
-          "Speak up, in a sentence or two, when a session is asking him something he would want to answer or has finished something he is waiting on: " +
-          "say what it is asking in plain words and offer to pass on his answer. Stay silent for routine progress.\n" +
+          "Speak up, in a sentence or two, when a session is asking them something they would want to answer or has finished something they are waiting on: " +
+          "say what it is asking in plain words and offer to pass on their answer. Stay silent for routine progress.\n" +
           items.slice(0, 12).join("\n");
         for (const c of listeners) c.inject(text);
       }, NEWS_MS);
