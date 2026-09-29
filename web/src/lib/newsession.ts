@@ -252,6 +252,44 @@ export function matchPrs(prs: readonly PrInfo[], query: string, limit = 8): PrIn
   return out.slice(0, limit);
 }
 
+// ---------------------------------------------------------------- choices
+
+const CHOICES_KEY = "agentbox.repoChoices";
+
+/** Repo id → when the dialog last picked it. Its own key, not a prefs field:
+ *  it is written on every pick, while the prefs are rewritten on every
+ *  keystroke, and one clobbering the other would lose choices. */
+export function loadRepoChoices(): Record<string, number> {
+  try {
+    const v = JSON.parse(localStorage.getItem(CHOICES_KEY) ?? "{}") as unknown;
+    if (!v || typeof v !== "object") return {};
+    const out: Record<string, number> = {};
+    for (const [id, at] of Object.entries(v)) if (typeof at === "number" && Number.isFinite(at)) out[id] = at;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function noteRepoChoice(id: string, at = Date.now()): void {
+  const choices = loadRepoChoices();
+  choices[id] = at;
+  try {
+    localStorage.setItem(CHOICES_KEY, JSON.stringify(choices));
+  } catch {
+    // private mode or full: forgetting is fine
+  }
+}
+
+/** Repos picked before, most recently chosen first; never-chosen ones keep
+ *  the order they came in (the caller's session-activity recency). */
+export function reposByChoice(repos: readonly Repo[], choices: Record<string, number>): Repo[] {
+  return repos
+    .map((r, i) => ({ r, at: choices[r.id] ?? 0, i }))
+    .sort((a, b) => b.at - a.at || a.i - b.i)
+    .map((x) => x.r);
+}
+
 // ------------------------------------------------------------------ where
 
 /** Repos with the most recently active session first; never-used ones keep

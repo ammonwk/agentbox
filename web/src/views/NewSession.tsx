@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Schedule } from "../../../src/core/types";
+import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Repo, Schedule } from "../../../src/core/types";
 import { parseWhen } from "../../../src/core/schedule";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
@@ -7,11 +7,14 @@ import { AttachButton, useAttachments } from "../attachments";
 import { Button, Icon, Modal } from "../components";
 import {
   loadPrefs,
+  loadRepoChoices,
+  noteRepoChoice,
   parseWorktreeRef,
   promptPrs,
   prsOf,
   rankModels,
   recentFolders,
+  reposByChoice,
   reposByRecency,
   savePrefs,
   skillsFor,
@@ -26,6 +29,9 @@ import { WorktreeField } from "./newsession/WorktreeField";
 import { WhenField } from "./newsession/WhenField";
 import { useDismiss, useFloating } from "./newsession/popover";
 import "./newsession.css";
+
+/** The select's extra row: picking it opens the "other repo" input below. */
+const OTHER = "__other__";
 
 /**
  * Start a session: which CLI, where, what to do, on which model and account.
@@ -49,7 +55,18 @@ export function NewSession({
   const [provider, setProvider] = useState<ProviderId>(
     prefs.provider && installed.includes(prefs.provider) ? prefs.provider : installed[0] ?? "claude",
   );
-  const repos = useMemo(() => reposByRecency(state.repos, state.sessions), [state.repos, state.sessions]);
+  /** Repos registered from this dialog ("Select other…") whose cold frame has
+   *  not landed yet, so the select can show the new one at once. */
+  const [added, setAdded] = useState<Repo[]>([]);
+  const knownRepos = useMemo(() => {
+    const ids = new Set(state.repos.map((r) => r.id));
+    return [...state.repos, ...added.filter((a) => !ids.has(a.id))];
+  }, [state.repos, added]);
+  const [repoChoices, setRepoChoices] = useState<Record<string, number>>(loadRepoChoices);
+  const repos = useMemo(
+    () => reposByChoice(reposByRecency(knownRepos, state.sessions), repoChoices),
+    [knownRepos, state.sessions, repoChoices],
+  );
   const [where, setWhere] = useState<"repo" | "path">(state.repos.length === 0 ? "path" : prefs.where ?? "repo");
   const [repoId, setRepoId] = useState<string>(
     prefs.repoId && state.repos.some((r) => r.id === prefs.repoId) ? prefs.repoId : repos[0]?.id ?? "",
@@ -146,7 +163,7 @@ export function NewSession({
   const efforts = models.find((m) => m.id === model)?.efforts ?? providerEfforts;
   const effortPref = perProvider[provider]?.effort ?? "";
   const effort = efforts.includes(effortPref) ? effortPref : "";
-  const repo = state.repos.find((r) => r.id === repoId) ?? null;
+  const repo = knownRepos.find((r) => r.id === repoId) ?? null;
   const repoPrs = useMemo(() => prsOf(state.prs, repo), [state.prs, repo]);
   const wt = parseWorktreeRef(wtText, repoPrs);
 
@@ -183,15 +200,72 @@ export function NewSession({
 
   // Picking a repo sets the box to where that repo's sessions usually run —
   // only on the switch, so unticking it afterwards sticks. A PR the prompt
-  // names wins: the effect above puts the session on it.
+  // names wins: the effect above puts the session on it. Every pick is
+  // remembered, so the list sorts by most recently chosen next time.
   function pickRepo(id: string) {
+    if (id === OTHER) {
+      setOtherRef("");
+      setOtherErr(null);
+      setOtherOpen(true);
+      return;
+    }
+    setOtherOpen(false);
+    noteRepoChoice(id);
+    setRepoChoices((c) => ({ ...c, [id]: Date.now() }));
     setRepoId(id);
-    const next = state.repos.find((r) => r.id === id);
+    const next = knownRepos.find((r) => r.id === id);
     if (!next || promptPrs(prompt, prsOf(state.prs, next), next.fullName).length > 0) return;
     const def = worktreeDefault(next);
     if (def === null) return;
     setWorktree(def);
     setWtText("");
+  }
+
+  // "Select other…": register a repo the list does not know — a local path or
+  // an owner/repo slug — and run against it from now on. The server resolves
+  // the branch and the GitHub slug, so a slug that is not local yet clones
+  // first and can take a while.
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [otherRef, setOtherRef] = useState("");
+  const [otherBusy, setOtherBusy] = useState(false);
+  const [otherErr, setOtherErr] = useState<string | null>(null);
+  const otherInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (otherOpen) otherInputRef.current?.focus();
+  }, [otherOpen]);
+  // Escape and an outside press close the input, not the dialog (the Modal's
+  // own Escape listener is document-capture; this one is window-capture).
+  useDismiss(otherOpen, () => setOtherOpen(false), [otherInputRef]);
+
+  async function addOther() {
+    const value = otherRef.trim();
+    if (!value || otherBusy) return;
+    setOtherBusy(true);
+    setOtherErr(null);
+    try {
+      const r = await api.addRepo(value);
+      if (!r) {
+        // The mock registers nothing; closing is its no-op.
+        setOtherOpen(false);
+        return;
+      }
+      noteRepoChoice(r.id);
+      setRepoChoices((c) => ({ ...c, [r.id]: Date.now() }));
+      setAdded((a) => [...a.filter((x) => x.id !== r.id), r]);
+      setRepoId(r.id);
+      setOtherOpen(false);
+      setOtherRef("");
+      if (promptPrs(prompt, prsOf(state.prs, r), r.fullName).length > 0) return;
+      const def = worktreeDefault(r);
+      if (def !== null) {
+        setWorktree(def);
+        setWtText("");
+      }
+    } catch (e) {
+      setOtherErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOtherBusy(false);
+    }
   }
 
   // Remember everything as it changes, so Cancel keeps it too.
@@ -337,9 +411,38 @@ export function NewSession({
                     {r.displayName} — {r.fullName ?? r.ref}
                   </option>
                 ))}
+                <option value={OTHER}>Select other…</option>
               </select>
               <WorktreeField on={worktree} onToggle={setWorktree} text={wtText} onText={setWtText} prs={repoPrs} />
             </div>
+            {otherOpen ? (
+              <>
+                <input
+                  ref={otherInputRef}
+                  aria-label="Repository path or owner/repo slug"
+                  className="mono"
+                  placeholder="/path/to/repo or owner/repo"
+                  value={otherRef}
+                  disabled={otherBusy}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => setOtherRef(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Enter would submit the whole dialog: here it registers
+                    // the repo instead. Escape is useDismiss's.
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void addOther();
+                    }
+                  }}
+                />
+                {otherErr ? (
+                  <p className="error-line" role="alert">
+                    {otherErr}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
             {!worktree ? (
               <p className="ns-wt-hint">
                 {wtFromPrompt ? <span className="ns-tag">from the prompt</span> : null}
