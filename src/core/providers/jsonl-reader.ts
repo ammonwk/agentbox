@@ -24,8 +24,9 @@ export type Piece =
   | { kind: "event"; event: TimelineEvent }
   /** A tool call, still without its result. `event.id` must be stable. */
   | { kind: "call"; callId: string; event: ToolEvent }
-  /** The result of an earlier (or same-record) call. */
-  | { kind: "result"; callId: string; output: string; error: boolean; answers?: Record<string, string> };
+  /** The result of an earlier (or same-record) call. `at` is when the result
+   *  record was written, so a call can show how long it took. */
+  | { kind: "result"; callId: string; output: string; error: boolean; answers?: Record<string, string>; at?: number };
 
 export interface TranscriptFormat {
   /** Fold one record into the running facts. Called once per record, in order. */
@@ -169,6 +170,7 @@ export class JsonlTranscriptReader implements TranscriptReader {
   private withResult(ev: ToolEvent, r: Extract<Piece, { kind: "result" }> | null): ToolEvent {
     if (!r) return ev;
     const done: ToolEvent = { ...ev, output: r.output, status: r.error ? "error" : "ok" };
+    if (typeof r.at === "number" && r.at > ev.at) done.endedAt = r.at;
     if (ev.ask && r.answers) done.ask = { ...ev.ask, answers: r.answers };
     return done;
   }

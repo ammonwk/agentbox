@@ -268,13 +268,15 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
 export interface ToolOutcome {
   isError: boolean;
   text: string;
+  /** When the toolResult record was written, for showing how long the call took. */
+  at: number | null;
 }
 
 /** The outcome a toolResult record carries, for merging into its call. */
 export function toolOutcomeOf(rec: any): ToolOutcome | null {
   const m = rec?.message;
   if (rec?.type !== "message" || m?.role !== "toolResult") return null;
-  return { isError: m.isError === true, text: textOf(m.content) };
+  return { isError: m.isError === true, text: textOf(m.content), at: tsOf(m.timestamp) };
 }
 
 /**
@@ -339,6 +341,7 @@ export function ompEvents(
       const input = argsJson(b.arguments);
       if (input) ev.input = input;
       if (r?.text) ev.output = clip(r.text, 4000);
+      if (typeof r?.at === "number" && r.at > when) ev.endedAt = r.at;
       out.push(ev);
     }
   });

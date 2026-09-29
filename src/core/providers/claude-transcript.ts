@@ -736,7 +736,7 @@ export function claudePieces(r: any, index: number): Piece[] {
       const texts: string[] = [];
       content.forEach((b: any, i: number) => {
         if (b?.type === "tool_result" && typeof b.tool_use_id === "string") {
-          out.push({ kind: "result", callId: b.tool_use_id, output: cap(toolResultText(b.content), OUTPUT_CAP), error: b.is_error === true, answers: askAnswersOf(r) });
+          out.push({ kind: "result", callId: b.tool_use_id, output: cap(toolResultText(b.content), OUTPUT_CAP), error: b.is_error === true, answers: askAnswersOf(r), at });
         } else if (b?.type === "image" || b?.type === "document") images++;
         else if (b?.type === "text" && typeof b.text === "string") {
           const kind = classifyUserText(b.text);
@@ -783,7 +783,7 @@ export function claudePieces(r: any, index: number): Piece[] {
           out.push({ kind: "call", callId: String(b.id), event: ev });
         } else if (typeof b?.type === "string" && b.type.endsWith("_tool_result") && typeof b.tool_use_id === "string") {
           // Server tools (web search) answer inside the same message.
-          out.push({ kind: "result", callId: b.tool_use_id, output: cap(toolResultText(b.content), OUTPUT_CAP), error: false });
+          out.push({ kind: "result", callId: b.tool_use_id, output: cap(toolResultText(b.content), OUTPUT_CAP), error: false, at });
         } else if (b?.type === "fallback") {
           out.push(meta(id, at, `model fallback: ${b.from?.model ?? "?"} → ${b.to?.model ?? "?"}`, "warn"));
         }

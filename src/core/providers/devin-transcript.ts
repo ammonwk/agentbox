@@ -449,6 +449,7 @@ export function chainEvents(
         }
       }
       if (output) ev.output = clip(output, 4000);
+      if (answer && answer.at > n.at) ev.endedAt = answer.at;
       out.push(ev);
     });
   }

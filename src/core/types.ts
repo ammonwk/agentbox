@@ -352,6 +352,8 @@ export type TimelineEvent = { id: string; at: number } & (
       input?: string;
       output?: string;
       status: "running" | "ok" | "error";
+      /** When the result landed, for showing how long the call took. */
+      endedAt?: number;
       /** AskUserQuestion: what was asked, uncapped, and what was answered. */
       ask?: { id: string; questions: AskQuestion[]; answers?: Record<string, string> };
     }

@@ -844,8 +844,54 @@
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+/* When a row landed, shown while you hover it. */
+.tl-stamp {
+  display: none;
+  flex: none;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tl-assistant:hover .tl-stamp,
+.tl-meta:hover .tl-stamp,
+.tl-thinking-head:hover .tl-stamp,
+.tl-mate-head:hover .tl-stamp,
+.tl-mate-quiet:hover .tl-stamp {
+  display: inline;
+}
 .tl-assistant {
+  position: relative;
   padding: 2px 2px;
+}
+/* Prose has no header row to sit in: the stamp floats over the top right. */
+.tl-stamp-float {
+  position: absolute;
+  top: -3px;
+  right: 0;
+  background: var(--panel);
+  line-height: 15px;
+  padding: 0 3px;
+  border-radius: 4px;
+}
+.tl-meta {
+  position: relative;
+}
+.tl-meta .tl-stamp {
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+/* How long a step took. */
+.tl-dur {
+  flex: none;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
 }
 
 /* A side question (/btw): an aside, not a turn — set in from the
@@ -1179,11 +1225,22 @@
   font-size: 11px;
   font-family: var(--mono);
 }
+.sx-tool-status.ok {
+  color: var(--faint);
+}
 .sx-tool-status.error {
   color: var(--danger);
 }
 .sx-tool-status.running {
   color: var(--warning);
+}
+/* A step still running past two minutes. */
+.sx-tool-status.is-slow,
+.tl-live.is-slow {
+  color: var(--danger);
+}
+.sx-tool.running.is-slow .sx-tool-glyph {
+  color: var(--danger);
 }
 .sx-tool.error {
   background: color-mix(in srgb, var(--danger) 6%, transparent);

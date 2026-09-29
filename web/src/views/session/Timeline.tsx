@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Btw, MateMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { fmtClock, useBtw, useTimeline } from "../../api";
+import { fmtDur } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline, withBtw } from "../../lib/timeline";
 import { Markdown } from "./Markdown";
@@ -17,6 +18,10 @@ import { hrefOf } from "../../route";
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
 const NO_TURNS: Turn[] = [];
+/** A step still running after this long is flagged red. */
+const SLOW_MS = 120_000;
+/** A thinking block older than this is an idle gap, not a thought: no duration. */
+const THINK_CAP_MS = 10 * 60_000;
 
 /**
  * The conversation as the provider's transcript records it, folded into
@@ -33,6 +38,28 @@ export function Timeline({ session }: { session: Session }) {
   // the next step is written). The terminal shows the same state.
   const lastEv = events[events.length - 1];
   const thinking = session.status === "running" && !(lastEv?.kind === "tool" && lastEv.status === "running");
+  // When the current wait began: the last step's end, or the session's last activity.
+  const liveSince = lastEv
+    ? lastEv.kind === "tool" && typeof lastEv.endedAt === "number" && lastEv.endedAt > lastEv.at
+      ? lastEv.endedAt
+      : lastEv.at
+    : (session.lastActivityAt ?? Date.now());
+  // Ticks once a second while the turn runs, so live durations advance.
+  const now = useNow(session.status === "running");
+  // How long each thinking block took: the gap from the previous step's end.
+  const thinkDur = useMemo(() => {
+    const m = new Map<string, number>();
+    let prev: { at: number; end: number } | null = null;
+    for (const ev of events) {
+      const end = ev.kind === "tool" && typeof ev.endedAt === "number" && ev.endedAt > ev.at ? ev.endedAt : ev.at;
+      if (ev.kind === "thinking" && prev && ev.at > prev.at) {
+        const d = ev.at - prev.end;
+        if (d > 0 && d <= THINK_CAP_MS) m.set(ev.id, d);
+      }
+      prev = { at: ev.at, end };
+    }
+    return m;
+  }, [events]);
 
   const boxRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
@@ -203,7 +230,7 @@ export function Timeline({ session }: { session: Session }) {
         <div className="tl-stream">
           {rows.map((r) =>
             r.type === "tools" ? (
-              <ToolRun key={r.id} events={r.events} />
+              <ToolRun key={r.id} events={r.events} now={now} />
             ) : r.type === "idle" ? (
               <IdleRow key={r.id} events={r.events} />
             ) : r.type === "btw" ? (
@@ -211,22 +238,19 @@ export function Timeline({ session }: { session: Session }) {
             ) : r.type === "ask" ? (
               <AskRow key={r.event.id} ev={r.event} live={session.question?.id === r.event.ask.id} />
             ) : (
-              <EventRow key={r.event.id} ev={r.event} />
+              <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
             ),
           )}
           {echoes.map((e) => (
             <div key={e.at} className="tl-user tl-echo" title="Sent; the agent has not recorded it yet">
               <div className="tl-who">
                 <Icon.user size={13} /> You <span className="faint">· sending…</span>
+                <time className="tl-time">{fmtClock(e.at)}</time>
               </div>
               <Markdown text={e.text} />
             </div>
           ))}
-          {thinking ? (
-            <div className="tl-live" role="status" title="The turn is running and its next step has not landed in the transcript yet">
-              <Spinner size={12} /> Thinking…
-            </div>
-          ) : null}
+          {thinking ? <ThinkingLive since={liveSince} now={now} /> : null}
         </div>
       </div>
       {!pinned ? (
@@ -271,7 +295,23 @@ function useEchoes(sessionId: string, events: readonly TimelineEvent[]): Echo[] 
   return live;
 }
 
-const EventRow = memo(function EventRow({ ev }: { ev: Exclude<TimelineEvent, ToolEvent> }) {
+/** Ticks once a second while `active`, so live durations advance. */
+function useNow(active: boolean): number {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  return Date.now();
+}
+
+/** The moment a row landed, shown while you hover it. */
+function Stamp({ at, float }: { at: number; float?: boolean }) {
+  return <time className={`tl-stamp${float ? " tl-stamp-float" : ""}`}>{fmtClock(at)}</time>;
+}
+
+const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number }) {
   switch (ev.kind) {
     case "user":
       return (
@@ -288,16 +328,18 @@ const EventRow = memo(function EventRow({ ev }: { ev: Exclude<TimelineEvent, Too
       return (
         <div className="tl-assistant" title={fmtClock(ev.at)}>
           <Markdown text={ev.text} />
+          <Stamp at={ev.at} float />
         </div>
       );
     case "thinking":
-      return <Thinking text={ev.text} at={ev.at} />;
+      return <Thinking text={ev.text} at={ev.at} dur={dur} />;
     case "meta":
       if (ev.mate) return <MateRow mate={ev.mate} at={ev.at} />;
       return (
         <div className={`tl-meta tone-${ev.tone ?? "info"}`} title={fmtClock(ev.at)}>
           {ev.tone === "warn" || ev.tone === "error" ? <Icon.alert size={12} /> : null}
           <span>{ev.text}</span>
+          <Stamp at={ev.at} />
         </div>
       );
   }
@@ -332,6 +374,7 @@ function MateRow({ mate, at }: { mate: MateMessage; at: number }) {
       <div className={`tl-mate tl-mate-quiet${failed ? " is-failed" : ""}`} title={fmtClock(at)}>
         {who}
         <span className="tl-mate-said">{mate.idle !== undefined ? (failed ? mate.idle.replace(/^failed: ?/, "stopped: ") : "is idle") : said}</span>
+        <Stamp at={at} />
       </div>
     );
   }
@@ -343,6 +386,7 @@ function MateRow({ mate, at }: { mate: MateMessage; at: number }) {
           {mate.idle !== undefined ? <span className="faint">finished · </span> : null}
           {said}
         </span>
+        <Stamp at={at} />
         <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
       </button>
       {open ? (
@@ -402,18 +446,21 @@ function IdleRow({ events }: { events: { at: number; mate: MateMessage }[] }) {
         })}{" "}
         {names.length === 1 ? "is" : "are"} idle
       </span>
+      <Stamp at={events[events.length - 1]!.at} />
     </div>
   );
 }
 
-function Thinking({ text, at }: { text: string; at: number }) {
+function Thinking({ text, at, dur }: { text: string; at: number; dur?: number }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="tl-thinking">
       <button className="tl-thinking-head" aria-expanded={open} onClick={() => setOpen(!open)} title={fmtClock(at)}>
         <Icon.brain size={13} />
         <span className="tl-thinking-label">Thinking</span>
+        {dur !== undefined ? <span className="tl-dur">{fmtDur(dur)}</span> : null}
         {!open ? <span className="tl-thinking-peek">{firstLine(text)}</span> : null}
+        <Stamp at={at} />
         <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
       </button>
       {open ? <div className="tl-thinking-body">{text}</div> : null}
@@ -421,19 +468,33 @@ function Thinking({ text, at }: { text: string; at: number }) {
   );
 }
 
-function ToolRun({ events }: { events: ToolEvent[] }) {
+/** The gap before the next step lands: thinking, with a live clock that goes red past two minutes. */
+function ThinkingLive({ since, now }: { since: number; now: number }) {
+  const ms = Math.max(0, now - since);
+  return (
+    <div className={`tl-live${ms > SLOW_MS ? " is-slow" : ""}`} role="status" title="The turn is running and its next step has not landed in the transcript yet">
+      <Spinner size={12} /> Thinking… <span className="tl-dur">{fmtDur(ms)}</span>
+    </div>
+  );
+}
+
+function ToolRun({ events, now }: { events: ToolEvent[]; now: number }) {
   return (
     <div className="sx-run">
       {events.map((e) => (
-        <ToolRow key={e.id} ev={e} />
+        <ToolRow key={e.id} ev={e} now={e.status === "running" ? now : 0} />
       ))}
     </div>
   );
 }
 
-const ToolRow = memo(function ToolRow({ ev }: { ev: ToolEvent }) {
+const ToolRow = memo(function ToolRow({ ev, now }: { ev: ToolEvent; now: number }) {
   const [open, setOpen] = useState(false);
   const hasDetail = !!(ev.input || ev.output);
+  const running = ev.status === "running";
+  // A finished call shows how long it took; a live one ticks until its result lands.
+  const took = running ? (now > 0 ? Math.max(0, now - ev.at) : null) : typeof ev.endedAt === "number" && ev.endedAt > ev.at ? ev.endedAt - ev.at : null;
+  const slow = running && now > 0 && now - ev.at > SLOW_MS;
   return (
     <>
       <button
@@ -442,14 +503,16 @@ const ToolRow = memo(function ToolRow({ ev }: { ev: ToolEvent }) {
         aria-expanded={hasDetail ? open : undefined}
         disabled={!hasDetail}
         onClick={() => setOpen(!open)}
-        title={fmtClock(ev.at)}
+        title={running && now > 0 ? `${fmtClock(ev.at)} · running for ${fmtDur(now - ev.at)}` : fmtClock(ev.at)}
       >
         <span className="sx-tool-glyph" aria-hidden="true">
-          {ev.status === "running" ? <Spinner size={11} /> : ev.status === "error" ? <Icon.x size={13} /> : <Icon.check size={13} />}
+          {running ? <Spinner size={11} /> : ev.status === "error" ? <Icon.x size={13} /> : <Icon.check size={13} />}
         </span>
         <span className="sx-tool-title">{ev.name}</span>
         <span className="sx-tool-sub">{ev.summary}</span>
-        <span className={`sx-tool-status ${ev.status}`}>{ev.status === "running" ? "running" : ev.status === "error" ? "error" : ""}</span>
+        <span className={`sx-tool-status ${ev.status}${slow ? " is-slow" : ""}`}>
+          {running ? (now > 0 ? fmtDur(now - ev.at) : "running") : ev.status === "error" ? `error${ev.endedAt && ev.endedAt > ev.at ? ` · ${fmtDur(ev.endedAt - ev.at)}` : ""}` : typeof ev.endedAt === "number" && ev.endedAt > ev.at ? fmtDur(ev.endedAt - ev.at) : ""}
+        </span>
         {hasDetail ? <Icon.chevronDown size={12} className={open ? "rot" : undefined} /> : null}
       </button>
       {open && hasDetail ? (

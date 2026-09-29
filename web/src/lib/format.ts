@@ -17,6 +17,18 @@ export function fmtClock(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/** How long a step took: "2.1s", "38s", "2m 05s", "1h 04m". */
+export function fmtDur(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0s";
+  const s = ms / 1000;
+  if (s < 10) return `${s.toFixed(1)}s`;
+  if (s < 60) return `${Math.round(s)}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(Math.round(s) % 60).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
 /**
  * A countdown, coarse on purpose: "3h 12m", "2d 4h", "12m", "<1m". Minutes are
  * the finest grain a rate-limit window is worth reading at.

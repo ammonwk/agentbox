@@ -604,7 +604,7 @@ export function codexPieces(r: any, index: number, fold?: { isInherited(r: any, 
       if (!p.call_id) return [];
       const raw = p.type === "tool_search_output" ? (p.tools ?? p.output ?? "") : p.output;
       const { text, error } = codexOutput(raw);
-      return [{ kind: "result", callId: String(p.call_id), output: cap(text, OUTPUT_CAP), error }];
+      return [{ kind: "result", callId: String(p.call_id), output: cap(text, OUTPUT_CAP), error, at }];
     }
     case "web_search_call": {
       const a = p.action ?? {};
