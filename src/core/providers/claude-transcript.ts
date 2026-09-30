@@ -15,6 +15,7 @@ import { basename, dirname, sep } from "node:path";
 import { addUsage, emptyTotals } from "../pricing";
 import type { AskQuestion, MateMessage, TimelineEvent, TokenTotals } from "../types";
 import { askQuestionsOf } from "./ask";
+import { PrRepoFold } from "../prrepo";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 
@@ -472,6 +473,7 @@ export class ClaudeFold {
   private sawMain = false;
   private sawSidechain = false;
   private recordSessionId: string | null = null;
+  private prRepo = new PrRepoFold();
 
   constructor(
     private readonly ref: Pick<TranscriptRef, "path" | "agentSessionId">,
@@ -643,6 +645,7 @@ export class ClaudeFold {
     const p = promptOf(content);
     if (p) {
       if (p.text) this.prompt(p.text);
+      this.prRepo.add(p.text);
       if (mine && at !== null) this.lastPromptAt = at;
       this.turnOpen = true;
       this.turnError = null;
@@ -684,6 +687,11 @@ export class ClaudeFold {
     }
     if (Array.isArray(m.content)) {
       for (const b of m.content) {
+        if (b?.type === "text") this.prRepo.add(b.text);
+        else if (b?.type === "tool_use") {
+          this.prRepo.add(b.input?.command);
+          this.prRepo.add(b.input?.url);
+        }
         if (b?.type !== "tool_use" || b.name !== "AskUserQuestion" || typeof b.id !== "string") continue;
         const questions = askQuestionsOf(b.input);
         if (questions) this.pendingAsk = { id: b.id, questions };
@@ -742,6 +750,7 @@ export class ClaudeFold {
       lastMessage: this.lastMessage,
       model: this.model,
       gitBranch: this.gitBranch,
+      prRepo: this.prRepo.repo,
       startedAt: this.startedAt,
       lastActivityAt: this.lastActivityAt,
       lastTurnAt: this.lastTurnAt,

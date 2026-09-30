@@ -22,6 +22,7 @@
 
 import { addUsage, emptyTotals } from "../pricing";
 import type { TimelineEvent, TokenTotals, UsageWindow, WindowKind } from "../types";
+import { PrRepoFold } from "../prrepo";
 import { oneLine, tidyPath } from "./claude-transcript";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
@@ -207,6 +208,7 @@ export class CodexFold {
   private lastPrompt: string | null = null;
   private lastPromptAt: number | null = null;
   private lastMessage: string | null = null;
+  private prRepo = new PrRepoFold();
   private startedAt: number | null = null;
   private lastActivityAt: number | null = null;
   private turnOpen = false;
@@ -275,6 +277,7 @@ export class CodexFold {
           const t = prompt.text.slice(0, PROMPT_CAP);
           this.firstPrompt ??= t;
           this.lastPrompt = t;
+          this.prRepo.add(prompt.text);
         }
         if (prompt && at !== null && !isAgentSent(prompt.text ?? "")) this.lastPromptAt = at;
         // Rollouts from before task_started existed only had the message.
@@ -282,6 +285,11 @@ export class CodexFold {
       } else if (p.type === "message" && p.role === "assistant") {
         const text = contentText(p.content).trim();
         if (text) this.lastMessage = text.length > 300 ? `…${text.slice(-299)}` : text;
+        this.prRepo.add(text);
+      } else if (p.type === "function_call" || p.type === "custom_tool_call") {
+        // A JSON string of the arguments; unescaped so `-R "owner/name"` reads as typed.
+        const args = p.type === "custom_tool_call" ? p.input : p.arguments;
+        if (typeof args === "string") this.prRepo.add(args.replace(/\\"/g, '"'));
       }
       return;
     }
@@ -377,6 +385,7 @@ export class CodexFold {
       lastMessage: this.lastMessage,
       model: this.model,
       gitBranch: this.gitBranch,
+      prRepo: this.prRepo.repo,
       startedAt: l?.startedAt ?? this.startedAt,
       lastActivityAt: this.lastActivityAt,
       turnOpen: this.turnOpen,

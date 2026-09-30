@@ -898,6 +898,12 @@ export function insertRepo(r: Repo) {
   );
 }
 
+/** A local repo's GitHub name, learned after it was added: its remote may
+ *  not have existed yet, and nothing else asks again. */
+export function setRepoFullName(id: string, fullName: string) {
+  getDb().run("UPDATE repos SET full_name=? WHERE id=? AND full_name IS NULL", [fullName, id]);
+}
+
 export function listRepos(): Repo[] {
   const rows = getDb().query("SELECT * FROM repos ORDER BY added_at ASC").all() as RepoRow[];
   return rows.map(rowToRepo);

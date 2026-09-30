@@ -85,6 +85,10 @@ export interface TranscriptFacts {
   lastMessage: string | null;
   model: string | null;
   gitBranch: string | null;
+  /** The GitHub repo (`owner/name`) the session names most as the home of
+   *  PRs — `gh -R`, a PR URL — which its `#1234`s link into ahead of its own
+   *  checkout's (see `prrepo.ts`). Absent when the provider does not look. */
+  prRepo?: string | null;
   startedAt: number | null;
   lastActivityAt: number | null;
   /**

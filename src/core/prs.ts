@@ -27,6 +27,7 @@ import {
   listSchedules,
   prBranchesOf,
   savePrSync,
+  setRepoFullName,
   upsertPrs,
   type PrSync,
   type StoredPr,
@@ -224,7 +225,10 @@ function tracked(): Map<string, boolean> {
   const out = new Map<string, boolean>();
   for (const r of listRepos()) {
     const slug = r.fullName ?? (r.kind === "github" ? r.ref : slugOf(repoCheckoutPath(r)));
-    if (slug) out.set(slug, true);
+    if (!slug) continue;
+    // Saved, so the rest of the app — the web's PR links — sees it too.
+    if (!r.fullName) setRepoFullName(r.id, slug);
+    out.set(slug, true);
   }
   for (const s of listSchedules()) {
     if (s.enabled && s.rule.kind === "merge" && s.rule.repo && !out.has(s.rule.repo)) out.set(s.rule.repo, false);

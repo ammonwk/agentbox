@@ -33,13 +33,16 @@ export function prRefs(text: string): PrRef[] {
 }
 
 /**
- * The `https://github.com/owner/repo` a session's numbers refer to: its own
- * repo when that is a registered GitHub one; for a session outside any repo
- * (a scratch dir) the repo most sessions work in. A
- * session in some other, unregistered repo gets none — linking its numbers
- * to a different project would be wrong every time.
+ * The `https://github.com/owner/repo` a session's numbers refer to: the repo
+ * it names most as the home of PRs (`gh -R`, a PR URL), since one run from
+ * here to look after another project's PRs is talking about that project's;
+ * else its own repo when that is a registered GitHub one; for a session
+ * outside any repo (a scratch dir) the repo most sessions work in. A session
+ * in some other, unregistered repo gets none — linking its numbers to a
+ * different project would be wrong every time.
  */
-export function prBaseFor(session: Pick<Session, "repoRoot">, state: Pick<AppState, "repos" | "sessions">): string | null {
+export function prBaseFor(session: Pick<Session, "repoRoot" | "prRepo">, state: Pick<AppState, "repos" | "sessions">): string | null {
+  if (session.prRepo) return `https://github.com/${session.prRepo}`;
   const slugOf = (root: string | null) => state.repos.find((r) => r.fullName && (r.ref === root || r.fullName === root))?.fullName ?? null;
   if (session.repoRoot) {
     const own = slugOf(session.repoRoot);

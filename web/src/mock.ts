@@ -281,6 +281,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     accountId: null,
     label: null,
     repoRoot: null,
+    prRepo: null,
     branch: null,
     worktree: null,
     model: null,

@@ -244,6 +244,9 @@ export interface Session {
   cwd: string;
   /** The git work tree root containing cwd, if any. */
   repoRoot: string | null;
+  /** The GitHub repo (`owner/name`) it names most as the home of PRs, when
+   *  it named one; its `#1234`s are that repo's. */
+  prRepo: string | null;
   branch: string | null;
   /** agentbox cut this worktree for the session. */
   worktree: string | null;
