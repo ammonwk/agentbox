@@ -56,6 +56,7 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
+import type { ChangeRow } from "../core/changes";
 import type {
   AccountView,
   ColdState,
@@ -116,12 +117,31 @@ let voice: VoiceHub;
 
 // --------------------------------------------------------------- state
 
+/** Every session on the board, closed ones too: `GET /api/state`. */
 function hotState(): HotState {
   const sessions = fleet
     .sessions()
     .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }))
     .sort(byAttention);
   return { sessions, serverTime: Date.now() };
+}
+
+/**
+ * The hot frame for sockets: the open sessions, with the closed ones only when
+ * they differ from the last broadcast's (or `all`, for a socket just
+ * connected, which leaves that alone). Most of the board is closed, and it
+ * changes a few times an hour.
+ */
+let lastClosed = "";
+function hotFrame(all: boolean): Extract<ServerMessage, { type: "hot" }> {
+  const { sessions, serverTime } = hotState();
+  const state = { sessions: sessions.filter((s) => s.status !== "closed"), serverTime };
+  const closed = sessions.filter((s) => s.status === "closed");
+  if (all) return { type: "hot", state, closed };
+  const json = JSON.stringify(closed);
+  if (json === lastClosed) return { type: "hot", state };
+  lastClosed = json;
+  return { type: "hot", state, closed };
 }
 
 /** Slow-changing inputs to cold state, refreshed off the request path. */
@@ -273,18 +293,36 @@ function broadcast(msg: ServerMessage): void {
   for (const ws of [...clients]) send(ws, msg);
 }
 
+/**
+ * `GET /api/state`'s body, built once for everyone who asks before the board
+ * or the cold state next moves, and at most a second old. Every
+ * `agentbox watch` polled it every 2s; eight of them were rebuilding and
+ * serializing 3 MB four times a second.
+ */
+let stateBody: { at: number; body: string } | null = null;
+const STATE_BODY_MS = 1_000;
+function stateResponse(): Response {
+  const now = Date.now();
+  if (!stateBody || now - stateBody.at > STATE_BODY_MS) {
+    stateBody = { at: now, body: JSON.stringify({ ok: true, data: { ...hotState(), ...coldState() }, error: null }) };
+  }
+  return new Response(stateBody.body, { headers: { "content-type": "application/json" } });
+}
+
 let hotTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleHot(): void {
+  stateBody = null;
   if (hotTimer) return;
   hotTimer = setTimeout(() => {
     hotTimer = null;
-    if (clients.size > 0) broadcast({ type: "hot", state: hotState() });
+    if (clients.size > 0) broadcast(hotFrame(false));
   }, HOT_COALESCE_MS);
 }
 
 let coldTimer: ReturnType<typeof setTimeout> | null = null;
 let lastCold = "";
 function scheduleCold(): void {
+  stateBody = null;
   if (coldTimer) return;
   coldTimer = setTimeout(() => {
     coldTimer = null;
@@ -446,7 +484,7 @@ const provider = (v: unknown): ProviderId => {
 };
 
 const router = new Router(mapError)
-  .add("GET", "/api/state", () => json({ ...hotState(), ...coldState() }))
+  .add("GET", "/api/state", stateResponse)
   .add("GET", "/api/voice", () => json(voice.status()))
   .add("GET", "/api/health", async ({ url }) => {
     // Re-check is someone who just installed or logged into something.
@@ -649,6 +687,26 @@ const router = new Router(mapError)
     const sessionId = await scheduler.runNow(params.id!);
     scheduleHot();
     return json({ sessionId });
+  })
+  // What `agentbox watch` needs of each session, closed ones too (it must see
+  // a reopen as one), and nothing else: it polls every 2s.
+  .add("GET", "/api/sessions/changes", ({ url }) => {
+    const ids = url.searchParams.get("ids");
+    const only = ids ? new Set(ids.split(",")) : null;
+    const rows: ChangeRow[] = fleet
+      .sessions()
+      .filter((s) => !only || only.has(s.id))
+      .map((s) => ({
+        id: s.id,
+        status: s.status,
+        label: s.label,
+        title: s.title,
+        firstPrompt: s.firstPrompt?.split("\n")[0]?.slice(0, 80) ?? null,
+        lastMessage: s.lastMessage,
+        turnError: s.turnError,
+        reason: attentionOf(s, fleet.blockedReason(s.id)).reason,
+      }));
+    return json(rows);
   })
   .add("GET", "/api/sessions/closed", ({ url }) => {
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
@@ -992,7 +1050,7 @@ export async function startServer(): Promise<void> {
         return;
       }
       clients.add(ws);
-      send(ws, { type: "hot", state: hotState() });
+      send(ws, hotFrame(true));
       const cold = coldState();
       lastCold = JSON.stringify(cold);
       send(ws, { type: "cold", state: cold });

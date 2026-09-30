@@ -8,7 +8,7 @@
  * mock is a dynamic import, so it costs a production bundle nothing.
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   Btw,
   Account,
@@ -462,6 +462,7 @@ interface Carried {
   at: number;
   hot: HotState;
   cold: ColdState;
+  closed: Closed;
 }
 
 /** Read once and dropped, so only the reload right after it sees it. */
@@ -477,7 +478,11 @@ const carried: Carried | null = (() => {
   }
 })();
 
-let latest: { hot: HotState; cold: ColdState } | null = null;
+/** The board's closed sessions, as the socket last sent them (see the `hot`
+ *  message); until it has, the HTTP seed's hot state holds them. */
+type Closed = HotState["sessions"];
+
+let latest: { hot: HotState; cold: ColdState; closed: Closed } | null = null;
 if (!MOCK && typeof window !== "undefined") {
   window.addEventListener("pagehide", () => {
     if (!latest) return;
@@ -492,17 +497,20 @@ if (!MOCK && typeof window !== "undefined") {
 export function useAppState(): { state: AppState | null; connected: boolean } {
   const [hot, setHot] = useState<HotState | null>(carried?.hot ?? null);
   const [cold, setCold] = useState<ColdState | null>(carried?.cold ?? null);
+  const [closed, setClosed] = useState<Closed>(carried?.closed ?? []);
   const { connected } = useConnection();
 
   useEffect(() => {
-    latest = hot && cold ? { hot, cold } : null;
-  }, [hot, cold]);
+    latest = hot && cold ? { hot, cold, closed } : null;
+  }, [hot, cold, closed]);
 
   useEffect(
     () =>
       wire.onMessage((msg) => {
-        if (msg.type === "hot") setHot(msg.state);
-        else if (msg.type === "cold") setCold(msg.state);
+        if (msg.type === "hot") {
+          setHot(msg.state);
+          if (msg.closed) setClosed(msg.closed);
+        } else if (msg.type === "cold") setCold(msg.state);
       }),
     [],
   );
@@ -540,7 +548,14 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
     };
   }, []);
 
-  const state = hot && cold ? { ...cold, ...hot } : null;
+  // A hot row wins over a closed one: a session that just closed or reopened
+  // is in both until the next frame with closed rows.
+  const sessions = useMemo(() => {
+    if (!hot || closed.length === 0) return hot?.sessions ?? [];
+    const open = new Set(hot.sessions.map((s) => s.id));
+    return [...hot.sessions, ...closed.filter((s) => !open.has(s.id))];
+  }, [hot, closed]);
+  const state = hot && cold ? { ...cold, ...hot, sessions } : null;
   return { state, connected };
 }
 

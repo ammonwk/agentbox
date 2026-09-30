@@ -3,7 +3,7 @@
  *  and every verb that takes ids also reads them from stdin with `-`. */
 
 import type { Api } from "../client";
-import { CHANGE_KINDS, ChangeWatcher, changeLine, type ChangeKind } from "../core/changes";
+import { CHANGE_KINDS, ChangeWatcher, changeLine, type ChangeKind, type ChangeRow } from "../core/changes";
 import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage } from "../core/types";
 
 type Row = AppState["sessions"][number];
@@ -308,22 +308,23 @@ export async function watch(api: Api, args: string[]): Promise<number> {
   const kinds: readonly ChangeKind[] = oneOf("status", str(flags.get("status"))?.split(","), CHANGE_KINDS) ?? ["blocked", "waiting", "stopped"];
   const only = rest.length ? new Set((await resolveIds(api, rest)).ids) : null;
   const watcher = new ChangeWatcher({ current: flags.has("now") });
+  // Only what a change line reads, not the whole board: watches run for days.
+  const path = `/api/sessions/changes${only ? `?ids=${[...only].join(",")}` : ""}`;
   for (;;) {
-    let s: AppState | null = null;
+    let rows: ChangeRow[] | null = null;
     try {
-      s = await state(api);
+      rows = await api<ChangeRow[]>("GET", path);
     } catch {
       // The server restarting is not the end of a watch.
     }
-    if (s) {
-      const rows = s.sessions.filter((x) => !only || only.has(x.id)).map((x) => ({ ...x, reason: x.attention.reason }));
+    if (rows) {
       for (const c of watcher.next(rows)) {
         if (!kinds.includes(c.kind)) continue;
         console.log(changeLine(c));
         if (flags.has("once")) return 0;
       }
     }
-    await Bun.sleep(s ? 2_000 : 5_000);
+    await Bun.sleep(rows ? 2_000 : 5_000);
   }
 }
 

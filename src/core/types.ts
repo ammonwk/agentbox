@@ -785,7 +785,9 @@ export type SkillSource = "global" | "agents" | "codex" | "omp" | "project";
 
 // ------------------------------------------------------------ wire shapes
 
-/** Pushed on every change. Small enough to send often. */
+/** Pushed on every change. Small enough to send often: over a socket it
+ *  holds the open sessions only (the closed ride along only when they
+ *  change; see the `hot` message). `GET /api/state` has them all. */
 export interface HotState {
   sessions: (Session & { attention: Attention })[];
   serverTime: number;
@@ -913,7 +915,11 @@ export interface Health {
 
 /** Server → client. */
 export type ServerMessage =
-  | { type: "hot"; state: HotState }
+  /** `closed`: the board's closed sessions, all of them, on the first frame
+   *  and whenever they changed; absent, they are as last sent. They were most
+   *  of every frame's bytes. In one message with the open ones so a session
+   *  closing or reopening is never in neither. */
+  | { type: "hot"; state: HotState; closed?: HotState["sessions"] }
   | { type: "cold"; state: ColdState }
   | {
       type: "timeline";
