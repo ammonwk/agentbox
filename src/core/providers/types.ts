@@ -108,10 +108,12 @@ export interface TranscriptFacts {
   /**
    * The turn is over because the provider stopped it, not because it was
    * done: the reply cut off by the output cap, a transient API error, or
-   * something a retry cannot fix (`kind`). Null when the provider cannot
-   * tell, or a prompt has followed.
+   * something a retry cannot fix (`kind`). `retryAfterMs` is how long to
+   * leave it before retrying, where the error says more than the default
+   * (a model at capacity). Null when the provider cannot tell, or a prompt
+   * has followed.
    */
-  turnError?: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string } | null;
+  turnError?: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string; retryAfterMs?: number } | null;
   contextUsed: number | null;
   contextLimit: number | null;
   /** Cumulative over the whole session, including subagents where the

@@ -196,6 +196,21 @@ export function isUsageLimit(e: any): boolean {
   return /hit your usage limit|usage limit (reached|exceeded)/i.test(String(e.message ?? ""));
 }
 
+/**
+ * A turn refused because the model has no room for it: `task_complete.error =
+ * {message: "Selected model is at capacity. Please try a different model.",
+ * codex_error_info: "server_overloaded"}`. Codex gives up on the turn and
+ * waits; the capacity comes back by itself, in minutes rather than seconds.
+ */
+export function isAtCapacity(e: any): boolean {
+  if (!e || typeof e !== "object") return false;
+  if (JSON.stringify(e.codex_error_info ?? "").includes("server_overloaded")) return true;
+  return /model is at capacity/i.test(String(e.message ?? ""));
+}
+
+/** How long a turn refused for capacity is left before it is retried. */
+const CAPACITY_RETRY_MS = 10 * 60_000;
+
 const MAX_HITS = 200;
 const PROMPT_CAP = 2000;
 
@@ -212,6 +227,7 @@ export class CodexFold {
   private startedAt: number | null = null;
   private lastActivityAt: number | null = null;
   private turnOpen = false;
+  private turnError: TranscriptFacts["turnError"] = null;
   private contextUsed: number | null = null;
   private contextLimit: number | null = null;
   private tokens: TokenTotals = emptyTotals();
@@ -281,7 +297,10 @@ export class CodexFold {
         }
         if (prompt && at !== null && !isAgentSent(prompt.text ?? "")) this.lastPromptAt = at;
         // Rollouts from before task_started existed only had the message.
-        if (prompt) this.turnOpen = true;
+        if (prompt) {
+          this.turnOpen = true;
+          this.turnError = null;
+        }
       } else if (p.type === "message" && p.role === "assistant") {
         const text = contentText(p.content).trim();
         if (text) this.lastMessage = text.length > 300 ? `…${text.slice(-299)}` : text;
@@ -298,11 +317,13 @@ export class CodexFold {
     switch (p.type) {
       case "task_started":
         this.turnOpen = true;
+        this.turnError = null;
         if (typeof p.model_context_window === "number") this.contextLimit = p.model_context_window;
         return;
       case "task_complete":
         this.turnOpen = false;
         if (p.error && isUsageLimit(p.error)) this.hit(at, oneLine(String(p.error.message ?? "usage limit"), 300));
+        else if (isAtCapacity(p.error)) this.atCapacity(at, p.error);
         return;
       case "turn_aborted":
         this.turnOpen = false;
@@ -318,9 +339,19 @@ export class CodexFold {
         return;
       case "error":
         if (isUsageLimit(p)) this.hit(at, oneLine(String(p.message ?? "usage limit"), 300));
+        else if (isAtCapacity(p)) this.atCapacity(at, p);
         this.turnOpen = false;
         return;
     }
+  }
+
+  private atCapacity(at: number | null, e: any): void {
+    this.turnError = {
+      at: at ?? this.lastActivityAt ?? 0,
+      kind: "transient",
+      detail: oneLine(String(e.message ?? "model at capacity"), 300),
+      retryAfterMs: CAPACITY_RETRY_MS,
+    };
   }
 
   private hit(at: number | null, detail: string): void {
@@ -389,6 +420,7 @@ export class CodexFold {
       startedAt: l?.startedAt ?? this.startedAt,
       lastActivityAt: this.lastActivityAt,
       turnOpen: this.turnOpen,
+      turnError: this.turnError ? { ...this.turnError } : null,
       contextUsed: this.contextUsed,
       contextLimit: this.contextLimit,
       tokens: { ...this.tokens },

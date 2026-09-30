@@ -557,7 +557,11 @@ export class Fleet extends EventEmitter {
    * the output cap, a transient API failure; never a fatal one — a retry
    * cannot fix that, and typing at it only burns tokens). One nudge across
    * the fleet at a time — several sessions retaking one rate-limited account
-   * in lockstep is what stuck them — a few per spell, then it is yours. A
+   * in lockstep is what stuck them — a few per spell, then it is yours. An
+   * error that names its own wait (`retryAfterMs`: a model at capacity, 10
+   * minutes) is left that long instead, and retried at that pace for as long
+   * as it keeps coming back: capacity returns by itself, the refused request
+   * cost nothing, and nothing you could do would bring it back sooner. A
    * cold session's nudge is `send`'s to place: it wakes where there is room,
    * which is the point when the account it sits on is the one that is out.
    */
@@ -565,16 +569,17 @@ export class Fleet extends EventEmitter {
     if (now < this.nextNudgeAt) return;
     for (const v of this.views.values()) {
       if (v.host !== "tmux" || this.busy.has(v.id)) continue;
-      if (now - v.lastActivityAt < NUDGE_QUIET_MS) continue;
       // A transcript error persists, so only act while it is fresh — a
       // restart does not retry what died hours before it was watching.
-      const err = v.status === "waiting" && v.turnError && now - v.turnError.at <= STALL_FRESH_MS ? v.turnError : null;
+      const wait = v.status === "waiting" ? v.turnError?.retryAfterMs : undefined;
+      const err = v.status === "waiting" && v.turnError && now - v.turnError.at <= STALL_FRESH_MS + (wait ?? 0) ? v.turnError : null;
+      if (now - v.lastActivityAt < (wait ?? NUDGE_QUIET_MS)) continue;
       const screen = v.status === "blocked" ? this.blocked.get(v.id) : undefined;
       const retryable = screen === "rate limit" || screen === "error" ? screen : err && err.kind !== "fatal" ? err.kind : null;
       if (!retryable) continue;
       const prev = this.nudges.get(v.id);
       const spell = prev && now - prev.firstAt < NUDGE_SPELL_MS ? prev : { firstAt: now, tries: 0 };
-      if (spell.tries >= NUDGE_MAX_TRIES) continue;
+      if (spell.tries >= NUDGE_MAX_TRIES && !err?.retryAfterMs) continue;
       this.nudges.set(v.id, { firstAt: spell.firstAt, tries: spell.tries + 1 });
       this.nextNudgeAt = now + NUDGE_STAGGER_MS;
       const message =
@@ -582,7 +587,7 @@ export class Fleet extends EventEmitter {
           ? "[agentbox: your last reply was cut off by the output token limit. Continue where you left off.]"
           : "[agentbox: your turn stopped on an error; this message retries it. Carry on where you left off.]";
       console.log(
-        `agentbox: ${v.id} (${v.title}) ${screen ? (screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}`}; nudging it on (${spell.tries + 1}/${NUDGE_MAX_TRIES})`,
+        `agentbox: ${v.id} (${v.title}) ${screen ? (screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}${err!.retryAfterMs ? ` (${oneLine(err!.detail, 80)})` : ""}`}; nudging it on (${spell.tries + 1}${err?.retryAfterMs ? "" : `/${NUDGE_MAX_TRIES}`})`,
       );
       void this.send(v.id, message).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
       return;

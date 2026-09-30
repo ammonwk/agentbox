@@ -287,9 +287,12 @@ export interface Session {
    *   output-cap — the reply was cut off mid-write; a message continues it
    *   transient  — a server/network failure; a retry has a real chance
    *   fatal      — a retry cannot fix it (context too long, model gone, login)
-   * Null while the turn is open or a prompt has followed.
+   * `retryAfterMs`, when set, is how long the fleet leaves it before each
+   * retry (a model at capacity: 10 minutes), and it keeps retrying at that
+   * pace until the error clears. Null while the turn is open or a prompt has
+   * followed.
    */
-  turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string } | null;
+  turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string; retryAfterMs?: number } | null;
   /** The AskUserQuestion dialog it is showing, while it shows one: answer it
    *  with `POST /api/sessions/:id/answer`. */
   question: { id: string; questions: AskQuestion[] } | null;
