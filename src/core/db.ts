@@ -1021,7 +1021,7 @@ export const DEFAULT_BALANCER: BalancerSettings = {
 
 export const DEFAULT_SETTINGS: AgentSettings = {
   theme: "system",
-  boardDays: 3,
+  boardDays: 7,
   autoApprove: true,
   parkIdleMin: 60,
   models: { claude: "", codex: "", devin: "", omp: "" },
