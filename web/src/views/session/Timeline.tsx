@@ -485,7 +485,12 @@ function Party({ name }: { name: string | null }) {
   if (!s) {
     // Claude addresses a session it has no name for by its socket.
     const shown = !name ? "An agent" : name.startsWith("uds:") ? "a Claude session" : name === "main" ? "its caller" : name;
-    return <span className="tl-sender" title={name ?? undefined}>{shown}</span>;
+    const why = !name ? "Sent before agentbox recorded who sends a message, or from outside any session it runs" : name;
+    return (
+      <span className="tl-sender" title={why}>
+        {shown}
+      </span>
+    );
   }
   return (
     <a className="tl-sender" href={hrefOf({ page: "session", id: s.id, tab })} title={`Open ${titleOf(s)} (${s.id})`}>

@@ -507,9 +507,14 @@ const router = new Router(mapError)
   .add("POST", "/api/sessions/:id/send", async ({ req, params }) => {
     const b = await readBody(req);
     const text = requireString(b, "text");
-    // The sending session's id, when it says (`AGENTBOX_SESSION`), goes in the
-    // mark: the timeline shows who wrote it, and the reader knows who to answer.
-    const fromSession = typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null;
+    // The sending session's id goes in the mark: the timeline shows who wrote
+    // it, and the reader knows who to answer. The sender says (`AGENTBOX_SESSION`)
+    // when its environment has it; otherwise it is found above the caller's
+    // process, as a spawn's parent is.
+    const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
+    const fromSession =
+      (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
+      (b.from === "agent" && callerPid ? fleet.callerOf(callerPid) : null);
     await fleet.send(params.id!, b.from === "agent" ? `${agentSentMark(fromSession)} ${text}` : text);
     return json(null);
   })

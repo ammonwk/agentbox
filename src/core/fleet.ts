@@ -793,6 +793,26 @@ export class Fleet extends EventEmitter {
 
   /** The session whose process `pid` runs under: the nearest ancestor that is
    *  a live session's own process. */
+  /**
+   * The session a process runs under, found by walking up from it: who is
+   * calling, when the caller cannot say. `agentbox send` asks this when
+   * `AGENTBOX_SESSION` did not reach it — Codex runs commands with only the
+   * core environment (`shell_environment_policy.inherit = "core"`).
+   */
+  callerOf(pid: number): string | null {
+    const found = this.sessionAbove(pid);
+    if (found) return found;
+    // A process not tied to its transcript yet: the agent above still carries
+    // the id agentbox started it with, even when the shell below was stripped.
+    let cur = ppidOf(pid);
+    for (let i = 0; i < 32 && cur !== null && cur > 1; i++) {
+      const id = environOf(cur)?.get("AGENTBOX_SESSION");
+      if (id && getSessionRecord(id)) return id;
+      cur = ppidOf(cur);
+    }
+    return null;
+  }
+
   private sessionAbove(pid: number): string | null {
     let cur = ppidOf(pid);
     for (let i = 0; i < 32 && cur !== null && cur > 1; i++) {

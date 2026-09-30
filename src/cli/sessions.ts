@@ -336,7 +336,7 @@ export async function send(api: Api, args: string[]): Promise<number> {
   if (!text) throw new Error("nothing to send");
   // Agents are who use this; you type in the app or the terminal. Voice mode
   // is the exception: what it sends is you, spoken (AGENTBOX_SEND_AS=you).
-  await api("POST", `/api/sessions/${ids[0]}/send`, process.env.AGENTBOX_SEND_AS === "you" ? { text } : { text, from: "agent", fromSession: process.env.AGENTBOX_SESSION });
+  await api("POST", `/api/sessions/${ids[0]}/send`, process.env.AGENTBOX_SEND_AS === "you" ? { text } : { text, from: "agent", fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
   return 0;
 }
 

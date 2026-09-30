@@ -146,7 +146,7 @@ export async function runMcp(base: string): Promise<void> {
       inputSchema: { id: z.string(), text: z.string().min(1) },
     },
     async ({ id, text: body }) => {
-      await api("POST", `/api/sessions/${id}/send`, { text: body, from: "agent", fromSession: process.env.AGENTBOX_SESSION });
+      await api("POST", `/api/sessions/${id}/send`, { text: body, from: "agent", fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
       return text(`sent to ${id}`);
     },
   );
