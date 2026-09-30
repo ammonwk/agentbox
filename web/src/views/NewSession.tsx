@@ -491,7 +491,7 @@ export function NewSession({
               ) : null}
             </span>
           </label>
-          <PromptBox id="ns-prompt" value={prompt} onChange={setPrompt} skills={skills} textareaRef={promptRef} attachments={images} />
+          <PromptBox id="ns-prompt" value={prompt} onChange={setPrompt} skills={skills} textareaRef={promptRef} attachments={images} onSubmit={() => void submit()} />
         </div>
 
         <div className="field">
@@ -550,7 +550,7 @@ export function NewSession({
               "A scheduled session needs a prompt"
             ) : (
               <>
-                <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to {mode === "now" ? "start" : "schedule"}
+                <kbd>Enter</kbd> to {mode === "now" ? "start" : "schedule"} · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line
               </>
             )}
           </span>

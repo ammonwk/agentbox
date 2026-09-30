@@ -23,6 +23,7 @@ import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
 import { prBaseFor } from "../../lib/prlinks";
+import { repoOfSession, skillsFor } from "../../lib/newsession";
 import { ago } from "../../lib/format";
 import { buildSessionIndex } from "../../lib/sessionrefs";
 import { PrBase } from "./prbase";
@@ -417,6 +418,10 @@ function Detail({
   const family = useFamilyOf(session, state.sessions, tab);
   // The list beside the session shows the family as a tree; a phone has no room for it.
   const narrow = useIsNarrow();
+  const skills = useMemo(
+    () => skillsFor(state.skills, session.provider, repoOfSession(state.repos, session)),
+    [state.skills, state.repos, session.provider, session.repoRoot, session.cwd],
+  );
 
   return (
     <div className="sv-main">
@@ -612,7 +617,13 @@ function Detail({
 
       {/* Keyed by session: each one keeps its own draft (see drafts.ts),
           rather than one box carrying its text into the next session. */}
-      <Composer key={session.id} session={session} accounts={state.accounts} claimIdleMin={state.settings.balancer.claimIdleMin} />
+      <Composer
+        key={session.id}
+        session={session}
+        accounts={state.accounts}
+        claimIdleMin={state.settings.balancer.claimIdleMin}
+        skills={skills}
+      />
 
       {confirmClose ? (
         <ConfirmClose

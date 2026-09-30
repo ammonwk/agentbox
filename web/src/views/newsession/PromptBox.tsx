@@ -1,13 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
+import { useRef, type Ref } from "react";
 import type { SkillInfo } from "../../../../src/core/types";
 import { AttachFrame, type Attachments } from "../../attachments";
-import { completeSlash, matchSkills, slashToken } from "../../lib/newsession";
-import { scrollActiveIntoView, useDismiss, useFloating } from "./popover";
+import { useSkillComplete } from "./skillcomplete";
 
 /**
- * The prompt, with `/skill` completion: typing `/go` lists the skills that
- * match, Tab or Enter takes the highlighted one, arrows move, Escape dismisses
- * until the next keystroke. Images pasted or dropped in attach to it.
+ * The prompt, with `/skill` completion (skillcomplete.tsx). Enter submits,
+ * Shift+Enter is a new line. Images pasted or dropped in attach to it.
  */
 export function PromptBox({
   value,
@@ -15,6 +13,7 @@ export function PromptBox({
   skills,
   textareaRef,
   attachments,
+  onSubmit,
   id,
 }: {
   value: string;
@@ -22,44 +21,11 @@ export function PromptBox({
   skills: SkillInfo[];
   textareaRef: Ref<HTMLTextAreaElement>;
   attachments: Attachments;
+  onSubmit: () => void;
   id?: string;
 }) {
   const localRef = useRef<HTMLTextAreaElement | null>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const [caret, setCaret] = useState(0);
-  const [dismissed, setDismissed] = useState(false);
-  const [active, setActive] = useState(0);
-  /** Where the caret goes after a completion re-renders the text. */
-  const pendingCaret = useRef<number | null>(null);
-
-  const token = slashToken(value, caret);
-  const matches = token ? matchSkills(skills, token.query) : [];
-  const open = !!token && !dismissed && matches.length > 0;
-  const style = useFloating(localRef, open, 280);
-  useDismiss(open, () => setDismissed(true), [localRef, listRef]);
-
-  useEffect(() => setActive(0), [token?.query]);
-  useEffect(() => scrollActiveIntoView(listRef.current, active), [active]);
-  useLayoutEffect(() => {
-    const el = localRef.current;
-    if (el && pendingCaret.current != null) {
-      el.setSelectionRange(pendingCaret.current, pendingCaret.current);
-      setCaret(pendingCaret.current);
-      pendingCaret.current = null;
-    }
-  }, [value]);
-
-  function complete(s: SkillInfo) {
-    if (!token) return;
-    const next = completeSlash(value, caret, token.start, s.name);
-    pendingCaret.current = next.caret;
-    onChange(next.text);
-  }
-
-  function syncCaret() {
-    const el = localRef.current;
-    if (el) setCaret(el.selectionStart ?? 0);
-  }
+  const skill = useSkillComplete({ value, onChange, skills, textareaRef: localRef });
 
   return (
     <AttachFrame a={attachments} className="ns-promptbox">
@@ -74,58 +40,21 @@ export function PromptBox({
         value={value}
         placeholder="What should it do? Type / for skills; paste or drop images."
         rows={6}
-        role="combobox"
-        aria-expanded={open}
-        aria-controls="ns-skill-list"
-        aria-autocomplete="list"
-        aria-activedescendant={open ? `ns-skill-${active}` : undefined}
+        {...skill.props}
         onChange={(e) => {
           onChange(e.target.value);
-          setCaret(e.target.selectionStart ?? 0);
-          setDismissed(false);
+          skill.onEdit(e.target);
         }}
-        onSelect={syncCaret}
         onKeyDown={(e) => {
-          if (!open) {
-            attachments.onKeyDown(e);
-            return;
-          }
-          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          if (skill.onKeyDown(e) || attachments.onKeyDown(e)) return;
+          // Ctrl+Enter is the form's, so it does not submit twice.
+          if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            const d = e.key === "ArrowDown" ? 1 : -1;
-            setActive((i) => (i + d + matches.length) % matches.length);
-          } else if (e.key === "Tab" || (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey)) {
-            e.preventDefault();
-            complete(matches[active]!);
+            onSubmit();
           }
         }}
       />
-      {open ? (
-        <div ref={listRef} id="ns-skill-list" role="listbox" aria-label="Skills" className="ns-pop ns-skill-pop" style={style}>
-          {matches.map((s, i) => (
-            <div
-              key={s.path}
-              id={`ns-skill-${i}`}
-              data-index={i}
-              role="option"
-              aria-selected={i === active}
-              data-active={i === active || undefined}
-              className="ns-skill-opt"
-              onMouseEnter={() => setActive(i)}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => complete(s)}
-            >
-              <span className="ns-skill-name mono">/{s.name}</span>
-              <span className="ns-skill-desc">{s.description}</span>
-              <span className="ns-tag">{s.source}</span>
-            </div>
-          ))}
-          <div className="ns-pop-foot faint">
-            <kbd>Tab</kbd> to complete · <kbd>↑</kbd>
-            <kbd>↓</kbd> to choose · <kbd>Esc</kbd> to dismiss
-          </div>
-        </div>
-      ) : null}
+      {skill.list}
     </AttachFrame>
   );
 }

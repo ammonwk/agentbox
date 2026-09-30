@@ -118,6 +118,12 @@ const SKILL_SOURCES: Record<ProviderId, readonly SkillSource[] | null> = {
   devin: null,
 };
 
+/** The registered repo a session runs in (a worktree's `repoRoot` is its main checkout). */
+export function repoOfSession(repos: readonly Repo[], s: Pick<Session, "repoRoot" | "cwd">): Repo | null {
+  const root = s.repoRoot ?? s.cwd;
+  return repos.find((r) => root === r.ref || root.startsWith(`${r.ref}/`)) ?? null;
+}
+
 /** The skills a session of `provider` in `repo` could run, first root wins. */
 export function skillsFor(skills: readonly SkillInfo[], provider: ProviderId, repo: Repo | null): SkillInfo[] {
   const sources = SKILL_SOURCES[provider];

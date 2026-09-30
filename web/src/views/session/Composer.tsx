@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import type { AccountView, Placement, Session } from "../../../../src/core/types";
+import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
 import { ago, api, fmtTokens, useBtw } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
+import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { loadDraft, saveDraft } from "./drafts";
 import "../newsession.css";
@@ -41,9 +42,15 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * text into the TUI (bracketed, so newlines stay one prompt) and presses
  * Enter. For a stopped one, the text becomes the prompt it resumes with. A
  * session in someone else's terminal cannot be typed into until adopted, so
- * the box is replaced by the Adopt explanation.
+ * the box is replaced by the Adopt explanation. `/` completes the skills the
+ * session can run, as in the new-session prompt.
  */
-export function Composer({ session, accounts, claimIdleMin }: { session: Session; accounts: readonly AccountView[]; claimIdleMin: number }) {
+export function Composer({ session, accounts, claimIdleMin, skills }: {
+  session: Session;
+  accounts: readonly AccountView[];
+  claimIdleMin: number;
+  skills: readonly SkillInfo[];
+}) {
   // The draft left here last time (the composer is keyed by session, so this
   // is read once per session). Sending clears it again.
   const draft = useMemo(() => loadDraft(session.id), [session.id]);
@@ -53,6 +60,7 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
   const ref = useRef<HTMLTextAreaElement>(null);
   const provider = PROVIDER_LABEL[session.provider];
   const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images });
+  const skill = useSkillComplete({ value: text, onChange: setText, skills, textareaRef: ref });
   const btwCards = useBtw(session.id);
   /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
   const btw = mode.kind === "send" && session.provider === "claude" ? BTW.exec(text) : null;
@@ -183,10 +191,14 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
           value={text}
           placeholder={placeholder}
           enterKeyHint="send"
-          title="Enter sends · Shift+Enter for a new line"
-          onChange={(e) => setText(e.target.value)}
+          title="Enter sends · Shift+Enter for a new line · / for skills"
+          {...skill.props}
+          onChange={(e) => {
+            setText(e.target.value);
+            skill.onEdit(e.target);
+          }}
           onKeyDown={(e) => {
-            if (images.onKeyDown(e)) return;
+            if (skill.onKeyDown(e) || images.onKeyDown(e)) return;
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void submit();
@@ -195,6 +207,7 @@ export function Composer({ session, accounts, claimIdleMin }: { session: Session
             }
           }}
         />
+        {skill.list}
         </AttachFrame>
         <AttachButton a={images} className="cmp-attach" />
         {mode.kind === "send" ? (
