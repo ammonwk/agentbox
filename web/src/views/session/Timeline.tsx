@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Btw, MateMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, fmtClock, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur } from "../../lib/format";
@@ -26,6 +26,10 @@ const NO_TURNS: Turn[] = [];
 const SLOW_MS = 120_000;
 /** A thinking block older than this is an idle gap, not a thought: no duration. */
 const THINK_CAP_MS = 10 * 60_000;
+/** Rows painted first when a session opens: a screenful and then some. The
+ *  rest of the page renders right after, off the path to the first paint —
+ *  building 200 rows of markdown before showing any took up to a second. */
+const FIRST_ROWS = 40;
 
 /**
  * The conversation as the provider's transcript records it, folded into
@@ -36,10 +40,28 @@ export function Timeline({ session }: { session: Session }) {
   const { events, ready, loadingOlder, exhausted, error, loadOlder } = useTimeline(session.id);
   const btw = useBtw(session.id);
   const [fold, setFold] = useFold();
-  const rows = useMemo(() => {
+  const allRows = useMemo(() => {
     const all = withBtw(groupTimeline(events), btw, exhausted);
     return fold ? foldSteps(all) : all;
   }, [events, btw, exhausted, fold]);
+  // The session whose rows are all rendered. Until then only the newest
+  // `FIRST_ROWS` are, and the rest follow once those are on screen.
+  const [whole, setWhole] = useState<string | null>(null);
+  const staged = whole !== session.id && allRows.length > FIRST_ROWS;
+  const rows = useMemo(() => (staged ? allRows.slice(-FIRST_ROWS) : allRows), [allRows, staged]);
+  useEffect(() => {
+    if (!ready || whole === session.id) return;
+    const id = session.id;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    // After the paint: a frame, then a task.
+    const raf = requestAnimationFrame(() => {
+      t = setTimeout(() => startTransition(() => setWhole(id)), 0);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t);
+    };
+  }, [ready, whole, session.id]);
   const { state } = useAppState();
   const board = useMemo(() => new Map((state?.sessions ?? []).map((s) => [s.id, s])), [state?.sessions]);
   // The agents it started inside itself, by name: where each was started, or
@@ -94,10 +116,10 @@ export function Timeline({ session }: { session: Session }) {
   // is taken back and the panel in the pane closes) or answered (read, done).
   // Not while typing — there Esc just blurs.
   const cards = useMemo(() => {
-    const shown = rows.filter((r) => r.type === "btw").map((r) => r.btw);
+    const shown = allRows.filter((r) => r.type === "btw").map((r) => r.btw);
     const ids = new Set(shown.map((b) => b.id));
     return [...shown, ...btw.filter((b) => b.status === "asking" && !ids.has(b.id))];
-  }, [rows, btw]);
+  }, [allRows, btw]);
   useEffect(() => {
     if (cards.length === 0) return;
     const onKey = (e: KeyboardEvent) => {
@@ -126,6 +148,19 @@ export function Timeline({ session }: { session: Session }) {
     }
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
   }, [events, pinned, echoes.length, btw, thinking]);
+
+  // The rest of a staged page rendered above what is on screen: stay at the
+  // bottom if that is where the reader was, else keep their place.
+  const wasStaged = useRef(staged);
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    const landed = wasStaged.current && !staged;
+    wasStaged.current = staged;
+    if (!el || !landed) return;
+    const p = prev.current;
+    el.scrollTop = pinned ? el.scrollHeight : anchoredScrollTop(p, el);
+    prev.current = { ...p, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight };
+  }, [staged, pinned]);
 
   // ---- the message rail: where you are, and going to one of them
   const turnList = useTurns(session.id, session.lastActivityAt);
@@ -177,7 +212,7 @@ export function Timeline({ session }: { session: Session }) {
 
   // Go to it once it is rendered, paging older history in until it is.
   useEffect(() => {
-    if (!jump || !ready) return;
+    if (!jump || !ready || staged) return;
     const box = boxRef.current;
     const el = rowOf(jump);
     if (box && el) {
@@ -191,7 +226,7 @@ export function Timeline({ session }: { session: Session }) {
     }
     if (exhausted || error) setJump(null);
     else if (!loadingOlder) loadOlder(1000);
-  }, [jump, ready, events, exhausted, error, loadingOlder, loadOlder, rowOf]);
+  }, [jump, ready, staged, events, exhausted, error, loadingOlder, loadOlder, rowOf]);
 
   const local = useMemo(() => ({ names: agentNames, jump: (id: string) => setJump(id) }), [agentNames]);
 

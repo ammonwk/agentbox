@@ -12,9 +12,14 @@ export function ago(ts: number | string, at: number = Date.now()): string {
   return `${Math.floor(s / 86_400)}d ago`;
 }
 
+/** One formatter, made once: `toLocaleTimeString` with options builds a new
+ *  `Intl.DateTimeFormat` per call, and a timeline of 200 rows called it for
+ *  every row on every render. */
+const CLOCK = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
 /** Time of day, for tooltips: when a thing actually happened. */
 export function fmtClock(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return CLOCK.format(ts);
 }
 
 /** How long a step took: "2.1s", "38s", "2m 05s", "1h 04m". */

@@ -71,11 +71,15 @@ export function layoutDots(seqs: readonly number[], total: number, height: numbe
   return ys;
 }
 
+/** Made once: a formatter per call was most of this rail's render. */
+const TIME = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+const DAY = new Intl.DateTimeFormat([], { month: "short", day: "numeric" });
+
 /** "3:42 PM" today, "Sep 25, 3:42 PM" before. */
 function when(at: number): string {
   const d = new Date(at);
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+  const time = TIME.format(d);
+  return d.toDateString() === new Date().toDateString() ? time : `${DAY.format(d)}, ${time}`;
 }
 
 export function MessageRail({

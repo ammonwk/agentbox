@@ -595,6 +595,30 @@ export interface TimelineState {
   error: string | null;
 }
 
+/** Timelines of the sessions opened last, so going back to one paints at
+ *  once instead of waiting on the server to read and send its page again. */
+const RECENT_TIMELINES = 8;
+
+interface CachedTimeline {
+  events: readonly TimelineEvent[];
+  before: string | null | undefined;
+  exhausted: boolean;
+}
+
+/** Most recently used last. */
+const recentTimelines = new Map<string, CachedTimeline>();
+
+function rememberTimeline(sessionId: string, t: CachedTimeline): void {
+  recentTimelines.delete(sessionId);
+  recentTimelines.set(sessionId, t);
+  while (recentTimelines.size > RECENT_TIMELINES) recentTimelines.delete(recentTimelines.keys().next().value!);
+}
+
+function overlaps(held: readonly TimelineEvent[], incoming: readonly TimelineEvent[]): boolean {
+  const ids = new Set(held.map((e) => e.id));
+  return incoming.some((e) => ids.has(e.id));
+}
+
 /**
  * One session's timeline, over the `watch` subscription: a `reset` frame with
  * the newest page, then increments, merged by id (a tool event is re-sent with
@@ -604,41 +628,66 @@ export interface TimelineState {
  * A session with no transcript yet gets a reset frame with no `before`; its
  * first older page, if one ever exists, is asked for by the oldest held
  * event's id.
+ *
+ * One of the last `RECENT_TIMELINES` sessions opened starts from what it
+ * showed when it was left, ready at once, and the reset frame folds in over it.
  */
 export function useTimeline(sessionId: string): TimelineState & { loadOlder: (limit?: number) => void } {
-  const [st, setSt] = useState<TimelineState>({
-    events: [],
-    ready: false,
-    loadingOlder: false,
-    exhausted: false,
-    error: null,
-  });
+  const [st, setSt] = useState(() => openingTimeline(sessionId));
+  // Another session: start from its cached copy in this same render, so
+  // neither the last one's rows nor "Reading the transcript…" paint first.
+  let cur = st;
+  if (st.of !== sessionId) {
+    cur = openingTimeline(sessionId);
+    setSt(cur);
+  }
   const before = useRef<string | null | undefined>(undefined);
   const busy = useRef(false);
   const eventsRef = useRef<readonly TimelineEvent[]>([]);
+  const exhaustedRef = useRef(false);
 
   useEffect(() => {
-    before.current = undefined;
+    // A session seen lately paints what it showed then, at once; the reset
+    // frame the watch brings folds in over it.
+    const cached = recentTimelines.get(sessionId);
+    let fromCache = !!cached;
+    before.current = cached?.before;
     busy.current = false;
-    eventsRef.current = [];
-    setSt({ events: [], ready: false, loadingOlder: false, exhausted: false, error: null });
+    eventsRef.current = cached?.events ?? [];
+    exhaustedRef.current = cached?.exhausted ?? false;
+    const remember = () => rememberTimeline(sessionId, { events: eventsRef.current, before: before.current, exhausted: exhaustedRef.current });
 
     const off = wire.onMessage((msg) => {
       if (msg.type !== "timeline" || msg.sessionId !== sessionId) return;
       if (msg.reset) {
-        before.current = msg.before;
-        eventsRef.current = mergeTimeline([], msg.events);
-        setSt({ events: eventsRef.current, ready: true, loadingOlder: false, exhausted: msg.before === null, error: null });
+        const held = eventsRef.current;
+        // Over the cached copy only where the two meet: a session that ran
+        // past a whole page since has a gap between them, and the fresh page
+        // alone is right. Merging keeps unchanged events as they were, so
+        // rows already on screen are not rebuilt; older pages the cache held
+        // stay, and so does the cursor behind them.
+        const keep = fromCache && held.length > 0 && msg.events.length > 0 && overlaps(held, msg.events) && held[0]!.at <= msg.events[0]!.at;
+        fromCache = false;
+        if (keep) {
+          eventsRef.current = mergeTimeline(held, msg.events);
+        } else {
+          before.current = msg.before;
+          exhaustedRef.current = msg.before === null;
+          eventsRef.current = mergeTimeline([], msg.events);
+        }
+        setSt({ of: sessionId, events: eventsRef.current, ready: true, loadingOlder: false, exhausted: exhaustedRef.current, error: null });
       } else {
         const next = mergeTimeline(eventsRef.current, msg.events);
         if (next === eventsRef.current) return;
         eventsRef.current = next;
         setSt((s) => ({ ...s, events: next, ready: true }));
       }
+      remember();
     });
     wire.watch(sessionId);
     return () => {
       off();
+      if (eventsRef.current.length > 0) remember();
       if (wire.watchingId() === sessionId) wire.watch(null);
     };
   }, [sessionId]);
@@ -656,12 +705,14 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
       .then((page) => {
         before.current = page.before;
         eventsRef.current = mergeTimeline(eventsRef.current, page.events, "prepend");
+        exhaustedRef.current = page.before === null || page.events.length === 0;
         setSt((s) => ({
           ...s,
           events: eventsRef.current,
           loadingOlder: false,
-          exhausted: page.before === null || page.events.length === 0,
+          exhausted: exhaustedRef.current,
         }));
+        rememberTimeline(sessionId, { events: eventsRef.current, before: before.current, exhausted: exhaustedRef.current });
       })
       .catch((e: unknown) => {
         setSt((s) => ({ ...s, loadingOlder: false, error: e instanceof Error ? e.message : String(e) }));
@@ -671,7 +722,13 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
       });
   }, [sessionId]);
 
-  return { ...st, loadOlder };
+  return { ...cur, loadOlder };
+}
+
+/** Where a session's timeline starts: its cached copy, ready, or nothing yet. */
+function openingTimeline(sessionId: string): TimelineState & { of: string } {
+  const c = recentTimelines.get(sessionId);
+  return { of: sessionId, events: c?.events ?? [], ready: !!c, loadingOlder: false, exhausted: c?.exhausted ?? false, error: null };
 }
 
 /**
