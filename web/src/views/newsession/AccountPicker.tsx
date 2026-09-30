@@ -188,7 +188,7 @@ export function AccountPicker({
                   {!a.enabled ? <p className="ns-acct-reason">Off for auto-placement; a pin still runs there.</p> : null}
                 </div>
                 {c?.eligible && c.legRoom != null ? (
-                  <span className="ns-acct-room" title="5-hour room after claims — what the balancer ranks by">
+                  <span className="ns-acct-room" title="5-hour room left at its reset, by the pace it is filling and the claims too new to show in it — what the balancer ranks by">
                     {fmtPts(c.legRoom)}
                     <small>room</small>
                   </span>
@@ -213,20 +213,27 @@ function AccountLine({ account: a, all, candidate: c }: { account: AccountView; 
       <span className="ns-acct-label">{a.label}</span>
       {a.plan ? <span className="ns-acct-plan">{a.plan}</span> : null}
       {auth ? <span className="ns-tag ns-tag-warn">{auth}</span> : null}
-      <MiniBar label="5h" used={c?.short ?? short?.usedPct ?? null} effective={c?.shortEffective ?? null} />
+      <MiniBar
+        label="5h"
+        used={c?.short ?? short?.usedPct ?? null}
+        effective={c?.shortEffective ?? null}
+        forecast={c?.shortPace != null ? `by its reset at ${fmtPts(c.shortPace)}%/h and new claims` : undefined}
+      />
       <MiniBar label="wk" used={c?.weekly ?? weekly?.usedPct ?? null} effective={c?.weeklyEffective ?? null} />
     </span>
   );
 }
 
-/** Use, with outstanding claims hatched on top. */
-function MiniBar({ label, used, effective }: { label: string; used: number | null; effective: number | null }) {
+/** Use, with where it is headed hatched on top: outstanding claims, or for a
+ *  5-hour window with a measured pace, its forecast at reset (`forecast` says
+ *  how, for the tooltip). */
+function MiniBar({ label, used, effective, forecast }: { label: string; used: number | null; effective: number | null; forecast?: string }) {
   if (used == null) return null;
   const eff = effective ?? used;
   const u = Math.min(100, Math.max(0, used));
   const claimed = Math.max(0, Math.min(100, eff) - u);
   return (
-    <span className="ns-mbar" data-tone={usageTone(eff)} title={`${label}: ${Math.round(used)}% used${eff > used ? `, ${Math.round(eff)}% with claims` : ""}`}>
+    <span className="ns-mbar" data-tone={usageTone(eff)} title={`${label}: ${Math.round(used)}% used${eff > used ? `, ${Math.round(eff)}% ${forecast ?? "with claims"}` : ""}`}>
       <span className="ns-mbar-label">{label}</span>
       <span className="ns-mbar-track" aria-hidden="true">
         <i style={{ width: `${u}%` }} />

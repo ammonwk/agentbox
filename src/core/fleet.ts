@@ -245,6 +245,10 @@ export class Fleet extends EventEmitter {
   private screens = new Map<string, { key: string; at: number; screen: string }>();
   private deadSince = new Map<string, number>();
   private startedAt = new Map<string, number>();
+  /** When each session was last woken, onto a new account or its own: its
+   *  claim is new there from then, however long ago it started. Lost on a
+   *  restart, which counts a claim made just before it as already measured. */
+  private wokeAt = new Map<string, number>();
   private answered = new Map<string, { sig: string; at: number; tries: number }>();
   /** Permission prompts `approvePrompt` has pressed Yes on, by session. */
   private approved = new Map<string, { sig: string; at: number; tries: number }>();
@@ -1876,6 +1880,7 @@ export class Fleet extends EventEmitter {
         claim: s.claim,
         lastActivityAt: s.lastActivityAt,
         running: s.status === "running" || s.status === "blocked",
+        since: Math.max(s.startedAt, this.wokeAt.get(s.id) ?? 0),
       });
     }
     return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), settings, now);
@@ -1910,7 +1915,7 @@ export class Fleet extends EventEmitter {
                 .filter((r) => r.windowId === short.id)
                 .map((r) => ({ at: r.at, usedPct: r.usedPct, resetsAt: r.resetsAt }))
             : [],
-          outstanding: (claims.get(a.id) ?? []).map((c) => c.outstanding),
+          claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
         };
       });
@@ -2180,6 +2185,7 @@ export class Fleet extends EventEmitter {
       });
     }
     updateSessionRecord(rec.id, patch);
+    this.wokeAt.set(rec.id, this.now());
     if (account.id !== from.id) {
       const ref = await adapter.findTranscript(account, rec.agentSessionId!).catch(() => null);
       if (ref) this.track(adapter, ref);

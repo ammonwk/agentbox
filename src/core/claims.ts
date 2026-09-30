@@ -31,6 +31,8 @@ export interface ClaimInput {
   lastActivityAt: number;
   /** Mid-turn right now. A running session's claim never lapses. */
   running: boolean;
+  /** Since when it has been spending on this account. */
+  since: number;
 }
 
 /**
@@ -58,6 +60,7 @@ export function claimsByAccount(
       consumed: Math.round(used * 100) / 100,
       outstanding: lapsed ? 0 : Math.round(Math.max(0, s.claim - used) * 100) / 100,
       lapsed,
+      since: s.since,
     };
     const list = out.get(s.accountId);
     if (list) list.push(view);

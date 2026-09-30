@@ -532,6 +532,7 @@ function claimsFor(accountId: string): ClaimView[] {
         consumed: Math.round(consumed * 10) / 10,
         outstanding: Math.round(outstanding * 10) / 10,
         lapsed,
+        since: s.startedAt,
       };
     });
 }

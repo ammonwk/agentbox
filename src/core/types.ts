@@ -110,6 +110,9 @@ export interface ClaimView {
   /** max(0, claim − consumed), or 0 once the claim has lapsed. */
   outstanding: number;
   lapsed: boolean;
+  /** Since when it has been spending on this account: started, or woken
+   *  there. A 5-hour pace measured before then has not seen it. */
+  since: number;
 }
 
 // ------------------------------------------------------------- balancer
@@ -138,11 +141,15 @@ export interface Candidate {
   weekly: number | null;
   weeklyEffective: number | null;
   weeklyResetsAt: number | null;
-  /** Short window used, and with claims added (claude). */
+  /** Short window used (claude), and where it is headed: with a pace, where
+   *  it stands at its reset if it keeps filling that fast, plus the claims of
+   *  sessions too new for the pace to have seen; without one, with every
+   *  outstanding claim added. */
   short: number | null;
   shortEffective: number | null;
   shortResetsAt: number | null;
-  /** 0–100: short-window room after claims and reset proximity. */
+  /** 0–100: short-window room left by `shortEffective`, raised by reset
+   *  proximity and capped by weekly headroom. */
   legRoom: number | null;
   /** Weekly points left per hour until the weekly reset. */
   weeklyPerHour: number | null;

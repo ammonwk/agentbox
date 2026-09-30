@@ -22,7 +22,11 @@
  * The pace is measured, not claimed: claims are what sessions placed here were
  * expected to spend, and an account also runs what the balancer never placed
  * — a lead's teammates, a session run by hand, one that turned out bigger than
- * its claim. The last readings say how fast the window is really filling.
+ * its claim. The last readings say how fast the window is really filling. So
+ * where there is a pace, it is the forecast, and a claim adds to it only for
+ * the part of the pace's span its session was not yet here to be measured: a
+ * session started ten minutes ago is mostly claim, one running for an hour is
+ * already in the pace.
  */
 
 import { claimFor } from "./claim";
@@ -40,8 +44,9 @@ export interface AccountState {
   windows: UsageWindow[];
   /** Readings of the short window over the last hour and a half, oldest first. */
   shortSamples?: { at: number; usedPct: number; resetsAt: number | null }[];
-  /** Outstanding weekly points of each active session pinned here. */
-  outstanding: number[];
+  /** Each active session pinned here: its outstanding weekly points, and
+   *  since when it has been spending here (started, or woken onto it). */
+  claims: { outstanding: number; since: number }[];
   /** No login in its home (a new account mid-login, or the CLI logged out). */
   loggedOut?: boolean;
 }
@@ -117,14 +122,25 @@ const round1 = (n: number): number => Math.round(n * 10) / 10;
  * none; the last one before the span stands for its start. Null when the
  * window is not running or the readings cover too little time.
  */
-export function paceOf(short: UsageWindow, samples: AccountState["shortSamples"], now: number): number | null {
+export function paceOf(
+  short: UsageWindow,
+  samples: AccountState["shortSamples"],
+  now: number,
+): { perHour: number; since: number } | null {
   if (short.resetsAt === null || short.resetsAt <= now || !samples?.length) return null;
   const same = samples.filter((s) => s.resetsAt !== null && Math.abs(s.resetsAt - short.resetsAt!) < 10 * 60_000 && s.at <= now);
   if (!same.length) return null;
   const base = [...same].reverse().find((s) => s.at <= now - PACE_SPAN) ?? same[0]!;
   const span = now - base.at;
   if (span < PACE_MIN_SPAN) return null;
-  return Math.max(0, (short.usedPct - base.usedPct) / (span / HOUR));
+  return { perHour: Math.max(0, (short.usedPct - base.usedPct) / (span / HOUR)), since: base.at };
+}
+
+/** The share of a claim the pace has not seen: how much of the pace's span
+ *  (`from` to `now`) had passed before its session was here to spend. */
+function unseenShare(since: number, from: number, now: number): number {
+  if (now <= from) return 1;
+  return Math.min(1, Math.max(0, (since - from) / (now - from)));
 }
 
 const clockOf = (t: number): string => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -156,7 +172,7 @@ function evaluate(
   req: Pick<PlaceRequest, "model" | "settings" | "now">,
 ): Candidate {
   const { settings, now } = req;
-  const outstanding = state.outstanding.reduce((a, b) => a + b, 0);
+  const outstanding = state.claims.reduce((a, c) => a + c.outstanding, 0);
   const weekly = weeklyWindow(state.windows);
   const short = shortWindow(state.windows);
   const scoped = scopedWindow(state.windows, req.model);
@@ -188,22 +204,26 @@ function evaluate(
 
   if (short) {
     c.short = round1(usedNow(short, now));
-    c.shortEffective = round1(c.short + (outstanding * 100) / settings.shortWindowInWeekly);
-    // Unfloored until the end: below zero is how far claims overrun the
-    // window, which is what separates two accounts that both have none.
-    let room = 100 - c.shortEffective;
-    // At the pace it is filling, what is left of it when it resets: claims
-    // or pace, whichever says less — they count the same sessions.
+    const inShort = (points: number) => (points * 100) / settings.shortWindowInWeekly;
+    // Where the window is headed. Measured, when there is a pace: where it
+    // stands at reset if it keeps filling this fast, plus the claims of
+    // sessions too new for the pace to have seen (the rest are in it
+    // already). Otherwise every claim is all there is to go on.
     const pace = paceOf(short, state.shortSamples, now);
     if (pace !== null) {
-      c.shortPace = round1(pace);
-      const hours = hoursLeft(short, now);
-      room = Math.min(room, 100 - (c.short + pace * hours));
-      if (pace > 0 && c.short < 100) {
-        const at = now + ((100 - c.short) / pace) * HOUR;
+      c.shortPace = round1(pace.perHour);
+      const unseen = state.claims.reduce((a, cl) => a + cl.outstanding * unseenShare(cl.since, pace.since, now), 0);
+      c.shortEffective = round1(c.short + pace.perHour * hoursLeft(short, now) + inShort(unseen));
+      if (pace.perHour > 0 && c.short < 100) {
+        const at = now + ((100 - c.short) / pace.perHour) * HOUR;
         if (short.resetsAt !== null && at < short.resetsAt) c.shortRunsOutAt = Math.round(at);
       }
+    } else {
+      c.shortEffective = round1(c.short + inShort(outstanding));
     }
+    // Unfloored until the end: below zero is how far it overruns the window,
+    // which is what separates two accounts that both have none.
+    let room = 100 - c.shortEffective;
     // A window about to reset is mostly fresh room: over the next
     // `resetHorizonMin` a new session spends little time in what is left of
     // this window and most of it in the next one.
@@ -214,8 +234,7 @@ function evaluate(
     // at 97% weekly with a fresh 5-hour window can run about an eighth of a
     // window before it hits the weekly wall, so that is its room — not 100.
     if (c.weeklyEffective !== null) {
-      const weeklyRoom = ((100 - c.weeklyEffective) * 100) / settings.shortWindowInWeekly;
-      room = Math.min(room, weeklyRoom);
+      room = Math.min(room, inShort(100 - c.weeklyEffective));
     }
     c.legRoom = round1(Math.max(0, room));
     c.score = round1(room);
