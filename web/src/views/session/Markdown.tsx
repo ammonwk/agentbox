@@ -49,7 +49,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
         urlTransform={keepFileImages}
         components={{
           ...(inline ? { p: Inline } : {}),
-          img: ({ src, alt }) => <ShownImage src={typeof src === "string" ? src : ""} alt={alt ?? ""} session={links.self} inline={inline} />,
+          img: inline ? ShownImageChip : ShownImage,
           a: ({ node: _node, children, href, ...rest }) => {
             if (href?.startsWith("fileref:")) {
               return (
@@ -113,24 +113,25 @@ function keepFileImages(url: string, key: string): string {
   return key === "src" && url.startsWith("file://") ? url : defaultUrlTransform(url);
 }
 
+type ImgProps = { src?: unknown; alt?: string };
+
 /** An image in agent prose. A web address loads as it is; anything else is a
  *  file on this machine, which the server reads (`/api/sessions/:id/image`).
  *  Big ones are shown shrunk, and a click opens them full size. A file gone
- *  since — or a one-line summary, which has no room — is a chip naming it. */
-function ShownImage({ src, alt, session, inline }: { src: string; alt: string; session: string | null; inline?: boolean }) {
+ *  since — or a one-line summary, which has no room — is a chip naming it.
+ *  Module-level, and the session read from context rather than closed over:
+ *  a component made in render is a new type each time, and the timeline
+ *  renders on every hot frame, so the image would be remade and blink. */
+function ShownImage({ src: raw, alt = "" }: ImgProps) {
+  const { self: session } = useContext(SessionLinks);
   const [broken, setBroken] = useState(false);
   const [open, setOpen] = useState(false);
+  const src = typeof raw === "string" ? raw : "";
   const web = /^https?:\/\//i.test(src);
   const path = web ? src : safeDecode(src);
   const url = web ? src : session && path ? shownImageUrl(session, path) : null;
-  const label = alt || path.split("/").pop() || "image";
-  if (!url || broken || inline) {
-    return (
-      <code className="sx-fileref sx-img-chip" title={broken ? `Could not load ${path}` : path}>
-        <Icon.image size={11} /> {label}
-      </code>
-    );
-  }
+  const label = labelOf(alt, path);
+  if (!url || broken) return <ImageChip label={label} title={broken ? `Could not load ${path}` : path} />;
   return (
     <span className="sx-img">
       <button type="button" className="sx-img-btn" title={`${path} · click for full size`} onClick={() => setOpen(true)}>
@@ -141,6 +142,21 @@ function ShownImage({ src, alt, session, inline }: { src: string; alt: string; s
     </span>
   );
 }
+
+function ShownImageChip({ src, alt = "" }: ImgProps) {
+  const path = typeof src === "string" ? safeDecode(src) : "";
+  return <ImageChip label={labelOf(alt, path)} title={path} />;
+}
+
+function ImageChip({ label, title }: { label: string; title: string }) {
+  return (
+    <code className="sx-fileref sx-img-chip" title={title}>
+      <Icon.image size={11} /> {label}
+    </code>
+  );
+}
+
+const labelOf = (alt: string, path: string) => alt || path.split("/").pop() || "image";
 
 /** Markdown percent-encodes a path written in `<…>`; the file has the plain name. */
 function safeDecode(s: string): string {
