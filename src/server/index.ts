@@ -522,6 +522,7 @@ const router = new Router(mapError)
         big: b.big === true,
         accountId: optionalString(b, "accountId") ?? null,
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
+        parent: optionalString(b, "parent"),
       });
       scheduleHot();
       scheduleCold();
@@ -541,7 +542,8 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const label = b.label === null ? null : typeof b.label === "string" ? b.label : undefined;
     const big = typeof b.big === "boolean" ? b.big : undefined;
-    const s = await fleet.patch(params.id!, { label, big });
+    const parent = b.parent === null ? null : typeof b.parent === "string" ? b.parent : undefined;
+    const s = await fleet.patch(params.id!, { label, big, parent });
     scheduleHot();
     scheduleCold();
     return json(s);

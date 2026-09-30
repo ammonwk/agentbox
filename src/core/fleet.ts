@@ -225,6 +225,9 @@ export interface SpawnRequest {
   /** The process asking (the CLI, the fleet MCP). A session it runs under
    *  becomes the new session's parent. */
   callerPid?: number;
+  /** The parent, named outright: for a detached orchestrator whose process
+   *  tree no longer reaches the session it works for. Wins over `callerPid`. */
+  parent?: string;
   /** Start under this id: a scheduled session keeps the one it was shown under. */
   id?: string;
 }
@@ -2011,6 +2014,7 @@ export class Fleet extends EventEmitter {
     if (!account) throw new FleetError(404, `no account ${placement.accountId}`);
 
     if (req.id && getSessionRecord(req.id)) throw new FleetError(409, `there is already a session ${req.id}`);
+    if (req.parent && !getSessionRecord(req.parent)) throw new FleetError(404, `no session ${req.parent} to be the parent`);
     const id = req.id ?? newSessionId();
     let cwd = req.cwd ? expandHome(req.cwd) : "";
     let worktree: string | null = null;
@@ -2041,7 +2045,7 @@ export class Fleet extends EventEmitter {
     const cmd = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
     const now = this.now();
     const name = tmuxName(id);
-    const parent = req.callerPid ? this.sessionAbove(req.callerPid) : null;
+    const parent = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
 
     insertSessionRecord({
       id,
@@ -2802,12 +2806,20 @@ export class Fleet extends EventEmitter {
     return out;
   }
 
-  async patch(id: string, p: { label?: string | null; big?: boolean }): Promise<Session> {
+  async patch(id: string, p: { label?: string | null; big?: boolean; parent?: string | null }): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const settings = getSettings().balancer;
     const patch: Partial<SessionRecord> = {};
     if (p.label !== undefined) patch.label = p.label?.trim() || null;
+    if (p.parent !== undefined) {
+      // Close walks a parent's sessions at any depth, so a cycle would never end.
+      for (let up = p.parent; up; up = getSessionRecord(up)?.parent ?? null) {
+        if (up === id) throw new FleetError(400, `${p.parent} is ${id} or runs under it`);
+        if (!getSessionRecord(up)) throw new FleetError(404, `no session ${up} to be the parent`);
+      }
+      patch.parent = p.parent;
+    }
     if (p.big !== undefined && p.big !== rec.big) {
       patch.big = p.big;
       patch.claim = claimFor(
