@@ -163,6 +163,9 @@ export interface PaneInfo {
   clients: number;
   width: number;
   height: number;
+  /** Epoch s of the window's last output: a screen captured in a later
+   *  second, at this size, is still what it shows. */
+  activity: number;
   /** The tmux server it is on — its pid and start (epoch ms). A different one
    *  later means this one died, and every session with it (src/core/recovery.ts). */
   server: { pid: number; start: number };
@@ -173,12 +176,12 @@ export interface PaneInfo {
 export function listPanes(): PaneInfo[] {
   const r = tmux([
     "list-panes", "-a", "-F",
-    "#{session_name}\t#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}\t#{session_attached}\t#{pane_width}\t#{pane_height}\t#{pid}\t#{start_time}",
+    "#{session_name}\t#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}\t#{session_attached}\t#{pane_width}\t#{pane_height}\t#{pid}\t#{start_time}\t#{window_activity}",
   ]);
   if (r.code !== 0) return [];
   const out: PaneInfo[] = [];
   for (const line of r.stdout.split("\n")) {
-    const [name, pid, dead, status, clients, w, h, serverPid, serverStart] = line.split("\t");
+    const [name, pid, dead, status, clients, w, h, serverPid, serverStart, activity] = line.split("\t");
     if (!name?.startsWith("ab-")) continue;
     out.push({
       name,
@@ -188,6 +191,7 @@ export function listPanes(): PaneInfo[] {
       clients: Number(clients) || 0,
       width: Number(w) || 0,
       height: Number(h) || 0,
+      activity: Number(activity) || 0,
       server: { pid: Number(serverPid) || 0, start: (Number(serverStart) || 0) * 1000 },
     });
   }

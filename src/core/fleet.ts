@@ -241,6 +241,8 @@ export class Fleet extends EventEmitter {
   private live = new Map<string, LiveProcess>();
   private livePids = new Map<number, LiveProcess & { provider: ProviderId }>();
   private panes = new Map<string, PaneInfo>();
+  /** The last screen `settledScreen` captured of each pane, and when. */
+  private screens = new Map<string, { key: string; at: number; screen: string }>();
   private deadSince = new Map<string, number>();
   private startedAt = new Map<string, number>();
   private answered = new Map<string, { sig: string; at: number; tries: number }>();
@@ -375,6 +377,7 @@ export class Fleet extends EventEmitter {
     const accountsOf = (p: ProviderId) => accounts.filter((a) => a.provider === p);
 
     this.panes = new Map(this.deps.runtime.listPanes().map((p) => [p.name, p]));
+    for (const name of this.screens.keys()) if (!this.panes.has(name)) this.screens.delete(name);
     this.coldAfterMs = settings.balancer.claimIdleMin * 60_000;
     this.owner = owners(accounts);
     // Movable means there is another *account* to move to; a second home on
@@ -1592,7 +1595,7 @@ export class Fleet extends EventEmitter {
       // answers the side question the session is working, and with the
       // answer shown it is the idle prompt it was at, under the panel.
       if (proc?.waitingOn) {
-        const panel = pane && rec.provider === "claude" ? readBtwPanel(this.deps.runtime.capture(pane.name) ?? "") : null;
+        const panel = pane && rec.provider === "claude" ? readBtwPanel(this.settledScreen(pane) ?? "") : null;
         if (!panel) {
           status = "blocked";
           this.blocked.set(rec.id, proc.waitingOn);
@@ -1606,7 +1609,7 @@ export class Fleet extends EventEmitter {
         // A prompt waiting on you stalls the transcript, so only look at the
         // screen when it has been quiet for a moment.
         if (quietFor > 2_500 || status === "waiting") {
-          const screen = this.deps.runtime.capture(pane.name);
+          const screen = this.settledScreen(pane);
           const shown = screen ? adapter.blockedOn(screen) : null;
           if (!shown) this.approved.delete(rec.id);
           // A session told to skip permissions is not waiting on you for one.
@@ -1720,6 +1723,25 @@ export class Fleet extends EventEmitter {
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
     };
+  }
+
+  /**
+   * A pane's screen for a pass's look at it, captured again only when tmux has
+   * seen output in the window, or it was resized, since the last capture.
+   * Every waiting pane was captured every pass: sixty of them held the server
+   * up for a quarter of a second in every two.
+   */
+  private settledScreen(pane: PaneInfo): string | null {
+    const key = `${pane.activity}:${pane.width}x${pane.height}`;
+    const had = this.screens.get(pane.name);
+    // Activity is in whole seconds: a capture in the second of the last output
+    // may have been taken before some of it.
+    if (had && had.key === key && Math.floor(had.at / 1000) > pane.activity) return had.screen;
+    const at = Date.now();
+    const screen = this.deps.runtime.capture(pane.name);
+    if (screen === null) this.screens.delete(pane.name);
+    else this.screens.set(pane.name, { key, at, screen });
+    return screen;
   }
 
   private autoAnswer(rec: SessionRecord, pane: PaneInfo | undefined, adapter: ProviderAdapter | undefined, now: number): void {
