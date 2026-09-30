@@ -127,6 +127,15 @@ const TICK_MS = 2_000;
 /** Dialogs are only auto-answered this soon after we start a process: a key
  *  pressed into a session you are using is worse than a dialog left open. */
 const AUTO_ANSWER_MS = 120_000;
+/**
+ * Linux caps a single argument at 128 KiB (MAX_ARG_STRLEN), whatever room the
+ * whole command line has: a prompt past it in the agent's argv fails the exec
+ * with "Argument list too long" and the pane dies before the agent starts.
+ * Past this many bytes the agent starts bare and the prompt is pasted in
+ * (`typeFirstPrompt`).
+ */
+const MAX_ARGV_PROMPT = 100_000;
+const tooLongForArgv = (prompt: string | undefined): prompt is string => !!prompt && Buffer.byteLength(prompt) > MAX_ARGV_PROMPT;
 /** A dead pane is kept this long so its last screen can be read, then killed. */
 const DEAD_PANE_MS = 10 * 60_000;
 /** A new token sample at most this often per session (plus at turn end). */
@@ -1938,7 +1947,8 @@ export class Fleet extends EventEmitter {
     if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);
 
     const model = req.model || settings.models[req.provider] || undefined;
-    const cmd = adapter.spawnCommand({ account, cwd, prompt: req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
+    const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
+    const cmd = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
     const now = this.now();
     const name = tmuxName(id);
     const parent = req.callerPid ? this.sessionAbove(req.callerPid) : null;
@@ -1988,6 +1998,7 @@ export class Fleet extends EventEmitter {
     }
     this.startedAt.set(id, now);
     this.watches.set(id, { since: now, flagged: false, repaired: false, recovery: null });
+    if (typed) this.typeFirstPrompt(id, name, typed);
     await this.tick();
     return { session: this.get(id), placement };
   }
@@ -2211,11 +2222,12 @@ export class Fleet extends EventEmitter {
   private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string): void {
     const settings = getSettings();
     const adapter = this.adapter(rec.provider);
+    const typed = tooLongForArgv(prompt) ? prompt : undefined;
     const opts = {
       account,
       agentSessionId: rec.agentSessionId!,
       cwd,
-      prompt: prompt || undefined,
+      prompt: typed ? undefined : prompt || undefined,
       ...(rec.effort ? { effort: rec.effort } : {}),
       ...(resumeModel(rec) ? { model: resumeModel(rec)! } : {}),
       autoApprove: settings.autoApprove,
@@ -2240,6 +2252,43 @@ export class Fleet extends EventEmitter {
     this.trouble.delete(rec.id);
     const prev = this.watches.get(rec.id);
     this.watches.set(rec.id, { since: this.now(), flagged: false, repaired: prev?.repaired ?? false, recovery: prev?.recovery ?? null });
+    if (typed) this.typeFirstPrompt(rec.id, name, typed);
+  }
+
+  /**
+   * Paste the prompt of a session started without one because it was too long
+   * for its argv (`tooLongForArgv`), once the TUI is up and past its start-up
+   * dialogs. Queued like a message, so one sent meanwhile lands after it.
+   */
+  private typeFirstPrompt(id: string, pane: string, prompt: string): void {
+    void this.serial(id, async () => {
+      await this.untilReady(id);
+      await this.untilSettled(id, pane);
+      await this.deps.runtime.sendText(pane, prompt);
+    }).catch((e) => console.error(`agentbox: typing ${id}'s prompt into it failed:`, e));
+  }
+
+  /**
+   * Wait — at most 60s from its start — until the pane shows no dialog the
+   * start-up answers (`autoAnswer`) and has held still for a second: a paste
+   * into Claude's trust dialog is lost, and one into a TUI still drawing its
+   * first screen can be too.
+   */
+  private async untilSettled(id: string, pane: string): Promise<void> {
+    const rec = getSessionRecord(id);
+    const adapter = rec ? this.adapter(rec.provider) : undefined;
+    const deadline = (this.startedAt.get(id) ?? this.now()) + 60_000;
+    let last = "";
+    let still = 0;
+    while (this.now() < deadline) {
+      if (!this.paneAlive(pane)) throw new Error("its pane exited before the prompt could be typed");
+      const screen = this.deps.runtime.capture(pane, { scrollback: 200 }) ?? "";
+      const dialog = adapter?.autoAnswer?.(screen, { bypassPermissions: getSettings().autoApprove });
+      still = !dialog && screen.trim() && screen === last ? still + 1 : 0;
+      if (still >= 2) return;
+      last = screen;
+      await Bun.sleep(500);
+    }
   }
 
   /**
