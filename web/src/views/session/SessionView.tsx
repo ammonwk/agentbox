@@ -423,6 +423,54 @@ function Detail({
     [state.skills, state.repos, session.provider, session.repoRoot, session.cwd],
   );
 
+  // The facts under the title; a phone runs them on from the actions, in the
+  // one row you swipe, rather than spending a row of its own on them.
+  const facts = (
+    <div className="sx-facts">
+      <span className="fact">
+        <AccountChip
+          accountId={session.accountId}
+          accounts={state.accounts}
+          cold={session.cold}
+          onClick={() => (location.hash = hrefOf({ page: "accounts", sub: "accounts" }))}
+        />
+      </span>
+      <span className="fact mono fact-cwd" title={session.cwd}>
+        <Icon.folder size={12} />
+        <span className="fact-cwd-text">
+          <span dir="ltr">{tildify(session.cwd, home)}</span>
+        </span>
+      </span>
+      {session.branch ? (
+        <span className="fact mono">
+          <Icon.branch size={12} /> {session.branch}
+        </span>
+      ) : null}
+      {session.model ? (
+        <span className="fact mono">
+          {session.model}
+          {session.effort ? <span className="muted"> · {session.effort}</span> : null}
+        </span>
+      ) : null}
+      <span className="fact">
+        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
+      </span>
+      <span
+        className="fact"
+        title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
+      >
+        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {fmtTokens(session.tokens.cacheRead)} cached ·{" "}
+        <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
+      </span>
+      {pr && (
+        <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
+          <Icon.prs size={12} /> #{pr.number}
+          {pr.isDraft ? " (draft)" : ""}
+        </a>
+      )}
+    </div>
+  );
+
   return (
     <div className="sv-main">
       <header className="sx-header">
@@ -488,52 +536,11 @@ function Detail({
                 Close
               </Button>
             )}
+            {narrow ? facts : null}
           </div>
         </div>
 
-        <div className="sx-facts">
-          <span className="fact">
-            <AccountChip
-              accountId={session.accountId}
-              accounts={state.accounts}
-              cold={session.cold}
-              onClick={() => (location.hash = hrefOf({ page: "accounts", sub: "accounts" }))}
-            />
-          </span>
-          <span className="fact mono fact-cwd" title={session.cwd}>
-            <Icon.folder size={12} />
-            <span className="fact-cwd-text">
-              <span dir="ltr">{tildify(session.cwd, home)}</span>
-            </span>
-          </span>
-          {session.branch ? (
-            <span className="fact mono">
-              <Icon.branch size={12} /> {session.branch}
-            </span>
-          ) : null}
-          {session.model ? (
-            <span className="fact mono">
-              {session.model}
-              {session.effort ? <span className="muted"> · {session.effort}</span> : null}
-            </span>
-          ) : null}
-          <span className="fact">
-            <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
-          </span>
-          <span
-            className="fact"
-            title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
-          >
-            {fmtTokens(session.tokens.input + session.tokens.output)} tok · {fmtTokens(session.tokens.cacheRead)} cached ·{" "}
-            <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
-          </span>
-          {pr && (
-            <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
-              <Icon.prs size={12} /> #{pr.number}
-              {pr.isDraft ? " (draft)" : ""}
-            </a>
-          )}
-        </div>
+        {narrow ? null : facts}
 
         {session.status === "blocked" || error ? (
           <div className="sx-attention-line bad" role={error ? "alert" : undefined}>

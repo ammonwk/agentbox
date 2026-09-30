@@ -2110,12 +2110,13 @@ a.tl-sender:hover .tl-sender-name {
 
 /* ------------------------------------------------------------------- phone */
 
-/* The header shrinks to two lines — title and status, then the actions in a
-   row you can swipe — and the facts scroll sideways instead of stacking, so
-   the conversation keeps most of the screen. */
+/* The header shrinks to two lines — title and status, then the actions and
+   the facts after them in one row you can swipe — above the tabs, and the
+   composer to the box and a row of keys, so the conversation keeps most of
+   the screen. */
 @media (max-width: 640px) {
   .sx-header {
-    padding: 8px 12px 0;
+    padding: 6px 12px 0;
   }
   .sx-header-top {
     flex-wrap: wrap;
@@ -2133,9 +2134,13 @@ a.tl-sender:hover .tl-sender-name {
   .sx-header-actions {
     order: 5;
     width: 100%;
-    margin: 2px 0 0;
+    margin: 0;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+  .sx-header-actions .btn,
+  .sx-big {
+    min-height: 30px;
   }
   .sx-header-actions::-webkit-scrollbar,
   .sx-facts::-webkit-scrollbar {
@@ -2144,30 +2149,47 @@ a.tl-sender:hover .tl-sender-name {
   .sx-header-actions > * {
     flex: none;
   }
-  .sx-facts {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-    margin-top: 6px;
-    padding-bottom: 2px;
+  .sx-header-actions .sx-facts {
+    flex: none;
+    overflow: visible;
+    margin: 0 0 0 6px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
   }
   .sx-facts .fact-cwd {
     display: none;
   }
+  .sx-tabs {
+    margin-top: 2px;
+  }
   .sx-tab {
-    min-height: 40px;
-    padding-left: 14px;
-    padding-right: 14px;
+    min-height: 36px;
+    padding: 6px 14px;
   }
 
   .cmp {
-    padding: 8px 10px;
+    gap: 6px;
+    padding: 6px 10px;
   }
+  /* The box, the attach button and Send on the first line; the keys and
+     Interrupt wrap to a slim second one. */
   .cmp-row {
     flex-wrap: wrap;
+    gap: 6px;
   }
-  .cmp-row .btn {
-    min-height: 40px;
+  .cmp-row .cmp-frame {
+    flex: 1 1 calc(100% - 90px);
+  }
+  .cmp-navigation {
+    gap: 6px;
+  }
+  .cmp-row .cmp-aux .btn,
+  .cmp-row > .btn.cmp-aux {
+    min-height: 32px;
+    height: 32px;
+  }
+  .cmp-row > .btn.cmp-aux {
+    margin-left: auto;
   }
   .cmp-hint {
     display: -webkit-box;

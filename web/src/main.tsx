@@ -13,6 +13,12 @@ import { reloadForMissingChunk } from "./lib/update";
 // which a hardware keyboard never changes.
 const TYPING = 'input:not([type="checkbox"]):not([type="radio"]):not([type="button"]), textarea, [contenteditable="true"]';
 const vv = window.visualViewport;
+// What the layout viewport has below the visual one with no keyboard up.
+// Installed to the Home Screen, iOS reports the visual viewport a status bar
+// short; counted as keyboard, that lifted the app a status bar off the bottom
+// of the screen. It is measured whenever nothing is being typed in, and
+// neither lifts the app nor counts toward the keyboard.
+let chrome = 0;
 const fit = () => {
   const root = document.documentElement;
   if (!isPhone()) {
@@ -21,13 +27,16 @@ const fit = () => {
     delete root.dataset.kb;
     return;
   }
+  const el = document.activeElement;
+  const typing = el instanceof HTMLElement && el.matches(TYPING) && !el.closest(".xterm");
   if (vv) {
     root.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
     // What the keyboard covers of the layout viewport, which iOS never shrinks.
-    root.style.setProperty("--kbh", `${Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))}px`);
+    const below = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    if (!typing) chrome = below;
+    root.style.setProperty("--kbh", `${typing ? Math.max(0, below - chrome) : 0}px`);
   }
-  const el = document.activeElement;
-  if (el instanceof HTMLElement && el.matches(TYPING) && !el.closest(".xterm")) root.dataset.kb = "";
+  if (typing) root.dataset.kb = "";
   else delete root.dataset.kb;
   if (window.scrollY) window.scrollTo(0, 0);
 };

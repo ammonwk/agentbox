@@ -2216,6 +2216,10 @@ kbd {
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
   }
+  /* Under the status bar, the colour of the header below it. */
+  .app[data-page="session"] {
+    background: var(--panel);
+  }
   .main {
     min-height: 0;
   }
@@ -2240,7 +2244,9 @@ kbd {
     flex-direction: row;
     align-items: stretch;
     gap: 0;
-    padding: 2px 4px env(safe-area-inset-bottom);
+    /* The home indicator sits in the bottom of the safe area; the labels can
+       share its top, as iOS's own tab bars do. */
+    padding: 2px 4px max(2px, calc(env(safe-area-inset-bottom) - 12px));
     border-right: 0;
     border-top: 1px solid var(--border);
     box-shadow: none;
@@ -2265,9 +2271,9 @@ kbd {
   .nav-new {
     flex: 1 1 0;
     min-width: 0;
-    min-height: 52px;
+    min-height: 48px;
     margin: 0;
-    padding: 6px 0 4px;
+    padding: 5px 0 3px;
     flex-direction: column;
     justify-content: center;
     gap: 3px;
