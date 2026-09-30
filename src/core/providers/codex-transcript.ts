@@ -23,6 +23,7 @@
 import { addUsage, emptyTotals } from "../pricing";
 import type { TimelineEvent, TokenTotals, UsageWindow, WindowKind } from "../types";
 import { PrRepoFold } from "../prrepo";
+import { loadFields, saveFields } from "./foldstate";
 import { oneLine, tidyPath } from "./claude-transcript";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
@@ -694,5 +695,7 @@ export function codexFormat(ref: Pick<TranscriptRef, "agentSessionId">, titleOf?
     facts: () => fold.facts(),
     links: codexLinks,
     pieces: (v, i) => codexPieces(v, i, fold),
+    state: () => saveFields(fold, ["ref"]),
+    restore: (s) => loadFields(fold, s),
   };
 }

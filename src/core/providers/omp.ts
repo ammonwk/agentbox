@@ -22,7 +22,7 @@ import { basename, join, sep } from "node:path";
 import { userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
-import { JsonlTail } from "./jsonl";
+import { JsonlTail, type JsonlTailState } from "./jsonl";
 import {
   foldOmpRecord,
   newOmpState,
@@ -37,6 +37,7 @@ import {
 } from "./omp-transcript";
 import { ompRedirectVars } from "./omp-usage";
 import { argvOf, cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf } from "./procs";
+import { BRIEFING } from "./briefing";
 import type {
   Command,
   LiveProcess,
@@ -458,6 +459,30 @@ class OmpReader implements TranscriptReader {
     };
   }
 
+  saveState(): unknown {
+    return {
+      tail: this.tail.state(),
+      state: this.state,
+      gen: this.gen,
+      subs: [...this.subs].map(([path, sub]) => ({ path, tail: sub.tail.state(), state: sub.state })),
+    };
+  }
+
+  /** Subagent logs whose tails no longer fit are left out; the first pull
+   *  lists the directory again (its mtime is not saved) and reads them anew. */
+  loadState(saved: unknown): boolean {
+    const s = saved as { tail: JsonlTailState; state: OmpState; gen: number; subs: { path: string; tail: JsonlTailState; state: OmpState }[] } | null;
+    if (!s || this.tail.recordCount > 0 || !(s.state?.calls instanceof Map)) return false;
+    if (!this.tail.restore(s.tail)) return false;
+    this.state = s.state;
+    this.gen = s.gen;
+    for (const sub of s.subs) {
+      const tail = new JsonlTail(sub.path);
+      if (tail.restore(sub.tail)) this.subs.set(sub.path, { tail, state: sub.state });
+    }
+    return true;
+  }
+
   async refresh(): Promise<{ changed: boolean; facts: TranscriptFacts }> {
     this.pull();
     const changed = this.dirty;
@@ -583,6 +608,7 @@ function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoA
   if (opts.model) a.push("--model", opts.model);
   if (opts.effort) a.push(`--thinking=${opts.effort}`);
   if (opts.autoApprove) a.push("--auto-approve");
+  a.push(`--append-system-prompt=${BRIEFING}`);
   // omp silently moves a session started in ~ to a temp dir unless told not to.
   if (canonical(opts.cwd) === canonical(homedir())) a.push("--allow-home");
   return a;

@@ -153,6 +153,12 @@ export function nodesAfter(path: string, id: string, afterRowId: number): DevinN
   );
 }
 
+/** Whether the session still has the node at `rowId`: a reader carrying on
+ *  from a saved position checks the database is the one it read. */
+export function hasNode(path: string, id: string, rowId: number): boolean {
+  return q(path, (db) => db.query("SELECT 1 FROM message_nodes WHERE row_id = ? AND session_id = ?").get(rowId, id) !== null) ?? false;
+}
+
 /** Messages by row id, for the nodes a timeline page shows. */
 export function messagesByRow(path: string, rowIds: readonly number[]): Map<number, string> | null {
   return q(path, (db) => {

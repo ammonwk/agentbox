@@ -27,14 +27,14 @@ import { moveInto } from "./move";
 import { randomUUID } from "node:crypto";
 import { userHome } from "../paths";
 import { cliVersion } from "./cli-version";
-import type { Account, TokenTotals } from "../types";
-import { emptyTotals } from "../pricing";
-import { JsonlTail } from "./jsonl";
+import type { Account } from "../types";
 import { JsonlTranscriptReader } from "./jsonl-reader";
-import { claudeFormat, ClaudeTokenFold } from "./claude-transcript";
+import { claudeFormat } from "./claude-transcript";
+import { SubagentTokens } from "./claude-subagents";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
 import { pickOption, plainScreen } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
+import { BRIEFING } from "./briefing";
 import type {
   Command,
   LiveProcess,
@@ -180,119 +180,6 @@ function indexFor(home: string): ProjectsIndex {
   let ix = indexes.get(root);
   if (!ix) indexes.set(root, (ix = new ProjectsIndex(root)));
   return ix;
-}
-
-// ------------------------------------------------------------- subagent tokens
-
-/**
- * Tokens spent by a session's subagents, which Claude writes to their own
- * files under `<sessionId>/subagents/`. They are the session's spend — a turn
- * that fans out to five agents costs six agents' tokens — so the reader folds
- * them in. Finished subagent files never change again, so only recently
- * written ones are re-stat'd on each refresh, with a full re-check now and
- * then for one that was resumed.
- */
-const SUB_HOT_MS = 10 * 60_000;
-const SUB_FULL_MS = 60_000;
-
-export class SubagentTokens {
-  private files = new Map<string, { tail: JsonlTail; fold: ClaudeTokenFold; mtimeMs: number; size: number }>();
-  private dirMtimes = new Map<string, number>();
-  private lastFull = 0;
-  private cached: TokenTotals | null = null;
-
-  constructor(
-    private readonly dir: string,
-    private readonly now: () => number = Date.now,
-  ) {}
-
-  totals(): TokenTotals | null {
-    return this.cached;
-  }
-
-  /** Paths of subagent transcripts: `subagents/agent-*.jsonl` and
-   *  `subagents/workflows/<wf>/agent-*.jsonl`. */
-  private list(): string[] | null {
-    const out: string[] = [];
-    let changed = false;
-    const walk = (d: string, depth: number) => {
-      let st;
-      try {
-        st = statSync(d);
-      } catch {
-        return;
-      }
-      if (this.dirMtimes.get(d) !== st.mtimeMs) changed = true;
-      this.dirMtimes.set(d, st.mtimeMs);
-      let ents;
-      try {
-        ents = readdirSync(d, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const e of ents) {
-        if (e.isFile() && e.name.startsWith("agent-") && e.name.endsWith(".jsonl")) out.push(join(d, e.name));
-        else if (e.isDirectory() && depth < 2 && (depth === 1 || e.name === "workflows")) walk(join(d, e.name), depth + 1);
-      }
-    };
-    walk(this.dir, 0);
-    return changed || this.files.size === 0 ? out : null;
-  }
-
-  refresh(): boolean {
-    let rootMtime: number;
-    try {
-      rootMtime = statSync(this.dir).mtimeMs;
-    } catch {
-      return false;
-    }
-    const now = this.now();
-    // A new subagent file changes the directory; a new workflow agent only
-    // its own directory, which the periodic full pass catches.
-    const full = now - this.lastFull >= SUB_FULL_MS || rootMtime !== this.dirMtimes.get(this.dir);
-    const listed = full ? this.list() : null;
-    if (full) this.lastFull = now;
-    const paths = listed ?? [...this.files.keys()];
-    let changed = false;
-    for (const p of paths) {
-      let f = this.files.get(p);
-      if (f && !full && now - f.mtimeMs > SUB_HOT_MS) continue;
-      let st;
-      try {
-        st = statSync(p);
-      } catch {
-        continue;
-      }
-      if (f && st.mtimeMs === f.mtimeMs && st.size === f.size) continue;
-      if (!f) this.files.set(p, (f = { tail: new JsonlTail(p), fold: new ClaudeTokenFold(), mtimeMs: 0, size: 0 }));
-      f.mtimeMs = st.mtimeMs;
-      f.size = st.size;
-      const fold = f.fold;
-      let last = -1;
-      f.tail.read((rec) => {
-        if (rec.index <= last) fold.reset();
-        last = rec.index;
-        try {
-          fold.add(rec.value);
-        } catch {
-          /* one odd record */
-        }
-      });
-      changed = true;
-    }
-    if (changed || (this.cached === null && this.files.size)) {
-      const t = emptyTotals();
-      for (const f of this.files.values()) {
-        t.input += f.fold.totals.input;
-        t.output += f.fold.totals.output;
-        t.cacheRead += f.fold.totals.cacheRead;
-        t.cacheWrite += f.fold.totals.cacheWrite;
-        t.costEquiv += f.fold.totals.costEquiv;
-      }
-      this.cached = t;
-    }
-    return changed;
-  }
 }
 
 // ------------------------------------------------------------- processes
@@ -515,6 +402,8 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
  *  timeline has nothing to show. */
 const THINKING = ["--thinking-display", "summarized"];
 
+const TOLD = ["--append-system-prompt", BRIEFING];
+
 /** A prompt that starts with `-` would be parsed as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
 
@@ -524,7 +413,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-  argv.push(...THINKING);
+  argv.push(...THINKING, ...TOLD);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: id };
 }
@@ -537,11 +426,14 @@ function resumeCommand(opts: ResumeOptions): Command {
     if (opts.model && !opts.carry.some((a) => a === "--model" || a.startsWith("--model="))) argv.push("--model", opts.model);
     if (opts.effort && !opts.carry.some((a) => a === "--effort" || a.startsWith("--effort="))) argv.push("--effort", opts.effort);
     if (!opts.carry.some((a) => a === "--thinking-display" || a.startsWith("--thinking-display="))) argv.push(...THINKING);
+    // One it was launched with is its own, or ours from an earlier launch; a
+    // second would replace it.
+    if (!opts.carry.some((a) => a.startsWith("--append-system-prompt"))) argv.push(...TOLD);
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-    argv.push(...THINKING);
+    argv.push(...THINKING, ...TOLD);
   }
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
@@ -667,7 +559,7 @@ export function claudeReader(ref: TranscriptRef): TranscriptReader {
   const subs = isSub ? null : new SubagentTokens(ref.path.replace(/\.jsonl$/, "") + "/subagents");
   return new JsonlTranscriptReader(
     ref,
-    claudeFormat(ref, subs ? { totals: () => subs.totals(), refresh: () => subs.refresh() } : undefined),
+    claudeFormat(ref, subs ?? undefined),
   );
 }
 

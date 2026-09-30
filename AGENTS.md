@@ -19,7 +19,9 @@ so it starts at boot — before anyone logs in, since lingering is on — and it
 does not die with the terminal or agent session that restarted it. It runs in
 a login shell's environment rather than whatever shell restarted it; every
 agent inherits that environment through tmux. Then check `/api/health`, and
-that `/api/state` has as many sessions as before. Never kill the process on
+that `/api/state` has as many sessions as before. The server answers within a
+few seconds of starting and `/api/state` waits for its first pass; the log's
+`agentbox ready in …` line says how long that took and where it went. Never kill the process on
 :4479 and start another by hand (the old `agentbox-serve.scope` recipe): the
 service sees a clean exit and stays down, so the board runs outside it until
 the next boot. `CPUWeight=2000` puts it ahead of the agents: each tmux pane is
@@ -91,7 +93,14 @@ and each recovery's report in `recovery/`.
   the tmux server restarts). `src/core/tmux.ts` is the only thing that runs
   tmux.
 - **Adapters are cheap to poll.** `listTranscripts` and `liveProcesses` run
-  every 2s: stat, don't read. Readers are incremental (`JsonlTail`).
+  every 2s: stat, don't read. Readers are incremental (`JsonlTail`), and
+  across restarts too: each reader's `saveState` goes to
+  `~/.local/share/agentbox/cache/readers/` (`src/core/readercache.ts`) and
+  the next server carries on from it, so a restart reads what was appended
+  while it was down, not a week of transcripts. A saved state is stamped with
+  a hash of its provider's reading code; change a fold and that provider's
+  transcripts are read in full once. A new fold field must be plain data
+  (`foldstate.ts`), or the reader must say how to save it.
 
 ## Where things are
 

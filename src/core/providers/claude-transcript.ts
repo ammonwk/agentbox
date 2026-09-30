@@ -16,6 +16,7 @@ import { addUsage, emptyTotals } from "../pricing";
 import type { AskQuestion, MateMessage, TimelineEvent, TokenTotals } from "../types";
 import { askQuestionsOf } from "./ask";
 import { PrRepoFold } from "../prrepo";
+import { loadFields, saveFields } from "./foldstate";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 import { dropPasteTags } from "../sent";
@@ -962,18 +963,30 @@ export function claudeLinks(r: any): { calls?: string[]; results?: string[] } | 
   return null;
 }
 
+/** Tokens from outside the main file (`SubagentTokens`). */
+export interface ClaudeExtra<S = any> {
+  totals(): TokenTotals | null;
+  refresh(): boolean;
+  state(): S;
+  restore(s: S): void;
+}
+
 /** The format the generic reader drives. `extra` folds subagent tokens. */
-export function claudeFormat(
-  ref: Pick<TranscriptRef, "path" | "agentSessionId">,
-  extra?: { totals: () => TokenTotals | null; refresh: () => boolean },
-): TranscriptFormat {
-  const fold = new ClaudeFold(ref, extra?.totals);
+export function claudeFormat(ref: Pick<TranscriptRef, "path" | "agentSessionId">, extra?: ClaudeExtra): TranscriptFormat {
+  const fold = new ClaudeFold(ref, extra ? () => extra.totals() : undefined);
   return {
     add: (v) => fold.add(v),
     reset: () => fold.reset(),
     facts: () => fold.facts(),
     links: claudeLinks,
     pieces: claudePieces,
-    refreshExtra: extra?.refresh,
+    refreshExtra: extra ? () => extra.refresh() : undefined,
+    state: () => ({ fold: saveFields(fold, ["ref"]), extra: extra?.state() ?? null }),
+    restore: (s) => {
+      const saved = s as { fold: unknown; extra: unknown };
+      if (!!saved.extra !== !!extra) throw new Error("saved for another kind of transcript");
+      loadFields(fold, saved.fold);
+      if (extra) extra.restore(saved.extra);
+    },
   };
 }

@@ -185,13 +185,15 @@ export function owners<A extends Pick<Account, "id" | "provider" | "email" | "is
 export async function ensureDefaultAccounts(
   detect: (p: ProviderId) => Promise<CliInfo> = detectCli,
 ): Promise<Account[]> {
-  const infos = await Promise.all(PROVIDERS.map(async (p) => [p, await detect(p)] as const));
+  const hasDefault = (p: ProviderId) => listAccounts(p).some((a) => a.isDefault || samePath(a.home, defaultHome(p)));
+  // Only a provider without one is asked whether its CLI is installed: that
+  // runs it (`omp --version` is a second), on every server start.
+  const missing = PROVIDERS.filter((p) => !hasDefault(p));
+  const infos = await Promise.all(missing.map(async (p) => [p, await detect(p)] as const));
   const added: Account[] = [];
   for (const [provider, info] of infos) {
-    if (!info.installed) continue;
-    const existing = listAccounts(provider);
+    if (!info.installed || hasDefault(provider)) continue;
     const home = defaultHome(provider);
-    if (existing.some((a) => a.isDefault || samePath(a.home, home))) continue;
     const account: Account = {
       id: newAccountId(),
       provider,

@@ -14,7 +14,7 @@
 
 import { statSync } from "node:fs";
 import type { TimelineEvent, TimelinePage } from "../types";
-import { JsonlTail } from "./jsonl";
+import { JsonlTail, type JsonlTailState } from "./jsonl";
 import type { TranscriptFacts, TranscriptReader, TranscriptRef } from "./types";
 
 export type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
@@ -41,6 +41,23 @@ export interface TranscriptFormat {
   /** Fold sources other than the main file (claude's subagent transcripts).
    *  True when anything new was read. */
   refreshExtra?(): boolean;
+  /** The fold's running state (extras included), for `restore` in a later
+   *  process. A format without it is read from the start on every restart. */
+  state?(): unknown;
+  /** Take up a saved state; throws when it does not fit. */
+  restore?(s: unknown): void;
+}
+
+/** What `JsonlTranscriptReader.saveState` returns. */
+interface SavedReader {
+  tail: JsonlTailState;
+  next: number;
+  resets: number;
+  ino: number;
+  callIds: string[];
+  /** [call record, result record or -1] per id in `callIds`. */
+  callAt: Int32Array;
+  format: unknown;
 }
 
 /** Past this many records behind, `since` sends a fresh page instead. */
@@ -132,6 +149,41 @@ export class JsonlTranscriptReader implements TranscriptReader {
       }
     }
     return changed;
+  }
+
+  /** Everything a later process needs to carry on from here, or null when
+   *  the format cannot say where it is. */
+  saveState(): unknown {
+    if (!this.format.state) return null;
+    const callIds = [...this.calls.keys()];
+    const callAt = new Int32Array(callIds.length * 2);
+    let i = 0;
+    for (const [call, result] of this.calls.values()) {
+      callAt[i++] = call;
+      callAt[i++] = result;
+    }
+    const saved: SavedReader = { tail: this.tail.state(), next: this.next, resets: this.resets, ino: this.ino, callIds, callAt, format: this.format.state() };
+    return saved;
+  }
+
+  /** Carry on from a saved state. False, and nothing changed, when it does
+   *  not describe the file as it is now: the reader then reads from the start. */
+  loadState(saved: unknown): boolean {
+    const s = saved as SavedReader | null;
+    if (!s || !this.format.restore || this.next !== 0 || !(s.callAt instanceof Int32Array)) return false;
+    if (!this.tail.restore(s.tail)) return false;
+    try {
+      this.format.restore(s.format);
+    } catch {
+      this.tail = new JsonlTail(this.ref.path);
+      this.format.reset();
+      return false;
+    }
+    this.next = s.next;
+    this.resets = s.resets;
+    this.ino = s.ino;
+    for (let i = 0; i < s.callIds.length; i++) this.calls.set(s.callIds[i]!, [s.callAt[2 * i]!, s.callAt[2 * i + 1]!]);
+    return true;
   }
 
   async refresh(): Promise<{ changed: boolean; facts: TranscriptFacts }> {

@@ -161,6 +161,16 @@ export interface TranscriptReader {
    * client replaces by id.
    */
   since(cursor: string): Promise<{ events: TimelineEvent[]; cursor: string; reset: boolean }>;
+  /**
+   * Where the reader is, as data (`bun:jsc`-serializable), so the next server
+   * can carry on from it instead of reading the whole file again. Null when
+   * this reader cannot. Only valid while the reading code is the same; the
+   * fleet's reader cache keys it by that code (`readercache.ts`).
+   */
+  saveState?(): unknown;
+  /** Take up a `saveState` from an earlier process, before the first
+   *  `refresh`. False when it no longer fits the file; nothing is changed. */
+  loadState?(saved: unknown): boolean;
 }
 
 export interface SpawnOptions {

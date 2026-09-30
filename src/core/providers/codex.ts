@@ -28,15 +28,17 @@
  */
 
 import { Database } from "bun:sqlite";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, readlinkSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
-import { userHome } from "../paths";
+import { deserialize, serialize } from "bun:jsc";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, readlinkSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { agentboxHome, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import type { Account } from "../types";
 import { codexFormat, codexLineage, type CodexLineage } from "./codex-transcript";
 import { JsonlTranscriptReader } from "./jsonl-reader";
 import { cwdOf, environOf, findProcesses, runsCli, startedAtOf, type ProcMatch } from "./procs";
 import { pickOption, plainScreen } from "./tui-screen";
+import { BRIEFING } from "./briefing";
 import type {
   Command,
   LiveProcess,
@@ -350,21 +352,62 @@ interface CodexLog {
 }
 const codexLogs = new Map<string, CodexLog>();
 
+/**
+ * Where each home's log was read to, kept across restarts: the first read
+ * after one otherwise walks every row since the oldest live codex started —
+ * a day of rows for a session left running, seconds of a restart. Keyed by
+ * the database's inode, so a new log is read from its start.
+ */
+const LOG_SAVE_MS = 30_000;
+const logSavedAt = new Map<string, number>();
+const logStateFile = (home: string): string => join(agentboxHome(), "cache", `codex-log-${Bun.hash(home).toString(16)}.bin`);
+
+function loadCodexLog(home: string, ino: number): CodexLog | null {
+  try {
+    const s = deserialize(readFileSync(logStateFile(home))) as CodexLog & { ino: number };
+    return s.ino === ino && s.threads instanceof Map ? { from: s.from, lastId: s.lastId, threads: s.threads } : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCodexLog(home: string, ino: number, log: CodexLog): void {
+  const file = logStateFile(home);
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(`${file}.tmp`, new Uint8Array(serialize({ ...log, ino })));
+    renameSync(`${file}.tmp`, file);
+  } catch {
+    /* a cache; the next read walks the rows instead */
+  }
+}
+
 /** A home's log brought up to date, holding rows from `from` (epoch s) on. */
 function readCodexLog(home: string, from: number): CodexLog | null {
   const path = join(home, "logs_2.sqlite");
-  if (!existsSync(path)) return null;
-  const had = codexLogs.get(home);
+  let ino: number;
+  try {
+    ino = statSync(path).ino;
+  } catch {
+    return null;
+  }
+  const had = codexLogs.get(home) ?? loadCodexLog(home, ino);
   const log = had && had.from <= from ? had : { from, lastId: 0, threads: new Map() };
   let db: Database | null = null;
   try {
     db = new Database(path, { readonly: true });
     // The first read goes by the ts index, the rest by rowid; the unary `+`
-    // keeps the planner off the thread_id index.
+    // keeps the planner off the thread_id index. Grouped in SQLite: only each
+    // (process, thread)'s newest row matters, and the first read of a log a
+    // day-old process is still writing was a day of rows handed to JS.
     const rows = (
       log.lastId
-        ? db.query("SELECT id, process_uuid, thread_id, ts FROM logs WHERE id > ?1 AND +thread_id IS NOT NULL").all(log.lastId)
-        : db.query("SELECT id, process_uuid, thread_id, ts FROM logs WHERE ts >= ?1 AND +thread_id IS NOT NULL").all(from)
+        ? db
+            .query("SELECT MAX(id) AS id, process_uuid, thread_id, MAX(ts) AS ts FROM logs WHERE id > ?1 AND +thread_id IS NOT NULL GROUP BY process_uuid, thread_id")
+            .all(log.lastId)
+        : db
+            .query("SELECT MAX(id) AS id, process_uuid, thread_id, MAX(ts) AS ts FROM logs WHERE ts >= ?1 AND +thread_id IS NOT NULL GROUP BY process_uuid, thread_id")
+            .all(from)
     ) as { id: number; process_uuid: string | null; thread_id: string; ts: number }[];
     for (const r of rows) {
       log.lastId = Math.max(log.lastId, r.id);
@@ -389,6 +432,11 @@ function readCodexLog(home: string, from: number): CodexLog | null {
     log.from = from;
   }
   codexLogs.set(home, log);
+  const now = Date.now();
+  if (now - (logSavedAt.get(home) ?? 0) >= LOG_SAVE_MS) {
+    logSavedAt.set(home, now);
+    saveCodexLog(home, ino, log);
+  }
   return log;
 }
 
@@ -655,6 +703,9 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
   return account.isDefault ? { env: {}, unset: ["CODEX_HOME"] } : { env: { CODEX_HOME: account.home } };
 }
 
+/** A JSON string is a TOML basic string, which is what `-c` parses. */
+const TOLD = ["-c", `developer_instructions=${JSON.stringify(BRIEFING)}`];
+
 /** clap reads a leading `-` as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
 
@@ -663,6 +714,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (opts.autoApprove) argv.push("--dangerously-bypass-approvals-and-sandbox");
+  argv.push(...TOLD);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: null };
 }
@@ -672,6 +724,7 @@ function resumeCommand(opts: ResumeOptions): Command {
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (opts.autoApprove) argv.push("--dangerously-bypass-approvals-and-sandbox");
+  argv.push(...TOLD);
   argv.push(opts.agentSessionId);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };

@@ -39,6 +39,7 @@ import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
+import { shownImage } from "../core/images";
 import { checkRequest } from "./csrf";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
@@ -401,6 +402,8 @@ function handleAppMessage(ws: Socket, raw: string | Buffer): void {
   if (msg.type === "ping" || ws.data.kind !== "app") return;
   ws.data.watching = msg.sessionId;
   ws.data.cursor = null;
+  // Before the first pass no transcript is known; `welcome` pumps it after.
+  if (!booted) return;
   if (msg.sessionId) send(ws, { type: "btw", sessionId: msg.sessionId, items: listBtw(msg.sessionId) });
   void pumpTimeline(ws);
 }
@@ -494,6 +497,7 @@ const router = new Router(mapError)
       scheduleCold();
     }
     const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh) };
+    if (!booted) health.starting = startupProgress();
     return json(health);
   })
 
@@ -615,6 +619,20 @@ const router = new Router(mapError)
     const f = uploadFile(params.name!);
     if (!f) throw new HttpError(404, "no such upload");
     return new Response(Bun.file(f.path), { headers: { "content-type": f.mime, "cache-control": "private, max-age=86400" } });
+  })
+  .add("GET", "/api/sessions/:id/image", ({ req, params, url }) => {
+    const s = fleet.get(params.id!);
+    let img;
+    try {
+      img = shownImage(url.searchParams.get("path") ?? "", s.cwd || null);
+    } catch (e) {
+      throw new HttpError(404, (e as Error).message);
+    }
+    // The file may be rewritten under the same name, so ask each time.
+    const etag = `"${img.size.toString(36)}-${Math.floor(img.mtimeMs).toString(36)}"`;
+    const headers = { "content-type": img.mime, "cache-control": "private, no-cache", etag, "x-content-type-options": "nosniff" };
+    if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
+    return new Response(Bun.file(img.path), { headers });
   })
   .add("POST", "/api/sessions/:id/adopt", async ({ params }) => {
     const s = await fleet.adopt(params.id!);
@@ -984,6 +1002,40 @@ function checkBuild(): void {
 
 // ------------------------------------------------------------------ boot
 
+/** The first pass is done and everything below `Bun.serve` in `startServer`
+ *  has run: until then pages wait in `waiting` and requests on `untilBooted`. */
+let booted = false;
+let markBooted!: () => void;
+const untilBooted = new Promise<void>((r) => (markBooted = r));
+const waiting = new Set<Socket>();
+let stopping = false;
+const bootStarted = performance.now();
+const STARTING_PUSH_MS = 500;
+
+function startupProgress(): { read: number; of: number } {
+  const p = fleet.startup();
+  // Past the transcripts, on the slow inputs: everything is read.
+  return p ?? { read: 1, of: 1 };
+}
+
+/** A page's first frames: the whole board, cold state, metrics, the build. */
+function welcome(ws: Socket): void {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  clients.add(ws);
+  send(ws, hotFrame(true));
+  const cold = coldState();
+  lastCold = JSON.stringify(cold);
+  send(ws, { type: "cold", state: cold });
+  send(ws, { type: "metrics", state: metricsSnapshot() });
+  send(ws, { type: "build", entry: uiBuild });
+  setMetricsWatchers(clients.size);
+  // A watch sent while it waited.
+  if (ws.data.kind === "app" && ws.data.watching) {
+    send(ws, { type: "btw", sessionId: ws.data.watching, items: listBtw(ws.data.watching) });
+    void pumpTimeline(ws);
+  }
+}
+
 export async function startServer(): Promise<void> {
   // Hold the port through startup, which takes a while on a busy machine. A
   // CLI that finds the server slow to answer starts another; found busy only at
@@ -994,39 +1046,31 @@ export async function startServer(): Promise<void> {
   } catch {
     throw new Error(`port ${PORT} is in use — another agentbox server is already running`);
   }
-  // Default accounts must exist before the first fleet tick, or every
-  // transcript found on it would be filed under no account.
-  await accounts.start();
-  fleet.start();
-  await fleet.ready;
-  scheduler.start();
-  // Before the first client connects: cold state's first push would otherwise
-  // carry the slow inputs' defaults — a checklist that says tmux is missing
-  // on a machine that has it, until the first refresh lands a minute later.
-  await refreshSlow().catch((e: unknown) => console.error("agentbox: first slow refresh failed:", e));
-  setInterval(() => refreshSlow().catch((e: unknown) => console.error("agentbox: slow refresh failed:", e)), SLOW_REFRESH_MS).unref?.();
-  void refreshPrs();
-  setInterval(() => void refreshPrs(), SLOW_REFRESH_MS).unref?.();
-  checkBuild();
-  setInterval(checkBuild, BUILD_POLL_MS).unref?.();
-  watchPwaDesktop();
-
-  fleet.on("sessions", () => {
-    scheduleHot();
-    // Claims move with sessions, and claims are on the Accounts page.
-    scheduleCold();
-  });
-  fleet.on("transcript", onTranscript);
-  fleet.on("btw", onBtw);
-  voice = new VoiceHub(fleet);
-  accounts.on("change", scheduleCold);
-  metricsEvents.on("metrics", (state: MetricsState) => broadcast({ type: "metrics", state }));
+  const phases: string[] = [];
+  let phaseAt = bootStarted;
+  const phase = (name: string) => {
+    const t = performance.now();
+    phases.push(`${name} ${((t - phaseAt) / 1000).toFixed(1)}s`);
+    phaseAt = t;
+  };
+  phase("loading");
 
   const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    // Tell every page first: a restart is back in seconds, and a page that
+    // knows reconnects at once instead of backing off (code 1012, Service
+    // Restart).
+    for (const ws of [...clients, ...waiting]) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      ws.send(JSON.stringify({ type: "restarting" } satisfies ServerMessage));
+      ws.close(1012, "restarting");
+    }
     scheduler.stop();
     fleet.stop();
     accounts.stop();
-    process.exit(0);
+    // Long enough for the close frames to leave.
+    setTimeout(() => process.exit(0), 100);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
@@ -1049,14 +1093,11 @@ export async function startServer(): Promise<void> {
         } else d.conv = r;
         return;
       }
-      clients.add(ws);
-      send(ws, hotFrame(true));
-      const cold = coldState();
-      lastCold = JSON.stringify(cold);
-      send(ws, { type: "cold", state: cold });
-      send(ws, { type: "metrics", state: metricsSnapshot() });
-      send(ws, { type: "build", entry: uiBuild });
-      setMetricsWatchers(clients.size);
+      if (booted) welcome(ws);
+      else {
+        waiting.add(ws);
+        send(ws, { type: "starting", ...startupProgress() });
+      }
     },
     message(ws, raw) {
       if (ws.data.kind === "voice") {
@@ -1072,7 +1113,10 @@ export async function startServer(): Promise<void> {
     close(ws) {
       if (ws.data.kind === "voice") ws.data.conv?.detach();
       else if (ws.data.kind === "term") closeTerminal(ws);
-      else dropClient(ws);
+      else {
+        waiting.delete(ws);
+        dropClient(ws);
+      }
     },
   };
 
@@ -1087,6 +1131,11 @@ export async function startServer(): Promise<void> {
       return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false } })
         ? undefined
         : fail("websocket upgrade failed", 500);
+    }
+    // Terminals and voice need the board; a page's socket may wait for it.
+    if (!booted && (url.pathname.startsWith("/ws/") || url.pathname.startsWith("/api/")) && url.pathname !== "/api/health") {
+      if (upgrade) return fail("agentbox is starting", 503);
+      return untilBooted.then(() => router.handle(req));
     }
     if (url.pathname === "/ws/voice") {
       if (!upgrade) return fail("voice requires a WebSocket upgrade", 426);
@@ -1106,14 +1155,59 @@ export async function startServer(): Promise<void> {
     return router.handle(req);
   };
 
+  // Serve from the start, before the accounts and the first pass, which on
+  // a busy machine, or with readers that cannot carry on from a saved state,
+  // take a while: pages connect and hear how far it is, and requests wait for
+  // it rather than failing (`handle`).
   hold.stop(true);
   Bun.serve<SocketData>({ port: PORT, hostname: HOST, idleTimeout: 60, websocket, fetch: (req, srv) => handle(req, srv) });
   console.log(`agentbox listening on http://${HOST}:${PORT}`);
   void listenOnTailnet(websocket, handle);
+  const progress = setInterval(() => {
+    for (const ws of waiting) send(ws, { type: "starting", ...startupProgress() });
+  }, STARTING_PUSH_MS);
+
+  // Default accounts must exist before the first fleet tick, or every
+  // transcript found on it would be filed under no account.
+  await accounts.start();
+  phase("accounts");
+  fleet.start();
+
+  await fleet.ready;
+  phase("first pass");
+  scheduler.start();
+  // Before the first client is welcomed: cold state's first push would
+  // otherwise carry the slow inputs' defaults — a checklist that says tmux is
+  // missing on a machine that has it, until the first refresh lands a minute
+  // later.
+  await refreshSlow().catch((e: unknown) => console.error("agentbox: first slow refresh failed:", e));
+  phase("slow inputs");
+  setInterval(() => refreshSlow().catch((e: unknown) => console.error("agentbox: slow refresh failed:", e)), SLOW_REFRESH_MS).unref?.();
+  void refreshPrs();
+  setInterval(() => void refreshPrs(), SLOW_REFRESH_MS).unref?.();
+  checkBuild();
+  setInterval(checkBuild, BUILD_POLL_MS).unref?.();
+  watchPwaDesktop();
+
+  fleet.on("sessions", () => {
+    scheduleHot();
+    // Claims move with sessions, and claims are on the Accounts page.
+    scheduleCold();
+  });
+  fleet.on("transcript", onTranscript);
+  fleet.on("btw", onBtw);
+  voice = new VoiceHub(fleet);
+  accounts.on("change", scheduleCold);
+  metricsEvents.on("metrics", (state: MetricsState) => broadcast({ type: "metrics", state }));
+
+  clearInterval(progress);
+  booted = true;
+  markBooted();
+  for (const ws of waiting) welcome(ws);
+  waiting.clear();
+  console.log(`agentbox ready in ${((performance.now() - bootStarted) / 1000).toFixed(1)}s (${phases.join(", ")})`);
 }
 
-/** The same app on the Tailscale address, for your own devices only (`tailnet.ts`).
- *  Tailscale may come up after we do, so keep looking until it has. */
 async function listenOnTailnet(
   websocket: WebSocketHandler<SocketData>,
   handle: (req: Request, srv: Server<SocketData>, hosts?: readonly string[]) => Response | undefined | Promise<Response>,

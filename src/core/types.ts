@@ -918,6 +918,9 @@ export interface Health {
   tmux: string | null;
   providers: ColdState["providers"];
   deps: DepSnapshot;
+  /** Present while the server's first pass over the transcripts runs: it
+   *  answers, but the board and every other route wait for that pass. */
+  starting?: { read: number; of: number };
 }
 
 /** Server → client. */
@@ -942,6 +945,13 @@ export type ServerMessage =
   | { type: "btw"; sessionId: string; items: Btw[] }
   /** The UI build on disk (its entry script's name); a page on another reloads. */
   | { type: "build"; entry: string | null }
+  /** The server is up but its first pass over the transcripts is still
+   *  running: the board and timelines follow when it is done. Sent on connect
+   *  and as it goes; `read` of `of` transcripts so far. */
+  | { type: "starting"; read: number; of: number }
+  /** The server is about to exit to be restarted; the socket closes next
+   *  (code 1012). Reconnect promptly rather than backing off. */
+  | { type: "restarting" }
   | { type: "error"; message: string };
 
 /** Client → server. A client watches at most one session's timeline. */

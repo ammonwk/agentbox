@@ -117,8 +117,11 @@ export function deriveIdentity(): DerivedIdentity {
 export function ensureUserEnv(): string | null {
   const path = userEnvPath();
   const existing = readEnvFile(path);
-  const { identity, sources } = deriveIdentity();
   const keys = ["name", "email", "github", "timezone"] as const;
+  // The boot-time case: every key there, and nothing to ask gh (a network
+  // round trip each) or git for. It ran on every server start.
+  if (keys.every((k) => existing[envKey(k)])) return null;
+  const { identity, sources } = deriveIdentity();
   const missing = keys.filter((k) => !existing[envKey(k)] && identity[k]);
   if (!missing.length) return null;
   const written = missing.map((k) => `${envKey(k)}=${identity[k]}`);

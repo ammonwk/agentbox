@@ -81,7 +81,12 @@ export class AccountsService extends EventEmitter {
         console.error(`agentbox: could not re-link shared config for ${a.label}: ${(err as Error).message}`);
       }
     }
-    await this.refreshIdentities(false);
+    // Not waited for: every account's email and plan are in the database from
+    // the last run, which is what the first fleet pass needs, and asking each
+    // CLI again (a process each, some a network round trip) held up every
+    // start by seconds. A login that changed while the server was down shows
+    // when this lands, as a "change".
+    void this.refreshIdentities(false);
     this.usage.start();
     this.sweep = setInterval(() => void this.refreshIdentities(true), IDENTITY_SWEEP_MS);
     this.sweep.unref?.();

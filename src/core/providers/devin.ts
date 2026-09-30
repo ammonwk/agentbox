@@ -302,6 +302,25 @@ class DevinReader implements TranscriptReader {
     return this.ref.agentSessionId;
   }
 
+  /** The forest's nodes and the rate-limit log's position: what costs a
+   *  read of every message to rebuild. The rest is derived from them, or
+   *  re-read from the database on the first pull. */
+  saveState(): unknown {
+    return { nodes: [...this.nodes.values()], lastRowId: this.lastRowId, hits: this.hits, hitKeys: [...this.hitKeys], log: this.log };
+  }
+
+  loadState(saved: unknown): boolean {
+    const s = saved as { nodes: DevinNode[]; lastRowId: number; hits: { at: number; detail: string }[]; hitKeys: string[]; log: DevinReader["log"] } | null;
+    if (!s || this.lastRowId !== 0 || !Array.isArray(s.nodes)) return false;
+    if (s.lastRowId > 0 && !db.hasNode(this.paths.db, this.id, s.lastRowId)) return false;
+    this.nodes = new Map(s.nodes.map((n) => [n.id, n]));
+    this.lastRowId = s.lastRowId;
+    this.hits = s.hits;
+    this.hitKeys = new Set(s.hitKeys);
+    this.log = s.log;
+    return true;
+  }
+
   private pull(): boolean {
     let changed = false;
 

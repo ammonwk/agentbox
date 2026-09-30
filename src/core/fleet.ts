@@ -21,7 +21,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { owners } from "./accounts/homes";
 import { place, type AccountState } from "./balancer";
 import { claimFor } from "./claim";
@@ -48,7 +48,7 @@ import {
   usageSamplesSince,
   type SessionRecord,
 } from "./db";
-import { createWorktree, run, worktreeForBranch } from "./git";
+import { createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
 import { attachArgv, tmuxName, type NewSession, type PaneInfo } from "./tmux";
 import {
@@ -99,6 +99,7 @@ import {
   type Step,
 } from "./recovery";
 import { agentboxBin } from "./paths";
+import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
 import { weeklyWindow } from "./balancer";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
@@ -124,6 +125,10 @@ import type {
 const DAY = 86_400_000;
 const DISCOVERY_MS = 10_000;
 const TICK_MS = 2_000;
+/** How often readers' positions are saved; a crash re-reads at most this much. */
+const READER_SAVE_MS = 60_000;
+/** Longest stretch of a pass without letting the event loop in. */
+const BREATHE_MS = 25;
 /** Dialogs are only auto-answered this soon after we start a process: a key
  *  pressed into a session you are using is worse than a dialog left open. */
 const AUTO_ANSWER_MS = 120_000;
@@ -196,6 +201,9 @@ interface Tracked {
   /** Rate-limit hits already recorded, so each is written once. */
   hitsSeen: number;
   lastUsageAt: number;
+  /** The reader took up where the last server left off (`readercache.ts`)
+   *  and has not been refreshed since. */
+  restored: boolean;
 }
 
 export interface SpawnRequest {
@@ -227,6 +235,12 @@ export class Fleet extends EventEmitter {
 
   /** By transcript path. */
   private tracked = new Map<string, Tracked>();
+  /** Transcripts read since their reader's state was last saved. */
+  private unsaved = new Set<string>();
+  private readersSavedAt = 0;
+  private breathedAt = 0;
+  /** The first pass's progress, until it is done. */
+  private starting: { read: number; of: number } | null = { read: 0, of: 0 };
   /** Transcripts that turned out to be in-process subagents; never sessions. */
   private ignored = new Set<string>();
   private pool: ReadonlyMap<string, PoolAgent> = new Map();
@@ -339,6 +353,10 @@ export class Fleet extends EventEmitter {
     this.snapshot = readSnapshot();
     this.manager = managerIncarnation();
     for (const id of failUnfinishedBtw("agentbox restarted before it answered", this.now())) this.emit("btw", id);
+    pruneReaderStates();
+    // The first save a while after the first pass, not in it: it is on the
+    // path to the board, and what it would save was just read anyway.
+    this.readersSavedAt = this.now();
     void this.tick();
     this.timer = setInterval(() => void this.tick(), TICK_MS);
   }
@@ -346,6 +364,7 @@ export class Fleet extends EventEmitter {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.saveReaders();
   }
 
   adapter(id: ProviderId): ProviderAdapter {
@@ -367,6 +386,7 @@ export class Fleet extends EventEmitter {
         .catch((e) => console.error("agentbox: fleet tick failed:", e))
         .finally(() => {
           this.ticking = null;
+          this.starting = null;
           this.markReady();
         });
     }
@@ -422,7 +442,10 @@ export class Fleet extends EventEmitter {
           } catch (e) {
             console.error(`agentbox: ${adapter.id} transcript scan failed for ${account.label}:`, e);
           }
-          for (const ref of refs) this.track(adapter, ref);
+          for (const ref of refs) {
+            this.track(adapter, ref);
+            await this.breathe();
+          }
         }
       }
       this.pool = this.deps.poolAgents?.() ?? this.pool;
@@ -455,7 +478,10 @@ export class Fleet extends EventEmitter {
 
     // Read what was appended.
     const changed = new Set<string>();
+    if (this.starting) this.starting.of = this.tracked.size;
     for (const [path, t] of this.tracked) {
+      if (this.starting) this.starting.read++;
+      await this.breathe();
       if (this.ignored.has(path)) continue;
       try {
         const st = statSync(transcriptFile(path));
@@ -470,11 +496,16 @@ export class Fleet extends EventEmitter {
       try {
         const r = await t.reader.refresh();
         t.facts = r.facts;
+        if (r.changed) this.unsaved.add(path);
+        // A restored reader's first facts are new to this process, though
+        // not to the file: record them as a first full read would.
+        const fresh = r.changed || t.restored;
+        t.restored = false;
         if (r.facts.isSubagent) {
           this.ignored.add(path);
           continue;
         }
-        if (r.changed) changed.add(path);
+        if (fresh) changed.add(path);
       } catch (e) {
         console.error(`agentbox: reading ${path} failed:`, e);
       }
@@ -506,6 +537,33 @@ export class Fleet extends EventEmitter {
     this.checkCrash(now);
     this.recordLive(now);
     for (const b of this.btwHistory.read(accountsOf("claude").map((a) => a.home))) this.watchTerminalBtw(b);
+    if (now - this.readersSavedAt >= READER_SAVE_MS) this.saveReaders();
+  }
+
+  /** Save the position of every reader that read something since the last
+   *  save, for the next server to carry on from (`readercache.ts`). */
+
+  private saveReaders(): void {
+    this.readersSavedAt = this.now();
+    for (const path of this.unsaved) {
+      const t = this.tracked.get(path);
+      const state = t?.reader.saveState?.();
+      if (t && state) saveReaderState(t.ref.provider, path, state);
+    }
+    this.unsaved.clear();
+  }
+
+  /** Let the event loop run now and then during a long pass — the first one
+   *  reads every transcript — so the server answers meanwhile. */
+  private async breathe(): Promise<void> {
+    if (performance.now() - this.breathedAt < BREATHE_MS) return;
+    await new Promise((r) => setImmediate(r));
+    this.breathedAt = performance.now();
+  }
+
+  /** How far the first pass is, while it runs; null once the board is ready. */
+  startup(): { read: number; of: number } | null {
+    return this.starting ? { ...this.starting } : null;
   }
 
   /**
@@ -616,7 +674,10 @@ export class Fleet extends EventEmitter {
     if (this.ignored.has(ref.path)) return;
     const existing = this.tracked.get(ref.path);
     if (existing) return;
-    this.tracked.set(ref.path, { ref: { ...ref, mtimeMs: -1 }, reader: adapter.reader(ref), facts: null, hitsSeen: -1, lastUsageAt: 0 });
+    const reader = adapter.reader(ref);
+    const saved = reader.loadState ? loadReaderState(ref.provider, ref.path) : null;
+    const restored = saved !== null && reader.loadState!(saved);
+    this.tracked.set(ref.path, { ref: { ...ref, mtimeMs: -1 }, reader, facts: null, hitsSeen: -1, lastUsageAt: 0, restored });
   }
 
   private poolAgentOf(rec: Pick<SessionRecord, "provider" | "agentSessionId">): PoolAgent | undefined {
@@ -3014,19 +3075,56 @@ export function headline(prompt: string | null | undefined): string | null {
  *  checkout it was made from, so worktree sessions group, filter and name
  *  under their repo rather than under their worktree directory. */
 const roots = new Map<string, string | null>();
-function repoRootOf(cwd: string): string | null {
+export function repoRootOf(cwd: string): string | null {
   if (!cwd) return null;
   if (roots.has(cwd)) return roots.get(cwd)!;
-  let root: string | null = null;
-  if (existsSync(cwd)) {
-    const r = run(["git", "rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"], cwd);
-    const [top, common] = r.code === 0 ? r.stdout.trim().split("\n") : [];
-    // A common dir not named .git (bare repo, --separate-git-dir) has no main
-    // checkout to point at; the worktree itself is the best answer.
-    root = common?.endsWith("/.git") ? dirname(common) : top || null;
-  }
+  const root = existsSync(cwd) ? gitRootOf(cwd) : null;
   roots.set(cwd, root);
   return root;
+}
+
+/**
+ * `git rev-parse --show-toplevel --git-common-dir`, read off the disk rather
+ * than run: the first pass asked it of every session's cwd, a process each,
+ * seconds of a restart. The nearest `.git` up from `dir` is the checkout's
+ * top; a directory there is a main checkout, and a file (`gitdir: …`) a
+ * linked worktree or submodule, whose git dir's `commondir` names the common
+ * one. A common dir not named .git (bare repo, --separate-git-dir, a
+ * submodule's) has no main checkout to point at; the top itself is the answer.
+ */
+function gitRootOf(dir: string): string | null {
+  for (let top = resolve(dir); ; top = dirname(top)) {
+    const dotGit = join(top, ".git");
+    let st;
+    try {
+      st = statSync(dotGit);
+    } catch {
+      if (dirname(top) === top) return null;
+      continue;
+    }
+    // A directory without a HEAD is not a repository, and git looks on up.
+    if (st.isDirectory()) {
+      if (existsSync(join(dotGit, "HEAD"))) return top;
+      if (dirname(top) === top) return null;
+      continue;
+    }
+    try {
+      const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
+      if (!gitdir) return null;
+      const gd = resolve(top, gitdir);
+      // A worktree whose git dir was deleted: git calls it no repository.
+      if (!existsSync(join(gd, "HEAD"))) return null;
+      let common = gd;
+      try {
+        common = resolve(gd, readFileSync(join(gd, "commondir"), "utf8").trim());
+      } catch {
+        /* no commondir: the git dir is its own */
+      }
+      return basename(common) === ".git" ? dirname(common) : top;
+    } catch {
+      return top;
+    }
+  }
 }
 
 function samePath(a: string | null | undefined, b: string | null | undefined): boolean {

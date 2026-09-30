@@ -23,6 +23,21 @@ export interface JsonlRecord {
   value: any;
 }
 
+/** A tail's position, saved so a restart resumes rather than re-reads. */
+export interface JsonlTailState {
+  offset: number;
+  ino: number;
+  /** Byte length of each parsed record's span to the next record's start
+   *  (the last one's to `offset`): the offset index, a quarter the size. */
+  spans: Uint32Array;
+  /** Hash of the bytes just before `offset`, to tell a file rewritten in
+   *  place (same inode, at least as long) from the one that was read. */
+  check: number;
+}
+
+/** How far back from `offset` a saved state's check reaches. */
+const CHECK_BYTES = 4096;
+
 export class JsonlTail {
   /** Next unread byte. Always at the start of a line. */
   private offset = 0;
@@ -115,6 +130,55 @@ export class JsonlTail {
     this.starts.push(fileOffset);
     if (visit) visit(rec);
     else out.push(rec);
+  }
+
+  /** Where this tail is, for `restore` in a later process. */
+  state(): JsonlTailState {
+    const spans = new Uint32Array(this.starts.length);
+    for (let i = 0; i < this.starts.length; i++) spans[i] = (i + 1 < this.starts.length ? this.starts[i + 1]! : this.offset) - this.starts[i]!;
+    return { offset: this.offset, ino: this.ino, spans, check: this.checkAt(this.offset) };
+  }
+
+  /**
+   * Take up a saved position, if it still describes this file: same inode,
+   * no shorter, and the same bytes before the offset. False leaves the tail
+   * as it was, to read from the start.
+   */
+  restore(s: JsonlTailState): boolean {
+    if (this.ino !== -1 || this.offset !== 0 || s.check < 0) return false;
+    try {
+      const st = statSync(this.path);
+      if (st.ino !== s.ino || st.size < s.offset) return false;
+    } catch {
+      return false;
+    }
+    if (this.checkAt(s.offset) !== s.check) return false;
+    const starts = new Array<number>(s.spans.length);
+    let at = s.offset;
+    for (let i = s.spans.length - 1; i >= 0; i--) starts[i] = at -= s.spans[i]!;
+    if (at < 0) return false;
+    this.starts = starts;
+    this.offset = s.offset;
+    this.ino = s.ino;
+    return true;
+  }
+
+  private checkAt(offset: number): number {
+    const len = Math.min(CHECK_BYTES, offset);
+    if (len === 0) return 0;
+    let fd: number;
+    try {
+      fd = openSync(this.path, "r");
+    } catch {
+      return -1;
+    }
+    try {
+      const buf = Buffer.allocUnsafe(len);
+      const n = readSync(fd, buf, 0, len, offset - len);
+      return n === len ? Bun.hash.crc32(buf) : -1;
+    } finally {
+      closeSync(fd);
+    }
   }
 
   /**
