@@ -311,6 +311,30 @@ export function killSession(name: string): void {
   tmux(["kill-session", "-t", `=${name}`]);
 }
 
+/**
+ * Give a window room to answer a dialog in, or hand it back. A terminal tab
+ * squeezed under the answer card leaves the window a dozen rows tall, and a
+ * dialog taller than that scrolls its tab bar and question off the top,
+ * where they cannot be read. Resizing pins the size (`window-size manual`)
+ * while the answer is typed; handing it back lets an attached client's size
+ * decide again, or leaves a window nobody is looking at the bigger size.
+ * Returns whether it grew, so a caller undoes only its own.
+ */
+export function setRoomy(name: string, on: boolean, min = { cols: 80, rows: 24 }, to = { cols: 140, rows: 45 }): boolean {
+  const r = tmux(["display-message", "-p", "-t", `=${name}:`, "#{session_attached} #{window_width} #{window_height}"]);
+  if (r.code !== 0) return false;
+  const [attached, cols, rows] = r.stdout.trim().split(" ").map(Number);
+  if (!on) {
+    tmux(["set-option", "-w", "-u", "-t", `=${name}:`, "window-size"]);
+    if (attached! > 0) tmux(["resize-window", "-A", "-t", `=${name}:`]);
+    return true;
+  }
+  if (cols! >= min.cols && rows! >= min.rows) return false;
+  const x = Math.max(cols!, to.cols);
+  const y = Math.max(rows!, to.rows);
+  return tmux(["resize-window", "-t", `=${name}:`, "-x", String(x), "-y", String(y)]).code === 0;
+}
+
 /** The argv that attaches a terminal to a session. */
 export function attachArgv(name: string): string[] {
   return ["tmux", "-L", tmuxSocket(), "attach-session", "-t", `=${name}`];

@@ -152,6 +152,8 @@ export interface Runtime {
   capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
   killSession(name: string): void;
   setZoom?(name: string, on: boolean): boolean;
+  /** A window too small to read a dialog off grown for a while, or handed back; whether it grew. */
+  setRoomy?(name: string, on: boolean): boolean;
   /** A window left at a gone client's small size back to a readable one; whether it changed. */
   unsquash?(name: string): boolean;
   bufferNames?(): string[];
@@ -2477,10 +2479,12 @@ export class Fleet extends EventEmitter {
       const pane = s.tmux;
       const rt = this.deps.runtime;
       let screen = rt.capture(pane) ?? "";
-      // A lead squeezed beside its teammates' panes is read zoomed, once it
-      // has redrawn at the new size.
+      // A window squeezed short by a small terminal is read grown, and a lead
+      // squeezed beside its teammates' panes zoomed, once it has redrawn at
+      // the new size.
+      const grown = rt.setRoomy?.(pane, true) ?? false;
       const zoomed = rt.setZoom?.(pane, true) ?? false;
-      if (zoomed) screen = await this.settled(pane, screen);
+      if (grown || zoomed) screen = await this.settled(pane, screen);
       try {
         const visited = new Set<number>();
         for (let n = 0; n < 60; n++) {
@@ -2501,6 +2505,7 @@ export class Fleet extends EventEmitter {
         throw new FleetError(409, "the dialog did not end up answered; the Terminal tab shows where it stopped");
       } finally {
         if (zoomed) rt.setZoom?.(pane, false);
+        if (grown) rt.setRoomy?.(pane, false);
       }
     });
   }
