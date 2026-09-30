@@ -334,26 +334,75 @@ function openThreads(pid: number, home: string): string[] {
   return out;
 }
 
-/** pid → threads from codex's own log database, newest first. Rows before the
- *  process started belong to an earlier process that had the same pid. */
-function loggedThreads(home: string, pid: number, startedAt: number): string[] {
+/**
+ * What codex's log database says each pid logged, per home, read a slice at a
+ * time: a poll reads only the rows added since the last. Asking it per pid
+ * walked every row with a thread (the planner takes the thread_id index for
+ * `IS NOT NULL`), a tenth of a second per process per poll on a 600 MB log,
+ * and an unidentified process asked again every poll.
+ */
+interface CodexLog {
+  /** Epoch s: rows before it were not read, or have been dropped. */
+  from: number;
+  lastId: number;
+  /** pid → thread → the last ts it was logged at. */
+  threads: Map<number, Map<string, number>>;
+}
+const codexLogs = new Map<string, CodexLog>();
+
+/** A home's log brought up to date, holding rows from `from` (epoch s) on. */
+function readCodexLog(home: string, from: number): CodexLog | null {
   const path = join(home, "logs_2.sqlite");
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) return null;
+  const had = codexLogs.get(home);
+  const log = had && had.from <= from ? had : { from, lastId: 0, threads: new Map() };
   let db: Database | null = null;
   try {
     db = new Database(path, { readonly: true });
-    const rows = db
-      .query(
-        "SELECT thread_id, MAX(ts) AS last FROM logs WHERE ts >= ?1 AND process_uuid LIKE ?2 AND thread_id IS NOT NULL GROUP BY thread_id ORDER BY last DESC LIMIT 20",
-      )
-      .all(Math.floor(startedAt / 1000) - 5, `pid:${pid}:%`) as { thread_id: string }[];
-    return rows.map((r) => r.thread_id).filter((t) => UUID.test(t));
+    // The first read goes by the ts index, the rest by rowid; the unary `+`
+    // keeps the planner off the thread_id index.
+    const rows = (
+      log.lastId
+        ? db.query("SELECT id, process_uuid, thread_id, ts FROM logs WHERE id > ?1 AND +thread_id IS NOT NULL").all(log.lastId)
+        : db.query("SELECT id, process_uuid, thread_id, ts FROM logs WHERE ts >= ?1 AND +thread_id IS NOT NULL").all(from)
+    ) as { id: number; process_uuid: string | null; thread_id: string; ts: number }[];
+    for (const r of rows) {
+      log.lastId = Math.max(log.lastId, r.id);
+      const pid = Number(/^pid:(\d+):/.exec(r.process_uuid ?? "")?.[1]);
+      if (!pid || !UUID.test(r.thread_id)) continue;
+      let t = log.threads.get(pid);
+      if (!t) log.threads.set(pid, (t = new Map()));
+      t.set(r.thread_id, Math.max(t.get(r.thread_id) ?? 0, r.ts));
+    }
   } catch {
     // Locked, migrated, or not the schema we know: this is only one witness.
-    return [];
+    return null;
   } finally {
     db?.close();
   }
+  // Rows older than every process still asking about can name none of them.
+  if (from > log.from) {
+    for (const [pid, t] of log.threads) {
+      for (const [id, ts] of t) if (ts < from) t.delete(id);
+      if (!t.size) log.threads.delete(pid);
+    }
+    log.from = from;
+  }
+  codexLogs.set(home, log);
+  return log;
+}
+
+/** pid → threads from codex's own log database, newest first. Rows before the
+ *  process started belong to an earlier process that had the same pid. */
+function loggedThreads(log: CodexLog | null, pid: number, startedAt: number): string[] {
+  const t = log?.threads.get(pid);
+  if (!t) return [];
+  const since = Math.floor(startedAt / 1000) - 5;
+  return [...t]
+    .filter(([, ts]) => ts >= since)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([id]) => id);
 }
 
 interface Candidate extends CwdCandidate {
@@ -402,6 +451,7 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
 
   const now = Date.now();
   const cands: Candidate[] = [];
+  const unheld: { cand: Candidate; key: string }[] = [];
   for (const [rootPid, members] of groups) {
     const root = byPid.get(rootPid)!;
     const inv = parseCodexArgs(codexArgs(root.argv));
@@ -427,10 +477,22 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
     if (!id && cached && now - cached.at < PROVEN_TTL) id = cached.id;
     if (!id) {
       const held = [...new Set(pids.flatMap((p) => openThreads(p, home)))];
-      id = pickThread(held, home) ?? pickThread(pids.flatMap((p) => loggedThreads(home, p, startedAt)), home);
+      id = pickThread(held, home);
       if (id) proven.set(key, { id, at: now });
     }
-    cands.push({ pid: rootPid, pids, account, home, cwd, startedAt, kind, id });
+    const cand: Candidate = { pid: rootPid, pids, account, home, cwd, startedAt, kind, id };
+    cands.push(cand);
+    if (!id) unheld.push({ cand, key });
+  }
+  // Then the log database, read once per home for all of them.
+  if (unheld.length) {
+    const from = Math.floor(Math.min(...unheld.map((u) => u.cand.startedAt)) / 1000) - 5;
+    const logs = new Map<string, CodexLog | null>();
+    for (const { cand: c, key } of unheld) {
+      if (!logs.has(c.home)) logs.set(c.home, readCodexLog(c.home, from));
+      c.id = pickThread(c.pids.flatMap((p) => loggedThreads(logs.get(c.home)!, p, c.startedAt)), c.home);
+      if (c.id) proven.set(key, { id: c.id, at: now });
+    }
   }
   if (proven.size > 500) for (const [k, v] of proven) if (now - v.at > PROVEN_TTL) proven.delete(k);
 
