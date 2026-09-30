@@ -1,0 +1,27 @@
+import { createContext, useContext } from "react";
+import type { SessionRow } from "../../lib/board";
+
+/** The board's sessions by id, for the timeline: who sent a message, and
+ *  what a session named in prose is doing. A context so each row does not
+ *  subscribe to the board itself. */
+export const BoardSessions = createContext<ReadonlyMap<string, SessionRow>>(new Map());
+export const useBoardSessions = () => useContext(BoardSessions);
+
+/** An agentbox id: eight of `newSessionId`'s alphabet (no 0/o/1/l). */
+const BOX_ID = /^([2-9a-km-z]{8})(?:$|[^a-z0-9])/;
+
+/**
+ * The session a message's sender names: an agentbox id (`agentbox send`), a
+ * Claude peer's name, which starts with one (`v4j82hzn-4f`), or a teammate's
+ * name — its title or label.
+ */
+export function senderOf(from: string, board: ReadonlyMap<string, SessionRow>, byName: ReadonlyMap<string, SessionRow>): SessionRow | null {
+  const exact = board.get(from);
+  if (exact) return exact;
+  const id = BOX_ID.exec(from)?.[1];
+  if (id && board.has(id)) return board.get(id)!;
+  const named = byName.get(from);
+  if (named) return named;
+  for (const s of board.values()) if (s.label?.trim() === from || s.title?.trim() === from) return s;
+  return null;
+}

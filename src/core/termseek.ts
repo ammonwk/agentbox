@@ -16,6 +16,7 @@
  *  it in the timeline instead. */
 
 import type { Turn } from "./types";
+import { dropPasteTags, readSent } from "./sent";
 
 /** A row with the TUI's prompt marker. */
 const PROMPT_ROW = /^\s{0,2}[❯›]\s(.*)$/;
@@ -32,8 +33,7 @@ const MAX_MS = 15_000;
 
 /** Row text as the rail's text would read: no sender mark, no image tags, one space. */
 export function norm(s: string): string {
-  return s
-    .replace(/^\s*\[(via agentbox send|Project session)\]\s*/, "")
+  return dropPasteTags(readSent(s).text)
     .replace(/^(\[Image #\d+\]\s*)+/, "")
     .replace(/\s+/g, " ")
     .trim()

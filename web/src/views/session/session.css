@@ -850,6 +850,118 @@
   background: var(--panel);
   padding: 8px 12px 10px;
 }
+/* Another agent's message: not you, so not your accent. */
+.tl-user.tl-sent {
+  border-left-color: var(--info);
+  background: none;
+}
+.tl-sent .tl-who {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+.tl-sender {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+}
+a.tl-sender:hover .tl-sender-name {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tl-sender-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-sender-id {
+  font-family: var(--mono);
+  font-weight: 400;
+  color: var(--faint);
+}
+.tl-via {
+  flex: none;
+  font-weight: 400;
+  color: var(--faint);
+}
+/* Long content cut to its first lines; the rest on a click. */
+.tl-clamp-body.is-clamped {
+  max-height: calc(var(--lines) * 1.55em + 0.4em);
+  overflow: hidden;
+}
+.tl-clamp-body.is-over {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.2em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.2em), transparent);
+}
+.tl-clamp-more {
+  font-size: 12px;
+  margin-top: 2px;
+}
+/* Something pasted into a message, set apart from what was typed around it. */
+.tl-paste {
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  padding: 4px 10px 6px;
+}
+.tl-clamp-label {
+  font-size: 11px;
+  color: var(--faint);
+  margin-bottom: 2px;
+}
+/* A session named in prose: its status before its name. */
+.sx-md a.sx-sesslink {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.sx-sesslink .st-dot {
+  align-self: center;
+}
+/* Codex's memory citations: which notes it drew on, not prose. */
+.tl-cites {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+/* A finished turn's work, folded to one line. */
+.tl-steps-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 0;
+  text-align: left;
+  cursor: pointer;
+}
+.tl-steps-head:hover {
+  color: var(--muted);
+}
+.tl-steps-err {
+  color: var(--danger);
+}
+.tl-steps-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 1px dashed var(--border-strong);
+}
 .tl-who {
   display: flex;
   align-items: center;
@@ -985,8 +1097,14 @@
   font-weight: 600;
   flex: none;
 }
+/* How the thought began, on the one line it is shown as. */
 .tl-thinking-fill {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
 }
 .tl-thinking-body {
   white-space: pre-wrap;
@@ -995,14 +1113,6 @@
   color: var(--muted);
   padding: 2px 0 6px;
   line-height: 1.55;
-}
-/* Shown, not hidden behind a click: the first lines, the rest on click. */
-.tl-thinking-body.is-clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
-  cursor: pointer;
 }
 
 .tl-meta {

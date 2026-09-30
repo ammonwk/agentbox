@@ -51,7 +51,7 @@ import { TurnIndex } from "../core/turns";
 import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
-import { AGENT_SENT_MARK } from "../core/providers/types";
+import { agentSentMark } from "../core/sent";
 import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
@@ -507,7 +507,10 @@ const router = new Router(mapError)
   .add("POST", "/api/sessions/:id/send", async ({ req, params }) => {
     const b = await readBody(req);
     const text = requireString(b, "text");
-    await fleet.send(params.id!, b.from === "agent" ? `${AGENT_SENT_MARK} ${text}` : text);
+    // The sending session's id, when it says (`AGENTBOX_SESSION`), goes in the
+    // mark: the timeline shows who wrote it, and the reader knows who to answer.
+    const fromSession = typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null;
+    await fleet.send(params.id!, b.from === "agent" ? `${agentSentMark(fromSession)} ${text}` : text);
     return json(null);
   })
   .add("POST", "/api/sessions/:id/keys", async ({ req, params }) => {

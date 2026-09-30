@@ -18,6 +18,7 @@ import { askQuestionsOf } from "./ask";
 import { PrRepoFold } from "../prrepo";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
+import { dropPasteTags } from "../sent";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
  *  collide), so it only ever proves a candidate, never recovers a path. */
@@ -598,7 +599,8 @@ export class ClaudeFold {
   }
 
   private prompt(text: string): void {
-    const t = text.trim().slice(0, PROMPT_CAP);
+    // A paste is recorded wrapped in `<pasted_content>`; a title is its words.
+    const t = dropPasteTags(text).trim().slice(0, PROMPT_CAP);
     if (!t) return;
     this.firstPrompt ??= t;
     this.lastPrompt = t;

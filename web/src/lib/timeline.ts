@@ -64,7 +64,9 @@ export type TimelineRow =
   /** Teammates going idle with nothing to report, back to back: one line. */
   | { type: "idle"; id: string; events: IdleEvent[] }
   /** A side question (Claude's /btw): not in the transcript, placed by when it was asked. */
-  | { type: "btw"; btw: Btw };
+  | { type: "btw"; btw: Btw }
+  /** A finished turn's thinking and tool calls between two things said, folded to one line. */
+  | { type: "steps"; id: string; rows: Exclude<TimelineRow, { type: "steps" }>[] };
 
 type IdleEvent = Extract<TimelineEvent, { kind: "meta" }> & { mate: NonNullable<Extract<TimelineEvent, { kind: "meta" }>["mate"]> };
 
@@ -92,7 +94,44 @@ export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
 }
 
 const rowAt = (r: TimelineRow): number =>
-  r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
+  r.type === "steps" ? rowAt(r.rows[0]!) : r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
+
+type Flat = Exclude<TimelineRow, { type: "steps" }>;
+/** Work, not words: what a finished turn can fold away. */
+const isWork = (r: TimelineRow): r is Flat =>
+  r.type === "tools" ? !r.events.some((e) => e.status === "running") : r.type === "event" && r.event.kind === "thinking";
+
+/**
+ * Fold each run of work — thinking and tool calls — in a turn that is over
+ * into one `steps` row. A turn is over once you (or anyone) wrote again after
+ * it; the last turn stays as it is, so what is happening now is always in
+ * full. A run of one thought or a single call is left alone: folding it saves
+ * nothing.
+ */
+export function foldSteps(rows: TimelineRow[]): TimelineRow[] {
+  let lastUser = -1;
+  rows.forEach((r, i) => {
+    if (r.type === "event" && r.event.kind === "user") lastUser = i;
+  });
+  const out: TimelineRow[] = [];
+  let run: Flat[] = [];
+  const flush = () => {
+    const calls = run.reduce((n, r) => n + (r.type === "tools" ? r.events.length : 1), 0);
+    if (calls >= 2) out.push({ type: "steps", id: `steps-${run[0]!.type === "tools" ? run[0]!.id : (run[0] as Extract<Flat, { type: "event" }>).event.id}`, rows: run });
+    else out.push(...run);
+    run = [];
+  };
+  rows.forEach((r, i) => {
+    if (i < lastUser && isWork(r)) {
+      run.push(r);
+      return;
+    }
+    if (run.length) flush();
+    out.push(r);
+  });
+  if (run.length) flush();
+  return out;
+}
 
 /**
  * Side questions placed among the rows by when they were asked, after the

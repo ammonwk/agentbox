@@ -6,7 +6,10 @@ import { prRefs, prUrl } from "../../lib/prlinks";
 import { sessionRefs } from "../../lib/sessionrefs";
 import { PrBase } from "./prbase";
 import { SessionLinks, type SessionLinksValue } from "./sessionlinks";
-import { hrefOf } from "../../route";
+import { hrefOf, parseHash } from "../../route";
+import { useBoardSessions } from "./boardsessions";
+import { StatusDot } from "../../bits";
+import { titleOf } from "../../lib/board";
 
 /** Agent prose. External links open in a new tab: this page is a live
  *  terminal, and navigating away from it drops the attach. A link to another
@@ -14,6 +17,7 @@ import { hrefOf } from "../../route";
 export function Markdown({ text }: { text: string }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);
+  const board = useBoardSessions();
   const plugins = useMemo(
     () => [remarkGfm, remarkFileRefs(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links)],
     [base, links],
@@ -31,7 +35,21 @@ export function Markdown({ text }: { text: string }) {
                 </code>
               );
             }
-            return <a {...rest} href={href} target={href?.startsWith("#/") ? undefined : "_blank"} rel="noreferrer">{children}</a>;
+            if (href?.startsWith("#/")) {
+              // Another session: say what it is and what it is doing, not just its id.
+              const r = parseHash(href);
+              const s = r.page === "session" ? board.get(r.id) : undefined;
+              if (s) {
+                return (
+                  <a {...rest} href={href} className="sx-sesslink" title={`${titleOf(s)} (${s.id})`}>
+                    <StatusDot status={s.status} />
+                    {children}
+                  </a>
+                );
+              }
+              return <a {...rest} href={href}>{children}</a>;
+            }
+            return <a {...rest} href={href} target="_blank" rel="noreferrer">{children}</a>;
           },
         }}
       >

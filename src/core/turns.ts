@@ -10,7 +10,7 @@
  *  lands, and must not be counted twice). */
 
 import type { TimelineEvent, TimelinePage, Turn, TurnList } from "./types";
-import { isAgentSent } from "./providers/types";
+import { dropPasteTags, readSent } from "./sent";
 import { devinAskAnswers } from "./providers/devin-transcript";
 
 /** The provider tools that ask you something; their result is your answer. */
@@ -24,10 +24,9 @@ const FULL_PAGE = 1000;
 /** The rail's view of one event, or null when it is not something you said. */
 export function turnOf(ev: TimelineEvent, seq: number): Turn | null {
   if (ev.kind === "user") {
-    const raw = ev.text.trim();
-    if (isAgentSent(raw) || FROM_PROJECT.test(raw)) {
-      return { id: ev.id, at: ev.at, kind: "agent", text: cap(raw.replace(/^\[(via agentbox send|Project session)\]\s*/, "")), seq };
-    }
+    const sent = readSent(ev.text.trim());
+    const raw = dropPasteTags(sent.text).trim();
+    if (sent.agent || FROM_PROJECT.test(raw)) return { id: ev.id, at: ev.at, kind: "agent", text: cap(raw), seq };
     const text = raw || (ev.images ? `(${ev.images} image${ev.images === 1 ? "" : "s"})` : "");
     if (!text) return null;
     const command = /^\/[a-z][\w:-]*(\s|$)/.test(text) || text.startsWith("! ");

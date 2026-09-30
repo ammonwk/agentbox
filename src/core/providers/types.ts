@@ -313,5 +313,4 @@ export interface ProviderAdapter {
  * as a prompt, but it is not you writing to the session, which is what the
  * board sorts by.
  */
-export const AGENT_SENT_MARK = "[via agentbox send]";
-export const isAgentSent = (text: string): boolean => /^\s*\[(via agentbox send|Project session)\]/.test(text);
+export { AGENT_SENT_MARK, isAgentSent } from "../sent";
