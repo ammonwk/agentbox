@@ -55,6 +55,9 @@ function ts(raw: unknown): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+/** Prompts are previews, capped as Claude's and Codex's are: a board row
+ *  carries them on every push. */
+const PROMPT_CAP = 2000;
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 /** A message or observation body: a string, or ATIF content parts. */
@@ -550,8 +553,8 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     // session from anywhere, but running it there keeps trust and tools right.
     resumeCwd: row?.working_directory ?? null,
     title: row?.title ?? null,
-    firstPrompt: prompts[0]?.content ?? atif?.userPrompts[0] ?? null,
-    lastPrompt: lastPrompt?.content ?? atif?.userPrompts[atif.userPrompts.length - 1] ?? null,
+    firstPrompt: (prompts[0]?.content ?? atif?.userPrompts[0])?.slice(0, PROMPT_CAP) ?? null,
+    lastPrompt: (lastPrompt?.content ?? atif?.userPrompts[atif.userPrompts.length - 1])?.slice(0, PROMPT_CAP) ?? null,
     lastPromptAt,
     lastMessage: atif?.lastMessage ?? null,
     model: atif?.model ?? (row?.model || null),

@@ -24,6 +24,10 @@ import type { TimelineEvent, TokenTotals } from "../types";
 import { addUsage, emptyTotals } from "../pricing";
 import { capJson } from "./jsonl-reader";
 
+/** Prompts are previews, capped as Claude's and Codex's are: a board row
+ *  carries them on every push. */
+const PROMPT_CAP = 2000;
+
 export interface OmpHeader {
   id: string;
   cwd: string | null;
@@ -217,7 +221,7 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       // Subagent assignments are user messages attributed to the agent; the
       // human's own prompts are what a list row should quote.
       if (m.attribution === "agent") return;
-      const text = textOf(m.content).trim();
+      const text = textOf(m.content).trim().slice(0, PROMPT_CAP);
       if (!text) return;
       s.firstPrompt ??= text;
       s.lastPrompt = text;
