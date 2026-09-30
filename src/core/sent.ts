@@ -15,7 +15,7 @@ export const agentSentMark = (from?: string | null): string => (from ? `[via age
 // The removed Project session signed its messages `[Project session]`; old
 // transcripts still carry that form.
 const MARK = /^\s*\[(?:via agentbox send(?: from ([\w-]+))?|Project session)\]\s*/;
-const PASTE_OPEN = /<pasted_content(?:\s+id="[^"]*")?\s*>/;
+const PASTE_OPEN = /<pasted_content\s+id="[^"]*"\s*>/;
 const PASTE_CLOSE = /<\/pasted_content(?:\s+id="[^"]*")?\s*>/;
 const PASTE = new RegExp(`${PASTE_OPEN.source}([\\s\\S]*?)(?:${PASTE_CLOSE.source}|$)`, "g");
 const WHOLE_PASTE = new RegExp(`^\\s*${PASTE_OPEN.source}([\\s\\S]*?)(?:${PASTE_CLOSE.source})?\\s*$`);

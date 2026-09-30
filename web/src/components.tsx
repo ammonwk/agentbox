@@ -98,6 +98,10 @@ export const Icon = {
   users: I("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M22 21a7 7 0 0 0-4.5-6.5"),
   copy: I("M9 9h11v11H9z", "M5 15H4V4h11v1"),
   key: I("M15 7a4 4 0 1 1-3.9 5H3v3h3v3h3v-3h2.1A4 4 0 0 1 15 7z"),
+  /** Arrows meeting: fold away. */
+  fold: I("M7 4l5 5 5-5", "M7 20l5-5 5 5"),
+  /** Arrows parting: unfold. */
+  unfold: I("M7 9l5-5 5 5", "M7 15l5 5 5-5"),
   bolt: I("M13 2L4 14h7l-1 8 9-12h-7z"),
   gauge: I("M12 14l4-4", "M3.5 18a9 9 0 1 1 17 0"),
   link: I("M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1", "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"),

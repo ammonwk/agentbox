@@ -1,6 +1,7 @@
 /** Folding timeline frames into what the client holds. Pure. */
 
 import type { Btw, TimelineEvent } from "../../../src/core/types";
+import { sendOf, type SendCall } from "./sendtool";
 
 /**
  * Merge incoming events into what is held, keyed by `id`.
@@ -61,6 +62,8 @@ export type TimelineRow =
   | { type: "tools"; id: string; events: Extract<TimelineEvent, { kind: "tool" }>[] }
   /** AskUserQuestion: a card of its own, not a line in a run of tools. */
   | { type: "ask"; event: Extract<TimelineEvent, { kind: "tool" }> & { ask: NonNullable<Extract<TimelineEvent, { kind: "tool" }>["ask"]> } }
+  /** A message to another agent: shown as the message, not as a tool call. */
+  | { type: "sent"; event: Extract<TimelineEvent, { kind: "tool" }>; send: SendCall }
   /** Teammates going idle with nothing to report, back to back: one line. */
   | { type: "idle"; id: string; events: IdleEvent[] }
   /** A side question (Claude's /btw): not in the transcript, placed by when it was asked. */
@@ -76,8 +79,11 @@ const quietIdle = (ev: TimelineEvent): ev is IdleEvent => ev.kind === "meta" && 
 export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = [];
   for (const ev of events) {
+    const send = ev.kind === "tool" && !ev.ask ? sendOf(ev) : null;
     if (ev.kind === "tool" && ev.ask) {
       rows.push({ type: "ask", event: { ...ev, ask: ev.ask } });
+    } else if (ev.kind === "tool" && send) {
+      rows.push({ type: "sent", event: ev, send });
     } else if (ev.kind === "tool") {
       const last = rows[rows.length - 1];
       if (last?.type === "tools") last.events.push(ev);
@@ -94,7 +100,7 @@ export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
 }
 
 const rowAt = (r: TimelineRow): number =>
-  r.type === "steps" ? rowAt(r.rows[0]!) : r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
+  r.type === "steps" ? rowAt(r.rows[0]!) : r.type === "sent" ? r.event.at : r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
 
 type Flat = Exclude<TimelineRow, { type: "steps" }>;
 /** Work, not words: what a finished turn can fold away. */

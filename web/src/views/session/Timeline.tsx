@@ -4,6 +4,7 @@ import { api, fmtClock, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, foldSteps, groupTimeline, withBtw, type TimelineRow } from "../../lib/timeline";
+import { field, type SendCall } from "../../lib/sendtool";
 import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
 import { Markdown } from "./Markdown";
 import { AskRow } from "./Question";
@@ -16,7 +17,7 @@ import { StatusDot } from "../../bits";
 import { titleOf } from "../../lib/board";
 import { hrefOf } from "../../route";
 import { readSent, splitPastes } from "../../../../src/core/sent";
-import { BoardSessions, senderOf, useBoardSessions } from "./boardsessions";
+import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -34,9 +35,28 @@ const THINK_CAP_MS = 10 * 60_000;
 export function Timeline({ session }: { session: Session }) {
   const { events, ready, loadingOlder, exhausted, error, loadOlder } = useTimeline(session.id);
   const btw = useBtw(session.id);
-  const rows = useMemo(() => foldSteps(withBtw(groupTimeline(events), btw, exhausted)), [events, btw, exhausted]);
+  const [fold, setFold] = useFold();
+  const rows = useMemo(() => {
+    const all = withBtw(groupTimeline(events), btw, exhausted);
+    return fold ? foldSteps(all) : all;
+  }, [events, btw, exhausted, fold]);
   const { state } = useAppState();
   const board = useMemo(() => new Map((state?.sessions ?? []).map((s) => [s.id, s])), [state?.sessions]);
+  // The agents it started inside itself, by name: where each was started, or
+  // failing that (its start is on a page not loaded) the first word from it.
+  const agentNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const ev of events) {
+      const n =
+        ev.kind === "tool" && (ev.name === "Agent" || ev.name === "Task")
+          ? field(ev.input, "name")
+          : ev.kind === "meta" && ev.mate
+            ? ev.mate.name
+            : null;
+      if (n && !m.has(n) && !board.has(n)) m.set(n, ev.id);
+    }
+    return m;
+  }, [events, board]);
   const echoes = useEchoes(session.id, events);
   // The turn is open but nothing has landed: the agent is thinking (a running
   // tool has a row of its own, spinning, so this is only for the gap before
@@ -173,6 +193,8 @@ export function Timeline({ session }: { session: Session }) {
     else if (!loadingOlder) loadOlder(1000);
   }, [jump, ready, events, exhausted, error, loadingOlder, loadOlder, rowOf]);
 
+  const local = useMemo(() => ({ names: agentNames, jump: (id: string) => setJump(id) }), [agentNames]);
+
   const toLatest = () => {
     const el = boxRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -222,6 +244,8 @@ export function Timeline({ session }: { session: Session }) {
       <BtwCard key={`btw-${r.btw.id}`} btw={r.btw} />
     ) : r.type === "ask" ? (
       <AskRow key={r.event.id} ev={r.event} live={session.question?.id === r.event.ask.id} />
+    ) : r.type === "sent" ? (
+      <SentRow key={r.event.id} ev={r.event} send={r.send} />
     ) : (
       <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
     );
@@ -247,6 +271,7 @@ export function Timeline({ session }: { session: Session }) {
 
   return (
     <BoardSessions.Provider value={board}>
+    <LocalAgents.Provider value={local}>
     <div className="tl-wrap">
       <div className="sx-panel tl" ref={boxRef} onScroll={onScroll} tabIndex={0} aria-label="Timeline">
         <div className="tl-edge" role="status">
@@ -291,6 +316,15 @@ export function Timeline({ session }: { session: Session }) {
           {thinking ? <ThinkingLive since={liveSince} now={now} background={session.background} /> : null}
         </div>
       </div>
+      <button
+        className="tl-fold"
+        aria-pressed={fold}
+        onClick={() => setFold(!fold)}
+        title={fold ? "Finished turns' thinking and tool calls are folded to one line each. Click to show them all." : "Fold each finished turn's thinking and tool calls to one line"}
+        aria-label="Fold finished turns' steps"
+      >
+        {fold ? <Icon.unfold size={13} /> : <Icon.fold size={13} />}
+      </button>
       {!pinned ? (
         <div className="tl-jump">
           <Button size="sm" icon={Icon.arrowDown} onClick={toLatest}>
@@ -312,8 +346,21 @@ export function Timeline({ session }: { session: Session }) {
         onStep={step}
       />
     </div>
+    </LocalAgents.Provider>
     </BoardSessions.Provider>
   );
+}
+
+const FOLD_KEY = "agentbox.timeline.fold";
+
+/** Whether finished turns' work is folded: off unless you turn it on, and remembered. */
+function useFold(): [boolean, (on: boolean) => void] {
+  const [on, setOn] = useState(() => localStorage.getItem(FOLD_KEY) === "1");
+  const set = (v: boolean) => {
+    setOn(v);
+    localStorage.setItem(FOLD_KEY, v ? "1" : "0");
+  };
+  return [on, set];
 }
 
 /** Messages sent from here that the transcript has not caught up with. */
@@ -359,7 +406,7 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
     case "thinking":
       return <Thinking text={ev.text} at={ev.at} dur={dur} />;
     case "meta":
-      if (ev.mate) return <MateRow mate={ev.mate} at={ev.at} />;
+      if (ev.mate) return <MateRow id={ev.id} mate={ev.mate} at={ev.at} />;
       return (
         <div className={`tl-meta tone-${ev.tone ?? "info"}`} title={fmtClock(ev.at)}>
           {ev.tone === "warn" || ev.tone === "error" ? <Icon.alert size={12} /> : null}
@@ -392,7 +439,7 @@ function UserRow({ ev }: { ev: Extract<TimelineEvent, { kind: "user" }> }) {
     return (
       <div className="tl-user tl-sent" title={fmtClock(ev.at)} data-ev={ev.id}>
         <div className="tl-who">
-          <Icon.send size={12} /> <Sender from={sent.from} />
+          <Icon.send size={12} /> <Party name={sent.from} />
           <span className="tl-via">via {sent.via}</span>
           <time className="tl-time">{fmtClock(ev.at)}</time>
         </div>
@@ -412,12 +459,34 @@ function UserRow({ ev }: { ev: Extract<TimelineEvent, { kind: "user" }> }) {
   );
 }
 
-/** The session that sent a message, linked, with what it is doing; its name as given when it is not on the board. */
-function Sender({ from }: { from: string | null }) {
+/** The session at the other end of a message, linked, with what it is doing;
+ *  its name as given when it is not on the board. */
+function Party({ name }: { name: string | null }) {
   const board = useBoardSessions();
   const { byName, tab } = useFamily();
-  const s = from ? senderOf(from, board, byName) : null;
-  if (!s) return <span className="tl-sender">{from ?? "An agent"}</span>;
+  const local = useLocalAgents();
+  const s = name ? senderOf(name, board, byName) : null;
+  const started = !s && name ? local.names.get(name) : undefined;
+  if (started) {
+    return (
+      <a
+        className="tl-sender"
+        href={`#ev:${started}`}
+        title="An agent this session started; go to where it was started"
+        onClick={(e) => {
+          e.preventDefault();
+          local.jump(started);
+        }}
+      >
+        <span className="tl-sender-name">{name}</span>
+      </a>
+    );
+  }
+  if (!s) {
+    // Claude addresses a session it has no name for by its socket.
+    const shown = !name ? "An agent" : name.startsWith("uds:") ? "a Claude session" : name === "main" ? "its caller" : name;
+    return <span className="tl-sender" title={name ?? undefined}>{shown}</span>;
+  }
   return (
     <a className="tl-sender" href={hrefOf({ page: "session", id: s.id, tab })} title={`Open ${titleOf(s)} (${s.id})`}>
       <StatusDot status={s.status} />
@@ -428,10 +497,78 @@ function Sender({ from }: { from: string | null }) {
 }
 
 /**
+ * A message this agent sent another, from whichever tool carried it: who to,
+ * what it said, and whether it went. Set on the right, the way a sent message
+ * is; the call itself is one click away.
+ */
+function SentRow({ ev, send }: { ev: ToolEvent; send: SendCall }) {
+  const [open, setOpen] = useState(false);
+  const failed = ev.status === "error" || /^\s*\{\s*"success"\s*:\s*false/.test(ev.output ?? "");
+  const call =
+    ev.input || ev.output ? (
+      <button className="linkish tl-clamp-more" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {open ? "Hide the call" : "The call"}
+      </button>
+    ) : null;
+  return (
+    <div className={`tl-user tl-sent tl-out${failed ? " is-failed" : ""}`} title={fmtClock(ev.at)} data-ev={ev.id}>
+      <div className="tl-who">
+        <Icon.send size={12} /> <span className="tl-to">To</span> <Party name={send.to} />
+        <span className="tl-via">via {send.via}</span>
+        {ev.status === "running" ? (
+          <span className="tl-via">
+            <Spinner size={11} /> sending…
+          </span>
+        ) : failed ? (
+          <span className="tl-out-err">
+            <Icon.alert size={12} /> not delivered
+          </span>
+        ) : null}
+        <time className="tl-time">{fmtClock(ev.at)}</time>
+      </div>
+      {send.text ? (
+        <Clamp lines={6} foot={call}>
+          <Markdown text={send.text} />
+        </Clamp>
+      ) : (
+        <>
+          <p className="faint tl-out-sealed">{ev.name.startsWith("collaboration.") ? "Codex does not show what one agent sends another." : ev.summary}</p>
+          {call ? <div className="tl-clamp-foot">{call}</div> : null}
+        </>
+      )}
+      {open ? (
+        <div className="sx-tool-detail">
+          {ev.input ? <ToolInput input={ev.input} title={ev.title} /> : null}
+          {ev.output ? (
+            <div>
+              <h4>{failed ? "Error" : "Result"}</h4>
+              <pre className="sx-pre">{ev.output}</pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * Long content cut to its first `lines`, with a button for the rest. Measured,
  * so short content gets no button.
  */
-function Clamp({ lines, className, label, children }: { lines: number; className?: string; label?: string; children: React.ReactNode }) {
+function Clamp({
+  lines,
+  className,
+  label,
+  foot,
+  children,
+}: {
+  lines: number;
+  className?: string;
+  label?: string;
+  /** More to put on the line "Show all" goes on. */
+  foot?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [over, setOver] = useState(false);
@@ -445,10 +582,15 @@ function Clamp({ lines, className, label, children }: { lines: number; className
       <div ref={ref} className={`tl-clamp-body${open ? "" : " is-clamped"}${over && !open ? " is-over" : ""}`} style={{ "--lines": lines } as React.CSSProperties}>
         {children}
       </div>
-      {over || open ? (
-        <button className="linkish tl-clamp-more" onClick={() => setOpen(!open)}>
-          {open ? "Show less" : "Show all"}
-        </button>
+      {over || open || foot ? (
+        <div className="tl-clamp-foot">
+          {over || open ? (
+            <button className="linkish tl-clamp-more" onClick={() => setOpen(!open)}>
+              {open ? "Show less" : "Show all"}
+            </button>
+          ) : null}
+          {foot}
+        </div>
       ) : null}
     </div>
   );
@@ -458,13 +600,14 @@ function Clamp({ lines, className, label, children }: { lines: number; className
  * Codex closes an answer that drew on its memory with an `<oai-mem-citation>`
  * block of file ranges and rollout ids. Not prose: a quiet line naming the files.
  */
-const MEM_CITE = /<oai-mem-citation>([\s\S]*?)(?:<\/oai-mem-citation>|$)/g;
+const MEM_CITE = /(?:^|\n)[ \t]*<oai-mem-citation>\s*<citation_entries>([\s\S]*?)<\/citation_entries>[\s\S]*?(?:<\/oai-mem-citation>|(?![\s\S]))/g;
 
+/** The block is taken only whole and on a line of its own: prose that names
+ *  the tag (`<oai-mem-citation>` in backticks) is left as it is. */
 function citations(text: string): { text: string; cites: string[] } {
   if (!text.includes("<oai-mem-citation>")) return { text, cites: [] };
   const cites: string[] = [];
-  const rest = text.replace(MEM_CITE, (_, inner: string) => {
-    const entries = /<citation_entries>([\s\S]*?)<\/citation_entries>/.exec(inner)?.[1] ?? "";
+  const rest = text.replace(MEM_CITE, (_, entries: string) => {
     for (const line of entries.split("\n")) {
       const t = line.trim();
       if (t) cites.push(t);
@@ -547,10 +690,13 @@ function Steps({ rows, children }: { rows: Exclude<TimelineRow, { type: "steps" 
  * session; what it said opens in place. An idle notice that reported nothing
  * is one quiet line — a lead hears one every time a teammate's turn ends.
  */
-function MateRow({ mate, at }: { mate: MateMessage; at: number }) {
+function MateRow({ id, mate, at }: { id: string; mate: MateMessage; at: number }) {
   const [open, setOpen] = useState(false);
   const { byName, tab } = useFamily();
+  const local = useLocalAgents();
   const to = byName.get(mate.name) ?? null;
+  // Not a session: an agent started inside this one. Its name goes to where it started.
+  const started = !to ? local.names.get(mate.name) : undefined;
   const failed = mate.idle?.startsWith("failed") ?? false;
   const name = to && mate.name === "team-lead" ? `${titleOf(to)} (lead)` : mate.name;
   const who = (
@@ -558,6 +704,18 @@ function MateRow({ mate, at }: { mate: MateMessage; at: number }) {
       {to ? <StatusDot status={to.status} /> : <span className="tl-mate-swatch" aria-hidden="true" />}
       {to ? (
         <a href={hrefOf({ page: "session", id: to.id, tab })} title={`Open ${titleOf(to)}`} onClick={(e) => e.stopPropagation()}>
+          {name}
+        </a>
+      ) : started && started !== id ? (
+        <a
+          href={`#ev:${started}`}
+          title="An agent this session started; go to where it was started"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            local.jump(started);
+          }}
+        >
           {name}
         </a>
       ) : (
@@ -568,20 +726,20 @@ function MateRow({ mate, at }: { mate: MateMessage; at: number }) {
   const said = mate.summary ?? firstLine(mate.body);
   if (!mate.body) {
     return (
-      <div className={`tl-mate tl-mate-quiet${failed ? " is-failed" : ""}`} title={fmtClock(at)}>
+      <div className={`tl-mate tl-mate-quiet${failed ? " is-failed" : ""}`} title={fmtClock(at)} data-ev={id}>
         {who}
-        <span className="tl-mate-said">{mate.idle !== undefined ? (failed ? mate.idle.replace(/^failed: ?/, "stopped: ") : "is idle") : said}</span>
+        <span className="tl-mate-said">{mate.idle !== undefined ? (failed ? mate.idle.replace(/^failed: ?/, "stopped: ") : "is idle") : <Markdown inline text={said} />}</span>
         <Stamp at={at} />
       </div>
     );
   }
   return (
-    <div className={`tl-mate${failed ? " is-failed" : ""}`}>
+    <div className={`tl-mate${failed ? " is-failed" : ""}`} data-ev={id}>
       <button className="tl-mate-head" aria-expanded={open} onClick={() => setOpen(!open)} title={fmtClock(at)}>
         {who}
         <span className="tl-mate-said">
           {mate.idle !== undefined ? <span className="faint">finished · </span> : null}
-          {said}
+          <Markdown inline text={said} />
         </span>
         <Stamp at={at} />
         <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
@@ -607,7 +765,9 @@ function BtwCard({ btw }: { btw: Btw }) {
         {btw.source === "terminal" ? <span className="faint"> · in the terminal</span> : null}
         <time className="tl-time">{fmtClock(btw.askedAt)}</time>
       </div>
-      <div className="tl-btw-q">{btw.question}</div>
+      <div className="tl-btw-q">
+        <Markdown text={btw.question} />
+      </div>
       <div className="tl-btw-a">
         {btw.status === "asking" ? (
           <span className="faint">
@@ -658,11 +818,15 @@ function Thinking({ text, at, dur }: { text: string; at: number; dur?: number })
         <Icon.brain size={13} />
         <span className="tl-thinking-label">Thinking</span>
         {dur !== undefined ? <span className="tl-dur">{fmtDur(dur)}</span> : null}
-        <span className="tl-thinking-fill">{open ? null : firstLine(body, 400)}</span>
+        <span className="tl-thinking-fill">{open ? null : <Markdown inline text={firstLine(body, 400)} />}</span>
         <Stamp at={at} />
         <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
       </button>
-      {open ? <div className="tl-thinking-body">{body}</div> : null}
+      {open ? (
+        <div className="tl-thinking-body">
+          <Markdown text={body} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -719,7 +883,11 @@ const ToolRow = memo(function ToolRow({ ev, now }: { ev: ToolEvent; now: number 
           {running ? <Spinner size={11} /> : ev.status === "error" ? <Icon.x size={13} /> : <Icon.check size={13} />}
         </span>
         <span className="sx-tool-title">{ev.name}</span>
-        {ev.title ? <span className="sx-tool-desc">{ev.title}</span> : null}
+        {ev.title ? (
+          <span className="sx-tool-desc">
+            <Markdown inline text={ev.title} />
+          </span>
+        ) : null}
         <span className="sx-tool-sub">{shortCommand(ev.summary)}</span>
         <span className={`sx-tool-status ${ev.status}${slow ? " is-slow" : ""}`}>
           {running ? (now > 0 ? fmtDur(now - ev.at) : "running") : ev.status === "error" ? `error${ev.endedAt && ev.endedAt > ev.at ? ` · ${fmtDur(ev.endedAt - ev.at)}` : ""}` : typeof ev.endedAt === "number" && ev.endedAt > ev.at ? fmtDur(ev.endedAt - ev.at) : ""}

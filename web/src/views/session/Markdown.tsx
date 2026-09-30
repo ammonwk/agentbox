@@ -7,32 +7,68 @@ import { sessionRefs } from "../../lib/sessionrefs";
 import { PrBase } from "./prbase";
 import { SessionLinks, type SessionLinksValue } from "./sessionlinks";
 import { hrefOf, parseHash } from "../../route";
-import { useBoardSessions } from "./boardsessions";
+import { isLinkableName, useBoardSessions, useLocalAgents } from "./boardsessions";
+import { useFamily } from "./family";
 import { StatusDot } from "../../bits";
 import { titleOf } from "../../lib/board";
 
 /** Agent prose. External links open in a new tab: this page is a live
  *  terminal, and navigating away from it drops the attach. A link to another
  *  session stays here — it is the same page. */
-export function Markdown({ text }: { text: string }) {
+/** One line of it, inside something you click (a row's summary): no blocks,
+ *  and a click on a link inside is the link's, not the row's. */
+const BLOCKS = ["h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "hr", "table", "thead", "tbody", "tr", "th", "td"];
+const Inline = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
+
+export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);
   const board = useBoardSessions();
+  const { byName, tab } = useFamily();
+  const local = useLocalAgents();
+  // Names, not ids: the teammates around this session, and the agents it
+  // started inside itself. A session's own id is linked by the pass before.
+  const names = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const [n, id] of local.names) if (isLinkableName(n)) m.set(n, `#ev:${id}`);
+    for (const [n, s] of byName) if (isLinkableName(n) && s.id !== links.self) m.set(n, hrefOf({ page: "session", id: s.id, tab }));
+    return m;
+  }, [local.names, byName, tab, links.self]);
   const plugins = useMemo(
-    () => [remarkGfm, remarkFileRefs(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links)],
-    [base, links],
+    () => [remarkGfm, remarkFileRefs(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
+    [base, links, names],
   );
-  return (
-    <div className="sx-md">
+  const md = (
       <ReactMarkdown
         remarkPlugins={plugins}
+        disallowedElements={inline ? BLOCKS : undefined}
+        unwrapDisallowed={inline}
         components={{
+          ...(inline ? { p: Inline } : {}),
           a: ({ node: _node, children, href, ...rest }) => {
             if (href?.startsWith("fileref:")) {
               return (
                 <code className="sx-fileref" title={href.slice("fileref:".length)}>
                   {children}
                 </code>
+              );
+            }
+            if (href?.startsWith("#ev:")) {
+              const id = href.slice(4);
+              return (
+                <a
+                  {...rest}
+                  href={href}
+                  className="sx-agentlink"
+                  title="An agent this session started; go to where it was started"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    local.jump(id);
+                  }}
+                >
+                  {children}
+                </a>
               );
             }
             if (href?.startsWith("#/")) {
@@ -55,8 +91,15 @@ export function Markdown({ text }: { text: string }) {
       >
         {text}
       </ReactMarkdown>
-    </div>
   );
+  if (inline) {
+    return (
+      <span className="sx-md sx-md-inline" onClick={(e) => (e.target as HTMLElement).closest("a") && e.stopPropagation()}>
+        {md}
+      </span>
+    );
+  }
+  return <div className="sx-md">{md}</div>;
 }
 
 /** `#6307` in prose becomes a link to the PR. Code and existing links are
@@ -84,6 +127,19 @@ function remarkSessionLinks({ index, self }: SessionLinksValue) {
           .filter((r) => r.id !== self)
           .map((r) => ({ start: r.start, end: r.end, url: hrefOf({ page: "session", id: r.id, tab: "terminal" }) })),
       ),
+    );
+  };
+}
+
+/** A teammate or in-session agent named in prose — `relexec`, bare or in
+ *  backticks — becomes a link: to its session, or to where it was started. */
+function remarkNameLinks(names: ReadonlyMap<string, string>) {
+  if (names.size === 0) return () => () => {};
+  const alt = [...names.keys()].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`(?<![\\w/.@#-])(?:${alt.join("|")})(?![\\w-]|\\.\\w)`, "g");
+  return () => (tree: Root) => {
+    rewrite(tree, true, (text, code) =>
+      splitRefs(text, code, (t) => [...t.matchAll(re)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, url: names.get(m[0])! }))),
     );
   };
 }
