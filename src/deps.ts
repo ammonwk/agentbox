@@ -67,7 +67,41 @@ function probeGit(): DepStatus {
   return { state: "ok", detail: r.said.split("\n")[0]?.trim() || "installed" };
 }
 
+/** What `gh auth status --json hosts` says of one account. */
+interface GhAuthEntry {
+  state?: string;
+  error?: string;
+  login?: string;
+}
+
 export function probeGh(): DepStatus {
+  // The JSON form, because it is the only one that tells a token GitHub
+  // refused from a GitHub that could not be reached: offline, the text form
+  // calls every token "invalid", so a laptop waking up read as logged out.
+  const res = run(["gh", "auth", "status", "--active", "--hostname", "github.com", "--json", "hosts"]);
+  let hosts: Record<string, GhAuthEntry[]> | undefined;
+  try {
+    hosts = (JSON.parse(res.stdout) as { hosts?: Record<string, GhAuthEntry[]> }).hosts;
+  } catch {
+    // A gh too old for --json (or --active) says so here; ask it the old way.
+    return probeGhText();
+  }
+  const entry = hosts?.["github.com"]?.[0];
+  if (!entry) {
+    return { state: "unusable", detail: "gh is installed but not authenticated — run `gh auth login`. Pull requests are invisible until you do." };
+  }
+  if (entry.state === "success") {
+    return { state: "ok", detail: entry.login ? `authenticated as ${entry.login}` : "authenticated" };
+  }
+  if (/\b401\b|bad credentials/i.test(entry.error ?? "")) {
+    return { state: "unusable", detail: "gh's token was refused by GitHub — run `gh auth login`. Pull requests are invisible until you do." };
+  }
+  // No answer, or not one about the token: it is logged in, just unchecked.
+  // A token that turns out bad is the pull request sync's warning to raise.
+  return { state: "ok", detail: `logged in${entry.login ? ` as ${entry.login}` : ""}; GitHub did not answer, so the token is unchecked` };
+}
+
+function probeGhText(): DepStatus {
   const r = attempt(["gh", "auth", "status"]);
   if (r.absent) {
     return { state: "missing", detail: "gh is not installed — pull request data will be empty (cli.github.com)" };

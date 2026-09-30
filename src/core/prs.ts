@@ -18,6 +18,9 @@
  *   - Closed and merged history, which only the worktree scan wants, walked
  *     oldest first a few pages a minute, and only while the hour has room.
  *   - Rate-limited, it stops until the reset GitHub gives.
+ *   - Unreachable — offline, a laptop waking or changing networks, GitHub
+ *     itself down — it stops for the minute, and says so in one line only
+ *     once that has lasted five minutes the machine was awake for.
  */
 
 import {
@@ -48,6 +51,13 @@ const HISTORY_PAGES_PER_SYNC = 5;
 /** The history walk waits while fewer requests than this are left in the
  *  hour: the rest are the agents'. */
 const RESERVE = 1500;
+/** How long GitHub may not answer before the board says so. Waking up or
+ *  changing networks is back well within it, and a copy a few minutes
+ *  behind costs nothing. */
+const UNREACHABLE_GRACE_MS = 5 * 60_000;
+/** A longer gap between two failed tries than this is the machine asleep,
+ *  not GitHub down: the grace starts again from the first try after it. */
+const ASLEEP_GAP_MS = 3 * 60_000;
 
 /**
  * What GitHub thinks of a branch, closed and merged PRs included. Reclaiming
@@ -107,14 +117,41 @@ export function branchStatesOf(repo: string): Map<string, PrState> | null {
   return out;
 }
 
-/** Why the copy may be behind: one line per repo, or one for `gh` itself. */
+/** Why the copy may be behind: one line per repo, or one for `gh` itself,
+ *  or one for GitHub not answering at all. */
 export function prWarnings(): string[] {
-  return [...new Set(errors.values())];
+  return [...(outage.shown() ? ["Cannot reach GitHub — retrying every minute; pull requests catch up once it answers."] : []), ...new Set(errors.values())];
 }
 
 // ---------------------------------------------------------------- syncing
 
 const errors = new Map<string, string>();
+
+/** A stretch of GitHub not answering, measured in time the machine was awake. */
+export class Outage {
+  /** The stretch's first failed try, and its latest; null while GitHub answers. */
+  private since: number | null = null;
+  private at = 0;
+
+  /** A try that got no answer; true when it starts a new stretch. */
+  fail(now: number): boolean {
+    const fresh = this.since === null || now - this.at > ASLEEP_GAP_MS;
+    if (fresh) this.since = now;
+    this.at = now;
+    return fresh;
+  }
+
+  answered(): void {
+    this.since = null;
+  }
+
+  /** Only moves when a try does, so a caller comparing before and after sees every change. */
+  shown(): boolean {
+    return this.since !== null && this.at - this.since >= UNREACHABLE_GRACE_MS;
+  }
+}
+
+const outage = new Outage();
 let syncing: Promise<boolean> | null = null;
 let again = false;
 
@@ -144,12 +181,19 @@ async function syncAll(): Promise<boolean> {
   for (const slug of errors.keys()) {
     if (!repos.has(slug)) changed = errors.delete(slug) || changed;
   }
+  const shown = outage.shown();
   for (const [slug, registered] of repos) {
     if (Date.now() < pausedUntil) break;
     try {
       changed = (await syncRepo(slug, registered)) || changed;
       changed = errors.delete(slug) || changed;
+      outage.answered();
     } catch (e) {
+      if (e instanceof Unreachable) {
+        if (outage.fail(Date.now())) console.error(`agentbox: pull requests: GitHub is not answering: ${e.message}`);
+        // Every other repo would fail the same way; the next minute tries again.
+        break;
+      }
       const message = (e as Error).message;
       const scoped = message.startsWith("`gh`") ? message : `Could not bring ${slug}'s pull requests up to date: ${message}`;
       if (errors.get(slug) !== scoped) {
@@ -158,7 +202,7 @@ async function syncAll(): Promise<boolean> {
       }
     }
   }
-  return changed;
+  return outage.shown() !== shown || changed;
 }
 
 async function syncRepo(slug: string, registered: boolean): Promise<boolean> {
@@ -285,6 +329,9 @@ let pausedUntil = 0;
 let remaining = Infinity;
 let token: string | null = null;
 
+/** GitHub did not answer, or answered that it is down: nothing about the repo. */
+class Unreachable extends Error {}
+
 /** `gh`'s token, so the sync counts against the same login the agents use
  *  and needs no setup of its own. */
 async function ghToken(): Promise<string> {
@@ -300,19 +347,23 @@ async function ghToken(): Promise<string> {
 
 /** What GitHub answers, or null when it has not changed since `etag`. */
 async function get<T>(path: string, etag?: string | null): Promise<{ body: T; etag: string | null } | null> {
+  const auth = `Bearer ${await ghToken()}`;
+  const unreachable = (e: unknown): never => {
+    throw new Unreachable((e as Error).message);
+  };
   const res = await fetch(API + path, {
     headers: {
-      Authorization: `Bearer ${await ghToken()}`,
+      Authorization: auth,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       ...(etag ? { "If-None-Match": etag } : {}),
     },
     signal: AbortSignal.timeout(60_000),
-  });
+  }).catch(unreachable);
   const left = res.headers.get("x-ratelimit-remaining");
   if (left !== null) remaining = Number(left);
   if (res.status === 304) return null;
-  if (res.ok) return { body: (await res.json()) as T, etag: res.headers.get("etag") };
+  if (res.ok) return { body: (await res.json().catch(unreachable)) as T, etag: res.headers.get("etag") };
   if (res.status === 401) {
     token = null;
     throw new Error("`gh` is not authenticated — run `gh auth login`");
@@ -324,5 +375,6 @@ async function get<T>(path: string, etag?: string | null): Promise<{ body: T; et
     throw new Error(`GitHub's rate limit is used up; catching up after ${new Date(pausedUntil).toLocaleTimeString()}`);
   }
   if (res.status === 404) throw new Error("GitHub has no such repo, or this login cannot see it");
+  if (res.status >= 500) throw new Unreachable(`GitHub answered ${res.status} ${res.statusText}`);
   throw new Error(`GitHub answered ${res.status} ${res.statusText}`);
 }
