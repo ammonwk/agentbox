@@ -312,6 +312,8 @@ function AttachmentStrip({ a }: { a: Attachments }) {
 /** Full size, over everything; Escape or a click anywhere closes it — and
  *  only it, not the dialog underneath. */
 export function Lightbox({ src, label, onClose }: { src: string; label: string; onClose: () => void }) {
+  // An agent's path can name a file that is gone, or never was an image.
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -335,7 +337,7 @@ export function Lightbox({ src, label, onClose }: { src: string; label: string; 
         onClose();
       }}
     >
-      <img src={src} alt={label} />
+      {failed ? <span className="att-lightbox-err">Could not open {label}: it is gone, or not an image.</span> : <img src={src} alt={label} onError={() => setFailed(true)} />}
       <span className="att-lightbox-cap">{label} · Esc to close</span>
     </div>,
     document.body,

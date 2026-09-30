@@ -14,6 +14,7 @@ import { titleOf } from "../../lib/board";
 import { Icon } from "../../components";
 import { Lightbox } from "../../attachments";
 import { shownImageUrl } from "../../api";
+import { ImagePath, imagePathRefs, isImagePath } from "./imagepaths";
 
 /** Agent prose. External links open in a new tab: this page is a live
  *  terminal, and navigating away from it drops the attach. A link to another
@@ -38,7 +39,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
     return m;
   }, [local.names, byName, tab, links.self]);
   const plugins = useMemo(
-    () => [remarkGfm, remarkFileRefs(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
+    () => [remarkGfm, remarkFileRefs(), remarkImagePaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
     [base, links, names],
   );
   const md = (
@@ -46,12 +47,21 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
         remarkPlugins={plugins}
         disallowedElements={inline ? BLOCKS : undefined}
         unwrapDisallowed={inline}
-        urlTransform={keepFileImages}
+        urlTransform={keepOurUrls}
         components={{
           ...(inline ? { p: Inline } : {}),
           img: inline ? ShownImageChip : ShownImage,
           a: ({ node: _node, children, href, ...rest }) => {
+            if (href?.startsWith("imgpath:")) return <ImagePath path={href.slice("imgpath:".length)}>{children}</ImagePath>;
             if (href?.startsWith("fileref:")) {
+              const file = href.slice("fileref:".length);
+              if (isImagePath(file)) {
+                return (
+                  <ImagePath path={file}>
+                    <code className="sx-fileref">{children}</code>
+                  </ImagePath>
+                );
+              }
               return (
                 <code className="sx-fileref" title={href.slice("fileref:".length)}>
                   {children}
@@ -107,9 +117,11 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
   return <div className="sx-md">{md}</div>;
 }
 
-/** `file://` is not a scheme react-markdown lets through, but it is one way
- *  an agent names the image it is showing you. */
-function keepFileImages(url: string, key: string): string {
+/** react-markdown blanks any URL whose scheme it does not know, which would
+ *  blank the links the passes here make (`fileref:`, `imgpath:`) and an image
+ *  named by `file://`, one way an agent shows you one. */
+function keepOurUrls(url: string, key: string): string {
+  if (/^(?:fileref|imgpath):/.test(url)) return url;
   return key === "src" && url.startsWith("file://") ? url : defaultUrlTransform(url);
 }
 
@@ -177,6 +189,16 @@ function remarkPrLinks(base: string) {
         if (refs.length === 0) return [];
         return refs.map((r) => ({ start: r.start, end: r.end, url: prUrl(base, r.number) }));
       }),
+    );
+  };
+}
+
+/** A path to an image in prose — `/tmp/shot.png`, bare or in backticks —
+ *  opens it. Runs before the session links: a worktree's path can hold one. */
+function remarkImagePaths() {
+  return () => (tree: Root) => {
+    rewrite(tree, true, (text, code) =>
+      splitRefs(text, code, (t) => imagePathRefs(t).map((r) => ({ start: r.start, end: r.end, url: `imgpath:${r.path}` }))),
     );
   };
 }

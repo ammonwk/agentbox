@@ -18,6 +18,7 @@ import { titleOf } from "../../lib/board";
 import { hrefOf } from "../../route";
 import { readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
+import { WithImagePaths } from "./imagepaths";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -928,7 +929,9 @@ const ToolRow = memo(function ToolRow({ ev, now }: { ev: ToolEvent; now: number 
             <Markdown inline text={ev.title} />
           </span>
         ) : null}
-        <span className="sx-tool-sub">{shortCommand(ev.summary)}</span>
+        <span className="sx-tool-sub">
+          <WithImagePaths text={shortCommand(ev.summary)} />
+        </span>
         <span className={`sx-tool-status ${ev.status}${slow ? " is-slow" : ""}`}>
           {running ? (now > 0 ? fmtDur(now - ev.at) : "running") : ev.status === "error" ? `error${ev.endedAt && ev.endedAt > ev.at ? ` · ${fmtDur(ev.endedAt - ev.at)}` : ""}` : typeof ev.endedAt === "number" && ev.endedAt > ev.at ? fmtDur(ev.endedAt - ev.at) : ""}
         </span>
@@ -987,7 +990,9 @@ function Field({ f }: { f: InputField }) {
         ) : f.kind === "block" ? (
           <pre className="sx-pre">{f.text}</pre>
         ) : (
-          <code className="sx-inline">{f.text}</code>
+          <code className="sx-inline">
+            <WithImagePaths text={f.text} />
+          </code>
         )}
       </dd>
     </>

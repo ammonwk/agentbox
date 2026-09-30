@@ -2183,6 +2183,13 @@ kbd {
   border-radius: 8px;
   box-shadow: 0 20px 60px rgb(0 0 0 / 0.5);
 }
+.att-lightbox-err {
+  padding: 14px 18px;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.6);
+  color: rgb(255 255 255 / 0.85);
+  font-size: 13px;
+}
 .att-lightbox-cap {
   position: absolute;
   bottom: 16px;
