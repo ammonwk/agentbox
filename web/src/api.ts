@@ -275,12 +275,25 @@ export interface Connection {
    * every time it is opened; one drop that the next attempt heals is not news.
    */
   failing: boolean;
+  /**
+   * The server said it was restarting (a `restarting` frame, or a close with
+   * 1012): expected downtime, retried every `RESTART_RETRY_MS` rather than
+   * backed off, and not an alarm.
+   */
+  restarting: boolean;
+  /** Connected, but the server is still reading transcripts after a start:
+   *  what is on screen is from before, until the first hot frame. */
+  starting: { read: number; of: number } | null;
 }
 
 const BACKOFF_MIN = 500;
 const BACKOFF_MAX = 15_000;
 const HEARTBEAT_MS = 25_000;
 const GRACE_MS = 3_000;
+/** A restart takes seconds; a minute or more on a cold start. Past this, the
+ *  normal backoff takes over again. */
+const RESTART_RETRY_MS = 500;
+const RESTART_WINDOW_MS = 3 * 60_000;
 
 /** Exponential with jitter: many tabs, one server. Exported for the terminal socket. */
 export function backoffMs(attempts: number): number {
@@ -297,7 +310,9 @@ class Wire {
   private mockStarted = false;
   private messageListeners = new Set<(m: ServerMessage) => void>();
   private statusListeners = new Set<() => void>();
-  private status: Connection = { connected: false, downSince: null, retryAt: null, attempts: 0, lastError: null, failing: false };
+  private status: Connection = { connected: false, downSince: null, retryAt: null, attempts: 0, lastError: null, failing: false, restarting: false, starting: null };
+  /** Until when a drop is a restart the server announced. */
+  private restartUntil = 0;
   /** The single session subscription, replayed verbatim after a reconnect. */
   private watching: string | null = null;
 
@@ -381,6 +396,7 @@ class Wire {
     ws.onopen = () => {
       if (this.grace) clearTimeout(this.grace);
       this.grace = null;
+      this.restartUntil = 0;
       this.setStatus(UP);
       // The server replays hot, cold and metrics on connect; we only restate
       // the watch, and the server answers it with a fresh `reset` frame.
@@ -399,6 +415,9 @@ class Wire {
       }
       if (msg.type === "error") this.setStatus({ lastError: msg.message });
       else if (msg.type === "build") noteServerBuild(msg.entry);
+      else if (msg.type === "restarting") this.restartUntil = Date.now() + RESTART_WINDOW_MS;
+      else if (msg.type === "starting") this.setStatus({ starting: { read: msg.read, of: msg.of } });
+      else if (msg.type === "hot" && this.status.starting) this.setStatus({ starting: null });
       this.emit(msg);
     };
 
@@ -407,22 +426,28 @@ class Wire {
       this.setStatus({ lastError: "connection error" });
     };
 
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       if (this.ws !== ws) return; // superseded by a newer socket
       this.ws = null;
       if (this.heartbeat) clearInterval(this.heartbeat);
       this.heartbeat = null;
+      if (e.code === 1012) this.restartUntil = Date.now() + RESTART_WINDOW_MS;
       const attempts = this.status.attempts + 1;
+      // A restart the server announced: back in seconds, so ask often and
+      // raise no alarm. Past its window it is down like any other.
+      const restarting = Date.now() < this.restartUntil;
       // The first drop retries at once: it is nearly always a socket the OS
       // closed while the page was in the background, and the server is fine.
-      const delay = attempts === 1 ? 0 : backoffMs(attempts - 1);
-      if (attempts === 1) this.grace = setTimeout(() => this.setStatus({ failing: true }), GRACE_MS);
+      const delay = restarting ? RESTART_RETRY_MS : attempts === 1 ? 0 : backoffMs(attempts - 1);
+      if (attempts === 1 && !restarting) this.grace = setTimeout(() => this.setStatus({ failing: true }), GRACE_MS);
       this.setStatus({
         connected: false,
         downSince: this.status.downSince ?? Date.now(),
         retryAt: Date.now() + delay,
         attempts,
-        failing: this.status.failing || attempts > 1,
+        failing: !restarting && (this.status.failing || attempts > 1),
+        restarting,
+        starting: null,
       });
       this.timer = setTimeout(() => {
         this.timer = null;
@@ -432,7 +457,7 @@ class Wire {
   }
 }
 
-const UP = { connected: true, downSince: null, retryAt: null, attempts: 0, lastError: null, failing: false } as const;
+const UP = { connected: true, downSince: null, retryAt: null, attempts: 0, lastError: null, failing: false, restarting: false, starting: null } as const;
 
 const wire = new Wire();
 if (typeof document !== "undefined") {

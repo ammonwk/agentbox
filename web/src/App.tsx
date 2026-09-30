@@ -349,8 +349,20 @@ function UpdateReady() {
 }
 
 function ConnectionChip() {
-  const { connected, downSince, failing } = useConnection();
-  const label = connected ? (MOCK ? "Mock data" : "Live") : failing ? "Offline" : downSince ? "Reconnecting…" : "Connecting…";
+  const { connected, downSince, failing, restarting, starting } = useConnection();
+  const label = connected
+    ? starting
+      ? "Starting…"
+      : MOCK
+        ? "Mock data"
+        : "Live"
+    : restarting
+      ? "Restarting…"
+      : failing
+        ? "Offline"
+        : downSince
+          ? "Reconnecting…"
+          : "Connecting…";
   return (
     <div className={`conn ${connected ? "on" : failing ? "off" : ""}`} title={`Connection: ${label}`} role="status">
       <span className="dot" aria-hidden="true" />
@@ -361,8 +373,29 @@ function ConnectionChip() {
 
 /** The app keeps rendering the last state it had; this says so out loud. */
 function StaleBanner() {
-  const { connected, downSince, retryAt, attempts, lastError, failing, retryNow } = useConnection();
+  const { connected, downSince, retryAt, attempts, lastError, failing, restarting, starting, retryNow } = useConnection();
   const secs = useCountdown(retryAt);
+  // Down on purpose: a restart the server announced, then its first read of
+  // the transcripts. Expected, and over in seconds, so no alarm.
+  if (connected && starting) {
+    return (
+      <Banner tone="warn" icon={Icon.clock}>
+        <span>
+          <strong>agentbox is starting.</strong> Reading transcripts
+          {starting.of > 0 ? ` (${starting.read} of ${starting.of})` : ""}; what you see is from before the restart until it is done.
+        </span>
+      </Banner>
+    );
+  }
+  if (!connected && restarting) {
+    return (
+      <Banner tone="warn" icon={Icon.refresh}>
+        <span>
+          <strong>agentbox is restarting…</strong> Reconnecting as soon as it is back; what you see is from before the restart.
+        </span>
+      </Banner>
+    );
+  }
   if (connected || downSince === null || !failing) return null;
   const downFor = Math.round((Date.now() - downSince) / 1000);
   return (
@@ -392,7 +425,7 @@ function Banner({ tone, icon: IconCmp, children }: { tone: "warn" | "danger"; ic
 
 /** Before the first state arrives: probe /api/health rather than hang on "Connecting…". */
 function Bootstrapping() {
-  const { connected } = useConnection();
+  const { connected, starting } = useConnection();
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
@@ -423,6 +456,15 @@ function Bootstrapping() {
         <p>
           Start it with <code>bun run dev</code> in the agentbox checkout, then reload. To look around
           without one, open this page with <code>?mock=1</code>.
+        </p>
+      </Empty>
+    );
+  }
+  if (connected && starting) {
+    return (
+      <Empty title="agentbox is starting…">
+        <p>
+          Reading transcripts{starting.of > 0 ? ` (${starting.read} of ${starting.of})` : ""}. Your sessions appear when it is done.
         </p>
       </Empty>
     );
