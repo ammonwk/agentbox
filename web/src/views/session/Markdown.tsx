@@ -1,5 +1,5 @@
-import { useContext, useMemo } from "react";
-import ReactMarkdown from "react-markdown";
+import { useContext, useMemo, useState } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Parent, PhrasingContent, Root, RootContent } from "mdast";
 import { prRefs, prUrl } from "../../lib/prlinks";
@@ -11,6 +11,9 @@ import { isLinkableName, useBoardSessions, useLocalAgents } from "./boardsession
 import { useFamily } from "./family";
 import { StatusDot } from "../../bits";
 import { titleOf } from "../../lib/board";
+import { Icon } from "../../components";
+import { Lightbox } from "../../attachments";
+import { shownImageUrl } from "../../api";
 
 /** Agent prose. External links open in a new tab: this page is a live
  *  terminal, and navigating away from it drops the attach. A link to another
@@ -43,8 +46,10 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
         remarkPlugins={plugins}
         disallowedElements={inline ? BLOCKS : undefined}
         unwrapDisallowed={inline}
+        urlTransform={keepFileImages}
         components={{
           ...(inline ? { p: Inline } : {}),
+          img: ({ src, alt }) => <ShownImage src={typeof src === "string" ? src : ""} alt={alt ?? ""} session={links.self} inline={inline} />,
           a: ({ node: _node, children, href, ...rest }) => {
             if (href?.startsWith("fileref:")) {
               return (
@@ -100,6 +105,50 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
     );
   }
   return <div className="sx-md">{md}</div>;
+}
+
+/** `file://` is not a scheme react-markdown lets through, but it is one way
+ *  an agent names the image it is showing you. */
+function keepFileImages(url: string, key: string): string {
+  return key === "src" && url.startsWith("file://") ? url : defaultUrlTransform(url);
+}
+
+/** An image in agent prose. A web address loads as it is; anything else is a
+ *  file on this machine, which the server reads (`/api/sessions/:id/image`).
+ *  Big ones are shown shrunk, and a click opens them full size. A file gone
+ *  since — or a one-line summary, which has no room — is a chip naming it. */
+function ShownImage({ src, alt, session, inline }: { src: string; alt: string; session: string | null; inline?: boolean }) {
+  const [broken, setBroken] = useState(false);
+  const [open, setOpen] = useState(false);
+  const web = /^https?:\/\//i.test(src);
+  const path = web ? src : safeDecode(src);
+  const url = web ? src : session && path ? shownImageUrl(session, path) : null;
+  const label = alt || path.split("/").pop() || "image";
+  if (!url || broken || inline) {
+    return (
+      <code className="sx-fileref sx-img-chip" title={broken ? `Could not load ${path}` : path}>
+        <Icon.image size={11} /> {label}
+      </code>
+    );
+  }
+  return (
+    <span className="sx-img">
+      <button type="button" className="sx-img-btn" title={`${path} · click for full size`} onClick={() => setOpen(true)}>
+        <img src={url} alt={alt} loading="lazy" onError={() => setBroken(true)} />
+      </button>
+      {alt ? <span className="sx-img-cap">{alt}</span> : null}
+      {open ? <Lightbox src={url} label={label} onClose={() => setOpen(false)} /> : null}
+    </span>
+  );
+}
+
+/** Markdown percent-encodes a path written in `<…>`; the file has the plain name. */
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }
 
 /** `#6307` in prose becomes a link to the PR. Code and existing links are

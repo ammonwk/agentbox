@@ -304,14 +304,14 @@ function AttachmentStrip({ a }: { a: Attachments }) {
           </button>
         </div>
       ))}
-      {preview ? <Lightbox att={preview} onClose={() => setPreview(null)} /> : null}
+      {preview ? <Lightbox src={preview.url} label={`Image #${preview.n}`} onClose={() => setPreview(null)} /> : null}
     </div>
   );
 }
 
 /** Full size, over everything; Escape or a click anywhere closes it — and
  *  only it, not the dialog underneath. */
-function Lightbox({ att, onClose }: { att: Attachment; onClose: () => void }) {
+export function Lightbox({ src, label, onClose }: { src: string; label: string; onClose: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -328,15 +328,15 @@ function Lightbox({ att, onClose }: { att: Attachment; onClose: () => void }) {
     <div
       className="att-lightbox"
       role="dialog"
-      aria-label={`Image #${att.n}`}
+      aria-label={label}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
         onClose();
       }}
     >
-      <img src={att.url} alt={`Image #${att.n}`} />
-      <span className="att-lightbox-cap">Image #{att.n} · Esc to close</span>
+      <img src={src} alt={label} />
+      <span className="att-lightbox-cap">{label} · Esc to close</span>
     </div>,
     document.body,
   );

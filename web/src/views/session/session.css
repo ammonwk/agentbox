@@ -1585,6 +1585,12 @@ a.tl-sender:hover .tl-sender-name {
 .sx-md th, .sx-md td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; vertical-align: top; }
 .sx-md th { background: var(--sunken); font-weight: 600; white-space: nowrap; }
 .sx-md img { max-width: 100%; }
+/* An image the agent showed: shrunk to fit, full size on a click. */
+.sx-md .sx-img { display: block; margin: 4px 0 10px; }
+.sx-md .sx-img-btn { display: inline-block; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--sunken); cursor: zoom-in; overflow: hidden; max-width: 100%; }
+.sx-md .sx-img-btn img { display: block; max-width: 100%; max-height: 420px; object-fit: contain; }
+.sx-md .sx-img-cap { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.sx-md code.sx-img-chip { display: inline-flex; align-items: center; gap: 4px; }
 
 /* -------------------------------------------------------------------- diff */
 

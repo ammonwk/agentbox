@@ -142,6 +142,11 @@ async function upload(file: Blob): Promise<Upload> {
 
 export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComponent(name)}`;
 
+/** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
+ *  is the session's directory's. */
+export const shownImageUrl = (sessionId: string, path: string): string =>
+  `/api/sessions/${encodeURIComponent(sessionId)}/image?path=${encodeURIComponent(path)}`;
+
 /**
  * `GET /api/health` as Diagnostics rows: the probed dependencies first, then
  * the provider CLIs. A provider is only ever found or not — its probe is
