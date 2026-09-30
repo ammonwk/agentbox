@@ -4,6 +4,8 @@
  * seconds to; until then the composer's echo stands in, marked as sending.
  */
 
+import { dropPasteTags } from "../../../../src/core/sent";
+
 export interface Echo {
   sessionId: string;
   text: string;
@@ -24,7 +26,9 @@ export function onEcho(fn: (e: Echo) => void): () => void {
   return () => removeEventListener(EVENT, h);
 }
 
-const norm = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 80);
+// Claude records a long or many-lined send wrapped in `<pasted_content>`
+// (it arrives through tmux as a paste); the echo has no wrapper.
+const norm = (s: string) => dropPasteTags(s).replace(/\s+/g, " ").trim().slice(0, 80);
 
 /** Whether the transcript now has the message an echo stands for. */
 export function landed(echo: Echo, users: readonly { text: string; at: number }[]): boolean {
