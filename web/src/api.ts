@@ -448,10 +448,55 @@ export function useConnection(): Connection & { retryNow: () => void } {
 
 // -------------------------------------------------------------- app state
 
+/**
+ * The state a page had when it went away, for the reload that follows to paint
+ * at once rather than show "Connecting…" until the server answers. lib/update.ts
+ * reloads a page on a stale build as you open another session, and a flash of
+ * the empty app there is jarring. Kept seconds, not minutes: past that it is a
+ * tab reopened later, and old sessions are worse than a moment's wait.
+ */
+const CARRY_KEY = "agentbox:state";
+const CARRY_MAX_AGE_MS = 10_000;
+
+interface Carried {
+  at: number;
+  hot: HotState;
+  cold: ColdState;
+}
+
+/** Read once and dropped, so only the reload right after it sees it. */
+const carried: Carried | null = (() => {
+  if (MOCK || typeof sessionStorage === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(CARRY_KEY);
+    sessionStorage.removeItem(CARRY_KEY);
+    const c = raw ? (JSON.parse(raw) as Carried) : null;
+    return c && Date.now() - c.at < CARRY_MAX_AGE_MS ? c : null;
+  } catch {
+    return null;
+  }
+})();
+
+let latest: { hot: HotState; cold: ColdState } | null = null;
+if (!MOCK && typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    if (!latest) return;
+    try {
+      sessionStorage.setItem(CARRY_KEY, JSON.stringify({ at: Date.now(), ...latest } satisfies Carried));
+    } catch {
+      /* over the storage quota: the next load waits on the server, as it always did. */
+    }
+  });
+}
+
 export function useAppState(): { state: AppState | null; connected: boolean } {
-  const [hot, setHot] = useState<HotState | null>(null);
-  const [cold, setCold] = useState<ColdState | null>(null);
+  const [hot, setHot] = useState<HotState | null>(carried?.hot ?? null);
+  const [cold, setCold] = useState<ColdState | null>(carried?.cold ?? null);
   const { connected } = useConnection();
+
+  useEffect(() => {
+    latest = hot && cold ? { hot, cold } : null;
+  }, [hot, cold]);
 
   useEffect(
     () =>
@@ -462,16 +507,17 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
     [],
   );
 
-  // Seed over HTTP so a first paint does not wait on the socket handshake.
+  // Seed over HTTP so a first paint does not wait on the socket handshake. It
+  // replaces a carried snapshot, but never a frame the socket already sent.
   useEffect(() => {
     let cancelled = false;
     api.state().then(
       (s) => {
         if (cancelled) return;
-        setHot((prev) => prev ?? { sessions: s.sessions, serverTime: s.serverTime });
+        setHot((prev) => (prev && prev !== carried?.hot ? prev : { sessions: s.sessions, serverTime: s.serverTime }));
         setCold(
           (prev) =>
-            prev ?? {
+            prev && prev !== carried?.cold ? prev : {
               accounts: s.accounts,
               logins: s.logins,
               repos: s.repos,
