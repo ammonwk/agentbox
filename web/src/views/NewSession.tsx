@@ -4,6 +4,7 @@ import { parseWhen } from "../../../src/core/schedule";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
 import { AttachButton, useAttachments } from "../attachments";
+import { promptHistory } from "../lib/prompthistory";
 import { Button, Icon, Modal } from "../components";
 import {
   loadPrefs,
@@ -81,6 +82,7 @@ export function NewSession({
   const [wtText, setWtText] = useState("");
   const [path, setPath] = useState(prefs.path ?? "");
   const [prompt, setPrompt] = useState(prefs.draft ?? "");
+  const history = useMemo(() => promptHistory(state.sessions), [state.sessions]);
   const [big, setBig] = useState(prefs.big ?? false);
   const [perProvider, setPerProvider] = useState(prefs.perProvider ?? {});
   const model = perProvider[provider]?.model ?? "";
@@ -482,7 +484,7 @@ export function NewSession({
           <label className="field-head ns-prompt-head" htmlFor="ns-prompt">
             <span className="field-label">Prompt</span>
             <span className="field-hint">
-              {mode === "schedule" ? "Needed to schedule." : "Optional."} <kbd>/</kbd> for skills{skills.length ? ` (${skills.length})` : ""}, paste images.
+              {mode === "schedule" ? "Needed to schedule." : "Optional."} <kbd>/</kbd> for skills{skills.length ? ` (${skills.length})` : ""}, <kbd>↑</kbd> for history when empty, paste images.
               <AttachButton a={images} />
               {prompt ? (
                 <button type="button" className="ns-linkbtn" onClick={() => setPrompt("")}>
@@ -491,7 +493,7 @@ export function NewSession({
               ) : null}
             </span>
           </label>
-          <PromptBox id="ns-prompt" value={prompt} onChange={setPrompt} skills={skills} textareaRef={promptRef} attachments={images} onSubmit={() => void submit()} />
+          <PromptBox id="ns-prompt" value={prompt} onChange={setPrompt} skills={skills} history={history} textareaRef={promptRef} attachments={images} onSubmit={() => void submit()} />
         </div>
 
         <div className="field">
