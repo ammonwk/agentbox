@@ -1665,6 +1665,14 @@ a.sx-imgpath:hover { color: var(--accent); }
   gap: 7px;
   align-items: flex-end;
 }
+.cmp-navigation {
+  display: flex;
+  flex: none;
+  gap: 7px;
+}
+.cmp-navigation .cmp-phone-key {
+  display: none;
+}
 .cmp textarea {
   flex: 1;
   min-height: 36px;
@@ -2207,6 +2215,11 @@ a.sx-imgpath:hover { color: var(--accent); }
   }
   .cmp-row > .btn.cmp-aux {
     margin-left: auto;
+  }
+  .cmp-navigation .cmp-phone-key {
+    display: inline-flex;
+    min-width: 40px;
+    padding: 0 10px;
   }
   .cmp-hint {
     display: -webkit-box;

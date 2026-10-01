@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
 import { ago, api, fmtTokens, useBtw } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
@@ -45,11 +45,12 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * the box is replaced by the Adopt explanation. `/` completes the skills the
  * session can run, as in the new-session prompt.
  */
-export function Composer({ session, accounts, claimIdleMin, skills }: {
+export function Composer({ session, accounts, claimIdleMin, skills, textareaRef }: {
   session: Session;
   accounts: readonly AccountView[];
   claimIdleMin: number;
   skills: readonly SkillInfo[];
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   // The draft left here last time (the composer is keyed by session, so this
   // is read once per session). Sending clears it again.
@@ -57,7 +58,7 @@ export function Composer({ session, accounts, claimIdleMin, skills }: {
   const [text, setText] = useState(draft?.text ?? "");
   const { run, busy, error, clear } = useAction();
   const mode = composerMode(session);
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const ref = textareaRef;
   const provider = PROVIDER_LABEL[session.provider];
   const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images });
   const skill = useSkillComplete({ value: text, onChange: setText, skills, textareaRef: ref });
@@ -224,21 +225,35 @@ export function Composer({ session, accounts, claimIdleMin, skills }: {
             >
               <span className="cmp-go-label">Send</span>
             </Button>
-            <Button
-              className="cmp-aux"
-              title={
-                escTakesCard
-                  ? "Puts the side question's card away; a panel still up in the pane closes with it"
-                  : "Press Escape in the session — cancels the current prompt or menu"
-              }
-              disabled={busy}
-              onClick={() => {
-                if (escTakesCard) for (const b of openCards) void api.btwDismiss(session.id, b.id).catch(() => {});
-                else void run(() => api.keys(session.id, ["Escape"]));
-              }}
-            >
-              Esc
-            </Button>
+            <div className="cmp-aux cmp-navigation">
+              <Button
+                className="cmp-aux"
+                title={
+                  escTakesCard
+                    ? "Puts the side question's card away; a panel still up in the pane closes with it"
+                    : "Press Escape in the session — cancels the current prompt or menu"
+                }
+                disabled={busy}
+                onClick={() => {
+                  if (escTakesCard) for (const b of openCards) void api.btwDismiss(session.id, b.id).catch(() => {});
+                  else void run(() => api.keys(session.id, ["Escape"]));
+                }}
+              >
+                Esc
+              </Button>
+              {(["Up", "Down", "Enter"] as const).map((key) => (
+                <Button
+                  key={key}
+                  className="cmp-phone-key"
+                  title={`Press ${key} in the session`}
+                  aria-label={`Press ${key} in the session`}
+                  disabled={busy}
+                  onClick={() => void run(() => api.keys(session.id, [key]))}
+                >
+                  {key === "Up" ? "↑" : key === "Down" ? "↓" : "Enter"}
+                </Button>
+              ))}
+            </div>
             <Button
               className="cmp-aux"
               variant="danger"

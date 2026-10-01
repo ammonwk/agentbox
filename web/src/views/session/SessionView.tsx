@@ -423,6 +423,7 @@ function Detail({
   const family = useFamilyOf(session, state.sessions, tab);
   // The list beside the session shows the family as a tree; a phone has no room for it.
   const narrow = useIsNarrow();
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const skills = useMemo(
     () => skillsFor(state.skills, session.provider, repoOfSession(state.repos, session)),
     [state.skills, state.repos, session.provider, session.repoRoot, session.cwd],
@@ -477,7 +478,15 @@ function Detail({
   );
 
   return (
-    <div className="sv-main">
+    <div className="sv-main" onClick={(e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.detail > 1 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const target = e.target as Element;
+      if (target.closest('a, button, input, textarea, select, label, summary, audio, video, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="option"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"], [role="tab"], [role="dialog"], [tabindex]:not([tabindex="-1"]):not(.tl), .xterm')) return;
+      // Selecting transcript text is still reading, and focusing must not
+      // scroll the timeline away from the message just clicked.
+      if (window.getSelection()?.isCollapsed === false) return;
+      composerRef.current?.focus({ preventScroll: true });
+    }}>
       <header className="sx-header">
         <div className="sx-header-top">
           <ProviderBadge provider={session.provider} />
@@ -635,6 +644,7 @@ function Detail({
         accounts={state.accounts}
         claimIdleMin={state.settings.balancer.claimIdleMin}
         skills={skills}
+        textareaRef={composerRef}
       />
 
       {confirmClose ? (
