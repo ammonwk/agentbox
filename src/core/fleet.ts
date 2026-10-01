@@ -285,7 +285,7 @@ export class Fleet extends EventEmitter {
    *  move a session, and there is another account to move it to. */
   private movable = new Set<ProviderId>();
   /** Limit hits already acted on (`continueStalled`): session → the hit's time. */
-  private stallsMoved = new Map<string, number>();
+  private stallsSeen = new Map<string, number>();
   /** Sessions nudged past an error screen (`nudgeErrored`): the spell's start
    *  and how many nudges it has had. */
   private nudges = new Map<string, { firstAt: number; tries: number }>();
@@ -574,23 +574,14 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * A session that stopped at its account's limit carries on.
+   * A session that stopped at its account's 5-hour limit carries on where it
+   * is: a minute after the window resets it is told to go on. It never moves
+   * to another account by itself — a move throws away the prompt cache, so
+   * that is yours to choose (the limit banner). A weekly limit is left to you.
    *
-   * A 5-hour window that resets within `RESET_WAIT_MS` is waited out: moving
-   * costs a cold start and a fresh claim elsewhere, and the window is nearly
-   * back. The session is told to go on a minute after the reset, where it is.
-   *
-   * Otherwise — a weekly limit, or a 5-hour one with more than that to go — it
-   * continues on another account with room: what the "limits reset" button
-   * does, done for you. Only when the balancer's pick is another account, and
-   * never for one that has led an agent team: its teammates run inside it and
-   * would not come back. The move proves the resume before it stops anything
-   * (`wake`).
-   *
-   * Either way only for a fresh hit — a restart does not act on what stalled
-   * hours ago — and once per hit. Bar one case: a hit inside the 5-hour window
-   * still running is waited out however old, so a restart in the middle of a
-   * wait does not drop it (the deadline lives only in memory).
+   * Once per hit, and only for a hit inside the window still running, so a
+   * restart in the middle of a wait picks it back up (the deadline lives only
+   * in memory).
    */
   private continueStalled(now: number): void {
     for (const [id, w] of this.resumeAfterReset) {
@@ -600,40 +591,24 @@ export class Fleet extends EventEmitter {
       // Still stopped at that same hit, and nobody has written to it since.
       if (!v || v.limitHit?.at !== w.hitAt || v.status !== "waiting" || v.host !== "tmux") continue;
       console.log(`agentbox: ${id} (${v.title}): its 5-hour window has reset; telling it to carry on`);
-      void this.send(id, "[agentbox: the 5-hour usage limit has reset. Carry on where you left off.]").catch((e) =>
+      void this.sendInPlace(id, "[agentbox: the 5-hour usage limit has reset. Carry on where you left off.]").catch((e) =>
         console.error(`agentbox: continuing ${id} after its reset failed:`, e),
       );
     }
     for (const v of this.views.values()) {
       const hit = v.limitHit;
-      if (!hit || this.stallsMoved.get(v.id) === hit.at) continue;
+      if (!hit || this.stallsSeen.get(v.id) === hit.at) continue;
       if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
-      const rec = getSessionRecord(v.id);
-      if (!rec) continue;
-      this.stallsMoved.set(v.id, hit.at);
-      const fresh = now - hit.at <= STALL_FRESH_MS;
-      const windows = rec.accountId ? this.deps.usage.usageOf(this.ownerOf(rec.accountId))?.windows ?? [] : [];
+      const accountId = getSessionRecord(v.id)?.accountId;
+      if (!accountId) continue;
+      this.stallsSeen.set(v.id, hit.at);
+      const windows = this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? [];
       const weekly = weeklyWindow(windows);
       const short = windows.find((w) => w.kind === "short" && !w.scope);
-      const weeklyOut = !!weekly && weekly.usedPct >= 100 && (weekly.resetsAt === null || weekly.resetsAt > now);
-      const resetAhead = !weeklyOut && !!short?.resetsAt && short.resetsAt > now;
-      const inWindow = resetAhead && hit.at >= short!.resetsAt! - short!.windowMs;
-      if (resetAhead && (fresh ? short!.resetsAt! - now <= RESET_WAIT_MS : inWindow)) {
-        this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short!.resetsAt! + 60_000 });
-        console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short!.resetsAt! - now) / 60_000)}m; waiting it out`);
-        continue;
-      }
-      if (!fresh || !this.movable.has(v.provider)) continue;
-      const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
-      if (t?.facts?.teamsLed?.length) continue;
-      const target = this.wakeTarget(rec, v);
-      if (!target) continue;
-      const from = rec.accountId ? getAccount(rec.accountId)?.label ?? rec.accountId : "its account";
-      const prompt = `[agentbox: ${from} hit its usage limit, so this session moved to ${target.account.label}. Carry on where you left off.]`;
-      console.log(`agentbox: ${v.id} (${v.title}) stopped at its limit on ${from}; continuing it on ${target.account.label}`);
-      void this.serial(v.id, () => this.moveAndContinue(v.id, { accountId: target.account.id, prompt })).catch((e) =>
-        console.error(`agentbox: moving ${v.id} after its limit failed:`, e),
-      );
+      if (weekly && weekly.usedPct >= 100 && (weekly.resetsAt === null || weekly.resetsAt > now)) continue;
+      if (!short?.resetsAt || short.resetsAt <= now || hit.at < short.resetsAt - short.windowMs) continue;
+      this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
+      console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
     }
   }
 
@@ -650,8 +625,7 @@ export class Fleet extends EventEmitter {
    * minutes) is left that long instead, and retried at that pace for as long
    * as it keeps coming back: capacity returns by itself, the refused request
    * cost nothing, and nothing you could do would bring it back sooner. A
-   * cold session's nudge is `send`'s to place: it wakes where there is room,
-   * which is the point when the account it sits on is the one that is out.
+   * nudge types where the session is, however cold: only you move it.
    */
   private nudgeErrored(now: number): void {
     if (now < this.nextNudgeAt) return;
@@ -683,7 +657,7 @@ export class Fleet extends EventEmitter {
       console.log(
         `agentbox: ${v.id} (${v.title}) ${screen ? (screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}${err!.retryAfterMs ? ` (${oneLine(err!.detail, 80)})` : ""}`}; nudging it on (${spell.tries + 1}${paced ? "" : `/${NUDGE_MAX_TRIES}`})`,
       );
-      void this.send(v.id, message).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
+      void this.sendInPlace(v.id, message).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
       return;
     }
   }
@@ -2488,7 +2462,36 @@ export class Fleet extends EventEmitter {
    *  mean restarting it on another account with `text` as its prompt; a
    *  parked one resumes with `text` as its prompt. */
   send(id: string, text: string): Promise<void> {
+    return this.serial(id, async () => {
+      if (!(await this.wakeElsewhere(id, text))) await this.sendNow(id, text);
+    });
+  }
+
+  /** Type into the session on the account it is on, however cold: the
+   *  fleet's own nudges, which must never move a session. */
+  private sendInPlace(id: string, text: string): Promise<void> {
     return this.serial(id, () => this.sendNow(id, text));
+  }
+
+  /** Wake a cold tmux session on the balancer's pick with `text` as its
+   *  prompt, when that is another account; false when it stays put. */
+  private async wakeElsewhere(id: string, text: string): Promise<boolean> {
+    const s = this.get(id);
+    if (!s.cold || s.host !== "tmux") return false;
+    const rec = getSessionRecord(id);
+    const target = rec ? this.wakeTarget(rec, s) : null;
+    const from = rec?.accountId ? getAccount(rec.accountId) : null;
+    if (!rec || !target || !from || !rec.agentSessionId) return false;
+    let cwd: string;
+    try {
+      cwd = this.resumeCwd(rec);
+    } catch {
+      return false; // cannot prove a resume: type into it where it is
+    }
+    if (!existsSync(cwd)) return false;
+    await this.wake(rec, s, from, cwd, target, text);
+    await this.tick();
+    return true;
   }
 
   private async sendNow(id: string, text: string): Promise<void> {
@@ -2512,22 +2515,6 @@ export class Fleet extends EventEmitter {
     if (s.host === "subagent") throw this.callersAgent(s);
     if (s.host !== "tmux" || !s.tmux) {
       throw new FleetError(409, "running in another terminal — adopt it to type here");
-    }
-    const rec = s.cold ? getSessionRecord(id) : null;
-    const target = rec ? this.wakeTarget(rec, s) : null;
-    const from = rec?.accountId ? getAccount(rec.accountId) : null;
-    if (rec && target && from && rec.agentSessionId) {
-      let cwd: string | null = null;
-      try {
-        cwd = this.resumeCwd(rec);
-      } catch {
-        /* cannot prove a resume: type into it where it is */
-      }
-      if (cwd && existsSync(cwd)) {
-        await this.wake(rec, s, from, cwd, target, text);
-        await this.tick();
-        return;
-      }
     }
     await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
@@ -2900,11 +2887,9 @@ export class Fleet extends EventEmitter {
 
 /** An idle Claude uses 1–2.5% of a core; more than this per agent over a
  *  minute is work nothing else caught. */
-/** A limit hit older than this is not moved on its own: it stalled before we
- *  were watching, and its account may well have reset since. */
+/** A turn error older than this is not retried on its own: it stalled before
+ *  we were watching. */
 const STALL_FRESH_MS = 15 * 60_000;
-/** A 5-hour window resetting within this is waited out, not moved away from. */
-const RESET_WAIT_MS = 60 * 60_000;
 /** A session stuck on an error screen is nudged once the error's reset window
  *  ("will reset in N seconds") has passed: this long after it last moved. */
 const NUDGE_QUIET_MS = 5 * 60_000;
