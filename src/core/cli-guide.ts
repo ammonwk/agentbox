@@ -69,6 +69,12 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
   sessions it started, at any depth, with it.
 - Stopping a running session interrupts its work, and a message sent to one
   lands mid-turn. Ask before stopping or sending to a running session.
+- \`send\` is for coordination a session cannot do without: an answer it is
+  waiting on, a blocker, a handoff, two sessions about to collide on the same
+  files. Never send to narrate your progress or to direct how another session
+  does its work: each message interrupts it and stays in its context. A
+  session you started says when its turn ends; \`watch\` it instead of
+  checking in.
 - A session another one started (a teammate, a \`codex exec\` run from a
   Bash tool, an agent of its subagent MCP) is listed right after its parent
   with its title indented \`└\`, and \`show\` names its parent and children.
