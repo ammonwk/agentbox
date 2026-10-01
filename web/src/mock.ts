@@ -19,6 +19,7 @@ import type {
   AppState,
   Attention,
   AttentionKind,
+  Btw,
   BalancerSettings,
   CalibrationReport,
   Candidate,
@@ -865,6 +866,14 @@ function emit(m: ServerMessage): void {
 const pushHot = () => emit({ type: "hot", state: hot() });
 const pushCold = () => emit({ type: "cold", state: cold() });
 
+/** Side questions (/btw), per session. Answered after a beat, with a canned reply. */
+const btws = new Map<string, Btw[]>();
+let btwSeq = 0;
+const btwOf = (id: string): Btw[] => btws.get(id) ?? (btws.set(id, []), btws.get(id)!);
+const pushBtw = (id: string) => {
+  if (watching === id) emit({ type: "btw", sessionId: id, items: [...btwOf(id)] });
+};
+
 function startLive(sessionId: string): void {
   if (liveTimer) clearInterval(liveTimer);
   liveTimer = null;
@@ -1206,6 +1215,27 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
         s.lastActivityAt = Date.now();
         break;
       }
+      case "btw": {
+        if (p[4]) {
+          const row = btwOf(id).find((x) => x.id === Number(p[4]));
+          if (!row) throw new Error(`no side question #${p[4]} here`);
+          row.status = "dismissed";
+          pushBtw(id);
+          return {};
+        }
+        const row: Btw = {
+          id: ++btwSeq, sessionId: id, question: x.question ?? "", answer: null, error: null,
+          status: "asking", source: "timeline", askedAt: Date.now(), answeredAt: null,
+        };
+        btwOf(id).push(row);
+        pushBtw(id);
+        setTimeout(() => {
+          if (row.status !== "asking") return;
+          Object.assign(row, { status: "answered", answeredAt: Date.now(), answer: "It reads the config once at startup, in `loadSettings()`; a change needs a restart." });
+          pushBtw(id);
+        }, 1500);
+        return row;
+      }
       case "keys":
       case "interrupt":
         if (action === "interrupt" || x.keys?.includes("Escape")) s.status = s.status === "running" ? "waiting" : s.status;
@@ -1425,6 +1455,7 @@ export const mockServer = {
       if (watching !== sid) return;
       const page = pageBefore(sid, null, PAGE);
       emit({ type: "timeline", sessionId: sid, events: page.events, cursor: page.cursor, reset: true, before: page.before });
+      pushBtw(sid);
       startLive(sid);
     }, 150);
   },

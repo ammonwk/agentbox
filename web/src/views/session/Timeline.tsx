@@ -277,7 +277,7 @@ export function Timeline({ session }: { session: Session }) {
     ) : r.type === "idle" ? (
       <IdleRow key={r.id} events={r.events} />
     ) : r.type === "btw" ? (
-      <BtwCard key={`btw-${r.btw.id}`} btw={r.btw} />
+      <BtwCard key={`btw-${r.btw.id}`} btw={r.btw} sessionId={session.id} />
     ) : r.type === "ask" ? (
       <AskRow key={r.event.id} ev={r.event} live={session.question?.id === r.event.ask.id} />
     ) : r.type === "sent" ? (
@@ -798,13 +798,27 @@ function MateRow({ id, mate, at }: { id: string; mate: MateMessage; at: number }
  * A side question and its answer. Beside the conversation, not in it: Claude
  * answered it from what it knew then, and the agent never saw it.
  */
-function BtwCard({ btw }: { btw: Btw }) {
+function BtwCard({ btw, sessionId }: { btw: Btw; sessionId: string }) {
+  const [busy, setBusy] = useState(false);
   return (
     <div className={`tl-btw is-${btw.status}`} title={fmtClock(btw.askedAt)}>
       <div className="tl-who">
         <span className="tl-btw-tag">/btw</span> You
         {btw.source === "terminal" ? <span className="faint"> · in the terminal</span> : null}
         <time className="tl-time">{fmtClock(btw.askedAt)}</time>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={Icon.x}
+          className="tl-btw-x"
+          aria-label="Dismiss"
+          title="Dismiss (Esc)"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            api.btwDismiss(sessionId, btw.id).catch(() => setBusy(false));
+          }}
+        />
       </div>
       <div className="tl-btw-q">
         <Markdown text={btw.question} />

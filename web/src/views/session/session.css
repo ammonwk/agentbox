@@ -1128,6 +1128,14 @@ a.tl-sender:hover .tl-sender-name {
 .tl-btw-hint {
   color: var(--faint);
 }
+/* Full tap size, pulled into the header's line so it does not grow it. */
+.tl-btw .tl-who .btn.tl-btw-x {
+  margin: -10px -8px -10px 0;
+  color: var(--faint);
+}
+.tl-btw .tl-who .btn.tl-btw-x:hover {
+  color: var(--text);
+}
 @media (max-width: 640px) {
   .tl-btw {
     margin-left: 8px;
