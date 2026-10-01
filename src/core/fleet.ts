@@ -101,6 +101,7 @@ import {
 import { agentboxBin } from "./paths";
 import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
 import { weeklyWindow } from "./balancer";
+import { statedWaitMs } from "./retrywait";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
@@ -289,6 +290,9 @@ export class Fleet extends EventEmitter {
    *  and how many nudges it has had. */
   private nudges = new Map<string, { firstAt: number; tries: number }>();
   private nextNudgeAt = 0;
+  /** Error screens that name their own wait ("will reset in 55 minutes"):
+   *  the error, as first seen, and when that wait is up. */
+  private screenWaits = new Map<string, { key: string; until: number }>();
   /** Sessions waiting out a 5-hour reset: tell them to go on at `at`, if still
    *  stopped at the hit `hitAt`. */
   private resumeAfterReset = new Map<string, { hitAt: number; at: number }>();
@@ -584,7 +588,9 @@ export class Fleet extends EventEmitter {
    * (`wake`).
    *
    * Either way only for a fresh hit — a restart does not act on what stalled
-   * hours ago — and once per hit.
+   * hours ago — and once per hit. Bar one case: a hit inside the 5-hour window
+   * still running is waited out however old, so a restart in the middle of a
+   * wait does not drop it (the deadline lives only in memory).
    */
   private continueStalled(now: number): void {
     for (const [id, w] of this.resumeAfterReset) {
@@ -600,21 +606,24 @@ export class Fleet extends EventEmitter {
     }
     for (const v of this.views.values()) {
       const hit = v.limitHit;
-      if (!hit || now - hit.at > STALL_FRESH_MS || this.stallsMoved.get(v.id) === hit.at) continue;
+      if (!hit || this.stallsMoved.get(v.id) === hit.at) continue;
       if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
       const rec = getSessionRecord(v.id);
       if (!rec) continue;
       this.stallsMoved.set(v.id, hit.at);
+      const fresh = now - hit.at <= STALL_FRESH_MS;
       const windows = rec.accountId ? this.deps.usage.usageOf(this.ownerOf(rec.accountId))?.windows ?? [] : [];
       const weekly = weeklyWindow(windows);
       const short = windows.find((w) => w.kind === "short" && !w.scope);
       const weeklyOut = !!weekly && weekly.usedPct >= 100 && (weekly.resetsAt === null || weekly.resetsAt > now);
-      if (!weeklyOut && short?.resetsAt && short.resetsAt > now && short.resetsAt - now <= RESET_WAIT_MS) {
-        this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
-        console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
+      const resetAhead = !weeklyOut && !!short?.resetsAt && short.resetsAt > now;
+      const inWindow = resetAhead && hit.at >= short!.resetsAt! - short!.windowMs;
+      if (resetAhead && (fresh ? short!.resetsAt! - now <= RESET_WAIT_MS : inWindow)) {
+        this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short!.resetsAt! + 60_000 });
+        console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short!.resetsAt! - now) / 60_000)}m; waiting it out`);
         continue;
       }
-      if (!this.movable.has(v.provider)) continue;
+      if (!fresh || !this.movable.has(v.provider)) continue;
       const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
       if (t?.facts?.teamsLed?.length) continue;
       const target = this.wakeTarget(rec, v);
@@ -652,13 +661,19 @@ export class Fleet extends EventEmitter {
       // restart does not retry what died hours before it was watching.
       const wait = v.status === "waiting" ? v.turnError?.retryAfterMs : undefined;
       const err = v.status === "waiting" && v.turnError && now - v.turnError.at <= STALL_FRESH_MS + (wait ?? 0) ? v.turnError : null;
-      if (now - v.lastActivityAt < (wait ?? NUDGE_QUIET_MS)) continue;
       const screen = v.status === "blocked" ? this.blocked.get(v.id) : undefined;
-      const retryable = screen === "rate limit" || screen === "error" ? screen : err && err.kind !== "fatal" ? err.kind : null;
+      const onScreen = screen === "rate limit" || screen === "error";
+      // An error screen that names its reset is left until then, however
+      // long: every earlier retry is refused the same way. Quiet a while
+      // either way, so the screen a nudge has not yet redrawn is not nudged.
+      const until = onScreen ? this.screenWaitUntil(v) : null;
+      if (now < Math.max(until ?? 0, v.lastActivityAt + (wait ?? NUDGE_QUIET_MS))) continue;
+      const retryable = onScreen ? screen : err && err.kind !== "fatal" ? err.kind : null;
       if (!retryable) continue;
       const prev = this.nudges.get(v.id);
       const spell = prev && now - prev.firstAt < NUDGE_SPELL_MS ? prev : { firstAt: now, tries: 0 };
-      if (spell.tries >= NUDGE_MAX_TRIES && !err?.retryAfterMs) continue;
+      const paced = !!err?.retryAfterMs || until !== null;
+      if (spell.tries >= NUDGE_MAX_TRIES && !paced) continue;
       this.nudges.set(v.id, { firstAt: spell.firstAt, tries: spell.tries + 1 });
       this.nextNudgeAt = now + NUDGE_STAGGER_MS;
       const message =
@@ -666,11 +681,38 @@ export class Fleet extends EventEmitter {
           ? "[agentbox: your last reply was cut off by the output token limit. Continue where you left off.]"
           : "[agentbox: your turn stopped on an error; this message retries it. Carry on where you left off.]";
       console.log(
-        `agentbox: ${v.id} (${v.title}) ${screen ? (screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}${err!.retryAfterMs ? ` (${oneLine(err!.detail, 80)})` : ""}`}; nudging it on (${spell.tries + 1}${err?.retryAfterMs ? "" : `/${NUDGE_MAX_TRIES}`})`,
+        `agentbox: ${v.id} (${v.title}) ${screen ? (screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}${err!.retryAfterMs ? ` (${oneLine(err!.detail, 80)})` : ""}`}; nudging it on (${spell.tries + 1}${paced ? "" : `/${NUDGE_MAX_TRIES}`})`,
       );
       void this.send(v.id, message).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
       return;
     }
+  }
+
+  /**
+   * When the wait an error screen names is up, or null when it names none.
+   * Devin logs a rate limit with the moment it struck (`limitHit`), so its
+   * "reset in 55 minutes" counts from then; the screen alone counts from when
+   * the fleet first read that error, which after a restart is late, never
+   * early. A minute over, for the reset the message rounded down.
+   */
+  private screenWaitUntil(v: Session): number | null {
+    const hitWait = v.limitHit ? statedWaitMs(v.limitHit.detail) : null;
+    if (v.limitHit && hitWait !== null) return v.limitHit.at + hitWait + 60_000;
+    return this.screenWaits.get(v.id)?.until ?? null;
+  }
+
+  /** Remember the wait an error screen names, from when it first showed: the
+   *  text stays put, so reading it again later must not push the wait back. */
+  private noteScreenWait(id: string, screen: string, now: number): void {
+    const foot = screen.split("\n").slice(-12).join("\n");
+    const ms = statedWaitMs(foot);
+    if (ms === null) {
+      this.screenWaits.delete(id);
+      return;
+    }
+    const key = `${/trace ID:?\s*([0-9a-f]{8,})/i.exec(foot)?.[1] ?? ""}|${ms}`;
+    if (this.screenWaits.get(id)?.key === key) return;
+    this.screenWaits.set(id, { key, until: now + ms + 60_000 });
   }
 
   private track(adapter: ProviderAdapter, ref: TranscriptRef): void {
@@ -1690,6 +1732,8 @@ export class Fleet extends EventEmitter {
             this.blocked.delete(rec.id);
             if (allowed) status = "running";
           }
+          if ((why === "rate limit" || why === "error") && screen) this.noteScreenWait(rec.id, screen, now);
+          else this.screenWaits.delete(rec.id);
           // A question the transcript does not have: read it off the screen,
           // at a size it can be read at (the next look sees the redraw).
           const ask = why === "asking a question" && !f?.pendingAsk && screen && adapter.askOnScreen ? adapter.askOnScreen(screen) : null;
@@ -1896,7 +1940,14 @@ export class Fleet extends EventEmitter {
   }
 
   blockedReason(id: string): string | null {
-    return this.blocked.get(id) ?? null;
+    const why = this.blocked.get(id) ?? null;
+    const v = this.views.get(id);
+    // An error screen with a stated reset is the fleet's to retry: say when.
+    const until = v && (why === "rate limit" || why === "error") ? this.screenWaitUntil(v) : null;
+    if (until !== null && until > Date.now()) {
+      return `${why} — agentbox retries it at ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+    }
+    return why;
   }
 
   private readerOf(id: string): TranscriptReader {
