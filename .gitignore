@@ -3,3 +3,4 @@ web/dist/
 .env
 *.log
 .claude/worktrees/
+CLAUDE.local.md

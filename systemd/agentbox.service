@@ -2,6 +2,9 @@
 # (with lingering on, before anyone logs in) and a crash is recovered from
 # without anyone there to restart it (src/core/recovery.ts).
 #
+# The board's first-run card installs it with your checkout's paths in place of
+# %h/Documents/agentbox (src/core/service.ts); from a checkout there, by hand:
+#
 #   systemctl --user enable --now ~/Documents/agentbox/systemd/agentbox.service
 #
 # Its own unit, so it does not die with the terminal or agent that started it.

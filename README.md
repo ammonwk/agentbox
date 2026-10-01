@@ -3,6 +3,8 @@
 One place for every coding-agent session on this machine — **Claude Code,
 Codex, Devin and omp** — across every subscription you're logged into.
 
+![A Claude session's timeline, with its subagents and the rest of the fleet in the list beside it](docs/screenshots/timeline.png)
+
 - **Every session, whoever started it.** agentbox reads each CLI's own
   transcripts, so a `claude` you started in some terminal shows up next to the
   ones agentbox started. Nothing is copied; the provider's transcript is the
@@ -40,6 +42,11 @@ Codex, Devin and omp** — across every subscription you're logged into.
 - **Subagents.** `agentbox subagent-mcp` is an MCP server that lets any agent
   delegate to omp or devin agents it calls like functions (`agent`,
   `send_message`, `workflow`, …), in its own working directory.
+
+| Accounts | New session | Terminal |
+|---|---|---|
+| ![Accounts: each login's 5-hour and weekly use, the claims running sessions hold on it, and the balancer's verdict](docs/screenshots/accounts.png) | ![New session: the account is picked for you, with its 5-hour and weekly use shown](docs/screenshots/new-session.png) | ![The same session as a live terminal: the real Claude Code TUI, running in agentbox's tmux](docs/screenshots/terminal.png) |
+| Every login's limits, and what the sessions on it still claim. | Placed on the account with the most room. | The real TUI, which `agentbox attach` puts in your own terminal too. |
 
 ## Use
 
@@ -105,4 +112,11 @@ bun scripts/fresh-machine.ts   # rehearse a stranger's first two minutes in a sa
 ```
 
 `docs/v2.md` is the design and the API contract. `AGENTS.md` has the rules
-that are easy to break.
+that are easy to break. See `CONTRIBUTING.md` before sending a change, and
+`SECURITY.md` for what the server exposes and how to report a vulnerability.
+
+The screenshots are of `?mock=1`: the UI on made-up data, no server needed.
+
+## License
+
+MIT — see `LICENSE`.

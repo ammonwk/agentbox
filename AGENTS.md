@@ -13,10 +13,10 @@ After changing `src/`, restart the server — Bun does not hot-reload:
 
     systemctl --user restart agentbox
 
-It is a service of your user's systemd (`systemd/agentbox.service`, enabled
-with `systemctl --user enable --now ~/Documents/agentbox/systemd/agentbox.service`),
-so it starts at boot — before anyone logs in, since lingering is on — and it
-does not die with the terminal or agent session that restarted it. It runs in
+It is a service of your user's systemd (`systemd/agentbox.service`, which the
+board's first-run card installs with this checkout's own paths), so it starts
+at boot — before anyone logs in, once lingering is on (`loginctl
+enable-linger`) — and it does not die with the terminal or agent session that restarted it. It runs in
 a login shell's environment rather than whatever shell restarted it; every
 agent inherits that environment through tmux. Then check `/api/health`, and
 that `/api/state` has as many sessions as before. The server answers within a
@@ -51,6 +51,10 @@ through their callers. `agentbox recover` shows what it would do now,
 `agentbox recover --last` what it did. The server keeps the live-sessions
 snapshot this starts from in `~/.local/share/agentbox/live-sessions.json`,
 and each recovery's report in `recovery/`.
+
+The server runs from the checkout it was started in, so a change only
+reaches it once it is there. Several agents may be editing that checkout at
+once: commit your own files by path, never `git add -A`.
 
 ## Rules that are easy to break
 

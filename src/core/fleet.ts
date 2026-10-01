@@ -98,7 +98,7 @@ import {
   type RecoveryReport,
   type Step,
 } from "./recovery";
-import { agentboxBin } from "./paths";
+import { agentboxHome } from "./paths";
 import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
 import { weeklyWindow } from "./balancer";
 import { statedWaitMs } from "./retrywait";
@@ -2947,14 +2947,16 @@ interface Watch {
   recovery: number | null;
 }
 
-/** Tell you, on your phone, through the repo's Telegram skill — when it is
- *  set up, and not turned off (`AGENTBOX_NOTIFY=0`, for a test instance). */
+/** Tell you, wherever you read such things, through `<agentbox home>/notify`:
+ *  any executable of yours, given the message as its one argument (a script
+ *  that sends it to a chat app, say). Nothing when there is none, or when
+ *  turned off (`AGENTBOX_NOTIFY=0`, for a test instance). */
 function notify(text: string): void {
   if (process.env.AGENTBOX_NOTIFY === "0") return;
-  const script = join(dirname(dirname(agentboxBin())), ".claude", "skills", "telegram", "send.ts");
+  const script = join(agentboxHome(), "notify");
   if (!existsSync(script)) return;
   try {
-    Bun.spawn(["bun", script, text], { cwd: dirname(script), stdio: ["ignore", "ignore", "ignore"] }).unref();
+    Bun.spawn([script, text], { cwd: agentboxHome(), stdio: ["ignore", "ignore", "ignore"] }).unref();
   } catch (e) {
     console.error("agentbox: sending the recovery message failed:", e);
   }
