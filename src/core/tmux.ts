@@ -198,6 +198,14 @@ export function listPanes(): PaneInfo[] {
   return out;
 }
 
+/**
+ * Leave copy mode first, in the same invocation. A wheel-up in the browser's
+ * terminal puts a pane that is not on the alternate screen (Devin's) into
+ * copy mode and leaves it there; the paste still reaches the agent, but
+ * copy mode takes the Enter, so every message sits unsent in its input box.
+ */
+const LEAVE_MODE = (name: string): string[] => ["copy-mode", "-q", "-t", `=${name}:`, ";"];
+
 /** The pause after a short paste, before Enter: an Enter that arrives inside
  *  the paste is taken as a newline in the prompt by some TUIs. */
 const PASTE_SETTLE_MS = 120;
@@ -223,7 +231,7 @@ export async function sendText(name: string, text: string): Promise<void> {
   const buffer = `ab-${process.pid}-${Date.now()}`;
   const load = tmux(["load-buffer", "-b", buffer, "-"], text);
   if (load.code !== 0) throw new Error(`tmux load-buffer failed: ${load.stderr.trim()}`);
-  const paste = tmux(["paste-buffer", "-p", "-d", "-b", buffer, "-t", `=${name}:`]);
+  const paste = tmux([...LEAVE_MODE(name), "paste-buffer", "-p", "-d", "-b", buffer, "-t", `=${name}:`]);
   if (paste.code !== 0) throw new Error(`tmux paste failed: ${paste.stderr.trim()}`);
   await settlePaste(name, text);
   sendKeys(name, ["Enter"]);
@@ -267,7 +275,7 @@ export function takeBuffer(buffer: string): string | null {
 /** Press keys by tmux name: `Enter`, `Escape`, `C-c`, `Down`, or literal text. */
 export function sendKeys(name: string, keys: string[]): void {
   if (keys.length === 0) return;
-  const r = tmux(["send-keys", "-t", `=${name}:`, ...keys]);
+  const r = tmux([...LEAVE_MODE(name), "send-keys", "-t", `=${name}:`, ...keys]);
   if (r.code !== 0) throw new Error(`tmux send-keys failed: ${r.stderr.trim()}`);
 }
 
