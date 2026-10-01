@@ -22,6 +22,7 @@ import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
+import { isInstalledApp } from "../../lib/phone";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
 import { ago } from "../../lib/format";
@@ -158,11 +159,22 @@ export function SessionView({
   };
 
   // Alt+W closes the open session and Alt+Shift+T reopens the most recently
-  // closed one. Capture these before the terminal handles its own keys.
+  // closed one; in the installed app Ctrl does too, and Ctrl+Tab and
+  // Ctrl+Shift+Tab step through the sessions like a browser's tabs. Capture
+  // these before the terminal handles its own keys (so there Ctrl+W no longer
+  // deletes a word: Ctrl+Backspace still does).
   useEffect(() => {
     const onShortcut = (e: KeyboardEvent) => {
-      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
-        if (e.key === "w" && !e.shiftKey) {
+      const app = e.ctrlKey && !e.altKey && isInstalledApp();
+      if ((app || (e.altKey && !e.ctrlKey)) && !e.metaKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
+        if (app && e.key === "Tab") {
+          if (ordered.length === 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const i = ordered.findIndex((s) => s.id === id);
+          const step = e.shiftKey ? -1 : 1;
+          onOpen(ordered[i === -1 ? (step === 1 ? 0 : ordered.length - 1) : (i + step + ordered.length) % ordered.length].id);
+        } else if (e.key.toLowerCase() === "w" && !e.shiftKey) {
           const row = id ? state.sessions.find((s) => s.id === id) : null;
           if (!row || row.status === "closed") return;
           e.preventDefault();

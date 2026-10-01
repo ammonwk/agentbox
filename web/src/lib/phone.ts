@@ -17,3 +17,12 @@ export function isPhone(): boolean {
 export function openingTab(status?: string): SessionTab {
   return status === "blocked" ? "terminal" : "timeline";
 }
+
+/**
+ * Running as the installed app rather than in a browser tab. Only there can
+ * the page have Ctrl+W, Ctrl+Tab and Ctrl+Shift+T: a Chrome tab keeps those
+ * for itself, and elsewhere they would be surprising.
+ */
+export function isInstalledApp(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(display-mode: standalone), (display-mode: window-controls-overlay)").matches;
+}
