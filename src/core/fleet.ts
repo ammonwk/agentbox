@@ -725,6 +725,13 @@ export class Fleet extends EventEmitter {
     return false;
   }
 
+  private transcriptStartedBefore(provider: ProviderId, agentSessionId: string, at: number): boolean {
+    for (const t of this.tracked.values()) {
+      if (t.ref.provider === provider && t.ref.agentSessionId === agentSessionId) return (t.facts?.startedAt ?? at) < at;
+    }
+    return false;
+  }
+
   /**
    * A provider that cannot be told its session id up front (codex, devin,
    * omp) writes a transcript some seconds after we start it. The session we
@@ -741,6 +748,10 @@ export class Fleet extends EventEmitter {
       const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
       const proc = pane ? this.processUnder(pane.pid, rec.provider) : undefined;
       let agentId = proc?.agentSessionId ?? null;
+      // A starting omp holds its recent sessions' files open, so its process can
+      // name an older conversation; one we just spawned never began before us.
+      // Wait for it to name its own rather than guess among siblings started beside it.
+      if (agentId && this.transcriptStartedBefore(rec.provider, agentId, rec.createdAt - 10_000)) continue;
 
       if (!agentId) {
         let best: Tracked | null = null;
