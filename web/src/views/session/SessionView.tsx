@@ -128,7 +128,7 @@ export function SessionView({
 
   // Closing one that runs sessions of its own stops them mid-task, so that is asked first.
   const [closingParent, setClosingParent] = useState<SessionRow | null>(null);
-  // Ctrl+W on a mid-turn session asks first, as the Close button does.
+  // Alt+W on a mid-turn session asks first, as the Close button does.
   const [confirmCloseRow, setConfirmCloseRow] = useState<SessionRow | null>(null);
   const close = (s: SessionRow) => (runningDescendants(s, state.sessions).length > 0 ? setClosingParent(s) : closeRow(s));
   // Closing the open one opens the row that takes its place: the one below
@@ -142,7 +142,7 @@ export function SessionView({
     else location.hash = hrefOf({ page: "sessions" });
   };
 
-  // Ctrl+Shift+T: the most recently closed session, from all of history —
+  // Alt+Shift+T: the most recently closed session, from all of history —
   // reopen it and open it. Pressed again it reopens the one before, since
   // the one just reopened is closed no more.
   const reopenLast = () => {
@@ -157,27 +157,28 @@ export function SessionView({
     }, () => undefined);
   };
 
-  // j/k switch sessions and ←/→ fold, from anywhere that is not a text field
-  // or the terminal; 1–4 pick a tab. Ctrl+W closes the open session and
-  // Ctrl+Shift+T reopens the most recently closed one, Chrome-style.
+  // Alt+W closes the open session and Alt+Shift+T reopens the most recently
+  // closed one. Capture these before the terminal handles its own keys.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
-        const t = e.target as HTMLElement | null;
+    const onShortcut = (e: KeyboardEvent) => {
+      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
         if (e.key === "w" && !e.shiftKey) {
-          // The terminal owns Ctrl+W: in a shell it deletes a word.
-          if (t?.closest(".xterm")) return;
           const row = id ? state.sessions.find((s) => s.id === id) : null;
           if (!row || row.status === "closed") return;
           e.preventDefault();
+          e.stopPropagation();
           if (row.status === "running" && runningDescendants(row, state.sessions).length === 0) setConfirmCloseRow(row);
           else close(row);
-        } else if (e.shiftKey && e.key === "T") {
+        } else if (e.shiftKey && e.key.toLowerCase() === "t") {
           e.preventDefault();
+          e.stopPropagation();
           reopenLast();
         }
-        return;
       }
+    };
+    // j/k switch sessions and ←/→ fold, from anywhere that is not a text
+    // field or the terminal; 1–4 pick a tab.
+    const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.closest(".xterm") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
@@ -204,8 +205,12 @@ export function SessionView({
         onTab(SESSION_TABS[Number(e.key) - 1]);
       }
     };
+    addEventListener("keydown", onShortcut, true);
     addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
+    return () => {
+      removeEventListener("keydown", onShortcut, true);
+      removeEventListener("keydown", onKey);
+    };
   });
 
   const [railW, setRailW] = useRailWidth();
