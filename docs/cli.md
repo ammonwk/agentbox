@@ -75,6 +75,9 @@ also reads them from stdin with `-`, so pipes and xargs work.
   does its work: each message interrupts it and stays in its context. A
   session you started says when its turn ends; `watch` it instead of
   checking in.
+- A sent message arrives marked `[via agentbox send from <id>]` with the
+  sender's session id, so don't sign it yourself; reply to the id in that
+  mark.
 - A session another one started (a teammate, a `codex exec` run from a
   Bash tool, an agent of its subagent MCP) is listed right after its parent
   with its title indented `└`, and `show` names its parent and children.

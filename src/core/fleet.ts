@@ -2125,7 +2125,7 @@ export class Fleet extends EventEmitter {
     });
 
     try {
-      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env: { ...cmd.env, ...sessionEnv(id) }, unset: cmd.unset });
+      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env: { ...cmd.env, ...sessionEnv(id, req.provider) }, unset: cmd.unset });
     } catch (e) {
       updateSessionRecord(id, { tmux: null });
       throw new FleetError(500, (e as Error).message);
@@ -2379,7 +2379,7 @@ export class Fleet extends EventEmitter {
     // A dead pane from the last run holds the name.
     this.killTmux(name);
     // The account's variables win over the launching shell's.
-    const env = { ...rec.launch?.env, ...cmd.env, ...sessionEnv(rec.id) };
+    const env = { ...rec.launch?.env, ...cmd.env, ...sessionEnv(rec.id, rec.provider) };
     this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env, unset: cmd.unset });
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
@@ -3066,9 +3066,14 @@ function resumeModel(rec: SessionRecord): string | null {
  * What every process agentbox starts is told about itself. The subagent MCP
  * a session runs inherits it, which is how a resumed session's MCP finds the
  * agents its last run left behind (src/subagents/pool.ts `revive`).
+ *
+ * Claude also takes the id as the name other sessions message it by. Left to
+ * itself it names a session after its folder, so one started in another
+ * session's worktree answered to that session's id, and replies sent with
+ * `agentbox send` went there. Claude does not pass it on to its shells.
  */
-function sessionEnv(id: string): Record<string, string> {
-  return { AGENTBOX_SESSION: id };
+function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
+  return { AGENTBOX_SESSION: id, ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}) };
 }
 
 /** Short, URL-safe, unambiguous: no 0/o/1/l. */
