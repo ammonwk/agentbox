@@ -764,6 +764,9 @@ export class Fleet extends EventEmitter {
           if (t.ref.accountId !== rec.accountId && !defaults.has(t.ref.accountId)) continue;
           if (this.byAgentId.has(`${rec.provider}:${f.agentSessionId}`)) continue;
           if (findSessionRecord(rec.provider, f.agentSessionId)) continue;
+          // Another process is writing it: a sibling started beside us, not ours.
+          const writer = this.live.get(`${rec.provider}:${f.agentSessionId}`);
+          if (writer && writer.pid !== proc?.pid) continue;
           if ((f.startedAt ?? 0) < rec.createdAt - 10_000) continue;
           if (!samePath(f.cwd, rec.cwd)) continue;
           if (!best || (f.startedAt ?? 0) < (best.facts!.startedAt ?? 0)) best = t;
