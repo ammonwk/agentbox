@@ -318,6 +318,24 @@
 .rail-row[data-depth] {
   padding-left: calc(12px + var(--depth) * 14px);
 }
+/* Dragging a session: the row it would go under, or the whole list when it
+ * would go to the top level, and a line at the foot saying which is which. */
+.rail-row[data-drop] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.rail-scroll[data-drop] {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.rail-drophint {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.rail-drophint[data-active] {
+  color: var(--accent);
+}
 /* What it last said: a hover away beside a session, on the row when the list
    is the page. */
 .rail-snippet {

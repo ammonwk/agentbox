@@ -313,6 +313,10 @@ export interface Session {
    * is closed or gone; the board shows such a child at the root.
    */
   parent: string | null;
+  /** You set or cleared `parent` yourself, by dragging it on the board: a
+   *  grouping of yours, not a run its parent made, so it is not closed when it
+   *  stops and the fleet never links it again. */
+  parentByHand: boolean;
   /** Set when this is an agent a session started through the subagent MCP
    *  (its `parent`); `answerWaiting` while that session has not collected a
    *  finished turn. */

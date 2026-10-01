@@ -56,6 +56,11 @@ export function hideWhile(id: string, title: string, verb: string, act: Promise<
   );
 }
 
+/** Say that `verb` could not be done to it, where a refused close is said. */
+export function reportFailure(id: string, title: string, verb: string, message: string): void {
+  set(pending, { id, title, message, verb });
+}
+
 /** No longer hidden: it closed, failed, or is being reopened. */
 export function forget(id: string): void {
   if (!pending.has(id)) return;

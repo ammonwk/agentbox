@@ -887,7 +887,7 @@ export class Fleet extends EventEmitter {
       if (lead) for (const team of t.facts.teamsLed) leads.set(team, lead);
     }
     for (const rec of listSessionRecords(since)) {
-      if (rec.parent) continue;
+      if (rec.parent || rec.parentByHand) continue;
       const agent = this.poolAgentOf(rec);
       if (agent) {
         const owner = this.sessionOfOwner(agent.owner);
@@ -1348,7 +1348,7 @@ export class Fleet extends EventEmitter {
       if (v.host === "none" || v.status === "closed") continue;
       // A run another session started — a teammate, a `claude -p`, a `codex
       // exec` — comes back with that session or not at all.
-      if (v.host === "external" && v.parent) continue;
+      if (v.host === "external" && v.parent && !v.parentByHand) continue;
       if (v.host === "external" && v.pid) external.add(v.pid);
       const launch = v.host === "external" && v.pid ? this.launchOf(v, v.pid) : null;
       if (launch === undefined) continue;
@@ -1748,7 +1748,7 @@ export class Fleet extends EventEmitter {
     // teammate, a `codex exec` from a Bash tool: listed while that run goes
     // on, then history (resumable by id), never stranded at the root of the
     // board or piled under a caller that has stopped.
-    else if (rec.parent && host === "none" && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
+    else if (rec.parent && !rec.parentByHand && host === "none" && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
       status = "closed";
     }
 
@@ -1805,6 +1805,7 @@ export class Fleet extends EventEmitter {
       question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,
       origin: rec.origin,
       parent: rec.parent ?? null,
+      parentByHand: !!rec.parentByHand,
       subagent: agent
         ? { name: agent.name, answerWaiting: host === "subagent" && !!pooled?.answerWaiting }
         : null,
@@ -1971,7 +1972,7 @@ export class Fleet extends EventEmitter {
       // A teammate, a pool agent, or a run another session started: the balancer never
       // placed it and its parent's claim already counts it. What it really
       // spends shows in the account's measured pace.
-      if ((s.parent && s.origin !== "agentbox") || s.subagent) continue;
+      if ((s.parent && !s.parentByHand && s.origin !== "agentbox") || s.subagent) continue;
       inputs.push({
         sessionId: s.id,
         accountId: s.accountId,
@@ -2868,6 +2869,7 @@ export class Fleet extends EventEmitter {
         if (!getSessionRecord(up)) throw new FleetError(404, `no session ${up} to be the parent`);
       }
       patch.parent = p.parent;
+      patch.parentByHand = true;
     }
     if (p.big !== undefined && p.big !== rec.big) {
       patch.big = p.big;

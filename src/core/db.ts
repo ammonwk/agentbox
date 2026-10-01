@@ -254,6 +254,9 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE repos ADD COLUMN worktree_default INTEGER;`,
   // 13 — what a new worktree of the repo is given (RepoSetup, as JSON).
   `ALTER TABLE repos ADD COLUMN setup TEXT;`,
+  // 14 — whether you set (or cleared) a session's parent yourself, by dragging
+  // it on the board: the fleet links it no more, and treats it as your grouping.
+  `ALTER TABLE sessions ADD COLUMN parent_by_hand INTEGER;`,
 ];
 
 function migrate(d: Database) {
@@ -352,6 +355,8 @@ export interface SessionRecord {
   model?: string | null;
   /** The session that started this one, once proven (see `Fleet.linkParents`). */
   parent?: string | null;
+  /** You set or cleared `parent` yourself (`Fleet.patch`): the fleet leaves it be. */
+  parentByHand?: boolean;
   /** When the fleet stopped it for sitting idle (`Fleet.parkIdle`); null once
    *  it runs again, or once you stop it yourself. */
   parkedAt?: number | null;
@@ -369,6 +374,7 @@ type SessionRow = {
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
+  parent_by_hand: number | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -392,6 +398,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     effort: r.effort ?? null,
     model: r.model ?? null,
     parent: r.parent ?? null,
+    parentByHand: !!r.parent_by_hand,
     parkedAt: r.parked_at ?? null,
     parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
     parkedWhy: r.parked_why ?? null,
@@ -419,6 +426,7 @@ const RECORD_COLUMNS = {
   effort: "effort",
   model: "model",
   parent: "parent",
+  parentByHand: "parent_by_hand",
   parkedAt: "parked_at",
   parkedMates: "parked_mates",
   parkedWhy: "parked_why",

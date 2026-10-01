@@ -301,6 +301,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     question: null,
     origin: "agentbox",
     parent: null,
+    parentByHand: false,
     subagent: null,
     pid: live ? 40000 + Math.floor(Math.random() * 20000) : null,
     tmux: p.host === "tmux" ? `ab-${p.id}` : null,

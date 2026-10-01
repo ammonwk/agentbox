@@ -7,6 +7,7 @@ import type { AppState, ProviderId, Schedule } from "../../../../src/core/types"
 import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
 import { Icon, RelativeTime } from "../../components";
 import {
+  descendantsOf,
   EMPTY_FILTER,
   repoKey,
   repoShapes,
@@ -27,7 +28,7 @@ import { openingTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
 import { useDismiss } from "../newsession/popover";
-import { useClosing } from "./closing";
+import { reportFailure, useClosing } from "./closing";
 import { ScheduledRow } from "./Scheduled";
 
 // ------------------------------------------------------------------- state
@@ -126,6 +127,30 @@ export function Rail({
     cur.current?.scrollIntoView({ block: "nearest" });
   }, [current]);
 
+  // Dragging a row: onto another row puts it under that one; anywhere else in
+  // the list, when it is under one now, takes it out to the top level. It
+  // cannot go under itself or a session it started (a loop), and a subagent
+  // stays with the session whose MCP runs it.
+  const [drag, setDrag] = useState<{ s: SessionRow; banned: ReadonlySet<string> } | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+  const endDrag = () => {
+    setDrag(null);
+    setOver(null);
+  };
+  const move = (s: SessionRow, parent: string | null) => {
+    endDrag();
+    if (parent) list.setOpen(parent, true);
+    api.patchSession(s.id, { parent }).catch((e: Error) => reportFailure(s.id, titleOf(s), "move", e.message));
+  };
+  const toRoot = drag?.s.parent != null;
+  const dropping: DropProps = {
+    start: (s) => setDrag({ s, banned: new Set([s.id, ...descendantsOf(s, state.sessions).map((c) => c.id)]) }),
+    end: endDrag,
+    can: (s) => !!drag && !drag.banned.has(s.id) && drag.s.parent !== s.id,
+    over: (id) => setOver(id),
+    drop: (s) => drag && move(drag.s, s.id),
+  };
+
   return (
     <nav className="rail" aria-label="Sessions">
       <div className="rail-top">
@@ -155,7 +180,24 @@ export function Rail({
         <SortMenu list={list} />
       </div>
 
-      <div className="rail-scroll">
+      <div
+        className="rail-scroll"
+        data-drop={over === "root" || undefined}
+        onDragOver={(e) => {
+          if (!drag || !toRoot) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          setOver("root");
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null);
+        }}
+        onDrop={(e) => {
+          if (!drag || !toRoot) return;
+          e.preventDefault();
+          move(drag.s, null);
+        }}
+      >
         <CloseFailure />
         {scheduled.length ? (
           <div className="rail-sec" data-kind="scheduled">
@@ -195,14 +237,31 @@ export function Rail({
                   list.setOpen(s.id, !(list.open.has(s.id) || forcedOpen.has(s.id)));
                 }}
                 onClose={onClose}
+                dnd={dropping}
+                target={over === s.id}
               />
             ))}
           </div>
         ))}
         <ClosedList query={filter.query} current={current} stamp={closedStamp} shapes={shapes} />
       </div>
+      {drag ? (
+        <div className="rail-drophint" data-active={over === "root" || undefined} aria-hidden="true">
+          {toRoot ? "Drop on a session to put it under that one, or anywhere else for the top level" : "Drop on a session to put it under that one"}
+        </div>
+      ) : null}
     </nav>
   );
+}
+
+/** What a row needs to be dragged, and dropped on. */
+interface DropProps {
+  start: (s: SessionRow) => void;
+  end: () => void;
+  /** Whether the row being dragged may go under `s`. */
+  can: (s: SessionRow) => boolean;
+  over: (id: string | null) => void;
+  drop: (s: SessionRow) => void;
 }
 
 function Row({
@@ -215,6 +274,8 @@ function Row({
   open,
   onToggle,
   onClose,
+  dnd,
+  target,
 }: {
   s: Nested<SessionRow>;
   current: boolean;
@@ -225,8 +286,12 @@ function Row({
   open: boolean;
   onToggle: () => void;
   onClose: (s: SessionRow) => void;
+  dnd: DropProps;
+  /** A dragged row is over this one, and may go under it. */
+  target: boolean;
 }) {
   const said = snippetOf(s);
+  const movable = s.host !== "subagent";
   return (
     <a
       ref={refFn}
@@ -237,6 +302,28 @@ function Row({
       data-depth={s.depth || undefined}
       style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
       title={[titleOf(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
+      draggable={movable}
+      data-drop={target || undefined}
+      onDragStart={(e) => {
+        if (!movable) return e.preventDefault();
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/x-agentbox-session", s.id);
+        dnd.start(s);
+      }}
+      onDragEnd={dnd.end}
+      onDragOver={(e) => {
+        // A row is never the list's top-level target, even one it cannot go under.
+        e.stopPropagation();
+        if (!dnd.can(s)) return dnd.over(null);
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        dnd.over(s.id);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (dnd.can(s)) dnd.drop(s);
+      }}
     >
       <StatusDot status={s.status} shape={shape} repo={baseName(repoKey(s))} copy={s.id} />
       <span className="rail-text">
