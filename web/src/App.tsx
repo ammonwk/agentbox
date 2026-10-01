@@ -8,7 +8,7 @@ import type { AgentSettings, AppState } from "../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./components";
 import { needsYou, titleOf } from "./lib/board";
 import { hrefOf, navOf, parseHash, type NavId, type Route } from "./route";
-import { openingTab } from "./lib/phone";
+import { isInstalledApp, openingTab } from "./lib/phone";
 import { useUpdateReady } from "./lib/update";
 import { SystemBar } from "./SystemBar";
 import { SessionView } from "./views/session/SessionView";
@@ -113,8 +113,20 @@ export function App() {
         }
       }
     };
+    // Ctrl+T is `n` in the installed app, from anywhere, the terminal
+    // included: captured before xterm can send it as a key.
+    const onCtrlT = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || e.key.toLowerCase() !== "t" || !isInstalledApp()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!document.querySelector(".modal-backdrop")) setNewOpen(true);
+    };
     addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
+    addEventListener("keydown", onCtrlT, true);
+    return () => {
+      removeEventListener("keydown", onKey);
+      removeEventListener("keydown", onCtrlT, true);
+    };
   }, []);
 
   const flush = route.page === "sessions" || route.page === "session" || route.page === "voice";

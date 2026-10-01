@@ -2,7 +2,7 @@
  *  row per session. It is the whole Sessions page's list; on a narrow screen
  *  with nothing open it is the page. */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type Ref } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
 import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
 import { Icon, RelativeTime } from "../../components";
@@ -151,8 +151,35 @@ export function Rail({
     drop: (s) => drag && move(drag.s, s.id),
   };
 
+  // The arrows walk the list as a tree: ↑/↓ from row to row (↓ from the
+  // search box to the open one, ↑ from the top row back to it), → unfolds a
+  // parent, ← folds it or goes to its parent. Enter opens a row, as any link.
+  const onArrow = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.key.startsWith("Arrow")) return;
+    const t = e.target as HTMLElement;
+    const nav = e.currentTarget;
+    const all = [...nav.querySelectorAll<HTMLElement>(".rail-row")];
+    const search = nav.querySelector<HTMLElement>("[data-search]");
+    if (t === search) {
+      if (e.key !== "ArrowDown") return;
+      (nav.querySelector<HTMLElement>('.rail-row[aria-current="page"]') ?? all[0])?.focus();
+    } else if (t.classList.contains("rail-row")) {
+      const i = all.indexOf(t);
+      const s = rows.find((r) => r.id === t.dataset.id);
+      const unfolded = !!s && (list.open.has(s.id) || forcedOpen.has(s.id));
+      if (e.key === "ArrowDown") all[i + 1]?.focus();
+      else if (e.key === "ArrowUp") (all[i - 1] ?? search)?.focus();
+      else if (e.key === "ArrowRight") {
+        if (s?.kids && !unfolded) list.setOpen(s.id, true);
+      } else if (s?.kids && unfolded && !forcedOpen.has(s.id)) list.setOpen(s.id, false);
+      else if (s?.parent) nav.querySelector<HTMLElement>(`.rail-row[data-id="${CSS.escape(s.parent)}"]`)?.focus();
+    } else return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
   return (
-    <nav className="rail" aria-label="Sessions">
+    <nav className="rail" aria-label="Sessions" onKeyDown={onArrow}>
       <div className="rail-top">
         <label className="rail-search">
           <Icon.search size={13} />
@@ -298,6 +325,7 @@ function Row({
       className="rail-row"
       href={hrefOf({ page: "session", id: s.id, tab: openingTab(s.status) })}
       aria-current={current ? "page" : undefined}
+      data-id={s.id}
       data-status={s.status}
       data-depth={s.depth || undefined}
       style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}

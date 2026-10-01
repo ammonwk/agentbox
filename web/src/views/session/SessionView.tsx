@@ -188,11 +188,23 @@ export function SessionView({
         }
       }
     };
-    // j/k switch sessions and ←/→ fold, from anywhere that is not a text
-    // field or the terminal; 1–4 pick a tab.
+    // j/k switch sessions and l/→ h fold, from anywhere that is not a text
+    // field or the terminal; 1–4 pick a tab. ← goes over to the list (from
+    // the message box too, once the cursor is at its start), where the arrows
+    // walk the rows and Enter opens one.
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
+      if (e.key === "ArrowLeft" && !e.shiftKey && id && !narrow && t && !t.closest(".rail, .xterm") && !document.querySelector(".modal-backdrop")) {
+        const box = t instanceof HTMLTextAreaElement && t.id.startsWith("cmp-") ? t : null;
+        const field = box || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable;
+        const row = document.querySelector<HTMLElement>('.rail .rail-row[aria-current="page"]') ?? document.querySelector<HTMLElement>(".rail .rail-row");
+        if (row && (!field || (box && box.selectionStart === 0 && box.selectionEnd === 0))) {
+          e.preventDefault();
+          row.focus();
+          return;
+        }
+      }
       if (t && (t.closest(".xterm") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
       if (document.querySelector(".modal-backdrop")) return;
       const row = ordered.find((s) => s.id === id);
@@ -205,7 +217,7 @@ export function SessionView({
       } else if ((e.key === "l" || e.key === "ArrowRight") && row?.kids && !open.has(row.id)) {
         e.preventDefault();
         setOpen(row.id, true);
-      } else if ((e.key === "h" || e.key === "ArrowLeft") && row) {
+      } else if (e.key === "h" && row) {
         if (row.kids && open.has(row.id)) {
           e.preventDefault();
           setOpen(row.id, false);
@@ -436,6 +448,18 @@ function Detail({
   // The list beside the session shows the family as a tree; a phone has no room for it.
   const narrow = useIsNarrow();
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Opening a session — from the list, Ctrl+Tab, a link — and coming back to
+  // the window put the cursor in its box, ready to type. Not on a phone,
+  // where it would put the keyboard up over what you came to read.
+  useEffect(() => {
+    if (narrow) return;
+    composerRef.current?.focus({ preventScroll: true });
+    const onFocus = () => {
+      if (document.activeElement === document.body) composerRef.current?.focus({ preventScroll: true });
+    };
+    addEventListener("focus", onFocus);
+    return () => removeEventListener("focus", onFocus);
+  }, [session.id, narrow]);
   const skills = useMemo(
     () => skillsFor(state.skills, session.provider, repoOfSession(state.repos, session)),
     [state.skills, state.repos, session.provider, session.repoRoot, session.cwd],
