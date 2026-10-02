@@ -85,12 +85,16 @@ export function bootTimeMs(): number {
 /** argv of a process, or null if it is gone, mid-exec, or not ours to read. */
 export function argvOf(pid: number): string[] | null {
   try {
-    const raw = readFileSync(`/proc/${pid}/cmdline`, "utf8");
-    if (!raw) return null;
-    return raw.split("\0").filter((s, i, a) => s.length > 0 || i < a.length - 1);
+    return splitArgv(readFileSync(`/proc/${pid}/cmdline`, "utf8"));
   } catch {
     return null;
   }
+}
+
+/** A /proc/<pid>/cmdline as argv; null when empty (a kernel thread, a zombie). */
+export function splitArgv(raw: string): string[] | null {
+  if (!raw) return null;
+  return raw.split("\0").filter((s, i, a) => s.length > 0 || i < a.length - 1);
 }
 
 export function parseStat(pid: number, s: string): ProcRow | null {
@@ -145,6 +149,26 @@ export async function readProcTable(): Promise<ProcTable> {
     else children.set(r.ppid, [r.pid]);
   }
   return { at: Date.now(), byPid, children };
+}
+
+/**
+ * The process table, shared. The fleet's pass, the metrics bar and the park
+ * checks each read all of /proc every couple of seconds, on a machine with
+ * near a thousand processes; one read now serves every caller within
+ * `maxAgeMs` of it, and a caller that asks mid-read waits for that read.
+ */
+let sharedTable: { at: number; table: Promise<ProcTable> } | null = null;
+
+export function sharedProcTable(maxAgeMs = 1_500): Promise<ProcTable> {
+  const now = Date.now();
+  if (sharedTable && now - sharedTable.at < maxAgeMs) return sharedTable.table;
+  const table = readProcTable();
+  const entry = { at: now, table };
+  sharedTable = entry;
+  table.catch(() => {
+    if (sharedTable === entry) sharedTable = null;
+  });
+  return table;
 }
 
 /** Every process in the subtree rooted at `pid`, the root included. */

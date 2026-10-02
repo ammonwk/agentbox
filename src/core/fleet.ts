@@ -60,7 +60,7 @@ import {
   type TranscriptRef,
 } from "./providers/types";
 import { argvOf, environOf, isAlive, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
-import { clockHz, describe, isToolShell, readProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
+import { clockHz, describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
 import {
   classifyShell,
   minutes,
@@ -285,6 +285,8 @@ export class Fleet extends EventEmitter {
    *  (`restingKey`): redrawn only when one of those moves. */
   private resting = new Map<string, { rec: SessionRecord; facts: TranscriptFacts | null; key: string; view: Session }>();
   private live = new Map<string, LiveProcess>();
+  /** The process table the last pass was run on. */
+  private procTable: ProcTable | null = null;
   private livePids = new Map<number, LiveProcess & { provider: ProviderId }>();
   private panes = new Map<string, PaneInfo>();
   /** The last screen captured of each pane, when, and in which pass. */
@@ -463,7 +465,8 @@ export class Fleet extends EventEmitter {
     // Processes.
     this.live.clear();
     this.livePids.clear();
-    await withProcessScan(async () => {
+    await withProcessScan(async (table) => {
+      this.procTable = table;
       for (const adapter of this.adapters.values()) {
         const accts = accountsOf(adapter.id);
         let procs: LiveProcess[] = [];
@@ -538,6 +541,7 @@ export class Fleet extends EventEmitter {
     if (this.starting) this.starting.of = behind.length;
     const catchUpEnds = performance.now() + CATCH_UP_MS;
     let stillBehind = 0;
+    let slowest = { ms: 0, path: "" };
     const order = behind.length ? [...this.tracked].sort(([, a], [, b]) => +!!a.facts - +!!b.facts || a.ref.size - b.ref.size) : this.tracked;
     for (const [path, t] of order) {
       await this.breathe();
@@ -562,7 +566,10 @@ export class Fleet extends EventEmitter {
         continue;
       }
       try {
+        const readAt = performance.now();
         const r = await this.load(t).refresh();
+        const took = performance.now() - readAt;
+        if (took > slowest.ms) slowest = { ms: took, path };
         t.facts = r.facts;
         if (r.changed) this.unsaved.add(path);
         // A restored reader's first facts are new to this process, though
@@ -581,6 +588,8 @@ export class Fleet extends EventEmitter {
     }
 
     lap("read");
+    if (slowest.ms > SLOW_PASS_MS / 4) laps.push(`slowest_read=${Math.round(slowest.ms)}:${basename(slowest.path)}`);
+    if (stillBehind) laps.push(`behind=${stillBehind}`);
     this.caughtUp = stillBehind === 0;
     this.matchPendingSpawns(now);
     this.followPaneSwitches(accounts);
@@ -943,13 +952,28 @@ export class Fleet extends EventEmitter {
     }
   }
 
+  /** A process's parent, from the last pass's table while it is there:
+   *  walking up from each pane, every pass, read a file per step. */
+  private ppid(pid: number): number | null {
+    return this.procTable?.byPid.get(pid)?.ppid ?? ppidOf(pid);
+  }
+
+  private isDescendant(pid: number, ancestor: number): boolean {
+    let cur: number | null = pid;
+    for (let i = 0; i < 16 && cur !== null && cur > 1; i++) {
+      if (cur === ancestor) return true;
+      cur = this.ppid(cur);
+    }
+    return false;
+  }
+
   /** The provider process at `pid` or somewhere under it (a shell wrapper,
    *  `env`, a node shim in front of a native binary). */
   private processUnder(pid: number, provider: ProviderId): LiveProcess | undefined {
     const direct = this.livePids.get(pid);
     if (direct?.provider === provider) return direct;
     for (const p of this.livePids.values()) {
-      if (p.provider === provider && isDescendant(p.pid, pid)) return p;
+      if (p.provider === provider && this.isDescendant(p.pid, pid)) return p;
     }
     return undefined;
   }
@@ -1046,24 +1070,24 @@ export class Fleet extends EventEmitter {
     if (found) return found;
     // A process not tied to its transcript yet: the agent above still carries
     // the id agentbox started it with, even when the shell below was stripped.
-    let cur = ppidOf(pid);
+    let cur = this.ppid(pid);
     for (let i = 0; i < 32 && cur !== null && cur > 1; i++) {
       const id = environOf(cur)?.get("AGENTBOX_SESSION");
       if (id && getSessionRecord(id)) return id;
-      cur = ppidOf(cur);
+      cur = this.ppid(cur);
     }
     return null;
   }
 
   private sessionAbove(pid: number): string | null {
-    let cur = ppidOf(pid);
+    let cur = this.ppid(pid);
     for (let i = 0; i < 32 && cur !== null && cur > 1; i++) {
       const p = this.livePids.get(cur);
       if (p?.agentSessionId) {
         const id = this.byAgentId.get(`${p.provider}:${p.agentSessionId}`) ?? findSessionRecord(p.provider, p.agentSessionId)?.id;
         if (id) return id;
       }
-      cur = ppidOf(cur);
+      cur = this.ppid(cur);
     }
     return null;
   }
@@ -1195,7 +1219,7 @@ export class Fleet extends EventEmitter {
     const holds = new Map<string, string>();
     const clean = new Map<string, ParkCheck>();
     if (candidates.length > 0) {
-      const table = await readProcTable().catch(() => null);
+      const table = await sharedProcTable().catch(() => null);
       const panes = new Map<string, PaneInfo[]>();
       for (const p of this.deps.runtime.listPanes()) panes.set(p.name, [...(panes.get(p.name) ?? []), p]);
       const live = readLive().filter((e) => subagentWorking(e.text));
@@ -1425,7 +1449,7 @@ export class Fleet extends EventEmitter {
       this.work.clear();
       return;
     }
-    const table = await readProcTable().catch(() => null);
+    const table = await sharedProcTable().catch(() => null);
     if (!table) return;
     const live = readLive().filter((e) => subagentWorking(e.text));
     const work = new Map<string, string>();
@@ -3394,15 +3418,6 @@ function expandHome(p: string): string {
   if (p === "~") return home;
   if (p.startsWith("~/")) return `${home}${p.slice(1)}`;
   return p;
-}
-
-function isDescendant(pid: number, ancestor: number): boolean {
-  let cur: number | null = pid;
-  for (let i = 0; i < 16 && cur !== null && cur > 1; i++) {
-    if (cur === ancestor) return true;
-    cur = ppidOf(cur);
-  }
-  return false;
 }
 
 function ppidOf(pid: number): number | null {

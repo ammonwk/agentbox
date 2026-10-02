@@ -7,8 +7,9 @@
  */
 
 import { readFileSync, readlinkSync, readdirSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
-import { argvOf, bootTimeMs, clockHz, parseStat } from "../proc";
+import { argvOf, bootTimeMs, clockHz, parseStat, sharedProcTable, splitArgv, type ProcTable } from "../proc";
 import type { ProviderId } from "../types";
 
 export { argvOf };
@@ -92,10 +93,10 @@ export function findProcesses(test: (argv: string[]) => boolean): ProcMatch[] {
 
 /**
  * Every process of ours with its argv. Each adapter's `liveProcesses` scans
- * the whole table (~25ms at 900 processes), so the fleet opens a shared scan
- * for the length of one pass (`withProcessScan`) and every adapter reads the
- * same one. Outside a pass every call scans fresh — a cache on a timer would
- * hand a caller that just started a process a table without it.
+ * the whole table, so the fleet opens a shared scan for the length of one
+ * pass (`withProcessScan`) and every adapter reads the same one. Outside a
+ * pass every call scans fresh — a cache on a timer would hand a caller that
+ * just started a process a table without it.
  */
 let shared: ProcMatch[] | null = null;
 
@@ -103,13 +104,51 @@ function scanOwnProcesses(): ProcMatch[] {
   return shared ?? scanUncached();
 }
 
-export async function withProcessScan<T>(fn: () => Promise<T>): Promise<T> {
-  shared = scanUncached();
+/** A pass's scan, over the shared process table (`sharedProcTable`), which
+ *  `fn` is handed too. */
+export async function withProcessScan<T>(fn: (table: ProcTable) => Promise<T>): Promise<T> {
+  const table = await sharedProcTable();
+  shared = await ownProcesses(table);
   try {
-    return await fn();
+    return await fn(table);
   } finally {
     shared = null;
   }
+}
+
+/**
+ * Each process's argv and owner, as read: reading every process's cmdline and
+ * owner each pass was two files a process, near a thousand processes, every
+ * two seconds, on the event loop. A process keeps its argv for life unless it
+ * execs, which changes its comm (bash → claude) and so reads it again; the
+ * rare exec that keeps its comm (node → node) is caught by re-reading each
+ * one every `KNOWN_MS` or so, staggered.
+ */
+const known = new Map<number, { startTicks: number; comm: string; until: number; argv: string[] | null; uid: number | null }>();
+const KNOWN_MS = 30_000;
+
+async function ownProcesses(table: ProcTable): Promise<ProcMatch[]> {
+  const uid = process.getuid?.();
+  const now = Date.now();
+  const out: ProcMatch[] = [];
+  await Promise.all(
+    [...table.byPid.values()].map(async (row) => {
+      if (row.pid === process.pid) return;
+      let k = known.get(row.pid);
+      if (!k || k.startTicks !== row.startTicks || k.comm !== row.comm || now > k.until) {
+        const [argv, owner] = await Promise.all([
+          readFile(`/proc/${row.pid}/cmdline`, "utf8").then(splitArgv, () => null),
+          stat(`/proc/${row.pid}`).then((s) => s.uid, () => null),
+        ]);
+        k = { startTicks: row.startTicks, comm: row.comm, until: now + KNOWN_MS * (0.5 + Math.random()), argv, uid: owner };
+        known.set(row.pid, k);
+      }
+      if (!k.argv || k.argv.length === 0 || (uid !== undefined && k.uid !== uid)) return;
+      out.push({ pid: row.pid, ppid: row.ppid, argv: k.argv });
+    }),
+  );
+  for (const pid of known.keys()) if (!table.byPid.has(pid)) known.delete(pid);
+  return out;
 }
 
 function scanUncached(): ProcMatch[] {

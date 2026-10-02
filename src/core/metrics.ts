@@ -5,6 +5,7 @@ import {
   backgroundShells,
   breakdown,
   readProcTable,
+  sharedProcTable,
   subtree,
   subtreePss,
   type ProcTable,
@@ -98,9 +99,11 @@ class Metrics {
     this.polling = true;
     try {
       const [table, system] = await Promise.all([
-        readProcTable().catch(() => undefined),
+        sharedProcTable().catch(() => undefined),
         this.sys.sample().catch(() => undefined),
       ]);
+      // The same table as the last poll (the fleet's, shared): nothing new to divide.
+      if (table && table === this.cur) return;
 
       if (table) {
         this.prev = this.cur;
