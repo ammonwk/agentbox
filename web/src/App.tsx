@@ -261,7 +261,7 @@ export function App() {
                   navigate({
                     page: "session",
                     id,
-                    tab: route.page === "session" ? route.tab : openingTab(state.sessions.find((s) => s.id === id)?.status),
+                    tab: route.page === "session" ? route.tab : openingTab(state.sessions.find((s) => s.id === id)),
                   })
                 }
                 onNew={() => setNewOpen(true)}

@@ -51,6 +51,8 @@ interface Item {
   label: string;
   checked: boolean | null;
   pointer: boolean;
+  /** The lines drawn under it: an option's description, or the rest of a typed answer that wrapped. */
+  under: string[];
 }
 
 interface QuestionScreen {
@@ -106,11 +108,13 @@ export function readAskScreen(raw: string): QuestionScreen | ReviewScreen | null
     const body = t.replace(/^❯\s+/, "");
     const m = /^(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*?)(?:\s+✔)?$/.exec(body);
     if (m) {
-      items.push({ n: Number(m[1]), label: m[3]!.trim(), checked: m[2] === undefined ? null : m[2] === "✔", pointer });
+      items.push({ n: Number(m[1]), label: m[3]!.trim(), checked: m[2] === undefined ? null : m[2] === "✔", pointer, under: [] });
     } else if (/^Submit$/.test(body.trim())) {
-      items.push({ n: null, label: "Submit", checked: null, pointer });
+      items.push({ n: null, label: "Submit", checked: null, pointer, under: [] });
     } else if (items.length === 0 && t.trim()) {
       text.push(t.trim());
+    } else if (t.trim()) {
+      items[items.length - 1]!.under.push(t.trim());
     }
   }
   if (!items.length || !text.length) return null;
@@ -186,8 +190,11 @@ export function askStep(raw: string, questions: AskQuestion[], answers: AskAnswe
   const fill = (text: string): AskStep | null => {
     if (!otherItem) return { error: "cannot find the Type something field" };
     if (!inField) return { keys: moves(items, otherItem) };
-    const shown = otherItem.label;
-    if (shown === text) return null;
+    // A long answer wraps under its first line, at a space or through a word:
+    // compared without the spaces, which is all the wrapping can change.
+    const shown = [otherItem.label, ...otherItem.under].join(" ");
+    const tight = (t: string) => t.replace(/\s+/g, "");
+    if (tight(shown) === tight(text)) return null;
     if (!PLACEHOLDER.test(shown) && shown) return { keys: Array<string>(Math.min(shown.length + 2, 400)).fill("BSpace") };
     return { type: text };
   };

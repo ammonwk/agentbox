@@ -323,7 +323,7 @@ function Row({
     <a
       ref={refFn}
       className="rail-row"
-      href={hrefOf({ page: "session", id: s.id, tab: openingTab(s.status) })}
+      href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })}
       aria-current={current ? "page" : undefined}
       data-id={s.id}
       data-status={s.status}
@@ -592,7 +592,7 @@ function ClosedList({ query, current, stamp, shapes }: { query: string; current:
             <a
               key={s.id}
               className="rail-row"
-              href={hrefOf({ page: "session", id: s.id, tab: openingTab(s.status) })}
+              href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })}
               aria-current={s.id === current ? "page" : undefined}
               data-status={s.status}
               title={titleOf(s)}

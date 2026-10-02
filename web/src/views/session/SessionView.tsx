@@ -604,7 +604,7 @@ function Detail({
             ) : (
               <>
                 <Icon.alert size={13} /> {session.attention.reason}.{" "}
-                {session.question ? "Answer it below." : "The Terminal tab shows the prompt."}
+                {!session.question ? "The Terminal tab shows the prompt." : tab === "terminal" && session.host === "tmux" ? "Answer it here, or on the Timeline tab." : "Answer it below."}
               </>
             )}
           </div>
@@ -677,6 +677,7 @@ function Detail({
       <Composer
         key={session.id}
         session={session}
+        tab={tab}
         accounts={state.accounts}
         claimIdleMin={state.settings.balancer.claimIdleMin}
         skills={skills}
