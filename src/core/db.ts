@@ -441,6 +441,32 @@ function recordToSql(key: RecordKey, value: unknown): string | number | null {
   return value as string | number;
 }
 
+/**
+ * Every session row, kept in step with the table by the two writers below,
+ * which are the only ones: the fleet lists them several times a pass, and
+ * re-reading and re-parsing every row's facts each time was a fifth of the
+ * server's CPU. Frozen, so a caller that edits one fails loudly rather than
+ * drifting from the table.
+ */
+let recordCache: { db: Database; byId: Map<string, SessionRecord> } | null = null;
+
+function cachedRecords(): Map<string, SessionRecord> {
+  const d = getDb();
+  if (recordCache?.db !== d) {
+    const rows = d.query("SELECT * FROM sessions").all() as SessionRow[];
+    recordCache = { db: d, byId: new Map(rows.map((r) => [r.id, Object.freeze(rowToRecord(r))])) };
+  }
+  return recordCache.byId;
+}
+
+/** Re-read one row into the cache after a write, so it holds what the table does. */
+function recacheRecord(id: string): void {
+  const byId = cachedRecords();
+  const row = getDb().query("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | null;
+  if (row) byId.set(id, Object.freeze(rowToRecord(row)));
+  else byId.delete(id);
+}
+
 export function insertSessionRecord(r: SessionRecord): void {
   const keys = Object.keys(RECORD_COLUMNS) as RecordKey[];
   const cols = ["id", ...keys.map((k) => RECORD_COLUMNS[k])];
@@ -448,6 +474,7 @@ export function insertSessionRecord(r: SessionRecord): void {
     `INSERT INTO sessions (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
     [r.id, ...keys.map((k) => recordToSql(k, r[k]))],
   );
+  recacheRecord(r.id);
 }
 
 export function updateSessionRecord(id: string, patch: Partial<SessionRecord>): void {
@@ -461,6 +488,7 @@ export function updateSessionRecord(id: string, patch: Partial<SessionRecord>): 
   }
   if (sets.length === 0) return;
   getDb().run(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`, [...vals, id]);
+  recacheRecord(id);
 }
 
 export function getSessionRecord(id: string): SessionRecord | null {
@@ -479,15 +507,9 @@ export function findSessionRecord(provider: ProviderId, agentSessionId: string):
  *  and was started by agentbox (those stay until you close them).
  *  (`archived_at` is when it was closed: the old name for it.) */
 export function listSessionRecords(sinceMs = 0): SessionRecord[] {
-  const rows = getDb()
-    .query(
-      `SELECT * FROM sessions
-        WHERE last_activity_at >= ?
-           OR (origin = 'agentbox' AND archived_at IS NULL)
-        ORDER BY last_activity_at DESC`,
-    )
-    .all(sinceMs) as SessionRow[];
-  return rows.map(rowToRecord);
+  return [...cachedRecords().values()]
+    .filter((r) => r.lastActivityAt >= sinceMs || (r.origin === "agentbox" && r.archivedAt === null))
+    .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
 /** Every closed session, the most recently closed first. */
