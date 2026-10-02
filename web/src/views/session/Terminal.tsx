@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { hrefOf } from "../../route";
+import { go } from "../../route";
 import { prRefs, prUrl } from "../../lib/prlinks";
 import { sessionRefs, type SessionIndex } from "../../lib/sessionrefs";
 import { backoffMs, openTerm, type TermChannel } from "../../api";
@@ -171,7 +171,7 @@ export default function Terminal({
             text: text.slice(r.start, r.end),
             decorations: { pointerCursor: true, underline: true },
             activate: () => {
-              location.hash = hrefOf({ page: "session", id: r.id, tab: "terminal" });
+              go({ page: "session", id: r.id, tab: "terminal" });
             },
           }));
         callback(found.length ? found : undefined);

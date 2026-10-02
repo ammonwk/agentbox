@@ -2,13 +2,13 @@
  *  be true — you can link to what you are looking at, and you can tell when
  *  the data on screen is stale. */
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { api, clockNow, MOCK, subscribeToClock, useAppState, useConnection } from "./api";
 import type { AgentSettings, AppState } from "../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./components";
 import { needsYou, titleOf } from "./lib/board";
-import { hrefOf, navOf, parseHash, type NavId, type Route } from "./route";
-import { isInstalledApp, openingTab } from "./lib/phone";
+import { go, hrefOf, navOf, onGo, parseHash, type NavId, type Route } from "./route";
+import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
 import { useUpdateReady } from "./lib/update";
 import { SystemBar } from "./SystemBar";
 import { SessionView } from "./views/session/SessionView";
@@ -29,25 +29,21 @@ const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice
 function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
 
-  const navigate = useCallback((to: Route, replace = false) => {
-    const href = hrefOf(to);
-    if (href === location.hash) return;
-    if (replace) history.replaceState(null, "", href);
-    else location.hash = href;
-    setRoute(to);
-  }, []);
-
   useEffect(() => {
     const onChange = () => setRoute(parseHash(location.hash));
     addEventListener("hashchange", onChange);
+    const off = onGo(onChange);
     // Normalise "" and anything unrecognised without adding a history entry.
     if (hrefOf(parseHash(location.hash)) !== location.hash) {
-      history.replaceState(null, "", hrefOf(parseHash(location.hash)));
+      history.replaceState(history.state, "", hrefOf(parseHash(location.hash)));
     }
-    return () => removeEventListener("hashchange", onChange);
+    return () => {
+      removeEventListener("hashchange", onChange);
+      off();
+    };
   }, []);
 
-  return [route, navigate];
+  return [route, go];
 }
 
 /** Keys that work anywhere except while typing: `n` new session, `/` search. */
@@ -294,18 +290,25 @@ export function App() {
             onClose={() => setNewOpen(false)}
             onCreated={(id) => {
               setNewOpen(false);
-              navigate({ page: "session", id, tab: openingTab() });
+              afterDialog(() => navigate({ page: "session", id, tab: openingTab() }));
             }}
             onScheduled={(sc) => {
               setNewOpen(false);
               // A one-time one waits in the list like a session; a recurring one lives in Settings.
-              navigate(!isRecurring(sc.rule) ? { page: "session", id: sc.id, tab: openingTab() } : { page: "settings" });
+              afterDialog(() => navigate(!isRecurring(sc.rule) ? { page: "session", id: sc.id, tab: openingTab() } : { page: "settings" }));
             }}
           />
         </ErrorBoundary>
       ) : null}
     </div>
   );
+}
+
+/** A phone's back gesture shows the page as it looked when it was left: leave
+ *  once the dialog is off the screen, or going back shows it for a moment. */
+function afterDialog(fn: () => void): void {
+  if (isPhone()) requestAnimationFrame(() => requestAnimationFrame(fn));
+  else fn();
 }
 
 function titleOfId(state: AppState, id: string): string {

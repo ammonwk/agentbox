@@ -10,7 +10,7 @@ import { describeRule, isRecurring, until } from "../../../../src/core/schedule"
 import { api, clockNow, subscribeToClock } from "../../api";
 import { PROVIDER_LABEL, ProviderBadge } from "../../bits";
 import { Button, Confirm, Icon } from "../../components";
-import { hrefOf } from "../../route";
+import { go, hrefOf } from "../../route";
 import { WhenField } from "../newsession/WhenField";
 import { useAction } from "./useAction";
 
@@ -88,7 +88,7 @@ export function ScheduledDetail({ sc, state, onCancel }: { sc: Schedule; state: 
     void run(async () => {
       const next = await api.patchSchedule(sc.id, { ...(whenChanged ? { when } : {}), ...(promptChanged ? { prompt } : {}) });
       // Made recurring: that kind lives in Settings.
-      if (isRecurring(next.rule)) location.hash = hrefOf({ page: "settings" });
+      if (isRecurring(next.rule)) go({ page: "settings" });
       else setWhen(describeRule(next.rule));
     });
 

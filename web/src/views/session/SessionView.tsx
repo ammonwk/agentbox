@@ -16,7 +16,7 @@ import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
 import { isRecurring } from "../../../../src/core/schedule";
-import { hrefOf, SESSION_TABS, type SessionTab } from "../../route";
+import { go, hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
 import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
@@ -122,9 +122,10 @@ export function SessionView({
   const cancelSchedule = (sc: Schedule) => {
     hideWhile(sc.id, scheduleTitle(sc), "cancel", api.deleteSchedule(sc.id));
     if (sc.id !== id) return;
-    const next = scheduled.find((s) => s.id !== sc.id)?.id ?? ordered[0]?.id;
+    // On a phone the list is where you go back to, so it is where you land.
+    const next = narrow ? null : (scheduled.find((s) => s.id !== sc.id)?.id ?? ordered[0]?.id);
     if (next) onOpen(next);
-    else location.hash = hrefOf({ page: "sessions" });
+    else go({ page: "sessions" });
   };
 
   // Closing one that runs sessions of its own stops them mid-task, so that is asked first.
@@ -133,14 +134,14 @@ export function SessionView({
   const [confirmCloseRow, setConfirmCloseRow] = useState<SessionRow | null>(null);
   const close = (s: SessionRow) => (runningDescendants(s, state.sessions).length > 0 ? setClosingParent(s) : closeRow(s));
   // Closing the open one opens the row that takes its place: the one below
-  // it, or the one above at the bottom of the list.
+  // it, or the one above at the bottom of the list. On a phone, the list.
   const closeRow = (s: SessionRow) => {
     const i = ordered.findIndex((x) => x.id === s.id);
-    const next = i === -1 ? null : (ordered[i + 1] ?? ordered[i - 1] ?? null);
+    const next = i === -1 || narrow ? null : (ordered[i + 1] ?? ordered[i - 1] ?? null);
     closeNow(s.id, titleOf(s), descendantsOf(s, state.sessions).map((c) => c.id));
     if (s.id !== id) return;
     if (next) onOpen(next.id);
-    else location.hash = hrefOf({ page: "sessions" });
+    else go({ page: "sessions" });
   };
 
   // Alt+Shift+T: the most recently closed session, from all of history —

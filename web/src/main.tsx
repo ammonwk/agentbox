@@ -4,6 +4,7 @@ import { App } from "./App";
 import "./styles.css";
 import { isPhone } from "./lib/phone";
 import { reloadForMissingChunk } from "./lib/update";
+import { followLinks, listUnderSession } from "./route";
 
 // On a phone the app is lifted by the on-screen keyboard's height, so the
 // keyboard shrinks it rather than covering it (iOS never resizes the layout
@@ -11,14 +12,19 @@ import { reloadForMissingChunk } from "./lib/update";
 // nothing is covered and nothing is lifted). The keyboard is what the visual
 // viewport leaves uncovered at the bottom of the layout one, less that gap
 // with no keyboard up: installed to the Home Screen, iOS reports the visual
-// viewport a status bar short. The smallest gap seen is the one with no
-// keyboard, so the baseline only ever gets more exact, whatever has focus and
-// whenever the events come. `data-kb` says the keyboard is up, and the
+// viewport a status bar short. Any reading within a sliver of the baseline is
+// one with no keyboard, so it becomes the baseline: a bad one is replaced by
+// the next. The baseline leaves out the viewport's pan and is never below
+// zero; while the keyboard goes, iOS gives the height back before it pans back
+// down, and that moment read as hundreds of pixels below zero and lifted the
+// app by them until a reload. `data-kb` says the keyboard is up, and the
 // stylesheets put away everything but the conversation and the box; a
 // hardware keyboard covers nothing, so it keeps them.
 const vv = window.visualViewport;
-/** The smallest gap seen, per width: rotating changes it. */
+/** The gap with no keyboard up, per width: rotating changes it. */
 const floors = new Map<number, number>();
+/** Less than any keyboard; more than iOS's shortcut bar over a hardware one. */
+const SLIVER = 80;
 const fit = () => {
   const root = document.documentElement;
   if (!isPhone() || !vv) {
@@ -30,14 +36,13 @@ const fit = () => {
   // Pinched in, the visual viewport is a window on the page, not a keyboard's
   // leftovers: leave the layout as it was.
   if (vv.scale > 1.01) return;
-  const gap = window.innerHeight - vv.height - vv.offsetTop;
-  const floor = Math.min(gap, floors.get(window.innerWidth) ?? Infinity);
-  floors.set(window.innerWidth, floor);
-  const kb = Math.max(0, Math.round(gap - floor));
+  const short = Math.max(0, window.innerHeight - vv.height);
+  let floor = floors.get(window.innerWidth) ?? Infinity;
+  if (short < floor + SLIVER) floors.set(window.innerWidth, (floor = short));
+  const kb = Math.max(0, Math.round(short - vv.offsetTop - floor));
   root.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
   root.style.setProperty("--kbh", `${kb}px`);
-  // Not every sliver: iOS's shortcut bar over a hardware keyboard is ~55px.
-  if (kb > 80) root.dataset.kb = "";
+  if (kb > SLIVER) root.dataset.kb = "";
   else delete root.dataset.kb;
   if (window.scrollY) window.scrollTo(0, 0);
 };
@@ -54,8 +59,11 @@ if ("serviceWorker" in navigator && window.isSecureContext && location.port !== 
   void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
 }
 
-createRoot(document.getElementById("root")!).render(
+listUnderSession();
+const root = document.getElementById("root")!;
+createRoot(root).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>
 );
+followLinks(root);

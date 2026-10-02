@@ -26,7 +26,7 @@ import {
 import { baseName, fmtBytes } from "../../lib/format";
 import { openingTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
-import { hrefOf } from "../../route";
+import { go, hrefOf } from "../../route";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
 import { ScheduledRow } from "./Scheduled";
@@ -260,7 +260,7 @@ export function Rail({
                 onToggle={() => {
                   // A parent held open only because the open session is under it
                   // cannot fold while that session stays open: deselect it first.
-                  if (forcedOpen.has(s.id)) location.hash = hrefOf({ page: "sessions" });
+                  if (forcedOpen.has(s.id)) go({ page: "sessions" });
                   list.setOpen(s.id, !(list.open.has(s.id) || forcedOpen.has(s.id)));
                 }}
                 onClose={onClose}
