@@ -267,6 +267,7 @@ export class Fleet extends EventEmitter {
   /** The last screen captured of each pane, when, and in which pass. */
   private screens = new Map<string, { key: string; at: number; pass: number; screen: string }>();
   private passes = 0;
+  private slowPasses = { since: 0, count: 0 };
   private deadSince = new Map<string, number>();
   private startedAt = new Map<string, number>();
   /** When each session was last woken, onto a new account or its own: its
@@ -573,7 +574,14 @@ export class Fleet extends EventEmitter {
     if (now - this.readersSavedAt >= READER_SAVE_MS) this.saveReaders();
     lap("rest");
     const total = performance.now() - started;
-    if (total > SLOW_PASS_MS) console.log(`agentbox: fleet_pass_slow ms=${Math.round(total)} sessions=${this.views.size} tracked=${this.tracked.size} ${laps.join(" ")}`);
+    if (total > SLOW_PASS_MS) {
+      // At most a line a minute: on a loaded machine every pass is slow.
+      this.slowPasses.count++;
+      if (now - this.slowPasses.since >= 60_000) {
+        console.log(`agentbox: fleet_pass_slow ms=${Math.round(total)} slow_passes=${this.slowPasses.count} sessions=${this.views.size} tracked=${this.tracked.size} ${laps.join(" ")}`);
+        this.slowPasses = { since: now, count: 0 };
+      }
+    }
   }
 
   /** Save the position of every reader that read something since the last
