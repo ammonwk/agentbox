@@ -83,6 +83,8 @@ const CHANGES_WAIT_MS = 25_000;
 const SLOW_REFRESH_MS = 60_000;
 const BUILD_POLL_MS = 2_000;
 const TIMELINE_PAGE = 200;
+/** Opening prompts the new-session box can recall. */
+const PROMPT_HISTORY = 1_000;
 const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 
 // ------------------------------------------------------------- the pieces
@@ -120,31 +122,45 @@ let voice: VoiceHub;
 
 // --------------------------------------------------------------- state
 
-/** Every session on the board, closed ones too: `GET /api/state`. */
-function hotState(): HotState {
+/** The sessions on the board — with the closed ones too unless `open` —
+ *  for `GET /api/state` and the sockets' frames. */
+function hotState(open = false): HotState {
+  let closedStamp = 0;
   const sessions = fleet
     .sessions()
+    .filter((s) => {
+      if (s.status !== "closed") return true;
+      closedStamp += 1 + (s.closedAt ?? 0);
+      return !open;
+    })
     .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }))
     .sort(byAttention);
-  return { sessions, serverTime: Date.now() };
+  return { sessions, serverTime: Date.now(), closedStamp };
 }
 
 /**
- * The hot frame for sockets: the open sessions, with the closed ones only when
- * they differ from the last broadcast's (or `all`, for a socket just
- * connected, which leaves that alone). Most of the board is closed, and it
- * changes a few times an hour.
+ * What the last frame to the sockets said of each open session, by id. A
+ * frame carries only what differs from it; a socket just connected is sent
+ * the board whole and then the same frames as everyone, which, each taken
+ * against the last broadcast rather than its own, bring it up to date too.
  */
-let lastClosed = "";
-function hotFrame(all: boolean): Extract<ServerMessage, { type: "hot" }> {
-  const { sessions, serverTime } = hotState();
-  const state = { sessions: sessions.filter((s) => s.status !== "closed"), serverTime };
-  const closed = sessions.filter((s) => s.status === "closed");
-  if (all) return { type: "hot", state, closed };
-  const json = JSON.stringify(closed);
-  if (json === lastClosed) return { type: "hot", state };
-  lastClosed = json;
-  return { type: "hot", state, closed };
+let sentOpen = new Map<string, string>();
+let sentClosedStamp = -1;
+
+function hotDelta(): Extract<ServerMessage, { type: "hotDelta" }> | null {
+  const { sessions, serverTime, closedStamp = 0 } = hotState(true);
+  const next = new Map<string, string>();
+  const changed: HotState["sessions"] = [];
+  for (const s of sessions) {
+    const fp = JSON.stringify(s);
+    next.set(s.id, fp);
+    if (sentOpen.get(s.id) !== fp) changed.push(s);
+  }
+  const gone = [...sentOpen.keys()].filter((id) => !next.has(id));
+  sentOpen = next;
+  if (changed.length === 0 && gone.length === 0 && closedStamp === sentClosedStamp) return null;
+  sentClosedStamp = closedStamp;
+  return { type: "hotDelta", sessions: changed, gone, serverTime, closedStamp };
 }
 
 /** Slow-changing inputs to cold state, refreshed off the request path. */
@@ -302,12 +318,12 @@ function broadcast(msg: ServerMessage): void {
  * `agentbox watch` polled it every 2s; eight of them were rebuilding and
  * serializing 3 MB four times a second.
  */
-let stateBody: { at: number; body: string } | null = null;
+let stateBody: { at: number; open: boolean; body: string } | null = null;
 const STATE_BODY_MS = 1_000;
-function stateResponse(): Response {
+function stateResponse(open: boolean): Response {
   const now = Date.now();
-  if (!stateBody || now - stateBody.at > STATE_BODY_MS) {
-    stateBody = { at: now, body: JSON.stringify({ ok: true, data: { ...hotState(), ...coldState() }, error: null }) };
+  if (!stateBody || stateBody.open !== open || now - stateBody.at > STATE_BODY_MS) {
+    stateBody = { at: now, open, body: JSON.stringify({ ok: true, data: { ...hotState(open), ...coldState() }, error: null }) };
   }
   return new Response(stateBody.body, { headers: { "content-type": "application/json" } });
 }
@@ -349,12 +365,17 @@ function scheduleHot(): void {
   if (hotTimer) return;
   hotTimer = setTimeout(() => {
     hotTimer = null;
-    if (clients.size > 0) broadcast(hotFrame(false));
+    if (clients.size === 0) return;
+    const frame = hotDelta();
+    if (frame) broadcast(frame);
   }, HOT_COALESCE_MS);
 }
 
+/** What the last cold frame to the sockets said of each part, as JSON: a
+ *  placement's forecast moves every pass, and it alone used to resend the
+ *  whole of cold state (the PRs, the skills) every two seconds. */
+let sentCold = new Map<string, string>();
 let coldTimer: ReturnType<typeof setTimeout> | null = null;
-let lastCold = "";
 function scheduleCold(): void {
   stateBody = null;
   if (coldTimer) return;
@@ -362,10 +383,14 @@ function scheduleCold(): void {
     coldTimer = null;
     if (clients.size === 0) return;
     const state = coldState();
-    const fp = JSON.stringify(state);
-    if (fp === lastCold) return;
-    lastCold = fp;
-    broadcast({ type: "cold", state });
+    const changed: Partial<ColdState> = {};
+    for (const [key, value] of Object.entries(state) as [keyof ColdState, unknown][]) {
+      const json = JSON.stringify(value);
+      if (sentCold.get(key) === json) continue;
+      sentCold.set(key, json);
+      (changed as Record<string, unknown>)[key] = value;
+    }
+    if (Object.keys(changed).length > 0) broadcast({ type: "coldDelta", state: changed });
   }, COLD_DEBOUNCE_MS);
 }
 
@@ -520,7 +545,8 @@ const provider = (v: unknown): ProviderId => {
 };
 
 const router = new Router(mapError)
-  .add("GET", "/api/state", stateResponse)
+  .add("GET", "/api/state", ({ url }) => stateResponse(url.searchParams.get("open") === "1"))
+  .add("GET", "/api/prompts", () => json(fleet.openingPrompts(PROMPT_HISTORY)))
   .add("GET", "/api/voice", () => json(voice.status()))
   .add("GET", "/api/health", async ({ url }) => {
     // Re-check is someone who just installed or logged into something.
@@ -1052,10 +1078,8 @@ function startupProgress(): { read: number; of: number } {
 function welcome(ws: Socket): void {
   if (ws.readyState !== WebSocket.OPEN) return;
   clients.add(ws);
-  send(ws, hotFrame(true));
-  const cold = coldState();
-  lastCold = JSON.stringify(cold);
-  send(ws, { type: "cold", state: cold });
+  send(ws, { type: "hot", state: hotState(true) });
+  send(ws, { type: "cold", state: coldState() });
   send(ws, { type: "metrics", state: metricsSnapshot() });
   send(ws, { type: "build", entry: uiBuild });
   setMetricsWatchers(clients.size);

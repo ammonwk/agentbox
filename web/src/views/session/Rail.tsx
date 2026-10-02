@@ -115,8 +115,8 @@ export function Rail({
   const shapes = useMemo(() => repoShapes(state.sessions), [state.sessions]);
   // Changes whenever something is closed or reopened, so an open closed list refetches.
   const closedStamp = useMemo(
-    () => state.sessions.reduce((n, s) => (s.status === "closed" ? n + 1 + (s.closedAt ?? 0) : n), 0),
-    [state.sessions],
+    () => state.closedStamp ?? state.sessions.reduce((n, s) => (s.status === "closed" ? n + 1 + (s.closedAt ?? 0) : n), 0),
+    [state.closedStamp, state.sessions],
   );
   const { filter, setFilter, sort } = list;
   const cur = useRef<HTMLAnchorElement>(null);

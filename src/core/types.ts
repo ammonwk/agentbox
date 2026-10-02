@@ -806,12 +806,22 @@ export type SkillSource = "global" | "agents" | "codex" | "omp" | "project";
 
 // ------------------------------------------------------------ wire shapes
 
-/** Pushed on every change. Small enough to send often: over a socket it
- *  holds the open sessions only (the closed ride along only when they
- *  change; see the `hot` message). `GET /api/state` has them all. */
+/** The board. Over a socket it holds the open sessions only, whole on
+ *  connect and then as they change (`hotDelta`); `GET /api/state` has the
+ *  closed ones too, unless asked for `?open=1`. The See closed list pages
+ *  them from `GET /api/sessions/closed`. */
 export interface HotState {
   sessions: (Session & { attention: Attention })[];
   serverTime: number;
+  /** Moves whenever a session is closed or reopened, so an open See closed
+   *  list knows to fetch again. */
+  closedStamp?: number;
+}
+
+/** An opening prompt you wrote, for the new-session box's history (`GET /api/prompts`). */
+export interface PromptHistoryEntry {
+  sessionId: string;
+  prompt: string;
 }
 
 /** One line of `GET /api/grep`. */
@@ -939,12 +949,16 @@ export interface Health {
 
 /** Server → client. */
 export type ServerMessage =
-  /** `closed`: the board's closed sessions, all of them, on the first frame
-   *  and whenever they changed; absent, they are as last sent. They were most
-   *  of every frame's bytes. In one message with the open ones so a session
-   *  closing or reopening is never in neither. */
-  | { type: "hot"; state: HotState; closed?: HotState["sessions"] }
+  /** The open sessions, whole: on connect. */
+  | { type: "hot"; state: HotState }
+  /** What moved since the last frame: open sessions new or changed (each
+   *  whole), and the ids no longer open (closed, or off the board). The open
+   *  ones were a few hundred KB a frame, several frames a second, to every page. */
+  | { type: "hotDelta"; sessions: HotState["sessions"]; gone: string[]; serverTime: number; closedStamp: number }
+  /** Cold state, whole: on connect. */
   | { type: "cold"; state: ColdState }
+  /** The parts of cold state that changed since the last frame, each whole. */
+  | { type: "coldDelta"; state: Partial<ColdState> }
   | {
       type: "timeline";
       sessionId: string;

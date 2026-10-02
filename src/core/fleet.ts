@@ -102,7 +102,7 @@ import { agentboxHome } from "./paths";
 import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
 import { weeklyWindow } from "./balancer";
 import { statedWaitMs } from "./retrywait";
-import { PROMPT_PREVIEW } from "./sent";
+import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
@@ -115,6 +115,7 @@ import type {
   Btw,
   ClaimView,
   Placement,
+  PromptHistoryEntry,
   ProviderId,
   Session,
   SessionHost,
@@ -2120,6 +2121,21 @@ export class Fleet extends EventEmitter {
       all.push(s);
     }
     return { sessions: all.slice(offset, offset + limit), total: all.length };
+  }
+
+  /** Opening prompts you wrote, newest first, from all of history, for the
+   *  new-session box's ↑: not a child's (a session wrote it), nor one an
+   *  agent sent. */
+  openingPrompts(limit: number): PromptHistoryEntry[] {
+    const out: PromptHistoryEntry[] = [];
+    for (const rec of listSessionRecords(0).sort((a, b) => b.startedAt - a.startedAt)) {
+      if (rec.parent) continue;
+      const prompt = (rec.facts as Partial<TranscriptFacts> | null)?.firstPrompt?.trim();
+      if (!prompt || isAgentSent(prompt)) continue;
+      out.push({ sessionId: rec.id, prompt });
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   blockedReason(id: string): string | null {

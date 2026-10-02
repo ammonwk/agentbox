@@ -1090,6 +1090,11 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       return health;
     }
     if (head === "accounts") return accountViews();
+    if (head === "prompts") {
+      return [...sessions]
+        .sort((a, b) => b.startedAt - a.startedAt)
+        .flatMap((s) => (s.parent || !s.firstPrompt?.trim() ? [] : [{ sessionId: s.id, prompt: s.firstPrompt.trim() }]));
+    }
     if (head === "calibration") return calibration(Number(url.searchParams.get("days") ?? 7));
     if (head === "settings") return structuredClone(settings);
     if (head === "repos") return repos;

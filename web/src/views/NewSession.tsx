@@ -4,7 +4,7 @@ import { parseWhen } from "../../../src/core/schedule";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
 import { AttachButton, useAttachments } from "../attachments";
-import { promptHistory } from "../lib/prompthistory";
+import type { PromptHistoryEntry } from "../lib/prompthistory";
 import { Button, Icon, Modal } from "../components";
 import {
   loadPrefs,
@@ -82,7 +82,18 @@ export function NewSession({
   const [wtText, setWtText] = useState("");
   const [path, setPath] = useState(prefs.path ?? "");
   const [prompt, setPrompt] = useState(prefs.draft ?? "");
-  const history = useMemo(() => promptHistory(state.sessions), [state.sessions]);
+  // Closed sessions' too, which the board does not carry: from the server.
+  const [history, setHistory] = useState<PromptHistoryEntry[]>([]);
+  useEffect(() => {
+    let live = true;
+    api.prompts().then(
+      (h) => live && setHistory(h),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
   const [big, setBig] = useState(prefs.big ?? false);
   const [perProvider, setPerProvider] = useState(prefs.perProvider ?? {});
   const model = perProvider[provider]?.model ?? "";

@@ -1,20 +1,8 @@
-import type { Session } from "../../../src/core/types";
+import type { PromptHistoryEntry } from "../../../src/core/types";
 import { dropPasteTags, isAgentSent, PROMPT_PREVIEW } from "../../../src/core/sent";
 import { api } from "../api";
 
-export interface PromptHistoryEntry {
-  sessionId: string;
-  prompt: string;
-}
-
-/** Opening prompts from the provider's record, newest first. */
-export function promptHistory(sessions: readonly Session[]): PromptHistoryEntry[] {
-  return [...sessions].sort((a, b) => b.startedAt - a.startedAt).flatMap((s) => {
-    const prompt = s.firstPrompt?.trim();
-    if (s.parent || !prompt || isAgentSent(prompt)) return [];
-    return [{ sessionId: s.id, prompt }];
-  });
-}
+export type { PromptHistoryEntry };
 
 /** The board carries the first `PROMPT_PREVIEW` characters of a prompt.
  *  Recall the full opening prompt from the transcript when it may have been capped. */

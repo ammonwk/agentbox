@@ -24,6 +24,7 @@ import type {
   DepStatus,
   Health,
   HotState,
+  PromptHistoryEntry,
   LoginFlow,
   MetricsState,
   ModelOption,
@@ -43,6 +44,7 @@ import type {
   WorktreeScan,
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
+import { byAttention } from "../../src/core/attention";
 import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
@@ -169,7 +171,10 @@ export function healthRows(h: Health): { name: string; state: DepState; detail: 
 }
 
 export const api = {
-  state: () => get<AppState>("/api/state"),
+  /** The board's open sessions and cold state; the closed ones page from `closed`. */
+  state: () => get<AppState>("/api/state?open=1"),
+  /** Opening prompts you wrote, newest first, for the new-session box's ↑. */
+  prompts: () => get<PromptHistoryEntry[]>("/api/prompts"),
   health: (refresh = false) => get<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
   voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
 
@@ -492,7 +497,6 @@ interface Carried {
   at: number;
   hot: HotState;
   cold: ColdState;
-  closed: Closed;
 }
 
 /** Read once and dropped, so only the reload right after it sees it. */
@@ -508,11 +512,7 @@ const carried: Carried | null = (() => {
   }
 })();
 
-/** The board's closed sessions, as the socket last sent them (see the `hot`
- *  message); until it has, the HTTP seed's hot state holds them. */
-type Closed = HotState["sessions"];
-
-let latest: { hot: HotState; cold: ColdState; closed: Closed } | null = null;
+let latest: { hot: HotState; cold: ColdState } | null = null;
 if (!MOCK && typeof window !== "undefined") {
   window.addEventListener("pagehide", () => {
     if (!latest) return;
@@ -527,20 +527,19 @@ if (!MOCK && typeof window !== "undefined") {
 export function useAppState(): { state: AppState | null; connected: boolean } {
   const [hot, setHot] = useState<HotState | null>(carried?.hot ?? null);
   const [cold, setCold] = useState<ColdState | null>(carried?.cold ?? null);
-  const [closed, setClosed] = useState<Closed>(carried?.closed ?? []);
   const { connected } = useConnection();
 
   useEffect(() => {
-    latest = hot && cold ? { hot, cold, closed } : null;
-  }, [hot, cold, closed]);
+    latest = hot && cold ? { hot, cold } : null;
+  }, [hot, cold]);
 
   useEffect(
     () =>
       wire.onMessage((msg) => {
-        if (msg.type === "hot") {
-          setHot(msg.state);
-          if (msg.closed) setClosed(msg.closed);
-        } else if (msg.type === "cold") setCold(msg.state);
+        if (msg.type === "hot") setHot(msg.state);
+        else if (msg.type === "hotDelta") setHot((prev) => (prev ? applyHotDelta(prev, msg) : prev));
+        else if (msg.type === "cold") setCold(msg.state);
+        else if (msg.type === "coldDelta") setCold((prev) => (prev ? { ...prev, ...msg.state } : prev));
       }),
     [],
   );
@@ -552,7 +551,7 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
     api.state().then(
       (s) => {
         if (cancelled) return;
-        setHot((prev) => (prev && prev !== carried?.hot ? prev : { sessions: s.sessions, serverTime: s.serverTime }));
+        setHot((prev) => (prev && prev !== carried?.hot ? prev : { sessions: s.sessions, serverTime: s.serverTime, closedStamp: s.closedStamp }));
         setCold(
           (prev) =>
             prev && prev !== carried?.cold ? prev : {
@@ -578,15 +577,17 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
     };
   }, []);
 
-  // A hot row wins over a closed one: a session that just closed or reopened
-  // is in both until the next frame with closed rows.
-  const sessions = useMemo(() => {
-    if (!hot || closed.length === 0) return hot?.sessions ?? [];
-    const open = new Set(hot.sessions.map((s) => s.id));
-    return [...hot.sessions, ...closed.filter((s) => !open.has(s.id))];
-  }, [hot, closed]);
-  const state = hot && cold ? { ...cold, ...hot, sessions } : null;
+  const state = useMemo(() => (hot && cold ? { ...cold, ...hot } : null), [hot, cold]);
   return { state, connected };
+}
+
+/** The board after a `hotDelta`: its sessions replaced or added, the gone
+ *  ones dropped, in the server's order (`byAttention`). */
+function applyHotDelta(prev: HotState, d: Extract<ServerMessage, { type: "hotDelta" }>): HotState {
+  const byId = new Map(prev.sessions.map((s) => [s.id, s]));
+  for (const id of d.gone) byId.delete(id);
+  for (const s of d.sessions) byId.set(s.id, s);
+  return { sessions: [...byId.values()].sort(byAttention), serverTime: d.serverTime, closedStamp: d.closedStamp };
 }
 
 // ----------------------------------------------------------------- metrics
