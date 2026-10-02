@@ -723,6 +723,20 @@ code {
     opacity: 0.3;
   }
 }
+/* The running dot's pulse fades its colour, not its opacity: an opacity
+   animation puts the 7px dot on a GPU layer of its own, and Chrome, drawing
+   that layer at the half-pixel the row centres it on, can smear stray pixels
+   beside it. A colour animation is repainted in place. */
+@keyframes pulse-dot {
+  50% {
+    background-color: color-mix(in srgb, var(--info) 30%, transparent);
+  }
+}
+@keyframes pulse-shape {
+  50% {
+    color: color-mix(in srgb, var(--info) 30%, transparent);
+  }
+}
 
 /* status ------------------------------------------------------------------ */
 
@@ -770,7 +784,7 @@ code {
 }
 .st-dot.st-running {
   background: var(--info);
-  animation: pulse 1.4s infinite;
+  animation: pulse-dot 1.4s infinite;
 }
 .st-dot.st-waiting {
   background: var(--warning);
@@ -793,7 +807,7 @@ code {
 }
 .st-shape.st-running {
   color: var(--info);
-  animation: pulse 1.4s infinite;
+  animation: pulse-shape 1.4s infinite;
 }
 .st-shape.st-waiting {
   color: var(--warning);
