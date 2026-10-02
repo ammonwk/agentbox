@@ -467,6 +467,8 @@ export class ClaudeFold {
   private turnOpen = false;
   /** Messages Claude is holding until the current step yields: see `queueOp`. */
   private queue: { text: string; at: number }[] = [];
+  /** `dequeue`s whose delivery has not been seen yet: see `queueOp`. */
+  private dequeued = 0;
   /** An AskUserQuestion still waiting for its answer. */
   private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
   /** The newest `permission-mode` record's (or prompt's) mode. */
@@ -567,6 +569,7 @@ export class ClaudeFold {
           // The next turn starts by taking what was queued: whatever the
           // records leave behind here was taken in a way they did not say.
           this.queue = [];
+          this.dequeued = 0;
         }
         else if (r.subtype === "scheduled_task_fire") this.turnOpen = true;
         else if (r.subtype === "compact_boundary") {
@@ -624,11 +627,17 @@ export class ClaudeFold {
   /**
    * A message typed while the agent is busy waits in Claude's queue until the
    * current step yields, and Claude records the queue as it goes: `enqueue`
-   * adds one, `dequeue` takes the oldest for the next turn, `remove` takes a
+   * adds one, `dequeue` takes one for the next turn, `remove` takes a
    * named one (delivered mid-turn, or pulled back to edit), `popAll` takes
    * them all back into the input box (an interrupt).
+   *
+   * A `dequeue` does not say which: it takes the most urgent, so a peer's
+   * message or a /loop wakeup goes ahead of an older notification. The user
+   * record that follows names it; only when none does (the next thing is the
+   * model's answer, or another queue record) is it taken to be the oldest.
    */
   private queueOp(r: any, at: number | null): void {
+    this.settleDequeued();
     const text = typeof r.content === "string" ? r.content.slice(0, QUEUED_CAP) : null;
     switch (r.operation) {
       case "enqueue":
@@ -637,33 +646,48 @@ export class ClaudeFold {
         if (this.queue.length > MAX_QUEUED) this.queue.shift();
         return;
       case "dequeue":
-        this.queue.shift();
+        this.dequeued++;
         return;
       case "remove":
         this.unqueue(text);
         return;
       case "popAll":
         this.queue = [];
+        this.dequeued = 0;
         return;
     }
   }
 
-  /** The queued message `text` has gone: removed, or delivered. A `dequeue`
-   *  takes the most urgent, not always the oldest, so delivery says too. */
+  /** The `dequeue`s no delivered record named took the oldest. */
+  private settleDequeued(): void {
+    for (; this.dequeued > 0; this.dequeued--) this.queue.shift();
+  }
+
+  /** The queued message `text` has gone: removed, or delivered. A peer's
+   *  `<agent-message>` is delivered inside more words than were queued, so
+   *  failing an exact match, a wrapped one the delivered text contains is it. */
   private unqueue(text: string | null | undefined): void {
     if (!text || this.queue.length === 0) return;
     const key = text.slice(0, QUEUED_CAP).trim();
-    const i = this.queue.findIndex((q) => q.text.trim() === key);
-    if (i >= 0) this.queue.splice(i, 1);
+    let i = this.queue.findIndex((q) => q.text.trim() === key);
+    if (i < 0) i = this.queue.findIndex((q) => q.text.trimStart().startsWith("<") && text.includes(q.text.trim()));
+    if (i < 0) return;
+    this.queue.splice(i, 1);
+    if (this.dequeued > 0) this.dequeued--;
   }
 
   private user(r: any, at: number | null): void {
-    if (r.isMeta || r.isCompactSummary) return;
+    if (r.isCompactSummary) return;
+    const content = r.message?.content;
+    if (r.isMeta) {
+      // A /loop wakeup or a peer's message is delivered as a meta record.
+      if (this.dequeued > 0 && typeof content === "string") this.unqueue(content);
+      return;
+    }
     // Claude says who a message is from: `human`, or `peer` (another agent),
     // `task-notification`, `auto-continuation`. Older versions say nothing,
     // and then it was typed.
     const kind0 = r.origin?.kind;
-    const content = r.message?.content;
     if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_result")) {
       if (this.pendingAsk && content.some((b: any) => b?.type === "tool_result" && b.tool_use_id === this.pendingAsk!.id)) this.pendingAsk = null;
       // A tool finished; the model is about to continue.
@@ -707,6 +731,7 @@ export class ClaudeFold {
   }
 
   private assistant(r: any, at: number | null): void {
+    this.settleDequeued();
     const m = r.message ?? {};
     if (r.isApiErrorMessage) {
       const text = blocksText(m.content);
