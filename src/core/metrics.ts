@@ -33,10 +33,11 @@ import type { MetricsState, ProcDetail } from "./types";
  * with them. Nothing here is on the boot path.
  *
  * ── The two lanes ──────────────────────────────────────────────────────────
- * CPU rides the 2s poll; PSS gets its own 20s lane and runs sequentially. See
- * the cost note in proc.ts — running fifteen smaps walks at once would spike
- * the very number we are trying to report, and the reading is twenty seconds
- * old by design.
+ * CPU rides the 2s poll; PSS gets its own lane, at least 20s apart and
+ * stretched so a sweep takes at most PSS_BUDGET of it, and runs sequentially.
+ * See the cost note in proc.ts — running fifteen smaps walks at once would
+ * spike the very number we are trying to report, and with hundreds of
+ * processes one sweep is seconds of kernel time.
  */
 
 export const metricsEvents = new EventEmitter();
@@ -44,12 +45,14 @@ metricsEvents.setMaxListeners(0);
 
 export const FAST_INTERVAL_MS = 2_000;
 export const SLOW_INTERVAL_MS = 20_000;
+/** The share of the PSS lane's time a sweep may take. */
+const PSS_BUDGET = 0.05;
 
 class Metrics {
   private sys = new SystemMeter();
   private meter = new LoadMeter();
   private fast: ReturnType<typeof setInterval> | null = null;
-  private slow: ReturnType<typeof setInterval> | null = null;
+  private slow: ReturnType<typeof setTimeout> | null = null;
   /** Guards against a slow filesystem queueing polls on top of each other. */
   private polling = false;
   private measuringPss = false;
@@ -68,14 +71,13 @@ class Metrics {
     if (this.fast || !metricsAvailable()) return;
     void this.poll();
     this.fast = setInterval(() => void this.poll(), FAST_INTERVAL_MS);
-    this.slow = setInterval(() => void this.measurePss(), SLOW_INTERVAL_MS);
     this.fast.unref?.();
-    this.slow.unref?.();
+    this.schedulePss(SLOW_INTERVAL_MS);
   }
 
   stop(): void {
     if (this.fast) clearInterval(this.fast);
-    if (this.slow) clearInterval(this.slow);
+    if (this.slow) clearTimeout(this.slow);
     this.fast = null;
     this.slow = null;
     // Deliberately keep `state` and the meters: a tab reopening within seconds
@@ -146,9 +148,16 @@ class Metrics {
    * here is time-critical — the reading is twenty seconds old by design. The
    * next fast poll picks the results up out of the meter.
    */
+  private schedulePss(ms: number): void {
+    if (this.slow) clearTimeout(this.slow);
+    this.slow = setTimeout(() => void this.measurePss(), ms);
+    this.slow.unref?.();
+  }
+
   private async measurePss(): Promise<void> {
     if (this.measuringPss) return;
     this.measuringPss = true;
+    const started = performance.now();
     try {
       const table = this.cur;
       if (!table) return;
@@ -161,6 +170,7 @@ class Metrics {
       }
     } finally {
       this.measuringPss = false;
+      if (this.slow) this.schedulePss(Math.max(SLOW_INTERVAL_MS, (performance.now() - started) / PSS_BUDGET));
     }
   }
 }
