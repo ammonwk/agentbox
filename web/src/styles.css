@@ -2216,9 +2216,9 @@ kbd {
 /* ------------------------------------------------------------------ phone
    Below 640px (lib/phone.ts) the icon rail becomes a tab bar along the bottom,
    where a thumb is, and the page gets the whole width. The app is pinned to
-   the screen's edges and lifted by the keyboard's height (main.tsx sets
-   --kbh), so the keyboard shrinks it instead of scrolling the composer out
-   from under your fingers. Not sized to the visual viewport: installed to the
+   the screen's edges and lifted by the keyboard's height (main.tsx measures
+   it from the visual viewport into --kbh), so the keyboard shrinks it instead
+   of scrolling the composer out from under your fingers. Not sized to the visual viewport: installed to the
    Home Screen, iOS reports that a status bar short, which left dead space
    along the bottom. */
 @media (max-width: 640px) {

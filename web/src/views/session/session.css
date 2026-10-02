@@ -2365,7 +2365,7 @@ a.sx-imgpath:hover { color: var(--accent); }
     flex-wrap: wrap;
   }
 
-  /* Typing (main.tsx sets data-kb): the conversation and the box, nothing
+  /* The keyboard is up (main.tsx sets data-kb): the conversation and the box, nothing
      else. The header, the hints and the extra keys come back with the
      keyboard's going; an error stays, since it is about what you just sent. */
   :root[data-kb] .sx-header,

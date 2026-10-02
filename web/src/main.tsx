@@ -6,48 +6,44 @@ import { isPhone } from "./lib/phone";
 import { reloadForMissingChunk } from "./lib/update";
 
 // On a phone the app is lifted by the on-screen keyboard's height, so the
-// keyboard shrinks it rather than panning the page (iOS never resizes the
-// layout viewport). `data-kb` says you are typing: the keyboard is up, and the
-// stylesheets put away everything but the conversation and the box. Focus is
-// the signal rather than the viewport's height, which iOS reports late and
-// which a hardware keyboard never changes.
-const TYPING = 'input:not([type="checkbox"]):not([type="radio"]):not([type="button"]), textarea, [contenteditable="true"]';
+// keyboard shrinks it rather than covering it (iOS never resizes the layout
+// viewport; Android does, for `interactive-widget=resizes-content`, and then
+// nothing is covered and nothing is lifted). The keyboard is what the visual
+// viewport leaves uncovered at the bottom of the layout one, less that gap
+// with no keyboard up: installed to the Home Screen, iOS reports the visual
+// viewport a status bar short. The smallest gap seen is the one with no
+// keyboard, so the baseline only ever gets more exact, whatever has focus and
+// whenever the events come. `data-kb` says the keyboard is up, and the
+// stylesheets put away everything but the conversation and the box; a
+// hardware keyboard covers nothing, so it keeps them.
 const vv = window.visualViewport;
-// What the layout viewport has below the visual one with no keyboard up.
-// Installed to the Home Screen, iOS reports the visual viewport a status bar
-// short; counted as keyboard, that lifted the app a status bar off the bottom
-// of the screen. It is measured whenever nothing is being typed in, and
-// neither lifts the app nor counts toward the keyboard.
-let chrome = 0;
+/** The smallest gap seen, per width: rotating changes it. */
+const floors = new Map<number, number>();
 const fit = () => {
   const root = document.documentElement;
-  if (!isPhone()) {
+  if (!isPhone() || !vv) {
     root.style.removeProperty("--vvh");
     root.style.removeProperty("--kbh");
     delete root.dataset.kb;
     return;
   }
-  const el = document.activeElement;
-  const typing = el instanceof HTMLElement && el.matches(TYPING) && !el.closest(".xterm");
-  if (vv) {
-    root.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
-    // What the keyboard covers of the layout viewport, which iOS never shrinks.
-    const below = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
-    if (!typing) chrome = below;
-    root.style.setProperty("--kbh", `${typing ? Math.max(0, below - chrome) : 0}px`);
-  }
-  if (typing) root.dataset.kb = "";
+  // Pinched in, the visual viewport is a window on the page, not a keyboard's
+  // leftovers: leave the layout as it was.
+  if (vv.scale > 1.01) return;
+  const gap = window.innerHeight - vv.height - vv.offsetTop;
+  const floor = Math.min(gap, floors.get(window.innerWidth) ?? Infinity);
+  floors.set(window.innerWidth, floor);
+  const kb = Math.max(0, Math.round(gap - floor));
+  root.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+  root.style.setProperty("--kbh", `${kb}px`);
+  // Not every sliver: iOS's shortcut bar over a hardware keyboard is ~55px.
+  if (kb > 80) root.dataset.kb = "";
   else delete root.dataset.kb;
   if (window.scrollY) window.scrollTo(0, 0);
 };
 vv?.addEventListener("resize", fit);
 vv?.addEventListener("scroll", fit);
 addEventListener("resize", fit);
-addEventListener("focusin", fit);
-// Putting the page back the instant the box loses focus moves everything
-// under the finger that tapped away, and the tap lands on whatever slid into
-// its place. Hold the typing layout until the tap's click has gone through.
-addEventListener("focusout", () => setTimeout(fit, 350));
 fit();
 
 // A lazy chunk that will not load is one a rebuild deleted (lib/update.ts).
