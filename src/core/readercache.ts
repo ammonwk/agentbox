@@ -36,12 +36,18 @@ const PRUNE_MS = 30 * 86_400_000;
 
 const cacheDir = (): string => join(agentboxHome(), "cache", "readers");
 
-const stamps = new Map<ProviderId, string>();
+const stamps = new Map<string, string>();
 
 /** A hash over a provider's reader modules and their runtime imports,
  *  transitively. Type-only imports are skipped: they change no fold. */
 export function readerCodeStamp(provider: ProviderId): string {
-  const known = stamps.get(provider);
+  return codeStamp(READER_ROOTS[provider]);
+}
+
+/** The same over `roots` (relative to this directory). */
+function codeStamp(roots: readonly string[]): string {
+  const key = roots.join(",");
+  const known = stamps.get(key);
   if (known) return known;
   const seen = new Set<string>();
   const hash = new Bun.CryptoHasher("sha256");
@@ -61,9 +67,9 @@ export function readerCodeStamp(provider: ProviderId): string {
       visit(resolve(dirname(file), spec.endsWith(".ts") ? spec : `${spec}.ts`));
     }
   };
-  for (const r of READER_ROOTS[provider]) visit(join(import.meta.dir, r));
+  for (const r of roots) visit(join(import.meta.dir, r));
   const stamp = hash.digest("hex").slice(0, 16);
-  stamps.set(provider, stamp);
+  stamps.set(key, stamp);
   return stamp;
 }
 
@@ -101,18 +107,51 @@ export function saveReaderState(provider: ProviderId, path: string, state: unkno
 /** Delete saved states nothing has written in `PRUNE_MS`: transcripts long
  *  out of the board's window, or ones deleted. */
 export function pruneReaderStates(now = Date.now()): void {
-  let names: string[];
-  try {
-    names = readdirSync(cacheDir());
-  } catch {
-    return;
-  }
-  for (const n of names) {
-    const f = join(cacheDir(), n);
+  for (const dir of [cacheDir(), turnsDir()]) {
+    let names: string[];
     try {
-      if (now - statSync(f).mtimeMs > PRUNE_MS) rmSync(f, { force: true });
+      names = readdirSync(dir);
     } catch {
-      /* gone already */
+      continue;
     }
+    for (const n of names) {
+      const f = join(dir, n);
+      try {
+        if (now - statSync(f).mtimeMs > PRUNE_MS) rmSync(f, { force: true });
+      } catch {
+        /* gone already */
+      }
+    }
+  }
+}
+
+// ----------------------------------------------------- the message rail
+
+/** Each session's message-rail index (`src/core/turns.ts`), kept the same
+ *  way. It carries on from a reader's cursor, so it is stamped with the
+ *  reader's code as well as its own. */
+const turnsDir = (): string => join(agentboxHome(), "cache", "turns");
+
+const turnsStamp = (provider: ProviderId): string => `${readerCodeStamp(provider)}.${codeStamp(["turns.ts"])}`;
+
+export function loadTurnState(provider: ProviderId, id: string): unknown {
+  try {
+    const s = deserialize(readFileSync(join(turnsDir(), `${id}.bin`))) as { code: string; state: unknown };
+    return s.code === turnsStamp(provider) ? s.state : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveTurnState(provider: ProviderId, id: string, state: unknown): void {
+  const file = join(turnsDir(), `${id}.bin`);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    mkdirSync(turnsDir(), { recursive: true });
+    writeFileSync(tmp, new Uint8Array(serialize({ code: turnsStamp(provider), state })));
+    renameSync(tmp, file);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    console.error(`agentbox: saving the message rail of ${id}:`, e);
   }
 }

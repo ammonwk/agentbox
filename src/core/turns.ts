@@ -3,11 +3,13 @@
  *  A long conversation is thousands of events, and the timeline only ever
  *  holds a page of them. The rail needs every message you sent, from the
  *  first, with where each sits in the conversation. That is one full read of
- *  the transcript, once per session; after it, only what was appended since
- *  its cursor is read, the same increments the timeline socket follows. What
- *  is kept is small: the turns themselves, capped, and the place of every
- *  event counted (a tool event is re-sent under its id when its result
- *  lands, and must not be counted twice). */
+ *  the transcript — a second and more of a 50 MB one — once per session, ever:
+ *  the index is saved (`TurnStore`), and after it only what was appended
+ *  since its cursor is read, the same increments the timeline socket follows.
+ *  What is kept is small: the turns themselves, capped, a count of the events,
+ *  and the place of the recent ones and of calls still waiting on a result
+ *  (an event is re-sent under its id — a call when its result lands, devin's
+ *  newest message as it grows — and must not be counted twice). */
 
 import type { TimelineEvent, TimelinePage, Turn, TurnList } from "./types";
 import { dropPasteTags, readSent } from "./sent";
@@ -82,19 +84,45 @@ export interface TurnSource {
   since(id: string, cursor: string): Promise<{ events: TimelineEvent[]; cursor: string; reset: boolean }>;
 }
 
+/** Where indexes are kept between servers; `load` gives back what `save`
+ *  was given, or null when there is none or it is from other code. */
+export interface TurnStore {
+  load(id: string): unknown;
+  save(id: string, entry: unknown): void;
+}
+
 interface Entry {
   cursor: string;
   turns: Turn[];
-  /** Every event counted so far, and its place. */
+  /** Events counted so far. */
+  count: number;
+  /** The place of each recent event and each call still running: what can
+   *  come again. */
   seen: Map<string, number>;
+  /** Calls without their result yet. */
+  open: Set<string>;
+  /** Folded since it was last saved, and when that was. */
+  dirty: boolean;
+  savedAt: number;
 }
 
+/** Events behind the newest whose places are kept (calls still running aside). */
+const SEEN_KEEP = 2_000;
+/** Sessions whose index is kept in memory; the rest wait in the store. */
+const MAX_ENTRIES = 32;
+/** An index that moved is saved at most this often (and when it leaves memory). */
+const SAVE_MS = 60_000;
+
 export class TurnIndex {
+  /** Most recently used last. */
   private entries = new Map<string, Entry>();
   /** One read at a time per session; a second caller waits for the first. */
   private pending = new Map<string, Promise<TurnList>>();
 
-  constructor(private readonly source: TurnSource) {}
+  constructor(
+    private readonly source: TurnSource,
+    private readonly store?: TurnStore,
+  ) {}
 
   list(id: string): Promise<TurnList> {
     const running = this.pending.get(id);
@@ -104,25 +132,27 @@ export class TurnIndex {
     return p;
   }
 
-  forget(id: string): void {
-    this.entries.delete(id);
-  }
-
   private async refresh(id: string): Promise<TurnList> {
-    let e = this.entries.get(id);
+    let e = this.entries.get(id) ?? this.restore(id);
     if (e) {
       const next = await this.source.since(id, e.cursor);
       if (next.reset) e = undefined;
       else {
         this.fold(e, next.events);
         e.cursor = next.cursor;
+        if (next.events.length > 0) e.dirty = true;
       }
     }
-    if (!e) {
-      e = await this.build(id);
-      this.entries.set(id, e);
+    if (!e) e = await this.build(id);
+    this.entries.delete(id);
+    this.entries.set(id, e);
+    if (e.dirty && Date.now() - e.savedAt >= SAVE_MS) this.save(id, e);
+    for (const [old, x] of this.entries) {
+      if (this.entries.size <= MAX_ENTRIES) break;
+      if (x.dirty) this.save(old, x);
+      this.entries.delete(old);
     }
-    return { turns: e.turns.slice(), total: e.seen.size };
+    return { turns: e.turns.slice(), total: e.count };
   }
 
   /** The whole transcript, newest page first, folded oldest first. */
@@ -136,16 +166,33 @@ export class TurnIndex {
       pages.push(page.events);
       before = page.before;
     } while (before);
-    const e: Entry = { cursor, turns: [], seen: new Map() };
+    const e: Entry = { cursor, turns: [], count: 0, seen: new Map(), open: new Set(), dirty: true, savedAt: 0 };
     for (let i = pages.length - 1; i >= 0; i--) this.fold(e, pages[i]!);
+    this.save(id, e);
     return e;
+  }
+
+  private save(id: string, e: Entry): void {
+    e.dirty = false;
+    e.savedAt = Date.now();
+    this.store?.save(id, { cursor: e.cursor, turns: e.turns, count: e.count, seen: [...e.seen], open: [...e.open] });
+  }
+
+  private restore(id: string): Entry | undefined {
+    const s = this.store?.load(id) as { cursor: string; turns: Turn[]; count: number; seen: [string, number][]; open: string[] } | null | undefined;
+    if (!s || typeof s.cursor !== "string" || !Array.isArray(s.turns) || !Array.isArray(s.seen) || !Array.isArray(s.open)) return undefined;
+    return { cursor: s.cursor, turns: s.turns, count: s.count, seen: new Map(s.seen), open: new Set(s.open), dirty: false, savedAt: Date.now() };
   }
 
   private fold(e: Entry, events: readonly TimelineEvent[]): void {
     for (const ev of events) {
+      if (ev.kind === "tool") {
+        if (ev.status === "running") e.open.add(ev.id);
+        else e.open.delete(ev.id);
+      }
       let seq = e.seen.get(ev.id);
       if (seq === undefined) {
-        seq = e.seen.size;
+        seq = e.count++;
         e.seen.set(ev.id, seq);
         const t = turnOf(ev, seq);
         if (t) e.turns.push(t);
@@ -158,6 +205,10 @@ export class TurnIndex {
       if (!t) continue;
       const at = e.turns.findIndex((x) => x.seq > t.seq);
       e.turns.splice(at === -1 ? e.turns.length : at, 0, t);
+    }
+    // Finished events long past do not come again.
+    if (e.seen.size > 2 * SEEN_KEEP) {
+      for (const [id, seq] of e.seen) if (seq < e.count - SEEN_KEEP && !e.open.has(id)) e.seen.delete(id);
     }
   }
 }

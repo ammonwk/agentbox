@@ -49,6 +49,7 @@ import { HttpError, Router, fail, json, readBody } from "./router";
 import { optionalString, parseAnswers, parseSettingsPatch, requireBoolean, requireString } from "./validate";
 import { parseClientMessage } from "./protocol";
 import { TurnIndex } from "../core/turns";
+import { loadTurnState, saveTurnState } from "../core/readercache";
 import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
@@ -103,7 +104,10 @@ export const fleet = new Fleet({
 setMetricsSource(() => fleet.sessions());
 /** Sessions to start later; on the board and in Settings, so cold state. */
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
-const turnIndex = new TurnIndex(fleet);
+const turnIndex = new TurnIndex(fleet, {
+  load: (id) => loadTurnState(fleet.get(id).provider, id),
+  save: (id, state) => saveTurnState(fleet.get(id).provider, id, state),
+});
 /** The newest seek per session; an older one still paging sees it and stops. */
 const seeks = new Map<string, number>();
 
