@@ -303,6 +303,10 @@ export interface Session {
   /** The AskUserQuestion dialog it is showing, while it shows one: answer it
    *  with `POST /api/sessions/:id/answer`. */
   question: { id: string; questions: AskQuestion[] } | null;
+  /** What it was sent mid-turn and is holding until the current step yields
+   *  (claude), oldest first; empty unless it is running or blocked. Claude
+   *  records its queue in the transcript, so this outlives the page that sent it. */
+  queued: QueuedMessage[];
   /** Where this session came from. */
   origin: "agentbox" | "external";
   /**
@@ -425,6 +429,12 @@ export interface MateMessage {
   body: string;
   /** An idle notice rather than a message: why it stopped (`available`, or `failed: …`). */
   idle?: string;
+}
+
+/** A message waiting in the agent's queue: as it will be delivered, and when it was queued. */
+export interface QueuedMessage {
+  text: string;
+  at: number;
 }
 
 /** One question of an AskUserQuestion call, as the agent asked it. */

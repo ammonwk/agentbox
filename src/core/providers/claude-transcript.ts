@@ -405,6 +405,9 @@ const SEEN_IDS = 512;
 const MAX_HITS = 200;
 const MAX_CWDS = 64;
 const MAX_TEAMS = 64;
+/** Claude's queue rarely holds more than a few; a long one is a missed `remove`. */
+const MAX_QUEUED = 20;
+const QUEUED_CAP = 4000;
 
 /** Token totals over assistant records, deduplicated by message id. Used for
  *  the main transcript and for each subagent transcript. */
@@ -462,6 +465,8 @@ export class ClaudeFold {
   /** The newest model call on the main chain (see TranscriptFacts.lastTurnAt). */
   private lastTurnAt: number | null = null;
   private turnOpen = false;
+  /** Messages Claude is holding until the current step yields: see `queueOp`. */
+  private queue: { text: string; at: number }[] = [];
   /** An AskUserQuestion still waiting for its answer. */
   private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
   /** The newest `permission-mode` record's (or prompt's) mode. */
@@ -527,6 +532,9 @@ export class ClaudeFold {
         // under the new directory's slug, so this is a resume candidate.
         this.noteCwd(r.relocatedCwd);
         return;
+      case "queue-operation":
+        this.queueOp(r, at);
+        return;
       case "worktree-state":
         if (this.cwds.size < MAX_CWDS) {
           for (const c of [r.worktreeSession?.originalCwd, r.worktreeSession?.worktreePath]) {
@@ -541,6 +549,7 @@ export class ClaudeFold {
         if (a?.type === "queued_command" && a.commandMode === "prompt" && !side) {
           const p = promptOf(a.prompt);
           if (p?.text) this.prompt(p.text);
+          this.unqueue(typeof a.prompt === "string" ? a.prompt : p?.text);
           this.turnOpen = true;
           // Yours unless it says otherwise — and it is when you last sent it
           // something, which the board sorts by. A session you keep talking to
@@ -553,7 +562,12 @@ export class ClaudeFold {
       }
       case "system":
         if (side) return;
-        if (r.subtype === "turn_duration") this.turnOpen = false;
+        if (r.subtype === "turn_duration") {
+          this.turnOpen = false;
+          // The next turn starts by taking what was queued: whatever the
+          // records leave behind here was taken in a way they did not say.
+          this.queue = [];
+        }
         else if (r.subtype === "scheduled_task_fire") this.turnOpen = true;
         else if (r.subtype === "compact_boundary") {
           const meta = r.compactMetadata ?? {};
@@ -607,6 +621,42 @@ export class ClaudeFold {
     this.lastPrompt = t;
   }
 
+  /**
+   * A message typed while the agent is busy waits in Claude's queue until the
+   * current step yields, and Claude records the queue as it goes: `enqueue`
+   * adds one, `dequeue` takes the oldest for the next turn, `remove` takes a
+   * named one (delivered mid-turn, or pulled back to edit), `popAll` takes
+   * them all back into the input box (an interrupt).
+   */
+  private queueOp(r: any, at: number | null): void {
+    const text = typeof r.content === "string" ? r.content.slice(0, QUEUED_CAP) : null;
+    switch (r.operation) {
+      case "enqueue":
+        if (text === null) return;
+        this.queue.push({ text, at: at ?? 0 });
+        if (this.queue.length > MAX_QUEUED) this.queue.shift();
+        return;
+      case "dequeue":
+        this.queue.shift();
+        return;
+      case "remove":
+        this.unqueue(text);
+        return;
+      case "popAll":
+        this.queue = [];
+        return;
+    }
+  }
+
+  /** The queued message `text` has gone: removed, or delivered. A `dequeue`
+   *  takes the most urgent, not always the oldest, so delivery says too. */
+  private unqueue(text: string | null | undefined): void {
+    if (!text || this.queue.length === 0) return;
+    const key = text.slice(0, QUEUED_CAP).trim();
+    const i = this.queue.findIndex((q) => q.text.trim() === key);
+    if (i >= 0) this.queue.splice(i, 1);
+  }
+
   private user(r: any, at: number | null): void {
     if (r.isMeta || r.isCompactSummary) return;
     // Claude says who a message is from: `human`, or `peer` (another agent),
@@ -648,6 +698,7 @@ export class ClaudeFold {
     const p = promptOf(content);
     if (p) {
       if (p.text) this.prompt(p.text);
+      this.unqueue(typeof content === "string" ? content : p.text);
       this.prRepo.add(p.text);
       if (mine && at !== null) this.lastPromptAt = at;
       this.turnOpen = true;
@@ -758,6 +809,8 @@ export class ClaudeFold {
       lastActivityAt: this.lastActivityAt,
       lastTurnAt: this.lastTurnAt,
       turnOpen: this.turnOpen,
+      // Background-task notifications queue too; only messages are shown.
+      queued: this.queue.filter((q) => classifyUserText(q.text) === "prompt").map((q) => ({ ...q })),
       turnError: this.turnError ? { ...this.turnError } : null,
       contextUsed: this.contextUsed,
       contextLimit: this.contextUsed === null && !this.model ? null : contextLimitFor(this.model, this.observedMax, this.autoCompactPre),

@@ -18,6 +18,7 @@ import type {
   AskAnswer,
   AskQuestion,
   ProviderId,
+  QueuedMessage,
   TimelineEvent,
   TimelinePage,
   TokenTotals,
@@ -136,6 +137,9 @@ export interface TranscriptFacts {
    */
   team?: string | null;
   teamsLed?: string[];
+  /** Messages the agent is holding until its current step yields (claude),
+   *  oldest first. Only meaningful while its process lives. */
+  queued?: QueuedMessage[];
   /** An AskUserQuestion call (claude) still waiting for its answer. */
   pendingAsk?: { id: string; questions: AskQuestion[] } | null;
   /** The session is in its CLI's skip-every-permission mode as of its latest

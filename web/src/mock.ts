@@ -299,6 +299,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     limitHit: null,
     turnError: null,
     question: null,
+    queued: [],
     origin: "agentbox",
     parent: null,
     parentByHand: false,

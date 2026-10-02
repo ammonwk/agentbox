@@ -1843,6 +1843,8 @@ export class Fleet extends EventEmitter {
       // Only while the dialog is up: a call recorded but not yet answered is
       // also what a session interrupted mid-question leaves behind.
       question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,
+      // The queue lives in the process: one that has ended took it with it.
+      queued: live === "running" || live === "blocked" ? (f?.queued ?? []) : [],
       origin: rec.origin,
       parent: rec.parent ?? null,
       parentByHand: !!rec.parentByHand,

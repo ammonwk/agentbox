@@ -1,5 +1,5 @@
 import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Btw, MateMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
+import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, fmtClock, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
@@ -80,7 +80,9 @@ export function Timeline({ session }: { session: Session }) {
     }
     return m;
   }, [events, board]);
-  const echoes = useEchoes(session.id, events);
+  // Sent mid-turn and held by the agent until its current step yields.
+  const queued = session.queued;
+  const echoes = useEchoes(session.id, events, queued);
   // The turn is open but nothing has landed: the agent is thinking (a running
   // tool has a row of its own, spinning, so this is only for the gap before
   // the next step is written). The terminal shows the same state.
@@ -148,7 +150,7 @@ export function Timeline({ session }: { session: Session }) {
       el.scrollTop = el.scrollHeight;
     }
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
-  }, [events, pinned, echoes.length, btw, thinking]);
+  }, [events, pinned, echoes.length, queued.length, btw, thinking]);
 
   // The rest of a staged page rendered above what is on screen: stay at the
   // bottom if that is where the reader was, else keep their place.
@@ -340,6 +342,9 @@ export function Timeline({ session }: { session: Session }) {
               renderRow(r)
             ),
           )}
+          {queued.map((q, i) => (
+            <UserRow key={`q${i}:${q.at}`} ev={{ id: `queued:${q.at}`, at: q.at, kind: "user", text: q.text }} queued />
+          ))}
           {echoes.map((e) => (
             <div key={e.at} className="tl-user tl-echo" title="Sent; the agent has not recorded it yet">
               <div className="tl-who">
@@ -400,7 +405,7 @@ function useFold(): [boolean, (on: boolean) => void] {
 }
 
 /** Messages sent from here that the transcript has not caught up with. */
-function useEchoes(sessionId: string, events: readonly TimelineEvent[]): Echo[] {
+function useEchoes(sessionId: string, events: readonly TimelineEvent[], queued: readonly QueuedMessage[]): Echo[] {
   const [sent, setSent] = useState<Echo[]>([]);
   useEffect(() => onEcho((e) => e.sessionId === sessionId && setSent((xs) => [...xs, e])), [sessionId]);
   const [, tick] = useState(0);
@@ -410,7 +415,8 @@ function useEchoes(sessionId: string, events: readonly TimelineEvent[]): Echo[] 
     return () => clearInterval(t);
   }, [sent.length]);
   const users = useMemo(() => events.filter((e): e is Extract<TimelineEvent, { kind: "user" }> => e.kind === "user").slice(-20), [events]);
-  const live = sent.filter((e) => Date.now() - e.at < ECHO_TTL_MS && !landed(e, users));
+  // In the agent's queue is as good as landed: the queued row stands in for it.
+  const live = sent.filter((e) => Date.now() - e.at < ECHO_TTL_MS && !landed(e, users) && !landed(e, queued));
   useEffect(() => {
     if (live.length !== sent.length) setSent(live);
   });
@@ -459,7 +465,7 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
  * says who sent it and links to them, in a quieter frame than yours. Pastes
  * are shown as pastes: Claude records one wrapped in `<pasted_content>`.
  */
-function UserRow({ ev }: { ev: Extract<TimelineEvent, { kind: "user" }> }) {
+function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean }) {
   const sent = useMemo(() => readSent(ev.text), [ev.text]);
   const parts = useMemo(() => splitPastes(sent.text), [sent.text]);
   const body = parts.map((p, i) =>
@@ -471,12 +477,20 @@ function UserRow({ ev }: { ev: Extract<TimelineEvent, { kind: "user" }> }) {
       <Markdown key={i} text={p.text} />
     ),
   );
+  const wait = queued ? (
+    <span className="faint" title="Waiting in the agent's queue: it arrives when the current step yields">
+      {" "}
+      · queued
+    </span>
+  ) : null;
+  const cls = queued ? " tl-queued" : "";
   if (sent.agent) {
     return (
-      <div className="tl-user tl-sent" title={fmtClock(ev.at)} data-ev={ev.id}>
+      <div className={`tl-user tl-sent${cls}`} title={fmtClock(ev.at)} data-ev={ev.id}>
         <div className="tl-who">
           <Icon.send size={12} /> <Party name={sent.from} />
           <span className="tl-via">via {sent.via}</span>
+          {wait}
           <time className="tl-time">{fmtClock(ev.at)}</time>
         </div>
         <Clamp lines={6}>{body}</Clamp>
@@ -484,10 +498,11 @@ function UserRow({ ev }: { ev: Extract<TimelineEvent, { kind: "user" }> }) {
     );
   }
   return (
-    <div className="tl-user" title={fmtClock(ev.at)} data-ev={ev.id}>
+    <div className={`tl-user${cls}`} title={fmtClock(ev.at)} data-ev={ev.id}>
       <div className="tl-who">
         <Icon.user size={13} /> You
         {ev.images ? <span className="faint"> · {ev.images} image{ev.images === 1 ? "" : "s"}</span> : null}
+        {wait}
         <time className="tl-time">{fmtClock(ev.at)}</time>
       </div>
       {body}

@@ -847,9 +847,13 @@
   max-width: 200px;
 }
 
-/* Sent from here, not yet in the transcript. */
-.tl-echo {
+/* Sent from here, not yet in the transcript; or in the agent's queue. */
+.tl-echo,
+.tl-queued {
   opacity: 0.6;
+}
+.tl-queued {
+  border-style: dashed;
 }
 
 /* The turn is running and its next step has not landed yet. */
