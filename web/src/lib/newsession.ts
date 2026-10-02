@@ -220,6 +220,7 @@ export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string
   }
   const known = new Set(prs.map((p) => p.number));
   for (const r of prRefs(text)) {
+    if (r.repo && r.repo.toLowerCase() !== repoSlug?.toLowerCase()) continue;
     const explicit = /^pr/i.test(text.slice(r.start, r.end));
     const before = text.slice(Math.max(0, r.start - 16), r.start);
     if (/\b(issues?|tickets?|bugs?|tasks?|stor(y|ies))\s*$/i.test(before)) continue;

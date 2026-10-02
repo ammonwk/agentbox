@@ -179,16 +179,14 @@ function safeDecode(s: string): string {
   }
 }
 
-/** `#6307` in prose becomes a link to the PR. Code and existing links are
- *  left alone: a number inside a code block is the code's business. */
+/** `#6307` in prose becomes a link to the PR, and in inline code too, where
+ *  agents put them as often as not (only with a `#` or `PR` there: a bare
+ *  number in code is a port or a pid). Code blocks and existing links are
+ *  left alone. */
 function remarkPrLinks(base: string) {
   return () => (tree: Root) => {
-    rewrite(tree, false, (text, code) =>
-      splitRefs(text, code, (t) => {
-        const refs = prRefs(t);
-        if (refs.length === 0) return [];
-        return refs.map((r) => ({ start: r.start, end: r.end, url: prUrl(base, r.number) }));
-      }),
+    rewrite(tree, true, (text, code) =>
+      splitRefs(text, code, (t) => prRefs(t, code).map((r) => ({ start: r.start, end: r.end, url: prUrl(base, r.number, r.repo) }))),
     );
   };
 }

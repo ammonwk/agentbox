@@ -177,7 +177,7 @@ export default function Terminal({
         callback(found.length ? found : undefined);
       },
     });
-    // PR numbers — `#6307`, `PR 6644`, a bare `6644` — open the PR on GitHub.
+    // PR numbers — `#6307`, `PR 6644`, `owner/repo#12`, a bare `6644` — open the PR on GitHub.
     const prLinks = term.registerLinkProvider({
       provideLinks(y, callback) {
         const base = pr.current;
@@ -189,7 +189,7 @@ export default function Terminal({
           decorations: { pointerCursor: true, underline: true },
           activate: (e: MouseEvent) => {
             e.preventDefault();
-            window.open(prUrl(base, r.number), "_blank", "noopener");
+            window.open(prUrl(base, r.number, r.repo), "_blank", "noopener");
           },
         }));
         callback(found.length ? found : undefined);
