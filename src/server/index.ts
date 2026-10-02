@@ -1202,15 +1202,18 @@ export async function startServer(): Promise<void> {
   await accounts.start();
   phase("accounts");
   fleet.start();
+  // Before the first client is welcomed: cold state's first push would
+  // otherwise carry the slow inputs' defaults — a checklist that says tmux is
+  // missing on a machine that has it, until the first refresh lands a minute
+  // later. Beside the first pass, not after it: each probe is a process to wait on.
+  const firstSlow = refreshSlow().catch((e: unknown) => console.error("agentbox: first slow refresh failed:", e));
 
   await fleet.ready;
   phase("first pass");
   scheduler.start();
-  // Before the first client is welcomed: cold state's first push would
-  // otherwise carry the slow inputs' defaults — a checklist that says tmux is
-  // missing on a machine that has it, until the first refresh lands a minute
-  // later.
-  await refreshSlow().catch((e: unknown) => console.error("agentbox: first slow refresh failed:", e));
+  await firstSlow;
+  // Its PRs are the sessions', which the pass may have finished after it looked.
+  slow.prs = openPrs(fleet.sessions());
   phase("slow inputs");
   setInterval(() => refreshSlow().catch((e: unknown) => console.error("agentbox: slow refresh failed:", e)), SLOW_REFRESH_MS).unref?.();
   void refreshPrs();

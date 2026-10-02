@@ -102,6 +102,7 @@ import { agentboxHome } from "./paths";
 import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
 import { weeklyWindow } from "./balancer";
 import { statedWaitMs } from "./retrywait";
+import { PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
@@ -128,6 +129,11 @@ const DISCOVERY_MS = 10_000;
 const TICK_MS = 2_000;
 /** How often readers' positions are saved; a crash re-reads at most this much. */
 const READER_SAVE_MS = 60_000;
+/** How long a pass spends catching readers up (see `pass`). */
+const CATCH_UP_MS = 3_000;
+/** A reader whose session runs nowhere and whose file has not moved, nor its
+ *  timeline been read, for this long is put away (see `Tracked`). */
+const READER_IDLE_MS = 10 * 60_000;
 /** A pass slower than this logs where its time went. */
 const SLOW_PASS_MS = 4 * TICK_MS;
 
@@ -200,10 +206,22 @@ export class FleetError extends Error {
   }
 }
 
+/**
+ * A transcript, and its reader while it is live. A reader holds an index of
+ * its whole file; a week of sessions is a thousand and more of them, nearly
+ * all closed or stopped and never written to again. So a reader is made only
+ * while its transcript can move — a process or pane of its session runs, the
+ * file changed, or you are reading its timeline — and is put away
+ * (`readercache.ts`) once it has sat still for `READER_IDLE_MS`. Without one,
+ * `ref` is the file as its record's facts describe it, and the board draws
+ * the session from those facts.
+ */
 interface Tracked {
   ref: TranscriptRef;
-  reader: TranscriptReader;
+  reader: TranscriptReader | null;
   facts: TranscriptFacts | null;
+  /** When the file last moved, or its timeline was last read. */
+  usedAt: number;
   /** Rate-limit hits already recorded, so each is written once. */
   hitsSeen: number;
   lastUsageAt: number;
@@ -250,6 +268,8 @@ export class Fleet extends EventEmitter {
   private breathedAt = 0;
   /** The first pass's progress, until it is done. */
   private starting: { read: number; of: number } | null = { read: 0, of: 0 };
+  /** Every reader has read its file through (see the read in `pass`). */
+  private caughtUp = false;
   /** Transcripts that turned out to be in-process subagents; never sessions. */
   private ignored = new Set<string>();
   private pool: ReadonlyMap<string, PoolAgent> = new Map();
@@ -261,6 +281,9 @@ export class Fleet extends EventEmitter {
   private byAgentId = new Map<string, string>();
   private views = new Map<string, Session>();
   private fingerprints = new Map<string, string>();
+  /** Views of sessions nothing of which runs, with what each was drawn from
+   *  (`restingKey`): redrawn only when one of those moves. */
+  private resting = new Map<string, { rec: SessionRecord; facts: TranscriptFacts | null; key: string; view: Session }>();
   private live = new Map<string, LiveProcess>();
   private livePids = new Map<number, LiveProcess & { provider: ProviderId }>();
   private panes = new Map<string, PaneInfo>();
@@ -469,7 +492,7 @@ export class Fleet extends EventEmitter {
             console.error(`agentbox: ${adapter.id} transcript scan failed for ${account.label}:`, e);
           }
           for (const ref of refs) {
-            this.track(adapter, ref);
+            this.track(ref);
             await this.breathe();
           }
         }
@@ -491,7 +514,7 @@ export class Fleet extends EventEmitter {
       const account = p.accountId ? accounts.find((a) => a.id === p.accountId) : null;
       if (!account) continue;
       const ref = await this.adapter(provider).findTranscript(account, p.agentSessionId).catch(() => null);
-      if (ref) this.track(this.adapter(provider), ref);
+      if (ref) this.track(ref);
     }
     // And so is every open agentbox session, so its board row has facts.
     for (const rec of listSessionRecords(since)) {
@@ -500,30 +523,46 @@ export class Fleet extends EventEmitter {
       const account = accounts.find((a) => a.id === rec.accountId);
       if (!account || !rec.agentSessionId) continue;
       const ref = await this.adapter(rec.provider).findTranscript(account, rec.agentSessionId).catch(() => null);
-      if (ref) this.track(this.adapter(rec.provider), ref);
+      if (ref) this.track(ref);
     }
 
     lap("find");
 
-    // Read what was appended.
+    // Read what was appended. A reader with no facts yet reads its file
+    // from where it was put away (or a reader-code change, from the start):
+    // catching up, smallest first and for at most `CATCH_UP_MS` a pass, so a
+    // restart's board shows in seconds and every tick still comes round. The
+    // board draws one still behind from its record until then.
     const changed = new Set<string>();
-    if (this.starting) this.starting.of = this.tracked.size;
-    for (const [path, t] of this.tracked) {
-      if (this.starting) this.starting.read++;
+    const behind = [...this.tracked].filter(([path, t]) => t.reader && !t.facts && !this.ignored.has(path));
+    if (this.starting) this.starting.of = behind.length;
+    const catchUpEnds = performance.now() + CATCH_UP_MS;
+    let stillBehind = 0;
+    const order = behind.length ? [...this.tracked].sort(([, a], [, b]) => +!!a.facts - +!!b.facts || a.ref.size - b.ref.size) : this.tracked;
+    for (const [path, t] of order) {
       await this.breathe();
       if (this.ignored.has(path)) continue;
+      if (t.reader && !t.facts) {
+        if (performance.now() > catchUpEnds) {
+          stillBehind++;
+          continue;
+        }
+        if (this.starting) this.starting.read++;
+      }
       try {
         const st = statSync(transcriptFile(path));
         // A live session is re-read every tick even when its own file has not
         // moved: its subagents write elsewhere, and their tokens are its tokens.
         const live = this.live.has(`${t.ref.provider}:${t.ref.agentSessionId}`);
-        if (t.facts && !live && st.mtimeMs === t.ref.mtimeMs && st.size === t.ref.size) continue;
+        const still = st.mtimeMs === t.ref.mtimeMs && st.size === t.ref.size;
+        if (still && !live && (t.facts || !t.reader)) continue;
+        if (!still) t.usedAt = now;
         t.ref = { ...t.ref, mtimeMs: st.mtimeMs, size: st.size };
       } catch {
         continue;
       }
       try {
-        const r = await t.reader.refresh();
+        const r = await this.load(t).refresh();
         t.facts = r.facts;
         if (r.changed) this.unsaved.add(path);
         // A restored reader's first facts are new to this process, though
@@ -532,6 +571,7 @@ export class Fleet extends EventEmitter {
         t.restored = false;
         if (r.facts.isSubagent) {
           this.ignored.add(path);
+          this.putAway(path, t, null);
           continue;
         }
         if (fresh) changed.add(path);
@@ -541,6 +581,7 @@ export class Fleet extends EventEmitter {
     }
 
     lap("read");
+    this.caughtUp = stillBehind === 0;
     this.matchPendingSpawns(now);
     this.followPaneSwitches(accounts);
 
@@ -548,10 +589,12 @@ export class Fleet extends EventEmitter {
     for (const [path, t] of this.tracked) {
       if (!t.facts || this.ignored.has(path)) continue;
       const id = this.recordFor(t, settings.balancer, now);
-      if (!changed.has(path)) continue;
-      this.persistFacts(id, t, now);
-      this.collectMetrics(id, t, now);
-      this.emit("transcript", id);
+      if (changed.has(path)) {
+        this.persistFacts(id, t, now);
+        this.collectMetrics(id, t, now);
+        this.emit("transcript", id);
+      }
+      if (now - t.usedAt >= READER_IDLE_MS && !this.runs(id, t.ref)) this.putAway(path, t, id);
     }
 
     this.linkParents(since);
@@ -561,15 +604,20 @@ export class Fleet extends EventEmitter {
     this.rebuildViews(since, now);
     lap("views");
     await this.parkIdle(now, settings.parkIdleMin);
-    this.continueStalled(now);
-    this.nudgeErrored(now);
+    // What acts on a session's transcript waits for every one to be read.
+    if (this.caughtUp) {
+      this.continueStalled(now);
+      this.nudgeErrored(now);
+    }
     lap("park");
     await this.refreshWork(now);
     lap("work");
     await this.watchStarts(now);
     lap("starts");
     this.checkCrash(now);
-    this.recordLive(now);
+    // Until then the snapshot recovery would start from stays the last one
+    // written from transcripts read through.
+    if (this.caughtUp) this.recordLive(now);
     for (const b of this.btwHistory.read(accountsOf("claude").map((a) => a.home))) this.watchTerminalBtw(b);
     if (now - this.readersSavedAt >= READER_SAVE_MS) this.saveReaders();
     lap("rest");
@@ -591,7 +639,7 @@ export class Fleet extends EventEmitter {
     this.readersSavedAt = this.now();
     for (const path of this.unsaved) {
       const t = this.tracked.get(path);
-      const state = t?.reader.saveState?.();
+      const state = t?.reader?.saveState?.();
       if (t && state) saveReaderState(t.ref.provider, path, state);
     }
     this.unsaved.clear();
@@ -726,14 +774,54 @@ export class Fleet extends EventEmitter {
     this.screenWaits.set(id, { key, until: now + ms + 60_000 });
   }
 
-  private track(adapter: ProviderAdapter, ref: TranscriptRef): void {
-    if (this.ignored.has(ref.path)) return;
-    const existing = this.tracked.get(ref.path);
-    if (existing) return;
-    const reader = adapter.reader(ref);
-    const saved = reader.loadState ? loadReaderState(ref.provider, ref.path) : null;
-    const restored = saved !== null && reader.loadState!(saved);
-    this.tracked.set(ref.path, { ref: { ...ref, mtimeMs: -1 }, reader, facts: null, hitsSeen: -1, lastUsageAt: 0, restored });
+  private track(ref: TranscriptRef): void {
+    if (this.ignored.has(ref.path) || this.tracked.has(ref.path)) return;
+    // Its record's facts are of the file as it is, and nothing of it runs:
+    // the board has all it needs, and no reader is made until the file moves.
+    const rec = findSessionRecord(ref.provider, ref.agentSessionId);
+    if (
+      rec?.transcriptPath === ref.path &&
+      (rec.facts as StoredFacts | null)?.transcriptSize === ref.size &&
+      !this.live.has(`${ref.provider}:${ref.agentSessionId}`) &&
+      !(rec.tmux && this.panes.has(rec.tmux))
+    ) {
+      this.tracked.set(ref.path, { ref, reader: null, facts: null, usedAt: 0, hitsSeen: -1, lastUsageAt: 0, restored: false });
+      return;
+    }
+    const t: Tracked = { ref: { ...ref, mtimeMs: -1 }, reader: null, facts: null, usedAt: this.now(), hitsSeen: -1, lastUsageAt: 0, restored: false };
+    this.load(t);
+    this.tracked.set(ref.path, t);
+  }
+
+  /** The transcript's reader, made (and carried on from where a server left
+   *  it, `readercache.ts`) if it was put away. */
+  private load(t: Tracked): TranscriptReader {
+    if (t.reader) return t.reader;
+    const reader = this.adapter(t.ref.provider).reader(t.ref);
+    const saved = reader.loadState ? loadReaderState(t.ref.provider, t.ref.path) : null;
+    t.restored = saved !== null && reader.loadState!(saved);
+    t.reader = reader;
+    return reader;
+  }
+
+  /** Put a reader away: its place saved for the next to carry on from, and
+   *  its session's record holding facts of the file as it is now. */
+  private putAway(path: string, t: Tracked, id: string | null): void {
+    if (this.unsaved.delete(path)) {
+      const state = t.reader?.saveState?.();
+      if (state) saveReaderState(t.ref.provider, path, state);
+    }
+    const rec = id && t.facts ? getSessionRecord(id) : null;
+    if (rec && (rec.facts as StoredFacts | null)?.transcriptSize !== t.ref.size) this.persistFacts(rec.id, t, this.now());
+    t.reader = null;
+    t.facts = null;
+    t.restored = false;
+    this.wakeScans.delete(path);
+  }
+
+  /** Whether anything of the session runs: its process, or its pane. */
+  private runs(id: string, ref: TranscriptRef): boolean {
+    return this.live.has(`${ref.provider}:${ref.agentSessionId}`) || (this.views.get(id)?.host ?? "none") !== "none";
   }
 
   private poolAgentOf(rec: Pick<SessionRecord, "provider" | "agentSessionId">): PoolAgent | undefined {
@@ -897,7 +985,7 @@ export class Fleet extends EventEmitter {
       startedAt: started,
       lastActivityAt: f.lastActivityAt ?? t.ref.mtimeMs,
       archivedAt: null,
-      facts: compactFacts(f),
+      facts: compactFacts(f, t.ref.size),
       createdAt: now,
     });
     this.byAgentId.set(key, id);
@@ -984,7 +1072,7 @@ export class Fleet extends EventEmitter {
     const f = t.facts!;
     const rec = getSessionRecord(id);
     if (!rec) return;
-    const patch: Partial<SessionRecord> = { facts: compactFacts(f), transcriptPath: t.ref.path };
+    const patch: Partial<SessionRecord> = { facts: compactFacts(f, t.ref.size), transcriptPath: t.ref.path };
     const last = f.lastActivityAt ?? t.ref.mtimeMs;
     // The transcript's newest turn is the record, so it also corrects a value
     // that was set too late; an mtime is only a guess and may only move it on.
@@ -1606,7 +1694,7 @@ export class Fleet extends EventEmitter {
       if (!rec || !t) continue;
       let events: TimelineEvent[];
       try {
-        events = (await t.reader.timeline({ limit: 80 })).events;
+        events = (await this.load(t).timeline({ limit: 80 })).events;
       } catch {
         continue;
       }
@@ -1658,7 +1746,18 @@ export class Fleet extends EventEmitter {
     const seen = new Set<string>();
     let dirty = false;
     for (const rec of records) {
+      // Most of the board runs nowhere and has not moved since the last
+      // pass: it keeps the view it had.
+      const t = rec.transcriptPath ? this.tracked.get(rec.transcriptPath) : undefined;
+      const key = this.restingKey(rec, t, now);
+      const kept = key === null ? undefined : this.resting.get(rec.id);
+      if (kept && kept.rec === rec && kept.facts === (t?.facts ?? null) && kept.key === key) {
+        seen.add(rec.id);
+        continue;
+      }
       const view = this.viewOf(rec, now);
+      if (key !== null && view) this.resting.set(rec.id, { rec, facts: t?.facts ?? null, key, view });
+      else this.resting.delete(rec.id);
       if (!view) continue;
       seen.add(rec.id);
       // Running again, however it got there (a resume here, or `claude
@@ -1679,10 +1778,26 @@ export class Fleet extends EventEmitter {
         this.views.delete(id);
         this.liveStatus.delete(id);
         this.fingerprints.delete(id);
+        this.resting.delete(id);
         dirty = true;
       }
     }
     if (dirty) this.emit("sessions");
+  }
+
+  /**
+   * For a session nothing of which runs, what else its view is drawn from —
+   * whether its cache has gone cold, whether its parent runs, its pool agent,
+   * its account's owner — so a pass can tell the view it has is still right.
+   * Null while a process or pane of it is there: then it is drawn anew.
+   */
+  private restingKey(rec: SessionRecord, t: Tracked | undefined, now: number): string | null {
+    if (rec.tmux && this.panes.has(rec.tmux)) return null;
+    if (rec.agentSessionId && this.live.has(`${rec.provider}:${rec.agentSessionId}`)) return null;
+    const f = t?.facts ?? (rec.facts as Partial<TranscriptFacts> | null);
+    const cold = this.movable.has(rec.provider) && now - (f?.lastTurnAt ?? f?.lastActivityAt ?? rec.lastActivityAt) > this.coldAfterMs;
+    const parentRuns = !!rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none";
+    return `${cold}|${parentRuns}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}`;
   }
 
   private viewOf(rec: SessionRecord, now: number): Session | null {
@@ -1821,8 +1936,8 @@ export class Fleet extends EventEmitter {
       branch: f?.gitBranch ?? null,
       worktree: rec.worktree,
       model: f?.model ?? null,
-      firstPrompt: f?.firstPrompt ?? null,
-      lastPrompt: f?.lastPrompt ?? null,
+      firstPrompt: f?.firstPrompt?.slice(0, PROMPT_PREVIEW) ?? null,
+      lastPrompt: f?.lastPrompt?.slice(0, PROMPT_PREVIEW) ?? null,
       lastPromptAt: f?.lastPromptAt ?? rec.startedAt,
       lastMessage: f?.lastMessage ?? null,
       contextUsed: f?.contextUsed ?? null,
@@ -1995,11 +2110,17 @@ export class Fleet extends EventEmitter {
   }
 
   private readerOf(id: string): TranscriptReader {
+    const t = this.trackedOf(id);
+    t.usedAt = this.now();
+    return this.load(t);
+  }
+
+  private trackedOf(id: string): Tracked {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const t = rec.transcriptPath ? this.tracked.get(rec.transcriptPath) : undefined;
     if (!t) throw new FleetError(404, `session ${id} has no transcript yet`);
-    return t.reader;
+    return t;
   }
 
   timeline(id: string, before: string | null, limit: number): Promise<TimelinePage> {
@@ -2012,7 +2133,7 @@ export class Fleet extends EventEmitter {
 
   hasTranscript(id: string): boolean {
     try {
-      this.readerOf(id);
+      this.trackedOf(id);
       return true;
     } catch {
       return false;
@@ -2348,7 +2469,7 @@ export class Fleet extends EventEmitter {
     this.wokeAt.set(rec.id, this.now());
     if (account.id !== from.id) {
       const ref = await adapter.findTranscript(account, rec.agentSessionId!).catch(() => null);
-      if (ref) this.track(adapter, ref);
+      if (ref) this.track(ref);
     }
     this.startTmux({ ...rec, ...patch }, account, cwd, prompt);
   }
@@ -3157,15 +3278,19 @@ function checkAnswers(questions: AskQuestion[], answers: AskAnswer[]): void {
   });
 }
 
-/** What the database keeps of the facts: enough to draw the board before the
- *  first scan, not the whole fold. */
-function compactFacts(f: TranscriptFacts): Partial<TranscriptFacts> {
+/** What the database keeps of the facts: enough to draw a session that has
+ *  no reader (see `Tracked`), not the whole fold. `transcriptSize` is how much
+ *  of the file they are of: the same size later means nothing new to read. */
+type StoredFacts = Partial<TranscriptFacts> & { transcriptSize?: number };
+
+function compactFacts(f: TranscriptFacts, transcriptSize: number): StoredFacts {
   return {
+    transcriptSize,
     cwd: f.cwd,
     resumeCwd: f.resumeCwd,
     title: f.title,
-    firstPrompt: f.firstPrompt?.slice(0, 500) ?? null,
-    lastPrompt: f.lastPrompt?.slice(0, 500) ?? null,
+    firstPrompt: f.firstPrompt?.slice(0, PROMPT_PREVIEW) ?? null,
+    lastPrompt: f.lastPrompt?.slice(0, PROMPT_PREVIEW) ?? null,
     lastPromptAt: f.lastPromptAt,
     lastMessage: f.lastMessage?.slice(0, 300) ?? null,
     model: f.model,
@@ -3178,6 +3303,7 @@ function compactFacts(f: TranscriptFacts): Partial<TranscriptFacts> {
     contextLimit: f.contextLimit,
     tokens: f.tokens,
     rateLimitHits: f.rateLimitHits.slice(-1),
+    turnError: f.turnError ?? null,
   };
 }
 

@@ -7,6 +7,10 @@
  *  be looked for inside it. A paste you made yourself is recorded the same
  *  way, wherever in the message it went. */
 
+/** How much of a session's first and last prompt the board carries (and its
+ *  record keeps); the transcript has the rest. */
+export const PROMPT_PREVIEW = 500;
+
 /** What `agentbox send` puts before a message an agent sends. The sender's
  *  agentbox id follows `from` when it is known (`AGENTBOX_SESSION`). */
 export const AGENT_SENT_MARK = "[via agentbox send]";

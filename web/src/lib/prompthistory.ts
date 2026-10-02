@@ -1,5 +1,5 @@
 import type { Session } from "../../../src/core/types";
-import { dropPasteTags, isAgentSent } from "../../../src/core/sent";
+import { dropPasteTags, isAgentSent, PROMPT_PREVIEW } from "../../../src/core/sent";
 import { api } from "../api";
 
 export interface PromptHistoryEntry {
@@ -16,10 +16,10 @@ export function promptHistory(sessions: readonly Session[]): PromptHistoryEntry[
   });
 }
 
-/** Claude and Codex cap board previews at 2000 characters. Recall the full
- *  opening prompt from their transcript when it may have been capped. */
+/** The board carries the first `PROMPT_PREVIEW` characters of a prompt.
+ *  Recall the full opening prompt from the transcript when it may have been capped. */
 export async function recallPrompt(entry: PromptHistoryEntry, isCurrent = () => true): Promise<string> {
-  if (entry.prompt.length < 2000) return entry.prompt;
+  if (entry.prompt.length < PROMPT_PREVIEW) return entry.prompt;
   let before: string | undefined;
   let prompt: string | null = null;
   do {

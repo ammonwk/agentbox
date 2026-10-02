@@ -101,10 +101,16 @@ once: commit your own files by path, never `git add -A`.
   across restarts too: each reader's `saveState` goes to
   `~/.local/share/agentbox/cache/readers/` (`src/core/readercache.ts`) and
   the next server carries on from it, so a restart reads what was appended
-  while it was down, not a week of transcripts. A saved state is stamped with
-  a hash of its provider's reading code; change a fold and that provider's
-  transcripts are read in full once. A new fold field must be plain data
-  (`foldstate.ts`), or the reader must say how to save it.
+  while it was down, not a week of transcripts. A reader exists only while
+  its transcript can move — a process or pane of its session runs, the file
+  changed, its timeline is open — and is put away after ten still minutes;
+  the rest of the board is drawn from each session's record, whose facts say
+  how much of the file they cover (`Tracked` in `src/core/fleet.ts`). A saved
+  state is stamped with a hash of its provider's reading code; change a fold
+  and that provider's live transcripts are read in full again, a few seconds
+  a pass while the board shows the rest from their records, and the others
+  when they next move. A new fold field must be plain data (`foldstate.ts`),
+  or the reader must say how to save it.
 
 ## Where things are
 
