@@ -8,7 +8,8 @@
 
 import { readFileSync, readlinkSync, readdirSync } from "node:fs";
 import { basename } from "node:path";
-import { argvOf, bootTimeMs, clockHz } from "../proc";
+import { argvOf, bootTimeMs, clockHz, parseStat } from "../proc";
+import type { ProviderId } from "../types";
 
 export { argvOf };
 
@@ -156,4 +157,35 @@ export function runsCli(argv: string[], name: string): boolean {
     return b1 === name || b1 === `${name}.js` || b1 === `${name}.exe` || a1.includes(`/${name}/`);
   }
   return false;
+}
+
+/** A process as pid and start time: the pid alone may since belong to another. */
+export interface ProcessRef {
+  pid: number;
+  startedAt: number;
+}
+
+const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp"];
+
+/** The nearest ancestor of this process that runs an agent CLI. */
+export function agentAncestor(): ProcessRef | null {
+  for (let pid = process.ppid, hops = 0; pid > 1 && hops < 64; hops++) {
+    const argv = argvOf(pid);
+    if (argv && AGENT_CLIS.some((name) => runsCli(argv, name))) {
+      const startedAt = startedAtOf(pid);
+      return startedAt === null ? null : { pid, startedAt };
+    }
+    let stat: string;
+    try {
+      stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    } catch {
+      return null;
+    }
+    pid = parseStat(pid, stat)?.ppid ?? 0;
+  }
+  return null;
+}
+
+export function stillRunning(p: ProcessRef): boolean {
+  return startedAtOf(p.pid) === p.startedAt;
 }

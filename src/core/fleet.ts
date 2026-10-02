@@ -128,6 +128,10 @@ const DISCOVERY_MS = 10_000;
 const TICK_MS = 2_000;
 /** How often readers' positions are saved; a crash re-reads at most this much. */
 const READER_SAVE_MS = 60_000;
+/** A pass slower than this logs where its time went. */
+const SLOW_PASS_MS = 4 * TICK_MS;
+
+const screenKey = (pane: PaneInfo): string => `${pane.activity}:${pane.width}x${pane.height}`;
 /** Longest stretch of a pass without letting the event loop in. */
 const BREATHE_MS = 25;
 /** Dialogs are only auto-answered this soon after we start a process: a key
@@ -156,6 +160,7 @@ export interface Runtime {
   sendText(name: string, text: string): Promise<void>;
   sendKeys(name: string, keys: string[]): void;
   capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
+  captureMany(names: string[]): Map<string, string | null>;
   killSession(name: string): void;
   setZoom?(name: string, on: boolean): boolean;
   /** A window too small to read a dialog off grown for a while, or handed back; whether it grew. */
@@ -259,8 +264,9 @@ export class Fleet extends EventEmitter {
   private live = new Map<string, LiveProcess>();
   private livePids = new Map<number, LiveProcess & { provider: ProviderId }>();
   private panes = new Map<string, PaneInfo>();
-  /** The last screen `settledScreen` captured of each pane, and when. */
-  private screens = new Map<string, { key: string; at: number; screen: string }>();
+  /** The last screen captured of each pane, when, and in which pass. */
+  private screens = new Map<string, { key: string; at: number; pass: number; screen: string }>();
+  private passes = 0;
   private deadSince = new Map<string, number>();
   private startedAt = new Map<string, number>();
   /** When each session was last woken, onto a new account or its own: its
@@ -406,9 +412,19 @@ export class Fleet extends EventEmitter {
     const since = now - settings.boardDays * DAY;
     const accounts = listAccounts();
     const accountsOf = (p: ProviderId) => accounts.filter((a) => a.provider === p);
+    const started = performance.now();
+    let lapAt = started;
+    const laps: string[] = [];
+    const lap = (phase: string) => {
+      const t = performance.now();
+      laps.push(`${phase}=${Math.round(t - lapAt)}`);
+      lapAt = t;
+    };
 
+    this.passes++;
     this.panes = new Map(this.deps.runtime.listPanes().map((p) => [p.name, p]));
     for (const name of this.screens.keys()) if (!this.panes.has(name)) this.screens.delete(name);
+    this.prefetchScreens();
     this.coldAfterMs = settings.balancer.claimIdleMin * 60_000;
     this.owner = owners(accounts);
     // Movable means there is another *account* to move to; a second home on
@@ -418,6 +434,7 @@ export class Fleet extends EventEmitter {
         .filter((a) => a.moveSession && new Set(accountsOf(a.id).map((x) => this.ownerOf(x.id))).size > 1)
         .map((a) => a.id),
     );
+    lap("panes");
 
     // Processes.
     this.live.clear();
@@ -437,6 +454,7 @@ export class Fleet extends EventEmitter {
         }
       }
     });
+    lap("procs");
 
     // New transcripts.
     if (now - this.lastDiscovery >= DISCOVERY_MS) {
@@ -457,6 +475,7 @@ export class Fleet extends EventEmitter {
       }
       this.pool = this.deps.poolAgents?.() ?? this.pool;
     }
+    lap("discovery");
     this.poolStates.clear();
     for (const [key, a] of this.pool) {
       const state = this.live.has(key) && isAlive(a.serverPid) ? poolState(a) : null;
@@ -482,6 +501,8 @@ export class Fleet extends EventEmitter {
       const ref = await this.adapter(rec.provider).findTranscript(account, rec.agentSessionId).catch(() => null);
       if (ref) this.track(this.adapter(rec.provider), ref);
     }
+
+    lap("find");
 
     // Read what was appended.
     const changed = new Set<string>();
@@ -518,6 +539,7 @@ export class Fleet extends EventEmitter {
       }
     }
 
+    lap("read");
     this.matchPendingSpawns(now);
     this.followPaneSwitches(accounts);
 
@@ -536,15 +558,22 @@ export class Fleet extends EventEmitter {
     this.reapDeadPanes(now);
     this.reapParked(now);
     this.rebuildViews(since, now);
+    lap("views");
     await this.parkIdle(now, settings.parkIdleMin);
     this.continueStalled(now);
     this.nudgeErrored(now);
+    lap("park");
     await this.refreshWork(now);
+    lap("work");
     await this.watchStarts(now);
+    lap("starts");
     this.checkCrash(now);
     this.recordLive(now);
     for (const b of this.btwHistory.read(accountsOf("claude").map((a) => a.home))) this.watchTerminalBtw(b);
     if (now - this.readersSavedAt >= READER_SAVE_MS) this.saveReaders();
+    lap("rest");
+    const total = performance.now() - started;
+    if (total > SLOW_PASS_MS) console.log(`agentbox: fleet_pass_slow ms=${Math.round(total)} sessions=${this.views.size} tracked=${this.tracked.size} ${laps.join(" ")}`);
   }
 
   /** Save the position of every reader that read something since the last
@@ -1827,22 +1856,38 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * A pane's screen for a pass's look at it, captured again only when tmux has
-   * seen output in the window, or it was resized, since the last capture.
-   * Every waiting pane was captured every pass: sixty of them held the server
-   * up for a quarter of a second in every two.
+   * A pane's screen for a pass's look at it: the one captured this pass, or an
+   * older one when tmux has seen no output in the window, and no resize, since.
    */
   private settledScreen(pane: PaneInfo): string | null {
-    const key = `${pane.activity}:${pane.width}x${pane.height}`;
+    if (this.screenIsCurrent(pane)) return this.screens.get(pane.name)!.screen;
+    const screen = this.deps.runtime.capture(pane.name);
+    this.keepScreen(pane, screen, Date.now());
+    return screen;
+  }
+
+  /** Captures every live pane whose screen may have moved in one tmux call: a
+   *  busy tmux server takes ~50ms to answer each call, and a spinner moves its
+   *  pane every second. */
+  private prefetchScreens(): void {
+    const stale = [...this.panes.values()].filter((p) => !p.dead && !this.screenIsCurrent(p));
+    if (!stale.length) return;
+    const at = Date.now();
+    const screens = this.deps.runtime.captureMany(stale.map((p) => p.name));
+    for (const pane of stale) this.keepScreen(pane, screens.get(pane.name) ?? null, at);
+  }
+
+  private screenIsCurrent(pane: PaneInfo): boolean {
     const had = this.screens.get(pane.name);
+    if (!had || had.key !== screenKey(pane)) return false;
     // Activity is in whole seconds: a capture in the second of the last output
     // may have been taken before some of it.
-    if (had && had.key === key && Math.floor(had.at / 1000) > pane.activity) return had.screen;
-    const at = Date.now();
-    const screen = this.deps.runtime.capture(pane.name);
+    return had.pass === this.passes || Math.floor(had.at / 1000) > pane.activity;
+  }
+
+  private keepScreen(pane: PaneInfo, screen: string | null, at: number): void {
     if (screen === null) this.screens.delete(pane.name);
-    else this.screens.set(pane.name, { key, at, screen });
-    return screen;
+    else this.screens.set(pane.name, { key: screenKey(pane), at, pass: this.passes, screen });
   }
 
   private autoAnswer(rec: SessionRecord, pane: PaneInfo | undefined, adapter: ProviderAdapter | undefined, now: number): void {

@@ -21,6 +21,9 @@ export type ChangeRow = Pick<Session, "id" | "status" | "label" | "title" | "fir
   reason?: string;
 };
 
+/** Names a set of rows, so a watch can ask the server to answer only once its rows differ. */
+export const rowsVersion = (rows: readonly ChangeRow[]): string => Bun.hash(JSON.stringify(rows)).toString(36);
+
 const oneLine = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
 
 /** The last `n` characters: an agent ends its turn with its question. */

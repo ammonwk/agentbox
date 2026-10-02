@@ -290,6 +290,41 @@ export function capture(name: string, opts: { ansi?: boolean; scrollback?: numbe
 }
 
 /**
+ * The visible screens of many panes in one tmux call — the same text `capture`
+ * returns for each, null for a pane that is gone. One call per pass rather
+ * than one per pane: a busy tmux server answers each call in ~50ms.
+ */
+export function captureMany(names: string[]): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const marker = `\u001fab-capture-${crypto.randomUUID()}:`;
+  let pending = names;
+  while (pending.length) {
+    const args = pending.flatMap((n) => ["display-message", "-p", `${marker}${n}`, ";", "capture-pane", "-p", "-J", "-t", `=${n}:`, ";"]);
+    const r = tmux(args.slice(0, -1));
+    let name: string | null = null;
+    let lines: string[] = [];
+    const flush = () => {
+      if (name !== null) out.set(name, lines.length ? `${lines.join("\n")}\n` : "");
+    };
+    for (const line of r.stdout.split("\n").slice(0, -1)) {
+      if (line.startsWith(marker)) {
+        flush();
+        name = line.slice(marker.length);
+        lines = [];
+      } else lines.push(line);
+    }
+    flush();
+    // tmux stops a command sequence at the first failure: the pane it named is
+    // gone, and the ones after it still need their own call.
+    if (r.code !== 0 && name !== null) out.set(name, null);
+    const done = name === null ? pending.length : pending.indexOf(name) + 1;
+    if (name === null) for (const n of pending) out.set(n, null);
+    pending = pending.slice(done);
+  }
+  return out;
+}
+
+/**
  * Zoom the session's active pane to the whole window, or undo that. Claude
  * splits its window into a pane per teammate, which can leave the lead a
  * column wide — too narrow to read a dialog off. Returns whether anything

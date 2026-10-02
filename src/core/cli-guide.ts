@@ -22,7 +22,8 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox diff <id>              # its worktree's changes
     agentbox usage                  # each account's limits
     agentbox watch [<id>...] [--status blocked,waiting,running,stopped] [--once] [--now]
-                                    # runs until killed: a line each time one starts
+                                    # runs until killed, or until the agent that armed
+                                    # it exits: a line each time one starts
                                     # asking (blocked), finishes its turn (waiting, with
                                     # the end of its last message) or stops. --once
                                     # exits after the first. --now first reports any

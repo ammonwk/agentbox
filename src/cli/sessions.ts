@@ -3,7 +3,8 @@
  *  and every verb that takes ids also reads them from stdin with `-`. */
 
 import type { Api } from "../client";
-import { CHANGE_KINDS, ChangeWatcher, changeLine, type ChangeKind, type ChangeRow } from "../core/changes";
+import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, type ChangeRow } from "../core/changes";
+import { agentAncestor, stillRunning } from "../core/providers/procs";
 import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage } from "../core/types";
 
 type Row = AppState["sessions"][number];
@@ -294,7 +295,8 @@ export async function diff(api: Api, args: string[]): Promise<number> {
 
 /** `agentbox watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once] [--now]`
  *
- * Runs until killed, one line per change as it happens: a session started
+ * Runs until killed, or until the agent CLI it runs under exits (no one is
+ * left to read it), one line per change as it happens: a session started
  * asking something (blocked, with what), finished its turn (waiting, with the
  * end of its last message), started working (running), stopped. Nothing for
  * the board as it is when it starts, unless `--now`: then a session already
@@ -309,22 +311,32 @@ export async function watch(api: Api, args: string[]): Promise<number> {
   const only = rest.length ? new Set((await resolveIds(api, rest)).ids) : null;
   const watcher = new ChangeWatcher({ current: flags.has("now") });
   // Only what a change line reads, not the whole board: watches run for days.
-  const path = `/api/sessions/changes${only ? `?ids=${[...only].join(",")}` : ""}`;
+  const query = only ? `ids=${[...only].join(",")}` : "";
+  // A watch an agent armed is for that agent: once it is gone, no one reads the lines.
+  const owner = agentAncestor();
+  let after: string | null = null;
   for (;;) {
+    if (owner && !stillRunning(owner)) return 0;
     let rows: ChangeRow[] | null = null;
     try {
-      rows = await api<ChangeRow[]>("GET", path);
+      const q = [query, after === null ? "" : `after=${after}`].filter(Boolean).join("&");
+      rows = await api<ChangeRow[]>("GET", `/api/sessions/changes${q ? `?${q}` : ""}`);
     } catch {
       // The server restarting is not the end of a watch.
     }
-    if (rows) {
-      for (const c of watcher.next(rows)) {
-        if (!kinds.includes(c.kind)) continue;
-        console.log(changeLine(c));
-        if (flags.has("once")) return 0;
-      }
+    if (!rows) {
+      await Bun.sleep(5_000);
+      continue;
     }
-    await Bun.sleep(rows ? 2_000 : 5_000);
+    for (const c of watcher.next(rows)) {
+      if (!kinds.includes(c.kind)) continue;
+      console.log(changeLine(c));
+      if (flags.has("once")) return 0;
+    }
+    const version = rowsVersion(rows);
+    // The server holds a request until the rows change; an unchanged answer is its wait running out.
+    if (version === after) await Bun.sleep(2_000);
+    after = version;
   }
 }
 

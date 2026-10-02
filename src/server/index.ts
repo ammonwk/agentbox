@@ -57,7 +57,7 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
-import type { ChangeRow } from "../core/changes";
+import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
   ColdState,
@@ -78,6 +78,8 @@ const PORT = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT);
 const HOST = process.env.AGENTBOX_HOST ?? "127.0.0.1";
 const HOT_COALESCE_MS = 250;
 const COLD_DEBOUNCE_MS = 500;
+/** Longest a watch's request waits for its rows to change; under the server's 60s idle timeout. */
+const CHANGES_WAIT_MS = 25_000;
 const SLOW_REFRESH_MS = 60_000;
 const BUILD_POLL_MS = 2_000;
 const TIMELINE_PAGE = 200;
@@ -310,9 +312,40 @@ function stateResponse(): Response {
   return new Response(stateBody.body, { headers: { "content-type": "application/json" } });
 }
 
+function changeRows(only: Set<string> | null): ChangeRow[] {
+  return fleet
+    .sessions()
+    .filter((s) => !only || only.has(s.id))
+    .map((s) => ({
+      id: s.id,
+      status: s.status,
+      label: s.label,
+      title: s.title,
+      firstPrompt: s.firstPrompt?.split("\n")[0]?.slice(0, 80) ?? null,
+      lastMessage: s.lastMessage,
+      turnError: s.turnError,
+      reason: attentionOf(s, fleet.blockedReason(s.id)).reason,
+    }));
+}
+
+/** Requests waiting for the board to change; `scheduleHot` wakes them all. */
+const changeWaiters = new Set<() => void>();
+function boardChange(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const wake = () => {
+      clearTimeout(timer);
+      changeWaiters.delete(wake);
+      resolve();
+    };
+    const timer = setTimeout(wake, ms);
+    changeWaiters.add(wake);
+  });
+}
+
 let hotTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleHot(): void {
   stateBody = null;
+  for (const wake of [...changeWaiters]) wake();
   if (hotTimer) return;
   hotTimer = setTimeout(() => {
     hotTimer = null;
@@ -709,23 +742,18 @@ const router = new Router(mapError)
     return json({ sessionId });
   })
   // What `agentbox watch` needs of each session, closed ones too (it must see
-  // a reopen as one), and nothing else: it polls every 2s.
-  .add("GET", "/api/sessions/changes", ({ url }) => {
+  // a reopen as one), and nothing else. With `after`, the rows it already has,
+  // the answer waits until they differ or CHANGES_WAIT_MS passes.
+  .add("GET", "/api/sessions/changes", async ({ url }) => {
     const ids = url.searchParams.get("ids");
     const only = ids ? new Set(ids.split(",")) : null;
-    const rows: ChangeRow[] = fleet
-      .sessions()
-      .filter((s) => !only || only.has(s.id))
-      .map((s) => ({
-        id: s.id,
-        status: s.status,
-        label: s.label,
-        title: s.title,
-        firstPrompt: s.firstPrompt?.split("\n")[0]?.slice(0, 80) ?? null,
-        lastMessage: s.lastMessage,
-        turnError: s.turnError,
-        reason: attentionOf(s, fleet.blockedReason(s.id)).reason,
-      }));
+    const after = url.searchParams.get("after");
+    const deadline = Date.now() + CHANGES_WAIT_MS;
+    let rows = changeRows(only);
+    while (after !== null && rowsVersion(rows) === after && Date.now() < deadline) {
+      await boardChange(deadline - Date.now());
+      rows = changeRows(only);
+    }
     return json(rows);
   })
   .add("GET", "/api/sessions/closed", ({ url }) => {
