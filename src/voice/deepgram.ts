@@ -20,6 +20,29 @@ export type TurnEvent = {
   transcript: string;
 };
 
+/** A recording the composer's hold-to-talk made, as text. Nova rather than
+ *  Flux: the clip is whole when it gets here, so nothing has to guess where
+ *  the turn ends, and it punctuates. Deepgram reads the container itself
+ *  (webm/opus from Chrome, mp4 from Safari). */
+export async function transcribe(key: string, audio: ArrayBuffer, mime: string, keyterms: string[]): Promise<string> {
+  const q = new URLSearchParams({ model: "nova-3", smart_format: "true" });
+  for (const k of [...BASE_KEYTERMS, ...keyterms]) if (k) q.append("keyterm", k);
+  let res: Response;
+  try {
+    res = await fetch(`https://api.deepgram.com/v1/listen?${q}`, {
+      method: "POST",
+      headers: { Authorization: `Token ${key}`, "content-type": mime },
+      body: audio,
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (e) {
+    throw new Error(`could not reach Deepgram (${(e as Error).message})`);
+  }
+  if (!res.ok) throw new Error(`Deepgram ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const out = (await res.json()) as { results?: { channels?: { alternatives?: { transcript?: string }[] }[] } };
+  return out.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+}
+
 /** Flux: a live transcript, cut into turns. Reconnects on its own while wanted. */
 export class Listener {
   private ws: WebSocket | null = null;

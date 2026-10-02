@@ -19,6 +19,11 @@ export interface VoiceConfig {
 
 export const voiceEnvPath = (): string => join(agentboxHome(), "voice.env");
 
+/** The Deepgram key alone: dictating a message needs no LLM key. */
+export function deepgramKey(): string {
+  return readEnvFile(voiceEnvPath()).DEEPGRAM_API_KEY || process.env.DEEPGRAM_API_KEY || "";
+}
+
 export function voiceConfig(): VoiceConfig | { missing: string } {
   const env = readEnvFile(voiceEnvPath());
   const deepgramKey = env.DEEPGRAM_API_KEY || process.env.DEEPGRAM_API_KEY || "";

@@ -12,6 +12,7 @@ import "../newsession.css";
 import { useAction } from "./useAction";
 import { echoSent } from "./echo";
 import { QuestionCard } from "./Question";
+import { useVoiceNote, voiceNotes } from "./voicenote";
 
 /** What the composer can do for a session, and the sentence that says so. */
 export type ComposerMode =
@@ -57,6 +58,8 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
   const draft = useMemo(() => loadDraft(session.id), [session.id]);
   const [text, setText] = useState(draft?.text ?? "");
   const { run, busy, error, clear } = useAction();
+  /** A voice message is on its way to words. */
+  const [hearing, setHearing] = useState(false);
   const mode = composerMode(session);
   const ref = textareaRef;
   const provider = PROVIDER_LABEL[session.provider];
@@ -87,11 +90,22 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
     saveDraft(session.id, text, savedImages);
   }, [session.id, text, savedKey]);
 
-  async function submit() {
+  /** Send what is in the box and, after it, what `spoken` says. */
+  async function submit(spoken?: Blob) {
     if (busy) return;
-    if (mode.kind === "send" && !text.trim()) return;
+    if (mode.kind === "send" && !spoken && !text.trim()) return;
+    let heard = "";
     const ok = await run(async () => {
-      const body = (await images.resolve(text)).trim();
+      if (spoken) {
+        setHearing(true);
+        try {
+          heard = await api.transcribe(spoken);
+        } finally {
+          setHearing(false);
+        }
+        if (!heard) throw new Error("no speech was heard in the recording");
+      }
+      const body = [(await images.resolve(text)).trim(), heard].filter(Boolean).join("\n\n");
       const side = mode.kind === "send" && session.provider === "claude" ? BTW.exec(body) : null;
       if (side) await api.btw(session.id, side[1]!);
       else if (mode.kind === "send") {
@@ -103,8 +117,20 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
     if (ok) {
       setText("");
       images.clear();
+    } else if (heard) {
+      // Heard but not delivered: the words wait in the box rather than being said again.
+      setText((t) => [t.trim(), heard].filter(Boolean).join("\n\n"));
     }
   }
+
+  const voice = useVoiceNote({
+    onDone: (audio) => void submit(audio),
+    onError: (why) => void run(() => Promise.reject(new Error(why))),
+    working: hearing,
+  });
+  /** A phone: Send is also the microphone, held. */
+  const talks = voiceNotes();
+  const recording = voice.phase !== "idle";
 
   const placeholder =
     mode.kind === "send"
@@ -209,22 +235,32 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
           }}
         />
         {skill.list}
+        {voice.bar}
         </AttachFrame>
         <AttachButton a={images} className="cmp-attach" />
         {mode.kind === "send" ? (
           <>
-            <Button
-              className="cmp-go"
-              variant="primary"
-              icon={Icon.arrowUp}
-              loading={busy}
-              disabled={!text.trim() || images.uploading}
-              aria-label="Send"
-              onMouseDown={keepKeyboard}
-              onClick={() => void submit()}
-            >
-              <span className="cmp-go-label">Send</span>
-            </Button>
+            <span className="cmp-go-wrap">
+              {voice.above}
+              <Button
+                className="cmp-go"
+                variant="primary"
+                icon={talks && (voice.phase === "held" || (!recording && !text.trim())) ? Icon.mic : Icon.arrowUp}
+                loading={busy}
+                disabled={talks ? images.uploading : !text.trim() || images.uploading}
+                aria-label={voice.phase === "locked" ? "Send the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
+                data-rec={recording ? voice.phase : undefined}
+                onMouseDown={keepKeyboard}
+                {...(talks ? voice.button : {})}
+                onClick={() => {
+                  if (voice.click()) return;
+                  if (talks && !text.trim()) voice.hint();
+                  else void submit();
+                }}
+              >
+                <span className="cmp-go-label">Send</span>
+              </Button>
+            </span>
             <div className="cmp-aux cmp-navigation">
               <Button
                 className="cmp-aux"
@@ -266,17 +302,24 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
             </Button>
           </>
         ) : mode.kind === "resume" ? (
-          <Button
-            className="cmp-go"
-            variant="primary"
-            icon={text.trim() ? Icon.arrowUp : Icon.play}
-            loading={busy}
-            aria-label={text.trim() ? "Resume with prompt" : "Resume"}
-            onMouseDown={keepKeyboard}
-            onClick={() => void submit()}
-          >
-            <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
-          </Button>
+          <span className="cmp-go-wrap">
+            {voice.above}
+            <Button
+              className="cmp-go"
+              variant="primary"
+              icon={voice.phase === "held" ? Icon.mic : recording || text.trim() ? Icon.arrowUp : Icon.play}
+              loading={busy}
+              aria-label={voice.phase === "locked" ? "Resume with the recording" : text.trim() ? "Resume with prompt" : "Resume"}
+              data-rec={recording ? voice.phase : undefined}
+              onMouseDown={keepKeyboard}
+              {...(talks ? voice.button : {})}
+              onClick={() => {
+                if (!voice.click()) void submit();
+              }}
+            >
+              <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
+            </Button>
+          </span>
         ) : null}
       </div>
       ) : null}

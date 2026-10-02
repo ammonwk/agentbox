@@ -43,7 +43,8 @@ import { shownImage } from "../core/images";
 import { checkRequest } from "./csrf";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
-import { voiceConfig } from "../voice/config";
+import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
+import { transcribe } from "../voice/deepgram";
 import type { Conversation } from "../voice/conversation";
 import { HttpError, Router, fail, json, readBody } from "./router";
 import { optionalString, parseAnswers, parseSettingsPatch, requireBoolean, requireString } from "./validate";
@@ -121,6 +122,9 @@ function seekable(id: string): { io: SeekIO; claude: boolean } {
   const io: SeekIO = { capture: () => fleet.screen(id), keys: (k) => fleet.keys(id, k), sleep: (ms) => Bun.sleep(ms) };
   return { io, claude: s.provider === "claude" };
 }
+/** A held-to-talk message: an hour of phone audio is well under this. */
+const MAX_AUDIO_BYTES = 40 * 1024 * 1024;
+
 /** Hands-free mode (src/voice); made once the fleet is up. */
 let voice: VoiceHub;
 
@@ -678,6 +682,22 @@ const router = new Router(mapError)
       return json(saveUpload(bytes, req.headers.get("content-type") ?? ""), 201);
     } catch (e) {
       throw new HttpError(400, (e as Error).message);
+    }
+  })
+  .add("POST", "/api/transcribe", async ({ req }) => {
+    const mime = req.headers.get("content-type") ?? "";
+    if (!/^audio\//i.test(mime)) throw new HttpError(400, `not a recording: ${mime || "no content type"}`);
+    if (Number(req.headers.get("content-length") ?? 0) > MAX_AUDIO_BYTES) throw new HttpError(413, `the recording is over ${MAX_AUDIO_BYTES / 1024 / 1024} MB`);
+    const key = deepgramKey();
+    if (!key) throw new HttpError(503, `voice messages need DEEPGRAM_API_KEY in ${voiceEnvPath()}`);
+    const bytes = await req.arrayBuffer();
+    if (bytes.byteLength === 0) throw new HttpError(400, "the recording is empty");
+    if (bytes.byteLength > MAX_AUDIO_BYTES) throw new HttpError(413, `the recording is over ${MAX_AUDIO_BYTES / 1024 / 1024} MB`);
+    const terms = [readUserIdentity().name, ...listRepos().map((r) => r.displayName)].slice(0, 40);
+    try {
+      return json({ text: await transcribe(key, bytes, mime, terms) });
+    } catch (e) {
+      throw new HttpError(502, (e as Error).message);
     }
   })
   .add("GET", "/api/uploads/:name", ({ params }) => {

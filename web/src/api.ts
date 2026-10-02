@@ -142,6 +142,20 @@ async function upload(file: Blob): Promise<Upload> {
   return env.data;
 }
 
+/** A recording put into words (Deepgram, on the server's key). Raw bytes, as `upload`. */
+async function transcribe(audio: Blob): Promise<string> {
+  if (MOCK) return "This is what the mock heard you say.";
+  let res: Response;
+  try {
+    res = await fetch("/api/transcribe", { method: "POST", headers: { "x-agentbox": "1", "content-type": audio.type || "audio/webm" }, body: audio });
+  } catch (err) {
+    throw new Error(`/api/transcribe: cannot reach agentbox (${(err as Error).message})`);
+  }
+  const env = (await res.json().catch(() => ({ ok: false, error: `${res.status} ${res.statusText}` }))) as { ok?: boolean; data?: { text: string }; error?: string };
+  if (!env.ok || !env.data) throw new Error(env.error || `transcription failed: ${res.status}`);
+  return env.data.text;
+}
+
 export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComponent(name)}`;
 
 /** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
@@ -208,6 +222,7 @@ export const api = {
   /** Continue on another account (`auto` = the balancer's pick), sending `prompt`. */
   move: (id: string, opts: { accountId?: string; prompt?: string }) => post<Session>(`/api/sessions/${enc(id)}/move`, opts),
   upload,
+  transcribe,
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
   /** Close stops it and takes it off the list; `false` reopens it (still stopped). */
   close: (id: string, closed: boolean) => post<unknown>(`/api/sessions/${enc(id)}/close`, { closed }),
