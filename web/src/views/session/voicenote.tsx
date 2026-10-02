@@ -4,10 +4,11 @@ import { isPhone } from "../../lib/phone";
 
 /**
  * A voice message from the Send button, the way WhatsApp's works: hold it to
- * record and let go to send; slide up while holding to lock the recording, so
- * it carries on without a finger until Send is tapped; slide left, or the
- * bin once locked, to throw it away. The recording goes to the caller whole,
- * which has it put into words (`api.transcribe`) and sends those.
+ * record and let go to finish; slide up while holding to lock the recording,
+ * so it carries on without a finger until the button is tapped; slide left,
+ * or the bin once locked, to throw it away. The recording goes to the caller
+ * whole, which has it put into words (`api.transcribe`) and puts those in the
+ * text box, to be read over and corrected before they are sent.
  */
 
 /** A press shorter than this is a tap: Send, as before. */
@@ -41,7 +42,7 @@ export interface VoiceNote {
     onContextMenu: (e: ReactMouseEvent) => void;
   };
   /** The button's click: true when the click was the recording's (the end of
-   *  a hold, or Send on a locked one) and the caller should do nothing. */
+   *  a hold, or the tap that finishes a locked one) and the caller should do nothing. */
   click: () => boolean;
   /** Say how it works, after a tap with nothing to send. */
   hint: () => void;
@@ -54,7 +55,7 @@ export interface VoiceNote {
 export function useVoiceNote({ onDone, onError, working }: {
   onDone: (audio: Blob) => void;
   onError: (why: string) => void;
-  /** The last recording is being transcribed and sent. */
+  /** The last recording is being put into words. */
   working: boolean;
 }): VoiceNote {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -101,7 +102,7 @@ export function useVoiceNote({ onDone, onError, working }: {
     return () => clearTimeout(t);
   }, [hinting]);
 
-  /** Stop recording; `keep` says whether what was said is sent or dropped. */
+  /** Stop recording; `keep` says whether what was said is kept or dropped. */
   const end = (keep: boolean) => {
     const s = g.current;
     if (s.timer) clearTimeout(s.timer);
@@ -205,7 +206,7 @@ export function useVoiceNote({ onDone, onError, working }: {
         s.timer = null;
       } else if (s.phase === "held") {
         // The system took the touch (a notification shade, the permission
-        // prompt). What was said so far is kept for a tap on Send; with no
+        // prompt). What was said so far is kept for a tap on the button; with no
         // microphone yet there is nothing to keep.
         if (s.rec) go("locked");
         else end(false);
@@ -244,7 +245,7 @@ export function useVoiceNote({ onDone, onError, working }: {
             <Icon.chevronLeft size={14} /> Slide to cancel
           </span>
         ) : (
-          <span className="cmp-rec-slide">Tap send when done</span>
+          <span className="cmp-rec-slide">Tap ✓ when done</span>
         )}
       </div>
     ) : working ? (
@@ -261,7 +262,7 @@ export function useVoiceNote({ onDone, onError, working }: {
       </span>
     ) : hinting ? (
       <span className="cmp-rec-hint" role="status">
-        Hold to record, release to send
+        Hold to record, release to type it out
       </span>
     ) : null;
 
