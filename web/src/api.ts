@@ -32,6 +32,7 @@ import type {
   Placement,
   ProcDetail,
   ProviderId,
+  NightlyReclaim,
   ReclaimResult,
   Repo,
   Schedule,
@@ -283,6 +284,7 @@ export const api = {
   installService: () => post<{ installed: string; lingering: boolean }>("/api/onboarding/service"),
   /** Slow by construction — many git and gh calls. Only ever on a button. */
   scanWorktrees: (scope: "all" | "agentbox") => post<WorktreeScan>("/api/worktrees/scan", { scope }),
+  nightlyReclaim: () => get<{ last: NightlyReclaim | null }>("/api/worktrees/nightly"),
   reclaimWorktrees: (paths: string[], force = false) =>
     post<ReclaimResult>("/api/worktrees/reclaim", { paths, force }),
 

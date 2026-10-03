@@ -66,6 +66,7 @@ const settings: AgentSettings = {
   boardDays: 7,
   autoApprove: false,
   parkIdleMin: 60,
+  reclaimNightly: false,
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "" },
   balancer: {
     claimNormal: 3,

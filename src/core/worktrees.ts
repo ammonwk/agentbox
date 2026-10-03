@@ -23,7 +23,8 @@ import type { ReclaimResult, Session, WorktreeInfo, WorktreeScan, WorktreeVerdic
  * session resumable, and destroying a gigabyte of disk was too blunt a price
  * for "take this off my board". The disk still has to come back somehow, so it
  * comes back here: a deliberate, explicitly-invoked sweep the human reads
- * before running.
+ * before running, and, where the human turned it on, the same safe set removed
+ * every night (nightly.ts).
  *
  * The scope is every worktree of every registered repo, not only the ones
  * agentbox cut. A repo agentbox knows about is a repo whose `git worktree list`
@@ -152,10 +153,16 @@ interface Candidate {
  * independent and I/O-bound, so phase two runs them `SCAN_CONCURRENCY` at a
  * time. Serially the same work took 45 seconds.
  *
- * Still far too expensive to sit behind a render or a timer — this is the
- * "Scan" button and nothing else.
+ * Still far too expensive to sit behind a render or a short timer — this is
+ * the "Scan" button, and the nightly sweep, which asks for it slowly.
  */
-export async function scanWorktrees(scope: WorktreeScope = "all", sessions: Session[] = []): Promise<WorktreeScan> {
+export async function scanWorktrees(
+  scope: WorktreeScope = "all",
+  sessions: Session[] = [],
+  // The nightly sweep sizes only what it removes, a few directories at a time.
+  opts: { sizes?: boolean; concurrency?: number } = {},
+): Promise<WorktreeScan> {
+  const concurrency = opts.concurrency ?? SCAN_CONCURRENCY;
   // Keyed by cwd as well as by worktree: a session started in a worktree
   // agentbox did not cut is still using it.
   const byPath = new Map<string, Session>();
@@ -173,7 +180,7 @@ export async function scanWorktrees(scope: WorktreeScope = "all", sessions: Sess
   // ---- phase one: what is out there, and what does GitHub say about it
 
   const repos = listRepos().filter((r) => existsSync(repoCheckoutPath(r)));
-  const perRepo = await mapPool(repos, SCAN_CONCURRENCY, async (repo) => {
+  const perRepo = await mapPool(repos, concurrency, async (repo) => {
     const worktrees = listWorktreesOf(repoCheckoutPath(repo));
     // Only when it has a linked worktree to ask about.
     const asked = repo.fullName !== null && worktrees.some((w) => !w.isMain && w.branch);
@@ -252,7 +259,7 @@ export async function scanWorktrees(scope: WorktreeScope = "all", sessions: Sess
 
   // ---- phase two: the expensive per-directory questions, in parallel
 
-  const items = await mapPool(candidates, SCAN_CONCURRENCY, async (c): Promise<WorktreeInfo> => {
+  const items = await mapPool(candidates, concurrency, async (c): Promise<WorktreeInfo> => {
     // A registration whose directory is gone has nothing to shell into, and
     // the main checkout is never a deletion candidate — neither is worth the
     // three subprocesses. Sizing main is still worth it: it is usually the
@@ -261,7 +268,7 @@ export async function scanWorktrees(scope: WorktreeScope = "all", sessions: Sess
     const [dirty, ahead, bytes, branch] = await Promise.all([
       inspect ? isDirty(c.path) : Promise.resolve(false),
       inspect && c.defaultBranch ? commitsAhead(c.path, c.defaultBranch) : Promise.resolve(0),
-      c.missing ? Promise.resolve(0) : diskBytesOf(c.path),
+      c.missing || opts.sizes === false ? Promise.resolve(0) : diskBytesOf(c.path),
       c.branch === null && c.orphan ? branchAt(c.path) : Promise.resolve(c.branch),
     ]);
 
@@ -358,7 +365,7 @@ export async function reclaimWorktrees(
   return result;
 }
 
-function repoCheckoutPathFor(repoId: string): string | null {
+export function repoCheckoutPathFor(repoId: string): string | null {
   const repo = listRepos().find((r) => r.id === repoId);
   return repo ? repoCheckoutPath(repo) : null;
 }

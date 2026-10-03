@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentSettings, AppState, BalancerSettings, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
+import type { AgentSettings, AppState, BalancerSettings, NightlyReclaim, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
 import { describeAt, describeRule, isRecurring } from "../../../src/core/schedule";
 import { api, fmtBytes, healthRows, type Health, type RepoPatch, type SettingsPatch } from "../api";
 import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
@@ -25,7 +25,7 @@ export function Settings({ state }: { state: AppState }) {
       <Models {...section} installed={state.providers} />
       <Balancer {...section} />
       <Repositories repos={repos} sessions={sessions} track={track} saveStateOf={saveStateOf} />
-      <Disk />
+      <Disk {...section} />
       <Diagnostics warnings={warnings} providers={state.providers} />
     </div>
   );
@@ -670,10 +670,15 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
  * instead — explicitly, over worktrees rather than sessions, after the human has
  * read what is about to go.
  *
- * Nothing on this screen runs on its own. The scan shells out to git several
- * times per worktree, which is far too expensive to put behind a render.
+ * Nothing on this screen runs on its own but the nightly sweep, and that only
+ * once it is switched on. The scan shells out to git several times per
+ * worktree, which is far too expensive to put behind a render.
  */
-function Disk() {
+function Disk({ settings, save, saveStateOf }: SectionProps) {
+  const [nightly, setNightly] = useState<NightlyReclaim | null>(null);
+  useEffect(() => {
+    api.nightlyReclaim().then((r) => setNightly(r.last)).catch(() => undefined);
+  }, []);
   const [scope, setScope] = useState<"all" | "agentbox">("all");
   const [scan, setScan] = useState<WorktreeScan | null>(null);
   const [busy, setBusy] = useState<null | "scan" | "safe" | "nuke">(null);
@@ -727,6 +732,22 @@ function Disk() {
         never touches its branch: a session whose worktree is gone still resumes,
         it just checks the branch out again first.
       </p>
+
+      <ToggleRow
+        label="Delete safe worktrees every night at 3am"
+        hint={
+          "The same ones Delete safe removes, except any that changed in the last day or that a process is running in. One at a time, at idle priority, waiting while the machine is busy." +
+          (nightly
+            ? ` Last run ${new Date(nightly.startedAt).toLocaleDateString()}: removed ${nightly.removed}, freeing ${fmtBytes(nightly.bytesFreed)}` +
+              (nightly.failed.length ? `; ${nightly.failed.length} could not be removed` : "") +
+              (nightly.cutShort ? "; stopped at its four-hour limit with more to go" : "") +
+              "."
+            : "")
+        }
+        checked={settings.reclaimNightly}
+        onChange={(v) => save("reclaimNightly", { reclaimNightly: v })}
+      />
+      <SaveMark state={saveStateOf("reclaimNightly")} />
 
       <div className="input-row">
         <Button

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { mkdirSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { repoRoot, worktreeRoot } from "./paths";
 import type { Repo } from "./types";
 
@@ -330,6 +330,37 @@ export function removeWorktreeAt(repoPath: string, worktreePath: string): CmdRes
     rmSync(worktreePath, { recursive: true, force: true });
   }
   return r;
+}
+
+/**
+ * `removeWorktreeAt` for a sweep nobody is waiting on: off the event loop, and
+ * at idle CPU and disk priority, so deleting a gigabyte of `node_modules` only
+ * takes what the agents are not using.
+ */
+export async function removeWorktreeIdly(repoPath: string, worktreePath: string): Promise<CmdResult> {
+  const idle = ["nice", "-n", "19", "ionice", "-c", "3"];
+  const r = await runAsync([...idle, "git", "worktree", "remove", "--force", worktreePath], repoPath);
+  if (r.code !== 0 && existsSync(worktreePath)) {
+    await runAsync(["git", "worktree", "prune"], repoPath);
+    await runAsync([...idle, "rm", "-rf", "--", worktreePath]);
+  }
+  return r;
+}
+
+/** When HEAD last moved here (a commit, a checkout, a reset), epoch ms. Null
+ *  when it cannot be read. The index is no signal: any `git status` rewrites it. */
+export async function headMovedAt(worktreePath: string): Promise<number | null> {
+  const r = await runAsync(["git", "rev-parse", "--absolute-git-dir"], worktreePath);
+  if (r.code !== 0) return null;
+  const dir = r.stdout.trim();
+  const times = ["HEAD", "logs/HEAD"].flatMap((f) => {
+    try {
+      return [statSync(join(dir, f)).mtimeMs];
+    } catch {
+      return [];
+    }
+  });
+  return times.length ? Math.max(...times) : null;
 }
 
 /** One entry from `git worktree list --porcelain`. */

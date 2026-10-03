@@ -1074,6 +1074,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   boardDays: 7,
   autoApprove: true,
   parkIdleMin: 60,
+  reclaimNightly: false,
   models: { claude: "", codex: "", devin: "", omp: "" },
   balancer: DEFAULT_BALANCER,
 };

@@ -656,6 +656,9 @@ export interface AgentSettings {
   /** Stop a Claude session's process after this many minutes idle with
    *  nothing holding it up (src/core/park.ts); 0 never does. */
   parkIdleMin: number;
+  /** Remove the worktrees with nothing to lose every night at 3am
+   *  (src/core/nightly.ts). */
+  reclaimNightly: boolean;
   /** Default model per provider; empty means the provider's own default. */
   models: Record<ProviderId, string>;
   balancer: BalancerSettings;
@@ -910,6 +913,19 @@ export interface WorktreeScan {
   /** A repo's PRs were needed to judge at least one branch and are not loaded
    *  from GitHub yet (src/core/prs.ts), so every PR state below is a guess. */
   ghUnavailable: boolean;
+}
+
+/** What the last nightly sweep did (src/core/nightly.ts). */
+export interface NightlyReclaim {
+  startedAt: number;
+  finishedAt: number;
+  removed: number;
+  bytesFreed: number;
+  /** Safe by the scan, but in use or changed by the time its turn came. */
+  kept: number;
+  failed: { path: string; error: string }[];
+  /** Stopped at its deadline with worktrees still to go. */
+  cutShort: boolean;
 }
 
 export interface ReclaimResult {

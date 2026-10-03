@@ -29,6 +29,7 @@ import { usageInsights } from "../core/insights";
 import { diffOf } from "../core/diff";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
+import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
 import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushSubscriptions, pushToAll, removeSubscription } from "../core/push";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
@@ -1060,6 +1061,7 @@ const router = new Router(mapError)
     }
     return json(await reclaimWorktrees(b.paths as string[], { force: b.force === true, sessions: fleet.sessions() }));
   })
+  .add("GET", "/api/worktrees/nightly", () => json({ last: lastNightlyReclaim() }))
   .add("GET", "/api/skill/body", ({ url }) => {
     const raw = url.searchParams.get("path") ?? "";
     const dir = containedIn(raw, skillRootDirs(localRepoDirs(listRepos())));
@@ -1317,6 +1319,7 @@ export async function startServer(): Promise<void> {
   checkBuild();
   setInterval(checkBuild, BUILD_POLL_MS).unref?.();
   watchPwaDesktop();
+  startNightlyReclaim(() => fleet.sessions());
 
   fleet.on("sessions", () => {
     notifyBlocked(fleet.sessions(), (id) => fleet.blockedReason(id));
