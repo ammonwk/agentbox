@@ -348,19 +348,21 @@ export async function removeWorktreeIdly(repoPath: string, worktreePath: string)
 }
 
 /** When HEAD last moved here (a commit, a checkout, a reset), epoch ms. Null
- *  when it cannot be read. The index is no signal: any `git status` rewrites it. */
+ *  when it cannot be read. Read from the reflog's last entry, not from any
+ *  file's mtime: a `git status` rewrites the index and a `git gc` rewrites
+ *  every worktree's reflog, and neither is somebody working here. */
 export async function headMovedAt(worktreePath: string): Promise<number | null> {
-  const r = await runAsync(["git", "rev-parse", "--absolute-git-dir"], worktreePath);
-  if (r.code !== 0) return null;
-  const dir = r.stdout.trim();
-  const times = ["HEAD", "logs/HEAD"].flatMap((f) => {
-    try {
-      return [statSync(join(dir, f)).mtimeMs];
-    } catch {
-      return [];
-    }
-  });
-  return times.length ? Math.max(...times) : null;
+  const r = await runAsync(["git", "log", "-g", "-1", "--format=%gd", "--date=unix", "HEAD"], worktreePath);
+  const at = Number(/@\{(\d+)\}/.exec(r.stdout)?.[1]);
+  if (r.code === 0 && Number.isFinite(at) && at > 0) return at * 1000;
+  // No reflog (a fresh `worktree add --detach` has one; a pruned one may not).
+  const dir = await runAsync(["git", "rev-parse", "--absolute-git-dir"], worktreePath);
+  if (dir.code !== 0) return null;
+  try {
+    return statSync(join(dir.stdout.trim(), "HEAD")).mtimeMs;
+  } catch {
+    return null;
+  }
 }
 
 /** One entry from `git worktree list --porcelain`. */
