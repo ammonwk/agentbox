@@ -736,7 +736,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
       <ToggleRow
         label="Delete safe worktrees every night at 3am"
         hint={
-          "The same ones Delete safe removes, except any that changed in the last day or that a process is running in. One at a time, at idle priority, waiting while the machine is busy." +
+          "The same ones Delete safe removes — including anything untouched for 14 days, uncommitted work and all — except any that changed in the last day or that a process is running in. One at a time, at idle priority, waiting while the machine is busy." +
           (nightly
             ? ` Last run ${new Date(nightly.startedAt).toLocaleDateString()}: removed ${nightly.removed}, freeing ${fmtBytes(nightly.bytesFreed)}` +
               (nightly.failed.length ? `; ${nightly.failed.length} could not be removed` : "") +
@@ -811,7 +811,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
                 title={
                   safe.length === 0
                     ? "Nothing is safe to delete — every worktree below has changes, an open PR, or could not be checked."
-                    : "Removes only worktrees with nothing to lose: clean, and either merged, closed, or holding no commits their base branch does not have."
+                    : "Removes worktrees nobody is coming back to: clean ones that are merged, closed, or hold no commits their base branch lacks; the same with only untracked files once 3 days idle; and anything untouched for 14 days, whatever is in it. Nothing is saved first."
                 }
                 onClick={() => void reclaim("safe", safe.map((w) => w.path), false)}
               >

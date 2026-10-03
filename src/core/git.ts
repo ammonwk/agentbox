@@ -429,14 +429,52 @@ export async function branchAt(worktreePath: string): Promise<string | null> {
   return r.code === 0 && name && name !== "HEAD" ? name : null;
 }
 
-/** True when the worktree has uncommitted or untracked changes — the one thing
- *  in it that no branch is holding a copy of. */
-export async function isDirty(worktreePath: string): Promise<boolean> {
-  const r = await runAsync(["git", "status", "--porcelain"], worktreePath);
-  // A worktree we cannot read is treated as dirty: the safe reclaim path must
-  // never take "the command failed" for "there is nothing here".
-  if (r.code !== 0) return true;
-  return r.stdout.trim().length > 0;
+/** What is uncommitted in a worktree: `minor` is untracked files and deleted
+ *  tracked ones (an agent's probe scripts and notes, a half-emptied checkout),
+ *  `major` an edit to a tracked file, anything staged, or a merge in progress. */
+export interface Dirt {
+  level: "none" | "minor" | "major";
+  /** When the newest uncommitted file was written, epoch ms. */
+  newestAt: number | null;
+}
+
+export async function dirtOf(worktreePath: string): Promise<Dirt> {
+  const r = await runAsync(["git", "status", "--porcelain", "-z"], worktreePath);
+  // A worktree we cannot read is treated as edited: the reclaim must never
+  // take "the command failed" for "there is nothing here".
+  if (r.code !== 0) return { level: "major", newestAt: null };
+  const entries = r.stdout.split("\0");
+  let minor = false;
+  let major = false;
+  let newestAt: number | null = null;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    if (!entry) continue;
+    const code = entry.slice(0, 2);
+    // A rename or copy is followed by the path it came from.
+    if (code[0] === "R" || code[0] === "C") i++;
+    if (code === " D") {
+      minor = true;
+      continue;
+    }
+    if (code === "??") minor = true;
+    else major = true;
+    try {
+      newestAt = Math.max(newestAt ?? 0, statSync(join(worktreePath, entry.slice(3))).mtimeMs);
+    } catch {
+      // gone between the status and the stat
+    }
+  }
+  return { level: major ? "major" : minor ? "minor" : "none", newestAt };
+}
+
+/** Commits on HEAD that no branch and no remote has: what removing a detached
+ *  worktree, or one whose repo is gone, would leave unreachable. 0 where git
+ *  cannot say, which is a directory git knows nothing about. */
+export async function commitsHeldOnlyHere(worktreePath: string): Promise<number> {
+  const r = await runAsync(["git", "rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"], worktreePath);
+  const n = Number(r.stdout.trim());
+  return r.code === 0 && Number.isInteger(n) ? n : 0;
 }
 
 /**

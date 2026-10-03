@@ -1,10 +1,10 @@
 import { readdirSync } from "node:fs";
 import { cpus, loadavg } from "node:os";
 import { getKv, getSettings, setKv } from "./db";
-import { diskBytesOf, headMovedAt, isDirty, removeWorktreeIdly } from "./git";
+import { diskBytesOf, headMovedAt, removeWorktreeIdly } from "./git";
 import { cwdOf } from "./providers/procs";
 import type { NightlyReclaim, Session } from "./types";
-import { repoCheckoutPathFor, scanWorktrees } from "./worktrees";
+import { repoCheckoutPathFor, scanWorktrees, untouchedSince } from "./worktrees";
 
 /**
  * The safe reclaim, every night at 3am, for the human who turned it on
@@ -74,7 +74,7 @@ export async function reclaimNightly(sessions: () => Session[]): Promise<Nightly
       processCwds().some((cwd) => inside(item.path, cwd)) ||
       // An orphan may not be a git checkout at all: nothing to read is not "recent".
       (moved !== null && Date.now() - moved < QUIET_MS) ||
-      (await isDirty(item.path));
+      !(await untouchedSince(item, scan.scannedAt));
     if (inUse) {
       out.kept++;
       continue;

@@ -882,7 +882,7 @@ export interface MetricsState {
 export interface WorktreeVerdict {
   safe: boolean;
   reason:
-    | "merged" | "closed" | "clean" | "orphan"
+    | "merged" | "closed" | "clean" | "orphan" | "stale"
     | "main" | "locked" | "live" | "dirty" | "open-pr" | "ahead" | "unknown";
   detail: string;
 }

@@ -1,11 +1,14 @@
-import { existsSync, readdirSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { listRepos } from "./db";
 import {
+  type Dirt,
   branchAt,
   commitsAhead,
+  commitsHeldOnlyHere,
   diskBytesOf,
-  isDirty,
+  dirtOf,
+  headMovedAt,
   listWorktreesOf,
   mapPool,
   removeWorktreeAt,
@@ -63,8 +66,12 @@ export interface WorktreeFacts {
   isMain: boolean;
   locked: boolean;
   live: boolean;
-  dirty: boolean;
-  /** Commits HEAD has that the base branch does not. -1 when unanswerable. */
+  dirt: Dirt["level"];
+  /** Days since anything happened here: HEAD moved, an uncommitted file was
+   *  written, a session in it did something. 0 when that cannot be read. */
+  idleDays: number;
+  /** Commits HEAD has that the base branch does not; for an orphan, that
+   *  nothing else has. -1 when unanswerable. */
   ahead: number;
   pr: PrState;
   /** On disk under the worktree root, but no registered repo lists it. */
@@ -74,11 +81,23 @@ export interface WorktreeFacts {
 /**
  * Decide what may be reclaimed.
  *
- * The safe set is deliberately narrow, because the failure it guards against is
- * unrecoverable and the failure it causes by being too cautious is a directory
- * that stays on disk. Anything unreadable, unanswerable or in use lands on the
- * cautious side.
+ * Time is what widens the safe set. A worktree nothing has touched for
+ * `STALE_DAYS` goes whatever is in it, and after `MINOR_DIRT_DAYS` untracked
+ * files stop holding one back: left to "dirty means keep", two in five
+ * worktrees on this machine were kept forever by an agent's probe scripts and
+ * notes, long after their PR merged. Nothing is saved first. What is lost is
+ * what nobody came back for, and the session's transcript still has most of it.
+ * Anything unreadable, unanswerable or in use lands on the cautious side.
  */
+export const STALE_DAYS = 14;
+export const MINOR_DIRT_DAYS = 3;
+
+/** Whether what is uncommitted here still holds the worktree back. */
+export function dirtBlocks(dirt: Dirt["level"], idleDays: number): boolean {
+  if (dirt === "none" || idleDays >= STALE_DAYS) return false;
+  return dirt === "major" || idleDays < MINOR_DIRT_DAYS;
+}
+
 export function verdictFor(input: WorktreeFacts): WorktreeVerdict {
   // The repo's own checkout. `git worktree remove` refuses it anyway; saying so
   // explicitly means the count the human reads never includes it.
@@ -87,17 +106,31 @@ export function verdictFor(input: WorktreeFacts): WorktreeVerdict {
   if (input.live) {
     return { safe: false, reason: "live", detail: "a running session is using it" };
   }
-  if (input.dirty) {
-    return { safe: false, reason: "dirty", detail: "uncommitted or untracked changes" };
+  const idle = Math.floor(input.idleDays);
+  if (input.idleDays >= STALE_DAYS) {
+    return { safe: true, reason: "stale", detail: `nothing has touched it for ${idle} days` };
+  }
+  if (dirtBlocks(input.dirt, input.idleDays)) {
+    return {
+      safe: false,
+      reason: "dirty",
+      detail:
+        input.dirt === "major"
+          ? `uncommitted edits, kept until ${STALE_DAYS} days idle`
+          : `untracked files, kept until ${MINOR_DIRT_DAYS} days idle`,
+    };
   }
 
   // A directory under the worktree root that no registered repo claims. Its
   // repo was deregistered or moved, so no session can resume into it —
   // `restoreWorktree` refuses outright without a registered repo — and there is
-  // no base branch left to compare against either. Once it is clean there is
-  // nothing here a branch does not already have, and nothing that will ever
-  // read it again.
+  // no base branch left to compare against either. What it can still hold is
+  // commits no branch or remote has, which removing it would leave unreachable.
   if (input.orphan) {
+    if (input.ahead > 0) {
+      const n = input.ahead;
+      return { safe: false, reason: "ahead", detail: `${n} commit${n === 1 ? "" : "s"} that nothing else has` };
+    }
     return { safe: true, reason: "orphan", detail: "its repo is no longer registered" };
   }
 
@@ -122,6 +155,28 @@ export function verdictFor(input: WorktreeFacts): WorktreeVerdict {
     };
   }
   return { safe: true, reason: "clean", detail: "clean, and nothing its base branch does not have" };
+}
+
+/** Days since the last sign of life, 0 when there is none to read. A directory
+ *  git cannot date (an orphan that is no checkout) goes by its own mtime. */
+function idleDays(path: string, headMoved: number | null, dirt: Dirt, sessionAt: number): number {
+  let at = Math.max(headMoved ?? 0, dirt.newestAt ?? 0, sessionAt);
+  if (!at) {
+    try {
+      at = statSync(path).mtimeMs;
+    } catch {
+      return 0;
+    }
+  }
+  return Math.max(0, (Date.now() - at) / 86_400_000);
+}
+
+/** Asked again just before a removal the scan called safe: whether somebody
+ *  has been here since. */
+export async function untouchedSince(item: WorktreeInfo, scannedAt: number): Promise<boolean> {
+  const [dirt, moved] = await Promise.all([dirtOf(item.path), headMovedAt(item.path)]);
+  if (Math.max(moved ?? 0, dirt.newestAt ?? 0) > scannedAt) return false;
+  return !dirtBlocks(dirt.level, idleDays(item.path, moved, dirt, 0));
 }
 
 /** A worktree found on disk, before anything expensive has been asked about it. */
@@ -169,6 +224,14 @@ export async function scanWorktrees(
   for (const s of sessions) {
     if (s.cwd) byPath.set(s.cwd, s);
     if (s.worktree) byPath.set(s.worktree, s);
+  }
+  // Every session that ran here counts, closed ones too: the last thing one did
+  // is the last time anybody cared about this checkout.
+  const activeAt = new Map<string, number>();
+  for (const s of sessions) {
+    for (const path of [s.cwd, s.worktree]) {
+      if (path) activeAt.set(path, Math.max(activeAt.get(path) ?? 0, s.lastActivityAt));
+    }
   }
   const liveOf = (path: string) => {
     const s = byPath.get(path);
@@ -265,9 +328,10 @@ export async function scanWorktrees(
     // three subprocesses. Sizing main is still worth it: it is usually the
     // largest thing listed, and hiding that would misreport the disk.
     const inspect = !c.missing && !c.isMain;
-    const [dirty, ahead, bytes, branch] = await Promise.all([
-      inspect ? isDirty(c.path) : Promise.resolve(false),
-      inspect && c.defaultBranch ? commitsAhead(c.path, c.defaultBranch) : Promise.resolve(0),
+    const [dirt, moved, ahead, bytes, branch] = await Promise.all([
+      inspect ? dirtOf(c.path) : Promise.resolve<Dirt>({ level: "none", newestAt: null }),
+      inspect ? headMovedAt(c.path) : Promise.resolve(null),
+      !inspect ? Promise.resolve(0) : c.orphan ? commitsHeldOnlyHere(c.path) : c.defaultBranch ? commitsAhead(c.path, c.defaultBranch) : Promise.resolve(0),
       c.missing || opts.sizes === false ? Promise.resolve(0) : diskBytesOf(c.path),
       c.branch === null && c.orphan ? branchAt(c.path) : Promise.resolve(c.branch),
     ]);
@@ -289,7 +353,8 @@ export async function scanWorktrees(
         isMain: c.isMain,
         locked: c.locked,
         live: c.live,
-        dirty,
+        dirt: dirt.level,
+        idleDays: idleDays(c.path, moved, dirt, activeAt.get(c.path) ?? 0),
         ahead,
         pr: c.pr,
         orphan: c.orphan,
