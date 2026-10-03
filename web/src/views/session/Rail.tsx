@@ -2,7 +2,7 @@
  *  row per session. It is the whole Sessions page's list; on a narrow screen
  *  with nothing open it is the page. */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
 import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
 import { Icon, RelativeTime } from "../../components";
@@ -52,6 +52,9 @@ let rememberedFilter: BoardFilter = EMPTY_FILTER;
 /** Parents whose children are shown. Folded by default: a lead with nine
  *  teammates is one row until you open it. */
 let openParents: ReadonlySet<string> = new Set();
+/** How far down the list was scrolled. On a phone the list is not mounted
+ *  while a session is open, and going back to it should find it where it was. */
+let railTop = 0;
 
 export function useListState() {
   const [filter, setFilterState] = useState<BoardFilter>(rememberedFilter);
@@ -120,6 +123,11 @@ export function Rail({
   );
   const { filter, setFilter, sort } = list;
   const cur = useRef<HTMLAnchorElement>(null);
+  // Before paint, and before the effect below brings the open session into view.
+  const scroller = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scroller.current) scroller.current.scrollTop = railTop;
+  }, []);
   // A block body, not `() => el.scrollIntoView()`: newer browsers return a
   // Promise from scrollIntoView, and React calls whatever an effect returns as
   // its cleanup — `destroy is not a function` took the whole app down.
@@ -209,6 +217,8 @@ export function Rail({
 
       <div
         className="rail-scroll"
+        ref={scroller}
+        onScroll={(e) => (railTop = e.currentTarget.scrollTop)}
         data-drop={over === "root" || undefined}
         onDragOver={(e) => {
           if (!drag || !toRoot) return;
@@ -512,6 +522,9 @@ function SortMenu({ list }: { list: ListState }) {
 const PAGE = 30;
 /** Whether See closed is expanded; survives a trip to another page. */
 let closedOpen = false;
+/** The closed list as it was last shown, so it comes back as long as it was
+ *  and the rail's scroll position can be put back inside it. */
+let closedShown: { query: string; rows: SessionRow[]; total: number | null } | null = null;
 /** Closed sessions fetched so far, by id: the session view falls back to
  *  these for one too old to be in the app state. */
 export const closedSessions = new Map<string, SessionRow>();
@@ -524,19 +537,22 @@ export const closedSessions = new Map<string, SessionRow>();
  */
 function ClosedList({ query, current, stamp, shapes }: { query: string; current: string | null; stamp: number; shapes: Map<string, Shape> }) {
   const [open, setOpenState] = useState(closedOpen);
-  const [rows, setRows] = useState<SessionRow[]>([]);
-  const [total, setTotal] = useState<number | null>(null);
+  const shown = closedShown?.query === query ? closedShown : null;
+  const [rows, setRows] = useState<SessionRow[]>(shown?.rows ?? []);
+  const [total, setTotal] = useState<number | null>(shown?.total ?? null);
+  // The first refresh fetches as many as were shown, not just the first page.
+  const keep = useRef(shown?.rows.length ?? 0);
   const [error, setError] = useState<string | null>(null);
   const loading = useRef(false);
   const gen = useRef(0);
   const end = useRef<HTMLDivElement>(null);
 
-  const load = async (offset: number) => {
+  const load = async (offset: number, limit = PAGE) => {
     if (loading.current) return;
     loading.current = true;
     const mine = gen.current;
     try {
-      const page = await api.closed(query.trim(), offset, PAGE);
+      const page = await api.closed(query.trim(), offset, limit);
       if (mine !== gen.current) return;
       for (const s of page.sessions) closedSessions.set(s.id, s);
       setRows((r) => (offset === 0 ? page.sessions : [...r, ...page.sessions]));
@@ -554,10 +570,18 @@ function ClosedList({ query, current, stamp, shapes }: { query: string; current:
     if (!open) return;
     gen.current++;
     loading.current = false;
-    const t = setTimeout(() => void load(0), query ? 200 : 0);
+    const limit = Math.max(PAGE, keep.current);
+    keep.current = 0;
+    const t = setTimeout(() => void load(0, limit), query ? 200 : 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, query, stamp]);
+
+  // Rows only change through load(), which drops a page fetched for an old search.
+  useEffect(() => {
+    closedShown = { query, rows, total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, total]);
 
   // The next page when the end of the list comes into view.
   useEffect(() => {
