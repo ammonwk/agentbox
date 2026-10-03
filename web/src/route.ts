@@ -9,6 +9,8 @@ export type Route =
   | { page: "sessions" }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
+  /** One account's usage insights. */
+  | { page: "accounts"; sub: "insights"; account: string }
   | { page: "skills" }
   | { page: "voice" }
   | { page: "settings" };
@@ -36,7 +38,10 @@ export function parseHash(hash: string): Route {
     const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
     return { page: "session", id: a, tab };
   }
-  if (head === "accounts") return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
+  if (head === "accounts") {
+    if (a === "insights" && b) return { page: "accounts", sub: "insights", account: b };
+    return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
+  }
   if (head === "skills") return { page: "skills" };
   if (head === "voice") return { page: "voice" };
   if (head === "settings") return { page: "settings" };
@@ -48,6 +53,7 @@ export function hrefOf(route: Route): string {
     case "session":
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
     case "accounts":
+      if (route.sub === "insights") return `#/accounts/insights/${encodeURIComponent(route.account)}`;
       return route.sub === "calibration" ? "#/accounts/calibration" : "#/accounts";
     default:
       return `#/${route.page}`;

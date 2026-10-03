@@ -25,6 +25,7 @@ import { Fleet, FleetError } from "../core/fleet";
 import * as tmux from "../core/tmux";
 import { attentionOf, byAttention } from "../core/attention";
 import { calibrate } from "../core/calibration";
+import { usageInsights } from "../core/insights";
 import { diffOf } from "../core/diff";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
@@ -937,6 +938,30 @@ const router = new Router(mapError)
     accounts.cancel(params.id!);
     scheduleCold();
     return json(null);
+  })
+  .add("GET", "/api/accounts/:id/insights", async ({ params, url }) => {
+    const homes = accounts.list();
+    const owner = owners(homes);
+    const home = homes.find((h) => h.id === params.id);
+    if (!home) throw new HttpError(404, "no such account");
+    const id = owner.get(home.id) ?? home.id;
+    const mine = homes.filter((h) => (owner.get(h.id) ?? h.id) === id);
+    const days = Math.min(7, Math.max(1, Number(url.searchParams.get("days") ?? 7) || 7));
+    const known = new Map(
+      fleet
+        .sessions()
+        .filter((s) => s.provider === home.provider && s.agentSessionId)
+        .map((s) => [s.agentSessionId!, { id: s.id, title: s.title }]),
+    );
+    return json(
+      await usageInsights({
+        account: { id, provider: home.provider },
+        accountIds: mine.map((h) => h.id),
+        homes: mine.map((h) => h.home),
+        days,
+        known: (k) => known.get(k) ?? null,
+      }),
+    );
   })
   .add("GET", "/api/calibration", ({ url }) => {
     const days = Math.min(60, Math.max(1, Number(url.searchParams.get("days") ?? 7) || 7));

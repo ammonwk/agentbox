@@ -794,6 +794,26 @@ export function tokenSampleAt(sessionId: string, atMs: number): TokenSampleRow |
     : null;
 }
 
+/** Sessions on any of `accountIds` that were active since `sinceMs`. */
+export function sessionsOnAccounts(accountIds: string[], sinceMs: number): { id: string; agentSessionId: string | null; label: string | null; cwd: string; model: string | null }[] {
+  if (accountIds.length === 0) return [];
+  const rows = getDb()
+    .query(
+      `SELECT id, agent_session_id, label, cwd, model FROM sessions
+        WHERE account_id IN (${accountIds.map(() => "?").join(",")}) AND last_activity_at >= ?`,
+    )
+    .all(...accountIds, sinceMs) as { id: string; agent_session_id: string | null; label: string | null; cwd: string; model: string | null }[];
+  return rows.map((r) => ({ id: r.id, agentSessionId: r.agent_session_id, label: r.label, cwd: r.cwd, model: r.model }));
+}
+
+/** A session's token samples after `sinceMs`, oldest first. */
+export function tokenSamplesAfter(sessionId: string, sinceMs: number): TokenSampleRow[] {
+  const rows = getDb()
+    .query("SELECT * FROM token_samples WHERE session_id = ? AND at > ? ORDER BY at")
+    .all(sessionId, sinceMs) as { session_id: string; at: number; input: number; output: number; cache_read: number; cache_write: number; cost_equiv: number }[];
+  return rows.map((r) => ({ sessionId: r.session_id, at: r.at, input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, costEquiv: r.cost_equiv }));
+}
+
 export function insertAttribution(sessionId: string, accountId: string, at: number, points: number): void {
   getDb().run("INSERT INTO attributions (session_id,account_id,at,points) VALUES (?,?,?,?)", [
     sessionId, accountId, at, points,

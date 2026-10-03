@@ -202,6 +202,144 @@ export interface Percentiles {
   p90: number | null;
 }
 
+// ---------------------------------------------------------------- insights
+
+/** The ways an input token is billed, plus output. Disjoint: they add up. */
+export type SpendPart = "input" | "write5m" | "write1h" | "cacheRead" | "output";
+
+/** Model calls, their tokens and what those would cost at API prices. */
+export interface Spend {
+  calls: number;
+  tokens: Record<SpendPart, number>;
+  /** API-equivalent dollars (src/core/pricing.ts), per part. */
+  cost: Record<SpendPart, number>;
+  /** Of `tokens.output`, how many were thinking. */
+  thinking: number;
+}
+
+/**
+ * Why a call wrote again a context that had been cached: what the session
+ * was waiting on while its cache expired (5 minutes for a subagent, an hour
+ * for a session), or that nothing was and it missed anyway.
+ */
+export type RebuildCause =
+  | "you" // waited for your next message
+  | "subagent" // a subagent it started and waited on
+  | "teammate" // a message from its lead, a teammate or another session
+  | "background" // a background task's notification, a wakeup
+  | "command" // a long tool call
+  | "compact" // compaction: the summary is new context
+  | "miss"; // no long wait: a restart, a model or tool change
+
+export interface Rebuild {
+  /** The transcript's session (see InsightSession.key). */
+  key: string;
+  /** The subagent that rebuilt, when it was one. */
+  agent: string | null;
+  at: number;
+  /** Since its previous call. */
+  gapMs: number;
+  /** Tokens written again. */
+  tokens: number;
+  cost: number;
+  /** What it would have cost to read them from a warm cache instead. */
+  warmCost: number;
+  cause: RebuildCause;
+  /** The tool it waited on (a command line, `Agent: …`). */
+  detail: string | null;
+}
+
+export interface InsightAgent {
+  name: string;
+  type: string | null;
+  spend: Spend;
+  peakContext: number;
+  rebuildCost: number;
+  firstAt: number;
+}
+
+export interface InsightSession {
+  /** The provider's session id. */
+  key: string;
+  /** The board's session, when agentbox knows it. */
+  sessionId: string | null;
+  title: string;
+  cwd: string | null;
+  /** The session's own calls and its subagents' together. */
+  spend: Spend;
+  /** Of `spend`, its subagents'. */
+  agentSpend: Spend;
+  /** Messages you sent it in the window. */
+  prompts: number;
+  firstAt: number;
+  lastAt: number;
+  /** The most context one call carried, in tokens. */
+  peakContext: number;
+  rebuilds: number;
+  rebuildCost: number;
+  /** Its costliest subagents, at most a dozen; `agentCount` is all of them. */
+  agents: InsightAgent[];
+  agentCount: number;
+}
+
+/**
+ * Where one account's usage went: every model call in its transcripts over
+ * the window, in API-equivalent dollars. Subscriptions do not bill per token,
+ * but list prices are the one scale on which a cache read, a cache write and
+ * an output token add up — and the weekly bar is drawn from roughly that.
+ */
+export interface UsageInsights {
+  accountId: string;
+  provider: ProviderId;
+  from: number;
+  to: number;
+  /** `transcripts`: every call, read from the provider's files. `samples`:
+   *  per-session totals agentbox recorded as they moved (devin, omp), with
+   *  no cache, context or wait detail. */
+  source: "transcripts" | "samples";
+  scan: { files: number; bytes: number; ms: number };
+  total: Spend;
+  /** One per hour from `from`. */
+  hours: Spend[];
+  /** The account's weekly window over the same span. */
+  weekly: {
+    points: { at: number; pct: number }[];
+    /** Points it rose by (across a reset too). */
+    gained: number;
+    /** API-equivalent dollars per weekly point, when it rose enough to say. */
+    perPoint: number | null;
+    /** When it first read 100%, and when that window reset. */
+    limitAt: number | null;
+    limitResetAt: number | null;
+    /** What ran while the window read 100%: the provider serves that only
+     *  as extra usage, billed apart from the plan. */
+    atLimit: { calls: number; cost: number };
+  } | null;
+  models: { model: string; calls: number; cost: number }[];
+  /** Calls by how much context each carried. `to` null: no upper bound. */
+  context: { from: number; to: number | null; calls: number; cost: number }[];
+  rebuilds: {
+    count: number;
+    cost: number;
+    warmCost: number;
+    causes: { cause: RebuildCause; count: number; cost: number; warmCost: number }[];
+    /** Of them, subagents' and teammates': five-minute caches. */
+    agents: { count: number; cost: number };
+    /** Many sessions rebuilding within minutes of each other: woken together,
+     *  by a restart, a recovery or a message to all of them. */
+    bursts: { at: number; sessions: number; cost: number }[];
+    /** The costliest, at most 20. */
+    worst: Rebuild[];
+  } | null;
+  /** By cost, at most 40. */
+  sessions: InsightSession[];
+  sessionCount: number;
+  /** Claude's subagents and teammates, across every session. */
+  agents: { count: number; spend: Spend; byType: { type: string; count: number; cost: number }[] } | null;
+  /** Rate-limit stops on this account in the window. */
+  limitHits: number[];
+}
+
 // ---------------------------------------------------------------- session
 
 /**

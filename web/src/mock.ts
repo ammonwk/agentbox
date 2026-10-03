@@ -22,6 +22,8 @@ import type {
   Btw,
   BalancerSettings,
   CalibrationReport,
+  Spend,
+  UsageInsights,
   Candidate,
   ClaimView,
   ClientMessage,
@@ -1053,6 +1055,78 @@ const worktreeScan = (): WorktreeScan => ({
   ],
 });
 
+/** A week of a busy Claude account, shaped like the real one: reads lead,
+ *  subagents spend most of it, and a lead's teammates rebuild their caches. */
+function insights(accountId: string, days: number): UsageInsights {
+  const H = 3_600_000;
+  const n = days * 24;
+  const to = Date.now();
+  const from = Math.floor(to / H) * H - (n - 1) * H;
+  const price = { input: 4, write5m: 5, write1h: 8, cacheRead: 0.2, output: 20 } as const;
+  const spend = (calls: number, k: { input: number; write5m: number; write1h: number; cacheRead: number; output: number }): Spend => {
+    const tokens = { ...k };
+    const cost = { input: 0, write5m: 0, write1h: 0, cacheRead: 0, output: 0 };
+    for (const p of Object.keys(tokens) as (keyof typeof tokens)[]) cost[p] = (tokens[p] * price[p]) / 1e6;
+    return { calls, tokens, cost, thinking: Math.round(k.output * 0.44) };
+  };
+  const hours = Array.from({ length: n }, (_, i) => {
+    const h = new Date(from + i * H).getHours();
+    const busy = h >= 9 && h <= 23 ? 1 + Math.sin(i * 1.7) * 0.6 + (i % 37 === 3 ? 4 : 0) : 0.08;
+    return spend(Math.round(200 * busy), { input: 0, write5m: 800_000 * busy, write1h: 260_000 * busy, cacheRead: 55e6 * busy, output: 150_000 * busy });
+  });
+  const total = spend(
+    hours.reduce((a, h) => a + h.calls, 0),
+    (["input", "write5m", "write1h", "cacheRead", "output"] as const).reduce(
+      (o, p) => ({ ...o, [p]: hours.reduce((a, h) => a + h.tokens[p], 0) }),
+      { input: 0, write5m: 0, write1h: 0, cacheRead: 0, output: 0 },
+    ),
+  );
+  const part = (f: number) => spend(Math.round(total.calls * f), {
+    input: 0, write5m: total.tokens.write5m * f, write1h: total.tokens.write1h * f, cacheRead: total.tokens.cacheRead * f, output: total.tokens.output * f,
+  });
+  const live = sessions.filter((s) => s.provider === "claude").slice(0, 6);
+  const shares = [0.41, 0.07, 0.055, 0.047, 0.046, 0.045];
+  const out = live.map((s, i) => ({
+    key: s.agentSessionId ?? s.id, sessionId: s.id, title: s.title, cwd: s.cwd, spend: part(shares[i]!), agentSpend: part(shares[i]! * (i === 0 ? 0.95 : 0.6)),
+    prompts: i === 0 ? 3 : 5 + i, firstAt: from + i * 9 * H, lastAt: to - i * 5 * H, peakContext: 965_000 - i * 80_000, rebuilds: 30 - i * 4, rebuildCost: 120 - i * 15,
+    agents: ["Server: coach, team, me", "Field app end-to-end run", "iOS design and branding polish", "Review sale-attribution fixes"].map((name, j) => ({
+      name, type: j === 3 ? "general-purpose" : `field-${j}`, spend: part(shares[i]! * 0.06 / (j + 1)), peakContext: 870_000 - j * 70_000, rebuildCost: 12 / (j + 1), firstAt: from + j * H,
+    })),
+    agentCount: i === 0 ? 200 : 12 - i,
+  }));
+  const c = (x: NonNullable<UsageInsights["rebuilds"]>["causes"][number]) => x;
+  return {
+    accountId, provider: "claude", from, to, source: "transcripts", scan: { files: 473, bytes: 77_635, ms: 508 }, total, hours,
+    weekly: {
+      points: Array.from({ length: n }, (_, i) => ({ at: from + i * H, pct: Math.min(100, (i / n) * 140) })),
+      gained: 100, perPoint: 45.2, limitAt: from + Math.round(n / 1.4) * H, limitResetAt: to + 2 * H, atLimit: { calls: 9435, cost: 1040 },
+    },
+    models: [{ model: "claude-opus-5-5", calls: total.calls, cost: 3448 }],
+    context: [
+      { from: 0, to: 50_000, calls: 1797, cost: 83 }, { from: 50_000, to: 100_000, calls: 4238, cost: 200 }, { from: 100_000, to: 200_000, calls: 9879, cost: 597 },
+      { from: 200_000, to: 400_000, calls: 10940, cost: 1059 }, { from: 400_000, to: 700_000, calls: 6386, cost: 1092 }, { from: 700_000, to: null, calls: 1787, cost: 417 },
+    ],
+    rebuilds: {
+      count: 258, cost: 569, warmCost: 19.3,
+      causes: [
+        c({ cause: "teammate", count: 128, cost: 346, warmCost: 11.5 }), c({ cause: "command", count: 37, cost: 77, warmCost: 3 }),
+        c({ cause: "subagent", count: 52, cost: 60, warmCost: 2.4 }), c({ cause: "background", count: 14, cost: 56, warmCost: 1.4 }),
+        c({ cause: "you", count: 17, cost: 20, warmCost: 0.7 }), c({ cause: "miss", count: 5, cost: 8, warmCost: 0.2 }),
+      ],
+      agents: { count: 221, cost: 402 },
+      bursts: [{ at: from + 30 * H, sessions: 14, cost: 71 }],
+      worst: out.slice(0, 4).map((s, i) => ({
+        key: s.key, agent: i % 2 ? "Field app end-to-end run" : null, at: to - i * 7 * H, gapMs: (19 - i * 4) * 60_000 * (i % 2 ? 1 : 60),
+        tokens: 924_131 - i * 50_000, cost: 7.39 - i * 0.4, warmCost: 0.18, cause: i % 2 ? "command" : "teammate",
+        detail: i % 2 ? "Bash: timeout 590 bash ~/.claude/scripts/pr-monitor.sh 7074 --until-green" : null,
+      })),
+    },
+    sessions: out, sessionCount: 68,
+    agents: { count: 279, spend: part(0.66), byType: [{ type: "general-purpose", count: 143, cost: 711 }, { type: "Explore", count: 35, cost: 112 }, { type: "claude", count: 11, cost: 105 }, { type: "fork", count: 18, cost: 91 }, { type: "field-server-coach", count: 1, cost: 92 }] },
+    limitHits: [from + 5 * H, from + Math.round(n / 1.4) * H + 2 * H],
+  };
+}
+
 function calibration(days: number): CalibrationReport {
   return {
     days,
@@ -1089,6 +1163,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       };
       return health;
     }
+    if (head === "accounts" && id && action === "insights") return insights(id, Number(url.searchParams.get("days") ?? 7));
     if (head === "accounts") return accountViews();
     if (head === "prompts") {
       return [...sessions]

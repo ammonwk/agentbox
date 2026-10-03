@@ -213,7 +213,7 @@ export function App() {
               <div className="seg topbar-seg" role="group" aria-label="Accounts view">
                 <button
                   type="button"
-                  aria-pressed={route.sub === "accounts"}
+                  aria-pressed={route.sub !== "calibration"}
                   onClick={() => navigate({ page: "accounts", sub: "accounts" })}
                 >
                   Accounts
@@ -264,7 +264,7 @@ export function App() {
               />
             ) : route.page === "accounts" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
-                <Accounts state={state} sub={route.sub} />
+                <Accounts state={state} route={route} />
               </Suspense>
             ) : route.page === "voice" ? (
               <Suspense fallback={<Empty title="Loading…" />}>

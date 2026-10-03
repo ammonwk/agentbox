@@ -1,0 +1,649 @@
+/* Usage insights (Accounts → an account). `ins-`; tokens only, plus the
+ * five series colors below. They are the dataviz reference palette's first
+ * five slots in its validated order, stepped per theme (validate_palette.js:
+ * adjacent CVD ΔE ≥ 8.4, normal-vision ≥ 19.3 in both). In light, three sit
+ * under 3:1 on the panel, so every series is named in a legend with its
+ * value beside it, never by color alone. */
+
+.ins {
+  --ins-read: #2a78d6;
+  --ins-w1h: #eb6834;
+  --ins-w5m: #1baf7a;
+  --ins-out: #eda100;
+  --ins-in: #e87ba4;
+  --ins-full: color-mix(in srgb, var(--warning) 12%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 1320px;
+  min-width: 0;
+}
+[data-theme="dark"] .ins {
+  --ins-read: #3987e5;
+  --ins-w1h: #d95926;
+  --ins-w5m: #199e70;
+  --ins-out: #c98500;
+  --ins-in: #d55181;
+  --ins-full: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+[data-part="cacheRead"] { --c: var(--ins-read); }
+[data-part="write1h"] { --c: var(--ins-w1h); }
+[data-part="write5m"] { --c: var(--ins-w5m); }
+[data-part="output"] { --c: var(--ins-out); }
+[data-part="input"] { --c: var(--ins-in); }
+.ins rect[data-part] { fill: var(--c); }
+
+/* ------------------------------------------------------------------ head */
+
+.ins-head {
+  display: flex;
+  align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+}
+.ins-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: var(--tap);
+  font-size: 12.5px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.ins-back:hover {
+  color: var(--text);
+}
+.ins-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.ins-who h2 {
+  font-size: 16px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ins-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--acct);
+  flex: none;
+}
+.ins-plan {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ins-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ins-loading {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  max-width: 640px;
+}
+.ins-loading .hint {
+  margin-top: 4px;
+}
+
+/* -------------------------------------------------------------- findings */
+
+.ins-findings {
+  padding: 14px 18px;
+}
+.ins-findings h3,
+.ins-sec h3 {
+  font-size: 14px;
+  font-weight: 650;
+}
+.ins-findings ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 8px 22px;
+}
+.ins-findings li {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.ins-findings li > svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--accent);
+}
+.ins-findings li[data-tone="warn"] > svg {
+  color: var(--warning);
+}
+.ins-findings b {
+  font-weight: 650;
+}
+
+/* ----------------------------------------------------------------- tiles */
+
+.ins-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.ins-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 11px 14px;
+  min-width: 0;
+}
+.ins-tile-label {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.ins-tile b {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.ins-tile[data-hero] b {
+  font-size: 28px;
+}
+.ins-tile-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ins-tile[data-tone="warn"] .ins-tile-note {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------------- sections */
+
+.ins-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.ins-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+.ins-sec > .hint {
+  margin-top: -6px;
+  max-width: 760px;
+}
+.ins-h4 {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.ins-foot {
+  max-width: 820px;
+}
+
+.ins-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ins-table th {
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--faint);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+.ins-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.ins-table th:first-child,
+.ins-table td:first-child {
+  padding-left: 0;
+}
+.ins-table th:last-child,
+.ins-table td:last-child {
+  padding-right: 0;
+}
+.ins .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ins-nowrap {
+  white-space: nowrap;
+}
+
+/* Swatches carry identity; the text beside them stays in text colors. */
+.ins-key {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--c);
+  margin-right: 6px;
+  vertical-align: -1px;
+  flex: none;
+}
+.ins-key-full {
+  background: var(--ins-full);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+}
+.ins-key-own {
+  background: var(--ins-read);
+}
+.ins-key-agents {
+  background: var(--ins-w1h);
+}
+.ins-part {
+  font-weight: 600;
+}
+.ins-what {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 1px;
+}
+.ins-legend-cell {
+  display: flex;
+  align-items: flex-start;
+}
+.ins-legend-cell > .ins-key {
+  margin-top: 3px;
+}
+
+/* ----------------------------------------------------------- composition */
+
+.ins-comp {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ins-stack {
+  display: flex;
+  gap: 2px;
+  height: 16px;
+}
+.ins-stack > span {
+  min-width: 3px;
+  background: var(--c);
+}
+.ins-stack > span:first-child {
+  border-radius: 4px 0 0 4px;
+}
+.ins-stack > span:last-child {
+  border-radius: 0 4px 4px 0;
+}
+.ins-stack > span:only-child {
+  border-radius: 4px;
+}
+
+/* -------------------------------------------------------------- timeline */
+
+.ins-time {
+  position: relative;
+  min-width: 0;
+}
+.ins-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.ins-chart-legend > span {
+  display: inline-flex;
+  align-items: center;
+}
+.ins-svg {
+  display: block;
+  touch-action: pan-y;
+  user-select: none;
+}
+.ins-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.ins-axis {
+  fill: var(--faint);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ins-full {
+  fill: var(--ins-full);
+}
+.ins-hover {
+  fill: var(--active);
+}
+.ins-weekly {
+  fill: none;
+  stroke: var(--acct);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.ins-hit {
+  fill: var(--danger);
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+.ins-sub-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 8px 0 2px;
+}
+.ins-tip {
+  position: absolute;
+  top: 26px;
+  transform: translateX(-50%);
+  min-width: 200px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 2;
+}
+/* On a phone it would cover the hours it is about: it sits under the charts. */
+.ins-tip[data-docked] {
+  position: static;
+  transform: none;
+  margin-top: 8px;
+  box-shadow: none;
+}
+.ins-tip-row > span:nth-child(2) {
+  white-space: nowrap;
+  padding-right: 10px;
+}
+.ins-tip-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.ins-tip-head b {
+  color: var(--text);
+}
+.ins-tip-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0 2px;
+  line-height: 1.6;
+}
+
+/* -------------------------------------------------------------- sessions */
+
+.ins-sessions,
+.ins-rebuilds {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ins-srow {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+}
+.ins-srow:last-child {
+  border-bottom: none;
+}
+.ins-srow-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ins-srow-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ins-srow-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+a.ins-srow-title:hover {
+  text-decoration: underline;
+}
+.ins-srow-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.ins-srow-cost {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+.ins-srow-cost b {
+  font-size: 14px;
+  font-weight: 600;
+}
+.ins-srow-cost .faint {
+  font-size: 11.5px;
+}
+.ins-srow-pad {
+  width: var(--tap);
+  flex: none;
+}
+.ins-srow-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  margin-top: 6px;
+  margin-right: calc(var(--tap) + 10px);
+}
+.ins-srow-bar > span {
+  border-radius: 3px;
+  min-width: 2px;
+}
+.ins-own {
+  background: var(--ins-read);
+}
+.ins-agents {
+  background: var(--ins-w1h);
+}
+.ins-agents-table {
+  margin-top: 8px;
+}
+.ins-agent-name {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.ins-agent-type {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--sunken);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-top: 2px;
+}
+
+/* -------------------------------------------------------------- rebuilds */
+
+.ins-causes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ins-cause {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(80px, 1fr) 64px;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+}
+.ins-cause-bar {
+  height: 10px;
+}
+.ins-cause-bar > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 0 4px 4px 0;
+  background: var(--ins-read);
+}
+.ins-rebuild {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
+  gap: 4px 14px;
+  align-items: start;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.ins-rebuild:last-child {
+  border-bottom: none;
+}
+.ins-rebuild-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ins-rebuild-who > :first-child {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.ins-rebuild-who .ins-agent-type {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ins-rebuild-why {
+  color: var(--muted);
+  min-width: 0;
+}
+.ins-detail {
+  display: block;
+  font-size: 11.5px;
+  color: var(--faint);
+  overflow-wrap: anywhere;
+  margin-top: 2px;
+}
+.ins-rebuild-cost {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+.ins-rebuild-cost .faint {
+  font-size: 11.5px;
+}
+
+/* --------------------------------------------------------------- context */
+
+.ins-avg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+}
+.ins-avg-bar {
+  flex: 1;
+  height: 8px;
+}
+.ins-avg-bar > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 0 4px 4px 0;
+  background: var(--ins-read);
+}
+.ins-avg .num {
+  min-width: 40px;
+}
+
+/* ---------------------------------------------------------------- narrow */
+
+@media (max-width: 640px) {
+  .ins-head {
+    gap: 6px 10px;
+  }
+  .ins-who {
+    flex-basis: 100%;
+    order: -1;
+  }
+  .ins-controls {
+    margin-left: auto;
+  }
+  .ins-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ins-tile[data-hero] {
+    grid-column: 1 / -1;
+  }
+  .ins-findings,
+  .ins-sec {
+    padding: 12px 12px;
+  }
+  .ins-findings li {
+    font-size: 12.5px;
+  }
+  .ins-cause {
+    grid-template-columns: minmax(0, 1fr) 64px;
+  }
+  .ins-cause-bar {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    height: 8px;
+  }
+  .ins-rebuild {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .ins-rebuild-why {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .ins-table .hide-narrow {
+    display: none;
+  }
+  .ins-what {
+    font-size: 11.5px;
+  }
+}
+
+.ins-more {
+  align-self: flex-start;
+}

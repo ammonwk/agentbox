@@ -5,8 +5,9 @@ import { accountHue, BigBadge, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBa
 import { Button, Confirm, Empty, Field, Icon, Modal, RelativeTime, Spinner, Toggle } from "../components";
 import { fmtCountdown, fmtPts, guessHome, tildify } from "../lib/format";
 import { outstandingOf, sortWindows } from "../lib/usage";
-import { hrefOf } from "../route";
+import { hrefOf, type Route } from "../route";
 import { Calibration } from "./Calibration";
+import { Insights } from "./Insights";
 import { useAction } from "./session/useAction";
 import "./accounts.css";
 
@@ -15,8 +16,9 @@ import "./accounts.css";
  * each rate-limit window is used, what the running sessions still claim, and
  * how the balancer currently sees it.
  */
-export function Accounts({ state, sub }: { state: AppState; sub: "accounts" | "calibration" }) {
-  if (sub === "calibration") return <Calibration settings={state.settings} />;
+export function Accounts({ state, route }: { state: AppState; route: Extract<Route, { page: "accounts" }> }) {
+  if (route.sub === "calibration") return <Calibration settings={state.settings} />;
+  if (route.sub === "insights") return <Insights state={state} accountId={route.account} />;
   return <AccountList state={state} />;
 }
 
@@ -389,6 +391,10 @@ function AccountCard({
       {login ? <LoginPanel login={login} onDismiss={() => onDismissLogin(login.id)} /> : null}
 
       <footer className="ac-foot">
+        <a className="btn btn-ghost btn-sm" href={hrefOf({ page: "accounts", sub: "insights", account: a.id })}>
+          <Icon.chart size={13} />
+          Usage insights
+        </a>
         <Button
           size="sm"
           variant="ghost"

@@ -18,6 +18,7 @@ import type {
   AppState,
   BalancerSettings,
   CalibrationReport,
+  UsageInsights,
   ClientMessage,
   ColdState,
   DepState,
@@ -259,6 +260,8 @@ export const api = {
   loginPaste: (id: string, text: string) => post<LoginFlow>(`/api/logins/${enc(id)}/paste`, { text }),
   loginCancel: (id: string) => post<unknown>(`/api/logins/${enc(id)}/cancel`),
   calibration: (days = 7) => get<CalibrationReport>(`/api/calibration?days=${days}`),
+  /** Reads the account's transcripts: seconds the first time, then only what was appended. */
+  insights: (id: string, days = 7) => get<UsageInsights>(`/api/accounts/${enc(id)}/insights?days=${days}`),
 
   // settings
   /** Deep-merges server-side, so a partial is a patch, not a replacement. */
