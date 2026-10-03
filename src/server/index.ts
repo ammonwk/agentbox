@@ -30,6 +30,7 @@ import { diffOf } from "../core/diff";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
+import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushSubscriptions, pushToAll, removeSubscription } from "../core/push";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
@@ -978,6 +979,28 @@ const router = new Router(mapError)
     void fleet.tick().then(scheduleHot);
     return json(next);
   })
+  // ---- notifications (src/core/push.ts)
+  .add("GET", "/api/push", async () =>
+    json({ publicKey: await pushPublicKey(), devices: pushSubscriptions().map((d) => ({ endpoint: d.endpoint, userAgent: d.userAgent, createdAt: d.createdAt })) }),
+  )
+  .add("POST", "/api/push/subscribe", async ({ req }) => {
+    let sub;
+    try {
+      sub = parseSubscription(await readBody(req), req.headers.get("user-agent"));
+    } catch (e) {
+      throw e instanceof HttpError ? e : new HttpError(400, (e as Error).message);
+    }
+    addSubscription(sub);
+    return json(null);
+  })
+  .add("POST", "/api/push/unsubscribe", async ({ req }) => {
+    removeSubscription(requireString(await readBody(req), "endpoint"));
+    return json(null);
+  })
+  .add("POST", "/api/push/test", async () => {
+    if (pushSubscriptions().length === 0) throw new HttpError(409, "no device has notifications turned on");
+    return json(await pushToAll({ title: "agentbox", body: "Notifications work on this device.", url: "/#/sessions", tag: "test" }));
+  })
   .add("GET", "/api/repos", () => json(listRepos()))
   .add("POST", "/api/repos", async ({ req }) => {
     const b = await readBody(req);
@@ -1296,6 +1319,7 @@ export async function startServer(): Promise<void> {
   watchPwaDesktop();
 
   fleet.on("sessions", () => {
+    notifyBlocked(fleet.sessions(), (id) => fleet.blockedReason(id));
     scheduleHot();
     // Claims move with sessions, and claims are on the Accounts page.
     scheduleCold();

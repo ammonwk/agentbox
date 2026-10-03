@@ -2,7 +2,8 @@
 // a network — stale code after a `web:build` is the failure this must never
 // cause — and falls back to the last copy offline. Content-hashed assets are
 // immutable, so they are served from the cache once seen. The API and the
-// sockets are never touched.
+// sockets are never touched. It also shows the server's pushes — a session
+// blocked on you (src/core/push.ts) — and a tap opens that session.
 const CACHE = "agentbox-v1";
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -48,4 +49,35 @@ self.addEventListener("fetch", (e) => {
       ),
     );
   }
+});
+
+self.addEventListener("push", (e) => {
+  let msg = {};
+  try {
+    msg = e.data.json();
+  } catch {
+    // Not ours to read; still shown, since iOS drops a subscription whose pushes show nothing.
+  }
+  e.waitUntil(
+    self.registration.showNotification(msg.title || "agentbox", {
+      body: msg.body || "",
+      tag: msg.tag,
+      icon: "/icon-512.png",
+      data: { url: msg.url || "/" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = e.notification.data?.url || "/";
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((open) => {
+      // An open app goes there itself (lib/push.ts): navigating it from here would reload it.
+      const app = open.find((c) => c.visibilityState === "visible") || open[0];
+      if (!app) return self.clients.openWindow(url);
+      app.postMessage({ type: "open", url });
+      return app.focus();
+    }),
+  );
 });

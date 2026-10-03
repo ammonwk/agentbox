@@ -193,6 +193,12 @@ export const api = {
   health: (refresh = false) => get<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
   voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
 
+  // notifications (lib/push.ts)
+  push: () => get<{ publicKey: string; devices: { endpoint: string; userAgent: string | null; createdAt: number }[] }>("/api/push"),
+  pushSubscribe: (sub: PushSubscriptionJSON) => post<null>("/api/push/subscribe", sub),
+  pushUnsubscribe: (endpoint: string) => post<null>("/api/push/unsubscribe", { endpoint }),
+  pushTest: () => post<{ sent: number; failed: string[] }>("/api/push/test"),
+
   // sessions
   placement: (input: { provider: ProviderId; big: boolean; model?: string }) =>
     post<Placement>("/api/placement", input),

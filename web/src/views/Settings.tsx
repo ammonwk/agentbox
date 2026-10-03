@@ -5,6 +5,7 @@ import { api, fmtBytes, healthRows, type Health, type RepoPatch, type SettingsPa
 import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
 import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle } from "../components";
 import { BALANCER_HELP } from "../lib/balancer";
+import { disablePush, enablePush, pushState, type PushState } from "../lib/push";
 import { hrefOf } from "../route";
 import { WhenField } from "./newsession/WhenField";
 import { scheduleTitle } from "./session/Scheduled";
@@ -20,6 +21,7 @@ export function Settings({ state }: { state: AppState }) {
     <div className="settings">
       <Schedules state={state} />
       <General {...section} />
+      <Notifications />
       <Models {...section} installed={state.providers} />
       <Balancer {...section} />
       <Repositories repos={repos} sessions={sessions} track={track} saveStateOf={saveStateOf} />
@@ -285,6 +287,86 @@ function Models({
           );
         })}
       </div>
+    </section>
+  );
+}
+
+// ----------------------------------------------------------- notifications
+
+const PUSH_WORDS: Record<PushState, string> = {
+  unsupported: "This browser cannot receive them. On an iPhone or iPad, add agentbox to the Home Screen (Share → Add to Home Screen) and turn them on from the app there.",
+  denied: "Notifications are turned off for agentbox in this device's settings; allow them there, then come back.",
+  off: "Off on this device.",
+  on: "On for this device.",
+};
+
+function Notifications() {
+  const [state, setState] = useState<PushState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    void pushState().then(setState, () => setState("unsupported"));
+  }, []);
+
+  const run = async (what: () => Promise<PushState>) => {
+    setBusy(true);
+    setNote(null);
+    try {
+      setState(await what());
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const test = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await api.pushTest();
+      setNote(r.failed.length ? `Sent to ${r.sent}; failed: ${r.failed.join("; ")}` : `Sent to ${r.sent} device${r.sent === 1 ? "" : "s"}.`);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h3>Notifications</h3>
+      <p className="hint">
+        A notification on this device when a session is blocked on you: a permission prompt, a question, an error it cannot get past. Each device is turned
+        on by itself, and it arrives with the app closed.
+      </p>
+      {state && (
+        <p className="hint" role="status">
+          {PUSH_WORDS[state]}
+        </p>
+      )}
+      <div className="repo-add">
+        {state === "off" && (
+          <Button variant="primary" loading={busy} onClick={() => void run(enablePush)}>
+            Turn on notifications
+          </Button>
+        )}
+        {state === "on" && (
+          <>
+            <Button loading={busy} onClick={() => void test()}>
+              Send a test
+            </Button>
+            <Button loading={busy} onClick={() => void run(disablePush)}>
+              Turn off
+            </Button>
+          </>
+        )}
+      </div>
+      {note && (
+        <p className="hint" role="status">
+          {note}
+        </p>
+      )}
     </section>
   );
 }

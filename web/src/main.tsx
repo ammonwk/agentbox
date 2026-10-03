@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
 import { isPhone } from "./lib/phone";
+import { startPush } from "./lib/push";
 import { reloadForMissingChunk } from "./lib/update";
 import { followLinks, listUnderSession } from "./route";
 
@@ -59,6 +60,7 @@ addEventListener("vite:preloadError", () => void reloadForMissingChunk());
 // Installable as an app (Add to Home Screen); service workers need HTTPS.
 if ("serviceWorker" in navigator && window.isSecureContext && location.port !== "5173") {
   void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  startPush();
 }
 
 listUnderSession();
