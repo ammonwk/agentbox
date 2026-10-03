@@ -7,7 +7,7 @@ import { firstLine, foldSteps, groupTimeline, withBtw, type TimelineRow } from "
 import { field, type SendCall } from "../../lib/sendtool";
 import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
 import { Markdown } from "./Markdown";
-import { AskRow } from "./Question";
+import { AskRow, QuestionCard } from "./Question";
 import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { MessageRail, useTurns } from "./MessageRail";
@@ -128,6 +128,19 @@ export function Timeline({ session }: { session: Session }) {
     }
     prev.current = { count: events.length, firstId, scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, initial: false };
   }, [events, pinned, echoes.length, queued.length, btw, thinking]);
+
+  // A question came up while you were at the tail (or the session opened on
+  // one): show it from its top, which a card taller than the view would
+  // otherwise have scrolled past.
+  const question = session.question;
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    const card = el?.querySelector<HTMLElement>(".ask-live");
+    if (!el || !card || !pinned) return;
+    el.scrollTop = el.scrollHeight;
+    const over = el.getBoundingClientRect().top + 8 - card.getBoundingClientRect().top;
+    if (over > 0) el.scrollTop -= over;
+  }, [question?.id, ready]);
 
   // The rest of a staged page rendered above what is on screen: stay at the
   // bottom if that is where the reader was, else keep their place.
@@ -258,7 +271,8 @@ export function Timeline({ session }: { session: Session }) {
     ) : r.type === "btw" ? (
       <BtwCard key={`btw-${r.btw.id}`} btw={r.btw} sessionId={session.id} />
     ) : r.type === "ask" ? (
-      <AskRow key={r.event.id} ev={r.event} live={session.question?.id === r.event.ask.id} />
+      // The one being asked now is the card at the tail, not a record yet.
+      question?.id === r.event.ask.id ? null : <AskRow key={r.event.id} ev={r.event} />
     ) : r.type === "sent" ? (
       <SentRow key={r.event.id} ev={r.event} send={r.send} />
     ) : (
@@ -319,6 +333,7 @@ export function Timeline({ session }: { session: Session }) {
               renderRow(r)
             ),
           )}
+          {question ? <QuestionCard key={question.id} sessionId={session.id} ask={question} /> : null}
           {queued.map((q, i) => (
             <UserRow key={`q${i}:${q.at}`} ev={{ id: `queued:${q.at}`, at: q.at, kind: "user", text: q.text }} queued />
           ))}

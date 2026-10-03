@@ -605,7 +605,22 @@ function Detail({
             ) : (
               <>
                 <Icon.alert size={13} /> {session.attention.reason}.{" "}
-                {!session.question ? "The Terminal tab shows the prompt." : tab === "terminal" && session.host === "tmux" ? "Answer it here, or on the Timeline tab." : "Answer it below."}
+                {!session.question ? (
+                  "The Terminal tab shows the prompt."
+                ) : tab === "terminal" && session.host === "tmux" ? (
+                  "Answer it here, or on the Timeline tab."
+                ) : (
+                  <button
+                    className="linkish"
+                    onClick={() => {
+                      // The card is the Timeline's last row; opening the tab lands on it.
+                      if (tab === "timeline") document.querySelector(".ask-live")?.scrollIntoView({ block: "start", behavior: "smooth" });
+                      else onTab("timeline");
+                    }}
+                  >
+                    {tab === "timeline" ? "Answer it in the Timeline." : "Answer it on the Timeline tab."}
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -678,7 +693,6 @@ function Detail({
       <Composer
         key={session.id}
         session={session}
-        tab={tab}
         accounts={state.accounts}
         claimIdleMin={state.settings.balancer.claimIdleMin}
         skills={skills}

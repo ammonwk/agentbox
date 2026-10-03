@@ -6,12 +6,11 @@ import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
-import { hrefOf, type SessionTab } from "../../route";
+import { hrefOf } from "../../route";
 import { loadDraft, saveDraft } from "./drafts";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { echoSent } from "./echo";
-import { QuestionCard } from "./Question";
 import { useVoiceNote, voiceNotes } from "./voicenote";
 
 /** What the composer can do for a session, and the sentence that says so. */
@@ -46,10 +45,8 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * the box is replaced by the Adopt explanation. `/` completes the skills the
  * session can run, as in the new-session prompt.
  */
-export function Composer({ session, tab, accounts, claimIdleMin, skills, textareaRef }: {
+export function Composer({ session, accounts, claimIdleMin, skills, textareaRef }: {
   session: Session;
-  /** The tab showing above: the terminal has the question's own dialog, so the card stays off it. */
-  tab: SessionTab;
   accounts: readonly AccountView[];
   claimIdleMin: number;
   skills: readonly SkillInfo[];
@@ -202,11 +199,7 @@ export function Composer({ session, tab, accounts, claimIdleMin, skills, textare
         </div>
       ) : null}
 
-      {session.question && mode.kind === "send" ? (
-        tab === "terminal" && session.host === "tmux" ? null : (
-          <QuestionCard key={session.question.id} sessionId={session.id} ask={session.question} />
-        )
-      ) : session.status === "blocked" && mode.kind === "send" ? (
+      {session.question && mode.kind === "send" ? null : session.status === "blocked" && mode.kind === "send" ? (
         <div className="cmp-keys" role="group" aria-label="Answer the prompt">
           <span className="cmp-keys-label">
             <Icon.alert size={13} /> The agent is showing a prompt — answer it in the terminal, or send a key:

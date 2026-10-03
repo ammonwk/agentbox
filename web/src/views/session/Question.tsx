@@ -24,8 +24,9 @@ function answerOf(q: AskQuestion, p: Choice): AskAnswer | null {
 }
 
 /**
- * The AskUserQuestion dialog the session is showing, answerable here: pick
- * the options (or type your own), then Answer. The server works the
+ * The AskUserQuestion dialog the session is showing, answerable where it
+ * stands in the Timeline: pick the options (or type your own), then Answer.
+ * The server works the
  * terminal's dialog to match (claude-ask.ts), so the terminal and this stay
  * one dialog.
  */
@@ -45,7 +46,7 @@ export function QuestionCard({ sessionId, ask }: { sessionId: string; ask: Pick<
   }
 
   return (
-    <section className="ask" aria-label="The agent is asking">
+    <section className="ask ask-live" aria-label="The agent is asking">
       {ask.questions.map((q, i) => {
         const p = picks[i]!;
         const kind = q.multiSelect ? "checkbox" : "radio";
@@ -133,7 +134,7 @@ export function QuestionCard({ sessionId, ask }: { sessionId: string; ask: Pick<
 }
 
 /** An AskUserQuestion call in the timeline: what was asked and what came back. */
-export function AskRow({ ev, live }: { ev: Extract<TimelineEvent, { kind: "tool" }> & { ask: Ask }; live: boolean }) {
+export function AskRow({ ev }: { ev: Extract<TimelineEvent, { kind: "tool" }> & { ask: Ask } }) {
   const { ask } = ev;
   return (
     <div className={`ask ask-past ${ev.status}`} title={fmtClock(ev.at)}>
@@ -155,15 +156,7 @@ export function AskRow({ ev, live }: { ev: Extract<TimelineEvent, { kind: "tool"
       })}
       {ev.status === "running" ? (
         <div className="ask-status">
-          {live ? (
-            <>
-              <Icon.arrowDown size={12} /> Waiting for your answer, below
-            </>
-          ) : (
-            <>
-              <Spinner size={11} /> Waiting for an answer
-            </>
-          )}
+          <Spinner size={11} /> Waiting for an answer
         </div>
       ) : ev.status === "error" || !ask.answers ? (
         <div className="ask-status faint">Not answered{ev.output ? ` — ${ev.output.split("\n")[0]!.slice(0, 160)}` : ""}</div>

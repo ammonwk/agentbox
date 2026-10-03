@@ -68,8 +68,8 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* The terminal keeps its size until it refits; a composer that grew (a
-     question card) must not end up under it. */
+  /* The terminal keeps its size until it refits; a composer that grew must
+     not end up under it. */
   overflow: hidden;
 }
 
@@ -1774,7 +1774,7 @@ a.sx-imgpath:hover { color: var(--accent); }
 
 /* ------------------------------------------------------------- questions */
 
-/* AskUserQuestion: answerable above the composer, and a record in the timeline. */
+/* AskUserQuestion: answerable in the timeline while it is asked, and a record there after. */
 .ask {
   display: flex;
   flex-direction: column;
@@ -1784,10 +1784,8 @@ a.sx-imgpath:hover { color: var(--accent); }
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 5%, var(--panel));
 }
-.cmp > .ask {
-  max-height: min(55vh, 520px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+.ask-live {
+  scroll-margin-top: 8px;
 }
 .ask-q {
   margin: 0;
