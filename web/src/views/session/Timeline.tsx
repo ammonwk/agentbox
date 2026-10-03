@@ -117,7 +117,7 @@ export function Timeline({ session }: { session: Session }) {
 
   // Esc puts a side question's card away while it is up: asking (the question
   // is taken back and the panel in the pane closes) or answered (read, done).
-  // Not while typing — there Esc just blurs.
+  // Not while typing — there Esc stops a running turn, or blurs (Composer).
   const cards = useMemo(() => {
     const shown = allRows.filter((r) => r.type === "btw").map((r) => r.btw);
     const ids = new Set(shown.map((b) => b.id));

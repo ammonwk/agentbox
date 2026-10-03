@@ -79,6 +79,24 @@ export function Composer({ session, tab, accounts, claimIdleMin, skills, textare
   // A prompt showing takes precedence: Esc there cancels it, and the card can wait.
   const escTakesCard = openCards.length > 0 && session.status !== "blocked";
 
+  /** Esc on the keyboard stops the turn: a session at its prompt has nothing to stop. */
+  const interruptible = mode.kind === "send" && session.status === "running";
+  // Esc from anywhere on the page that is not a field, the terminal (which
+  // sends its own) or a dialog. A card that is up takes it first (Timeline).
+  useEffect(() => {
+    if (!interruptible || escTakesCard) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.repeat || e.defaultPrevented) return;
+      if (document.querySelector("[role=dialog]")) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest(".xterm") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable)) return;
+      e.preventDefault();
+      void run(() => api.interrupt(session.id));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [interruptible, escTakesCard, session.id, run]);
+
   // Grow with the text up to a cap, then scroll.
   useEffect(() => {
     const el = ref.current;
@@ -230,7 +248,7 @@ export function Composer({ session, tab, accounts, claimIdleMin, skills, textare
           value={text}
           placeholder={placeholder}
           enterKeyHint="send"
-          title="Enter sends · Shift+Enter for a new line · / for skills"
+          title="Enter sends · Shift+Enter for a new line · / for skills · Esc stops a running turn"
           {...skill.props}
           onChange={(e) => {
             setText(e.target.value);
@@ -242,7 +260,11 @@ export function Composer({ session, tab, accounts, claimIdleMin, skills, textare
               e.preventDefault();
               void submit();
             } else if (e.key === "Escape") {
-              (e.target as HTMLTextAreaElement).blur();
+              // Mid-turn Esc stops the turn, as it does in the terminal; at rest it leaves the box.
+              if (interruptible) {
+                e.preventDefault();
+                if (!e.repeat && !busy) void run(() => api.interrupt(session.id));
+              } else (e.target as HTMLTextAreaElement).blur();
             }
           }}
         />
