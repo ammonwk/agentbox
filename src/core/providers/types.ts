@@ -141,10 +141,11 @@ export interface TranscriptFacts {
    *  oldest first. Only meaningful while its process lives. */
   queued?: QueuedMessage[];
   /**
-   * Background-task notifications (claude) queued after the turn ended and
-   * never taken: the session was waiting on them and nothing woke it. Claude
-   * does this with a command an in-process teammate started and then went
-   * idle on. The fleet nudges it (`Fleet.nudgeStranded`).
+   * Background-task notifications (claude) still queued with the turn over:
+   * the session was waiting on them and nothing woke it. Claude does this
+   * with a command an in-process teammate started and then went idle on, and
+   * the session's later turns do not take them either. The fleet nudges it
+   * (`Fleet.nudgeStranded`), and the nudge in the transcript clears them.
    */
   stranded?: QueuedMessage[];
   /** An AskUserQuestion call (claude) still waiting for its answer. */

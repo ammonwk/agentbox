@@ -118,6 +118,7 @@ import type {
   ClaimView,
   Placement,
   PromptHistoryEntry,
+  QueuedMessage,
   ProviderId,
   Session,
   SessionHost,
@@ -769,8 +770,10 @@ export class Fleet extends EventEmitter {
    * sits "waiting on CI" for good, and is parked an hour later with nothing
    * holding it. Once the session has been quiet for `strandedNudgeAfter` —
    * 55 minutes, while its cache is still warm and before it is parked — it
-   * gets one message naming what finished. Once per notification, and not
-   * while a teammate is still writing.
+   * gets one message naming what finished, and is not parked before it has
+   * (`parkHold`). Once per notification — the nudge in the transcript clears
+   * them, so a restart does not repeat it — and not while a teammate is
+   * still writing.
    */
   private nudgeStranded(now: number, parkIdleMin: number): void {
     const after = strandedNudgeAfter(parkIdleMin);
@@ -780,7 +783,7 @@ export class Fleet extends EventEmitter {
       if (v.status !== "waiting" && v.status !== "running") continue;
       if (now - v.lastActivityAt < after) continue;
       const facts = v.transcriptPath ? this.tracked.get(v.transcriptPath)?.facts : null;
-      const stranded = facts?.stranded ?? [];
+      const stranded = this.strandedOf(v);
       const newest = stranded.at(-1)?.at;
       if (newest === undefined || this.strandedSeen.get(v.id) === newest) continue;
       // A working teammate's notification waits in the lead's queue until the
@@ -791,6 +794,17 @@ export class Fleet extends EventEmitter {
       console.log(`agentbox: ${v.id} (${v.title}) was never woken by ${stranded.length} finished background task${stranded.length === 1 ? "" : "s"}; nudging it after ${minutes(now - v.lastActivityAt)} quiet`);
       void this.sendInPlace(v.id, strandedNudge(stranded)).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
     }
+  }
+
+  /** The notifications Claude never delivered to this session's running
+   *  process: one queued before it started died with the process before. */
+  private strandedOf(v: Session): QueuedMessage[] {
+    const all = (v.transcriptPath ? this.tracked.get(v.transcriptPath)?.facts?.stranded : null) ?? [];
+    if (all.length === 0) return all;
+    const pane = v.tmux ? this.panes.get(v.tmux) : undefined;
+    const pid = (pane ? this.processUnder(pane.pid, v.provider)?.pid : undefined) ?? v.pid;
+    const since = pid ? startedAtOf(pid) : null;
+    return since === null ? [] : all.filter((q) => q.at >= since);
   }
 
   /**
@@ -1395,6 +1409,13 @@ export class Fleet extends EventEmitter {
     if (panes.some((p) => p.clients > 0)) return "a terminal or browser is attached to it";
     const own = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
     if (!own?.facts) return "its transcript has not been read yet";
+    // Told first (`nudgeStranded`), parked only if it goes quiet again. One
+    // already nudged holds nothing: a nudge that never landed must not keep
+    // the session up for good.
+    const stranded = this.strandedOf(v);
+    if (stranded.length > 0 && this.strandedSeen.get(v.id) !== stranded.at(-1)!.at) {
+      return `${stranded.length} finished background task${stranded.length === 1 ? "" : "s"} never woke it; it is told first`;
+    }
 
     // Every pane is an agent: the lead, and teammates, which name their team
     // and themselves on the command line.

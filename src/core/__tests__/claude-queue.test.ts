@@ -66,11 +66,22 @@ describe("Claude's queue", () => {
     expect(await stranded(answer("m1") + queue("enqueue", NOTE))).toEqual([NOTE]);
   });
 
-  test("a notification that was taken, or is waiting for a running turn, is not", async () => {
+  test("a teammate's notification the lead's later turns never took is stranded until the nudge", async () => {
+    // A teammate's build finishes; another teammate then wakes the lead, which
+    // answers and ends its turn with the notification still queued.
+    const waiting = queue("enqueue", NOTE) + queue("enqueue", PEER) + queue("dequeue") + meta(`Another Claude session sent a message:\n${PEER}`) + answer("m1") + line({ type: "system", subtype: "turn_duration", sessionId: SESSION, uuid: "s", timestamp: at() });
+    expect(await stranded(waiting)).toEqual([NOTE]);
+    const nudge = line({ type: "user", sessionId: SESSION, uuid: "n", timestamp: at(), message: { role: "user", content: strandedNudge([{ text: NOTE }]) } });
+    expect(await stranded(waiting + nudge + answer("m2"))).toEqual([]);
+  });
+
+  test("a notification that was taken is not", async () => {
     // Taken: the turn it starts is open.
     expect(await stranded(answer("m1") + queue("enqueue", NOTE) + queue("dequeue") + line({ type: "user", sessionId: SESSION, uuid: "u", timestamp: at(), message: { role: "user", content: NOTE } }))).toEqual([]);
-    // Queued mid-turn, before the answer that ended it: delivered inside it.
-    expect(await stranded(queue("enqueue", NOTE) + answer("m1"))).toEqual([]);
+    // Delivered by name with no dequeue.
+    expect(await stranded(answer("m1") + queue("enqueue", NOTE) + line({ type: "user", sessionId: SESSION, uuid: "u", timestamp: at(), message: { role: "user", content: NOTE } }) + answer("m2"))).toEqual([]);
+    // Removed mid-turn.
+    expect(await stranded(queue("enqueue", NOTE) + queue("remove", NOTE) + answer("m1"))).toEqual([]);
     // A message is not a notification.
     expect(await stranded(answer("m1") + queue("enqueue", "hello"))).toEqual([]);
   });

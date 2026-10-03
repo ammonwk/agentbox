@@ -418,6 +418,15 @@ export function strandedNudgeAfter(parkIdleMin: number): number {
   return Math.max(60_000, Math.min(STRANDED_NUDGE_MS, parkIdleMin * 60_000 - STRANDED_LEAD_MS));
 }
 
+const STRANDED_NUDGE_HEAD = "[agentbox: ";
+const STRANDED_NUDGE_MARK = "finished while this session was idle, and the notification never woke it:";
+
+/** Is this prompt the nudge? The transcript is the record that a session was
+ *  told: a restarted server reads it there instead of nudging again. */
+export function isStrandedNudge(prompt: string): boolean {
+  return prompt.startsWith(STRANDED_NUDGE_HEAD) && prompt.includes(STRANDED_NUDGE_MARK);
+}
+
 /** The nudge: what finished, and where its output is, since the notification
  *  itself may never arrive. */
 export function strandedNudge(notes: { text: string }[]): string {
@@ -426,7 +435,7 @@ export function strandedNudge(notes: { text: string }[]): string {
     const file = tag(n.text, "output-file");
     return `- ${tag(n.text, "summary") ?? "A background task finished"}${file ? ` (output: ${file})` : ""}`;
   });
-  return `[agentbox: ${notes.length === 1 ? "a background task" : `${notes.length} background tasks`} finished while this session was idle, and the notification never woke it:\n${lines.join("\n")}\nCarry on with what was waiting on ${notes.length === 1 ? "it" : "them"}; a teammate that started one is still idle and will not act unless you tell it.]`;
+  return `${STRANDED_NUDGE_HEAD}${notes.length === 1 ? "a background task" : `${notes.length} background tasks`} ${STRANDED_NUDGE_MARK}\n${lines.join("\n")}\nCarry on with what was waiting on ${notes.length === 1 ? "it" : "them"}; a teammate that started one is still idle and will not act unless you tell it.]`;
 }
 
 // ---------------------------------------------------------------- words

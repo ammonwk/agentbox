@@ -20,6 +20,7 @@ import { loadFields, saveFields } from "./foldstate";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
 import { dropPasteTags } from "../sent";
+import { isStrandedNudge } from "../park";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
  *  collide), so it only ever proves a candidate, never recovers a path. */
@@ -72,6 +73,10 @@ export type UserTextKind =
   | "hidden"; // caveats and other wrappers nobody needs to see
 
 const WRAPPER_TAG = /^\s*<([a-z][a-z0-9_-]*)>/;
+
+function isTaskNotification(q: { text: string }): boolean {
+  return q.text.startsWith("<task-notification>");
+}
 
 export function classifyUserText(text: string): UserTextKind {
   if (text.startsWith("[Request interrupted")) return "interrupted";
@@ -566,9 +571,11 @@ export class ClaudeFold {
         if (side) return;
         if (r.subtype === "turn_duration") {
           this.turnOpen = false;
-          // The next turn starts by taking what was queued: whatever the
+          // The next turn starts by taking what was queued: a message the
           // records leave behind here was taken in a way they did not say.
-          this.queue = [];
+          // A notification's delivery is always recorded, so one still here
+          // was not delivered (see `stranded`).
+          this.queue = this.queue.filter(isTaskNotification);
           this.dequeued = 0;
         }
         else if (r.subtype === "scheduled_task_fire") this.turnOpen = true;
@@ -620,6 +627,8 @@ export class ClaudeFold {
     // A paste is recorded wrapped in `<pasted_content>`; a title is its words.
     const t = dropPasteTags(text).trim().slice(0, PROMPT_CAP);
     if (!t) return;
+    // The fleet's nudge names the notifications Claude never delivered.
+    if (isStrandedNudge(t)) this.queue = this.queue.filter((q) => !isTaskNotification(q));
     this.firstPrompt ??= t;
     this.lastPrompt = t;
   }
@@ -705,6 +714,7 @@ export class ClaudeFold {
     }
     if (kind === "notification") {
       // Claude answers a finished background task on its own.
+      this.unqueue(first);
       this.turnOpen = true;
       this.turnError = null;
       return;
@@ -836,11 +846,10 @@ export class ClaudeFold {
       turnOpen: this.turnOpen,
       // Background-task notifications queue too; only messages are shown.
       queued: this.queue.filter((q) => classifyUserText(q.text) === "prompt").map((q) => ({ ...q })),
-      // Queued since the model last answered, with no turn to take it: Claude
-      // never delivered it (an idle in-process teammate's background command).
-      stranded: this.turnOpen
-        ? []
-        : this.queue.filter((q) => q.text.startsWith("<task-notification>") && q.at > (this.lastTurnAt ?? 0)).map((q) => ({ ...q })),
+      // Still queued with no turn to take it: Claude never delivered it (an
+      // idle in-process teammate's background command), however many turns
+      // the session has run since.
+      stranded: this.turnOpen ? [] : this.queue.filter(isTaskNotification).map((q) => ({ ...q })),
       turnError: this.turnError ? { ...this.turnError } : null,
       contextUsed: this.contextUsed,
       contextLimit: this.contextUsed === null && !this.model ? null : contextLimitFor(this.model, this.observedMax, this.autoCompactPre),
