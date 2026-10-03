@@ -140,6 +140,13 @@ export interface TranscriptFacts {
   /** Messages the agent is holding until its current step yields (claude),
    *  oldest first. Only meaningful while its process lives. */
   queued?: QueuedMessage[];
+  /**
+   * Background-task notifications (claude) queued after the turn ended and
+   * never taken: the session was waiting on them and nothing woke it. Claude
+   * does this with a command an in-process teammate started and then went
+   * idle on. The fleet nudges it (`Fleet.nudgeStranded`).
+   */
+  stranded?: QueuedMessage[];
   /** An AskUserQuestion call (claude) still waiting for its answer. */
   pendingAsk?: { id: string; questions: AskQuestion[] } | null;
   /** The session is in its CLI's skip-every-permission mode as of its latest

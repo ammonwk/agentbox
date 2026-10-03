@@ -836,6 +836,11 @@ export class ClaudeFold {
       turnOpen: this.turnOpen,
       // Background-task notifications queue too; only messages are shown.
       queued: this.queue.filter((q) => classifyUserText(q.text) === "prompt").map((q) => ({ ...q })),
+      // Queued since the model last answered, with no turn to take it: Claude
+      // never delivered it (an idle in-process teammate's background command).
+      stranded: this.turnOpen
+        ? []
+        : this.queue.filter((q) => q.text.startsWith("<task-notification>") && q.at > (this.lastTurnAt ?? 0)).map((q) => ({ ...q })),
       turnError: this.turnError ? { ...this.turnError } : null,
       contextUsed: this.contextUsed,
       contextLimit: this.contextUsed === null && !this.model ? null : contextLimitFor(this.model, this.observedMax, this.autoCompactPre),

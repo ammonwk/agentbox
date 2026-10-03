@@ -401,6 +401,34 @@ export function subagentWorking(text: string): boolean {
   return !/ · finished\b.*\bUNCOLLECTED\b/.test(text);
 }
 
+// ---------------------------------------------------------------- stranded
+
+/** A session sitting on notifications Claude never delivered (TranscriptFacts
+ *  `stranded`) is told about them after this long quiet: inside the hour its
+ *  prompt cache lasts, and before it would be parked. */
+export const STRANDED_NUDGE_MS = 55 * 60_000;
+/** ...or this long before parking, where `parkIdleMin` is set shorter. */
+const STRANDED_LEAD_MS = 5 * 60_000;
+
+/** How long a session with stranded notifications is left quiet before the
+ *  nudge. Never under a minute: a notification is queued a moment before it
+ *  is taken. */
+export function strandedNudgeAfter(parkIdleMin: number): number {
+  if (!parkIdleMin) return STRANDED_NUDGE_MS;
+  return Math.max(60_000, Math.min(STRANDED_NUDGE_MS, parkIdleMin * 60_000 - STRANDED_LEAD_MS));
+}
+
+/** The nudge: what finished, and where its output is, since the notification
+ *  itself may never arrive. */
+export function strandedNudge(notes: { text: string }[]): string {
+  const tag = (text: string, name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim() ?? null;
+  const lines = notes.map((n) => {
+    const file = tag(n.text, "output-file");
+    return `- ${tag(n.text, "summary") ?? "A background task finished"}${file ? ` (output: ${file})` : ""}`;
+  });
+  return `[agentbox: ${notes.length === 1 ? "a background task" : `${notes.length} background tasks`} finished while this session was idle, and the notification never woke it:\n${lines.join("\n")}\nCarry on with what was waiting on ${notes.length === 1 ? "it" : "them"}; a teammate that started one is still idle and will not act unless you tell it.]`;
+}
+
 // ---------------------------------------------------------------- words
 
 export function minutes(ms: number): string {

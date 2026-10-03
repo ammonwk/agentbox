@@ -71,6 +71,8 @@ import {
   normalCommand,
   shellHold,
   STALE_TURN_MS,
+  strandedNudge,
+  strandedNudgeAfter,
   SUBAGENT_QUIET_MS,
   subagentsLastWrite,
   WakeScan,
@@ -323,6 +325,9 @@ export class Fleet extends EventEmitter {
    *  and how many nudges it has had. */
   private nudges = new Map<string, { firstAt: number; tries: number }>();
   private nextNudgeAt = 0;
+  /** Stranded notifications already nudged (`nudgeStranded`): session → the
+   *  newest one's time. */
+  private strandedSeen = new Map<string, number>();
   /** Error screens that name their own wait ("will reset in 55 minutes"):
    *  the error, as first seen, and when that wait is up. */
   private screenWaits = new Map<string, { key: string; until: number }>();
@@ -618,6 +623,7 @@ export class Fleet extends EventEmitter {
     if (this.caughtUp) {
       this.continueStalled(now);
       this.nudgeErrored(now);
+      this.nudgeStranded(now, settings.parkIdleMin);
     }
     lap("park");
     await this.refreshWork(now);
@@ -754,6 +760,37 @@ export class Fleet extends EventEmitter {
       );
       void this.sendInPlace(v.id, message).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
       return;
+    }
+  }
+
+  /**
+   * A session whose background task finished without waking it is told so.
+   * Claude queues the notification and never delivers it when the command
+   * was started by an in-process teammate that has since gone idle: the lead
+   * sits "waiting on CI" for good, and is parked an hour later with nothing
+   * holding it. Once the session has been quiet for `strandedNudgeAfter` —
+   * 55 minutes, while its cache is still warm and before it is parked — it
+   * gets one message naming what finished. Once per notification, and not
+   * while a teammate is still writing.
+   */
+  private nudgeStranded(now: number, parkIdleMin: number): void {
+    const after = strandedNudgeAfter(parkIdleMin);
+    for (const v of this.views.values()) {
+      if (v.provider !== "claude" || v.host !== "tmux" || this.busy.has(v.id)) continue;
+      // "Running" too: Claude's status file says busy on a lead with teammates.
+      if (v.status !== "waiting" && v.status !== "running") continue;
+      if (now - v.lastActivityAt < after) continue;
+      const facts = v.transcriptPath ? this.tracked.get(v.transcriptPath)?.facts : null;
+      const stranded = facts?.stranded ?? [];
+      const newest = stranded.at(-1)?.at;
+      if (newest === undefined || this.strandedSeen.get(v.id) === newest) continue;
+      // A working teammate's notification waits in the lead's queue until the
+      // teammate's step yields, and is taken then.
+      const sub = subagentsLastWrite(v.transcriptPath!, facts!.agentSessionId);
+      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) continue;
+      this.strandedSeen.set(v.id, newest);
+      console.log(`agentbox: ${v.id} (${v.title}) was never woken by ${stranded.length} finished background task${stranded.length === 1 ? "" : "s"}; nudging it after ${minutes(now - v.lastActivityAt)} quiet`);
+      void this.sendInPlace(v.id, strandedNudge(stranded)).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
     }
   }
 

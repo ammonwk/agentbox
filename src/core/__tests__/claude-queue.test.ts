@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeReader } from "../providers/claude";
+import { strandedNudge, strandedNudgeAfter } from "../park";
 
 const dir = mkdtempSync(join(tmpdir(), "agentbox-claude-queue-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -16,13 +17,23 @@ const meta = (content: string) => line({ type: "user", isMeta: true, sessionId: 
 const assistant = (id: string) =>
   line({ type: "assistant", sessionId: SESSION, uuid: `a${n}`, timestamp: at(), message: { id, role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "ok" }] } });
 
-async function queued(records: string): Promise<string[]> {
+async function factsOf(records: string) {
   const path = join(dir, `${SESSION}-${n}.jsonl`);
   writeFileSync(path, records);
   const r = claudeReader({ provider: "claude", accountId: "acct", agentSessionId: SESSION, path, mtimeMs: 0, size: 0 });
-  const { facts } = await r.refresh();
-  return (facts.queued ?? []).map((q) => q.text);
+  return (await r.refresh()).facts;
 }
+const queued = async (records: string): Promise<string[]> => ((await factsOf(records)).queued ?? []).map((q) => q.text);
+const stranded = async (records: string): Promise<string[]> => ((await factsOf(records)).stranded ?? []).map((q) => q.text);
+/** A model call that ends the turn. */
+const answer = (id: string) =>
+  line({
+    type: "assistant",
+    sessionId: SESSION,
+    uuid: `a${n}`,
+    timestamp: at(),
+    message: { id, role: "assistant", model: "claude-opus-5-5", stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: "text", text: "Waiting on CI." }] },
+  });
 
 const LOOP = "Check progress of the release audit.";
 const NOTE = "<task-notification>\n<task-id>b1</task-id>\n</task-notification>";
@@ -49,5 +60,34 @@ describe("Claude's queue", () => {
   test("a dequeue no record names takes the oldest", async () => {
     const records = queue("enqueue", "first") + queue("enqueue", "second") + queue("dequeue") + assistant("m1");
     expect(await queued(records)).toEqual(["second"]);
+  });
+
+  test("a notification queued after the turn ended and never taken is stranded", async () => {
+    expect(await stranded(answer("m1") + queue("enqueue", NOTE))).toEqual([NOTE]);
+  });
+
+  test("a notification that was taken, or is waiting for a running turn, is not", async () => {
+    // Taken: the turn it starts is open.
+    expect(await stranded(answer("m1") + queue("enqueue", NOTE) + queue("dequeue") + line({ type: "user", sessionId: SESSION, uuid: "u", timestamp: at(), message: { role: "user", content: NOTE } }))).toEqual([]);
+    // Queued mid-turn, before the answer that ended it: delivered inside it.
+    expect(await stranded(queue("enqueue", NOTE) + answer("m1"))).toEqual([]);
+    // A message is not a notification.
+    expect(await stranded(answer("m1") + queue("enqueue", "hello"))).toEqual([]);
+  });
+});
+
+describe("the nudge for stranded notifications", () => {
+  test("names what finished and where its output is", () => {
+    const note = "<task-notification>\n<task-id>b1</task-id>\n<output-file>/tmp/tasks/b1.output</output-file>\n<status>completed</status>\n<summary>Background command \"Wait for PR checks\" completed (exit code 0)</summary>\n</task-notification>";
+    const text = strandedNudge([{ text: note }]);
+    expect(text).toContain('- Background command "Wait for PR checks" completed (exit code 0) (output: /tmp/tasks/b1.output)');
+    expect(text.startsWith("[agentbox: a background task finished")).toBe(true);
+  });
+
+  test("comes at 55 minutes, or five before parking when that is sooner", () => {
+    expect(strandedNudgeAfter(60)).toBe(55 * 60_000);
+    expect(strandedNudgeAfter(0)).toBe(55 * 60_000);
+    expect(strandedNudgeAfter(30)).toBe(25 * 60_000);
+    expect(strandedNudgeAfter(3)).toBe(60_000);
   });
 });
