@@ -115,29 +115,6 @@ export function Timeline({ session }: { session: Session }) {
   const [pinned, setPinned] = useState(true);
   const prev = useRef({ count: 0, firstId: "", scrollTop: 0, scrollHeight: 0, initial: true });
 
-  // Esc puts a side question's card away while it is up: asking (the question
-  // is taken back and the panel in the pane closes) or answered (read, done).
-  // Not while typing — there Esc stops a running turn, or blurs (Composer).
-  const cards = useMemo(() => {
-    const shown = allRows.filter((r) => r.type === "btw").map((r) => r.btw);
-    const ids = new Set(shown.map((b) => b.id));
-    return [...shown, ...btw.filter((b) => b.status === "asking" && !ids.has(b.id))];
-  }, [allRows, btw]);
-  useEffect(() => {
-    if (cards.length === 0) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.repeat) return;
-      // A dialog is open, or you are typing: Esc is theirs, not the card's.
-      if (document.querySelector("[role=dialog]")) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
-      e.preventDefault();
-      for (const b of cards) void api.btwDismiss(session.id, b.id).catch(() => {});
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [cards, session.id]);
-
   useLayoutEffect(() => {
     const el = boxRef.current;
     if (!el || events.length === 0) return;
@@ -827,7 +804,7 @@ function BtwCard({ btw, sessionId }: { btw: Btw; sessionId: string }) {
           icon={Icon.x}
           className="tl-btw-x"
           aria-label="Dismiss"
-          title="Dismiss (Esc)"
+          title="Dismiss"
           disabled={busy}
           onClick={() => {
             setBusy(true);
@@ -841,7 +818,7 @@ function BtwCard({ btw, sessionId }: { btw: Btw; sessionId: string }) {
       <div className="tl-btw-a">
         {btw.status === "asking" ? (
           <span className="faint">
-            <Spinner size={11} /> Answering… <span className="tl-btw-hint">· Esc dismisses</span>
+            <Spinner size={11} /> Answering…
           </span>
         ) : btw.status === "failed" ? (
           <span className="tl-btw-err">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
-import { ago, api, fmtTokens, useBtw } from "../../api";
+import { ago, api, fmtTokens } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
@@ -69,22 +69,14 @@ export function Composer({ session, tab, accounts, claimIdleMin, skills, textare
   const provider = PROVIDER_LABEL[session.provider];
   const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images });
   const skill = useSkillComplete({ value: text, onChange: setText, skills, textareaRef: ref });
-  const btwCards = useBtw(session.id);
   /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
   const btw = mode.kind === "send" && session.provider === "claude" ? BTW.exec(text) : null;
-  // Side questions with a card up in the Timeline. Live only while the
-  // timeline's watch is held (this box shows on every tab); elsewhere the
-  // list is empty and Esc goes to the pane, which is what that tab wants.
-  const openCards = useMemo(() => btwCards.filter((b) => b.status !== "dismissed"), [btwCards]);
-  // A prompt showing takes precedence: Esc there cancels it, and the card can wait.
-  const escTakesCard = openCards.length > 0 && session.status !== "blocked";
-
   /** Esc on the keyboard stops the turn: a session at its prompt has nothing to stop. */
   const interruptible = mode.kind === "send" && session.status === "running";
   // Esc from anywhere on the page that is not a field, the terminal (which
-  // sends its own) or a dialog. A card that is up takes it first (Timeline).
+  // sends its own) or a dialog.
   useEffect(() => {
-    if (!interruptible || escTakesCard) return;
+    if (!interruptible) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.repeat || e.defaultPrevented) return;
       if (document.querySelector("[role=dialog]")) return;
@@ -95,7 +87,7 @@ export function Composer({ session, tab, accounts, claimIdleMin, skills, textare
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interruptible, escTakesCard, session.id, run]);
+  }, [interruptible, session.id, run]);
 
   // Grow with the text up to a cap, then scroll.
   useEffect(() => {
@@ -298,16 +290,9 @@ export function Composer({ session, tab, accounts, claimIdleMin, skills, textare
             <div className="cmp-aux cmp-navigation">
               <Button
                 className="cmp-aux"
-                title={
-                  escTakesCard
-                    ? "Puts the side question's card away; a panel still up in the pane closes with it"
-                    : "Press Escape in the session — cancels the current prompt or menu"
-                }
+                title="Press Escape in the session — cancels the current prompt or menu"
                 disabled={busy}
-                onClick={() => {
-                  if (escTakesCard) for (const b of openCards) void api.btwDismiss(session.id, b.id).catch(() => {});
-                  else void run(() => api.keys(session.id, ["Escape"]));
-                }}
+                onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
               >
                 Esc
               </Button>
