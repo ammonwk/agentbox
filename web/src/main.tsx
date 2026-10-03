@@ -14,10 +14,12 @@ import { followLinks, listUnderSession } from "./route";
 // with no keyboard up: installed to the Home Screen, iOS reports the visual
 // viewport a status bar short. Any reading within a sliver of the baseline is
 // one with no keyboard, so it becomes the baseline: a bad one is replaced by
-// the next. The baseline leaves out the viewport's pan and is never below
-// zero; while the keyboard goes, iOS gives the height back before it pans back
-// down, and that moment read as hundreds of pixels below zero and lifted the
-// app by them until a reload. `data-kb` says the keyboard is up, and the
+// the next. Neither counts how far iOS has panned the page, since the pan is
+// undone here: while the keyboard goes, iOS gives the height back before it
+// pans back down, which read as hundreds of pixels below zero and lifted the
+// app by them until a reload; while it comes, iOS pans the box into view, the
+// keyboard less the pan read as nothing, and undoing the pan sends no event
+// to measure again. `data-kb` says the keyboard is up, and the
 // stylesheets put away everything but the conversation and the box; a
 // hardware keyboard covers nothing, so it keeps them.
 const vv = window.visualViewport;
@@ -39,7 +41,7 @@ const fit = () => {
   const short = Math.max(0, window.innerHeight - vv.height);
   let floor = floors.get(window.innerWidth) ?? Infinity;
   if (short < floor + SLIVER) floors.set(window.innerWidth, (floor = short));
-  const kb = Math.max(0, Math.round(short - vv.offsetTop - floor));
+  const kb = Math.max(0, Math.round(short - floor));
   root.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
   root.style.setProperty("--kbh", `${kb}px`);
   if (kb > SLIVER) root.dataset.kb = "";
