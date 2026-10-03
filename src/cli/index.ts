@@ -128,7 +128,7 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
   return { flags, rest };
 }
 
-/** `agentbox claude [--big] [--account X] [--model M] [--detach] [prompt…]` */
+/** `agentbox claude [--account X] [--model M] [--detach] [prompt…]` */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
   const { flags, rest } = parseFlags(args);
   await ensureServer();
@@ -154,7 +154,6 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       cwd: process.cwd(),
       prompt: rest.join(" ") || undefined,
       model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
-      big: flags.has("big"),
       accountId,
       // Started from inside another session, it is that session's child.
       callerPid: process.pid,
@@ -364,7 +363,7 @@ async function recover(args: string[]): Promise<number> {
 
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
-  claude|codex|devin|omp [--big] [--account NAME] [--model M] [--detach] [prompt…]
+  claude|codex|devin|omp [--account NAME] [--model M] [--detach] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d)
   usage                 each account's limits and what running sessions claim
@@ -394,7 +393,7 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
                         what one would do now (no ids), or recovers stopped ids
 
 scheduled sessions (one-time ones show in the app as sessions; recurring ones in Settings):
-  schedule <when> [--agent claude] [--cwd DIR] [--big] [--account A] [--model M] [--effort E] [--name N] <prompt…|->
+  schedule <when> [--agent claude] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N] <prompt…|->
                         start one later, in DIR (default: here). <when> is one quoted
                         argument: "in 4 hours", "tomorrow at 9am", "friday 5pm",
                         "every weekday at 8:30", "every 2 hours"

@@ -102,7 +102,6 @@ export interface AccountView extends Account {
 export interface ClaimView {
   sessionId: string;
   title: string;
-  big: boolean;
   /** Weekly points claimed at placement. */
   claim: number;
   /** Weekly points attributed to this session so far. */
@@ -120,8 +119,6 @@ export interface ClaimView {
 export interface BalancerSettings {
   /** Weekly points a normal session is assumed to use. */
   claimNormal: number;
-  /** Weekly points a Big session is assumed to use. */
-  claimBig: number;
   /** Weekly points one full short (5-hour) window is worth. */
   shortWindowInWeekly: number;
   /** A claim lapses after this long with no activity. */
@@ -174,7 +171,6 @@ export interface Placement {
    * has real weekly left; "none" means nothing can take it at all.
    */
   mode: "auto" | "manual" | "overflow" | "none";
-  big: boolean;
   claim: number;
   candidates: Candidate[];
   /** One sentence: why this account. */
@@ -185,10 +181,7 @@ export interface CalibrationReport {
   /** How many days of samples this is built from. */
   days: number;
   shortWindowInWeekly: { estimate: number | null; samples: number; r2: number | null };
-  sessionUse: {
-    normal: Percentiles & { samples: number };
-    big: Percentiles & { samples: number };
-  };
+  sessionUse: Percentiles & { samples: number };
   placements: number;
   /** Placements followed by a rate-limit hit on the chosen account. */
   hitAfterPlacement: number;
@@ -410,7 +403,6 @@ export interface Session {
   contextLimit: number | null;
   tokens: TokenTotals;
 
-  big: boolean;
   claim: number;
   /** The reasoning effort it was started with; null for the CLI's default. */
   effort: string | null;
@@ -1041,7 +1033,6 @@ export interface ScheduleSpec {
   prompt?: string;
   model?: string;
   effort?: string;
-  big?: boolean;
   /** `auto` or none: the balancer picks when it starts, not when it was asked. */
   accountId?: string | null;
 }

@@ -247,7 +247,6 @@ export interface SpawnRequest {
   model?: string;
   /** One of the adapter's `efforts`. */
   effort?: string;
-  big?: boolean;
   accountId?: string | null;
   /** The process asking (the CLI, the fleet MCP). A session it runs under
    *  becomes the new session's parent. */
@@ -1036,11 +1035,10 @@ export class Fleet extends EventEmitter {
       cwd: f.cwd ?? "",
       worktree: null,
       label: null,
-      big: false,
       // A session started outside agentbox still uses its account, so it
       // claims like any other; it just was not placed. Its model is known
       // from its transcript, so the claim is the model's.
-      claim: claimFor({ model: f.model, big: false }, settings),
+      claim: claimFor({ model: f.model }, settings),
       origin: "external",
       tmux: null,
       transcriptPath: t.ref.path,
@@ -1144,7 +1142,7 @@ export class Fleet extends EventEmitter {
     // follows. A wake's claim already counts what was consumed before it, so
     // only a real change rewrites it, never the same model re-read.
     if (f.model && f.model !== (rec.facts as Partial<TranscriptFacts> | null)?.model) {
-      patch.claim = claimFor({ model: f.model, effort: rec.effort ?? null, big: rec.big }, getSettings().balancer);
+      patch.claim = claimFor({ model: f.model, effort: rec.effort ?? null }, getSettings().balancer);
     }
     // A message from you to a closed session means you went back to it.
     // Its own activity does not: an agent still finishing, or one another
@@ -2005,7 +2003,6 @@ export class Fleet extends EventEmitter {
       contextUsed: f?.contextUsed ?? null,
       contextLimit: f?.contextLimit ?? null,
       tokens: f?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0 },
-      big: rec.big,
       claim: rec.claim,
       effort: rec.effort ?? null,
       cold,
@@ -2233,7 +2230,6 @@ export class Fleet extends EventEmitter {
         sessionId: s.id,
         accountId: s.accountId,
         title: s.title,
-        big: s.big,
         claim: s.claim,
         lastActivityAt: s.lastActivityAt,
         running: s.status === "running" || s.status === "blocked",
@@ -2278,11 +2274,10 @@ export class Fleet extends EventEmitter {
       });
   }
 
-  placement(provider: ProviderId, big: boolean, model?: string | null, accountId?: string | null, effort?: string | null): Placement {
+  placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null): Placement {
     this.adapter(provider);
     return place({
       provider,
-      big,
       model: model || getSettings().models[provider] || null,
       effort: effort ?? null,
       accountId: accountId && accountId !== "auto" ? accountId : null,
@@ -2301,7 +2296,7 @@ export class Fleet extends EventEmitter {
       throw new FleetError(400, `${adapter.label} takes no effort "${req.effort}"${adapter.efforts.length ? ` (${adapter.efforts.join(", ")})` : ""}`);
     }
     const effort = req.effort || undefined;
-    const placement = this.placement(req.provider, !!req.big, req.model, req.accountId, effort);
+    const placement = this.placement(req.provider, req.model, req.accountId, effort);
     if (!placement.accountId) throw new FleetError(409, placement.why, placement);
     const account = getAccount(placement.accountId);
     if (!account) throw new FleetError(404, `no account ${placement.accountId}`);
@@ -2348,7 +2343,6 @@ export class Fleet extends EventEmitter {
       cwd,
       worktree,
       label: null,
-      big: !!req.big,
       claim: placement.claim,
       origin: "agentbox",
       tmux: name,
@@ -2370,7 +2364,6 @@ export class Fleet extends EventEmitter {
       provider: req.provider,
       accountId: account.id,
       mode: placement.mode,
-      big: !!req.big,
       claim: placement.claim,
       candidates: placement.candidates,
       settings: settings.balancer,
@@ -2473,7 +2466,7 @@ export class Fleet extends EventEmitter {
    */
   private wakeTarget(rec: SessionRecord, view: Session, accountId?: string | null): { account: Account; placement: Placement } | null {
     if (!this.adapter(rec.provider).moveSession) return null;
-    const placement = this.placement(rec.provider, rec.big, view.model, accountId, rec.effort ?? null);
+    const placement = this.placement(rec.provider, view.model, accountId, rec.effort ?? null);
     // Another home on the same login is the same account: moving there would
     // cost a cold start and change nothing about the limits.
     if (!placement.accountId || placement.mode === "none" || placement.accountId === this.ownerOf(rec.accountId ?? "")) return null;
@@ -2520,7 +2513,7 @@ export class Fleet extends EventEmitter {
     const consumed = consumedBy([rec.id]).get(rec.id) ?? 0;
     // It claims afresh, and the claim is its model's: what it used before it
     // went cold was used, and the balancer should count what it is about to.
-    const fresh = claimFor({ model: view.model, effort: rec.effort ?? null, big: rec.big }, settings.balancer);
+    const fresh = claimFor({ model: view.model, effort: rec.effort ?? null }, settings.balancer);
     const claim = Math.round((consumed + fresh) * 100) / 100;
     const patch: Partial<SessionRecord> = { claim };
     if (account.id !== from.id) {
@@ -2535,7 +2528,6 @@ export class Fleet extends EventEmitter {
         provider: rec.provider,
         accountId: account.id,
         mode: p.mode,
-        big: rec.big,
         claim,
         candidates: p.candidates,
         settings: settings.balancer,
@@ -3112,10 +3104,9 @@ export class Fleet extends EventEmitter {
     return out;
   }
 
-  async patch(id: string, p: { label?: string | null; big?: boolean; parent?: string | null }): Promise<Session> {
+  async patch(id: string, p: { label?: string | null; parent?: string | null }): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
-    const settings = getSettings().balancer;
     const patch: Partial<SessionRecord> = {};
     if (p.label !== undefined) patch.label = p.label?.trim() || null;
     if (p.parent !== undefined) {
@@ -3126,13 +3117,6 @@ export class Fleet extends EventEmitter {
       }
       patch.parent = p.parent;
       patch.parentByHand = true;
-    }
-    if (p.big !== undefined && p.big !== rec.big) {
-      patch.big = p.big;
-      patch.claim = claimFor(
-        { model: this.views.get(id)?.model ?? rec.model ?? null, effort: rec.effort ?? null, big: p.big },
-        settings,
-      );
     }
     updateSessionRecord(id, patch);
     await this.tick();

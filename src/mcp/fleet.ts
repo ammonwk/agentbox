@@ -43,7 +43,7 @@ export function brief(s: Session & { attention?: { reason: string } }, accountLa
   const where = s.host === "tmux" ? "" : s.host === "external" ? " (other terminal)" : s.host === "subagent" ? " (subagent)" : "";
   const place = [s.repoRoot ? s.repoRoot.split("/").pop() : s.cwd, s.branch].filter(Boolean).join("@");
   const lines = [
-    `[${s.id}] ${s.status}${where} · ${s.provider}/${accountLabel}${s.big ? " · BIG" : ""} · ${place} · ${ago(s.lastActivityAt, now)} ago${ctx}`,
+    `[${s.id}] ${s.status}${where} · ${s.provider}/${accountLabel} · ${place} · ${ago(s.lastActivityAt, now)} ago${ctx}`,
     `  ${clip(s.title, 100)}`,
   ];
   if (s.lastPrompt && s.lastPrompt !== s.title) lines.push(`  asked: ${clip(s.lastPrompt, 160)}`);
@@ -157,19 +157,17 @@ export async function runMcp(base: string): Promise<void> {
       title: "Start a new session",
       description:
         "Starts a new agent session in `cwd` with `prompt`, placed on whichever account has the most room " +
-        "(or `account`, a label, if given). Set `big` for work expected to use far more than a normal " +
-        "session — it reserves more of the account's weekly budget so other sessions go elsewhere. " +
+        "(or `account`, a label, if given). " +
         "Returns the new session's id and why it went to that account.",
       inputSchema: {
         provider: z.enum(["claude", "codex", "devin", "omp"]),
         cwd: z.string().describe("Absolute path of the directory to work in"),
         prompt: z.string().min(1),
-        big: z.boolean().optional(),
         account: z.string().optional().describe("Account label to force; omit to let the balancer choose"),
         model: z.string().optional(),
       },
     },
-    async ({ provider, cwd, prompt, big, account, model }) => {
+    async ({ provider, cwd, prompt, account, model }) => {
       let accountId: string | null = null;
       if (account) {
         const state = await api<AppState>("GET", "/api/state");
@@ -178,7 +176,7 @@ export async function runMcp(base: string): Promise<void> {
         accountId = match.id;
       }
       const out = await api<{ session: Session; placement: Placement }>("POST", "/api/sessions", {
-        provider, cwd, prompt, big, model, accountId, callerPid: process.pid,
+        provider, cwd, prompt, model, accountId, callerPid: process.pid,
       });
       return text(`started ${out.session.id}: ${out.placement.why}`);
     },

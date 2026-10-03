@@ -56,7 +56,7 @@ export function asObject(v: unknown, label: string): Record<string, unknown> {
  *
  * The merge itself belongs to db.ts — this only establishes that what arrived
  * over the wire is the shape the merge is typed for. Every field is optional at
- * every level: the UI sends partials like `{balancer: {claimBig: 25}}`, and
+ * every level: the UI sends partials like `{balancer: {claimNormal: 5}}`, and
  * the keys it leaves out must survive the merge rather than being reset. Unknown
  * keys are rejected rather than persisted, so a client typo is a 400 and not a
  * setting nothing reads.
@@ -102,7 +102,6 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
     const next: NonNullable<SettingsPatch["balancer"]> = {};
     const ranges: Record<string, [number, number]> = {
       claimNormal: [0, 100],
-      claimBig: [0, 100],
       shortWindowInWeekly: [1, 100],
       claimIdleMin: [1, 24 * 60],
       resetHorizonMin: [0, 300],

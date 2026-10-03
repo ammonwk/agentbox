@@ -1713,22 +1713,6 @@ button.acct:hover {
   color: var(--warning);
 }
 
-.big-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius: 4px;
-  padding: 0 4px 0 3px;
-  line-height: 1.5;
-  flex: none;
-}
-
 /* Context bar: small and numeric; colour only when it matters. */
 .ctx {
   display: inline-flex;

@@ -11,9 +11,9 @@ import { parseArgs } from "./sessions";
 const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
 const str = (v: string | true | undefined): string | undefined => (typeof v === "string" ? v : undefined);
 
-/** `agentbox schedule <when> [--agent claude] [--cwd DIR] [--big] [--account A] [--model M] [--effort E] [--name N] <prompt…|->` */
+/** `agentbox schedule <when> [--agent claude] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N] <prompt…|->` */
 export async function schedule(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["agent", "cwd", "account", "model", "effort", "name"], ["big"]);
+  const { flags, rest } = parseArgs(args, ["agent", "cwd", "account", "model", "effort", "name"], []);
   const [when, ...words] = rest;
   if (!when) throw new Error('schedule needs a time and a prompt: agentbox schedule "tomorrow at 9am" fix the flaky test');
   const agent = (str(flags.get("agent")) ?? "claude") as ProviderId;
@@ -39,7 +39,6 @@ export async function schedule(api: Api, args: string[]): Promise<number> {
       prompt,
       model: str(flags.get("model")),
       effort: str(flags.get("effort")),
-      big: flags.has("big"),
       accountId,
     },
   });

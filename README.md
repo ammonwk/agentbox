@@ -20,8 +20,8 @@ Codex, Devin and omp** — across every subscription you're logged into.
   whole life, so switching subscriptions never invalidates a prompt cache.
   Instead, *new* sessions are placed on whichever account has the most room.
 - **Placement you can read.** Claude has a 5-hour and a weekly limit, Codex a
-  weekly one. A new session claims 5% of an account's weekly (20% if you tick
-  **Big session**); an account takes new sessions while its weekly plus
+  weekly one. A new session claims a few percent of an account's weekly, by its model
+  and effort; an account takes new sessions while its weekly plus
   outstanding claims is under 100%, and among those the one with the most
   5-hour room wins, ties going to the account whose weekly would otherwise
   expire unused. When every account is fully claimed, a session overflows
@@ -71,7 +71,7 @@ From any directory (session commands start the server if it isn't running):
 
 ```bash
 agentbox claude                  # new session here, on the account with the most room
-agentbox claude --big "migrate the billing module"
+agentbox claude "migrate the billing module"
 agentbox codex --account work    # force an account
 agentbox omp --detach --model M  # start without attaching this terminal
 agentbox ls                      # recent sessions (--all, --json)

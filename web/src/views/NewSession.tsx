@@ -94,7 +94,6 @@ export function NewSession({
       live = false;
     };
   }, []);
-  const [big, setBig] = useState(prefs.big ?? false);
   const [perProvider, setPerProvider] = useState(prefs.perProvider ?? {});
   const model = perProvider[provider]?.model ?? "";
   const accountId = perProvider[provider]?.accountId ?? "auto";
@@ -144,7 +143,7 @@ export function NewSession({
     setPlaceErr(null);
     const t = setTimeout(() => {
       api
-        .placement({ provider, big, ...(model ? { model } : {}) })
+        .placement({ provider, ...(model ? { model } : {}) })
         .then((p) => !cancelled && setPlacement(p))
         .catch((e: unknown) => !cancelled && setPlaceErr(e instanceof Error ? e.message : String(e)))
         .finally(() => !cancelled && setPlacing(false));
@@ -153,7 +152,7 @@ export function NewSession({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [provider, big, model]);
+  }, [provider, model]);
 
   const manual = accountId !== "auto" ? accounts.find((a) => a.id === accountId) ?? null : null;
   // The account whose models to offer: the pin, else where Auto would go.
@@ -290,8 +289,8 @@ export function NewSession({
   const draftImagesKey = JSON.stringify(draftImages);
   useEffect(() => {
     // A PR the prompt ticked off is not a preference for next time.
-    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider, draft: prompt, draftImages });
-  }, [provider, where, repoId, worktree, wtFromPrompt, path, big, perProvider, prompt, draftImagesKey]);
+    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider, draft: prompt, draftImages });
+  }, [provider, where, repoId, worktree, wtFromPrompt, path, perProvider, prompt, draftImagesKey]);
   // Typing `new` is the same as ticking the box again.
   useEffect(() => {
     if (!worktree && wt.kind === "new") {
@@ -335,18 +334,17 @@ export function NewSession({
       ...(text ? { prompt: text } : {}),
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
-      big,
       accountId,
     };
     try {
       if (mode === "schedule") {
         const sc = await api.createSchedule({ when, spec: input });
-        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider });
+        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider });
         onScheduled(sc);
         return;
       }
       const r = await api.createSession(input);
-      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, big, perProvider });
+      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider });
       onCreated(r.session.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -521,32 +519,20 @@ export function NewSession({
           />
         </div>
 
-        <div className="ns-row2">
-          <div className="field">
-            <label className="field-label ns-label" htmlFor="ns-model">
-              Model
-            </label>
-            <div className="ns-model-row">
-              <ModelPicker
-                id="ns-model"
-                models={models}
-                value={model}
-                onChange={(m) => setChoice({ model: m })}
-                defaultLabel={defaultModel}
-              />
-              {efforts.length ? <EffortPicker levels={efforts} value={effort} onChange={(e) => setChoice({ effort: e })} /> : null}
-            </div>
-          </div>
-          <label className="ns-big" data-on={big || undefined} title={`Claims ${b.claimBig}% of the account's weekly instead of ${b.claimNormal}%, so the balancer keeps room for a long run and steers other sessions elsewhere.`}>
-            <input type="checkbox" checked={big} onChange={(e) => setBig(e.target.checked)} />
-            <Icon.bolt size={13} />
-            <span>
-              <strong>Big session</strong>
-              <span className="field-hint">
-                Claims {b.claimBig}% of the weekly, not {b.claimNormal}%
-              </span>
-            </span>
+        <div className="field">
+          <label className="field-label ns-label" htmlFor="ns-model">
+            Model
           </label>
+          <div className="ns-model-row">
+            <ModelPicker
+              id="ns-model"
+              models={models}
+              value={model}
+              onChange={(m) => setChoice({ model: m })}
+              defaultLabel={defaultModel}
+            />
+            {efforts.length ? <EffortPicker levels={efforts} value={effort} onChange={(e) => setChoice({ effort: e })} /> : null}
+          </div>
         </div>
 
         {mode === "schedule" ? <WhenField value={when} onChange={setWhen} inputRef={whenRef} /> : null}

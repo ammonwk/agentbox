@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { AccountView, AppState, LoginFlow, ProviderId } from "../../../src/core/types";
 import { api, useNow } from "../api";
-import { accountHue, BigBadge, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
+import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
 import { Button, Confirm, Empty, Field, Icon, Modal, RelativeTime, Spinner, Toggle } from "../components";
 import { fmtCountdown, fmtPts, guessHome, tildify } from "../lib/format";
 import { outstandingOf, sortWindows } from "../lib/usage";
@@ -343,7 +343,6 @@ function AccountCard({
                     <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "terminal" })} className="ac-claim-title">
                       {cl.title}
                     </a>
-                    {cl.big ? <BigBadge /> : null}
                     {cl.lapsed ? <span className="ac-lapsed" title="Idle long enough that its claim no longer counts">lapsed</span> : null}
                   </td>
                   <td className="num">{fmtPts(cl.claim)}</td>

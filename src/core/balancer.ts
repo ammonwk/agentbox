@@ -53,7 +53,6 @@ export interface AccountState {
 
 export interface PlaceRequest {
   provider: ProviderId;
-  big: boolean;
   model?: string | null;
   /** The reasoning effort it starts with; scales the claim. */
   effort?: string | null;
@@ -308,13 +307,13 @@ function needOf(claim: number, settings: BalancerSettings): number {
 export function place(req: PlaceRequest): Placement {
   // The claim is the model's, not one number for everything: a GLM-Flash
   // session and a Fable one are not the same guest (see claim.ts).
-  const claim = claimFor({ model: req.model, effort: req.effort, big: req.big }, req.settings);
+  const claim = claimFor({ model: req.model, effort: req.effort }, req.settings);
   const candidates = req.accounts.map((a) => evaluate(a, req));
   const need = needOf(claim, req.settings);
   const ordered = rank(candidates, need);
   const eligible = ordered.filter((c) => c.eligible);
 
-  const base = { provider: req.provider, big: req.big, claim, candidates: ordered };
+  const base = { provider: req.provider, claim, candidates: ordered };
 
   if (req.accountId) {
     const chosen = candidates.find((c) => c.accountId === req.accountId);

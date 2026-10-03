@@ -1,7 +1,7 @@
 /** Turning a week of metrics into better balancer settings.
  *
- * The balancer's numbers start as guesses: a session uses 3 weekly points, a
- * Big one 20, a full short window is worth 24. Every one of them is measurable
+ * The balancer's numbers start as guesses: a session uses 3 weekly points,
+ * a full short window is worth 24. Every one of them is measurable
  * from what agentbox records anyway, and this file measures them. It proposes;
  * the settings only change when you apply the proposal.
  */
@@ -132,8 +132,7 @@ export function calibrate(days = 7, now = Date.now()): CalibrationReport {
     (r) => r.accountId && r.claim > 0 && r.lastActivityAt < finishedBefore,
   );
   const used = attributedPoints(records.map((r) => r.id));
-  const normal = records.filter((r) => !r.big).map((r) => used.get(r.id) ?? 0);
-  const big = records.filter((r) => r.big).map((r) => used.get(r.id) ?? 0);
+  const normal = records.map((r) => used.get(r.id) ?? 0);
 
   const assignments = assignmentsSince(since).filter((a) => a.accountId);
   const hits = rateLimitHitsSince(since);
@@ -149,16 +148,11 @@ export function calibrate(days = 7, now = Date.now()): CalibrationReport {
   // account and hit a wall, which costs more than an account left idle.
   const pn = percentiles(normal);
   if (normal.length >= 5 && pn.p75 !== null) suggested.claimNormal = claimOf(pn.p75);
-  const pb = percentiles(big);
-  if (big.length >= 3 && pb.p75 !== null) suggested.claimBig = claimOf(pb.p75);
 
   return {
     days,
     shortWindowInWeekly: short,
-    sessionUse: {
-      normal: { ...pn, samples: normal.length },
-      big: { ...pb, samples: big.length },
-    },
+    sessionUse: { ...pn, samples: normal.length },
     placements: assignments.length,
     hitAfterPlacement,
     suggested,

@@ -207,7 +207,6 @@ export function ScheduledDetail({ sc, state, onCancel }: { sc: Schedule; state: 
           <dd>
             {sc.spec.model ?? `Default${state.settings.models[sc.spec.provider] ? ` (${state.settings.models[sc.spec.provider]})` : ""}`}
             {sc.spec.effort ? ` · ${sc.spec.effort}` : ""}
-            {sc.spec.big ? " · Big" : ""}
           </dd>
           <dt>Account</dt>
           <dd>{account ? account.label : "Auto: the balancer picks when it starts"}</dd>

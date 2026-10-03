@@ -18,7 +18,6 @@ export interface NewSessionPrefs {
   repoId?: string;
   worktree?: boolean;
   path?: string;
-  big?: boolean;
   perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string; effort?: string }>>;
   /** The unsent prompt; cleared when a session starts. */
   draft?: string;

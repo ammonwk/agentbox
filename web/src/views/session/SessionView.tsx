@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { AppState, Schedule } from "../../../../src/core/types";
+import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
 import {
   AccountChip,
@@ -9,6 +9,7 @@ import {
   PROVIDER_LABEL,
   ProviderBadge,
   StatusPill,
+  UsageBar,
 } from "../../bits";
 import { Button, Confirm, Empty, Icon } from "../../components";
 import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
@@ -26,6 +27,8 @@ import { isInstalledApp } from "../../lib/phone";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
 import { ago } from "../../lib/format";
+import { outstandingOf, sortWindows } from "../../lib/usage";
+import { useDismiss, useFloating } from "../newsession/popover";
 import { buildSessionIndex } from "../../lib/sessionrefs";
 import { PrBase } from "./prbase";
 import { SessionLinks } from "./sessionlinks";
@@ -419,6 +422,51 @@ function RailResizer({ width, onWidth }: { width: number; onWidth: (w: number, s
 
 // ------------------------------------------------------------------ detail
 
+/**
+ * The session's account, and under a press its usage: each limit window as
+ * the Accounts page draws it, the weekly one with what sessions still claim.
+ */
+function AccountUsage({ accountId, accounts, cold }: { accountId: string | null; accounts: readonly AccountView[]; cold: boolean }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLSpanElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  useDismiss(open, () => setOpen(false), [wrap, pop]);
+  const style = useFloating(wrap, open, 420, 280);
+  const a = accounts.find((x) => x.id === accountId) ?? null;
+  const toAccounts = hrefOf({ page: "accounts", sub: "accounts" });
+  if (!a) return <AccountChip accountId={accountId} accounts={accounts} cold={cold} onClick={() => (location.hash = toAccounts)} />;
+  const now = Date.now();
+  const outstanding = outstandingOf(a.claims);
+  const windows = sortWindows(a.usage.windows);
+  return (
+    <span className="sx-usage-wrap" ref={wrap}>
+      <AccountChip accountId={accountId} accounts={accounts} cold={cold} onClick={() => setOpen((o) => !o)} />
+      {open ? (
+        <div className="sx-usage" ref={pop} style={style} role="group" aria-label={`Usage of ${a.label}`} onClick={(e) => e.stopPropagation()}>
+          <div className="sx-usage-head">
+            <strong>{a.label}</strong>
+            {a.plan ? <span className="muted">{a.plan}</span> : null}
+          </div>
+          {windows.length === 0 ? (
+            <div className="faint">{a.usage.source === "none" ? "This provider reports no usage." : "No usage read yet."}</div>
+          ) : (
+            windows.map((w) => <UsageBar key={w.id} window={w} now={now} outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0} />)
+          )}
+          {a.usage.stale ? (
+            <div className="sx-usage-stale">
+              <Icon.alert size={12} /> {a.usage.stale}
+            </div>
+          ) : null}
+          <div className="sx-usage-foot">
+            <span className="faint">{a.usage.at ? `as of ${ago(a.usage.at)}` : ""}</span>
+            <a href={toAccounts}>All accounts</a>
+          </div>
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
 function Detail({
   session,
   state,
@@ -471,12 +519,7 @@ function Detail({
   const facts = (
     <div className="sx-facts">
       <span className="fact">
-        <AccountChip
-          accountId={session.accountId}
-          accounts={state.accounts}
-          cold={session.cold}
-          onClick={() => (location.hash = hrefOf({ page: "accounts", sub: "accounts" }))}
-        />
+        <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
       </span>
       <span className="fact mono fact-cwd" title={session.cwd}>
         <Icon.folder size={12} />
@@ -536,16 +579,6 @@ function Detail({
           <div className="sx-header-actions">
             {/* The provider's own id: what `claude -r` (or `codex resume`) takes. */}
             {session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null}
-            <button
-              type="button"
-              className="sx-big"
-              aria-pressed={session.big}
-              disabled={busy}
-              title={session.big ? "Big session: claims the larger share of the account's weekly. Click to make it normal." : "Mark as Big: claims the larger share of the account's weekly"}
-              onClick={() => void run(() => api.patchSession(session.id, { big: !session.big }))}
-            >
-              <Icon.bolt size={12} /> Big
-            </button>
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt
@@ -593,7 +626,8 @@ function Detail({
 
         {narrow ? null : facts}
 
-        {session.status === "blocked" || error ? (
+        {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
+        {(session.status === "blocked" && !session.question) || error ? (
           <div className="sx-attention-line bad" role={error ? "alert" : undefined}>
             {error ? (
               <>
@@ -605,22 +639,7 @@ function Detail({
             ) : (
               <>
                 <Icon.alert size={13} /> {session.attention.reason}.{" "}
-                {!session.question ? (
-                  "The Terminal tab shows the prompt."
-                ) : tab === "terminal" && session.host === "tmux" ? (
-                  "Answer it here, or on the Timeline tab."
-                ) : (
-                  <button
-                    className="linkish"
-                    onClick={() => {
-                      // The card is the Timeline's last row; opening the tab lands on it.
-                      if (tab === "timeline") document.querySelector(".ask-live")?.scrollIntoView({ block: "start", behavior: "smooth" });
-                      else onTab("timeline");
-                    }}
-                  >
-                    {tab === "timeline" ? "Answer it in the Timeline." : "Answer it on the Timeline tab."}
-                  </button>
-                )}
+                The Terminal tab shows the prompt.
               </>
             )}
           </div>

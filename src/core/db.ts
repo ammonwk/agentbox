@@ -257,6 +257,9 @@ const MIGRATIONS: string[] = [
   // 14 — whether you set (or cleared) a session's parent yourself, by dragging
   // it on the board: the fleet links it no more, and treats it as your grouping.
   `ALTER TABLE sessions ADD COLUMN parent_by_hand INTEGER;`,
+  // 15 — the Big flag is gone: a session's claim is its model's and effort's.
+  `ALTER TABLE sessions DROP COLUMN big;
+   ALTER TABLE assignments DROP COLUMN big;`,
 ];
 
 function migrate(d: Database) {
@@ -336,7 +339,6 @@ export interface SessionRecord {
   cwd: string;
   worktree: string | null;
   label: string | null;
-  big: boolean;
   claim: number;
   origin: "agentbox" | "external";
   tmux: string | null;
@@ -369,7 +371,7 @@ export interface SessionRecord {
 
 type SessionRow = {
   id: string; provider: string; agent_session_id: string | null; account_id: string | null;
-  cwd: string; worktree: string | null; label: string | null; big: number; claim: number;
+  cwd: string; worktree: string | null; label: string | null; claim: number;
   origin: string; tmux: string | null; transcript_path: string | null; started_at: number;
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
@@ -390,7 +392,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
   return {
     id: r.id, provider: r.provider as ProviderId, agentSessionId: r.agent_session_id,
     accountId: r.account_id, cwd: r.cwd, worktree: r.worktree, label: r.label,
-    big: !!r.big, claim: r.claim, origin: r.origin as SessionRecord["origin"], tmux: r.tmux,
+    claim: r.claim, origin: r.origin as SessionRecord["origin"], tmux: r.tmux,
     transcriptPath: r.transcript_path, startedAt: r.started_at,
     lastActivityAt: r.last_activity_at, archivedAt: r.archived_at,
     facts: parseJson(r.facts), createdAt: r.created_at,
@@ -412,7 +414,6 @@ const RECORD_COLUMNS = {
   cwd: "cwd",
   worktree: "worktree",
   label: "label",
-  big: "big",
   claim: "claim",
   origin: "origin",
   tmux: "tmux",
@@ -841,7 +842,6 @@ export interface AssignmentRow {
   provider: ProviderId;
   accountId: string | null;
   mode: string;
-  big: boolean;
   claim: number;
   candidates: Candidate[];
   settings: BalancerSettings;
@@ -850,9 +850,9 @@ export interface AssignmentRow {
 
 export function insertAssignment(a: AssignmentRow): void {
   getDb().run(
-    `INSERT INTO assignments (id,session_id,at,provider,account_id,mode,big,claim,candidates,settings,why)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    [a.id, a.sessionId, a.at, a.provider, a.accountId, a.mode, a.big ? 1 : 0, a.claim,
+    `INSERT INTO assignments (id,session_id,at,provider,account_id,mode,claim,candidates,settings,why)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [a.id, a.sessionId, a.at, a.provider, a.accountId, a.mode, a.claim,
      JSON.stringify(a.candidates), JSON.stringify(a.settings), a.why],
   );
 }
@@ -860,11 +860,11 @@ export function insertAssignment(a: AssignmentRow): void {
 export function assignmentsSince(sinceMs: number): AssignmentRow[] {
   const rows = getDb().query("SELECT * FROM assignments WHERE at >= ? ORDER BY at").all(sinceMs) as {
     id: string; session_id: string | null; at: number; provider: string; account_id: string | null;
-    mode: string; big: number; claim: number; candidates: string; settings: string; why: string;
+    mode: string; claim: number; candidates: string; settings: string; why: string;
   }[];
   return rows.map((r) => ({
     id: r.id, sessionId: r.session_id, at: r.at, provider: r.provider as ProviderId,
-    accountId: r.account_id, mode: r.mode, big: !!r.big, claim: r.claim,
+    accountId: r.account_id, mode: r.mode, claim: r.claim,
     candidates: (parseJson(r.candidates) as Candidate[]) ?? [],
     settings: parseJson(r.settings) as BalancerSettings, why: r.why,
   }));
@@ -1063,7 +1063,6 @@ function remoteDefaultBranch(slug: string): string {
 
 export const DEFAULT_BALANCER: BalancerSettings = {
   claimNormal: 3,
-  claimBig: 20,
   shortWindowInWeekly: 24,
   claimIdleMin: 60,
   resetHorizonMin: 60,
@@ -1090,7 +1089,7 @@ export type SettingsPatch = {
  * Merge a patch over a full settings object, one level into the nested groups.
  *
  * A flat `{...base, ...patch}` would replace `balancer` wholesale, so a UI
- * that sends `{balancer: {claimBig: 25}}` would drop every other knob. Keys the
+ * that sends `{balancer: {claimNormal: 5}}` would drop every other knob. Keys the
  * base does not have are dropped, so a setting deleted from the code cannot
  * ride along in the stored row forever.
  */

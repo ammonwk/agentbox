@@ -1,7 +1,7 @@
 /** What each session still claims, and how observed usage is split among them.
  *
  * A session claims weekly points when it is placed — what its model is
- * expected to use (`claimFor` in claim.ts), or `claimNormal`/`claimBig` when
+ * expected to use (`claimFor` in claim.ts), or `claimNormal` when
  * the model is unknown. As it runs, the account's weekly percentage rises,
  * and that rise is apportioned across the account's sessions by how much each
  * did in the same interval (token-weighted cost, see pricing.ts). What a
@@ -26,7 +26,6 @@ export interface ClaimInput {
   sessionId: string;
   accountId: string;
   title: string;
-  big: boolean;
   claim: number;
   lastActivityAt: number;
   /** Mid-turn right now. A running session's claim never lapses. */
@@ -55,7 +54,6 @@ export function claimsByAccount(
     const view: ClaimView = {
       sessionId: s.sessionId,
       title: s.title,
-      big: s.big,
       claim: s.claim,
       consumed: Math.round(used * 100) / 100,
       outstanding: lapsed ? 0 : Math.round(Math.max(0, s.claim - used) * 100) / 100,

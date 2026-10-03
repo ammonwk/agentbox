@@ -50,13 +50,11 @@ const EFFORT_SUFFIX = /-(low|medium|xhigh|high|max|ultra)$/;
 
 /**
  * The claim for a session on `model` at `effort`: the family's points, times
- * effort, times the Big ratio (`claimBig` over `claimNormal`) when it is
- * started as a Big session. Anything the table does not know claims
- * `claimNormal`, which is what calibration measures — an unknown model costs
+ * effort. Anything the table does not know claims `claimNormal`, which is what calibration measures — an unknown model costs
  * what sessions have always cost until it says otherwise.
  */
 export function claimFor(
-  opts: { model?: string | null; effort?: string | null; big?: boolean },
+  opts: { model?: string | null; effort?: string | null },
   settings: BalancerSettings,
 ): number {
   let model = (opts.model ?? "").toLowerCase();
@@ -68,6 +66,5 @@ export function claimFor(
   }
   const base = TABLE.find(([re]) => re.test(model))?.[1] ?? settings.claimNormal;
   const weight = (effort && EFFORT[effort.toLowerCase()]) || 1;
-  const big = opts.big && settings.claimNormal > 0 ? settings.claimBig / settings.claimNormal : 1;
-  return Math.round(base * weight * big * 100) / 100;
+  return Math.round(base * weight * 100) / 100;
 }

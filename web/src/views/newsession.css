@@ -53,8 +53,7 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.ns-wt input,
-.ns-big input {
+.ns-wt input {
   accent-color: var(--accent);
   width: 15px;
   height: 15px;
@@ -135,47 +134,8 @@
   resize: vertical;
   line-height: 1.5;
 }
-.ns-row2 {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: end;
-}
 .ns-label {
   margin-bottom: 6px;
-}
-
-/* big */
-.ns-big {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 3px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
-  font-size: 13px;
-  cursor: pointer;
-}
-.ns-big svg {
-  color: var(--faint);
-  flex: none;
-}
-.ns-big[data-on] {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--sunken));
-}
-.ns-big[data-on] svg {
-  color: var(--accent);
-}
-.ns-big > span {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.25;
-}
-.ns-big .field-hint {
-  font-size: 11px;
 }
 
 /* floating lists (popover.ts places them) */
@@ -625,9 +585,6 @@
 }
 
 @media (max-width: 700px) {
-  .ns-row2 {
-    grid-template-columns: minmax(0, 1fr);
-  }
   .ns-foot-hint {
     display: none;
   }

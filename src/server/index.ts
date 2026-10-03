@@ -250,7 +250,7 @@ function accountViews(): AccountView[] {
     let p = placements.get(a.provider);
     if (!p) {
       try {
-        p = fleet.placement(a.provider, false);
+        p = fleet.placement(a.provider);
       } catch {
         p = undefined;
       }
@@ -574,7 +574,7 @@ const router = new Router(mapError)
   // ---- sessions
   .add("POST", "/api/placement", async ({ req }) => {
     const b = await readBody(req);
-    return json(fleet.placement(provider(b.provider), b.big === true, optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null, optionalString(b, "effort") ?? null));
+    return json(fleet.placement(provider(b.provider), optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null, optionalString(b, "effort") ?? null));
   })
   .add("POST", "/api/sessions", async ({ req }) => {
     const b = await readBody(req);
@@ -589,7 +589,6 @@ const router = new Router(mapError)
         prompt: typeof b.prompt === "string" ? b.prompt : undefined,
         model: optionalString(b, "model"),
         effort: optionalString(b, "effort"),
-        big: b.big === true,
         accountId: optionalString(b, "accountId") ?? null,
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
@@ -611,9 +610,8 @@ const router = new Router(mapError)
   .add("PATCH", "/api/sessions/:id", async ({ req, params }) => {
     const b = await readBody(req);
     const label = b.label === null ? null : typeof b.label === "string" ? b.label : undefined;
-    const big = typeof b.big === "boolean" ? b.big : undefined;
     const parent = b.parent === null ? null : typeof b.parent === "string" ? b.parent : undefined;
-    const s = await fleet.patch(params.id!, { label, big, parent });
+    const s = await fleet.patch(params.id!, { label, parent });
     scheduleHot();
     scheduleCold();
     return json(s);
@@ -766,7 +764,6 @@ const router = new Router(mapError)
         prompt: typeof spec.prompt === "string" && spec.prompt.trim() ? spec.prompt : undefined,
         model: optionalString(spec, "model"),
         effort: optionalString(spec, "effort"),
-        big: spec.big === true,
         accountId: optionalString(spec, "accountId") ?? null,
       },
     });

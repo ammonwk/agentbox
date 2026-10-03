@@ -508,8 +508,7 @@
 }
 .sx-header-top > .pill,
 .sx-header-top > .host,
-.sx-header-top > .prov,
-.sx-header-top > .big-badge {
+.sx-header-top > .prov {
   flex: none;
 }
 .tl:focus-visible {
@@ -638,33 +637,41 @@
   color: var(--accent);
   text-decoration: none;
 }
-/* Big, as a pressable chip among the actions rather than a switch on its own
- * line — it is a property you set once, not a control you watch. */
-.sx-big {
+/* The account's usage, under its chip (popover.ts places it). */
+.sx-usage-wrap {
   display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 26px;
-  padding: 0 9px 0 7px;
-  border: 1px dashed var(--border-strong);
+  min-width: 0;
+}
+.sx-usage {
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: none;
-  color: var(--faint);
-  font-size: 11.5px;
-  font-weight: 650;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  cursor: pointer;
+  background: var(--raised);
+  box-shadow: var(--shadow-lg);
+  font-size: 12.5px;
+  white-space: normal;
 }
-.sx-big:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--faint);
+.sx-usage-head,
+.sx-usage-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
 }
-.sx-big[aria-pressed="true"] {
-  border-style: solid;
-  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+.sx-usage-stale {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warning);
+}
+.sx-usage-foot a {
   color: var(--accent);
+  text-decoration: none;
 }
 
 .sx-attention-line {
@@ -2274,7 +2281,13 @@ a.sx-imgpath:hover { color: var(--accent); }
     min-width: 0;
     font-size: 16px;
   }
-  .copy-btn.sx-id,
+  /* The id is a copy button with no room for its text. */
+  .copy-btn.sx-id {
+    min-width: 30px;
+    min-height: 30px;
+    justify-content: center;
+  }
+  .copy-btn.sx-id span,
   .copy-btn.resume-copy {
     display: none;
   }
@@ -2285,8 +2298,7 @@ a.sx-imgpath:hover { color: var(--accent); }
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .sx-header-actions .btn,
-  .sx-big {
+  .sx-header-actions .btn {
     min-height: 30px;
   }
   .sx-header-actions::-webkit-scrollbar,

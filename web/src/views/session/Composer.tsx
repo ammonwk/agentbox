@@ -382,7 +382,7 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
     let cancelled = false;
     setChoice("auto");
     api
-      .placement({ provider: session.provider, big: session.big, ...(session.model ? { model: session.model } : {}) })
+      .placement({ provider: session.provider, ...(session.model ? { model: session.model } : {}) })
       .then((p) => {
         if (cancelled) return;
         setPlacement(p);

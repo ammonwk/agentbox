@@ -100,8 +100,7 @@ export function Calibration({ settings }: { settings: AgentSettings }) {
             </tr>
           </thead>
           <tbody>
-            <PctRow label="Normal" p={report.sessionUse.normal} samples={report.sessionUse.normal.samples} claim={current.claimNormal} />
-            <PctRow label="Big" p={report.sessionUse.big} samples={report.sessionUse.big.samples} claim={current.claimBig} />
+            <PctRow label="Sessions" p={report.sessionUse} samples={report.sessionUse.samples} claim={current.claimNormal} />
           </tbody>
         </table>
       </section>

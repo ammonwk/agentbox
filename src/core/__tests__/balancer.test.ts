@@ -8,7 +8,6 @@ const NOW = 1_800_000_000_000;
 
 const settings: BalancerSettings = {
   claimNormal: 3,
-  claimBig: 6,
   shortWindowInWeekly: 24,
   claimIdleMin: 60,
   resetHorizonMin: 60,
@@ -43,7 +42,7 @@ function acct(label: string, o: { short: number; from?: number; resetsIn?: numbe
   };
 }
 
-const run = (accounts: AccountState[]) => place({ provider: "claude", big: false, accounts, settings, now: NOW });
+const run = (accounts: AccountState[]) => place({ provider: "claude", accounts, settings, now: NOW });
 
 test("with a pace, claims of sessions it has measured add nothing to the forecast", () => {
   // 36% used, filling at 6/h for 2 more hours: 48 at reset. 16 weekly points

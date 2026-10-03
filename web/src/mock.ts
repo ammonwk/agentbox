@@ -4,7 +4,7 @@
  * providers, three Claude accounts with very different 5-hour/weekly shapes,
  * two Codex accounts, sessions in every status and host, logins in flight, a
  * calibration report. Mutations mostly succeed and are reflected in the state
- * (labels, Big, enabled, settings, stop/resume) so interactions can be tried;
+ * (labels, enabled, settings, stop/resume) so interactions can be tried;
  * nothing leaves the page.
  *
  * Only ever loaded through a dynamic import from api.ts, so a production
@@ -70,7 +70,6 @@ const settings: AgentSettings = {
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "" },
   balancer: {
     claimNormal: 3,
-    claimBig: 20,
     shortWindowInWeekly: 24,
     claimIdleMin: 60,
     resetHorizonMin: 60,
@@ -295,8 +294,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     contextUsed: null,
     contextLimit: null,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0 },
-    big: false,
-    claim: p.big ? settings.balancer.claimBig : settings.balancer.claimNormal,
+    claim: settings.balancer.claimNormal,
     effort: null,
     cold: false,
     limitHit: null,
@@ -336,7 +334,7 @@ const sessions: MockSession[] = [
     startedAt: T0 - 48 * M, lastActivityAt: T0 - 8 * 1000,
   }),
   sess({
-    id: "3mq9", provider: "claude", accountId: "cl-work", status: "blocked", host: "tmux", big: true, claim: 20,
+    id: "3mq9", provider: "claude", accountId: "cl-work", status: "blocked", host: "tmux", claim: 20,
     title: "Migrate usage_samples to the v2 schema", cwd: `${AB}/.worktrees/usage-schema`, repoRoot: `${AB}/.worktrees/usage-schema`,
     branch: "feat/usage-samples-v2", worktree: `${AB}/.worktrees/usage-schema`, model: "claude-fable-5-1",
     firstPrompt: "Write the migration for usage_samples: add window id, kind and scope columns; backfill from the old rows.",
@@ -426,7 +424,7 @@ const sessions: MockSession[] = [
     startedAt: T0 - 17 * M, lastActivityAt: T0 - 3 * M,
   }),
   sess({
-    id: "b8v7", provider: "codex", accountId: "cx-main", status: "running", host: "tmux", big: true, claim: 20,
+    id: "b8v7", provider: "codex", accountId: "cx-main", status: "running", host: "tmux", claim: 20,
     title: "Rewrite the transcript tailer around a record index", cwd: `${AB}/.worktrees/tailer`, repoRoot: `${AB}/.worktrees/tailer`,
     branch: "feat/tailer-index", worktree: `${AB}/.worktrees/tailer`, model: "gpt-5.4-codex",
     lastMessage: "Index built for 4,812 records in 38 ms; wiring `since` cursors next.",
@@ -533,7 +531,6 @@ function claimsFor(accountId: string): ClaimView[] {
       return {
         sessionId: s.id,
         title: s.label ?? s.title,
-        big: s.big,
         claim: s.claim,
         consumed: Math.round(consumed * 10) / 10,
         outstanding: Math.round(outstanding * 10) / 10,
@@ -543,7 +540,7 @@ function claimsFor(accountId: string): ClaimView[] {
     });
 }
 
-function candidateFor(a: MockAccount, big: boolean, now: number): Candidate {
+function candidateFor(a: MockAccount, now: number): Candidate {
   const b = settings.balancer;
   const claims = claimsFor(a.id);
   const outstanding = claims.reduce((n, c) => n + c.outstanding, 0);
@@ -573,9 +570,9 @@ function candidateFor(a: MockAccount, big: boolean, now: number): Candidate {
   } else if (weeklyEffective != null && weeklyEffective >= 100) {
     eligible = false;
     reason = `Weekly is ${Math.round(weeklyEffective)} with claims — over 100.`;
-  } else if (weeklyEffective != null && weeklyEffective + (big ? b.claimBig : b.claimNormal) > 100) {
+  } else if (weeklyEffective != null && weeklyEffective + b.claimNormal > 100) {
     eligible = false;
-    reason = `A ${big ? "Big" : "normal"} claim would take weekly past 100.`;
+    reason = "A claim would take weekly past 100.";
   }
   const score =
     a.provider === "claude" && legRoom != null
@@ -625,14 +622,14 @@ const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
   ],
 };
 
-function placementFor(provider: ProviderId, big: boolean, manual?: string): Placement {
+function placementFor(provider: ProviderId, manual?: string): Placement {
   const now = Date.now();
-  const candidates = accounts.filter((a) => a.provider === provider).map((a) => candidateFor(a, big, now));
+  const candidates = accounts.filter((a) => a.provider === provider).map((a) => candidateFor(a, now));
   const best = [...candidates].filter((c) => c.eligible).sort((a, b) => b.score - a.score)[0] ?? null;
-  const claim = big ? settings.balancer.claimBig : settings.balancer.claimNormal;
+  const claim = settings.balancer.claimNormal;
   if (manual && manual !== "auto") {
     const c = candidates.find((x) => x.accountId === manual);
-    return { provider, accountId: manual, mode: "manual", big, claim, candidates, why: `You picked ${c?.label ?? manual}.` };
+    return { provider, accountId: manual, mode: "manual", claim, candidates, why: `You picked ${c?.label ?? manual}.` };
   }
   if (!best) {
     // As the balancer: fully claimed but not spent overflows onto the least claimed.
@@ -644,7 +641,6 @@ function placementFor(provider: ProviderId, big: boolean, manual?: string): Plac
         provider,
         accountId: least.accountId,
         mode: "overflow",
-        big,
         claim,
         candidates,
         why: `every ${provider} account's weekly is fully claimed by running sessions; ${least.label} is the least claimed (${least.weekly}% used + ${least.outstanding} claimed)`,
@@ -654,7 +650,6 @@ function placementFor(provider: ProviderId, big: boolean, manual?: string): Plac
       provider,
       accountId: null,
       mode: "none",
-      big,
       claim,
       candidates,
       why: candidates.length === 0 ? `No ${provider} account is set up.` : "Every account is over its weekly with claims counted. Pick one by hand to override.",
@@ -667,12 +662,12 @@ function placementFor(provider: ProviderId, big: boolean, manual?: string): Plac
         ? `${best.label} has the most weekly to use before it resets, and room in its 5-hour window.`
         : `${best.label} has the most 5-hour room after claims (${Math.round(best.legRoom)} vs ${second?.legRoom != null ? Math.round(second.legRoom) : "—"}).`
       : `${best.label} has the most weekly left per hour until its reset (${best.weeklyPerHour?.toFixed(2)}/h).`;
-  return { provider, accountId: best.accountId, mode: "auto", big, claim, candidates, why };
+  return { provider, accountId: best.accountId, mode: "auto", claim, candidates, why };
 }
 
 function accountViews(): AccountView[] {
   const now = Date.now();
-  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, false, now), alsoAt: [] }));
+  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, now), alsoAt: [] }));
 }
 
 // ------------------------------------------------------------- state
@@ -1132,13 +1127,10 @@ function calibration(days: number): CalibrationReport {
   return {
     days,
     shortWindowInWeekly: { estimate: 21.4, samples: 312 * (days / 7), r2: 0.83 },
-    sessionUse: {
-      normal: { p50: 3.1, p75: 5.8, p90: 9.4, samples: 64 },
-      big: { p50: 14.2, p75: 22.5, p90: 31.0, samples: 9 },
-    },
+    sessionUse: { p50: 3.1, p75: 5.8, p90: 9.4, samples: 73 },
     placements: 73,
     hitAfterPlacement: 4,
-    suggested: { shortWindowInWeekly: 21.4, claimNormal: 6, claimBig: 23 },
+    suggested: { shortWindowInWeekly: 21.4, claimNormal: 6 },
     current: structuredClone(settings.balancer) as BalancerSettings,
   };
 }
@@ -1199,8 +1191,8 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   await sleep(head === "placement" ? 220 : 120);
 
   if (head === "placement") {
-    const x = body<{ provider: ProviderId; big: boolean }>(b);
-    return placementFor(x.provider ?? "claude", !!x.big);
+    const x = body<{ provider: ProviderId }>(b);
+    return placementFor(x.provider ?? "claude");
   }
 
   if (head === "schedules") {
@@ -1239,9 +1231,9 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   }
 
   if (head === "sessions" && !id) {
-    const x = body<{ provider: ProviderId; cwd: string; repoId: string; worktree: boolean; prompt: string; model: string; big: boolean; accountId: string }>(b);
+    const x = body<{ provider: ProviderId; cwd: string; repoId: string; worktree: boolean; prompt: string; model: string; accountId: string }>(b);
     const provider = x.provider ?? "claude";
-    const placement = placementFor(provider, !!x.big, x.accountId);
+    const placement = placementFor(provider, x.accountId);
     const repo = repos.find((r) => r.id === x.repoId);
     const nid = Math.random().toString(36).slice(2, 6);
     const cwd = repo ? (x.worktree ? `${repo.ref}/.worktrees/${nid}` : repo.ref) : x.cwd || HOME;
@@ -1249,7 +1241,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       id: nid, provider, accountId: placement.accountId, status: "running", host: "tmux",
       title: (x.prompt ?? "").split("\n")[0].slice(0, 70) || "New session", cwd, repoRoot: repo ? cwd : null,
       branch: repo ? (x.worktree ? `agentbox/${nid}` : repo.defaultBranch) : null, worktree: repo && x.worktree ? cwd : null,
-      model: x.model || settings.models[provider] || null, firstPrompt: x.prompt || null, big: !!x.big,
+      model: x.model || settings.models[provider] || null, firstPrompt: x.prompt || null,
       startedAt: Date.now(), lastActivityAt: Date.now(), contextUsed: 0, contextLimit: 200_000,
     });
     sessions.unshift(s);
@@ -1260,14 +1252,10 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
 
   if (head === "sessions" && id) {
     const s = mustSession(id);
-    const x = body<{ label: string | null; big: boolean; text: string; keys: string[]; prompt: string; closed: boolean; question: string; answers: AskAnswer[] }>(b);
+    const x = body<{ label: string | null; text: string; keys: string[]; prompt: string; closed: boolean; question: string; answers: AskAnswer[] }>(b);
     switch (method === "PATCH" ? "patch" : action) {
       case "patch":
         if ("label" in x) s.label = x.label?.trim() ? x.label.trim() : null;
-        if (typeof x.big === "boolean") {
-          s.big = x.big;
-          s.claim = x.big ? settings.balancer.claimBig : settings.balancer.claimNormal;
-        }
         break;
       case "send": {
         const tl = timelineOf(id);

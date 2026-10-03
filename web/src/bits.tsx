@@ -231,15 +231,6 @@ export function HostBadge({ host }: { host: SessionHost }) {
   );
 }
 
-export function BigBadge() {
-  return (
-    <span className="big-badge" title="Big session: claims the larger share of the account's weekly">
-      <Icon.bolt size={11} />
-      Big
-    </span>
-  );
-}
-
 // ---------------------------------------------------------------- context
 
 /** Context-window fill: amber past 75%, red past 90% — when compaction bites. */

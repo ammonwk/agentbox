@@ -120,7 +120,6 @@ export interface NewSessionInput {
   prompt?: string;
   model?: string;
   effort?: string;
-  big?: boolean;
   accountId?: string;
 }
 
@@ -201,7 +200,7 @@ export const api = {
   pushTest: () => post<{ sent: number; failed: string[] }>("/api/push/test"),
 
   // sessions
-  placement: (input: { provider: ProviderId; big: boolean; model?: string }) =>
+  placement: (input: { provider: ProviderId; model?: string }) =>
     post<Placement>("/api/placement", input),
   /** What `--model` can be on this account, newest release first. */
   models: (accountId: string) => get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}`),
@@ -213,7 +212,7 @@ export const api = {
   runSchedule: (id: string) => post<{ sessionId: string }>(`/api/schedules/${enc(id)}/run`),
   createSession: (input: NewSessionInput) =>
     post<{ session: Session; placement: Placement }>("/api/sessions", input),
-  patchSession: (id: string, patch: { label?: string | null; big?: boolean; parent?: string | null }) =>
+  patchSession: (id: string, patch: { label?: string | null; parent?: string | null }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
   keys: (id: string, keys: string[]) => post<unknown>(`/api/sessions/${enc(id)}/keys`, { keys }),
