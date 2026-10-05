@@ -206,9 +206,10 @@ function remarkImagePaths() {
 
 /** File paths in prose and inline code get the same desktop action as an
  * explicit Markdown link. Bare filenames need code and a known extension so
- * ordinary domain names and version numbers stay prose. */
+ * ordinary domain names and version numbers stay prose. A folder is a rooted
+ * path ending in a slash (`~/Pictures/shots/`); `pairs/` alone stays prose. */
 function remarkLocalPaths() {
-  const pattern = /(?<![\w/.~:@%+-])(?:(?:~\/|\.{1,2}\/|\/)?(?:[\w.@%+~-]+\/)+)?[\w@%+~-]+(?:\.[\w@%+~-]+)*\.[a-z][a-z\d]*(?::\d+(?:-\d+)?){0,2}(?![\w/]|\.\w)/gi;
+  const pattern = /(?<![\w/.~:@%+-])(?:(?:(?:~\/|\.{1,2}\/|\/)?(?:[\w.@%+~-]+\/)+)?[\w@%+~-]+(?:\.[\w@%+~-]+)*\.[a-z][a-z\d]*(?::\d+(?:-\d+)?){0,2}(?![\w/]|\.\w)|(?:~\/|\.{1,2}\/|\/)(?:[\w.@%+~-]+\/)+(?![\w/]))/gi;
   const known = /\.(?:[cm]?[jt]sx?|html?|css|scss|json|md|txt|py|rs|go|sh|yaml|yml|toml|sql|zip|pdf)(?::\d+(?:-\d+)?){0,2}$/i;
   return () => (tree: Root) => {
     rewrite(tree, true, (text, code) => splitRefs(text, code, (t) =>
