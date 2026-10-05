@@ -25,7 +25,7 @@ import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "n
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { moveInto } from "./move";
 import { randomUUID } from "node:crypto";
-import { userHome } from "../paths";
+import { packageRoot, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import type { Account } from "../types";
 import { JsonlTranscriptReader } from "./jsonl-reader";
@@ -404,6 +404,29 @@ const THINKING = ["--thinking-display", "summarized"];
 
 const TOLD = ["--append-system-prompt", BRIEFING];
 
+/** A subagent's own subagents are told who started them, or they take "main"
+ *  for their coordinator and write to the conversation the user is reading
+ *  (`claude-spawn-hook.ts`). Hooks given by flag add to the user's own. */
+const HOOKED = [
+  "--settings",
+  JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "Agent|Task",
+          hooks: [
+            {
+              type: "command",
+              command: `"${process.execPath}" "${join(packageRoot, "src", "core", "providers", "claude-spawn-hook.ts")}"`,
+              timeout: 10,
+            },
+          ],
+        },
+      ],
+    },
+  }),
+];
+
 /** A prompt that starts with `-` would be parsed as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
 
@@ -413,7 +436,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-  argv.push(...THINKING, ...TOLD);
+  argv.push(...THINKING, ...TOLD, ...HOOKED);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: id };
 }
@@ -429,11 +452,12 @@ function resumeCommand(opts: ResumeOptions): Command {
     // One it was launched with is its own, or ours from an earlier launch; a
     // second would replace it.
     if (!opts.carry.some((a) => a.startsWith("--append-system-prompt"))) argv.push(...TOLD);
+    if (!opts.carry.some((a) => a === "--settings" || a.startsWith("--settings="))) argv.push(...HOOKED);
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-    argv.push(...THINKING, ...TOLD);
+    argv.push(...THINKING, ...TOLD, ...HOOKED);
   }
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
