@@ -401,11 +401,65 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
   unschedule <id>...    delete one; it will not start (sessions it started stay)
   mcp                   run the fleet MCP server on stdio (for a conductor session)
   subagent-mcp          run the omp/devin subagent MCP server on stdio (needs no server)
+  devin-bridge [status|start|restart|check]
+                        the bridge that runs other providers' models in devin
+                        (docs/devin-bridge.md); check tests it end to end
   doctor                check that everything agentbox needs is present
   onboard               derive who agentbox works for (git, gh, the system),
                         write user.env, and say what is still missing
   guide                 how an agent drives the fleet with this CLI
   version               print the version`;
+
+/** `agentbox devin-bridge [status|start|restart|check|run]`. */
+async function devinBridge(verb = "status"): Promise<number | null> {
+  const service = await import("../bridge/service");
+  const { bridgeUrl } = await import("../bridge/models");
+  switch (verb) {
+    case "run": {
+      const { appendFileSync } = await import("node:fs");
+      const { startBridge } = await import("../bridge/devin");
+      startBridge({
+        log: (line) => {
+          const stamped = `${new Date().toISOString()} ${line}`;
+          console.log(stamped);
+          try {
+            appendFileSync(service.bridgeLog(), stamped + "\n");
+          } catch {}
+        },
+      });
+      return null;
+    }
+    case "start":
+    case "restart":
+    case "status": {
+      if (verb === "start") service.ensureBridge();
+      if (verb === "restart") service.restartBridge();
+      if (verb !== "status" && !(await service.bridgeUp())) {
+        console.error(`agentbox: the devin bridge did not come up on ${bridgeUrl()}; \`agentbox devin-bridge run\` shows why`);
+        return 1;
+      }
+      const res = await fetch(`${bridgeUrl()}/healthz`, { signal: AbortSignal.timeout(2000) }).catch(() => null);
+      if (!res?.ok) {
+        console.log(`not running (${bridgeUrl()}); it starts with the first session on a bridged model, or \`agentbox devin-bridge start\``);
+        return 1;
+      }
+      const h = (await res.json()) as { pid: number; upstream: string; chats: number; failed: number; lastChatAt: string | null; models: { uid: string; contextTokens: number; compaction: { spawn: number; apply: number; hard: number }; key: boolean }[] };
+      console.log(`running on ${bridgeUrl()} (pid ${h.pid}) in front of ${h.upstream}; log ${service.bridgeLog()}`);
+      console.log(`${h.chats} replies served, ${h.failed} failed${h.lastChatAt ? `, last ${h.lastChatAt}` : ""}`);
+      for (const m of h.models) {
+        console.log(`  ${m.uid}  window ${m.contextTokens}, summary from ${m.compaction.spawn}, swapped in at ${m.compaction.apply}${m.key ? "" : "  (no key)"}`);
+      }
+      return 0;
+    }
+    case "check": {
+      const { checkBridge } = await import("../bridge/check");
+      return await checkBridge();
+    }
+    default:
+      console.error("usage: agentbox devin-bridge [status|start|restart|check|run]");
+      return 2;
+  }
+}
 
 export async function main(argv: string[]): Promise<number | null> {
   const cmd = argv[0] ?? "serve";
@@ -484,6 +538,9 @@ export async function main(argv: string[]): Promise<number | null> {
         await runSubagentMcp();
         return null;
       }
+      // A server of its own too: devin sessions on a bridged model talk to it.
+      case "devin-bridge":
+        return await devinBridge(argv[1]);
       case "doctor":
         return doctor();
       case "onboard":

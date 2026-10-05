@@ -52,6 +52,8 @@ import {
 import { cwdOf, environOf, findProcesses, runsCli, startedAtOf } from "./procs";
 import { askFromScreen, askStep } from "./devin-ask";
 import { askQuestionsOf } from "./ask";
+import { bridgeUrl, bridgedModel } from "../../bridge/models";
+import { ensureBridge } from "../../bridge/service";
 import type {
   Command,
   LiveProcess,
@@ -566,6 +568,24 @@ function flags(opts: { model?: string; autoApprove: boolean }): string[] {
   return a;
 }
 
+/**
+ * A session on a model devin does not sell (`src/bridge/models.ts`) takes its
+ * catalog and its replies from agentbox's bridge instead of devin's server,
+ * which the bridge stands in front of. Started here if it is not running: a
+ * session that needs it is the only thing that does.
+ */
+function bridgeEnv(model: string | null | undefined): Record<string, string> {
+  if (!bridgedModel(model)) return {};
+  ensureBridge();
+  return { WINDSURF_API_SERVER_URL: bridgeUrl() };
+}
+
+/** The value of `--model` among flags carried over from an adopted launch. */
+function carriedModel(carry: string[] | undefined): string | null {
+  const at = carry?.indexOf("--model") ?? -1;
+  return at >= 0 ? (carry![at + 1] ?? null) : null;
+}
+
 /** devin takes the initial prompt after `--`. */
 const withPrompt = (argv: string[], prompt?: string) => (prompt ? [...argv, "--", prompt] : argv);
 
@@ -680,7 +700,13 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     },
 
     spawnCommand(opts: SpawnOptions) {
-      return { argv: withPrompt(["devin", ...flags(opts)], opts.prompt), ...accountCommand(opts.account), agentSessionId: null };
+      const account = accountCommand(opts.account);
+      return {
+        argv: withPrompt(["devin", ...flags(opts)], opts.prompt),
+        ...account,
+        env: { ...account.env, ...bridgeEnv(opts.model) },
+        agentSessionId: null,
+      };
     },
 
     // Every account runs on the one session store (only the key differs), so
@@ -688,9 +714,14 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     moveSession: ({ transcriptPath }) => transcriptPath,
 
     resumeCommand(opts: ResumeOptions): Command {
+      const account = accountCommand(opts.account);
+      // With no model given devin resumes on the one it saved, which is then
+      // the one that says whether the session needs the bridge.
+      const model = opts.model ?? carriedModel(opts.carry) ?? db.sessionById(paths().db, opts.agentSessionId)?.model;
       return {
         argv: withPrompt(["devin", "-r", opts.agentSessionId, ...flags(opts)], opts.prompt),
-        ...accountCommand(opts.account),
+        ...account,
+        env: { ...account.env, ...bridgeEnv(model) },
       };
     },
 

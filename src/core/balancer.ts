@@ -58,6 +58,10 @@ export interface PlaceRequest {
   effort?: string | null;
   /** A specific account instead of the balancer's pick. */
   accountId?: string | null;
+  /** The model is someone else's to meter (one agentbox's devin bridge
+   *  serves): the session claims nothing, and an account at its limit can
+   *  still take it. Turned off and logged out still rule an account out. */
+  unmetered?: boolean;
   accounts: AccountState[];
   settings: BalancerSettings;
   now: number;
@@ -168,7 +172,7 @@ function runsOut(c: Candidate): boolean {
 
 function evaluate(
   state: AccountState,
-  req: Pick<PlaceRequest, "model" | "settings" | "now">,
+  req: Pick<PlaceRequest, "model" | "settings" | "now" | "unmetered">,
 ): Candidate {
   const { settings, now } = req;
   const outstanding = state.claims.reduce((a, c) => a + c.outstanding, 0);
@@ -253,6 +257,8 @@ function evaluate(
   } else if (state.loggedOut) {
     c.eligible = false;
     c.reason = "not logged in";
+  } else if (req.unmetered) {
+    // Nothing of this account's will be used: no limit of its is in the way.
   } else if (atShortLimit(c)) {
     c.eligible = false;
     c.reason = `5-hour limit reached (${c.short}%)`;
@@ -307,7 +313,7 @@ function needOf(claim: number, settings: BalancerSettings): number {
 export function place(req: PlaceRequest): Placement {
   // The claim is the model's, not one number for everything: a GLM-Flash
   // session and a Fable one are not the same guest (see claim.ts).
-  const claim = claimFor({ model: req.model, effort: req.effort }, req.settings);
+  const claim = req.unmetered ? 0 : claimFor({ model: req.model, effort: req.effort }, req.settings);
   const candidates = req.accounts.map((a) => evaluate(a, req));
   const need = needOf(claim, req.settings);
   const ordered = rank(candidates, need);

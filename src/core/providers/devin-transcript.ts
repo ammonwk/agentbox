@@ -40,6 +40,7 @@ import type { TranscriptFacts } from "./types";
 import { askQuestionsOf } from "./ask";
 import { addUsage, emptyTotals } from "../pricing";
 import type { DevinPrompt, DevinSessionRow } from "./devin-db";
+import { bridgedModel } from "../../bridge/models";
 
 function clip(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
@@ -546,6 +547,7 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     (lastPromptAt !== null &&
       (atif?.lastStepAt != null ? lastPromptAt > atif.lastStepAt : activity === null || lastPromptAt >= activity));
   const times = [activity, lastPromptAt, atif?.lastStepAt ?? null].filter((x): x is number => x !== null);
+  const model = atif?.model ?? (row?.model || null);
   return {
     agentSessionId: i.id,
     cwd: row?.working_directory ?? null,
@@ -557,14 +559,15 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     lastPrompt: (lastPrompt?.content ?? atif?.userPrompts[atif.userPrompts.length - 1])?.slice(0, PROMPT_CAP) ?? null,
     lastPromptAt,
     lastMessage: atif?.lastMessage ?? null,
-    model: atif?.model ?? (row?.model || null),
+    model,
     gitBranch: null,
     startedAt: row ? row.created_at * 1000 : (atif?.firstStepAt ?? null),
     lastActivityAt: times.length > 0 ? Math.max(...times) : null,
     turnOpen,
     turnError: atif?.turnError ? { ...atif.turnError, kind: "output-cap" as const } : null,
     contextUsed: atif?.contextUsed ?? null,
-    contextLimit: null,
+    // devin does not record a model's window; the bridge's models are ours.
+    contextLimit: bridgedModel(model)?.contextTokens ?? null,
     tokens: atif ? { ...atif.tokens } : emptyTotals(),
     usage: null,
     rateLimitHits: i.rateLimitHits,

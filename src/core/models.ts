@@ -17,7 +17,8 @@
  *   - devin: `devin models list --format json` — the CLI's own per-account
  *     list, run under the account's home. Effort is part of the model id
  *     there (`-low` … `-max`, `-fast`, `-priority`), which is why the list is
- *     hundreds of variants long and why devin has no effort picker.
+ *     hundreds of variants long and why devin has no effort picker. Ahead of
+ *     it, the models agentbox's own bridge runs in devin (`src/bridge/`).
  *
  * Release dates come from models.dev. agentbox downloads its own copy to
  * `<agentbox home>/cache/models-dev.json`, refreshed in the background once a
@@ -34,6 +35,7 @@ import { exec } from "./accounts/exec";
 import { claudeHome } from "./providers/claude";
 import { codexHome } from "./providers/codex";
 import { devinAdapter } from "./providers/devin";
+import { BRIDGED } from "../bridge/models";
 import { agentDirOf } from "./providers/omp";
 import type { Account, ModelOption } from "./types";
 
@@ -320,12 +322,26 @@ async function listDevinModels(account: Account): Promise<ModelOption[] | null> 
   return byRelease(out);
 }
 
+/** The models agentbox's bridge adds to devin (`src/bridge/`), for whichever
+ *  have a key to run on. First, since devin's own list is hundreds long. */
+function bridgedOptions(): ModelOption[] {
+  return BRIDGED.filter((m) => m.apiKey() !== null).map((m) => ({
+    id: m.uid,
+    label: m.label,
+    releasedAt: null,
+    note: `not devin's: run in its harness by agentbox's bridge · compacts by ${Math.round(m.compaction.hard / 1000)}k`,
+  }));
+}
+
 async function devinModels(account: Account): Promise<ModelOption[]> {
   const hit = devinCatalog.get(account.id);
-  if (hit && Date.now() - hit.at < DEVIN_TTL_MS) return hit.options;
-  const options = await listDevinModels(account);
-  if (options) devinCatalog.set(account.id, { at: Date.now(), options });
-  return options ?? hit?.options ?? [];
+  let options = hit?.options ?? [];
+  if (!hit || Date.now() - hit.at >= DEVIN_TTL_MS) {
+    const fresh = await listDevinModels(account);
+    if (fresh) devinCatalog.set(account.id, { at: Date.now(), options: fresh });
+    options = fresh ?? options;
+  }
+  return [...bridgedOptions(), ...options];
 }
 
 // ------------------------------------------------------------------ api

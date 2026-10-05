@@ -109,6 +109,7 @@ import { retryClock } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
+import { bridgedModel } from "../bridge/models";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
   Account,
@@ -2365,10 +2366,14 @@ export class Fleet extends EventEmitter {
 
   placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null): Placement {
     this.adapter(provider);
+    const asked = model || getSettings().models[provider] || null;
     return place({
       provider,
-      model: model || getSettings().models[provider] || null,
+      model: asked,
       effort: effort ?? null,
+      // A model the devin bridge serves draws on its own provider, not on
+      // the devin account the session is signed in as.
+      unmetered: provider === "devin" && bridgedModel(asked) !== null,
       accountId: accountId && accountId !== "auto" ? accountId : null,
       accounts: this.accountStates(provider),
       settings: getSettings().balancer,

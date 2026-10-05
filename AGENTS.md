@@ -128,8 +128,17 @@ once: commit your own files by path, never `git add -A`.
   `src/subagents/`: a pool of `omp acp` / `devin acp` processes it owns
   (`backend.ts` says how each CLI is started), their records and live status
   lines. Independent of the server and the database.
+- `src/bridge/` — the devin bridge (`agentbox devin-bridge`, a process of
+  its own on :4480): runs a model devin does not sell in devin's harness, so
+  it gets devin's compaction. LongCat 2.5 Preview from OpenCode Go is the one
+  so far, rolled before 220k. A devin session on such a model has
+  `WINDSURF_API_SERVER_URL` pointed at it (the devin adapter does this) and
+  is placed as `unmetered`. It depends on a wire format read off the network:
+  **`docs/devin-bridge.md` is how it works and how to repair it after a devin
+  update**, starting with `agentbox devin-bridge check`. After changing
+  `src/bridge/`, `agentbox devin-bridge restart`.
 - `src/cli/index.ts` — `agentbox claude|codex|…`, `attach`, `usage`, `mcp`,
-  `subagent-mcp`, `doctor`; `src/cli/sessions.ts` — the Unix-shaped session
+  `subagent-mcp`, `devin-bridge`, `doctor`; `src/cli/sessions.ts` — the Unix-shaped session
   verbs (`ls`, `show`, `log`, `grep`, `screen`, `diff`, `send`, `watch`, `close`,
   `stop`, `resume`, `adopt`, `label`): ids first on every line, `-` reads ids
   from stdin.

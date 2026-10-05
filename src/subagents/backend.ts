@@ -3,6 +3,9 @@
  * process is started, how it takes a system prompt, and how it is made
  * read-only. */
 
+import { bridgeUrl, bridgedModel } from "../bridge/models";
+import { ensureBridge } from "../bridge/service";
+
 export const SUBAGENT_PROVIDERS = ["omp", "devin"] as const;
 export type SubagentProvider = (typeof SUBAGENT_PROVIDERS)[number];
 
@@ -50,12 +53,20 @@ const omp: AcpBackend = {
   mode: () => null,
 };
 
+/** A subagent on one of the bridge's models (`src/bridge/`) reaches it the
+ *  way a session does; the bridge is started if this is the first to need it. */
+function devinBridgeEnv(): Record<string, string> {
+  if (!bridgedModel(devin.model())) return {};
+  ensureBridge();
+  return { WINDSURF_API_SERVER_URL: bridgeUrl() };
+}
+
 const devin: AcpBackend = {
   id: "devin",
   model: () => process.env.AGENTBOX_SUBAGENT_DEVIN_MODEL || null,
   argv: (model) => ["devin", "acp", ...(model === null ? [] : ["--model", model])],
   // devin logs at INFO to stderr, which the pool reports as the agent's errors.
-  env: () => ({ RUST_LOG: "error" }),
+  env: () => ({ RUST_LOG: "error", ...devinBridgeEnv() }),
   systemPromptFlag: false,
   // `ask` removes devin's write and shell tools outright; `bypass` approves
   // everything, as a delegated writer with nobody to ask must.
