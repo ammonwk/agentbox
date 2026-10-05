@@ -13,7 +13,7 @@ export const BALANCER_HELP: Record<keyof BalancerSettings, { label: string; unit
   claimIdleMin: {
     label: "Cache goes cold after",
     unit: "min idle",
-    help: "A session idle this long stops holding its claim and its account: its prompt cache is cold, so it wakes on whichever account has room.",
+    help: "For a provider that does not say how long its prompt cache lives (Claude's does: an hour, or five minutes), a session idle this long counts as cold: it stops holding its claim and its account, and wakes on whichever account has room.",
   },
   resetHorizonMin: {
     label: "Reset horizon",

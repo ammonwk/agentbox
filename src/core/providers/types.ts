@@ -100,6 +100,9 @@ export interface TranscriptFacts {
    * hours ago. Absent when the provider cannot tell the two apart.
    */
   lastTurnAt?: number | null;
+  /** How long the prompt cache that call wrote lives (claude: an hour, or
+   *  five minutes; src/core/cache.ts). Absent when the provider does not say. */
+  cacheTtlMs?: number | null;
   /**
    * True when the transcript shows a turn in progress: the newest thing is a
    * prompt or a tool call, not an end of turn. Combined with process liveness
@@ -145,7 +148,7 @@ export interface TranscriptFacts {
    * the session was waiting on them and nothing woke it. Claude does this
    * with a command an in-process teammate started and then went idle on, and
    * the session's later turns do not take them either. The fleet nudges it
-   * (`Fleet.nudgeStranded`), and the nudge in the transcript clears them.
+   * (`Fleet.keepWarm`), and the nudge in the transcript clears them.
    */
   stranded?: QueuedMessage[];
   /** An AskUserQuestion call (claude) still waiting for its answer. */

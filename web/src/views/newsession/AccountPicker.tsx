@@ -21,7 +21,6 @@ export function AccountPicker({
   placement,
   placing,
   placeErr,
-  claimIdleMin,
 }: {
   /** This provider's accounts. */
   accounts: AccountView[];
@@ -32,7 +31,6 @@ export function AccountPicker({
   placement: Placement | null;
   placing: boolean;
   placeErr: string | null;
-  claimIdleMin: number;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -157,7 +155,7 @@ export function AccountPicker({
                 <p className="ns-acct-why">
                   {placement.why}
                   {/[.!?]$/.test(placement.why) ? " " : ". "}
-                  Claims <strong>{placement.claim}</strong> weekly points until used or idle {claimIdleMin} min.
+                  Claims <strong>{placement.claim}</strong> weekly points until used or its cache goes cold.
                 </p>
               ) : null}
             </div>

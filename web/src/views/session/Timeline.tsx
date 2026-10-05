@@ -481,7 +481,7 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
       <div className={`tl-user tl-sent${cls}`} title={fmtClock(ev.at)} data-ev={ev.id}>
         <div className="tl-who">
           <Icon.send size={12} /> <Party name={sent.from} />
-          <span className="tl-via">via {sent.via}</span>
+          {sent.via ? <span className="tl-via">via {sent.via}</span> : null}
           {wait}
           <time className="tl-time">{fmtClock(ev.at)}</time>
         </div>

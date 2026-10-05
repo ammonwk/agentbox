@@ -41,7 +41,7 @@ export interface Sent {
   /** Written by another agent, not by you. */
   agent: boolean;
   /** Who sent it, when the message says: an agentbox id from the send mark,
-   *  or the name a delivered message carries. */
+   *  the name a delivered message carries, or "agentbox" for its own note. */
   from: string | null;
   /** How it came: `agentbox send`, or Claude's own delivery between sessions. */
   via: "agentbox send" | "Claude" | null;
@@ -49,8 +49,14 @@ export interface Sent {
   text: string;
 }
 
+/** A note agentbox itself typed into a session, the whole of the message: a
+ *  nudge, a keep-warm, a recovery notice. A note put before your own message
+ *  (`[agentbox: …]\n\nwhat you wrote`, waking a parked session) is yours. */
+const FLEET_NOTE = /^\s*\[agentbox: (?:(?!\]\n)[\s\S])*\]\s*$/;
+
 export function readSent(raw: string): Sent {
   const text = unwrapPaste(raw);
+  if (FLEET_NOTE.test(text)) return { agent: true, from: "agentbox", via: null, text: text.trim() };
   const m = MARK.exec(text);
   if (m) return { agent: true, from: m[1] ?? null, via: "agentbox send", text: text.slice(m[0].length).trim() };
   const d = DELIVERED.exec(text);
@@ -62,6 +68,7 @@ export function readSent(raw: string): Sent {
 }
 
 export const isAgentSent = (text: string): boolean => readSent(text).agent;
+export const isFleetNote = (text: string): boolean => FLEET_NOTE.test(unwrapPaste(text));
 
 /** The text with every paste wrapper taken off and its content kept: for a
  *  one-line preview, where a paste is just more of what was said. */

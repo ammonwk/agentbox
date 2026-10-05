@@ -66,9 +66,10 @@ once: commit your own files by path, never `git add -A`.
   And Claude's /btw side questions: Claude keeps those only in the process's
   memory, so the `btw` table is their one record (`src/core/btw.ts`).
 - **A warm session never changes account.** Switching accounts invalidates
-  the provider's prompt cache, so while a session has been active within
-  `claimIdleMin` (60) resume and adopt use its pinned account. Once it is idle
-  past that the cache is cold anyway: it is shown unpinned, and a resume or a
+  the provider's prompt cache, so until its cache goes cold
+  (`Session.cacheWarmUntil`, `src/core/cache.ts` — the one clock for "is it
+  warm?"; nothing else should keep its own) resume and adopt use its pinned
+  account. After that it is shown unpinned, and a resume or a
   message wakes it on the balancer's pick (`Fleet.wake`, which moves — never
   copies — the transcript into that account's home; claude and devin only).
   A session stopped at a limit is never moved on its own: the UI offers a

@@ -19,8 +19,9 @@ import { PrRepoFold } from "../prrepo";
 import { loadFields, saveFields } from "./foldstate";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
-import { dropPasteTags } from "../sent";
+import { dropPasteTags, isFleetNote } from "../sent";
 import { isStrandedNudge } from "../park";
+import { claudeCacheTtl } from "../cache";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
  *  collide), so it only ever proves a candidate, never recovers a path. */
@@ -469,6 +470,8 @@ export class ClaudeFold {
   private lastActivityAt: number | null = null;
   /** The newest model call on the main chain (see TranscriptFacts.lastTurnAt). */
   private lastTurnAt: number | null = null;
+  /** The cache lifetime the newest call that wrote any cache wrote it with. */
+  private cacheTtlMs: number | null = null;
   private turnOpen = false;
   /** Messages Claude is holding until the current step yields: see `queueOp`. */
   private queue: { text: string; at: number }[] = [];
@@ -629,6 +632,8 @@ export class ClaudeFold {
     if (!t) return;
     // The fleet's nudge names the notifications Claude never delivered.
     if (isStrandedNudge(t)) this.queue = this.queue.filter((q) => !isTaskNotification(q));
+    // Nor is a note of its own what the session was asked.
+    if (isFleetNote(t)) return;
     this.firstPrompt ??= t;
     this.lastPrompt = t;
   }
@@ -768,6 +773,7 @@ export class ClaudeFold {
     if (m.usage) {
       const u = m.usage;
       if (at !== null && (this.lastTurnAt === null || at > this.lastTurnAt)) this.lastTurnAt = at;
+      this.cacheTtlMs = claudeCacheTtl(u) ?? this.cacheTtlMs;
       const used = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       if (used > 0) {
         this.contextUsed = used;
@@ -843,6 +849,7 @@ export class ClaudeFold {
       startedAt: this.startedAt,
       lastActivityAt: this.lastActivityAt,
       lastTurnAt: this.lastTurnAt,
+      cacheTtlMs: this.cacheTtlMs,
       turnOpen: this.turnOpen,
       // Background-task notifications queue too; only messages are shown.
       queued: this.queue.filter((q) => classifyUserText(q.text) === "prompt").map((q) => ({ ...q })),

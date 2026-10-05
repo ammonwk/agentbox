@@ -128,8 +128,6 @@ export function NewSession({
   }, []);
 
   const accounts = useMemo(() => state.accounts.filter((a) => a.provider === provider), [state.accounts, provider]);
-  const b = state.settings.balancer;
-
   // A remembered pin to an account that is gone is not a pin.
   useEffect(() => {
     if (accountId !== "auto" && !accounts.some((a) => a.id === accountId)) setChoice({ accountId: "auto" });
@@ -515,7 +513,6 @@ export function NewSession({
             placement={placement}
             placing={placing}
             placeErr={placeErr}
-            claimIdleMin={b.claimIdleMin}
           />
         </div>
 

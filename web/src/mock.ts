@@ -317,6 +317,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     background: false,
     ...p,
     lastPromptAt: p.lastPromptAt ?? p.lastActivityAt ?? T0 - 5 * M,
+    cacheWarmUntil: p.cacheWarmUntil ?? (p.lastActivityAt ?? T0 - 5 * M) + H,
   };
 }
 
@@ -528,7 +529,7 @@ function claimsFor(accountId: string): ClaimView[] {
     .filter((s) => s.accountId === accountId && (s.status === "running" || s.status === "waiting" || s.status === "blocked"))
     .map((s) => {
       const consumed = Math.min(s.claim * 1.3, (s.tokens.costEquiv / 10) * s.claim * 0.8);
-      const lapsed = T0 - s.lastActivityAt > settings.balancer.claimIdleMin * M;
+      const lapsed = T0 > s.cacheWarmUntil;
       const outstanding = lapsed ? 0 : Math.max(0, s.claim - consumed);
       return {
         sessionId: s.id,

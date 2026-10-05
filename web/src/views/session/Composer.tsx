@@ -45,10 +45,9 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * the box is replaced by the Adopt explanation. `/` completes the skills the
  * session can run, as in the new-session prompt.
  */
-export function Composer({ session, accounts, claimIdleMin, skills, textareaRef }: {
+export function Composer({ session, accounts, skills, textareaRef }: {
   session: Session;
   accounts: readonly AccountView[];
-  claimIdleMin: number;
   skills: readonly SkillInfo[];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
@@ -230,7 +229,7 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
         </div>
       ) : null}
 
-      {session.limitHit ? <LimitBanner session={session} accounts={accounts} claimIdleMin={claimIdleMin} /> : null}
+      {session.limitHit ? <LimitBanner session={session} accounts={accounts} /> : null}
 
       {mode.kind === "send" || mode.kind === "resume" ? (
       <div className="cmp-row">
@@ -382,7 +381,7 @@ const MOVABLE = new Set(["claude", "devin"]);
  * shown before you click), or on whichever account you pick instead, telling
  * the agent to carry on.
  */
-function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; accounts: readonly AccountView[]; claimIdleMin: number }) {
+function LimitBanner({ session, accounts }: { session: Session; accounts: readonly AccountView[] }) {
   const { run, busy, error, clear } = useAction();
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [placeErr, setPlaceErr] = useState<string | null>(null);
@@ -487,7 +486,6 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
             placement={placement}
             placing={!placement && !placeErr}
             placeErr={placeErr}
-            claimIdleMin={claimIdleMin}
           />
         </div>
       ) : null}

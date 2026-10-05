@@ -20,14 +20,15 @@ import {
   lastUsageSample,
   tokenSampleAt,
 } from "./db";
-import type { BalancerSettings, ClaimView } from "./types";
+import type { ClaimView } from "./types";
 
 export interface ClaimInput {
   sessionId: string;
   accountId: string;
   title: string;
   claim: number;
-  lastActivityAt: number;
+  /** When its prompt cache goes cold (`Session.cacheWarmUntil`). */
+  warmUntil: number;
   /** Mid-turn right now. A running session's claim never lapses. */
   running: boolean;
   /** Since when it has been spending on this account. */
@@ -35,22 +36,17 @@ export interface ClaimInput {
 }
 
 /**
- * Claims per account. A claim lapses once its session has been idle for
- * `claimIdleMin`: a session left open overnight should not hold an account's
- * weekly hostage, and if it is picked up again its use shows in the live
- * percentage anyway.
+ * Claims per account. A claim lapses once its session's cache has gone cold:
+ * a session left open overnight should not hold an account's weekly hostage,
+ * it wakes on whichever account has room by then, and if it is picked up
+ * again its use shows in the live percentage anyway.
  */
-export function claimsByAccount(
-  sessions: ClaimInput[],
-  consumed: Map<string, number>,
-  settings: BalancerSettings,
-  now: number,
-): Map<string, ClaimView[]> {
+export function claimsByAccount(sessions: ClaimInput[], consumed: Map<string, number>, now: number): Map<string, ClaimView[]> {
   const out = new Map<string, ClaimView[]>();
   for (const s of sessions) {
     if (s.claim <= 0) continue;
     const used = consumed.get(s.sessionId) ?? 0;
-    const lapsed = !s.running && now - s.lastActivityAt > settings.claimIdleMin * 60_000;
+    const lapsed = !s.running && now > s.warmUntil;
     const view: ClaimView = {
       sessionId: s.sessionId,
       title: s.title,

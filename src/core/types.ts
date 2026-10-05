@@ -406,8 +406,11 @@ export interface Session {
   claim: number;
   /** The reasoning effort it was started with; null for the CLI's default. */
   effort: string | null;
+  /** When its prompt cache goes cold: its newest model call plus the
+   *  lifetime that call wrote the cache with (src/core/cache.ts). */
+  cacheWarmUntil: number;
   /**
-   * Idle past `claimIdleMin`, so its prompt cache is cold and nothing is lost
+   * Past `cacheWarmUntil`, so its prompt cache is cold and nothing is lost
    * by moving it: it is no longer pinned to `accountId` (the account it last
    * ran on) and wakes — on resume or on a message — on whichever account has
    * the most room. Only for providers that can move a session between

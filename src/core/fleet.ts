@@ -78,6 +78,7 @@ import {
   subagentsLastWrite,
   WakeScan,
 } from "./park";
+import { cacheExpiring, cacheWarmUntil, KEEP_WARM_MAX, keepWarmNote, keepWarmPlan, type WarmSpell } from "./cache";
 import { read as readLive } from "../subagents/live";
 import { claimRecord, poolKey, poolState, type PoolAgent } from "../subagents/record";
 import { carryEnv, type Launch } from "./launch";
@@ -330,9 +331,12 @@ export class Fleet extends EventEmitter {
    *  when a turn ends cleanly. */
   private nudges = new Map<string, { lastAt: number; tries: number }>();
   private nextNudgeAt = 0;
-  /** Stranded notifications already nudged (`nudgeStranded`): session → the
+  /** Stranded notifications already nudged (`keepWarm`): session → the
    *  newest one's time. */
   private strandedSeen = new Map<string, number>();
+  /** Keep-warm messages sent in the session's current wait (`keepWarm`): how
+   *  many, and when the last went. */
+  private warmPings = new Map<string, WarmSpell>();
   /** Error screens that name their own wait ("will reset in 55 minutes"):
    *  the error, as first seen, and when that wait is up. */
   private screenWaits = new Map<string, { key: string; until: number }>();
@@ -628,7 +632,7 @@ export class Fleet extends EventEmitter {
     if (this.caughtUp) {
       this.continueStalled(now);
       this.nudgeErrored(now);
-      this.nudgeStranded(now, settings.parkIdleMin);
+      this.keepWarm(now, settings.parkIdleMin);
     }
     lap("park");
     await this.refreshWork(now);
@@ -801,38 +805,64 @@ export class Fleet extends EventEmitter {
   }
 
   /**
+   * Message a session, while its prompt cache is still warm, that is waiting
+   * on something: so the cache is still there when that something wakes it.
+   *
    * A session whose background task finished without waking it is told so.
    * Claude queues the notification and never delivers it when the command
    * was started by an in-process teammate that has since gone idle: the lead
    * sits "waiting on CI" for good, and is parked an hour later with nothing
    * holding it. Once the session has been quiet for `strandedNudgeAfter` —
-   * 55 minutes, while its cache is still warm and before it is parked — it
+   * 55 minutes, before it is parked — or its cache is about to go cold, it
    * gets one message naming what finished, and is not parked before it has
    * (`parkHold`). Once per notification — the nudge in the transcript clears
    * them, so a restart does not repeat it — and not while a teammate is
-   * still writing. Not to a session stopped at a usage limit
-   * (`stoppedAtLimit`): the nudge would only meet the limit again.
+   * still writing.
+   *
+   * A session whose turn is over and that still has work going that will
+   * wake it — a background command, a monitor, a wakeup, subagents: what a
+   * crash would take (`work`) — is sent `keepWarmNote` `KEEP_WARM_LEAD_MS`
+   * before its cache goes cold. Reading the cached conversation back costs a
+   * tenth of an input token per token; the work waking it to a cold cache
+   * costs two, an hour's write. Only for caches that live an hour (a
+   * five-minute one would need a message every few minutes), and at most
+   * `KEEP_WARM_MAX` times in one wait.
+   *
+   * Neither to a session stopped at a usage limit (`stoppedAtLimit`): the
+   * message would only meet the limit again.
    */
-  private nudgeStranded(now: number, parkIdleMin: number): void {
+  private keepWarm(now: number, parkIdleMin: number): void {
     const after = strandedNudgeAfter(parkIdleMin);
     for (const v of this.views.values()) {
       if (v.provider !== "claude" || v.host !== "tmux" || this.busy.has(v.id)) continue;
       // "Running" too: Claude's status file says busy on a lead with teammates.
       if (v.status !== "waiting" && v.status !== "running") continue;
-      if (now - v.lastActivityAt < after) continue;
       const facts = v.transcriptPath ? this.tracked.get(v.transcriptPath)?.facts : null;
       if (!facts || stoppedAtLimit(facts)) continue;
+
       const stranded = this.strandedOf(v);
       const newest = stranded.at(-1)?.at;
-      if (newest === undefined || this.strandedSeen.get(v.id) === newest) continue;
-      // A working teammate's notification waits in the lead's queue until the
-      // teammate's step yields, and is taken then.
-      const sub = subagentsLastWrite(v.transcriptPath!, facts.agentSessionId);
-      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) continue;
-      this.strandedSeen.set(v.id, newest);
-      console.log(`agentbox: ${v.id} (${v.title}) was never woken by ${stranded.length} finished background task${stranded.length === 1 ? "" : "s"}; nudging it after ${minutes(now - v.lastActivityAt)} quiet`);
-      void this.sendInPlace(v.id, strandedNudge(stranded)).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
+      if (newest !== undefined && this.strandedSeen.get(v.id) !== newest && (cacheExpiring(now, v.cacheWarmUntil) || now - v.lastActivityAt >= after)) {
+        // A working teammate's notification waits in the lead's queue until
+        // the teammate's step yields, and is taken then.
+        const sub = subagentsLastWrite(v.transcriptPath!, facts.agentSessionId);
+        if (sub !== null && now - sub < SUBAGENT_QUIET_MS) continue;
+        this.strandedSeen.set(v.id, newest);
+        console.log(`agentbox: ${v.id} (${v.title}) was never woken by ${stranded.length} finished background task${stranded.length === 1 ? "" : "s"}; nudging it after ${minutes(now - v.lastActivityAt)} quiet`);
+        void this.sendInPlace(v.id, strandedNudge(stranded)).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
+        continue;
+      }
+
+      // In the words crash recovery uses, which look back on it.
+      const work = this.work.get(v.id)?.replace(/ were working\b/, " are working");
+      if (!work || v.status !== "waiting" || facts.turnOpen) continue;
+      const spell = keepWarmPlan({ ...facts, now, warmUntil: v.cacheWarmUntil }, this.warmPings.get(v.id));
+      if (!spell) continue;
+      this.warmPings.set(v.id, spell);
+      console.log(`agentbox: keeping ${v.id} (${v.title}) warm (${spell.count}/${KEEP_WARM_MAX}) while ${work}`);
+      void this.sendInPlace(v.id, keepWarmNote(work)).catch((e) => console.error(`agentbox: keeping ${v.id} warm failed:`, e));
     }
+    for (const id of this.warmPings.keys()) if (!this.views.has(id)) this.warmPings.delete(id);
   }
 
   /** The notifications Claude never delivered to this session's running
@@ -1273,10 +1303,10 @@ export class Fleet extends EventEmitter {
 
   /**
    * Stop the process of every Claude session in our tmux that has sat idle
-   * for `idleMin` with nothing holding it up (src/core/park.ts says what
-   * holds). The session stays on the board as waiting, and a message or a
-   * resume brings it back — with the prompt cache cold after this long, a
-   * resume costs no more than keeping it would have.
+   * for `idleMin`, whose prompt cache has gone cold, with nothing holding it
+   * up (src/core/park.ts says what holds). The session stays on the board as
+   * waiting, and a message or a resume brings it back — with the cache cold,
+   * a resume costs no more than keeping it would have.
    *
    * The unit is the tmux session: a lead's teammates run as panes in it and
    * go with it, so every pane must be idle too. Nothing is stopped before
@@ -1301,6 +1331,8 @@ export class Fleet extends EventEmitter {
         v.provider === "claude" &&
         v.host === "tmux" &&
         v.tmux &&
+        // Still warm, its next message costs less with the process up.
+        now > v.cacheWarmUntil &&
         (this.liveStatus.get(v.id) === "waiting"
           ? now - v.lastActivityAt >= idleMs
           : this.liveStatus.get(v.id) === "running" && now - v.lastActivityAt >= Math.max(idleMs, STALE_TURN_MS)),
@@ -1448,7 +1480,7 @@ export class Fleet extends EventEmitter {
     if (panes.some((p) => p.clients > 0)) return "a terminal or browser is attached to it";
     const own = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
     if (!own?.facts) return "its transcript has not been read yet";
-    // Told first (`nudgeStranded`), parked only if it goes quiet again. One
+    // Told first (`keepWarm`), parked only if it goes quiet again. One
     // already nudged holds nothing: a nudge that never landed must not keep
     // the session up for good.
     const stranded = stoppedAtLimit(own.facts) ? [] : this.strandedOf(v);
@@ -1601,7 +1633,6 @@ export class Fleet extends EventEmitter {
       const launch = v.host === "external" && v.pid ? this.launchOf(v, v.pid) : null;
       if (launch === undefined) continue;
       const status = this.liveStatus.get(v.id) ?? v.status;
-      const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
       const entry: LiveEntry = {
         id: v.id,
         provider: v.provider,
@@ -1613,7 +1644,7 @@ export class Fleet extends EventEmitter {
         parent: v.parent,
         subagent: v.subagent ? { name: v.subagent.name, answerWaiting: v.subagent.answerWaiting } : null,
         lastActivityAt: v.lastActivityAt,
-        lastTurnAt: t?.facts?.lastTurnAt ?? null,
+        cacheWarmUntil: v.cacheWarmUntil,
         launch,
       };
       entries.push(entry);
@@ -1745,7 +1776,7 @@ export class Fleet extends EventEmitter {
     });
     // Resumes last, warmest cache first: a minute's wait can be the difference.
     const rank = { leave: 0, park: 1, revive: 2, resume: 3 } as const;
-    const warmth = (s: Step) => byId.get(s.id)!.lastTurnAt ?? byId.get(s.id)!.lastActivityAt;
+    const warmth = (s: Step) => byId.get(s.id)!.cacheWarmUntil ?? byId.get(s.id)!.lastActivityAt;
     steps.sort((a, b) => rank[a.action] - rank[b.action] || warmth(b) - warmth(a));
     const report: RecoveryReport = { at: now, cause, lastSeen, dryRun, steps, trouble: [] };
     if (dryRun) return report;
@@ -1950,7 +1981,7 @@ export class Fleet extends EventEmitter {
     if (rec.tmux && this.panes.has(rec.tmux)) return null;
     if (rec.agentSessionId && this.live.has(`${rec.provider}:${rec.agentSessionId}`)) return null;
     const f = t?.facts ?? (rec.facts as Partial<TranscriptFacts> | null);
-    const cold = this.movable.has(rec.provider) && now - (f?.lastTurnAt ?? f?.lastActivityAt ?? rec.lastActivityAt) > this.coldAfterMs;
+    const cold = this.movable.has(rec.provider) && now > cacheWarmUntil(f, rec.lastActivityAt, this.coldAfterMs);
     const parentRuns = !!rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none";
     return `${cold}|${parentRuns}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}`;
   }
@@ -2068,14 +2099,12 @@ export class Fleet extends EventEmitter {
     // odd bookkeeping line written in the same breath.
     const hit = f?.rateLimitHits?.at(-1) ?? null;
     const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? hit : null;
-    // The cache goes cold from the last model call, not the last line: a
-    // session watching background work writes notification lines for hours
-    // without calling the model once.
+    const warmUntil = cacheWarmUntil(f, lastActivityAt, this.coldAfterMs);
     const cold =
       this.movable.has(rec.provider) &&
       (live === "waiting" || live === "stopped") &&
       (host === "tmux" || host === "none") &&
-      now - (f?.lastTurnAt ?? lastActivityAt) > this.coldAfterMs;
+      now > warmUntil;
     return {
       id: rec.id,
       provider: rec.provider,
@@ -2100,6 +2129,7 @@ export class Fleet extends EventEmitter {
       tokens: f?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0 },
       claim: rec.claim,
       effort: rec.effort ?? null,
+      cacheWarmUntil: warmUntil,
       cold,
       limitHit,
       // The transcript's turn ended on the provider and nothing has followed
@@ -2310,7 +2340,6 @@ export class Fleet extends EventEmitter {
   /** Claims per account, as the balancer and the Accounts page see them. */
   claims(): Map<string, ClaimView[]> {
     const now = this.now();
-    const settings = getSettings().balancer;
     const inputs: ClaimInput[] = [];
     for (const s of this.views.values()) {
       // A closed session with a process still alive can still spend.
@@ -2324,12 +2353,12 @@ export class Fleet extends EventEmitter {
         accountId: s.accountId,
         title: s.title,
         claim: s.claim,
-        lastActivityAt: s.lastActivityAt,
+        warmUntil: s.cacheWarmUntil,
         running: s.status === "running" || s.status === "blocked",
         since: Math.max(s.startedAt, this.wokeAt.get(s.id) ?? 0),
       });
     }
-    return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), settings, now);
+    return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), now);
   }
 
   /** The account a home belongs to (itself unless it is a twin). */
@@ -3459,6 +3488,7 @@ function compactFacts(f: TranscriptFacts, transcriptSize: number): StoredFacts {
     prRepo: f.prRepo ?? null,
     lastActivityAt: f.lastActivityAt,
     lastTurnAt: f.lastTurnAt ?? null,
+    cacheTtlMs: f.cacheTtlMs ?? null,
     turnOpen: f.turnOpen,
     contextUsed: f.contextUsed,
     contextLimit: f.contextLimit,

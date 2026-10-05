@@ -713,7 +713,6 @@ function Detail({
         key={session.id}
         session={session}
         accounts={state.accounts}
-        claimIdleMin={state.settings.balancer.claimIdleMin}
         skills={skills}
         textareaRef={composerRef}
       />
