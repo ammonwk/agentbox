@@ -43,7 +43,7 @@ import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { shownImage } from "../core/images";
-import { DesktopError, openLocalFile } from "../core/desktop";
+import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
@@ -557,6 +557,9 @@ const provider = (v: unknown): ProviderId => {
   return v as ProviderId;
 };
 
+/** Requests from a browser on this machine, whose desktop is the server's. */
+const fromThisMachine = new WeakSet<Request>();
+
 const router = new Router(mapError)
   .add("GET", "/api/state", ({ url }) => stateResponse(url.searchParams.get("open") === "1"))
   .add("GET", "/api/prompts", () => json(fleet.openingPrompts(PROMPT_HISTORY)))
@@ -721,6 +724,13 @@ const router = new Router(mapError)
     const headers = { "content-type": img.mime, "cache-control": "private, no-cache", etag, "x-content-type-options": "nosniff" };
     if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
     return new Response(Bun.file(img.path), { headers });
+  })
+  // A browser on this machine; anywhere else the link opens where it was clicked.
+  .add("GET", "/api/desktop", ({ req }) => json({ backgroundTabs: fromThisMachine.has(req) && backgroundTabs() }))
+  .add("POST", "/api/open-url", async ({ req }) => {
+    if (!fromThisMachine.has(req)) throw new HttpError(403, "only a browser on this machine opens links on its desktop");
+    await openUrlBehind(requireString(await readBody(req), "url"));
+    return json(null);
   })
   .add("POST", "/api/sessions/:id/open-file", async ({ req, params }) => {
     const s = fleet.get(params.id!);
@@ -1257,6 +1267,8 @@ export async function startServer(): Promise<void> {
     const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
     const verdict = checkRequest(req, PORT, { upgrade, hosts });
     if (!verdict.ok) return fail(verdict.reason, 403);
+    // The loopback listener, or the tailnet one reached at this machine's own address.
+    if (!hosts || srv.requestIP(req)?.address === hosts[0]) fromThisMachine.add(req);
 
     if (url.pathname === "/ws") {
       if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);

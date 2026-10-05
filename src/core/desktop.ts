@@ -46,6 +46,22 @@ async function openInBrowser(url: string, background: boolean): Promise<void> {
   }
 }
 
+/** Whether a web link opened from this machine can go in behind the window
+ * in front: only chromectl can say which window, and that it isn't active. */
+export function backgroundTabs(): boolean {
+  return !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY) && !!Bun.which("chromectl");
+}
+
+export async function openUrlBehind(url: string): Promise<void> {
+  if (!/^https?:\/\//i.test(url) || !URL.canParse(url)) throw new DesktopError(400, "not a web link");
+  if (!backgroundTabs()) throw new DesktopError(503, "background tabs need chromectl on this machine's desktop");
+  try {
+    await launch(["chromectl", "open", "-w", "current", url]);
+  } catch (e) {
+    throw new DesktopError(502, `could not open the browser: ${(e as Error).message}`);
+  }
+}
+
 export async function openLocalFile(ref: string, cwd: string | null, background = false): Promise<{ path: string; action: "open" | "reveal" }> {
   const link = localFileLink(ref, true);
   if (!link) throw new DesktopError(400, "not a local file path");

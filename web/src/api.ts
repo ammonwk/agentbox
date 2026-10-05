@@ -192,6 +192,9 @@ export const api = {
   prompts: () => get<PromptHistoryEntry[]>("/api/prompts"),
   health: (refresh = false) => get<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
   voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
+  /** Whether web links can open behind the window in front, for this browser. */
+  desktop: () => get<{ backgroundTabs: boolean }>("/api/desktop"),
+  openUrl: (url: string) => post<null>("/api/open-url", { url }),
 
   // notifications (lib/push.ts)
   push: () => get<{ publicKey: string; devices: { endpoint: string; userAgent: string | null; createdAt: number }[] }>("/api/push"),
