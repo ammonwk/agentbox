@@ -1,6 +1,10 @@
+/** Pages and documents a browser shows itself: these open in a tab, keeping
+ * a query or fragment such as a PDF's `#page=3`. */
+export const BROWSER_FILE = /\.(?:html?|pdf)$/i;
+
 /** Local links in agent prose. Shared by the renderer and desktop opener;
  * no filesystem or browser globals here. Line references name the file too. */
-export function localFileLink(ref: string, explicit = false): { path: string; html: boolean; suffix: string } | null {
+export function localFileLink(ref: string, explicit = false): { path: string; browser: boolean; suffix: string } | null {
   let path = ref;
   let suffix = "";
   if (path.startsWith("file://")) {
@@ -29,6 +33,6 @@ export function localFileLink(ref: string, explicit = false): { path: string; ht
     return null;
   }
   if (!path || path.includes("\0")) return null;
-  const html = /\.html?$/i.test(path);
-  return { path, html, suffix: html ? suffix : "" };
+  const browser = BROWSER_FILE.test(path);
+  return { path, browser, suffix: browser ? suffix : "" };
 }
