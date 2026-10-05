@@ -194,6 +194,18 @@ export function tookWith(e: LiveEntry, all: readonly LiveEntry[], tookAll: boole
 }
 
 /**
+ * Is the process still running a session the one the crash took, on its way
+ * out? A tmux server killed outright hangs up every pane, and an agent
+ * mid-turn takes seconds to go: seen in that gap it has a process and no
+ * pane, which is how a session in another terminal looks. One that ran in
+ * our tmux, on a process older than the snapshot, was not picked up again —
+ * it has not finished dying.
+ */
+export function leftover(e: LiveEntry, procStartedAt: number, lastSeen: number): boolean {
+  return e.host === "tmux" && procStartedAt <= lastSeen;
+}
+
+/**
  * Your user's systemd (`systemd --user`), the manager every agent, terminal
  * and agentbox itself run under. It is stopped at logout — or by a stray
  * SIGTERM — and everything under it goes with it.

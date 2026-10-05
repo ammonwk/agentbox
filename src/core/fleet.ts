@@ -85,6 +85,7 @@ import {
   crashCause,
   decide,
   lastReport,
+  leftover,
   managerIncarnation,
   MAX_AUTO_RESUME_MS,
   parkedWhy,
@@ -1643,10 +1644,43 @@ export class Fleet extends EventEmitter {
     const rec = getSessionRecord(e.id);
     if (!rec || rec.archivedAt || rec.parkedAt) return false;
     const v = this.views.get(e.id);
-    if (v && v.host !== "none") return false;
+    if (v && v.host !== "none" && !this.leftoverOf(e, lastSeen)) return false;
     if ((this.touched.get(e.id) ?? 0) > lastSeen - 5_000) return false;
     if (rec.tmux && (this.killedAt.get(rec.tmux) ?? 0) > lastSeen - 5_000) return false;
     return true;
+  }
+
+  /** The process the crash left a session with, still exiting (recovery.ts
+   *  `leftover`); null when it is gone, or the session runs again. */
+  private leftoverOf(e: LiveEntry, lastSeen: number): number | null {
+    const v = this.views.get(e.id);
+    if (v?.host !== "external" || !v.pid) return null;
+    const started = startedAtOf(v.pid);
+    return started !== null && leftover(e, started, lastSeen) ? v.pid : null;
+  }
+
+  /** Wait until the process the crash left a session with is gone, so the
+   *  resume is the only one writing its transcript. Its pane is gone and
+   *  nothing can reach it, so one that lingers is told to go. */
+  private async outlast(e: LiveEntry, lastSeen: number): Promise<void> {
+    const pid = this.leftoverOf(e, lastSeen);
+    if (!pid) return;
+    const start = this.now();
+    let termed = false;
+    while (isAlive(pid)) {
+      if (!termed && this.now() - start > 5_000) {
+        termed = true;
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* gone */
+        }
+      }
+      if (this.now() - start > 20_000) throw new FleetError(409, `its old process (${pid}) did not exit within 20s`);
+      await Bun.sleep(300);
+    }
+    // A pass already under way may have seen it alive; the next one has not.
+    for (let i = 0; i < 2 && this.views.get(e.id)?.host !== "none"; i++) await this.tick();
   }
 
   /** Decide what to do with each of `dead`, and do it unless `dryRun`. */
@@ -1699,6 +1733,7 @@ export class Fleet extends EventEmitter {
       const e = byId.get(s.id)!;
       const revived = dead.filter((c) => c.parent === e.id && steps.find((x) => x.id === c.id)?.action === "revive");
       try {
+        await this.outlast(e, lastSeen);
         await this.resume(s.id, resumePrompt(e, s.why, cause, lastSeen, revived));
         s.outcome = "resumed";
         const w = this.watches.get(s.id);
