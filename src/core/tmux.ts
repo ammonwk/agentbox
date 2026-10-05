@@ -136,21 +136,28 @@ function writeLauncher(name: string, cmd: string[]): string {
  * own. Started plainly, the server lands in the cgroup of whatever started it
  * — the agentbox server's scope, whose `systemctl stop` then takes the tmux
  * server and every agent with it (each pane is in a scope of its own, but
- * loses its terminal when the server dies). Without systemd, or if the unit
- * name is still held by a scope being torn down, tmux runs plainly.
+ * loses its terminal when the server dies). The scope is `agentbox-tmux`
+ * while that name is free: a tmux server that was killed leaves it held for
+ * as long as anything one of its panes started is still running, and then the
+ * scope goes unnamed (`run-….scope`) rather than not being one. Only without
+ * systemd does tmux run plainly.
  */
 function startServer(args: string[]): TmuxResult {
-  let p: ReturnType<typeof Bun.spawnSync>;
-  try {
-    p = Bun.spawnSync(["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-tmux", "-p", "CPUWeight=1000", "tmux", "-L", tmuxSocket(), ...args], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  } catch {
-    return tmux(args);
-  }
-  const r = { code: p.exitCode ?? -1, stdout: p.stdout?.toString() ?? "", stderr: p.stderr?.toString() ?? "" };
+  const scoped = (unit: string[]): TmuxResult | null => {
+    try {
+      const p = Bun.spawnSync(["systemd-run", "--user", "--scope", "--collect", "--quiet", ...unit, "-p", "CPUWeight=1000", "tmux", "-L", tmuxSocket(), ...args], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      return { code: p.exitCode ?? -1, stdout: p.stdout?.toString() ?? "", stderr: p.stderr?.toString() ?? "" };
+    } catch {
+      return null;
+    }
+  };
+  let r = scoped(["--unit=agentbox-tmux"]);
+  if (r && r.code !== 0 && /already loaded|already exists/i.test(r.stderr)) r = scoped([]);
+  if (!r) return tmux(args);
   if (r.code !== 0 && /transient|systemd|Failed to connect/i.test(r.stderr)) return tmux(args);
   return r;
 }

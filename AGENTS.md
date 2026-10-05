@@ -31,7 +31,9 @@ starts the service when the server is down, and the old scope only where the
 service is not installed.
 
 The tmux server runs in a scope of its own, `agentbox-tmux.scope`
-(`src/core/tmux.ts` starts it through `systemd-run`). This is what makes a
+(`src/core/tmux.ts` starts it through `systemd-run`) — or an unnamed
+`run-….scope` after a tmux server was killed, whose name stays held while
+anything its panes started still runs. This is what makes a
 restart safe: tmux puts each pane in a `tmux-spawn-*.scope` that is `PartOf`
 whatever unit the tmux server was in when the pane started, so a tmux server
 living in the server's own unit meant stopping the server stopped every
