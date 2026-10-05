@@ -7,7 +7,7 @@ import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
-import { loadDraft, saveDraft } from "./drafts";
+import { draftSent, loadDraft, onDraftSent, saveDraft } from "./drafts";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { echoSent } from "./echo";
@@ -100,11 +100,22 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
   useEffect(() => {
     saveDraft(session.id, text, savedImages);
   }, [session.id, text, savedKey]);
+  // A send that began in a composer since left (this one opened on its draft) has landed.
+  useEffect(
+    () =>
+      onDraftSent((id, sent) => {
+        if (id !== session.id || sent !== text) return;
+        setText("");
+        images.clear();
+      }),
+    [session.id, text],
+  );
 
   async function submit() {
     if (busy) return;
     if (mode.kind === "send" && !text.trim()) return;
     setSpoke(false);
+    const sent = text;
     const ok = await run(async () => {
       const body = (await images.resolve(text)).trim();
       const side = mode.kind === "send" && session.provider === "claude" ? BTW.exec(body) : null;
@@ -118,6 +129,7 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
     if (ok) {
       setText("");
       images.clear();
+      draftSent(session.id, sent);
     }
   }
 

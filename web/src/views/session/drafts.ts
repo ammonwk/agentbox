@@ -2,7 +2,8 @@
  *  somewhere else — another session, another page, or a reload. The
  *  new-session dialog keeps its draft the same way (`agentbox.newSession`);
  *  this is that, per session. Cleared by sending: an empty draft deletes
- *  itself. */
+ *  itself, and `draftSent` takes it out when the composer that sent it is
+ *  no longer there to empty. */
 
 import type { SavedAttachment } from "../../attachments";
 
@@ -47,4 +48,24 @@ export function saveDraft(id: string, text: string, images: SavedAttachment[]): 
   } catch {
     // private mode or full: forgetting is fine
   }
+}
+
+const SENT = "agentbox:draft-sent";
+
+/** `text` was sent: its draft goes, whoever holds it. The server answers a
+ *  send only once the pane has taken it, seconds on a busy machine, and a
+ *  composer left by then cannot empty itself; one opened in the meantime
+ *  started from the draft and is told to. */
+export function draftSent(id: string, text: string): void {
+  if (readAll()[id]?.text === text) saveDraft(id, "", []);
+  dispatchEvent(new CustomEvent(SENT, { detail: { id, text } }));
+}
+
+export function onDraftSent(fn: (id: string, text: string) => void): () => void {
+  const h = (e: Event) => {
+    const d = (e as CustomEvent<{ id: string; text: string }>).detail;
+    fn(d.id, d.text);
+  };
+  addEventListener(SENT, h);
+  return () => removeEventListener(SENT, h);
 }
