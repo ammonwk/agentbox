@@ -418,6 +418,17 @@ export function strandedNudgeAfter(parkIdleMin: number): number {
   return Math.max(60_000, Math.min(STRANDED_NUDGE_MS, parkIdleMin * 60_000 - STRANDED_LEAD_MS));
 }
 
+/** Did the session's last try at a turn hit a usage limit, with no answer
+ *  since? A notification lines up behind the limit like anything else, and
+ *  telling the session about it only meets the limit again: Claude does not
+ *  retry on its own, and moving or continuing it is the limit banner's. The
+ *  newest model call, not the newest line: notifications queued after the
+ *  hit move `lastActivityAt` on but answer nothing. */
+export function stoppedAtLimit(facts: { rateLimitHits: { at: number }[]; lastTurnAt?: number | null }): boolean {
+  const hit = facts.rateLimitHits.at(-1);
+  return !!hit && hit.at > (facts.lastTurnAt ?? 0);
+}
+
 const STRANDED_NUDGE_HEAD = "[agentbox: ";
 const STRANDED_NUDGE_MARK = "finished while this session was idle, and the notification never woke it:";
 

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeReader } from "../providers/claude";
-import { strandedNudge, strandedNudgeAfter } from "../park";
+import { stoppedAtLimit, strandedNudge, strandedNudgeAfter } from "../park";
 
 const dir = mkdtempSync(join(tmpdir(), "agentbox-claude-queue-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -93,6 +93,15 @@ describe("the nudge for stranded notifications", () => {
     const text = strandedNudge([{ text: note }]);
     expect(text).toContain('- Background command "Wait for PR checks" completed (exit code 0) (output: /tmp/tasks/b1.output)');
     expect(text.startsWith("[agentbox: a background task finished")).toBe(true);
+  });
+
+  test("is not sent to a session whose last try hit a usage limit", () => {
+    // Stopped at the limit, with a notification queued after it.
+    expect(stoppedAtLimit({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: 1_000 })).toBe(true);
+    expect(stoppedAtLimit({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: null })).toBe(true);
+    // Continued since: a model call answered after the hit.
+    expect(stoppedAtLimit({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: 3_000 })).toBe(false);
+    expect(stoppedAtLimit({ rateLimitHits: [], lastTurnAt: 3_000 })).toBe(false);
   });
 
   test("comes at 55 minutes, or five before parking when that is sooner", () => {

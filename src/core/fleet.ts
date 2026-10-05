@@ -71,6 +71,7 @@ import {
   normalCommand,
   shellHold,
   STALE_TURN_MS,
+  stoppedAtLimit,
   strandedNudge,
   strandedNudgeAfter,
   SUBAGENT_QUIET_MS,
@@ -809,7 +810,8 @@ export class Fleet extends EventEmitter {
    * gets one message naming what finished, and is not parked before it has
    * (`parkHold`). Once per notification — the nudge in the transcript clears
    * them, so a restart does not repeat it — and not while a teammate is
-   * still writing.
+   * still writing. Not to a session stopped at a usage limit
+   * (`stoppedAtLimit`): the nudge would only meet the limit again.
    */
   private nudgeStranded(now: number, parkIdleMin: number): void {
     const after = strandedNudgeAfter(parkIdleMin);
@@ -819,12 +821,13 @@ export class Fleet extends EventEmitter {
       if (v.status !== "waiting" && v.status !== "running") continue;
       if (now - v.lastActivityAt < after) continue;
       const facts = v.transcriptPath ? this.tracked.get(v.transcriptPath)?.facts : null;
+      if (!facts || stoppedAtLimit(facts)) continue;
       const stranded = this.strandedOf(v);
       const newest = stranded.at(-1)?.at;
       if (newest === undefined || this.strandedSeen.get(v.id) === newest) continue;
       // A working teammate's notification waits in the lead's queue until the
       // teammate's step yields, and is taken then.
-      const sub = subagentsLastWrite(v.transcriptPath!, facts!.agentSessionId);
+      const sub = subagentsLastWrite(v.transcriptPath!, facts.agentSessionId);
       if (sub !== null && now - sub < SUBAGENT_QUIET_MS) continue;
       this.strandedSeen.set(v.id, newest);
       console.log(`agentbox: ${v.id} (${v.title}) was never woken by ${stranded.length} finished background task${stranded.length === 1 ? "" : "s"}; nudging it after ${minutes(now - v.lastActivityAt)} quiet`);
@@ -1448,7 +1451,7 @@ export class Fleet extends EventEmitter {
     // Told first (`nudgeStranded`), parked only if it goes quiet again. One
     // already nudged holds nothing: a nudge that never landed must not keep
     // the session up for good.
-    const stranded = this.strandedOf(v);
+    const stranded = stoppedAtLimit(own.facts) ? [] : this.strandedOf(v);
     if (stranded.length > 0 && this.strandedSeen.get(v.id) !== stranded.at(-1)!.at) {
       return `${stranded.length} finished background task${stranded.length === 1 ? "" : "s"} never woke it; it is told first`;
     }
