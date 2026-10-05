@@ -725,7 +725,7 @@ const router = new Router(mapError)
   .add("POST", "/api/sessions/:id/open-file", async ({ req, params }) => {
     const s = fleet.get(params.id!);
     const body = await readBody(req);
-    return json(await openLocalFile(requireString(body, "path"), s.cwd || null));
+    return json(await openLocalFile(requireString(body, "path"), s.cwd || null, body.background === true));
   })
   .add("POST", "/api/sessions/:id/adopt", async ({ params }) => {
     const s = await fleet.adopt(params.id!);

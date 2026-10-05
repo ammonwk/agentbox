@@ -24,15 +24,16 @@ async function output(argv: string[]): Promise<string> {
   return out.trim();
 }
 
-/** A tab in the browser window the user last had, brought forward. Chrome
+/** A tab in the browser window the user last had, brought forward unless
+ * `background`, so several can be opened from the app in a row. Chrome
  * given a URL by another program opens a new window whenever the window it
  * used last can't hold tabs, which is always the case for a click in the
  * installed app; chromectl's extension names the window instead. Without
  * it the default browser gets the URL, so a PDF isn't left to a viewer. */
-async function openInBrowser(url: string): Promise<void> {
+async function openInBrowser(url: string, background: boolean): Promise<void> {
   if (Bun.which("chromectl")) {
     try {
-      return await launch(["chromectl", "open", "--focus", url]);
+      return await launch(["chromectl", "open", ...(background ? ["-w", "current"] : ["--focus"]), url]);
     } catch {
       // Extension not loaded: fall through to launching the browser.
     }
@@ -45,7 +46,7 @@ async function openInBrowser(url: string): Promise<void> {
   }
 }
 
-export async function openLocalFile(ref: string, cwd: string | null): Promise<{ path: string; action: "open" | "reveal" }> {
+export async function openLocalFile(ref: string, cwd: string | null, background = false): Promise<{ path: string; action: "open" | "reveal" }> {
   const link = localFileLink(ref, true);
   if (!link) throw new DesktopError(400, "not a local file path");
   let path = link.path;
@@ -71,7 +72,7 @@ export async function openLocalFile(ref: string, cwd: string | null): Promise<{ 
   const browser = !directory && BROWSER_FILE.test(path);
   try {
     if (browser) {
-      await openInBrowser(uri + link.suffix);
+      await openInBrowser(uri + link.suffix, background);
     } else if (directory) {
       await launch(["xdg-open", uri]);
     } else {

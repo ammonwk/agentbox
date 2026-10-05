@@ -215,7 +215,9 @@ export const api = {
   patchSession: (id: string, patch: { label?: string | null; parent?: string | null }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
-  openFile: (id: string, path: string) => post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path }),
+  /** `background` leaves a browser tab behind the window in front (Ctrl-click). */
+  openFile: (id: string, path: string, background = false) =>
+    post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path, background }),
   keys: (id: string, keys: string[]) => post<unknown>(`/api/sessions/${enc(id)}/keys`, { keys }),
   /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
   answer: (id: string, question: string, answers: AskAnswer[]) => post<unknown>(`/api/sessions/${enc(id)}/answer`, { question, answers }),
