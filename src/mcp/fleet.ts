@@ -18,6 +18,7 @@ import { z } from "zod";
 import { VERSION } from "../version";
 import { apiClient } from "../client";
 import type { AppState, Placement, Session, TimelineEvent, TimelinePage } from "../core/types";
+import { retryClock } from "../core/attention";
 
 const text = (body: string) => ({ content: [{ type: "text" as const, text: body }] });
 
@@ -54,7 +55,7 @@ export function brief(s: Session & { attention?: { reason: string } }, accountLa
         : s.turnError.kind === "transient"
           ? `stopped on an error (${clip(s.turnError.detail, 120)}) — send a message to retry`
           : `stopped on an error a retry cannot fix: ${clip(s.turnError.detail, 120)}`;
-    lines.push(`  ! ${why}`);
+    lines.push(`  ! ${why}${s.autoResume ? `; agentbox retries it ${retryClock(s.autoResume.at, now)}` : ""}`);
   }
   if (s.lastMessage) lines.push(`  said: ${clip(s.lastMessage, 220)}`);
   return lines.join("\n");

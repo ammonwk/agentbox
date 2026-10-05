@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
-import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
+import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
 import {
   AccountChip,
   ContextBar,
@@ -26,7 +26,7 @@ import { useIsNarrow } from "./useIsNarrow";
 import { isInstalledApp } from "../../lib/phone";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
-import { ago } from "../../lib/format";
+import { ago, fmtRetryAt } from "../../lib/format";
 import { outstandingOf, sortWindows } from "../../lib/usage";
 import { useDismiss, useFloating } from "../newsession/popover";
 import { buildSessionIndex } from "../../lib/sessionrefs";
@@ -883,10 +883,14 @@ function TitleEdit({ session }: { session: SessionRow }) {
 /** A turn the provider ended — the output cap cut its reply off, or an API
  *  error stopped it — so it sits at the prompt without meaning to. Retryable
  *  kinds get the button that sends the message the CLI asks for; a fatal one
- *  only says what is wrong, since a retry cannot fix it. */
+ *  only says what is wrong, since a retry cannot fix it. When the fleet will
+ *  retry it by itself it says when; the button, or anything you send, does it
+ *  now instead. */
 function TurnErrorLine({ session }: { session: SessionRow }) {
   const { run, busy, error, clear } = useAction();
+  const now = useNow(15_000);
   const err = session.turnError!;
+  const auto = session.autoResume;
   const retryable = err.kind !== "fatal";
   const nudge =
     err.kind === "output-cap"
@@ -904,7 +908,8 @@ function TurnErrorLine({ session }: { session: SessionRow }) {
       <span>
         {said}
         {session.lastActivityAt ? ` ${ago(err.at || session.lastActivityAt)}` : ""}
-        {err.kind !== "output-cap" ? `: ${err.detail}` : " — it stopped without meaning to."}
+        {err.kind !== "output-cap" ? `: ${err.detail}${auto && !/[.!?]$/.test(err.detail) ? "." : ""}` : " — it stopped without meaning to."}
+        {auto ? <AutoResumeNote auto={auto} now={now} what={err.kind === "output-cap" ? "continues it" : "retries it"} /> : null}
         {error ? (
           <>
             {" "}
@@ -917,9 +922,21 @@ function TurnErrorLine({ session }: { session: SessionRow }) {
       </span>
       {retryable ? (
         <Button size="sm" variant="ghost" icon={Icon.play} loading={busy} onClick={() => void run(() => api.send(session.id, nudge))}>
-          {err.kind === "output-cap" ? "Continue" : "Retry"}
+          {auto ? (err.kind === "output-cap" ? "Continue now" : "Retry now") : err.kind === "output-cap" ? "Continue" : "Retry"}
         </Button>
       ) : null}
     </div>
+  );
+}
+
+/** " agentbox retries it at 1:51 AM (in 4m), try 2 of 3 — or send it something yourself." */
+export function AutoResumeNote({ auto, now, what }: { auto: NonNullable<SessionRow["autoResume"]>; now: number; what: string }) {
+  const nth = auto.of === 1 ? "" : auto.of === null ? (auto.attempt > 1 ? `, try ${auto.attempt}` : "") : `, try ${auto.attempt} of ${auto.of}`;
+  return (
+    <span className="sx-auto-resume">
+      {" "}
+      agentbox {what} {fmtRetryAt(auto.at, now)}
+      {nth} — or send it something yourself.
+    </span>
   );
 }

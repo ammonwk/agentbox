@@ -105,6 +105,7 @@ import { agentboxHome } from "./paths";
 import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
 import { weeklyWindow } from "./balancer";
 import { statedWaitMs } from "./retrywait";
+import { retryClock } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
@@ -322,9 +323,10 @@ export class Fleet extends EventEmitter {
   private movable = new Set<ProviderId>();
   /** Limit hits already acted on (`continueStalled`): session → the hit's time. */
   private stallsSeen = new Map<string, number>();
-  /** Sessions nudged past an error screen (`nudgeErrored`): the spell's start
-   *  and how many nudges it has had. */
-  private nudges = new Map<string, { firstAt: number; tries: number }>();
+  /** Sessions nudged past an error (`nudgeErrored`): the spell's last nudge
+   *  and how many it has had. A spell ends an hour after its last nudge, or
+   *  when a turn ends cleanly. */
+  private nudges = new Map<string, { lastAt: number; tries: number }>();
   private nextNudgeAt = 0;
   /** Stranded notifications already nudged (`nudgeStranded`): session → the
    *  newest one's time. */
@@ -724,44 +726,76 @@ export class Fleet extends EventEmitter {
    * the fleet at a time — several sessions retaking one rate-limited account
    * in lockstep is what stuck them — a few per spell, then it is yours. An
    * error that names its own wait (`retryAfterMs`: a model at capacity, 10
-   * minutes) is left that long instead, and retried at that pace for as long
-   * as it keeps coming back: capacity returns by itself, the refused request
-   * cost nothing, and nothing you could do would bring it back sooner. A
-   * nudge types where the session is, however cold: only you move it.
+   * minutes) backs off up to it — 1, 2, 5 minutes, then that — and is retried
+   * for as long as it keeps coming back: capacity returns by itself, often
+   * within a minute or two, the refused request cost nothing, and nothing you
+   * could do would bring it back sooner. A nudge types where the session is,
+   * however cold: only you move it.
    */
   private nudgeErrored(now: number): void {
     if (now < this.nextNudgeAt) return;
     for (const v of this.views.values()) {
-      if (v.host !== "tmux" || this.busy.has(v.id)) continue;
-      // A transcript error persists, so only act while it is fresh — a
-      // restart does not retry what died hours before it was watching.
-      const wait = v.status === "waiting" ? v.turnError?.retryAfterMs : undefined;
-      const err = v.status === "waiting" && v.turnError && now - v.turnError.at <= STALL_FRESH_MS + (wait ?? 0) ? v.turnError : null;
-      const screen = v.status === "blocked" ? this.blocked.get(v.id) : undefined;
-      const onScreen = screen === "rate limit" || screen === "error";
-      // An error screen that names its reset is left until then, however
-      // long: every earlier retry is refused the same way. Quiet a while
-      // either way, so the screen a nudge has not yet redrawn is not nudged.
-      const until = onScreen ? this.screenWaitUntil(v) : null;
-      if (now < Math.max(until ?? 0, v.lastActivityAt + (wait ?? NUDGE_QUIET_MS))) continue;
-      const retryable = onScreen ? screen : err && err.kind !== "fatal" ? err.kind : null;
-      if (!retryable) continue;
-      const prev = this.nudges.get(v.id);
-      const spell = prev && now - prev.firstAt < NUDGE_SPELL_MS ? prev : { firstAt: now, tries: 0 };
-      const paced = !!err?.retryAfterMs || until !== null;
-      if (spell.tries >= NUDGE_MAX_TRIES && !paced) continue;
-      this.nudges.set(v.id, { firstAt: spell.firstAt, tries: spell.tries + 1 });
+      const plan = this.nudgePlan(v, now);
+      if (!plan || now < plan.at) continue;
+      this.nudges.set(v.id, { lastAt: now, tries: plan.attempt });
       this.nextNudgeAt = now + NUDGE_STAGGER_MS;
+      const err = plan.screen ? null : v.turnError!;
       const message =
         err?.kind === "output-cap"
           ? "[agentbox: your last reply was cut off by the output token limit. Continue where you left off.]"
           : "[agentbox: your turn stopped on an error; this message retries it. Carry on where you left off.]";
       console.log(
-        `agentbox: ${v.id} (${v.title}) ${screen ? (screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}${err!.retryAfterMs ? ` (${oneLine(err!.detail, 80)})` : ""}`}; nudging it on (${spell.tries + 1}${paced ? "" : `/${NUDGE_MAX_TRIES}`})`,
+        `agentbox: ${v.id} (${v.title}) ${plan.screen ? (plan.screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}${err!.retryAfterMs ? ` (${oneLine(err!.detail, 80)})` : ""}`}; nudging it on (${plan.attempt}${plan.of === null ? "" : `/${plan.of}`})`,
       );
       void this.sendInPlace(v.id, message).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
       return;
     }
+  }
+
+  /**
+   * When `nudgeErrored` will nudge this session, and which try that is; null
+   * when it will not. Asked of every view each pass, so the board says when;
+   * a pass that finds the session's turn ended cleanly since its last nudge
+   * ends the spell there, so the next error starts the backoff over.
+   */
+  private nudgePlan(v: Session, now: number): { at: number; attempt: number; of: number | null; screen: string | null } | null {
+    let prev = this.nudges.get(v.id);
+    if (prev && v.status === "waiting" && !v.turnError && v.lastActivityAt > prev.lastAt) {
+      this.nudges.delete(v.id);
+      prev = undefined;
+    }
+    if (v.host !== "tmux" || this.busy.has(v.id)) return null;
+    const tries = prev && now - prev.lastAt < NUDGE_SPELL_MS ? prev.tries : 0;
+    const cap = v.status === "waiting" ? v.turnError?.retryAfterMs : undefined;
+    const wait = cap ? Math.min(cap, PACED_BACKOFF_MS[tries] ?? cap) : undefined;
+    // A transcript error persists, so only act while it is fresh — a
+    // restart does not retry what died hours before it was watching.
+    const err = v.status === "waiting" && v.turnError && now - v.turnError.at <= STALL_FRESH_MS + (wait ?? 0) ? v.turnError : null;
+    const screen = v.status === "blocked" ? this.blocked.get(v.id) : undefined;
+    const onScreen = screen === "rate limit" || screen === "error";
+    if (!(onScreen || (err && err.kind !== "fatal"))) return null;
+    // An error screen that names its reset is left until then, however
+    // long: every earlier retry is refused the same way. Quiet a while
+    // either way, so the screen a nudge has not yet redrawn is not nudged.
+    const until = onScreen ? this.screenWaitUntil(v) : null;
+    const paced = !!wait || until !== null;
+    if (tries >= NUDGE_MAX_TRIES && !paced) return null;
+    return {
+      at: Math.max(until ?? 0, v.lastActivityAt + (wait ?? NUDGE_QUIET_MS), this.nextNudgeAt),
+      attempt: tries + 1,
+      of: paced ? null : NUDGE_MAX_TRIES,
+      screen: onScreen ? screen! : null,
+    };
+  }
+
+  /** When the fleet will tell this session to go on by itself, if it will:
+   *  after its 5-hour reset (`continueStalled`), or past an error
+   *  (`nudgeErrored`). */
+  private autoResumeOf(v: Session, now: number): Session["autoResume"] {
+    const reset = this.resumeAfterReset.get(v.id);
+    if (reset && v.limitHit?.at === reset.hitAt && v.status === "waiting" && v.host === "tmux") return { at: reset.at, attempt: 1, of: 1 };
+    const plan = this.nudgePlan(v, now);
+    return plan && { at: plan.at, attempt: plan.attempt, of: plan.of };
   }
 
   /**
@@ -1875,6 +1909,7 @@ export class Fleet extends EventEmitter {
       if (key !== null && view) this.resting.set(rec.id, { rec, facts: t?.facts ?? null, key, view });
       else this.resting.delete(rec.id);
       if (!view) continue;
+      view.autoResume = this.autoResumeOf(view, now);
       seen.add(rec.id);
       // Running again, however it got there (a resume here, or `claude
       // --resume` in some terminal): no longer parked.
@@ -2070,6 +2105,7 @@ export class Fleet extends EventEmitter {
       // what died hours ago.
       turnError:
         f?.turnError && (live === "waiting" || live === "stopped") && f.turnError.at >= lastActivityAt - 60_000 ? f.turnError : null,
+      autoResume: null,
       // Only while the dialog is up: a call recorded but not yet answered is
       // also what a session interrupted mid-question leaves behind.
       question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,
@@ -2230,12 +2266,9 @@ export class Fleet extends EventEmitter {
 
   blockedReason(id: string): string | null {
     const why = this.blocked.get(id) ?? null;
-    const v = this.views.get(id);
-    // An error screen with a stated reset is the fleet's to retry: say when.
-    const until = v && (why === "rate limit" || why === "error") ? this.screenWaitUntil(v) : null;
-    if (until !== null && until > Date.now()) {
-      return `${why} — agentbox retries it at ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
-    }
+    // An error screen the fleet will retry: say when.
+    const at = why ? this.views.get(id)?.autoResume?.at : undefined;
+    if (at) return `${why} — agentbox retries it ${retryClock(at)}`;
     return why;
   }
 
@@ -3209,6 +3242,9 @@ const NUDGE_STAGGER_MS = 90_000;
 const NUDGE_MAX_TRIES = 3;
 /** How long a spell lasts: after this quiet, the count starts over. */
 const NUDGE_SPELL_MS = 60 * 60_000;
+/** The waits before an error that names its own (`retryAfterMs`) is retried,
+ *  by try, each capped at that; past the end of this, that wait. */
+const PACED_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000];
 
 const BUSY_CORES_PER_AGENT = 0.1;
 

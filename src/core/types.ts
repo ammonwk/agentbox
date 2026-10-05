@@ -424,12 +424,20 @@ export interface Session {
    *   output-cap — the reply was cut off mid-write; a message continues it
    *   transient  — a server/network failure; a retry has a real chance
    *   fatal      — a retry cannot fix it (context too long, model gone, login)
-   * `retryAfterMs`, when set, is how long the fleet leaves it before each
-   * retry (a model at capacity: 10 minutes), and it keeps retrying at that
-   * pace until the error clears. Null while the turn is open or a prompt has
-   * followed.
+   * `retryAfterMs`, when set, is the longest the fleet leaves it between
+   * retries (a model at capacity: 10 minutes; it backs off up to that, from a
+   * minute), and it keeps retrying until the error clears. Null while the
+   * turn is open or a prompt has followed.
    */
   turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string; retryAfterMs?: number } | null;
+  /**
+   * When the fleet will tell it to go on by itself — past an error, a rate
+   * limit or a 5-hour reset (`Fleet.autoResumeOf`) — and which try that is:
+   * `attempt` of `of`, `of` null when it keeps trying until it works. About:
+   * nudges go out one at a time across the fleet. Anything you send it first
+   * does the same and calls this off. Null when nothing will.
+   */
+  autoResume: { at: number; attempt: number; of: number | null } | null;
   /** The AskUserQuestion dialog it is showing, while it shows one: answer it
    *  with `POST /api/sessions/:id/answer`. */
   question: { id: string; questions: AskQuestion[] } | null;

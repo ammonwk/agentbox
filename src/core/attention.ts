@@ -22,7 +22,7 @@ export function attentionOf(s: Session, blockedReason: string | null = null): At
               ? "finished; its answer waits for its caller to collect"
               : "idle; its caller's turn"
             : s.turnError
-              ? turnErrorReason(s.turnError, s.host === "external")
+              ? turnErrorReason(s.turnError, s.host === "external") + (s.autoResume ? `; agentbox retries it ${retryClock(s.autoResume.at)}` : "")
               : s.host === "external"
                 ? "your turn (in another terminal)"
                 : "your turn",
@@ -53,6 +53,12 @@ function turnErrorReason(e: NonNullable<Session["turnError"]>, elsewhere: boolea
     case "fatal":
       return `stopped on an error a retry cannot fix: ${oneLine(e.detail, 90)}${at}`;
   }
+}
+
+/** When the fleet's next try is, for a reason line: "at 1:51 AM", or "shortly"
+ *  once that is past and it waits its turn behind other sessions' nudges. */
+export function retryClock(at: number, now = Date.now()): string {
+  return at <= now ? "shortly" : `at ${new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
 function oneLine(s: string, n: number): string {

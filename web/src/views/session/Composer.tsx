@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
-import { ago, api, fmtTokens } from "../../api";
+import { ago, api, fmtRetryAt, fmtTokens, useNow } from "../../api";
 import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
@@ -390,6 +390,7 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
   /** Phones show one line and the button; the why and the picker are behind this. */
   const [more, setMore] = useState(false);
   const hit = session.limitHit!;
+  const now = useNow(15_000);
   useEffect(() => {
     let cancelled = false;
     setChoice("auto");
@@ -433,6 +434,12 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
           {short.charAt(0).toUpperCase() + short.slice(1)} · {ago(hit.at)}
         </strong>
         <span className="cmp-limit-detail">{hit.detail}</span>
+        {session.autoResume ? (
+          <span className="cmp-limit-auto">
+            agentbox tells it to carry on here {fmtRetryAt(session.autoResume.at, now)}, a minute after the window resets — or send it
+            something yourself.
+          </span>
+        ) : null}
         {error ? (
           <span className="cmp-limit-err">
             {error}{" "}
