@@ -43,6 +43,7 @@ import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { shownImage } from "../core/images";
+import { DesktopError, openLocalFile } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
@@ -544,6 +545,7 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
+  if (e instanceof DesktopError) return new HttpError(e.status, e.message);
   if (e instanceof FleetError || e instanceof AccountError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }
@@ -719,6 +721,11 @@ const router = new Router(mapError)
     const headers = { "content-type": img.mime, "cache-control": "private, no-cache", etag, "x-content-type-options": "nosniff" };
     if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
     return new Response(Bun.file(img.path), { headers });
+  })
+  .add("POST", "/api/sessions/:id/open-file", async ({ req, params }) => {
+    const s = fleet.get(params.id!);
+    const body = await readBody(req);
+    return json(await openLocalFile(requireString(body, "path"), s.cwd || null));
   })
   .add("POST", "/api/sessions/:id/adopt", async ({ params }) => {
     const s = await fleet.adopt(params.id!);

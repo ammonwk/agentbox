@@ -1613,6 +1613,13 @@ a.tl-sender:hover .tl-sender-name {
 }
 .sx-md pre code { background: none; border: none; padding: 0; }
 .sx-md code.sx-fileref { color: var(--muted); cursor: default; }
+.sx-md a.sx-filelink { color: var(--muted); text-decoration: underline dotted; }
+.sx-md a.sx-filelink:hover { color: var(--accent); }
+.sx-filelink > svg { display: inline; vertical-align: -2px; margin-right: 4px; opacity: .7; }
+.sx-md a.sx-filelink code { color: inherit; cursor: pointer; }
+.sx-md a.sx-desktoplink code { color: inherit; cursor: pointer; }
+.sx-filelink[aria-disabled="true"], .sx-desktoplink[aria-disabled="true"] { cursor: progress; }
+.sx-filelink-error { color: var(--danger); font-size: 12px; }
 .sx-md blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .sx-md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .sx-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }

@@ -15,6 +15,8 @@ import { Icon } from "../../components";
 import { Lightbox } from "../../attachments";
 import { shownImageUrl } from "../../api";
 import { ImagePath, imagePathRefs, isImagePath } from "./imagepaths";
+import { localFileLink } from "../../../../src/core/filelinks";
+import { FileLink } from "./FileLink";
 
 /** Agent prose. External links open in a new tab: this page is a live
  *  terminal, and navigating away from it drops the attach. A link to another
@@ -39,7 +41,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
     return m;
   }, [local.names, byName, tab, links.self]);
   const plugins = useMemo(
-    () => [remarkGfm, remarkFileRefs(), remarkImagePaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
+    () => [remarkGfm, remarkFileRefs(), remarkImagePaths(), remarkLocalPaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
     [base, links, names],
   );
   const md = (
@@ -62,11 +64,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
                   </ImagePath>
                 );
               }
-              return (
-                <code className="sx-fileref" title={href.slice("fileref:".length)}>
-                  {children}
-                </code>
-              );
+              return <FileLink path={file}><code className="sx-fileref">{children}</code></FileLink>;
             }
             if (href?.startsWith("#ev:")) {
               const id = href.slice(4);
@@ -100,6 +98,11 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
               }
               return <a {...rest} href={href}>{children}</a>;
             }
+            const file = href && !/^\/(?:api|assets|ws)(?:\/|$)/.test(href) && localFileLink(href);
+            if (file) {
+              if (isImagePath(file.path)) return <ImagePath path={file.path}>{children}</ImagePath>;
+              return <FileLink path={href!}>{children}</FileLink>;
+            }
             return <a {...rest} href={href} target="_blank" rel="noreferrer">{children}</a>;
           },
         }}
@@ -122,7 +125,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
  *  named by `file://`, one way an agent shows you one. */
 function keepOurUrls(url: string, key: string): string {
   if (/^(?:fileref|imgpath):/.test(url)) return url;
-  return key === "src" && url.startsWith("file://") ? url : defaultUrlTransform(url);
+  return url.startsWith("file://") && (key === "src" || localFileLink(url)) ? url : defaultUrlTransform(url);
 }
 
 type ImgProps = { src?: unknown; alt?: string };
@@ -198,6 +201,21 @@ function remarkImagePaths() {
     rewrite(tree, true, (text, code) =>
       splitRefs(text, code, (t) => imagePathRefs(t).map((r) => ({ start: r.start, end: r.end, url: `imgpath:${r.path}` }))),
     );
+  };
+}
+
+/** File paths in prose and inline code get the same desktop action as an
+ * explicit Markdown link. Bare filenames need code and a known extension so
+ * ordinary domain names and version numbers stay prose. */
+function remarkLocalPaths() {
+  const pattern = /(?<![\w/.~:@%+-])(?:(?:~\/|\.{1,2}\/|\/)?(?:[\w.@%+~-]+\/)+)?[\w@%+~-]+(?:\.[\w@%+~-]+)*\.[a-z][a-z\d]*(?::\d+(?:-\d+)?){0,2}(?![\w/]|\.\w)/gi;
+  const known = /\.(?:[cm]?[jt]sx?|html?|css|scss|json|md|txt|py|rs|go|sh|yaml|yml|toml|sql|zip|pdf)(?::\d+(?:-\d+)?){0,2}$/i;
+  return () => (tree: Root) => {
+    rewrite(tree, true, (text, code) => splitRefs(text, code, (t) =>
+      [...t.matchAll(pattern)]
+        .filter((m) => m[0].includes("/") || (code && known.test(m[0])))
+        .map((m) => ({ start: m.index!, end: m.index! + m[0].length, url: `fileref:${m[0]}` })),
+    ));
   };
 }
 
