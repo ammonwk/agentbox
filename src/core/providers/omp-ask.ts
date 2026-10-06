@@ -121,6 +121,13 @@ function same(onScreen: string, q: string): boolean {
   return a === b || (a.length >= 20 && b.startsWith(a));
 }
 
+/** The option on screen is this one. omp's dialog appends " (Recommended)" to
+ *  the recommended option, even to a label that already ends with it. */
+function sameOption(onScreen: string, label: string): boolean {
+  const bare = (x: string) => x.replace(/(\s*\(Recommended\))+\s*$/, "");
+  return same(bare(norm(onScreen)), bare(norm(label)));
+}
+
 /** Does the Submit tab's line for a question say `a`? Typed text is quoted,
  *  and beside picked options reads `Other: “…”`: `Y, Other: “Z”`. */
 function says(line: string | undefined, a: AskAnswer): boolean {
@@ -160,7 +167,7 @@ export function ompAskStep(raw: string, questions: AskQuestion[], answers: AskAn
   const q = questions[k]!;
   const a = answers[k]!;
   // Where each item sits in the whole list: the options, then Other.
-  const place = (i: Item) => (i.other ? q.options.length : q.options.findIndex((o) => same(i.label, o.label)));
+  const place = (i: Item) => (i.other ? q.options.length : q.options.findIndex((o) => sameOption(i.label, o.label)));
   const pointer = s.items.find((i) => i.pointer);
   if (!pointer || place(pointer) < 0) return { error: "cannot find the pointer on the dialog" };
   const to = (n: number): string[] => {
