@@ -2,7 +2,8 @@
  *
  * Claude's AskUserQuestion and devin's ask_user_question carry the same
  * `questions` payload: `{question, header?, multiSelect?, options:
- * [{label, description?}]}`.
+ * [{label, description?}]}`. omp's ask names a question by `id` and marks
+ * several answers allowed with `multi`.
  */
 
 import type { AskQuestion } from "../types";
@@ -16,8 +17,8 @@ export function askQuestionsOf(input: any): AskQuestion[] | null {
     if (typeof q?.question !== "string" || !Array.isArray(q.options)) return null;
     out.push({
       question: q.question,
-      header: typeof q.header === "string" ? q.header : "",
-      multiSelect: q.multiSelect === true,
+      header: typeof q.header === "string" ? q.header : typeof q.id === "string" ? q.id : "",
+      multiSelect: q.multiSelect === true || q.multi === true,
       options: q.options
         .filter((o: any) => typeof o?.label === "string")
         .map((o: any) => (typeof o.description === "string" && o.description ? { label: o.label, description: o.description } : { label: o.label })),

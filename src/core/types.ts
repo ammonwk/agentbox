@@ -58,6 +58,8 @@ export interface UsageWindow {
   windowMs: number;
   /** A limit that applies only to one model. */
   scope?: { model: string };
+  /** The upstream it belongs to, where one account fronts several (omp). */
+  provider?: string;
 }
 
 export interface AccountUsage {
@@ -419,7 +421,7 @@ export interface Session {
   cold: boolean;
   /** The provider's latest "you hit your limit", when that is the last thing
    *  the session did — it stopped there and is waiting to be continued. */
-  limitHit: { at: number; detail: string } | null;
+  limitHit: { at: number; detail: string; provider?: string } | null;
   /**
    * The turn ended on the provider rather than finishing — cut off by the
    * output cap, a transient API error, or something a retry cannot fix —

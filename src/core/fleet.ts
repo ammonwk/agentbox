@@ -48,7 +48,7 @@ import {
   usageSamplesSince,
   type SessionRecord,
 } from "./db";
-import { createWorktree, worktreeForBranch } from "./git";
+import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
 import { attachArgv, tmuxName, type NewSession, type PaneInfo } from "./tmux";
 import {
@@ -583,6 +583,9 @@ export class Fleet extends EventEmitter {
         const r = await this.load(t).refresh();
         const took = performance.now() - readAt;
         if (took > slowest.ms) slowest = { ms: took, path };
+        // omp and devin do not record the branch: read it off the checkout
+        // when the transcript moves, which switching branches always does.
+        if (!r.facts.gitBranch && r.facts.cwd) r.facts.gitBranch = r.changed || !t.facts ? branchOnDisk(r.facts.cwd) : t.facts.gitBranch;
         t.facts = r.facts;
         if (r.changed) this.unsaved.add(path);
         // A restored reader's first facts are new to this process, though
@@ -710,10 +713,14 @@ export class Fleet extends EventEmitter {
       const accountId = getSessionRecord(v.id)?.accountId;
       if (!accountId) continue;
       this.stallsSeen.set(v.id, hit.at);
-      const windows = this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? [];
-      const weekly = weeklyWindow(windows);
-      const short = windows.find((w) => w.kind === "short" && !w.scope);
-      if (weekly && weekly.usedPct >= 100 && (weekly.resetsAt === null || weekly.resetsAt > now)) continue;
+      // An account that fronts several providers (omp) has windows for each:
+      // the ones that matter are those of the provider that refused.
+      const windows = (this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? []).filter(
+        (w) => !w.scope && (!hit.provider || !w.provider || w.provider === hit.provider),
+      );
+      const short = windows.find((w) => w.kind === "short");
+      // A longer window that is spent outlasts the 5-hour reset.
+      if (windows.some((w) => w.kind !== "short" && w.usedPct >= 100 && (w.resetsAt === null || w.resetsAt > now))) continue;
       if (!short?.resetsAt || short.resetsAt <= now || hit.at < short.resetsAt - short.windowMs) continue;
       this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
       console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
@@ -3529,45 +3536,22 @@ export function repoRootOf(cwd: string): string | null {
 /**
  * `git rev-parse --show-toplevel --git-common-dir`, read off the disk rather
  * than run: the first pass asked it of every session's cwd, a process each,
- * seconds of a restart. The nearest `.git` up from `dir` is the checkout's
- * top; a directory there is a main checkout, and a file (`gitdir: …`) a
- * linked worktree or submodule, whose git dir's `commondir` names the common
- * one. A common dir not named .git (bare repo, --separate-git-dir, a
- * submodule's) has no main checkout to point at; the top itself is the answer.
+ * seconds of a restart. A linked worktree or submodule's git dir names the
+ * common one in `commondir`; a common dir not named .git (bare repo,
+ * --separate-git-dir, a submodule's) has no main checkout to point at, and
+ * the top itself is the answer.
  */
 function gitRootOf(dir: string): string | null {
-  for (let top = resolve(dir); ; top = dirname(top)) {
-    const dotGit = join(top, ".git");
-    let st;
-    try {
-      st = statSync(dotGit);
-    } catch {
-      if (dirname(top) === top) return null;
-      continue;
-    }
-    // A directory without a HEAD is not a repository, and git looks on up.
-    if (st.isDirectory()) {
-      if (existsSync(join(dotGit, "HEAD"))) return top;
-      if (dirname(top) === top) return null;
-      continue;
-    }
-    try {
-      const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
-      if (!gitdir) return null;
-      const gd = resolve(top, gitdir);
-      // A worktree whose git dir was deleted: git calls it no repository.
-      if (!existsSync(join(gd, "HEAD"))) return null;
-      let common = gd;
-      try {
-        common = resolve(gd, readFileSync(join(gd, "commondir"), "utf8").trim());
-      } catch {
-        /* no commondir: the git dir is its own */
-      }
-      return basename(common) === ".git" ? dirname(common) : top;
-    } catch {
-      return top;
-    }
+  const c = checkoutAt(dir);
+  if (!c) return null;
+  if (c.gitDir === join(c.top, ".git")) return c.top;
+  let common = c.gitDir;
+  try {
+    common = resolve(c.gitDir, readFileSync(join(c.gitDir, "commondir"), "utf8").trim());
+  } catch {
+    /* no commondir: the git dir is its own */
   }
+  return basename(common) === ".git" ? dirname(common) : c.top;
 }
 
 function samePath(a: string | null | undefined, b: string | null | undefined): boolean {

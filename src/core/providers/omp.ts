@@ -21,6 +21,8 @@ import { homedir, tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { userHome } from "../paths";
 import { cliVersion } from "./cli-version";
+import { mostNamed } from "../prrepo";
+import { ompAskStep, readOmpAsk } from "./omp-ask";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import { JsonlTail, type JsonlTailState } from "./jsonl";
 import {
@@ -446,9 +448,11 @@ class OmpReader implements TranscriptReader {
       lastMessage: s.lastMessage,
       model: s.model,
       gitBranch: null,
+      prRepo: mostNamed(s.prRepos),
       startedAt: s.header?.startedAt ?? startFromFileName(basename(this.ref.path)),
       lastActivityAt: s.lastActivityAt,
       turnOpen: s.turnOpen,
+      turnError: s.turnError,
       contextUsed: s.contextUsed,
       contextLimit: null,
       tokens,
@@ -457,6 +461,7 @@ class OmpReader implements TranscriptReader {
       isSubagent: this.parentId !== null || s.sessionInit,
       parentId: this.parentId,
       wakes: [...s.wakes.values()],
+      pendingAsk: s.pendingAsk,
     };
   }
 
@@ -710,9 +715,12 @@ export const ompAdapter: ProviderAdapter = {
   blockedOn(screen) {
     const tool = /Allow tool: ([\w:.-]+)/.exec(screen);
     if (tool) return `permission: ${tool[1]}`;
+    if (readOmpAsk(screen)) return "asking a question";
     if (/Approve and execute/.test(screen) && /Refine plan/.test(screen)) return "plan approval";
     if (/No models available/.test(screen)) return "login";
     if (/belongs to a directory that no longer exists|Move session/i.test(screen)) return "move session";
     return null;
   },
+
+  answerStep: ompAskStep,
 };

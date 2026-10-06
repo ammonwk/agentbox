@@ -1,5 +1,5 @@
-import { join } from "node:path";
-import { mkdirSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { mkdirSync, existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { repoRoot, worktreeRoot } from "./paths";
 import type { Repo } from "./types";
 
@@ -420,6 +420,52 @@ export function listWorktreesOf(repoPath: string): WorktreeEntry[] {
   }
   flush();
   return out;
+}
+
+/**
+ * The checkout `dir` is in, as git finds it, read off the disk: the nearest
+ * `.git` up is its top — a directory for a main checkout, a file (`gitdir:
+ * …`) for a linked worktree or submodule — and `gitDir` is where its HEAD
+ * is. A directory without a HEAD is not a repository, and git looks on up; a
+ * worktree whose git dir was deleted is none.
+ */
+export function checkoutAt(dir: string): { top: string; gitDir: string } | null {
+  for (let top = resolve(dir); ; top = dirname(top)) {
+    const dotGit = join(top, ".git");
+    let st;
+    try {
+      st = statSync(dotGit);
+    } catch {
+      if (dirname(top) === top) return null;
+      continue;
+    }
+    if (st.isDirectory()) {
+      if (existsSync(join(dotGit, "HEAD"))) return { top, gitDir: dotGit };
+      if (dirname(top) === top) return null;
+      continue;
+    }
+    let gitdir: string | undefined;
+    try {
+      gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
+    } catch {
+      return null;
+    }
+    if (!gitdir) return null;
+    const gd = resolve(top, gitdir);
+    return existsSync(join(gd, "HEAD")) ? { top, gitDir: gd } : null;
+  }
+}
+
+/** The branch the checkout `dir` is in is on, read off its HEAD; null when
+ *  detached or not a repository. Two small reads, no process. */
+export function branchOnDisk(dir: string): string | null {
+  const c = checkoutAt(dir);
+  if (!c) return null;
+  try {
+    return /^ref: refs\/heads\/(.+?)\s*$/m.exec(readFileSync(join(c.gitDir, "HEAD"), "utf8"))?.[1] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** The branch a checkout is on, or null when detached or unreadable. */

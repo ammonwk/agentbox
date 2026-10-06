@@ -64,6 +64,15 @@ export interface LiveProcess {
   waitingOn?: string;
 }
 
+/** A provider saying it hit a usage limit. `provider` is the upstream that
+ *  said so, for a CLI that fronts several (omp: `opencode-go`), whose usage
+ *  windows carry the same name. */
+export interface LimitHit {
+  at: number;
+  detail: string;
+  provider?: string;
+}
+
 /** Something an agent set going that will wake it (TranscriptFacts.wakes). */
 export interface Wake {
   /** What it is, as a hold reads it: "background job bg_3 (npm test)". */
@@ -138,7 +147,7 @@ export interface TranscriptFacts {
    *  The newest reading only. */
   usage: { at: number; windows: UsageWindow[] } | null;
   /** Each time the provider said it hit a limit. */
-  rateLimitHits: { at: number; detail: string }[];
+  rateLimitHits: LimitHit[];
   /** Provider subagent / sidechain transcripts are folded into their parent
    *  and never become sessions of their own. */
   isSubagent: boolean;

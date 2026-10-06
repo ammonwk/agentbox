@@ -20,10 +20,12 @@
  * is the active branch for every session that was never re-rooted.
  */
 
-import type { TimelineEvent, TokenTotals } from "../types";
-import type { Wake } from "./types";
+import type { AskQuestion, TimelineEvent, TokenTotals } from "../types";
+import type { LimitHit, TranscriptFacts, Wake } from "./types";
 import { addUsage, emptyTotals } from "../pricing";
 import { capJson } from "./jsonl-reader";
+import { countPrRepos } from "../prrepo";
+import { askQuestionsOf } from "./ask";
 
 /** Prompts are previews, capped as Claude's and Codex's are: a board row
  *  carries them on every push. */
@@ -54,7 +56,9 @@ export interface OmpState {
   lastActivityAt: number | null;
   turnOpen: boolean;
   contextUsed: number | null;
-  rateLimitHits: { at: number; detail: string }[];
+  rateLimitHits: LimitHit[];
+  /** The error the turn ended on, until a prompt or an answer follows. */
+  turnError: TranscriptFacts["turnError"];
   /** Record indices that produce at least one timeline event, ascending. */
   anchors: number[];
   /** toolCallId → record index of the assistant message that made the call. */
@@ -69,6 +73,10 @@ export interface OmpState {
   wakes: Map<string, Wake>;
   /** An `async` bash call's command, until its result names the job. */
   asyncCalls: Map<string, string>;
+  /** The repos it names as the home of PRs (`countPrRepos`). */
+  prRepos: Map<string, number>;
+  /** An `ask` call still waiting for its answer. */
+  pendingAsk: { id: string; questions: AskQuestion[] } | null;
 }
 
 export function newOmpState(): OmpState {
@@ -86,12 +94,15 @@ export function newOmpState(): OmpState {
     turnOpen: false,
     contextUsed: null,
     rateLimitHits: [],
+    turnError: null,
     anchors: [],
     calls: new Map(),
     results: new Map(),
     resultLog: [],
     wakes: new Map(),
     asyncCalls: new Map(),
+    prRepos: new Map(),
+    pendingAsk: null,
   };
 }
 
@@ -169,6 +180,22 @@ export function isRateLimitError(msg: { errorStatus?: unknown; errorMessage?: un
   return /rate.?limit|usage limit|quota|too many requests|FreeUsageLimitError/i.test(m);
 }
 
+/**
+ * How an error that ended the turn classifies (TranscriptFacts.turnError):
+ * fatal when a retry cannot fix it — out of funds or credits, a rejected
+ * key, a request the provider refuses — and transient otherwise: stream
+ * timeouts, dropped sockets, 5xx. omp has already retried a transient one
+ * itself by the time it gives up, but minutes later a retry often goes.
+ */
+export function ompErrorKind(msg: { errorStatus?: unknown; errorMessage?: unknown }): "transient" | "fatal" {
+  const status = typeof msg.errorStatus === "number" ? msg.errorStatus : null;
+  if (status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429) return "fatal";
+  const m = typeof msg.errorMessage === "string" ? msg.errorMessage : "";
+  return /insufficient (account )?(funds|balance|credits)|invalid_request|unauthori[sz]ed|forbidden|context (length|window)|too many tokens|prompt is too long/i.test(m)
+    ? "fatal"
+    : "transient";
+}
+
 interface FoldOptions {
   /** Keep the timeline index. Off for subagent logs, which are folded only
    *  for their tokens and rate-limit hits. */
@@ -210,9 +237,10 @@ export function foldOmpRecord(s: OmpState, rec: any, index: number, opts: FoldOp
     case "custom":
       if (rec.customType === "session_exit") {
         s.turnOpen = false;
-        // Its jobs and supervised processes die with it.
+        // Its jobs, supervised processes and dialogs die with it.
         s.wakes.clear();
         s.asyncCalls.clear();
+        s.pendingAsk = null;
       }
       return;
     case "custom_message":
@@ -234,12 +262,14 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
   switch (m.role) {
     case "user": {
       s.turnOpen = true;
+      s.turnError = null;
       if (opts.events) s.anchors.push(index);
       // Subagent assignments are user messages attributed to the agent; the
       // human's own prompts are what a list row should quote.
       if (m.attribution === "agent") return;
       const text = textOf(m.content).trim().slice(0, PROMPT_CAP);
       if (!text) return;
+      countPrRepos(s.prRepos, text);
       s.firstPrompt ??= text;
       s.lastPrompt = text;
       if (when) s.lastPromptAt = when;
@@ -250,10 +280,12 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       return;
     case "toolResult":
       s.turnOpen = true;
+      s.turnError = null;
       if (typeof m.toolCallId === "string") {
         s.results.set(m.toolCallId, index);
         if (opts.events) s.resultLog.push({ rec: index, callId: m.toolCallId });
         noteJobs(s, m.toolCallId, m.details, when);
+        if (s.pendingAsk?.id === m.toolCallId) s.pendingAsk = null;
       }
       return;
     case "assistant": {
@@ -271,8 +303,15 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       }
       if (Array.isArray(m.content)) {
         for (const b of m.content) {
+          if (b?.type === "text") countPrRepos(s.prRepos, b.text);
           if (b?.type !== "toolCall" || typeof b.id !== "string") continue;
           s.calls.set(b.id, index);
+          countPrRepos(s.prRepos, b.arguments?.command);
+          countPrRepos(s.prRepos, b.arguments?.url);
+          if (b.name === "ask") {
+            const questions = askQuestionsOf(b.arguments);
+            if (questions) s.pendingAsk = { id: b.id, questions };
+          }
           if (b.name === "bash" && b.arguments?.async === true && typeof b.arguments.command === "string") {
             s.asyncCalls.set(b.id, oneLine(b.arguments.command, 80));
           }
@@ -280,10 +319,19 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       }
       const said = textOf(m.content).trim();
       if (said) s.lastMessage = said.length > 300 ? `…${said.slice(-299)}` : said;
-      if (m.stopReason === "error" && isRateLimitError(m)) {
+      s.turnError = null;
+      if (m.stopReason === "error") {
         const who = [m.provider, m.model].filter((x) => typeof x === "string" && x).join("/");
         const first = String(m.errorMessage ?? `HTTP ${m.errorStatus}`).split("\n")[0]!;
-        s.rateLimitHits.push({ at: when, detail: oneLine(who ? `${who}: ${first}` : first, 200) });
+        if (isRateLimitError(m)) {
+          const hit: LimitHit = { at: when, detail: oneLine(who ? `${who}: ${first}` : first, 200) };
+          if (typeof m.provider === "string" && m.provider) hit.provider = m.provider;
+          s.rateLimitHits.push(hit);
+        } else {
+          s.turnError = { at: when, kind: ompErrorKind(m), detail: oneLine(first, 300) };
+        }
+      } else if (m.stopReason === "length") {
+        s.turnError = { at: when, kind: "output-cap", detail: "the reply hit the model's output token limit" };
       }
       // A tool call means the turn goes on; anything else ends it.
       s.turnOpen = m.stopReason === "toolUse";
@@ -407,6 +455,8 @@ export function ompEvents(
       const input = argsJson(b.arguments);
       if (input) ev.input = input;
       if (typeof b.intent === "string" && b.intent.trim() && ev.summary !== oneLine(b.intent, 200)) ev.title = oneLine(b.intent, 200);
+      const questions = b.name === "ask" ? askQuestionsOf(b.arguments) : null;
+      if (questions) ev.ask = { id: b.id, questions, answers: r ? ompAskAnswers(r.text, questions) : undefined };
       if (r?.text) ev.output = clip(r.text, 4000);
       if (typeof r?.at === "number" && r.at > when) ev.endedAt = r.at;
       out.push(ev);
@@ -417,6 +467,26 @@ export function ompEvents(
     out.push({ id: id("e"), at: when, kind: "meta", text: clip(msg, 1000), tone: m.stopReason === "aborted" ? "warn" : "error" });
   }
   return out;
+}
+
+/**
+ * What you answered an `ask`, by question text, from its result: `User
+ * selected: Blue` for one question, and for several a line per question id,
+ * `color: "Teal please"` or `sizes: [Small, Large]`. Undefined for anything
+ * else (a cancel reads "Ask input was cancelled").
+ */
+export function ompAskAnswers(output: string, questions: AskQuestion[]): Record<string, string> | undefined {
+  const unwrap = (v: string) => v.trim().replace(/^\[(.*)\]$/, "$1").replace(/^"(.*)"$/, "$1");
+  const one = /^User (?:selected|answered|provided)[^:\n]*:\s*(.+)$/.exec(output.trim());
+  if (one && questions.length === 1) return { [questions[0]!.question]: unwrap(one[1]!) };
+  if (!output.startsWith("User answers:")) return undefined;
+  const out: Record<string, string> = {};
+  for (const line of output.split("\n").slice(1)) {
+    const m = /^([^:]+):\s*(.*)$/.exec(line);
+    const q = m && questions.find((x) => x.header === m[1]!.trim());
+    if (q) out[q.question] = unwrap(m![2]!);
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** The title from the fixed-width slot on line 0, or null. */
