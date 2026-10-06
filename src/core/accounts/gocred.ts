@@ -30,6 +30,10 @@ export const GO_LOGIN_FILE = "opencode-console.json";
 export const GO_KEY_UPSTREAM = "https://opencode.ai/zen/go/v1";
 export const GO_CONSOLE_UPSTREAM = { openai: "https://opencode.ai/inference/go/openai/v1", anthropic: "https://opencode.ai/inference/go/anthropic/v1" } as const;
 
+/** Go's usage report for a Console sign-in: beside the two shapes, not under
+ *  either. By key it is `<GO_KEY_UPSTREAM>/usage`. */
+export const GO_CONSOLE_USAGE = "https://opencode.ai/inference/go/v1/usage";
+
 /** What omp sends as its key to name the account a request is for; anything
  *  else it sends is a real key and goes through as it is. */
 export const GO_ACCOUNT_BEARER = "agentbox-account:";

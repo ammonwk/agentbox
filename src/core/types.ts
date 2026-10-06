@@ -75,9 +75,7 @@ export interface AccountUsage {
   windows: UsageWindow[];
   /** Why the numbers are old or missing: "token expired", "429 until 14:02". */
   stale: string | null;
-  /** `transcripts`: OpenCode Go, which reports none, added up from what its
-   *  sessions spent (accounts/gospend.ts). */
-  source: "endpoint" | "cache" | "rollout" | "cli" | "transcripts" | "none";
+  source: "endpoint" | "cache" | "rollout" | "cli" | "none";
   /** Anything else worth a line: extra-usage state, credits, a locked reason. */
   notes: string[];
 }

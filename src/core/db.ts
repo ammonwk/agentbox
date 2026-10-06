@@ -262,8 +262,8 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE sessions DROP COLUMN big;
    ALTER TABLE assignments DROP COLUMN big;`,
   // 16 — what each OpenCode Go key has spent, by minute, read from omp's and
-  // opencode's transcripts (Go has no usage API; src/core/accounts/gospend.ts),
-  // and how far into each transcript that reading has got.
+  // opencode's transcripts, and how far into each that reading had got.
+  // Dropped in 17.
   `
   CREATE TABLE go_spend (
     account_id TEXT NOT NULL,
@@ -276,6 +276,13 @@ const MIGRATIONS: string[] = [
     pos     INTEGER NOT NULL,
     seen_at INTEGER NOT NULL
   ) WITHOUT ROWID;
+  `,
+  // 17 — Go does report usage (`…/go/v1/usage`, src/core/accounts/usage.ts),
+  // so the spend added up from transcripts is gone, with the samples of it.
+  `
+  DROP TABLE go_spend;
+  DROP TABLE go_spend_cursors;
+  DELETE FROM usage_samples WHERE source = 'transcripts';
   `,
 ];
 

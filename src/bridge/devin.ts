@@ -28,7 +28,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { userHome } from "../core/paths";
-import { GO_ACCOUNT_BEARER, GO_CONSOLE_UPSTREAM, GO_KEY_UPSTREAM, defaultGoKey, goHomeForSelector } from "../core/accounts/gocred";
+import { GO_ACCOUNT_BEARER, GO_CONSOLE_UPSTREAM, GO_CONSOLE_USAGE, GO_KEY_UPSTREAM, defaultGoKey, goHomeForSelector } from "../core/accounts/gocred";
 import { freshGoLogin } from "../core/accounts/godevice";
 import { BRIDGED, bridgePort, bridgedModel, type BridgedModel } from "./models";
 import {
@@ -421,7 +421,8 @@ async function passThrough(req: Request, url: URL, body: Uint8Array | null): Pro
  * id (its Console sign-in, refreshed here when due or refused), or "caller":
  * omp, whose endpoint is fixed in its models.yml, names the account in its
  * key (`agentbox-account:<id>`), and any other key it sends is a real one
- * that goes through untouched. The session's own headers
+ * that goes through untouched. `/go/<account>/v1/usage` is Go's own usage
+ * report for that credential (accounts/usage.ts). The session's own headers
  * (`x-opencode-session`) ride along; the reply streams back.
  */
 async function goProxy(req: Request, url: URL, log: (line: string) => void): Promise<Response> {
@@ -462,7 +463,8 @@ async function goProxy(req: Request, url: URL, log: (line: string) => void): Pro
     credential(login.access);
     if (login.orgID) headers.set("x-opencode-org-id", login.orgID);
     else headers.delete("x-opencode-org-id");
-    const res = await goSend(`${GO_CONSOLE_UPSTREAM[shape]}${rest}`, req, headers, body, log, selector);
+    const target = shape === "openai" && m[3] === "/usage" ? `${GO_CONSOLE_USAGE}${url.search}` : `${GO_CONSOLE_UPSTREAM[shape]}${rest}`;
+    const res = await goSend(target, req, headers, body, log, selector);
     // A token refused before its time: refresh once and ask again.
     if (res.status !== 401 || force) return res;
     await res.arrayBuffer().catch(() => undefined);

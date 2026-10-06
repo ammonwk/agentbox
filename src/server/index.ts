@@ -18,7 +18,6 @@
  */
 
 import { ensureBridge } from "../bridge/service";
-import { startGoSpend } from "../core/accounts/gospend";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
@@ -1337,11 +1336,9 @@ export async function startServer(): Promise<void> {
   await fleet.ready;
   phase("first pass");
   scheduler.start();
-  // What each OpenCode Go key spent, which is its usage (accounts/gospend.ts).
-  // After the first pass: the first run reads a month of transcripts.
-  startGoSpend();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
-  // sessions and in your own terminals alike, so it is up from the start.
+  // sessions and in your own terminals alike, and Go's usage is asked through
+  // it (accounts/usage.ts), so it is up from the start.
   ensureBridge();
   await firstSlow;
   // Its PRs are the sessions', which the pass may have finished after it looked.
