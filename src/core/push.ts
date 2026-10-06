@@ -211,31 +211,43 @@ let seeded = false;
  * blocked is pushed once, and again only after it has been unblocked. What
  * was blocked when the server started is not news. A stop the fleet retries
  * by itself (an error or rate-limit screen, `retrying`) is not yours to
- * answer, so it waits until the retries are spent.
+ * answer, so it waits until the retries are spent. An error screen is never
+ * pushed, spent or not: the board shows it, and it is no question to answer.
  */
 export function notifyBlocked(sessions: readonly Session[], reasonOf: (id: string) => string | null): void {
+  for (const msg of blockedNews(sessions, reasonOf)) {
+    if (pushSubscriptions().length === 0) continue;
+    void pushToAll(msg).then((r) => {
+      for (const f of r.failed) console.error(`agentbox: push for ${msg.tag} failed — ${f}`);
+    });
+  }
+}
+
+/** What `notifyBlocked` sends for this board: one message per session newly blocked on you. */
+export function blockedNews(sessions: readonly Session[], reasonOf: (id: string) => string | null): PushMessage[] {
   const blocked = sessions.filter((s) => s.status === "blocked");
   const ids = new Set(blocked.map((s) => s.id));
   for (const id of told) if (!ids.has(id)) told.delete(id);
   if (!seeded) {
     seeded = true;
     for (const id of ids) told.add(id);
-    return;
+    return [];
   }
+  const news: PushMessage[] = [];
   for (const s of blocked) {
     if (told.has(s.id)) continue;
     if (retrying(s)) continue;
     const reason = reasonOf(s.id) ?? "waiting on a prompt";
+    // Not marked told: the prompt that replaces the error is still news.
+    if (reason === "error") continue;
     told.add(s.id);
-    if (pushSubscriptions().length === 0) continue;
     const ask = s.question?.questions[0]?.question;
-    void pushToAll({
+    news.push({
       title: s.label ?? s.title,
       body: ask ? `Asks: ${ask}` : `Blocked: ${reason}`,
       url: `/#/s/${encodeURIComponent(s.id)}${s.question ? "" : "/terminal"}`,
       tag: s.id,
-    }).then((r) => {
-      for (const f of r.failed) console.error(`agentbox: push for ${s.id} failed — ${f}`);
     });
   }
+  return news;
 }

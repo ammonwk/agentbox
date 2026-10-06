@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createDecipheriv, createECDH, hkdfSync } from "node:crypto";
-import { b64url, encryptPush } from "../push";
+import { b64url, blockedNews, encryptPush } from "../push";
+import type { Session } from "../types";
 
 /** What a browser does with a push (RFC 8291), on node's crypto rather than the WebCrypto that sealed it. */
 function open(body: Uint8Array, ua: ReturnType<typeof createECDH>, auth: Buffer): string {
@@ -30,5 +31,20 @@ describe("encryptPush", () => {
     expect(new DataView(body.buffer).getUint32(16)).toBe(4096);
     expect(body[20]).toBe(65);
     expect(open(body, ua, auth)).toBe(text);
+  });
+});
+
+describe("blockedNews", () => {
+  const blocked = (id: string, extra: Partial<Session> = {}) => ({ id, title: id, label: null, status: "blocked", autoResume: null, question: null, ...extra }) as Session;
+  const bodies = (sessions: Session[], reasons: Record<string, string>) => blockedNews(sessions, (id) => reasons[id] ?? null).map((m) => `${m.tag}: ${m.body}`);
+
+  test("an error screen is not pushed, retried or spent; the prompt after it is", () => {
+    // The first board is what was blocked at startup: not news.
+    expect(bodies([blocked("old")], { old: "permission: Bash" })).toEqual([]);
+    const retried = blocked("a", { autoResume: { at: 1, attempt: 1, of: 3, after: "error" } });
+    expect(bodies([retried, blocked("b")], { a: "error — agentbox retries it in 1m", b: "permission: Bash" })).toEqual(["b: Blocked: permission: Bash"]);
+    // Its retries spent, the error is still only on the board.
+    expect(bodies([blocked("a"), blocked("b")], { a: "error", b: "permission: Bash" })).toEqual([]);
+    expect(bodies([blocked("a"), blocked("b")], { a: "folder trust", b: "permission: Bash" })).toEqual(["a: Blocked: folder trust"]);
   });
 });
