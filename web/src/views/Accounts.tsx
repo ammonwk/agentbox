@@ -68,14 +68,19 @@ function AccountList({ state }: { state: AppState }) {
           <section key={p} className="acs-sec" aria-labelledby={`acs-${p}`}>
             <header className="acs-sec-head">
               <ProviderBadge provider={p} />
-              <h2 id={`acs-${p}`}>{PROVIDER_LABEL[p]}</h2>
+              <h2 id={`acs-${p}`}>{sectionTitle(p)}</h2>
               <span className="faint">
                 {accounts.length} account{accounts.length === 1 ? "" : "s"}
                 {info?.version ? ` · ${info.version}` : info && !info.installed ? " · CLI not installed" : ""}
               </span>
               <span className="acs-sec-actions">
                 {p === "omp" ? (
-                  <span className="hint">omp balances its own credential pool. opencode sessions run on this account too: both use OpenCode Go.</span>
+                  <>
+                    <span className="hint">One key per account; omp and opencode sessions share them.</span>
+                    <Button size="sm" icon={Icon.plus} disabled={!info?.installed} onClick={() => setAdding({ provider: p })}>
+                      Add account
+                    </Button>
+                  </>
                 ) : (
                   <>
                     <Button size="sm" variant="ghost" icon={Icon.folder} onClick={() => setImporting(p)}>
@@ -211,7 +216,11 @@ function AccountCard({
             </button>
           </h3>
         )}
-        {a.isDefault && a.provider !== "omp" ? (
+        {a.isDefault && a.provider === "omp" ? (
+          <span className="src ac-default" title="opencode's own OpenCode Go login (opencode auth login), which omp reads too.">
+            opencode login
+          </span>
+        ) : a.isDefault ? (
           <span className="src ac-default" title={`Your plain ${a.provider} CLI's own login. Logging the CLI in or out changes this card only.`}>
             CLI login
           </span>
@@ -227,7 +236,7 @@ function AccountCard({
       </header>
 
       <div className="ac-sub">
-        <span>{a.email ?? <span className="faint">no email yet</span>}</span>
+        <span>{a.email ?? <span className="faint">{a.provider === "omp" ? "OpenCode Go key" : "no email yet"}</span>}</span>
         {a.plan ? <span className="ac-plan">{a.plan}</span> : null}
         <AuthBadge account={a} now={now} />
       </div>
@@ -530,7 +539,9 @@ export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismis
       {l.state === "awaiting-user" && l.url ? (
         <ol className="lg-steps">
           <li>
-            <span className="lg-step-label">Open this and sign in to the account you want here:</span>
+            <span className="lg-step-label">
+              {l.provider === "omp" ? "Get the key from your OpenCode workspace here:" : "Open this and sign in to the account you want here:"}
+            </span>
             <span className="lg-url-row">
               <a className="lg-url" href={l.url} target="_blank" rel="noreferrer">
                 <Icon.external size={14} />
@@ -550,7 +561,9 @@ export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismis
           ) : null}
           {l.needsPaste ? (
             <li>
-              <span className="lg-step-label">Paste the code the browser gives you back:</span>
+              <span className="lg-step-label">
+                {l.provider === "omp" ? "Paste this account's OpenCode Go API key:" : "Paste the code the browser gives you back:"}
+              </span>
               <form
                 className="lg-paste"
                 onSubmit={(e) => {
@@ -560,8 +573,9 @@ export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismis
               >
                 <input
                   className="mono"
-                  aria-label="Code from the browser"
-                  placeholder={l.provider === "claude" ? "code#state" : "token"}
+                  aria-label={l.provider === "omp" ? "OpenCode Go API key" : "Code from the browser"}
+                  type={l.provider === "omp" ? "password" : "text"}
+                  placeholder={l.provider === "claude" ? "code#state" : l.provider === "omp" ? "sk-…" : "token"}
                   value={paste}
                   onChange={(e) => setPaste(e.target.value)}
                   spellCheck={false}
@@ -590,6 +604,11 @@ export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismis
   );
 }
 
+/** omp's accounts are OpenCode Go keys, which opencode sessions use too. */
+function sectionTitle(p: ProviderId): string {
+  return p === "omp" ? "OpenCode Go · omp and opencode" : PROVIDER_LABEL[p];
+}
+
 // ---------------------------------------------------------------- dialogs
 
 function AddAccount({
@@ -608,8 +627,12 @@ function AddAccount({
   const { run, busy, error } = useAction();
   return (
     <Modal
-      title={`Add a ${PROVIDER_LABEL[provider]} account`}
-      hint="agentbox makes a fresh credential home for it and starts the CLI's own login. Nothing is copied from your other accounts."
+      title={`Add ${provider === "omp" ? "an OpenCode Go" : `a ${PROVIDER_LABEL[provider]}`} account`}
+      hint={
+        provider === "omp"
+          ? "agentbox makes a home for it and asks for its OpenCode Go API key, which omp and opencode sessions placed on it then use. Nothing is copied from your other accounts."
+          : "agentbox makes a fresh credential home for it and starts the CLI's own login. Nothing is copied from your other accounts."
+      }
       onClose={onClose}
     >
       <form
@@ -622,7 +645,7 @@ function AddAccount({
           });
         }}
       >
-        <Field label="Label" hint="What you call it — defaults to the email once logged in.">
+        <Field label="Label" hint={provider === "omp" ? "What you call it, e.g. whose Go plan it is." : "What you call it — defaults to the email once logged in."}>
           <input autoFocus value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. work, personal, team-b" />
         </Field>
         {expect ? (

@@ -261,6 +261,22 @@ const MIGRATIONS: string[] = [
   // 15 — the Big flag is gone: a session's claim is its model's and effort's.
   `ALTER TABLE sessions DROP COLUMN big;
    ALTER TABLE assignments DROP COLUMN big;`,
+  // 16 — what each OpenCode Go key has spent, by minute, read from omp's and
+  // opencode's transcripts (Go has no usage API; src/core/accounts/gospend.ts),
+  // and how far into each transcript that reading has got.
+  `
+  CREATE TABLE go_spend (
+    account_id TEXT NOT NULL,
+    minute     INTEGER NOT NULL,
+    cost       REAL NOT NULL,
+    PRIMARY KEY (account_id, minute)
+  ) WITHOUT ROWID;
+  CREATE TABLE go_spend_cursors (
+    source  TEXT PRIMARY KEY,
+    pos     INTEGER NOT NULL,
+    seen_at INTEGER NOT NULL
+  ) WITHOUT ROWID;
+  `,
 ];
 
 function migrate(d: Database) {

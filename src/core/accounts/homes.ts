@@ -28,6 +28,7 @@ import { basename, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
 import { adapterFor } from "../providers";
+import { GO_KEY_FILE } from "./gokey";
 import type { Account, AccountProvider, ProviderId } from "../types";
 
 /** The providers that hold accounts; opencode runs on omp's (see AccountProvider). */
@@ -70,14 +71,15 @@ export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault"
   return { env: e.env, unset: e.unset ?? [] };
 }
 
-/** The file whose existence means "this home has logged in". Null for omp,
- *  which keeps its own credential pool we do not look inside. */
+/** The file whose existence means "this home has logged in". For omp, an
+ *  OpenCode Go account, its pasted key (the default account's is opencode's
+ *  own login instead: accounts/gokey.ts). */
 export function credentialsPath(provider: AccountProvider, home: string): string | null {
   switch (provider) {
     case "claude": return join(home, ".credentials.json");
     case "codex": return join(home, "auth.json");
     case "devin": return join(home, "devin", "credentials.toml");
-    case "omp": return null;
+    case "omp": return join(home, GO_KEY_FILE);
   }
 }
 
@@ -380,9 +382,6 @@ function syncClaudeJson(home: string): boolean {
  * token.
  */
 export function createAccountHome(provider: AccountProvider, id: string): string {
-  if (provider === "omp") {
-    throw new AccountError(400, "omp manages its own credential pool — it has one implicit account and no extra homes");
-  }
   const home = accountHomeFor(id);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   chmodSync(home, 0o700);
@@ -433,7 +432,7 @@ export async function importHome(
   path: string,
   deps: ImportDeps,
 ): Promise<{ account: Account; email: string | null }> {
-  if (provider === "omp") throw new AccountError(400, "omp has one implicit account; there is no home to import");
+  if (provider === "omp") throw new AccountError(400, "an OpenCode Go account has no home to import — add one and paste its key");
   const home = canonical(expandHome(path.trim()));
   if (!existsSync(home) || !statSync(home).isDirectory()) throw new AccountError(400, `${home} is not a directory`);
   const cred = credentialsPath(provider, home)!;

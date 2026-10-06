@@ -28,6 +28,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { userHome } from "../core/paths";
+import { GO_UPSTREAM, goKeyForId } from "../core/accounts/gokey";
 import { BRIDGED, bridgePort, bridgedModel, type BridgedModel } from "./models";
 import {
   ChatReply,
@@ -411,6 +412,43 @@ async function passThrough(req: Request, url: URL, body: Uint8Array | null): Pro
   return new Response(res.body, { status: res.status, headers: out });
 }
 
+/**
+ * OpenCode Go on a given account's key: `/go/<account id>/<rest>` is
+ * forwarded to `GO_UPSTREAM/<rest>` with that account's key in place of
+ * whatever the caller sent. opencode keeps one stored login and prefers it to
+ * any key in its config, so a session on another Go account is pointed here
+ * (its config's baseURL) instead; see src/core/accounts/gokey.ts. Streams
+ * both ways, and the session's own headers (`x-opencode-session`) ride along.
+ */
+async function goProxy(req: Request, url: URL, log: (line: string) => void): Promise<Response> {
+  const m = /^\/go\/([^/]+)(\/.*)$/.exec(url.pathname);
+  const key = m ? goKeyForId(m[1]!) : null;
+  if (!m || !key) {
+    return Response.json({ type: "error", error: { type: "AuthError", message: `agentbox bridge: no OpenCode Go key for account ${m?.[1] ?? "?"}` } }, { status: 401 });
+  }
+  const headers = new Headers(req.headers);
+  for (const h of HOP) headers.delete(h);
+  headers.set("authorization", `Bearer ${key}`);
+  // opencode signed into an OpenCode workspace bills that workspace (its
+  // token and this header) instead of the Go key; the key is what we mean.
+  headers.delete("x-opencode-org-id");
+  headers.set("accept-encoding", "identity");
+  const res = await fetch(GO_UPSTREAM + m[2]! + url.search, {
+    method: req.method,
+    headers,
+    body: req.body,
+    signal: req.signal,
+    // A reasoning model can be quiet for minutes; the CLI does the giving up.
+    timeout: false,
+    duplex: "half",
+  } as RequestInit);
+  if (!res.ok) log(`go ${m[1]} ${req.method} ${m[2]} -> ${res.status}`);
+  const out = new Headers(res.headers);
+  for (const h of HOP) out.delete(h);
+  out.delete("content-encoding");
+  return new Response(res.body, { status: res.status, headers: out });
+}
+
 /** The unary responses the bridge adds its models to, by method. */
 const REWRITES: Record<string, (body: Uint8Array) => Uint8Array> = {
   GetCliModelConfigs: (body) => withModels(body, [...BRIDGED]),
@@ -449,6 +487,14 @@ export function startBridge(options: BridgeOptions = {}): { port: number; stop()
           models: BRIDGED.map((m) => ({ uid: m.uid, contextTokens: m.contextTokens, compaction: m.compaction, key: m.apiKey() !== null })),
           ...served,
         });
+      }
+      if (url.pathname.startsWith("/go/")) {
+        try {
+          return await goProxy(req, url, log);
+        } catch (e) {
+          if (!req.signal.aborted) log(`go ${url.pathname} failed: ${(e as Error).message}`);
+          return Response.json({ type: "error", error: { type: "BridgeError", message: `agentbox bridge: ${(e as Error).message}` } }, { status: 502 });
+        }
       }
       try {
         const body = req.body ? new Uint8Array(await req.arrayBuffer()) : null;

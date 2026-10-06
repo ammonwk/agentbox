@@ -134,7 +134,7 @@ describe("opencode reader", () => {
     expect((await reader.since(next.cursor)).events).toEqual([]);
   });
 
-  test("a quota error is a limit hit on its provider; running out of funds is a fatal turn error", async () => {
+  test("a quota error is a limit hit on its provider, and so is a Go key out of funds; other funds are a fatal turn error", async () => {
     const id = "ses_eedb6e092ffftZsxnpAdAADkJg";
     session(id);
     message(id, "user", { text: "hi" });
@@ -145,8 +145,18 @@ describe("opencode reader", () => {
     message(id, "idle", { outcome: "failed" });
     const ref = await adapter.findTranscript(account, id);
     const { facts } = await adapter.reader(ref!).refresh();
-    expect(facts.rateLimitHits).toEqual([{ at: T0 + 5, detail: "opencode/space-bunny-free: Rate limit exceeded. Please try again later.", provider: "opencode" }]);
-    expect(facts.turnError).toMatchObject({ kind: "fatal", detail: "Upstream request failed: Insufficient account funds" });
+    expect(facts.rateLimitHits).toEqual([
+      { at: T0 + 5, detail: "opencode/space-bunny-free: Rate limit exceeded. Please try again later.", provider: "opencode" },
+      { at: T0 + 7, detail: "opencode-go/deepseek-v4.1-flash: Upstream request failed: Insufficient account funds", provider: "opencode-go" },
+    ]);
+    expect(facts.turnError).toBeNull();
+
+    message(id, "user", { text: "Continue." });
+    message(id, "assistant", { time: { created: T0 + 9, completed: T0 + 10 }, model: { id: "big", providerID: "anthropic" }, content: [], finish: "error", error: { type: "api", message: "Insufficient account funds", status: 402 } });
+    message(id, "idle", { outcome: "failed" });
+    const after = (await adapter.reader(ref!).refresh()).facts;
+    expect(after.rateLimitHits).toHaveLength(2);
+    expect(after.turnError).toMatchObject({ kind: "fatal", detail: "Insufficient account funds" });
   });
 
   test("a question still waiting is the pending ask; its answer shows on the event", async () => {

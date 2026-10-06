@@ -37,6 +37,8 @@ import { cliVersion } from "./cli-version";
 import { carryFlags, type Arity } from "../launch";
 import { cwdOf, findProcesses, runsCli, startedAtOf } from "./procs";
 import { BRIEFING } from "./briefing";
+import { ensureBridge } from "../../bridge/service";
+import { bridgeUrl } from "../../bridge/models";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import * as db from "./opencode-db";
 import { modelName, opencodeEvents, opencodeFacts, parseData, summarize, type RowSummary } from "./opencode-transcript";
@@ -395,7 +397,16 @@ function briefingFile(): string {
 
 /** OPENCODE_CONFIG_CONTENT with the briefing added to whatever the server's
  *  own environment already sets there. */
-function configEnv(): Record<string, string> {
+const objectOr = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+
+/** The config a launch adds to the user's own: the briefing, and the bridge
+ *  as OpenCode Go's endpoint, which puts the session's account's Go key on
+ *  each request. Without it opencode sends no Go key at all when it is signed
+ *  into an OpenCode workspace — it bills the workspace, whatever key it holds
+ *  or its config names — and on another account it would still use its one
+ *  stored login (accounts/gokey.ts). */
+function configEnv(account: Pick<Account, "id" | "isDefault">): Record<string, string> {
   let cfg: Record<string, unknown> = {};
   const own = process.env.OPENCODE_CONFIG_CONTENT;
   if (own) {
@@ -405,6 +416,11 @@ function configEnv(): Record<string, string> {
   const brief = briefingFile();
   const instructions = Array.isArray(cfg.instructions) ? cfg.instructions.filter((x) => x !== brief) : [];
   cfg = { ...cfg, instructions: [...instructions, brief] };
+  ensureBridge();
+  const providers = objectOr(cfg.provider);
+  const go = objectOr(providers["opencode-go"]);
+  const options = { ...objectOr(go.options), baseURL: `${bridgeUrl()}/go/${account.isDefault ? "default" : account.id}/v1` };
+  cfg = { ...cfg, provider: { ...providers, "opencode-go": { ...go, options } } };
   // The user's own shell runs opencode with fewer GC marker threads.
   return { OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg), JSC_numberOfGCMarkers: process.env.JSC_numberOfGCMarkers || "2" };
 }
@@ -515,6 +531,10 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Pro
       return new OpencodeReader(ref, dbPath());
     },
 
+    // Every OpenCode Go account runs on the one database (only the key
+    // differs), so a session is already wherever it is resumed.
+    moveSession: ({ transcriptPath }) => transcriptPath,
+
     spawnCommand(opts: SpawnOptions) {
       const id = newSessionId();
       const body: Record<string, unknown> = { id, location: { directory: opts.cwd } };
@@ -522,7 +542,7 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Pro
       if (model) body.model = model;
       return {
         argv: ["sh", "-c", SPAWN_SCRIPT, "opencode", JSON.stringify(body), id, ...tuiFlags(opts)],
-        env: configEnv(),
+        env: configEnv(opts.account),
         agentSessionId: id,
       };
     },
@@ -537,11 +557,11 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Pro
         if (want && (want.id !== current?.id || want.providerID !== current?.providerID || (want.variant ?? null) !== (current?.variant ?? null))) {
           return {
             argv: ["sh", "-c", RESUME_SCRIPT, "opencode", opts.agentSessionId, JSON.stringify({ model: want }), ...flags],
-            env: configEnv(),
+            env: configEnv(opts.account),
           };
         }
       }
-      return { argv: ["opencode", "-s", opts.agentSessionId, ...flags], env: configEnv() };
+      return { argv: ["opencode", "-s", opts.agentSessionId, ...flags], env: configEnv(opts.account) };
     },
 
     carryOver: (argv) => carryFlags(argv, CARRIED),

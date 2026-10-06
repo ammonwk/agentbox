@@ -27,6 +27,7 @@ import { getKv, insertUsageSample, lastUsageSample, setKv, type UsageSampleRow }
 import type { Account, AccountProvider, AccountUsage, ProviderId, UsageWindow, WindowKind } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
+import { GO_LIMITS, goSpendDollars, goSpendReady, goSpendWindows } from "./gospend";
 import { readClaudeCredentials, readClaudeJson, readCodexAuth, readDevinCredentials } from "./identity";
 
 const MIN = 60_000;
@@ -39,7 +40,8 @@ export const POLL_MS: Record<AccountProvider, number> = {
   claude: 3 * MIN,
   codex: 5 * MIN,
   devin: 10 * MIN,
-  omp: 5 * MIN,
+  // agentbox's own ledger, not a provider: cheap to read.
+  omp: MIN,
 };
 
 const TICK_MS = 10_000;
@@ -453,48 +455,26 @@ export async function fetchDevinUsage(account: Pick<Account, "home">, deps: Usag
   return { kind: "ok", at: deps.now(), windows, notes, source: "endpoint" };
 }
 
-// --------------------------------------------------------------------- omp
+// ------------------------------------------------------------ OpenCode Go
 
-/** `omp usage --json` → one window per provider limit. */
-export function mapOmpUsage(json: unknown): { windows: UsageWindow[]; notes: string[] } {
-  const windows: UsageWindow[] = [];
-  const notes: string[] = [];
-  const reports = Array.isArray(rec(json)?.reports) ? (rec(json)!.reports as unknown[]) : [];
-  for (const r of reports) {
-    const report = rec(r);
-    const provider = typeof report?.provider === "string" ? report.provider : "omp";
-    for (const l of Array.isArray(report?.limits) ? (report!.limits as unknown[]) : []) {
-      const limit = rec(l);
-      const frac = toNum(rec(limit?.amount)?.usedFraction);
-      if (!limit || frac === null) continue;
-      const win = rec(limit.window);
-      const windowMs = toNum(win?.durationMs) ?? 0;
-      const winLabel = typeof win?.label === "string" ? win.label : typeof limit.label === "string" ? limit.label : String(limit.id);
-      windows.push({
-        id: `${provider}:${String(limit.id)}`,
-        kind: windowMs > 0 ? kindForDuration(windowMs) : "monthly",
-        label: `${provider} ${winLabel}`,
-        usedPct: clampPct(frac * 100),
-        resetsAt: toNum(win?.resetsAt),
-        windowMs,
-      });
-    }
-  }
-  return { windows, notes };
-}
-
-export async function fetchOmpUsage(deps: UsageDeps): Promise<Reading> {
-  const r = await deps.exec(["omp", "usage", "--json"], { timeoutMs: 20_000 });
-  if (r.timedOut) return { kind: "error", stale: "omp usage timed out" };
-  if (r.code !== 0) return { kind: "error", stale: `omp usage failed (exit ${r.code})` };
-  let json: unknown;
-  try {
-    json = JSON.parse(r.stdout);
-  } catch {
-    return { kind: "error", stale: "omp usage printed something that is not JSON" };
-  }
-  const { windows, notes } = mapOmpUsage(json);
-  return { kind: "ok", at: deps.now(), windows, notes, source: "cli" };
+/** An omp account is an OpenCode Go key, which has no usage API: what its
+ *  omp and opencode sessions spent, from their transcripts, against Go's
+ *  limits (accounts/gospend.ts). */
+function goUsage(account: Account, deps: UsageDeps): Reading {
+  if (!goSpendReady()) return { kind: "skip", stale: "adding up OpenCode Go spend from transcripts" };
+  const now = deps.now();
+  const d = goSpendDollars(account.id, now);
+  const money = (n: number) => `$${n.toFixed(2)}`;
+  return {
+    kind: "ok",
+    at: now,
+    windows: goSpendWindows(account.id, now),
+    notes: [
+      GO_LIMITS.map((l) => `${money(d[l.id as keyof typeof d])} of $${l.limitUsd} ${l.label.toLowerCase()}`).join(", "),
+      "Counted from what omp and opencode sessions spent: Go reports no usage, and spend elsewhere (opencode.ai, the devin bridge) is not seen.",
+    ],
+    source: "transcripts",
+  };
 }
 
 function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
@@ -502,7 +482,7 @@ function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
     case "claude": return fetchClaudeUsage(account, deps);
     case "codex": return fetchCodexUsage(account, deps);
     case "devin": return fetchDevinUsage(account, deps);
-    case "omp": return fetchOmpUsage(deps);
+    case "omp": return Promise.resolve(goUsage(account, deps));
   }
 }
 

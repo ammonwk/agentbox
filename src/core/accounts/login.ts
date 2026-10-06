@@ -19,6 +19,8 @@ import { randomUUID } from "node:crypto";
 import type { Account, AccountProvider, LoginFlow } from "../types";
 import { childEnv } from "./exec";
 import { userHome } from "../paths";
+import { join } from "node:path";
+import { GO_KEY_FILE } from "./gokey";
 import { AccountError, authEnv, credentialsPath } from "./homes";
 
 const OUTPUT_KEEP = 4096;
@@ -48,7 +50,18 @@ export interface LoginCommand {
  */
 export function loginCommand(account: Pick<Account, "provider" | "home" | "isDefault">): LoginCommand {
   if (account.provider === "omp") {
-    throw new AccountError(400, "omp logins are managed by omp itself — run `omp auth-broker login <provider>` in a terminal");
+    if (account.isDefault) {
+      throw new AccountError(400, "the default OpenCode Go account is opencode's own login — run `opencode auth login` (OpenCode Go) in a terminal");
+    }
+    // OpenCode Go has no login to run: you paste the account's API key, which
+    // is kept alone in its home (accounts/gokey.ts), never echoed.
+    return {
+      argv: ["sh", "-c", GO_KEY_SCRIPT, "sh", join(account.home, GO_KEY_FILE)],
+      env: { NO_COLOR: "1" },
+      unset: [],
+      credentialFile: join(account.home, GO_KEY_FILE),
+      needsPaste: true,
+    };
   }
   const { env, unset } = authEnv(account);
   const common = {
@@ -65,6 +78,18 @@ export function loginCommand(account: Pick<Account, "provider" | "home" | "isDef
       return { argv: ["devin", "auth", "login", "--force-manual-token-flow"], ...common, needsPaste: true };
   }
 }
+
+/** Ask for an OpenCode Go key and keep it, 0600, in `$1`. */
+const GO_KEY_SCRIPT = [
+  "umask 077",
+  "echo 'Paste this account\\'s OpenCode Go API key (from https://opencode.ai/auth, your workspace, API Keys) below.'",
+  "stty -echo 2>/dev/null",
+  "IFS= read -r k",
+  "stty echo 2>/dev/null",
+  "k=$(printf %s \"$k\" | tr -d '[:space:]')",
+  "[ -n \"$k\" ] || { echo 'No key was pasted.'; exit 1; }",
+  "printf %s \"$k\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\" && echo 'Saved.'",
+].join("\n");
 
 // ---------------------------------------------------------------- parsing
 

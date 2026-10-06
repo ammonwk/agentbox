@@ -375,7 +375,7 @@ const CONTINUE = "Usage limits have reset, continue";
 
 /** Providers whose adapter can move a transcript between account homes
  *  (`moveSession`); the others can only continue where they are. */
-const MOVABLE = new Set(["claude", "devin"]);
+const MOVABLE = new Set(["claude", "devin", "omp", "opencode"]);
 
 /**
  * The session stopped at its account's limit. Nothing moves it on its own —

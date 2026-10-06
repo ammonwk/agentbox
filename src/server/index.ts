@@ -17,6 +17,7 @@
  * session, bytes both ways. Closing it detaches; the agent keeps running.
  */
 
+import { startGoSpend } from "../core/accounts/gospend";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
@@ -1335,6 +1336,9 @@ export async function startServer(): Promise<void> {
   await fleet.ready;
   phase("first pass");
   scheduler.start();
+  // What each OpenCode Go key spent, which is its usage (accounts/gospend.ts).
+  // After the first pass: the first run reads a month of transcripts.
+  startGoSpend();
   await firstSlow;
   // Its PRs are the sessions', which the pass may have finished after it looked.
   slow.prs = openPrs(fleet.sessions());

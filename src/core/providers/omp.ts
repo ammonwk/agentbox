@@ -39,6 +39,7 @@ import {
   type ToolOutcome,
 } from "./omp-transcript";
 import { ompRedirectVars } from "./omp-usage";
+import { goKeyOf } from "../accounts/gokey";
 import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
 import { BRIEFING } from "./briefing";
 import type {
@@ -674,11 +675,17 @@ function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoA
   return a;
 }
 
-/** One implicit account. What must not leak in from the server's shell is
- *  anything that silently points omp at another data dir: an XDG_*_HOME with
- *  an `omp/` under it, a profile, or a session-dir override. */
-function ompAccountCommand(): Pick<Command, "env" | "unset"> {
-  return { env: {}, unset: ompRedirectVars() };
+/** omp's data dir is the same for every account; what differs is the
+ *  OpenCode Go key, which `~/.omp/agent/models.yml` takes from
+ *  `OPENCODE_GO_API_KEY` before opencode's own login (accounts/gokey.ts). The
+ *  default account is that login, so it is left to it. What must not leak in
+ *  from the server's shell is anything that silently points omp at another
+ *  data dir: an XDG_*_HOME with an `omp/` under it, a profile, or a
+ *  session-dir override. */
+function ompAccountCommand(account?: Pick<Account, "home" | "isDefault">): Pick<Command, "env" | "unset"> {
+  const key = account && !account.isDefault ? goKeyOf(account) : null;
+  if (key) return { env: { OPENCODE_GO_API_KEY: key }, unset: ompRedirectVars() };
+  return { env: {}, unset: [...ompRedirectVars(), "OPENCODE_GO_API_KEY"] };
 }
 
 export const ompAdapter: ProviderAdapter = {
@@ -694,8 +701,8 @@ export const ompAdapter: ProviderAdapter = {
     return join(userHome(), ".omp");
   },
 
-  accountCommand: ompAccountCommand,
-  authEnv: ompAccountCommand,
+  accountCommand: (account) => ompAccountCommand(account),
+  authEnv: () => ompAccountCommand(),
 
   async listTranscripts(account, sinceMs) {
     const out: TranscriptRef[] = [];
@@ -748,10 +755,14 @@ export const ompAdapter: ProviderAdapter = {
 
   subagentLogDir: (ref) => ref.path.slice(0, -".jsonl".length),
 
+  // Every OpenCode Go account runs on the one session store (only the key
+  // differs), so a session is already wherever it is resumed.
+  moveSession: ({ transcriptPath }) => transcriptPath,
+
   spawnCommand(opts: SpawnOptions) {
     return {
       argv: withPrompt(["omp", ...commonFlags(opts)], opts.prompt),
-      ...ompAccountCommand(),
+      ...ompAccountCommand(opts.account),
       agentSessionId: null,
     };
   },
@@ -762,7 +773,7 @@ export const ompAdapter: ProviderAdapter = {
     const path = findSessionFile(sessionsRootOf(opts.account), opts.agentSessionId, opts.cwd);
     return {
       argv: withPrompt(["omp", "-r", path ?? opts.agentSessionId, ...commonFlags(opts)], opts.prompt),
-      ...ompAccountCommand(),
+      ...ompAccountCommand(opts.account),
     };
   },
 

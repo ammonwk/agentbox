@@ -181,6 +181,15 @@ export function isRateLimitError(msg: { errorStatus?: unknown; errorMessage?: un
 }
 
 /**
+ * An OpenCode Go key out of funds. Elsewhere that is fatal (no wait fixes
+ * it), but each Go key is an account of its own, so for Go it is that
+ * account's limit: the session can go on on another key.
+ */
+export function goOutOfFunds(provider: unknown, message: unknown): boolean {
+  return typeof provider === "string" && provider.startsWith("opencode-go") && typeof message === "string" && /insufficient (account )?(funds|balance|credits)/i.test(message);
+}
+
+/**
  * How an error that ended the turn classifies (TranscriptFacts.turnError):
  * fatal when a retry cannot fix it — out of funds or credits, a rejected
  * key, a request the provider refuses — and transient otherwise: stream
@@ -323,7 +332,7 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       if (m.stopReason === "error") {
         const who = [m.provider, m.model].filter((x) => typeof x === "string" && x).join("/");
         const first = String(m.errorMessage ?? `HTTP ${m.errorStatus}`).split("\n")[0]!;
-        if (isRateLimitError(m)) {
+        if (isRateLimitError(m) || goOutOfFunds(m.provider, m.errorMessage)) {
           const hit: LimitHit = { at: when, detail: oneLine(who ? `${who}: ${first}` : first, 200) };
           if (typeof m.provider === "string" && m.provider) hit.provider = m.provider;
           s.rateLimitHits.push(hit);

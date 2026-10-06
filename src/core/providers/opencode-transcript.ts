@@ -31,7 +31,7 @@ import { addUsage, emptyTotals } from "../pricing";
 import { capJson } from "./jsonl-reader";
 import { countSlugs, mostNamed, prReposIn } from "../prrepo";
 import { askQuestionsOf } from "./ask";
-import { clip, ompErrorKind, toolSummary } from "./omp-transcript";
+import { clip, goOutOfFunds, ompErrorKind, toolSummary } from "./omp-transcript";
 import type { OpencodeChildRow, OpencodeMessageRow, OpencodeSessionRow } from "./opencode-db";
 
 const PROMPT_CAP = 2000;
@@ -185,9 +185,10 @@ export function summarize(row: OpencodeMessageRow, ver: number): RowSummary {
 }
 
 /** A limit the provider refused on, rather than a fault: 429s and quota
- *  errors, but not running out of prepaid funds, which no wait fixes. */
-function isLimit(e: NonNullable<RowSummary["error"]>): boolean {
-  if (/insufficient (account )?(funds|balance|credits)/i.test(e.message)) return false;
+ *  errors, and an OpenCode Go key out of funds (`goOutOfFunds`), but not
+ *  another provider's prepaid funds running out, which no wait fixes. */
+function isLimit(e: NonNullable<RowSummary["error"]>, provider: string | null): boolean {
+  if (/insufficient (account )?(funds|balance|credits)/i.test(e.message)) return goOutOfFunds(provider, e.message);
   if (e.type === "provider.quota" || e.status === 429) return true;
   return /rate.?limit|usage limit|quota|too many requests|FreeUsageLimitError/i.test(e.message);
 }
@@ -243,9 +244,9 @@ export function opencodeFacts({ id, row, rows, children }: FactsInput): Transcri
         turnError = null;
         if (r.error && r.error.type !== "aborted") {
           const who = r.model ?? "";
-          if (isLimit(r.error)) {
+          const provider = r.model?.includes("/") ? r.model.slice(0, r.model.indexOf("/")) : null;
+          if (isLimit(r.error, provider)) {
             const hit: LimitHit = { at: r.at, detail: oneLine(who ? `${who}: ${r.error.message}` : r.error.message, 200) };
-            const provider = r.model?.includes("/") ? r.model.slice(0, r.model.indexOf("/")) : null;
             if (provider) hit.provider = provider;
             hits.push(hit);
           } else {
