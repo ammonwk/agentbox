@@ -82,7 +82,7 @@ export function loginCommand(account: Pick<Account, "provider" | "home" | "isDef
 /** Ask for an OpenCode Go key and keep it, 0600, in `$1`. */
 const GO_KEY_SCRIPT = [
   "umask 077",
-  "echo 'Paste this account\\'s OpenCode Go API key (from https://opencode.ai/auth, your workspace, API Keys) below.'",
+  "echo 'Paste the OpenCode Go API key for this account (from https://opencode.ai/auth: your workspace, API Keys) below.'",
   "stty -echo 2>/dev/null",
   "IFS= read -r k",
   "stty echo 2>/dev/null",
