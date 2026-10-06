@@ -39,6 +39,7 @@ import { JsonlTranscriptReader } from "./jsonl-reader";
 import { cwdOf, environOf, findProcesses, runsCli, startedAtOf, type ProcMatch } from "./procs";
 import { pickOption, plainScreen } from "./tui-screen";
 import { BRIEFING } from "./briefing";
+import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
   LiveProcess,
@@ -709,23 +710,57 @@ const TOLD = ["-c", `developer_instructions=${JSON.stringify(BRIEFING)}`];
 /** clap reads a leading `-` as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
 
+/** Flags adopt carries over (`carryFlags`): model, config, profile,
+ *  sandbox and approvals, directories — never a subcommand or the prompt. */
+const CARRIED: Record<string, Arity> = {
+  "-m": "one",
+  "--model": "one",
+  "-c": "one",
+  "--config": "one",
+  "-p": "one",
+  "--profile": "one",
+  "-s": "one",
+  "--sandbox": "one",
+  "-a": "one",
+  "--ask-for-approval": "one",
+  "--dangerously-bypass-approvals-and-sandbox": "none",
+  "--full-auto": "none",
+  "--add-dir": "one",
+  "--enable": "one",
+  "--disable": "one",
+  "--search": "none",
+  "--oss": "none",
+  "--local-provider": "one",
+  "--no-alt-screen": "none",
+  "--strict-config": "none",
+};
+
+/** `codex exec` and `codex review`: something is reading the output. */
+const isHeadless = (argv: string[]): boolean => ["exec", "e", "review"].includes(parseCodexArgs(codexArgs(argv)).sub ?? "");
+
+/**
+ * The flags a session starts with. A carried launch decides model and
+ * permissions (ResumeOptions.carry); what it does not set is ours.
+ */
+function sessionFlags(opts: { model?: string; effort?: string; autoApprove: boolean; carry?: string[] }): string[] {
+  const c = opts.carry;
+  const a: string[] = [...(c ?? [])];
+  const configs = (c ?? []).filter((x, i) => c![i - 1] === "-c" || c![i - 1] === "--config" || x.startsWith("--config="));
+  if (opts.model && !(c && setsFlag(c, "-m", "--model"))) a.push("--model", opts.model);
+  if (opts.effort && !configs.some((x) => /(^|=)model_reasoning_effort=/.test(x))) a.push("-c", `model_reasoning_effort="${opts.effort}"`);
+  if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox");
+  if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...TOLD);
+  return a;
+}
+
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
-  const argv = ["codex"];
-  if (opts.model) argv.push("--model", opts.model);
-  if (opts.effort) argv.push("-c", `model_reasoning_effort="${opts.effort}"`);
-  if (opts.autoApprove) argv.push("--dangerously-bypass-approvals-and-sandbox");
-  argv.push(...TOLD);
+  const argv = ["codex", ...sessionFlags(opts)];
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: null };
 }
 
 function resumeCommand(opts: ResumeOptions): Command {
-  const argv = ["codex", "resume"];
-  if (opts.model) argv.push("--model", opts.model);
-  if (opts.effort) argv.push("-c", `model_reasoning_effort="${opts.effort}"`);
-  if (opts.autoApprove) argv.push("--dangerously-bypass-approvals-and-sandbox");
-  argv.push(...TOLD);
-  argv.push(opts.agentSessionId);
+  const argv = ["codex", "resume", ...sessionFlags(opts), opts.agentSessionId];
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
 }
@@ -782,6 +817,8 @@ export const codexAdapter: ProviderAdapter = {
   reader: codexReader,
   spawnCommand,
   resumeCommand,
+  carryOver: (argv) => carryFlags(codexArgs(argv), CARRIED),
+  headless: isHeadless,
   autoAnswer: codexAutoAnswer,
   blockedOn: codexBlockedOn,
 };

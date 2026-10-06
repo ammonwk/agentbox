@@ -35,6 +35,7 @@ import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf 
 import { pickOption, plainScreen } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
 import { BRIEFING } from "./briefing";
+import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
   LiveProcess,
@@ -446,13 +447,13 @@ function resumeCommand(opts: ResumeOptions): Command {
   if (opts.carry) {
     // An adopted session keeps how it was launched, permissions included.
     argv.push(...opts.carry);
-    if (opts.model && !opts.carry.some((a) => a === "--model" || a.startsWith("--model="))) argv.push("--model", opts.model);
-    if (opts.effort && !opts.carry.some((a) => a === "--effort" || a.startsWith("--effort="))) argv.push("--effort", opts.effort);
-    if (!opts.carry.some((a) => a === "--thinking-display" || a.startsWith("--thinking-display="))) argv.push(...THINKING);
+    if (opts.model && !setsFlag(opts.carry, "--model")) argv.push("--model", opts.model);
+    if (opts.effort && !setsFlag(opts.carry, "--effort")) argv.push("--effort", opts.effort);
+    if (!setsFlag(opts.carry, "--thinking-display")) argv.push(...THINKING);
     // One it was launched with is its own, or ours from an earlier launch; a
     // second would replace it.
-    if (!opts.carry.some((a) => a.startsWith("--append-system-prompt"))) argv.push(...TOLD);
-    if (!opts.carry.some((a) => a === "--settings" || a.startsWith("--settings="))) argv.push(...HOOKED);
+    if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...TOLD);
+    if (!setsFlag(opts.carry, "--settings")) argv.push(...HOOKED);
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
@@ -463,13 +464,8 @@ function resumeCommand(opts: ResumeOptions): Command {
   return { argv, ...accountCommand(opts.account) };
 }
 
-/**
- * Flags adopt carries over, by how many values each takes (`many` runs to the
- * next flag, as commander parses it). An allowlist, not a denylist: a flag we
- * do not know the arity of could swallow the prompt, and one we do not know
- * the meaning of could be the session id.
- */
-const CARRIED: Record<string, "none" | "one" | "many"> = {
+/** Flags adopt carries over, by how many values each takes (`carryFlags`). */
+const CARRIED: Record<string, Arity> = {
   "--dangerously-skip-permissions": "none",
   "--allow-dangerously-skip-permissions": "none",
   "--permission-mode": "one",
@@ -508,24 +504,7 @@ const CARRIED: Record<string, "none" | "one" | "many"> = {
   "--verbose": "none",
 };
 
-export function claudeCarryOver(argv: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    const eq = a.indexOf("=");
-    const flag = a.startsWith("--") && eq > 0 ? a.slice(0, eq) : a;
-    const arity = CARRIED[flag];
-    if (!arity) continue;
-    out.push(a);
-    if (arity === "none" || eq > 0) continue;
-    if (arity === "one") {
-      if (argv[i + 1] !== undefined) out.push(argv[++i]!);
-      continue;
-    }
-    while (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith("-")) out.push(argv[++i]!);
-  }
-  return out;
-}
+export const claudeCarryOver = (argv: string[]): string[] => carryFlags(argv, CARRIED);
 
 /**
  * Move a stopped session to another account's home: the transcript and its

@@ -22,6 +22,7 @@ import { basename, join, sep } from "node:path";
 import { userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import { mostNamed } from "../prrepo";
+import { carryFlags, setsFlag, type Arity } from "../launch";
 import { ompAskStep, readOmpAsk } from "./omp-ask";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import { JsonlTail, type JsonlTailState } from "./jsonl";
@@ -609,14 +610,65 @@ function withPrompt(argv: string[], prompt?: string): string[] {
   return prompt ? [...argv, "--", prompt] : argv;
 }
 
-function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoApprove: boolean }): string[] {
-  const a: string[] = [];
-  if (opts.model) a.push("--model", opts.model);
-  if (opts.effort) a.push(`--thinking=${opts.effort}`);
-  if (opts.autoApprove) a.push("--auto-approve");
-  a.push(`--append-system-prompt=${BRIEFING}`);
+/** Flags adopt carries over (`carryFlags`): model, permissions, prompt,
+ *  tools and directories — never the session, the profile, a key or a mode
+ *  that makes it a one-shot. */
+const CARRIED: Record<string, Arity> = {
+  "--model": "one",
+  "--smol": "one",
+  "--slow": "one",
+  "--plan": "one",
+  "--provider": "one",
+  "--models": "one",
+  "--thinking": "one",
+  "--service-tier": "one",
+  "--hide-thinking": "none",
+  "--system-prompt": "one",
+  "--append-system-prompt": "one",
+  "--allow-home": "none",
+  "--add-dir": "one",
+  "--config": "one",
+  "--tools": "one",
+  "--no-tools": "none",
+  "--no-lsp": "none",
+  "--no-pty": "none",
+  "--advisor": "none",
+  "--hook": "one",
+  "--extension": "one",
+  "-e": "one",
+  "--no-extensions": "none",
+  "--skills": "one",
+  "--no-skills": "none",
+  "--no-rules": "none",
+  "--no-title": "none",
+  "--auto-approve": "none",
+  "--approval-mode": "one",
+};
+
+/** `omp -p` and the machine-readable modes: something is reading the output. */
+function isHeadless(argv: string[]): boolean {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "-p" || a === "--print") return true;
+    const mode = a === "--mode" ? argv[i + 1] : a.startsWith("--mode=") ? a.slice("--mode=".length) : undefined;
+    if (mode !== undefined && mode !== "text") return true;
+  }
+  return false;
+}
+
+/**
+ * The flags a session starts with. A carried launch decides model and
+ * permissions (ResumeOptions.carry); what it does not set is ours.
+ */
+function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[] }): string[] {
+  const c = opts.carry;
+  const a: string[] = [...(c ?? [])];
+  if (opts.model && !(c && setsFlag(c, "--model"))) a.push("--model", opts.model);
+  if (opts.effort && !(c && setsFlag(c, "--thinking"))) a.push(`--thinking=${opts.effort}`);
+  if (!c && opts.autoApprove) a.push("--auto-approve");
+  if (!(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${BRIEFING}`);
   // omp silently moves a session started in ~ to a temp dir unless told not to.
-  if (canonical(opts.cwd) === canonical(homedir())) a.push("--allow-home");
+  if (canonical(opts.cwd) === canonical(homedir()) && !(c && setsFlag(c, "--allow-home"))) a.push("--allow-home");
   return a;
 }
 
@@ -723,4 +775,6 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   answerStep: ompAskStep,
+  carryOver: (argv) => carryFlags(argv, CARRIED),
+  headless: isHeadless,
 };
