@@ -368,8 +368,14 @@ const OUTPUT_CAP_TEXT = /exceeded the \d+ output token (maximum|limit)|output to
 const FATAL_ERROR_TEXT =
   /Prompt is too long|organization has disabled|issue with the selected model|does not support this model|not logged in|please run \/login|dimension limit for many-image|Failed to authenticate|exceeds the maximum/i;
 
+/** A 403 for a model's access grant, which Claude prefixes with "Please run
+ *  /login" like any 403. One account's grant to Opus 5.5 failed for five
+ *  minutes and came back with the same token; a new login was never needed. */
+const GRANT_ERROR_TEXT = /requires an access grant/i;
+
 export function claudeTurnErrorKind(text: string): "output-cap" | "transient" | "fatal" {
   if (OUTPUT_CAP_TEXT.test(text)) return "output-cap";
+  if (GRANT_ERROR_TEXT.test(text)) return "transient";
   if (FATAL_ERROR_TEXT.test(text)) return "fatal";
   return "transient";
 }

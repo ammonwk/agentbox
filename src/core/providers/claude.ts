@@ -364,10 +364,46 @@ export function claudeApprovePrompt(raw: string): string[] | null {
   return pickOption(tail, /^Yes$/);
 }
 
+/**
+ * The last message above the input box: its bullet line and what wraps under
+ * it, up to a blank line. The agent list under the input box has bullets too,
+ * so the input box (a `❯` line under a rule) bounds the search when shown.
+ */
+function lastMessage(s: string): string | null {
+  const lines = s.split("\n");
+  const rule = /^─{20,}\s*$/;
+  let end = lines.length;
+  for (let i = lines.length - 1; i > 0; i--) {
+    if (/^❯/.test(lines[i]!) && rule.test(lines[i - 1]!)) {
+      end = i - 1;
+      break;
+    }
+  }
+  for (let i = end - 1; i >= 0; i--) {
+    if (!/^\s*[●⏺]\s/.test(lines[i]!)) continue;
+    const out = [lines[i]!.replace(/^\s*[●⏺]\s+/, "")];
+    for (let j = i + 1; j < end && lines[j]!.trim() && !rule.test(lines[j]!); j++) out.push(lines[j]!.trim());
+    return out.join(" ");
+  }
+  return null;
+}
+
+/** Claude's own refusal for want of a login, as a message in the conversation
+ *  ("Please run /login · API Error: 401 …", "Not logged in · Please run
+ *  /login"). It prefixes every 403 the same way, including an account's
+ *  access grant to a model failing for a few minutes, which a retry gets past
+ *  with the same token (claudeTurnErrorKind). */
+const LOGIN_ERROR = /^(?:Please run \/login|Not logged in|Invalid API key)/;
+
 /** What a Claude screen is waiting on you for, in a few words. */
 export function claudeBlockedOn(raw: string): string | null {
   const s = plainScreen(raw);
-  if (/Select login method|Please run \/login|Not logged in/.test(s)) return "login required";
+  if (/Select login method/.test(s)) return "login required";
+  // An error line is history once anything follows it: only the session's
+  // last message says it is still stopped there. A teammate's failure is in
+  // a "Teammate @x failed:" line, which is not this session's login.
+  const last = lastMessage(s);
+  if (last && LOGIN_ERROR.test(last) && !/requires an access grant/i.test(last)) return "login required";
   // The options alone: in a short pane the dialog's heading has scrolled away.
   if (/Yes, I trust this folder/.test(s) && /No, exit/.test(s)) return "folder trust";
   if (/Bypass Permissions mode/.test(s) && /Yes, I accept/.test(s)) return "confirm bypass-permissions mode";
