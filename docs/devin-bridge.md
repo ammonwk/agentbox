@@ -6,6 +6,10 @@ such model is LongCat 2.5 Preview, free on OpenCode Go, which has a 1M window
 and is to be rolled before about 220k: in devin it is summarised from 160k,
 the summary swapped in at 195k, and never sent more than 220k.
 
+It is also offered as `longcat-400k`, the same model summarised from 300k
+and never sent more than 400k, to measure whether fewer summaries are worth
+running further past the point where it is reported to degrade.
+
 None of this is supported by devin. It rests on a wire format read off the
 network, so a devin update can break it. The second half of this page is how
 to find out what broke and put it back.

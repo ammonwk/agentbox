@@ -46,35 +46,46 @@ const envInt = (name: string, fallback: number): number => {
   return Number.isInteger(v) && v > 0 ? v : fallback;
 };
 
-/**
- * LongCat 2.5 Preview, free on OpenCode Go. Its window is 1M tokens, but it
- * is to be rolled before about 220k, so that is the window devin is told:
- * the summary is written from 160k and swapped in at 195k, which leaves a
- * turn's worth of tool output before 220k. The thresholds are devin's own
- * mechanism, set per model in the catalog.
- */
-const longcat: BridgedModel = {
-  uid: "longcat-2-5-preview-free",
-  label: "LongCat 2.5 Preview (OpenCode Go)",
-  family: "LongCat 2.5 Preview",
-  alias: "longcat",
-  // A reasoning model served over chat completions, in devin's harness for
-  // models that are neither its own nor OpenAI's.
-  template: "deepseek-v4-1-flash-max",
-  contextTokens: envInt("AGENTBOX_LONGCAT_CONTEXT", 220_000),
-  maxOutputTokens: 32_000,
-  compaction: {
-    spawn: envInt("AGENTBOX_LONGCAT_COMPACT_SPAWN", 160_000),
-    apply: envInt("AGENTBOX_LONGCAT_COMPACT_APPLY", 195_000),
-    hard: envInt("AGENTBOX_LONGCAT_CONTEXT", 220_000),
-  },
-  baseUrl: process.env.AGENTBOX_LONGCAT_BASE_URL || "https://opencode.ai/zen/go/v1",
-  upstreamModel: "longcat-2.5-preview-free",
-  apiKey: opencodeGoKey,
-  keyHint: "log in to OpenCode Go (`opencode auth login`) or set OPENCODE_GO_API_KEY",
-};
+/** LongCat 2.5 Preview, free on OpenCode Go, at a given window and devin
+ *  compaction thresholds. Its own window is 1M tokens, but it is reported to
+ *  degrade past about 200k, so it is told less and summarised before then. */
+function longcat(uid: string, alias: string, label: string, window: number, compaction: BridgedModel["compaction"]): BridgedModel {
+  return {
+    uid,
+    label,
+    family: "LongCat 2.5 Preview",
+    alias,
+    // A reasoning model served over chat completions, in devin's harness for
+    // models that are neither its own nor OpenAI's.
+    template: "deepseek-v4-1-flash-max",
+    contextTokens: window,
+    maxOutputTokens: 32_000,
+    compaction,
+    baseUrl: process.env.AGENTBOX_LONGCAT_BASE_URL || "https://opencode.ai/zen/go/v1",
+    upstreamModel: "longcat-2.5-preview-free",
+    apiKey: opencodeGoKey,
+    keyHint: "log in to OpenCode Go (`opencode auth login`) or set OPENCODE_GO_API_KEY",
+  };
+}
 
-export const BRIDGED: readonly BridgedModel[] = [longcat];
+/** Rolled before 220k: the summary is written from 160k and swapped in at
+ *  195k, which leaves a turn's worth of tool output before 220k. */
+const longcatWindow = envInt("AGENTBOX_LONGCAT_CONTEXT", 220_000);
+const longcat220k = longcat("longcat-2-5-preview-free", "longcat", "LongCat 2.5 Preview (OpenCode Go)", longcatWindow, {
+  spawn: envInt("AGENTBOX_LONGCAT_COMPACT_SPAWN", 160_000),
+  apply: envInt("AGENTBOX_LONGCAT_COMPACT_APPLY", 195_000),
+  hard: longcatWindow,
+});
+
+/** The same model given 400k before it is summarised, to measure whether
+ *  fewer summaries are worth running further past 200k. */
+const longcat400k = longcat("longcat-2-5-preview-free-400k", "longcat-400k", "LongCat 2.5 Preview, 400k (OpenCode Go)", 400_000, {
+  spawn: 300_000,
+  apply: 370_000,
+  hard: 400_000,
+});
+
+export const BRIDGED: readonly BridgedModel[] = [longcat220k, longcat400k];
 
 /** The bridged model a devin `--model` value names, if any. */
 export function bridgedModel(model: string | null | undefined): BridgedModel | null {
