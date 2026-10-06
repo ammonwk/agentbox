@@ -3136,16 +3136,22 @@ export class Fleet extends EventEmitter {
     await clearPanel(this.deps.runtime, pane);
   }
 
-  /** The screen once it has changed from `before` and held still a moment. */
+  /** The screen once it has changed from `before` and held still a moment.
+   *  A spinner is not a change: omp's turns while its ask dialog is up, and
+   *  counting it returned the screen from before the keys had been taken. */
   private async settled(pane: string, before: string): Promise<string> {
-    let last = before;
+    const still = (s: string) => s.replace(/[\u2800-\u28ff]/g, "");
+    const from = still(before);
+    let last = from;
+    let screen = before;
     for (let t = 0; t < 2_000; t += 50) {
       await Bun.sleep(50);
-      const now = this.deps.runtime.capture(pane) ?? "";
-      if (now !== before && now === last) return now;
+      screen = this.deps.runtime.capture(pane) ?? "";
+      const now = still(screen);
+      if (now !== from && now === last) return screen;
       last = now;
     }
-    return last;
+    return screen;
   }
 
   async stopSession(id: string): Promise<void> {
