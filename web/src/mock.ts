@@ -780,7 +780,6 @@ function metrics(): MetricsState {
       memKind: "pss",
       procs: busy ? 6 + (s.id.charCodeAt(1) % 5) : 3,
       history: h.slice(),
-      ...(s.id === "b8v7" ? { backgroundShells: 1 } : {}),
     };
   }
   return { at: Date.now(), system: sys, load };

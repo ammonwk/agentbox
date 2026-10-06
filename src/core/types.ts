@@ -846,8 +846,6 @@ export interface LoadSample {
   procs: number;
   /** Recent cpuPct samples, oldest first, for the sparkline. */
   history: number[];
-  /** Shell tool calls outliving a parked turn. Absent when there are none. */
-  backgroundShells?: number;
 }
 
 /** What a process in a session's subtree is doing there. */
