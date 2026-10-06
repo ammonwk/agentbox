@@ -75,8 +75,8 @@ import {
   strandedNudge,
   strandedNudgeAfter,
   SUBAGENT_QUIET_MS,
-  subagentsLastWrite,
-  WakeScan,
+  lastWriteUnder,
+  wakeHold,
 } from "./park";
 import { cacheExpiring, cacheWarmUntil, KEEP_WARM_MAX, keepWarmNote, keepWarmPlan, type WarmSpell } from "./cache";
 import { read as readLive } from "../subagents/live";
@@ -350,8 +350,6 @@ export class Fleet extends EventEmitter {
   private liveStatus = new Map<string, SessionStatus>();
   /** Idle sessions kept running, and why (see src/core/park.ts). */
   private parkHolds = new Map<string, string>();
-  /** By transcript path. */
-  private wakeScans = new Map<string, WakeScan>();
   /** Sessions found parkable at the last check (see `parkIdle`). */
   private parkClean = new Map<string, ParkCheck>();
   /** Parked processes that may outlive their tmux session (see reapParked). */
@@ -834,19 +832,19 @@ export class Fleet extends EventEmitter {
   private keepWarm(now: number, parkIdleMin: number): void {
     const after = strandedNudgeAfter(parkIdleMin);
     for (const v of this.views.values()) {
-      if (v.provider !== "claude" || v.host !== "tmux" || this.busy.has(v.id)) continue;
+      if (v.host !== "tmux" || this.busy.has(v.id)) continue;
       // "Running" too: Claude's status file says busy on a lead with teammates.
       if (v.status !== "waiting" && v.status !== "running") continue;
-      const facts = v.transcriptPath ? this.tracked.get(v.transcriptPath)?.facts : null;
-      if (!facts || stoppedAtLimit(facts)) continue;
+      const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
+      const facts = t?.facts;
+      if (!t || !facts || stoppedAtLimit(facts)) continue;
 
       const stranded = this.strandedOf(v);
       const newest = stranded.at(-1)?.at;
       if (newest !== undefined && this.strandedSeen.get(v.id) !== newest && (cacheExpiring(now, v.cacheWarmUntil) || now - v.lastActivityAt >= after)) {
         // A working teammate's notification waits in the lead's queue until
         // the teammate's step yields, and is taken then.
-        const sub = subagentsLastWrite(v.transcriptPath!, facts.agentSessionId);
-        if (sub !== null && now - sub < SUBAGENT_QUIET_MS) continue;
+        if (this.subagentsWorking(t.ref, now)) continue;
         this.strandedSeen.set(v.id, newest);
         console.log(`agentbox: ${v.id} (${v.title}) was never woken by ${stranded.length} finished background task${stranded.length === 1 ? "" : "s"}; nudging it after ${minutes(now - v.lastActivityAt)} quiet`);
         void this.sendInPlace(v.id, strandedNudge(stranded)).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
@@ -945,7 +943,6 @@ export class Fleet extends EventEmitter {
     t.reader = null;
     t.facts = null;
     t.restored = false;
-    this.wakeScans.delete(path);
   }
 
   /** Whether anything of the session runs: its process, or its pane. */
@@ -1302,7 +1299,7 @@ export class Fleet extends EventEmitter {
   // -------------------------------------------------------------- parking
 
   /**
-   * Stop the process of every Claude session in our tmux that has sat idle
+   * Stop the process of every session in our tmux that has sat idle
    * for `idleMin`, whose prompt cache has gone cold, with nothing holding it
    * up (src/core/park.ts says what holds). The session stays on the board as
    * waiting, and a message or a resume brings it back — with the cache cold,
@@ -1328,7 +1325,6 @@ export class Fleet extends EventEmitter {
     const idleMs = idleMin * 60_000;
     const candidates = [...this.views.values()].filter(
       (v) =>
-        v.provider === "claude" &&
         v.host === "tmux" &&
         v.tmux &&
         // Still warm, its next message costs less with the process up.
@@ -1424,12 +1420,11 @@ export class Fleet extends EventEmitter {
       if (parked) this.emit("sessions");
     }
     this.parkClean = clean;
-    for (const path of this.wakeScans.keys()) if (!this.tracked.has(path)) this.wakeScans.delete(path);
     this.parkHolds = holds;
   }
 
   /**
-   * A parked Claude that outlives its tmux session — it ignored the hangup,
+   * A parked agent that outlives its tmux session — it ignored the hangup,
    * or is slow to shut its MCP servers down — gets SIGTERM after 10s and
    * SIGKILL after two minutes: a process left behind is what parking is for.
    * The start time guards against a recycled pid.
@@ -1495,7 +1490,7 @@ export class Fleet extends EventEmitter {
       if (pane.dead) continue;
       const argv = argvOf(pane.pid);
       if (!argv) continue; // exited since the listing
-      if (!runsCli(argv, "claude")) return `a pane runs ${basename(argv[0] ?? "?")}, not claude`;
+      if (!runsCli(argv, v.provider)) return `a pane runs ${basename(argv[0] ?? "?")}, not ${v.provider}`;
       const started = startedAtOf(pane.pid);
       if (started !== null && now - started < idleMs) return `started ${minutes(now - started)} ago`;
       const flag = (f: string) => {
@@ -1525,15 +1520,10 @@ export class Fleet extends EventEmitter {
         if (f.turnOpen && now - at < STALE_TURN_MS) return `${name} is mid-turn`;
         if (now - at < idleMs) return `${name} was active ${minutes(now - at)} ago`;
       }
-      let scan = this.wakeScans.get(t.ref.path);
-      if (!scan) this.wakeScans.set(t.ref.path, (scan = new WakeScan(t.ref.path)));
-      // Timers set before these processes started died with the one before.
-      const since = Math.min(...agents.map((a) => a.started), now);
-      const wake = await scan.hold(now, since);
+      const wake = wakeHold(f.wakes, now, Math.min(...agents.map((a) => a.started), now));
       if (wake) return name === "it" ? wake : `${name}: ${wake}`;
-      for (const m of scan.monitors) monitors.add(m);
-      const sub = subagentsLastWrite(t.ref.path, f.agentSessionId);
-      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) return `${name === "it" ? "its" : `${name}'s`} subagents are working`;
+      for (const m of f.monitors ?? []) monitors.add(m);
+      if (this.subagentsWorking(t.ref, now)) return `${name === "it" ? "its" : `${name}'s`} subagents are working`;
     }
 
     // What runs under each agent.
@@ -1584,13 +1574,26 @@ export class Fleet extends EventEmitter {
     for (const v of idle) {
       // Let the server answer between sessions.
       await Bun.sleep(0);
-      const why = await this.workOf(v, table, live, now).catch(() => null);
+      let why: string | null = null;
+      try {
+        why = this.workOf(v, table, live, now);
+      } catch {
+        /* its process went away mid-look */
+      }
       if (why) work.set(v.id, why);
     }
     this.work = work;
   }
 
-  private async workOf(v: Session, table: ProcTable, live: { owner: string }[], now: number): Promise<string | null> {
+  /** Have this transcript's in-process subagents written lately? They run
+   *  inside the session's process and leave no child to find. */
+  private subagentsWorking(ref: TranscriptRef, now: number): boolean {
+    const dir = this.adapter(ref.provider).subagentLogDir?.(ref);
+    const last = dir ? lastWriteUnder(dir) : null;
+    return last !== null && now - last < SUBAGENT_QUIET_MS;
+  }
+
+  private workOf(v: Session, table: ProcTable, live: { owner: string }[], now: number): string | null {
     const kids = [...this.views.values()].filter((c) => c.parent === v.id && c.host === "subagent" && c.status === "running");
     if (kids.length) return `its subagents were working (${kids.map((k) => k.subagent?.name ?? k.id).join(", ")})`;
     const pane = v.tmux ? this.panes.get(v.tmux) : undefined;
@@ -1603,14 +1606,11 @@ export class Fleet extends EventEmitter {
     if (live.some((e) => owners.includes(e.owner))) return "its subagents were working";
     const monitors = new Set<string>();
     const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
-    if (v.provider === "claude" && t?.facts) {
-      let scan = this.wakeScans.get(t.ref.path);
-      if (!scan) this.wakeScans.set(t.ref.path, (scan = new WakeScan(t.ref.path)));
-      const wake = await scan.hold(now, startedAtOf(pid) ?? now);
+    if (t?.facts) {
+      const wake = wakeHold(t.facts.wakes, now, startedAtOf(pid) ?? now);
       if (wake) return wake;
-      for (const m of scan.monitors) monitors.add(m);
-      const sub = subagentsLastWrite(t.ref.path, t.facts.agentSessionId);
-      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) return "its in-process subagents were working";
+      for (const m of t.facts.monitors ?? []) monitors.add(m);
+      if (this.subagentsWorking(t.ref, now)) return "its in-process subagents were working";
     }
     return shellWork(table, pid, monitors, now - v.lastActivityAt, false).hold;
   }

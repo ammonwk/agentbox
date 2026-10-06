@@ -317,14 +317,16 @@ const DASH_C = /^-[a-z]*c[a-z]*$/;
  * Structural rather than string-matched, because the four providers do not
  * share a shape. Claude Code runs every Bash call through `bash -c source
  * <shell snapshot>`, which nothing else does, so that marker is exact. Codex
- * runs `bash -lc <command>` (its rollouts record the argv). omp's and devin's
- * shapes have not been sampled mid-turn; an idle agent has no children at all,
- * so the subtree only exists while a turn is running.
+ * runs `bash -lc <command>` (its rollouts record the argv). omp does not fit:
+ * it runs the command itself (`bash script.sh`, `node …/tsc`), so its tool
+ * calls read as servers here, and its background work is read from its
+ * transcript instead (TranscriptFacts.wakes). devin's shape has not been
+ * sampled.
  *
- * So the rule is the one that holds for any of them: a direct child that is a
- * shell running `-c` is work the agent asked for, and a direct child that is
- * anything else is a server it started at boot. To check a provider against
- * it, sample a subtree while a turn is in flight:
+ * So the rule: a direct child that is a shell running `-c` is work the agent
+ * asked for, and a direct child that is anything else is a server it started
+ * at boot. To check a provider against it, sample a subtree while a turn is
+ * in flight:
  *   ps -e -o pid,ppid,args --no-headers | awk '$2==<agent pid>'
  */
 export function isToolShell(cmd: string | undefined): boolean {

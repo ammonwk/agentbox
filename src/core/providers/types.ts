@@ -64,6 +64,17 @@ export interface LiveProcess {
   waitingOn?: string;
 }
 
+/** Something an agent set going that will wake it (TranscriptFacts.wakes). */
+export interface Wake {
+  /** What it is, as a hold reads it: "background job bg_3 (npm test)". */
+  label: string;
+  setAt: number;
+  /** When it fires or gives up; null when it runs until it reports back. */
+  until: number | null;
+  /** Survives the process that set it (claude's durable cron jobs). */
+  durable?: boolean;
+}
+
 /** Everything an adapter can say about one transcript. */
 export interface TranscriptFacts {
   agentSessionId: string;
@@ -151,6 +162,17 @@ export interface TranscriptFacts {
    * (`Fleet.keepWarm`), and the nudge in the transcript clears them.
    */
   stranded?: QueuedMessage[];
+  /**
+   * What the agent set going that will wake it with its turn over, as its
+   * transcript records it: omp's background jobs and supervised processes,
+   * claude's /loop wakeups and cron jobs. Each lives in the agent's process
+   * and dies with it.
+   */
+  wakes?: Wake[];
+  /** Commands whose every line of output is a message to the session
+   *  (claude's Monitor), whitespace-collapsed: a never-ending shell that is
+   *  work. */
+  monitors?: string[];
   /** An AskUserQuestion call (claude) still waiting for its answer. */
   pendingAsk?: { id: string; questions: AskQuestion[] } | null;
   /** The session is in its CLI's skip-every-permission mode as of its latest
@@ -265,6 +287,11 @@ export interface ProviderAdapter {
   findTranscript(account: Account, agentSessionId: string): Promise<TranscriptRef | null>;
 
   reader(ref: TranscriptRef): TranscriptReader;
+
+  /** Where a session's in-process subagents write their logs. They leave no
+   *  child process to find, but they write as they work. Absent when the CLI
+   *  keeps none. */
+  subagentLogDir?(ref: TranscriptRef): string;
 
   /**
    * argv for a new interactive session. `agentSessionId` is set when the CLI

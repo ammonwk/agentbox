@@ -18,7 +18,7 @@ import { askQuestionsOf } from "./ask";
 import { PrRepoFold } from "../prrepo";
 import { loadFields, saveFields } from "./foldstate";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
-import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
+import { isAgentSent, type TranscriptFacts, type TranscriptRef, type Wake } from "./types";
 import { dropPasteTags, isFleetNote } from "../sent";
 import { isStrandedNudge } from "../park";
 import { claudeCacheTtl } from "../cache";
@@ -413,6 +413,8 @@ const MAX_CWDS = 64;
 const MAX_TEAMS = 64;
 /** Claude's queue rarely holds more than a few; a long one is a missed `remove`. */
 const MAX_QUEUED = 20;
+const MAX_CRONS = 64;
+const MAX_MONITORS = 64;
 const QUEUED_CAP = 4000;
 
 /** Token totals over assistant records, deduplicated by message id. Used for
@@ -491,6 +493,12 @@ export class ClaudeFold {
   private sawSidechain = false;
   private recordSessionId: string | null = null;
   private prRepo = new PrRepoFold();
+  /** The newest ScheduleWakeup (dynamic /loop) and the live CronCreate jobs,
+   *  by id: timers inside the process, with no child to find. */
+  private wakeup: { due: number; setAt: number } | null = null;
+  private crons = new Map<string, { until: number; setAt: number; durable: boolean }>();
+  /** Every command a Monitor call started, whitespace-collapsed. */
+  private monitors = new Set<string>();
 
   constructor(
     private readonly ref: Pick<TranscriptRef, "path" | "agentSessionId">,
@@ -524,6 +532,7 @@ export class ClaudeFold {
     }
     // Sidechain tokens are this session's spend, recorded in this file.
     this.tokens.add(r);
+    if (at !== null && (r.type === "user" || r.type === "assistant")) this.timers(r, at);
 
     if (!side && typeof r.permissionMode === "string" && (r.type === "permission-mode" || r.type === "user")) this.permissionMode = r.permissionMode;
 
@@ -624,6 +633,45 @@ export class ClaudeFold {
     if (spawned?.status !== "teammate_spawned" || this.teamsLed.size >= MAX_TEAMS) return;
     const team = typeof spawned.team_name === "string" ? spawned.team_name : String(spawned.agent_id ?? "").split("@")[1];
     if (team) this.teamsLed.add(team);
+  }
+
+  /** What the session set up to wake itself (TranscriptFacts.wakes), and its
+   *  monitors. A CronCreate result says the job's id and schedule, and its
+   *  text how long a recurring one lives. */
+  private timers(r: any, at: number): void {
+    const tur = r.toolUseResult;
+    if (tur && typeof tur.id === "string" && typeof tur.humanSchedule === "string") {
+      const durable = tur.durable === true;
+      if (tur.recurring) {
+        const days = Number(/expires after (\d+) days?/i.exec(JSON.stringify(r.message?.content ?? ""))?.[1] ?? 7);
+        this.crons.set(tur.id, { until: at + days * 86_400_000, setAt: at, durable });
+      } else {
+        this.crons.set(tur.id, { until: oneShotFire(tur.humanSchedule, at), setAt: at, durable });
+      }
+      if (this.crons.size > MAX_CRONS) this.crons.delete(this.crons.keys().next().value!);
+      return;
+    }
+    const content = r.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const b of content) {
+      if (b?.type !== "tool_use") continue;
+      if (b.name === "ScheduleWakeup") {
+        const delay = Number(b.input?.delaySeconds);
+        this.wakeup = b.input?.stop || !Number.isFinite(delay) ? null : { due: at + delay * 1000, setAt: at };
+      } else if (b.name === "CronDelete") {
+        this.crons.delete(String(b.input?.id ?? ""));
+      } else if (b.name === "Monitor" && typeof b.input?.command === "string") {
+        this.monitors.add(b.input.command.replace(/\s+/g, " ").trim());
+        if (this.monitors.size > MAX_MONITORS) this.monitors.delete(this.monitors.values().next().value!);
+      }
+    }
+  }
+
+  private wakes(): Wake[] {
+    const out: Wake[] = [];
+    if (this.wakeup) out.push({ label: "a /loop wakeup", setAt: this.wakeup.setAt, until: this.wakeup.due });
+    for (const [id, c] of this.crons) out.push({ label: `cron job ${id}`, setAt: c.setAt, until: c.until, durable: c.durable });
+    return out;
   }
 
   private prompt(text: string): void {
@@ -869,8 +917,30 @@ export class ClaudeFold {
       teamsLed: [...this.teamsLed],
       pendingAsk: this.pendingAsk,
       skipsPermissions: this.permissionMode === "bypassPermissions",
+      wakes: this.wakes(),
+      monitors: [...this.monitors],
     };
   }
+}
+
+/** A one-shot cron job whose fire time cannot be read is given this long. */
+const ONE_SHOT_MAX_MS = 24 * 3_600_000;
+
+/**
+ * When a one-shot cron job fires: its minute, hour, day and month are fixed
+ * numbers (that is how Claude writes "tomorrow at 9"), in local time, at the
+ * first such moment after it was set. Anything else is given a day.
+ */
+export function oneShotFire(cron: string, setAt: number): number {
+  const f = cron.trim().split(/\s+/);
+  const [min, hour, dom, mon] = f.map(Number);
+  if (f.length < 5 || ![min, hour, dom, mon].every((x) => Number.isInteger(x))) return setAt + ONE_SHOT_MAX_MS;
+  const set = new Date(setAt);
+  for (const year of [set.getFullYear(), set.getFullYear() + 1]) {
+    const t = new Date(year, mon! - 1, dom!, hour!, min!).getTime();
+    if (t >= setAt - 60_000) return t;
+  }
+  return setAt + ONE_SHOT_MAX_MS;
 }
 
 // ------------------------------------------------------------- timeline

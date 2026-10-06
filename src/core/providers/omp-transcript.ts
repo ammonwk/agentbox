@@ -21,6 +21,7 @@
  */
 
 import type { TimelineEvent, TokenTotals } from "../types";
+import type { Wake } from "./types";
 import { addUsage, emptyTotals } from "../pricing";
 import { capJson } from "./jsonl-reader";
 
@@ -63,6 +64,11 @@ export interface OmpState {
   /** Every toolResult in file order, so `since` can find results that landed
    *  after a cursor for calls made before it. */
   resultLog: { rec: number; callId: string }[];
+  /** Background jobs and supervised processes still running, by job id or
+   *  `daemon:<name>` (TranscriptFacts.wakes). */
+  wakes: Map<string, Wake>;
+  /** An `async` bash call's command, until its result names the job. */
+  asyncCalls: Map<string, string>;
 }
 
 export function newOmpState(): OmpState {
@@ -84,6 +90,8 @@ export function newOmpState(): OmpState {
     calls: new Map(),
     results: new Map(),
     resultLog: [],
+    wakes: new Map(),
+    asyncCalls: new Map(),
   };
 }
 
@@ -200,10 +208,19 @@ export function foldOmpRecord(s: OmpState, rec: any, index: number, opts: FoldOp
       if (opts.events) s.anchors.push(index);
       return;
     case "custom":
-      if (rec.customType === "session_exit") s.turnOpen = false;
+      if (rec.customType === "session_exit") {
+        s.turnOpen = false;
+        // Its jobs and supervised processes die with it.
+        s.wakes.clear();
+        s.asyncCalls.clear();
+      }
       return;
     case "custom_message":
       if (opts.events && rec.display !== false) s.anchors.push(index);
+      if (rec.customType === "async-result") {
+        for (const j of arrayOf(rec.details?.jobs)) if (typeof j?.jobId === "string") s.wakes.delete(j.jobId);
+      }
+      noteDaemons(s, rec.details, at);
       return;
     case "message":
       foldMessage(s, rec.message, index, at, opts);
@@ -236,6 +253,7 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       if (typeof m.toolCallId === "string") {
         s.results.set(m.toolCallId, index);
         if (opts.events) s.resultLog.push({ rec: index, callId: m.toolCallId });
+        noteJobs(s, m.toolCallId, m.details, when);
       }
       return;
     case "assistant": {
@@ -253,7 +271,11 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       }
       if (Array.isArray(m.content)) {
         for (const b of m.content) {
-          if (b?.type === "toolCall" && typeof b.id === "string") s.calls.set(b.id, index);
+          if (b?.type !== "toolCall" || typeof b.id !== "string") continue;
+          s.calls.set(b.id, index);
+          if (b.name === "bash" && b.arguments?.async === true && typeof b.arguments.command === "string") {
+            s.asyncCalls.set(b.id, oneLine(b.arguments.command, 80));
+          }
         }
       }
       const said = textOf(m.content).trim();
@@ -267,6 +289,45 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       s.turnOpen = m.stopReason === "toolUse";
       return;
     }
+  }
+}
+
+function arrayOf(v: unknown): any[] {
+  return Array.isArray(v) ? v : [];
+}
+
+/**
+ * Background work a tool result starts or ends. `bash` with `async` and
+ * `task` answer "Backgrounded as job <id>" with `details.async.state:
+ * "running"`, and the job's end arrives later as an `async-result` message;
+ * `hub cancel` ends jobs in its own result. A bash job is killed at its
+ * timeout.
+ */
+function noteJobs(s: OmpState, callId: string, details: any, at: number): void {
+  const command = s.asyncCalls.get(callId);
+  s.asyncCalls.delete(callId);
+  const job = details?.async;
+  if (job?.state === "running" && typeof job.jobId === "string") {
+    const timeout = typeof details.timeoutSeconds === "number" ? details.timeoutSeconds * 1000 : null;
+    const label = job.type === "task" ? `subagent ${job.jobId}` : `background job ${job.jobId}${command ? ` (${command})` : ""}`;
+    s.wakes.set(job.jobId, { label, setAt: at, until: timeout === null ? null : at + timeout });
+  }
+  if (details?.op === "cancel") for (const j of arrayOf(details.jobs)) if (typeof j?.id === "string") s.wakes.delete(j.id);
+  noteDaemons(s, details, at);
+}
+
+const DAEMON_LIVE = new Set(["starting", "ready", "running", "restarting"]);
+
+/** Supervised processes (`hub start`): every result or notice that shows one
+ *  says what state it is in. A listing can show other sessions' too. */
+function noteDaemons(s: OmpState, details: any, at: number | null): void {
+  if (!details || typeof details !== "object") return;
+  for (const d of [details.daemon, ...arrayOf(details.daemons)]) {
+    if (typeof d?.name !== "string" || typeof d.state !== "string") continue;
+    if (typeof d.owner === "string" && s.header && d.owner !== s.header.id) continue;
+    const key = `daemon:${d.name}`;
+    if (!DAEMON_LIVE.has(d.state)) s.wakes.delete(key);
+    else if (!s.wakes.has(key)) s.wakes.set(key, { label: `supervised process ${d.name}`, setAt: tsOf(d.startedAt) ?? at ?? 0, until: null });
   }
 }
 

@@ -578,9 +578,14 @@ function refOf(account: Account, path: string, id: string, mtimeMs: number, size
   return { provider: "claude", accountId: account.id, agentSessionId: id, path, mtimeMs, size };
 }
 
+/** `<slug>/<sessionId>/subagents/`, beside the session's transcript. */
+function subagentLogDir(ref: TranscriptRef): string {
+  return ref.path.replace(/\.jsonl$/, "") + "/subagents";
+}
+
 export function claudeReader(ref: TranscriptRef): TranscriptReader {
   const isSub = ref.path.includes("/subagents/");
-  const subs = isSub ? null : new SubagentTokens(ref.path.replace(/\.jsonl$/, "") + "/subagents");
+  const subs = isSub ? null : new SubagentTokens(subagentLogDir(ref));
   return new JsonlTranscriptReader(
     ref,
     claudeFormat(ref, subs ?? undefined),
@@ -637,6 +642,7 @@ export const claudeAdapter: ProviderAdapter = {
   },
 
   reader: claudeReader,
+  subagentLogDir,
   spawnCommand,
   resumeCommand,
   moveSession,

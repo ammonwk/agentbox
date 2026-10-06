@@ -456,6 +456,7 @@ class OmpReader implements TranscriptReader {
       rateLimitHits: hits,
       isSubagent: this.parentId !== null || s.sessionInit,
       parentId: this.parentId,
+      wakes: [...s.wakes.values()],
     };
   }
 
@@ -685,6 +686,8 @@ export const ompAdapter: ProviderAdapter = {
   reader(ref) {
     return new OmpReader(ref);
   },
+
+  subagentLogDir: (ref) => ref.path.slice(0, -".jsonl".length),
 
   spawnCommand(opts: SpawnOptions) {
     return {
