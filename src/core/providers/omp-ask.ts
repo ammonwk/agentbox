@@ -14,6 +14,8 @@
  *   │ Enter select · n note · ↑/↓ move · Tab/←/→ · Esc cancel    │
  *   ╰────────────────────────────────────────────────────────────╯
  *
+ * A single question has neither the tab row nor `Tab/←/→` in the footer.
+ *
  * The Submit tab reads "Review answers" and lists `1. color: “Teal please”`,
  * `2. sizes: Small, Large` above `❯ Submit`.
  *
@@ -81,7 +83,9 @@ export function readOmpAsk(raw: string): OmpAskScreen | null {
   if (rules.length < 2 || !/Esc cancel/.test(box[rules[1]! + 1] ?? "")) return null;
   // The right edge is the border, and a scrollbar inside it while the list scrolls.
   const inner = (l: string) => l.replace(/^\s*│ ?/, "").replace(/(\s*[│┃█▐▌░▒▓])+\s*$/, "");
-  const text = norm(box.slice(1, rules[0]).map(inner).join(" "));
+  // A single question has no tab row (and no Tab in the footer): its first line is the question.
+  const tabs = /\bTab\b/.test(box[rules[1]! + 1] ?? "") ? 1 : 0;
+  const text = norm(box.slice(tabs, rules[0]).map(inner).join(" "));
   const body = box.slice(rules[0]! + 1, rules[1]).map(inner);
 
   if (text === "Review answers") {
@@ -107,10 +111,13 @@ export function readOmpAsk(raw: string): OmpAskScreen | null {
   return items.length > 0 && text ? { kind: "question", text, items } : null;
 }
 
+/** omp draws inline markdown: `code` and **bold** show without their marks. */
+const plain = (s: string) => norm(s.replace(/`|\*\*/g, ""));
+
 /** The question on screen is this one: same words, allowing for a cut-off tail. */
 function same(onScreen: string, q: string): boolean {
-  const a = norm(onScreen).replace(/…$/, "");
-  const b = norm(q);
+  const a = plain(onScreen).replace(/…$/, "");
+  const b = plain(q);
   return a === b || (a.length >= 20 && b.startsWith(a));
 }
 
