@@ -7,6 +7,7 @@ import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
+import { shownStatus } from "../../lib/board";
 import { draftSent, loadDraft, onDraftSent, saveDraft } from "./drafts";
 import "../newsession.css";
 import { useAction } from "./useAction";
@@ -210,7 +211,8 @@ export function Composer({ session, accounts, skills, textareaRef }: {
         </div>
       ) : null}
 
-      {session.question && mode.kind === "send" ? null : session.status === "blocked" && mode.kind === "send" ? (
+      {/* An error screen agentbox retries is not a prompt for you: the session view says so. */}
+      {session.question && mode.kind === "send" ? null : session.status === "blocked" && mode.kind === "send" && shownStatus(session) !== "retrying" ? (
         <div className="cmp-keys" role="group" aria-label="Answer the prompt">
           <span className="cmp-keys-label">
             <Icon.alert size={13} /> The agent is showing a prompt — answer it in the terminal, or send a key:
