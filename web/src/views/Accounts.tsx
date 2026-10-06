@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { AccountView, AppState, LoginFlow, ProviderId } from "../../../src/core/types";
 import { api, useNow } from "../api";
+import { accountProvider } from "../../../src/core/providers/account";
 import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
 import { Button, Confirm, Empty, Field, Icon, Modal, RelativeTime, Spinner, Toggle } from "../components";
 import { fmtCountdown, fmtPts, guessHome, tildify } from "../lib/format";
@@ -37,8 +38,11 @@ function AccountList({ state }: { state: AppState }) {
     return [...byId.values()].filter((l) => !dismissed.has(l.id));
   }, [started, state.logins, dismissed]);
 
+  // opencode holds no accounts: its sessions run on omp's.
   const providers = PROVIDERS.filter(
-    (p) => state.providers.some((x) => x.id === p && x.installed) || state.accounts.some((a) => a.provider === p),
+    (p) =>
+      accountProvider(p) === p &&
+      (state.providers.some((x) => x.id === p && x.installed) || state.accounts.some((a) => a.provider === p)),
   );
 
   const dismiss = (id: string) => setDismissed((d) => new Set(d).add(id));
@@ -71,7 +75,7 @@ function AccountList({ state }: { state: AppState }) {
               </span>
               <span className="acs-sec-actions">
                 {p === "omp" ? (
-                  <span className="hint">omp balances its own credential pool.</span>
+                  <span className="hint">omp balances its own credential pool. opencode sessions run on this account too: both use OpenCode Go.</span>
                 ) : (
                   <>
                     <Button size="sm" variant="ghost" icon={Icon.folder} onClick={() => setImporting(p)}>

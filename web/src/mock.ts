@@ -36,6 +36,7 @@ import type {
   ModelOption,
   Placement,
   ProcDetail,
+  AccountProvider,
   ProviderId,
   Repo,
   ServerMessage,
@@ -53,6 +54,7 @@ import type {
 import type { RepoPatch, TermChannel, TermHandlers } from "./api";
 import { nextRun, parseWhen } from "../../src/core/schedule";
 import { retrying } from "../../src/core/attention";
+import { accountProvider } from "../../src/core/providers/account";
 
 const M = 60_000;
 const H = 60 * M;
@@ -68,7 +70,7 @@ const settings: AgentSettings = {
   autoApprove: false,
   parkIdleMin: 60,
   reclaimNightly: false,
-  models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "" },
+  models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "" },
   balancer: {
     claimNormal: 3,
     shortWindowInWeekly: 24,
@@ -616,6 +618,7 @@ const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
     { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", releasedAt: "2026-07-09", efforts: ["low", "medium", "high", "xhigh", "max"] },
   ],
   omp: [{ id: "opencode-go/deepseek-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
+  opencode: [{ id: "opencode-go/deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
   devin: [
     { id: "swe", label: "SWE-2 (latest)", releasedAt: null },
     { id: "swe-2-max", label: "SWE-2 Max", releasedAt: null, note: "Free" },
@@ -628,7 +631,7 @@ const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
 
 function placementFor(provider: ProviderId, manual?: string): Placement {
   const now = Date.now();
-  const candidates = accounts.filter((a) => a.provider === provider).map((a) => candidateFor(a, now));
+  const candidates = accounts.filter((a) => a.provider === accountProvider(provider)).map((a) => candidateFor(a, now));
   const best = [...candidates].filter((c) => c.eligible).sort((a, b) => b.score - a.score)[0] ?? null;
   const claim = settings.balancer.claimNormal;
   if (manual && manual !== "auto") {
@@ -1171,7 +1174,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
     if (head === "repos") return repos;
     if (head === "models") {
       const a = mustAccount(url.searchParams.get("accountId") ?? "");
-      return MOCK_MODELS[a.provider];
+      return MOCK_MODELS[(url.searchParams.get("provider") as ProviderId | null) ?? a.provider];
     }
     if (head === "skill") return { body: `---\nname: example\ndescription: A mock skill body.\n---\n\n# Example\n\nThis is what SKILL.md would contain.\n` };
     if (head === "sessions" && id === "closed") {
@@ -1352,7 +1355,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
 
   if (head === "accounts") {
     if (!id) {
-      const x = body<{ provider: ProviderId; label: string }>(b);
+      const x = body<{ provider: AccountProvider; label: string }>(b);
       const provider = x.provider ?? "claude";
       const aid = `${provider.slice(0, 2)}-${Math.random().toString(36).slice(2, 6)}`;
       const acc: MockAccount = {
@@ -1373,7 +1376,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       return { account: acc, login };
     }
     if (id === "import") {
-      const x = body<{ provider: ProviderId; home: string }>(b);
+      const x = body<{ provider: AccountProvider; home: string }>(b);
       const aid = `im-${Math.random().toString(36).slice(2, 6)}`;
       const acc: MockAccount = {
         id: aid, provider: x.provider ?? "claude", label: (x.home ?? "imported").split("/").pop() || "imported",

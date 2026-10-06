@@ -90,7 +90,7 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
     const m = asObject(body.models, "models");
     const next: NonNullable<SettingsPatch["models"]> = {};
     for (const [k, v] of Object.entries(m)) {
-      if (!["claude", "codex", "devin", "omp"].includes(k)) throw new HttpError(400, `unknown provider in models: ${k}`);
+      if (!["claude", "codex", "devin", "omp", "opencode"].includes(k)) throw new HttpError(400, `unknown provider in models: ${k}`);
       if (typeof v !== "string") throw new HttpError(400, `models.${k} must be a string`);
       next[k as keyof typeof next] = v.trim();
     }

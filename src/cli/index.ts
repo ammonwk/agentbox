@@ -27,10 +27,11 @@ import { onboardingItems } from "../core/onboarding";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
+import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
 
 const BASE = serverBase();
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 
 // ------------------------------------------------------------------ client
 
@@ -137,11 +138,12 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
   const wanted = flags.get("account");
   if (typeof wanted === "string") {
     const state = await api<AppState>("GET", "/api/state");
+    const holder = accountProvider(provider);
     const match = state.accounts.find(
-      (a) => a.provider === provider && (a.id === wanted || a.label === wanted || a.email === wanted),
+      (a) => a.provider === holder && (a.id === wanted || a.label === wanted || a.email === wanted),
     );
     if (!match) {
-      console.error(`no ${provider} account "${wanted}" — have: ${state.accounts.filter((a) => a.provider === provider).map((a) => a.label).join(", ") || "none"}`);
+      console.error(`no ${holder} account "${wanted}" — have: ${state.accounts.filter((a) => a.provider === holder).map((a) => a.label).join(", ") || "none"}`);
       return 2;
     }
     accountId = match.id;
@@ -363,7 +365,7 @@ async function recover(args: string[]): Promise<number> {
 
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
-  claude|codex|devin|omp [--account NAME] [--model M] [--detach] [prompt…]
+  claude|codex|devin|omp|opencode [--account NAME] [--model M] [--detach] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d)
   usage                 each account's limits and what running sessions claim
@@ -477,6 +479,7 @@ export async function main(argv: string[]): Promise<number | null> {
       case "codex":
       case "devin":
       case "omp":
+      case "opencode":
         return await startSession(cmd, argv.slice(1));
       case "ls":
       case "list":

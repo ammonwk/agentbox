@@ -206,7 +206,8 @@ export const api = {
   placement: (input: { provider: ProviderId; model?: string }) =>
     post<Placement>("/api/placement", input),
   /** What `--model` can be on this account, newest release first. */
-  models: (accountId: string) => get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}`),
+  models: (accountId: string, provider?: ProviderId) =>
+    get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}${provider ? `&provider=${enc(provider)}` : ""}`),
   /** Start one later: `when` is plain words ("in 4 hours", "every weekday at 9am"). */
   createSchedule: (input: { when: string; spec: NewSessionInput; label?: string }) => post<Schedule>("/api/schedules", input),
   patchSchedule: (id: string, patch: { when?: string; prompt?: string; label?: string | null; enabled?: boolean; repoId?: string }) =>

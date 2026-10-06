@@ -16,9 +16,10 @@ export const PROVIDER_LABEL: Record<ProviderId, string> = {
   codex: "Codex",
   devin: "Devin",
   omp: "omp",
+  opencode: "opencode",
 };
 
-export const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "devin", "omp"];
+export const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 
 /** A text badge in the provider's colour. No logos: no external assets, and
  *  the word is more legible at 11px than any mark. */

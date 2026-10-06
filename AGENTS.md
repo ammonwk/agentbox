@@ -1,6 +1,6 @@
 # agentbox
 
-A fleet manager for coding-agent CLI sessions (claude, codex, devin, omp)
+A fleet manager for coding-agent CLI sessions (claude, codex, devin, omp, opencode)
 across multiple subscription accounts. **Read `docs/v2.md` first** — it is the
 design and the HTTP/WebSocket contract, and it says which piece owns what.
 

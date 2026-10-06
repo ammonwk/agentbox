@@ -16,7 +16,7 @@
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { Account, LoginFlow, ProviderId } from "../types";
+import type { Account, AccountProvider, LoginFlow } from "../types";
 import { childEnv } from "./exec";
 import { userHome } from "../paths";
 import { AccountError, authEnv, credentialsPath } from "./homes";
@@ -97,8 +97,8 @@ const URL_RE = /https?:\/\/[^\s"'<>\x1b]+/g;
  *           "2. Enter this one-time code (expires in 15 minutes)\n   ABCD-12345"
  *   devin:  "Visit <url> to sign in, then copy the token and paste it below."
  */
-export function parseLoginOutput(provider: ProviderId, text: string): { url: string | null; userCode: string | null } {
-  const anchors: Record<ProviderId, RegExp> = {
+export function parseLoginOutput(provider: AccountProvider, text: string): { url: string | null; userCode: string | null } {
+  const anchors: Record<AccountProvider, RegExp> = {
     claude: /visit:/i,
     codex: /open this link/i,
     devin: /visit\s/i,

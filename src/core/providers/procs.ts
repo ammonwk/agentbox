@@ -211,13 +211,16 @@ export interface ProcessRef {
   startedAt: number;
 }
 
-const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp"];
+const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 
 /** The nearest ancestor of this process that runs an agent CLI. */
 export function agentAncestor(): ProcessRef | null {
   for (let pid = process.ppid, hops = 0; pid > 1 && hops < 64; hops++) {
     const argv = argvOf(pid);
-    if (argv && AGENT_CLIS.some((name) => runsCli(argv, name))) {
+    // A standalone opencode runs its tools under a private `opencode serve`,
+    // its TUI's child: the session is the TUI above it.
+    const server = !!argv && runsCli(argv, "opencode") && argv.includes("serve");
+    if (argv && !server && AGENT_CLIS.some((name) => runsCli(argv, name))) {
       const startedAt = startedAtOf(pid);
       return startedAt === null ? null : { pid, startedAt };
     }

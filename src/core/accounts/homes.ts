@@ -28,9 +28,10 @@ import { basename, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
 import { adapterFor } from "../providers";
-import type { Account, ProviderId } from "../types";
+import type { Account, AccountProvider, ProviderId } from "../types";
 
-export const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
+/** The providers that hold accounts; opencode runs on omp's (see AccountProvider). */
+export const PROVIDERS: AccountProvider[] = ["claude", "codex", "devin", "omp"];
 
 /**
  * A request this module refuses, with the HTTP status that says why: 404 for
@@ -71,7 +72,7 @@ export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault"
 
 /** The file whose existence means "this home has logged in". Null for omp,
  *  which keeps its own credential pool we do not look inside. */
-export function credentialsPath(provider: ProviderId, home: string): string | null {
+export function credentialsPath(provider: AccountProvider, home: string): string | null {
   switch (provider) {
     case "claude": return join(home, ".credentials.json");
     case "codex": return join(home, "auth.json");
@@ -185,7 +186,7 @@ export function owners<A extends Pick<Account, "id" | "provider" | "email" | "is
 export async function ensureDefaultAccounts(
   detect: (p: ProviderId) => Promise<CliInfo> = detectCli,
 ): Promise<Account[]> {
-  const hasDefault = (p: ProviderId) => listAccounts(p).some((a) => a.isDefault || samePath(a.home, defaultHome(p)));
+  const hasDefault = (p: AccountProvider) => listAccounts(p).some((a) => a.isDefault || samePath(a.home, defaultHome(p)));
   // Only a provider without one is asked whether its CLI is installed: that
   // runs it (`omp --version` is a second), on every server start.
   const missing = PROVIDERS.filter((p) => !hasDefault(p));
@@ -234,7 +235,7 @@ function expandHome(p: string): string {
 /** What each provider shares from its default home. `statusline*` is a prefix
  *  match: people keep status-line scripts next to settings.json and reference
  *  them by path. */
-const SHARED: Record<Exclude<ProviderId, "omp" | "devin">, { names: string[]; prefixes: string[] }> = {
+const SHARED: Record<Exclude<AccountProvider, "omp" | "devin">, { names: string[]; prefixes: string[] }> = {
   claude: {
     names: ["settings.json", "CLAUDE.md", "skills", "agents", "commands", "plugins", "hooks", "output-styles", "keybindings.json"],
     prefixes: ["statusline"],
@@ -378,7 +379,7 @@ function syncClaudeJson(home: string): boolean {
  * Returns the home path. The directory is 0700: it is about to hold a refresh
  * token.
  */
-export function createAccountHome(provider: ProviderId, id: string): string {
+export function createAccountHome(provider: AccountProvider, id: string): string {
   if (provider === "omp") {
     throw new AccountError(400, "omp manages its own credential pool — it has one implicit account and no extra homes");
   }
@@ -428,7 +429,7 @@ export interface ImportDeps {
  * last one because both homes would then refresh from one token family.
  */
 export async function importHome(
-  provider: ProviderId,
+  provider: AccountProvider,
   path: string,
   deps: ImportDeps,
 ): Promise<{ account: Account; email: string | null }> {

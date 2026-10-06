@@ -24,7 +24,7 @@
 import { EventEmitter } from "node:events";
 import { statSync } from "node:fs";
 import { getKv, insertUsageSample, lastUsageSample, setKv, type UsageSampleRow } from "../db";
-import type { Account, AccountUsage, ProviderId, UsageWindow, WindowKind } from "../types";
+import type { Account, AccountProvider, AccountUsage, ProviderId, UsageWindow, WindowKind } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
 import { readClaudeCredentials, readClaudeJson, readCodexAuth, readDevinCredentials } from "./identity";
@@ -35,7 +35,7 @@ const FIVE_HOURS = 5 * HOUR;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 
-export const POLL_MS: Record<ProviderId, number> = {
+export const POLL_MS: Record<AccountProvider, number> = {
   claude: 3 * MIN,
   codex: 5 * MIN,
   devin: 10 * MIN,

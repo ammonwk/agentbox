@@ -111,6 +111,7 @@ import { retryClock } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
+import { accountProvider } from "./providers";
 import { bridgedModel } from "../bridge/models";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
@@ -450,7 +451,7 @@ export class Fleet extends EventEmitter {
     const settings = getSettings();
     const since = now - settings.boardDays * DAY;
     const accounts = listAccounts();
-    const accountsOf = (p: ProviderId) => accounts.filter((a) => a.provider === p);
+    const accountsOf = (p: ProviderId) => accounts.filter((a) => a.provider === accountProvider(p));
     const started = performance.now();
     let lapAt = started;
     const laps: string[] = [];
@@ -2392,7 +2393,7 @@ export class Fleet extends EventEmitter {
    */
   accountStates(provider: ProviderId): AccountState[] {
     const claims = this.claims();
-    const all = listAccounts(provider);
+    const all = listAccounts(accountProvider(provider));
     const owner = owners(all);
     const since = this.now() - 90 * 60_000;
     return all

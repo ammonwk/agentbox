@@ -14,7 +14,13 @@ export type { UserIdentity };
 
 // -------------------------------------------------------------- providers
 
-export type ProviderId = "claude" | "codex" | "devin" | "omp";
+export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode";
+
+/** The providers that hold accounts. opencode holds none of its own: it runs
+ *  on OpenCode Go, the login omp's implicit account already holds and reports
+ *  usage for, so its sessions sit on that account and share its balancer
+ *  (`accountProvider` in providers/index.ts). */
+export type AccountProvider = Exclude<ProviderId, "opencode">;
 
 // --------------------------------------------------------------- accounts
 
@@ -24,7 +30,7 @@ export type ProviderId = "claude" | "codex" | "devin" | "omp";
  */
 export interface Account {
   id: string;
-  provider: ProviderId;
+  provider: AccountProvider;
   /** What you called it. Defaults to the email. */
   label: string;
   email: string | null;
@@ -637,7 +643,7 @@ export type LoginState = "starting" | "awaiting-user" | "verifying" | "done" | "
 
 export interface LoginFlow {
   id: string;
-  provider: ProviderId;
+  provider: AccountProvider;
   accountId: string;
   state: LoginState;
   /** Open this. */

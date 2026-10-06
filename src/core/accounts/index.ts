@@ -8,7 +8,7 @@
 
 import { EventEmitter } from "node:events";
 import { deleteAccount, getAccount, insertAccount, listAccounts, updateAccount } from "../db";
-import type { Account, AccountAuth, AccountUsage, LoginFlow, ProviderId, UsageWindow } from "../types";
+import type { Account, AccountAuth, AccountProvider, AccountUsage, LoginFlow, ProviderId, UsageWindow } from "../types";
 import type { ExecFn } from "./exec";
 import {
   AccountError,
@@ -118,7 +118,7 @@ export class AccountsService extends EventEmitter {
    * started in it. The account exists from this moment (auth "missing") so a
    * login you abandon can be resumed with `login(id)`.
    */
-  async create(provider: ProviderId, label?: string): Promise<{ account: Account; login: LoginFlow }> {
+  async create(provider: AccountProvider, label?: string): Promise<{ account: Account; login: LoginFlow }> {
     if (provider === "omp") throw new AccountError(400, "omp balances its own logins — add them with `omp auth-broker login` instead");
     const id = newAccountId();
     const home = createAccountHome(provider, id);
@@ -147,7 +147,7 @@ export class AccountsService extends EventEmitter {
     return { account, login };
   }
 
-  async importHome(provider: ProviderId, home: string): Promise<Account> {
+  async importHome(provider: AccountProvider, home: string): Promise<Account> {
     const { account } = await importHomeImpl(provider, home, {
       identifyEmail: async (a) => (await identify(a, { exec: this.opts.exec })).email,
     });

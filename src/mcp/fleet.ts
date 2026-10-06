@@ -19,6 +19,7 @@ import { VERSION } from "../version";
 import { apiClient } from "../client";
 import type { AppState, Placement, Session, TimelineEvent, TimelinePage } from "../core/types";
 import { retryClock } from "../core/attention";
+import { accountProvider } from "../core/providers/account";
 
 const text = (body: string) => ({ content: [{ type: "text" as const, text: body }] });
 
@@ -161,7 +162,7 @@ export async function runMcp(base: string): Promise<void> {
         "(or `account`, a label, if given). " +
         "Returns the new session's id and why it went to that account.",
       inputSchema: {
-        provider: z.enum(["claude", "codex", "devin", "omp"]),
+        provider: z.enum(["claude", "codex", "devin", "omp", "opencode"]),
         cwd: z.string().describe("Absolute path of the directory to work in"),
         prompt: z.string().min(1),
         account: z.string().optional().describe("Account label to force; omit to let the balancer choose"),
@@ -172,7 +173,7 @@ export async function runMcp(base: string): Promise<void> {
       let accountId: string | null = null;
       if (account) {
         const state = await api<AppState>("GET", "/api/state");
-        const match = state.accounts.find((a) => a.provider === provider && (a.label === account || a.id === account || a.email === account));
+        const match = state.accounts.find((a) => a.provider === accountProvider(provider) && (a.label === account || a.id === account || a.email === account));
         if (!match) throw new Error(`no ${provider} account "${account}"`);
         accountId = match.id;
       }

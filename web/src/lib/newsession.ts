@@ -115,6 +115,7 @@ const SKILL_SOURCES: Record<ProviderId, readonly SkillSource[] | null> = {
   codex: ["codex", "agents"],
   omp: ["project", "omp", "global", "agents"],
   devin: null,
+  opencode: null,
 };
 
 /** The registered repo a session runs in (a worktree's `repoRoot` is its main checkout). */

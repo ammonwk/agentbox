@@ -72,6 +72,7 @@ import type {
   HotState,
   MetricsState,
   PrInfo,
+  AccountProvider,
   ProviderId,
   Repo,
   RepoSetup,
@@ -91,7 +92,7 @@ const BUILD_POLL_MS = 2_000;
 const TIMELINE_PAGE = 200;
 /** Opening prompts the new-session box can recall. */
 const PROMPT_HISTORY = 1_000;
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 
 // ------------------------------------------------------------- the pieces
 
@@ -558,6 +559,13 @@ const provider = (v: unknown): ProviderId => {
   return v as ProviderId;
 };
 
+/** A provider that holds accounts: opencode runs on omp's. */
+const accountProvider = (v: unknown): AccountProvider => {
+  const p = provider(v);
+  if (p === "opencode") throw new HttpError(400, "opencode has no accounts of its own: it runs on OpenCode Go through omp's account");
+  return p;
+};
+
 /** Requests from a browser on this machine, whose desktop is the server's. */
 const fromThisMachine = new WeakSet<Request>();
 
@@ -907,17 +915,18 @@ const router = new Router(mapError)
   .add("GET", "/api/models", async ({ url }) => {
     const a = accounts.get(url.searchParams.get("accountId") ?? "");
     if (!a) throw new HttpError(404, "no such account");
-    return json(await modelOptions(a));
+    const p = url.searchParams.get("provider");
+    return json(await modelOptions(a, p ? provider(p) : a.provider));
   })
   .add("POST", "/api/accounts", async ({ req }) => {
     const b = await readBody(req);
-    const out = await accounts.create(provider(b.provider), optionalString(b, "label"));
+    const out = await accounts.create(accountProvider(b.provider), optionalString(b, "label"));
     scheduleCold();
     return json(out, 201);
   })
   .add("POST", "/api/accounts/import", async ({ req }) => {
     const b = await readBody(req);
-    const a = await accounts.importHome(provider(b.provider), requireString(b, "home"));
+    const a = await accounts.importHome(accountProvider(b.provider), requireString(b, "home"));
     scheduleCold();
     return json(a, 201);
   })

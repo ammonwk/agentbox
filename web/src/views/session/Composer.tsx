@@ -13,6 +13,7 @@ import "../newsession.css";
 import { useAction } from "./useAction";
 import { echoSent } from "./echo";
 import { useVoiceNote, voiceNotes } from "./voicenote";
+import { accountProvider } from "../../../../src/core/providers/account";
 
 /** What the composer can do for a session, and the sentence that says so. */
 export type ComposerMode =
@@ -412,7 +413,7 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
     };
   }, [session.id, hit.at]);
 
-  const mine = accounts.filter((a) => a.provider === session.provider);
+  const mine = accounts.filter((a) => a.provider === accountProvider(session.provider));
   const canMove = MOVABLE.has(session.provider) && mine.length > 1;
   const here = accounts.find((a) => a.id === session.accountId) ?? null;
   const auto = placement?.accountId && placement.mode !== "none" ? accounts.find((a) => a.id === placement.accountId) ?? null : null;

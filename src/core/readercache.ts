@@ -29,6 +29,7 @@ const READER_ROOTS: Record<ProviderId, string[]> = {
   codex: ["providers/jsonl-reader.ts", "providers/codex-transcript.ts"],
   devin: ["providers/devin.ts"],
   omp: ["providers/omp.ts"],
+  opencode: ["providers/opencode.ts"],
 };
 
 /** Saved states of transcripts nobody has read in this long are deleted. */

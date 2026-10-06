@@ -11,6 +11,7 @@ import type {
   BalancerSettings,
   Btw,
   Candidate,
+  AccountProvider,
   ProviderId,
   Repo,
   RepoSetup,
@@ -281,13 +282,13 @@ type AccountRow = {
 
 function rowToAccount(r: AccountRow): Account {
   return {
-    id: r.id, provider: r.provider as ProviderId, label: r.label, email: r.email,
+    id: r.id, provider: r.provider as AccountProvider, label: r.label, email: r.email,
     plan: r.plan, home: r.home, isDefault: !!r.is_default, enabled: !!r.enabled,
     createdAt: r.created_at,
   };
 }
 
-export function listAccounts(provider?: ProviderId): Account[] {
+export function listAccounts(provider?: AccountProvider): Account[] {
   const rows = provider
     ? getDb().query("SELECT * FROM accounts WHERE provider = ? ORDER BY is_default DESC, created_at").all(provider)
     : getDb().query("SELECT * FROM accounts ORDER BY provider, is_default DESC, created_at").all();
@@ -390,7 +391,7 @@ function parseJson(raw: string | null): unknown {
 
 function rowToRecord(r: SessionRow): SessionRecord {
   return {
-    id: r.id, provider: r.provider as ProviderId, agentSessionId: r.agent_session_id,
+    id: r.id, provider: r.provider as AccountProvider, agentSessionId: r.agent_session_id,
     accountId: r.account_id, cwd: r.cwd, worktree: r.worktree, label: r.label,
     claim: r.claim, origin: r.origin as SessionRecord["origin"], tmux: r.tmux,
     transcriptPath: r.transcript_path, startedAt: r.started_at,
@@ -863,7 +864,7 @@ export function assignmentsSince(sinceMs: number): AssignmentRow[] {
     mode: string; claim: number; candidates: string; settings: string; why: string;
   }[];
   return rows.map((r) => ({
-    id: r.id, sessionId: r.session_id, at: r.at, provider: r.provider as ProviderId,
+    id: r.id, sessionId: r.session_id, at: r.at, provider: r.provider as AccountProvider,
     accountId: r.account_id, mode: r.mode, claim: r.claim,
     candidates: (parseJson(r.candidates) as Candidate[]) ?? [],
     settings: parseJson(r.settings) as BalancerSettings, why: r.why,
@@ -1074,7 +1075,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   autoApprove: true,
   parkIdleMin: 60,
   reclaimNightly: false,
-  models: { claude: "", codex: "", devin: "", omp: "" },
+  models: { claude: "", codex: "", devin: "", omp: "", opencode: "" },
   balancer: DEFAULT_BALANCER,
 };
 
