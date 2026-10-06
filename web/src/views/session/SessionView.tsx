@@ -193,9 +193,10 @@ export function SessionView({
       }
     };
     // j/k switch sessions and l/→ h fold, from anywhere that is not a text
-    // field or the terminal; 1–4 pick a tab. ← goes over to the list (from
-    // the message box too, once the cursor is at its start), where the arrows
-    // walk the rows and Enter opens one.
+    // field or the terminal; 1–4 pick a tab, and Tab and Shift+Tab step
+    // through them, from the message box too (where Tab only moved focus on).
+    // ← goes over to the list (from the message box too, once the cursor is at
+    // its start), where the arrows walk the rows and Enter opens one.
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
@@ -206,6 +207,15 @@ export function SessionView({
         if (row && (!field || (box && box.selectionStart === 0 && box.selectionEnd === 0))) {
           e.preventDefault();
           row.focus();
+          return;
+        }
+      }
+      if (e.key === "Tab" && id && t && !t.closest(".xterm") && !e.isComposing && !document.querySelector(".modal-backdrop")) {
+        const box = t instanceof HTMLTextAreaElement && t.id.startsWith("cmp-");
+        if (box || !["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) {
+          e.preventDefault();
+          const i = SESSION_TABS.indexOf(tab);
+          onTab(SESSION_TABS[(i + (e.shiftKey ? -1 : 1) + SESSION_TABS.length) % SESSION_TABS.length]);
           return;
         }
       }
@@ -658,7 +668,7 @@ function Detail({
               className="sx-tab"
               role="tab"
               aria-selected={tab === t}
-              title={`${TAB_LABEL[t]} (${i + 1})`}
+              title={`${TAB_LABEL[t]} (${i + 1}; Tab and Shift+Tab step through)`}
               onClick={() => onTab(t)}
             >
               {TAB_LABEL[t]}

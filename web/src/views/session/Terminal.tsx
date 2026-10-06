@@ -138,7 +138,11 @@ export default function Terminal({
           setPhase({ kind: "live" });
           safeFit();
           chan?.resize(term.cols, term.rows);
-          term.focus();
+          // Not out of the message box: Tab there steps through the tabs, so
+          // arriving here by Tab and leaving by Shift+Tab must not land in the
+          // agent (whose Shift+Tab is its own), nor a reattach take keys mid-message.
+          const a = document.activeElement;
+          if (!(a instanceof HTMLTextAreaElement && a.id.startsWith("cmp-"))) term.focus();
         },
         onOutput: (bytes) => alive && term.write(bytes),
         onClose: (reason) => {
