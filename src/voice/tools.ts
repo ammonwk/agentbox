@@ -7,7 +7,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
-import { attentionOf } from "../core/attention";
+import { attentionOf, retrying } from "../core/attention";
 import type { Fleet } from "../core/fleet";
 import type { Session } from "../core/types";
 import { runShell, type Watches } from "./shell";
@@ -95,7 +95,7 @@ export class VoiceTools {
    *  line each, running ones by title, and what is being watched. */
   glance(): string {
     const all = this.live().filter((s) => s.status !== "stopped");
-    const by = (st: Session["status"]) => all.filter((s) => s.status === st).sort((a, b) => b.lastPromptAt - a.lastPromptAt);
+    const by = (st: Session["status"]) => all.filter((s) => (retrying(s) ? "running" : s.status) === st).sort((a, b) => b.lastPromptAt - a.lastPromptAt);
     const blocked = by("blocked");
     const waiting = by("waiting").slice(0, 12);
     const running = by("running");

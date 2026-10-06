@@ -10,7 +10,7 @@ import { hrefOf, parseHash } from "../../route";
 import { isLinkableName, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { useFamily } from "./family";
 import { StatusDot } from "../../bits";
-import { titleOf } from "../../lib/board";
+import { shownStatus, titleOf } from "../../lib/board";
 import { Icon } from "../../components";
 import { Lightbox } from "../../attachments";
 import { shownImageUrl } from "../../api";
@@ -91,7 +91,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
               if (s) {
                 return (
                   <a {...rest} href={href} className="sx-sesslink" title={`${titleOf(s)} (${s.id})`}>
-                    <StatusDot status={s.status} />
+                    <StatusDot status={shownStatus(s)} />
                     {children}
                   </a>
                 );

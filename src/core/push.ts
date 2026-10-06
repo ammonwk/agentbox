@@ -13,6 +13,7 @@
  * subscriptions are in the database's key-value rows.
  */
 
+import { retrying } from "./attention";
 import { getKv, setKv } from "./db";
 import type { Session } from "./types";
 
@@ -209,8 +210,8 @@ let seeded = false;
  * Called with the board whenever it changes: a session that has turned
  * blocked is pushed once, and again only after it has been unblocked. What
  * was blocked when the server started is not news. A stop the fleet retries
- * by itself (a rate limit with a stated reset) is not yours to answer, so it
- * waits until it is.
+ * by itself (an error or rate-limit screen, `retrying`) is not yours to
+ * answer, so it waits until the retries are spent.
  */
 export function notifyBlocked(sessions: readonly Session[], reasonOf: (id: string) => string | null): void {
   const blocked = sessions.filter((s) => s.status === "blocked");
@@ -223,8 +224,8 @@ export function notifyBlocked(sessions: readonly Session[], reasonOf: (id: strin
   }
   for (const s of blocked) {
     if (told.has(s.id)) continue;
+    if (retrying(s)) continue;
     const reason = reasonOf(s.id) ?? "waiting on a prompt";
-    if (reason.includes("agentbox retries it")) continue;
     told.add(s.id);
     if (pushSubscriptions().length === 0) continue;
     const ask = s.question?.questions[0]?.question;

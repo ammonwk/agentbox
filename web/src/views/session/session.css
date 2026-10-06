@@ -689,6 +689,10 @@
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   background: color-mix(in srgb, var(--danger) 8%, var(--panel));
 }
+.sx-attention-line.info {
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+  background: color-mix(in srgb, var(--info) 8%, var(--panel));
+}
 .sx-attention-line.warn > span {
   flex: 1;
 }

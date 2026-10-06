@@ -3,9 +3,9 @@
  *  live in components.tsx; these know what a session and an account are. */
 
 import { useEffect, useRef, useState } from "react";
-import type { AccountView, ProviderId, SessionHost, SessionStatus, UsageWindow } from "../../src/core/types";
+import type { AccountView, ProviderId, SessionHost, UsageWindow } from "../../src/core/types";
 import { Icon } from "./components";
-import { contextPct, type Shape } from "./lib/board";
+import { contextPct, type Shape, type ShownStatus } from "./lib/board";
 import { fmtTokens } from "./lib/format";
 import { barSegments, resetText, usageTone, usedNow, windowElapsed, windowLabel } from "./lib/usage";
 
@@ -117,7 +117,8 @@ export function AccountChip({
 
 // ----------------------------------------------------------------- status
 
-const STATUS_LABEL: Record<SessionStatus, string> = {
+const STATUS_LABEL: Record<ShownStatus, string> = {
+  retrying: "Retrying",
   blocked: "Blocked",
   waiting: "Your turn",
   running: "Running",
@@ -125,7 +126,8 @@ const STATUS_LABEL: Record<SessionStatus, string> = {
   closed: "Closed",
 };
 
-const STATUS_TITLE: Record<SessionStatus, string> = {
+const STATUS_TITLE: Record<ShownStatus, string> = {
+  retrying: "Stopped on an error that agentbox retries by itself — nothing for you to do",
   blocked: "Showing a prompt it needs answered — a permission, a trust dialog, a login",
   waiting: "The turn is over; the process is alive and waiting for you",
   running: "Mid-turn",
@@ -133,7 +135,7 @@ const STATUS_TITLE: Record<SessionStatus, string> = {
   closed: "Stopped and off the list; still resumable",
 };
 
-export function StatusPill({ status }: { status: SessionStatus }) {
+export function StatusPill({ status }: { status: ShownStatus }) {
   return (
     <span className={`pill pill-${status}`} title={STATUS_TITLE[status]}>
       <span className="pill-dot" aria-hidden="true" />
@@ -165,7 +167,7 @@ export function ShapeMark({ shape }: { shape: Shape }) {
  *  is the repo — a list sorted by time still says both at a glance. With
  *  `copy` (a session id) clicking it copies the id instead of following the
  *  row's link, a check says so for a moment. */
-export function StatusDot({ status, shape, repo, copy }: { status: SessionStatus; shape?: Shape; repo?: string; copy?: string }) {
+export function StatusDot({ status, shape, repo, copy }: { status: ShownStatus; shape?: Shape; repo?: string; copy?: string }) {
   const [done, setDone] = useState(false);
   const t = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {

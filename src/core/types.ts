@@ -440,9 +440,11 @@ export interface Session {
    * limit or a 5-hour reset (`Fleet.autoResumeOf`) — and which try that is:
    * `attempt` of `of`, `of` null when it keeps trying until it works. About:
    * nudges go out one at a time across the fleet. Anything you send it first
-   * does the same and calls this off. Null when nothing will.
+   * does the same and calls this off. Null when nothing will. `after` says
+   * what it goes on past: an error (a turn error or an error screen, which
+   * the board draws as working: retrying it is not your move) or a reset.
    */
-  autoResume: { at: number; attempt: number; of: number | null } | null;
+  autoResume: { at: number; attempt: number; of: number | null; after: "error" | "reset" } | null;
   /** The AskUserQuestion dialog it is showing, while it shows one: answer it
    *  with `POST /api/sessions/:id/answer`. */
   question: { id: string; questions: AskQuestion[] } | null;

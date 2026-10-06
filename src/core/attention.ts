@@ -9,6 +9,14 @@ import type { Attention, Session } from "./types";
 const RANK = { blocked: 0, waiting: 1, running: 2, stopped: 3, closed: 4 } as const;
 
 export function attentionOf(s: Session, blockedReason: string | null = null): Attention {
+  // Not yours: it ranks and reads with the working sessions, saying why.
+  if (retrying(s)) {
+    const reason =
+      s.status === "blocked" || !s.turnError
+        ? (blockedReason ?? `stopped on an error; agentbox retries it ${retryClock(s.autoResume!.at)}`)
+        : `${turnErrorReason(s.turnError, s.host === "external")}; agentbox retries it ${retryClock(s.autoResume!.at)}`;
+    return { kind: "running", rank: RANK.running, reason };
+  }
   switch (s.status) {
     case "blocked":
       return { kind: "blocked", rank: RANK.blocked, reason: blockedReason ?? "waiting on a prompt" };
@@ -22,7 +30,7 @@ export function attentionOf(s: Session, blockedReason: string | null = null): At
               ? "finished; its answer waits for its caller to collect"
               : "idle; its caller's turn"
             : s.turnError
-              ? turnErrorReason(s.turnError, s.host === "external") + (s.autoResume ? `; agentbox retries it ${retryClock(s.autoResume.at)}` : "")
+              ? turnErrorReason(s.turnError, s.host === "external")
               : s.host === "external"
                 ? "your turn (in another terminal)"
                 : "your turn",
@@ -34,6 +42,15 @@ export function attentionOf(s: Session, blockedReason: string | null = null): At
     case "closed":
       return { kind: "closed", rank: RANK.closed, reason: "closed" };
   }
+}
+
+/** Stopped on an error (a turn error or an error screen) that agentbox will
+ *  retry by itself (`Session.autoResume`): nothing for you to do, so the
+ *  board draws it as working and nothing tells you it is blocked. A 5-hour
+ *  reset it waits out is still your turn; so is an error once the retries
+ *  are spent. */
+export function retrying(s: Pick<Session, "status" | "autoResume">): boolean {
+  return s.autoResume?.after === "error" && (s.status === "blocked" || s.status === "waiting");
 }
 
 /** Most urgent first; within a rank, the one you last sent something to

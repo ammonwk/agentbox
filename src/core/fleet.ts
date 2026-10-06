@@ -747,7 +747,7 @@ export class Fleet extends EventEmitter {
     if (now < this.nextNudgeAt) return;
     for (const v of this.views.values()) {
       const plan = this.nudgePlan(v, now);
-      if (!plan || now < plan.at) continue;
+      if (!plan || plan.sent || now < plan.at) continue;
       this.nudges.set(v.id, { lastAt: now, tries: plan.attempt });
       this.nextNudgeAt = now + NUDGE_STAGGER_MS;
       const err = plan.screen ? null : v.turnError!;
@@ -769,13 +769,19 @@ export class Fleet extends EventEmitter {
    * a pass that finds the session's turn ended cleanly since its last nudge
    * ends the spell there, so the next error starts the backoff over.
    */
-  private nudgePlan(v: Session, now: number): { at: number; attempt: number; of: number | null; screen: string | null } | null {
+  private nudgePlan(v: Session, now: number): { at: number; attempt: number; of: number | null; screen: string | null; sent?: true } | null {
     let prev = this.nudges.get(v.id);
     if (prev && v.status === "waiting" && !v.turnError && v.lastActivityAt > prev.lastAt) {
       this.nudges.delete(v.id);
       prev = undefined;
     }
-    if (v.host !== "tmux" || this.busy.has(v.id)) return null;
+    if (v.host !== "tmux") return null;
+    // The nudge just sent is the retry until the session takes it: the
+    // error stays on screen while it is typed (the session busy meanwhile),
+    // and the last try is no more yours than the first. Without this the
+    // board turned red, and pushed "Blocked", for those few seconds.
+    const sent = !!prev && now - prev.lastAt < NUDGE_TAKE_MS;
+    if (this.busy.has(v.id) && !sent) return null;
     const tries = prev && now - prev.lastAt < NUDGE_SPELL_MS ? prev.tries : 0;
     const cap = v.status === "waiting" ? v.turnError?.retryAfterMs : undefined;
     const wait = cap ? Math.min(cap, PACED_BACKOFF_MS[tries] ?? cap) : undefined;
@@ -790,6 +796,7 @@ export class Fleet extends EventEmitter {
     // either way, so the screen a nudge has not yet redrawn is not nudged.
     const until = onScreen ? this.screenWaitUntil(v) : null;
     const paced = !!wait || until !== null;
+    if (sent && (this.busy.has(v.id) || (tries >= NUDGE_MAX_TRIES && !paced))) return { at: prev!.lastAt, attempt: prev!.tries, of: paced ? null : NUDGE_MAX_TRIES, screen: onScreen ? screen! : null, sent };
     if (tries >= NUDGE_MAX_TRIES && !paced) return null;
     return {
       at: Math.max(until ?? 0, v.lastActivityAt + (wait ?? NUDGE_QUIET_MS), this.nextNudgeAt),
@@ -804,9 +811,9 @@ export class Fleet extends EventEmitter {
    *  (`nudgeErrored`). */
   private autoResumeOf(v: Session, now: number): Session["autoResume"] {
     const reset = this.resumeAfterReset.get(v.id);
-    if (reset && v.limitHit?.at === reset.hitAt && v.status === "waiting" && v.host === "tmux") return { at: reset.at, attempt: 1, of: 1 };
+    if (reset && v.limitHit?.at === reset.hitAt && v.status === "waiting" && v.host === "tmux") return { at: reset.at, attempt: 1, of: 1, after: "reset" };
     const plan = this.nudgePlan(v, now);
-    return plan && { at: plan.at, attempt: plan.attempt, of: plan.of };
+    return plan && { at: plan.at, attempt: plan.attempt, of: plan.of, after: "error" };
   }
 
   /**
@@ -3288,6 +3295,9 @@ const NUDGE_QUIET_MS = 5 * 60_000;
 /** One nudge across the fleet this often: several sessions retaking one
  *  rate-limited account in lockstep is what stuck them. */
 const NUDGE_STAGGER_MS = 90_000;
+/** How long a nudge counts as the retry under way, while it is typed and
+ *  before the session's screen or transcript shows it took. */
+const NUDGE_TAKE_MS = 60_000;
 /** Nudges per spell before a stuck session is left for you. */
 const NUDGE_MAX_TRIES = 3;
 /** How long a spell lasts: after this quiet, the count starts over. */

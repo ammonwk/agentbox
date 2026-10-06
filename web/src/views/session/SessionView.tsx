@@ -12,7 +12,7 @@ import {
   UsageBar,
 } from "../../bits";
 import { Button, Confirm, Empty, Icon } from "../../components";
-import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
+import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, shownStatus, titleOf, type SessionRow } from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
@@ -572,7 +572,7 @@ function Detail({
           <ProviderBadge provider={session.provider} />
           <TitleEdit session={session} />
           <CopyButton text={session.id} label={session.id} className="sx-id" />
-          <StatusPill status={session.status} />
+          <StatusPill status={shownStatus(session)} />
           {/* tmux is the normal case; only say where it runs when it is not ours. */}
           {session.host === "external" || session.host === "subagent" ? <HostBadge host={session.host} /> : null}
 
@@ -627,7 +627,7 @@ function Detail({
         {narrow ? null : facts}
 
         {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
-        {(session.status === "blocked" && !session.question) || error ? (
+        {(session.status === "blocked" && !session.question && shownStatus(session) !== "retrying") || error ? (
           <div className="sx-attention-line bad" role={error ? "alert" : undefined}>
             {error ? (
               <>
@@ -642,6 +642,10 @@ function Detail({
                 The Terminal tab shows the prompt.
               </>
             )}
+          </div>
+        ) : session.status === "blocked" && !session.question ? (
+          <div className="sx-attention-line info" role="status">
+            <Icon.refresh size={13} /> {session.attention.reason}. Nothing for you to do; the Terminal tab shows the error.
           </div>
         ) : session.status === "waiting" && session.turnError ? (
           <TurnErrorLine session={session} />
@@ -902,8 +906,8 @@ function TurnErrorLine({ session }: { session: SessionRow }) {
         ? "Stopped on an error"
         : "Stopped on an error a retry cannot fix";
   return (
-    <div className="sx-attention-line warn" role="status">
-      <Icon.alert size={13} />
+    <div className={`sx-attention-line warn${auto ? " info" : ""}`} role="status">
+      {auto ? <Icon.refresh size={13} /> : <Icon.alert size={13} />}
       <span>
         {said}
         {session.lastActivityAt ? ` ${ago(err.at || session.lastActivityAt)}` : ""}

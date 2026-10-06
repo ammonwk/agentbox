@@ -14,6 +14,7 @@ import {
   SORT_LABEL,
   sortTime,
   sentTip,
+  shownStatus,
   titleOf,
   usualProvider,
   type BoardFilter,
@@ -363,10 +364,10 @@ function Row({
         if (dnd.can(s)) dnd.drop(s);
       }}
     >
-      <StatusDot status={s.status} shape={shape} repo={baseName(repoKey(s))} copy={s.id} />
+      <StatusDot status={shownStatus(s)} shape={shape} repo={baseName(repoKey(s))} copy={s.id} />
       <span className="rail-text">
         <span className="rail-title">{titleOf(s)}</span>
-        {said ? <span className={`rail-snippet${s.status === "blocked" ? " blocked" : ""}`}>{said}</span> : null}
+        {said ? <span className={`rail-snippet${s.attention.kind === "blocked" ? " blocked" : ""}`}>{said}</span> : null}
       </span>
       {s.kids ? (
         <button
@@ -621,7 +622,7 @@ function ClosedList({ query, current, stamp, shapes }: { query: string; current:
               data-status={s.status}
               title={titleOf(s)}
             >
-              <StatusDot status={s.status} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} copy={s.id} />
+              <StatusDot status={shownStatus(s)} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} copy={s.id} />
               <span className="rail-text">
                 <span className="rail-title">{titleOf(s)}</span>
               </span>

@@ -23,7 +23,7 @@ import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { DEFAULT_PORT, webDist } from "../core/paths";
 import { Fleet, FleetError } from "../core/fleet";
 import * as tmux from "../core/tmux";
-import { attentionOf, byAttention } from "../core/attention";
+import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
 import { usageInsights } from "../core/insights";
 import { diffOf } from "../core/diff";
@@ -346,7 +346,8 @@ function changeRows(only: Set<string> | null): ChangeRow[] {
     .filter((s) => !only || only.has(s.id))
     .map((s) => ({
       id: s.id,
-      status: s.status,
+      // One agentbox will retry has not stopped on you.
+      status: retrying(s) ? "running" : s.status,
       label: s.label,
       title: s.title,
       firstPrompt: s.firstPrompt?.split("\n")[0]?.slice(0, 80) ?? null,

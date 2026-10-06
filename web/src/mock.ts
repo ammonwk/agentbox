@@ -52,6 +52,7 @@ import type {
 } from "../../src/core/types";
 import type { RepoPatch, TermChannel, TermHandlers } from "./api";
 import { nextRun, parseWhen } from "../../src/core/schedule";
+import { retrying } from "../../src/core/attention";
 
 const M = 60_000;
 const H = 60 * M;
@@ -418,7 +419,7 @@ const sessions: MockSession[] = [
   sess({
     id: "s6g3", provider: "devin", accountId: "dv-main", status: "waiting", host: "tmux",
     turnError: { at: T0 - 3 * M, kind: "output-cap", detail: "the reply hit the model's max output token limit" },
-    autoResume: { at: T0 + 2 * M, attempt: 1, of: 3 },
+    autoResume: { at: T0 + 2 * M, attempt: 1, of: 3, after: "error" },
     title: "Trace how the CH projector folds call flags", cwd: `${AB}/.worktrees/ch-flags`, repoRoot: `${AB}/.worktrees/ch-flags`,
     branch: "feat/ch-call-flags", worktree: `${AB}/.worktrees/ch-flags`, model: "glm-5-3-flash-max",
     lastMessage: "Let me look at how the CH projector materializes call flags and whether org context is available there.",
@@ -517,8 +518,8 @@ const REASON: Record<AttentionKind, (s: Session) => string> = {
 };
 
 function attentionOf(s: Session): Attention {
-  const kind: AttentionKind = s.status;
-  return { kind, rank: ATTN[kind], reason: REASON[kind](s) };
+  const kind: AttentionKind = retrying(s) ? "running" : s.status;
+  return { kind, rank: ATTN[kind], reason: REASON[s.status](s) };
 }
 
 // ------------------------------------------------------------- claims & balancer

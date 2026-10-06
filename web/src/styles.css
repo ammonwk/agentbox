@@ -757,10 +757,12 @@ code {
   border-radius: 50%;
   background: currentColor;
 }
-.pill-running {
+.pill-running,
+.pill-retrying {
   color: var(--info);
 }
-.pill-running .pill-dot {
+.pill-running .pill-dot,
+.pill-retrying .pill-dot {
   animation: pulse 1.4s infinite;
 }
 .pill-waiting {
@@ -782,7 +784,8 @@ code {
   flex: none;
   background: var(--faint);
 }
-.st-dot.st-running {
+.st-dot.st-running,
+.st-dot.st-retrying {
   background: var(--info);
   animation: pulse-dot 1.4s infinite;
 }
@@ -805,7 +808,8 @@ code {
   fill: currentColor;
   overflow: visible;
 }
-.st-shape.st-running {
+.st-shape.st-running,
+.st-shape.st-retrying {
   color: var(--info);
   animation: pulse-shape 1.4s infinite;
 }
