@@ -1013,9 +1013,9 @@ export class Fleet extends EventEmitter {
       const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
       const proc = pane ? this.processUnder(pane.pid, rec.provider) : undefined;
       let agentId = proc?.agentSessionId ?? null;
-      // A starting omp holds its recent sessions' files open, so its process can
-      // name an older conversation; one we just spawned never began before us.
-      // Wait for it to name its own rather than guess among siblings started beside it.
+      // One we just spawned never began before us, so a process naming an older
+      // conversation is misread: wait for it to name its own rather than guess
+      // among siblings started beside it.
       if (agentId && this.transcriptStartedBefore(rec.provider, agentId, rec.createdAt - 10_000)) continue;
 
       if (!agentId) {
@@ -1059,6 +1059,11 @@ export class Fleet extends EventEmitter {
       const proc = this.processUnder(pane.pid, rec.provider);
       if (!proc?.agentSessionId || proc.agentSessionId === rec.agentSessionId) continue;
       let target = findSessionRecord(rec.provider, proc.agentSessionId);
+      // A conversation runs in one pane. A claim on one whose own pane is up
+      // is a misreading, and following it would leave that pane to no row,
+      // where nothing parks, reads or resumes it.
+      const held = target?.tmux ? this.panes.get(target.tmux) : undefined;
+      if (held && !held.dead) continue;
       if (!target) {
         const account = accounts.find((a) => a.id === rec.accountId);
         if (!account) continue;

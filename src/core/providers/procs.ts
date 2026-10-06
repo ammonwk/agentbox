@@ -61,19 +61,26 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-/** Paths a process currently has open, resolved. */
-export function openFilesOf(pid: number): string[] {
+/** Paths a process has open for writing, among those `keep` accepts. Each
+ *  fd's mode is read only once its path is kept: a process has dozens. */
+export function filesWrittenBy(pid: number, keep: (path: string) => boolean): string[] {
+  let fds: string[];
   try {
-    return readdirSync(`/proc/${pid}/fd`).flatMap((fd) => {
-      try {
-        return [readlinkSync(`/proc/${pid}/fd/${fd}`)];
-      } catch {
-        return [];
-      }
-    });
+    fds = readdirSync(`/proc/${pid}/fd`);
   } catch {
     return [];
   }
+  return fds.flatMap((fd) => {
+    try {
+      const path = readlinkSync(`/proc/${pid}/fd/${fd}`);
+      if (!keep(path)) return [];
+      const flags = /^flags:\s*([0-7]+)/m.exec(readFileSync(`/proc/${pid}/fdinfo/${fd}`, "utf8"))?.[1];
+      // The access mode is the low two bits; 0 is O_RDONLY.
+      return flags !== undefined && (parseInt(flags, 8) & 3) !== 0 ? [path] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 export interface ProcMatch {

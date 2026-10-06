@@ -39,7 +39,7 @@ import {
   type ToolOutcome,
 } from "./omp-transcript";
 import { ompRedirectVars } from "./omp-usage";
-import { argvOf, cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf } from "./procs";
+import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
 import { BRIEFING } from "./briefing";
 import type {
   Command,
@@ -212,7 +212,10 @@ interface OmpProc {
 /**
  * Attribute live omp processes to sessions, most certain first, and never
  * give one session to two processes:
- *  1. an open fd on a top-level session file (omp keeps its writer open);
+ *  1. a top-level session file it has open for writing: omp appends to its
+ *     own for the life of the session, and opens others' only to read them
+ *     (its recent-sessions list) — counting those would credit a starting
+ *     omp with a sibling's conversation;
  *  2. `-r <id|path>` in argv;
  *  3. the newest session file in the cwd's slug dir created after the
  *     process started and not already claimed.
@@ -220,21 +223,20 @@ interface OmpProc {
 export function attributeOmp(
   procs: OmpProc[],
   root: string,
-  openFiles: (pid: number) => string[],
+  filesWritten: (pid: number, keep: (path: string) => boolean) => string[],
 ): Map<number, string | null> {
   const out = new Map<number, string | null>();
   const claimed = new Set<string>();
   const rootPrefix = root.endsWith(sep) ? root : root + sep;
+  // Only `<root>/<slug>/<file>.jsonl`: subagent logs are one level deeper and
+  // belong to the same process's parent session.
+  const isSessionFile = (f: string) => f.startsWith(rootPrefix) && f.endsWith(".jsonl") && f.slice(rootPrefix.length).split(sep).length === 2;
 
-  // 1. Open files. Only `<root>/<slug>/<file>.jsonl`; subagent logs are one
-  //    level deeper and belong to the same process's parent session.
+  // 1. Files open for writing.
   for (const p of procs) {
     let best: { id: string; mtime: number } | null = null;
-    for (const f of openFiles(p.pid)) {
-      if (!f.startsWith(rootPrefix) || !f.endsWith(".jsonl")) continue;
-      const rest = f.slice(rootPrefix.length).split(sep);
-      if (rest.length !== 2) continue;
-      const id = sessionIdFromFileName(rest[1]!);
+    for (const f of filesWritten(p.pid, isSessionFile)) {
+      const id = sessionIdFromFileName(basename(f));
       if (!id || claimed.has(id)) continue;
       let mtime = 0;
       try {
@@ -723,7 +725,7 @@ export const ompAdapter: ProviderAdapter = {
     }
     if (procs.length === 0) return [];
     const root = account ? sessionsRootOf(account) : join(userHome(), ".omp", "agent", "sessions");
-    const ids = attributeOmp(procs, root, openFilesOf);
+    const ids = attributeOmp(procs, root, filesWrittenBy);
     return procs.map(
       (p): LiveProcess => ({
         pid: p.pid,
