@@ -2,7 +2,7 @@
  * where the bridge listens. Apart from the bridge so the devin adapter and
  * the model picker can ask "is this one bridged?" without loading a server. */
 
-import { defaultGoKey } from "../core/accounts/gokey";
+import { defaultGoKey } from "../core/accounts/gocred";
 import type { CatalogModel } from "./devin-wire";
 
 export const DEFAULT_BRIDGE_PORT = 4480;

@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { Account, AccountAuth } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { authEnv, claudeJsonPath, credentialsPath } from "./homes";
+import { defaultGoKey, readGoLogin } from "./gocred";
 
 export interface Identity {
   email: string | null;
@@ -257,10 +258,21 @@ export async function identify(account: AccountRef, opts: { exec?: ExecFn; now?:
     case "claude": return identifyClaude(account, now);
     case "codex": return identifyCodex(account, now);
     case "devin": return identifyDevin(account, opts.exec);
-    case "omp":
-      // omp balances a pool of logins of its own; there is no one email or
-      // plan. Auth is inferred from whether `omp usage` answers (usage.ts).
-      return { email: null, plan: null, auth: { state: "unknown", expiresAt: null, detail: null } };
+    case "omp": {
+      // An OpenCode Go account. The default one is an API key, which names
+      // nobody; any other is a Console sign-in, which says who it is. Its
+      // access token running out is not the login running out: the bridge
+      // refreshes it (accounts/gocred.ts).
+      if (account.isDefault) {
+        return defaultGoKey()
+          ? { email: null, plan: "OpenCode Go", auth: { state: "ok", expiresAt: null, detail: null } }
+          : { email: null, plan: null, auth: { state: "missing", expiresAt: null, detail: "opencode has no OpenCode Go key — run `opencode auth login`" } };
+      }
+      const login = readGoLogin(account.home);
+      return login
+        ? { email: login.email || null, plan: login.orgName ? `OpenCode Go · ${login.orgName}` : "OpenCode Go", auth: { state: "ok", expiresAt: null, detail: null } }
+        : { email: null, plan: null, auth: { state: "missing", expiresAt: null, detail: "not signed in yet" } };
+    }
   }
 }
 

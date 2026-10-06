@@ -475,6 +475,13 @@ export async function main(argv: string[]): Promise<number | null> {
         await startServer();
         return null;
       }
+      case "go-login": {
+        // The OpenCode Console sign-in for one OpenCode Go account, run by
+        // the login manager in a terminal it reads (accounts/godevice.ts).
+        if (!argv[1]) throw new Error("usage: agentbox go-login <account home>");
+        const { runGoLogin } = await import("../core/accounts/godevice");
+        return await runGoLogin(argv[1]);
+      }
       case "claude":
       case "codex":
       case "devin":

@@ -28,7 +28,8 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { userHome } from "../core/paths";
-import { GO_UPSTREAM, goKeyForId } from "../core/accounts/gokey";
+import { GO_ACCOUNT_BEARER, GO_CONSOLE_UPSTREAM, GO_KEY_UPSTREAM, defaultGoKey, goHomeForSelector } from "../core/accounts/gocred";
+import { freshGoLogin } from "../core/accounts/godevice";
 import { BRIDGED, bridgePort, bridgedModel, type BridgedModel } from "./models";
 import {
   ChatReply,
@@ -413,36 +414,72 @@ async function passThrough(req: Request, url: URL, body: Uint8Array | null): Pro
 }
 
 /**
- * OpenCode Go on a given account's key: `/go/<account id>/<rest>` is
- * forwarded to `GO_UPSTREAM/<rest>` with that account's key in place of
- * whatever the caller sent. opencode keeps one stored login and prefers it to
- * any key in its config, so a session on another Go account is pointed here
- * (its config's baseURL) instead; see src/core/accounts/gokey.ts. Streams
- * both ways, and the session's own headers (`x-opencode-session`) ride along.
+ * OpenCode Go on a given account's credential (src/core/accounts/gocred.ts):
+ * `/go/<account>/v1/<rest>` and `/go/<account>/anthropic/v1/<rest>` are
+ * forwarded to Go with that account's credential in place of whatever the
+ * caller sent. `<account>` is "default" (opencode's own API key), an account
+ * id (its Console sign-in, refreshed here when due or refused), or "caller":
+ * omp, whose endpoint is fixed in its models.yml, names the account in its
+ * key (`agentbox-account:<id>`), and any other key it sends is a real one
+ * that goes through untouched. The session's own headers
+ * (`x-opencode-session`) ride along; the reply streams back.
  */
 async function goProxy(req: Request, url: URL, log: (line: string) => void): Promise<Response> {
-  const m = /^\/go\/([^/]+)(\/.*)$/.exec(url.pathname);
-  const key = m ? goKeyForId(m[1]!) : null;
-  if (!m || !key) {
-    return Response.json({ type: "error", error: { type: "AuthError", message: `agentbox bridge: no OpenCode Go key for account ${m?.[1] ?? "?"}` } }, { status: 401 });
-  }
+  const refuse = (message: string) => Response.json({ type: "error", error: { type: "AuthError", message: `agentbox bridge: ${message}` } }, { status: 401 });
+  const m = /^\/go\/([^/]+)(\/anthropic)?\/v1(\/.*)$/.exec(url.pathname);
+  if (!m) return refuse(`no such OpenCode Go route: ${url.pathname}`);
+  const shape = m[2] ? "anthropic" : "openai";
+  const rest = m[3]! + url.search;
   const headers = new Headers(req.headers);
   for (const h of HOP) headers.delete(h);
-  headers.set("authorization", `Bearer ${key}`);
-  // opencode signed into an OpenCode workspace bills that workspace (its
-  // token and this header) instead of the Go key; the key is what we mean.
-  headers.delete("x-opencode-org-id");
   headers.set("accept-encoding", "identity");
-  const res = await fetch(GO_UPSTREAM + m[2]! + url.search, {
+  const body = req.body ? await req.arrayBuffer() : undefined;
+
+  let selector = m[1]!;
+  if (selector === "caller") {
+    const sent = (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "") || (headers.get("x-api-key") ?? "");
+    if (!sent.startsWith(GO_ACCOUNT_BEARER)) return goSend(`${GO_KEY_UPSTREAM}${rest}`, req, headers, body, log, "caller");
+    selector = sent.slice(GO_ACCOUNT_BEARER.length);
+  }
+  const credential = (token: string) => {
+    headers.set("authorization", `Bearer ${token}`);
+    if (headers.has("x-api-key")) headers.set("x-api-key", token);
+  };
+
+  if (selector === "default") {
+    const key = defaultGoKey();
+    if (!key) return refuse("opencode has no OpenCode Go key — run `opencode auth login`");
+    credential(key);
+    // opencode signed into a workspace names it; a key is its own workspace.
+    headers.delete("x-opencode-org-id");
+    return goSend(`${GO_KEY_UPSTREAM}${rest}`, req, headers, body, log, selector);
+  }
+
+  const home = goHomeForSelector(selector);
+  for (const force of [false, true]) {
+    const login = home ? await freshGoLogin(home, { force }).catch((e: Error) => (log(`go ${selector}: ${e.message}`), null)) : null;
+    if (!login) return refuse(`OpenCode Go account ${selector} is not signed in — log it in again in agentbox`);
+    credential(login.access);
+    if (login.orgID) headers.set("x-opencode-org-id", login.orgID);
+    else headers.delete("x-opencode-org-id");
+    const res = await goSend(`${GO_CONSOLE_UPSTREAM[shape]}${rest}`, req, headers, body, log, selector);
+    // A token refused before its time: refresh once and ask again.
+    if (res.status !== 401 || force) return res;
+    await res.arrayBuffer().catch(() => undefined);
+  }
+  return refuse("unreachable");
+}
+
+async function goSend(target: string, req: Request, headers: Headers, body: ArrayBuffer | undefined, log: (line: string) => void, who: string): Promise<Response> {
+  const res = await fetch(target, {
     method: req.method,
     headers,
-    body: req.body,
+    body,
     signal: req.signal,
     // A reasoning model can be quiet for minutes; the CLI does the giving up.
     timeout: false,
-    duplex: "half",
   } as RequestInit);
-  if (!res.ok) log(`go ${m[1]} ${req.method} ${m[2]} -> ${res.status}`);
+  if (!res.ok) log(`go ${who} ${req.method} ${new URL(target).pathname} -> ${res.status}`);
   const out = new Headers(res.headers);
   for (const h of HOP) out.delete(h);
   out.delete("content-encoding");

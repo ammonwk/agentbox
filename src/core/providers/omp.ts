@@ -39,7 +39,8 @@ import {
   type ToolOutcome,
 } from "./omp-transcript";
 import { ompRedirectVars } from "./omp-usage";
-import { goKeyOf } from "../accounts/gokey";
+import { GO_ACCOUNT_BEARER } from "../accounts/gocred";
+import { ensureBridge } from "../../bridge/service";
 import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
 import { BRIEFING } from "./briefing";
 import type {
@@ -676,16 +677,23 @@ function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoA
 }
 
 /** omp's data dir is the same for every account; what differs is the
- *  OpenCode Go key, which `~/.omp/agent/models.yml` takes from
- *  `OPENCODE_GO_API_KEY` before opencode's own login (accounts/gokey.ts). The
- *  default account is that login, so it is left to it. What must not leak in
+ *  OpenCode Go credential. `~/.omp/agent/models.yml` points omp's Go blocks
+ *  at the bridge and sends `OPENCODE_GO_API_KEY` as the key, else opencode's
+ *  own: for an account you added the "key" names the account, and the bridge
+ *  puts its Console sign-in on the request; the default account sends the
+ *  real key, which goes through (accounts/gocred.ts). What must not leak in
  *  from the server's shell is anything that silently points omp at another
  *  data dir: an XDG_*_HOME with an `omp/` under it, a profile, or a
  *  session-dir override. */
-function ompAccountCommand(account?: Pick<Account, "home" | "isDefault">): Pick<Command, "env" | "unset"> {
-  const key = account && !account.isDefault ? goKeyOf(account) : null;
-  if (key) return { env: { OPENCODE_GO_API_KEY: key }, unset: ompRedirectVars() };
+function ompAccountCommand(account?: Pick<Account, "id" | "isDefault">): Pick<Command, "env" | "unset"> {
+  if (account && !account.isDefault) return { env: { OPENCODE_GO_API_KEY: `${GO_ACCOUNT_BEARER}${account.id}` }, unset: ompRedirectVars() };
   return { env: {}, unset: [...ompRedirectVars(), "OPENCODE_GO_API_KEY"] };
+}
+
+/** A session's account env, with the bridge its Go requests go through up. */
+function ompLaunch(account: Pick<Account, "id" | "isDefault">): Pick<Command, "env" | "unset"> {
+  ensureBridge();
+  return ompAccountCommand(account);
 }
 
 export const ompAdapter: ProviderAdapter = {
@@ -762,7 +770,7 @@ export const ompAdapter: ProviderAdapter = {
   spawnCommand(opts: SpawnOptions) {
     return {
       argv: withPrompt(["omp", ...commonFlags(opts)], opts.prompt),
-      ...ompAccountCommand(opts.account),
+      ...ompLaunch(opts.account),
       agentSessionId: null,
     };
   },
@@ -773,7 +781,7 @@ export const ompAdapter: ProviderAdapter = {
     const path = findSessionFile(sessionsRootOf(opts.account), opts.agentSessionId, opts.cwd);
     return {
       argv: withPrompt(["omp", "-r", path ?? opts.agentSessionId, ...commonFlags(opts)], opts.prompt),
-      ...ompAccountCommand(opts.account),
+      ...ompLaunch(opts.account),
     };
   },
 

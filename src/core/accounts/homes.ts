@@ -28,7 +28,7 @@ import { basename, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
 import { adapterFor } from "../providers";
-import { GO_KEY_FILE } from "./gokey";
+import { GO_LOGIN_FILE } from "./gocred";
 import type { Account, AccountProvider, ProviderId } from "../types";
 
 /** The providers that hold accounts; opencode runs on omp's (see AccountProvider). */
@@ -72,14 +72,14 @@ export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault"
 }
 
 /** The file whose existence means "this home has logged in". For omp, an
- *  OpenCode Go account, its pasted key (the default account's is opencode's
- *  own login instead: accounts/gokey.ts). */
+ *  OpenCode Go account, its Console sign-in (the default account's is the
+ *  API key opencode holds instead: accounts/gocred.ts). */
 export function credentialsPath(provider: AccountProvider, home: string): string | null {
   switch (provider) {
     case "claude": return join(home, ".credentials.json");
     case "codex": return join(home, "auth.json");
     case "devin": return join(home, "devin", "credentials.toml");
-    case "omp": return join(home, GO_KEY_FILE);
+    case "omp": return join(home, GO_LOGIN_FILE);
   }
 }
 
@@ -432,7 +432,7 @@ export async function importHome(
   path: string,
   deps: ImportDeps,
 ): Promise<{ account: Account; email: string | null }> {
-  if (provider === "omp") throw new AccountError(400, "an OpenCode Go account has no home to import — add one and paste its key");
+  if (provider === "omp") throw new AccountError(400, "an OpenCode Go account has no home to import — add one and sign in to it");
   const home = canonical(expandHome(path.trim()));
   if (!existsSync(home) || !statSync(home).isDirectory()) throw new AccountError(400, `${home} is not a directory`);
   const cred = credentialsPath(provider, home)!;

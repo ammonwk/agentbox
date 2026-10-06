@@ -39,6 +39,8 @@ import { cwdOf, findProcesses, runsCli, startedAtOf } from "./procs";
 import { BRIEFING } from "./briefing";
 import { ensureBridge } from "../../bridge/service";
 import { bridgeUrl } from "../../bridge/models";
+import { goSelector } from "../accounts/gocred";
+import { anthropicGoModels } from "../accounts/gomodels";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import * as db from "./opencode-db";
 import { modelName, opencodeEvents, opencodeFacts, parseData, summarize, type RowSummary } from "./opencode-transcript";
@@ -401,11 +403,11 @@ const objectOr = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
 /** The config a launch adds to the user's own: the briefing, and the bridge
- *  as OpenCode Go's endpoint, which puts the session's account's Go key on
- *  each request. Without it opencode sends no Go key at all when it is signed
- *  into an OpenCode workspace — it bills the workspace, whatever key it holds
- *  or its config names — and on another account it would still use its one
- *  stored login (accounts/gokey.ts). */
+ *  as OpenCode Go's endpoint, which puts the session's account's credential
+ *  on each request (accounts/gocred.ts). opencode itself would not: it uses
+ *  its own stored login whatever its config says, and signed into a Console
+ *  workspace it bills that one. The models with an endpoint of their own
+ *  (accounts/gomodels.ts) are each pointed at the bridge as well. */
 function configEnv(account: Pick<Account, "id" | "isDefault">): Record<string, string> {
   let cfg: Record<string, unknown> = {};
   const own = process.env.OPENCODE_CONFIG_CONTENT;
@@ -417,10 +419,15 @@ function configEnv(account: Pick<Account, "id" | "isDefault">): Record<string, s
   const instructions = Array.isArray(cfg.instructions) ? cfg.instructions.filter((x) => x !== brief) : [];
   cfg = { ...cfg, instructions: [...instructions, brief] };
   ensureBridge();
+  const base = `${bridgeUrl()}/go/${goSelector(account)}`;
   const providers = objectOr(cfg.provider);
   const go = objectOr(providers["opencode-go"]);
-  const options = { ...objectOr(go.options), baseURL: `${bridgeUrl()}/go/${account.isDefault ? "default" : account.id}/v1` };
-  cfg = { ...cfg, provider: { ...providers, "opencode-go": { ...go, options } } };
+  const models = { ...objectOr(go.models) };
+  for (const id of anthropicGoModels()) {
+    const m = objectOr(models[id]);
+    models[id] = { ...m, options: { ...objectOr(m.options), baseURL: `${base}/anthropic/v1` } };
+  }
+  cfg = { ...cfg, provider: { ...providers, "opencode-go": { ...go, options: { ...objectOr(go.options), baseURL: `${base}/v1` }, models } } };
   // The user's own shell runs opencode with fewer GC marker threads.
   return { OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg), JSC_numberOfGCMarkers: process.env.JSC_numberOfGCMarkers || "2" };
 }

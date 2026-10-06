@@ -18,9 +18,9 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Account, AccountProvider, LoginFlow } from "../types";
 import { childEnv } from "./exec";
-import { userHome } from "../paths";
+import { agentboxBin, userHome } from "../paths";
 import { join } from "node:path";
-import { GO_KEY_FILE } from "./gokey";
+import { GO_LOGIN_FILE } from "./gocred";
 import { AccountError, authEnv, credentialsPath } from "./homes";
 
 const OUTPUT_KEEP = 4096;
@@ -51,16 +51,16 @@ export interface LoginCommand {
 export function loginCommand(account: Pick<Account, "provider" | "home" | "isDefault">): LoginCommand {
   if (account.provider === "omp") {
     if (account.isDefault) {
-      throw new AccountError(400, "the default OpenCode Go account is opencode's own login — run `opencode auth login` (OpenCode Go) in a terminal");
+      throw new AccountError(400, "the default OpenCode Go account is the API key opencode itself holds — run `opencode auth login` (OpenCode Go) in a terminal, or add an account here and sign in to it");
     }
-    // OpenCode Go has no login to run: you paste the account's API key, which
-    // is kept alone in its home (accounts/gokey.ts), never echoed.
+    // The OpenCode Console's device sign-in, run by agentbox so the login is
+    // this account's own (accounts/godevice.ts): a link and a code, no paste.
     return {
-      argv: ["sh", "-c", GO_KEY_SCRIPT, "sh", join(account.home, GO_KEY_FILE)],
+      argv: [process.execPath, agentboxBin(), "go-login", account.home],
       env: { NO_COLOR: "1" },
       unset: [],
-      credentialFile: join(account.home, GO_KEY_FILE),
-      needsPaste: true,
+      credentialFile: join(account.home, GO_LOGIN_FILE),
+      needsPaste: false,
     };
   }
   const { env, unset } = authEnv(account);
@@ -78,18 +78,6 @@ export function loginCommand(account: Pick<Account, "provider" | "home" | "isDef
       return { argv: ["devin", "auth", "login", "--force-manual-token-flow"], ...common, needsPaste: true };
   }
 }
-
-/** Ask for an OpenCode Go key and keep it, 0600, in `$1`. */
-const GO_KEY_SCRIPT = [
-  "umask 077",
-  "echo 'Paste the OpenCode Go API key for this account (from https://opencode.ai/auth: your workspace, API Keys) below.'",
-  "stty -echo 2>/dev/null",
-  "IFS= read -r k",
-  "stty echo 2>/dev/null",
-  "k=$(printf %s \"$k\" | tr -d '[:space:]')",
-  "[ -n \"$k\" ] || { echo 'No key was pasted.'; exit 1; }",
-  "printf %s \"$k\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\" && echo 'Saved.'",
-].join("\n");
 
 // ---------------------------------------------------------------- parsing
 
@@ -127,14 +115,14 @@ export function parseLoginOutput(provider: AccountProvider, text: string): { url
     claude: /visit:/i,
     codex: /open this link/i,
     devin: /visit\s/i,
-    omp: /https?:/,
+    omp: /open this link/i,
   };
   const m = anchors[provider].exec(text);
   const after = m ? text.slice(m.index) : text;
   const url = (after.match(URL_RE)?.[0] ?? text.match(URL_RE)?.[0] ?? null)?.replace(/[).,;]+$/, "") ?? null;
   let userCode: string | null = null;
-  if (provider === "codex") {
-    const i = text.search(/one-time code/i);
+  if (provider === "codex" || provider === "omp") {
+    const i = text.search(provider === "codex" ? /one-time code/i : /enter code/i);
     if (i >= 0) userCode = /\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/.exec(text.slice(i))?.[1] ?? null;
   }
   return { url, userCode };
@@ -323,7 +311,8 @@ export class LoginManager extends EventEmitter {
       const { url, userCode } = parseLoginOutput(run.flow.provider, visible);
       if (url) run.flow.url = url;
       if (userCode) run.flow.userCode = userCode;
-      const ready = run.flow.provider === "codex" ? !!(run.flow.url && run.flow.userCode) : !!run.flow.url;
+      const coded = run.flow.provider === "codex" || run.flow.provider === "omp";
+      const ready = coded ? !!(run.flow.url && run.flow.userCode) : !!run.flow.url;
       if (run.flow.state === "starting" && ready) run.flow.state = "awaiting-user";
     }
     this.emit("change", { ...run.flow });

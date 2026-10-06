@@ -25,7 +25,6 @@ import {
 import { identify, IdentityCache, type Identity } from "./identity";
 import { LoginManager, type LoginCommand } from "./login";
 import { UsageService, type UsageDeps } from "./usage";
-import { goKeyOf } from "./gokey";
 
 export { AccountError } from "./homes";
 
@@ -220,16 +219,11 @@ export class AccountsService extends EventEmitter {
 
   private withStatus(a: Account): AccountWithStatus {
     const usage = this.usage.get(a.id);
-    let auth = this.identities.peek(a.id)?.auth ?? UNKNOWN_AUTH;
-    if (a.provider === "omp") {
-      // An OpenCode Go account is its key: there or not.
-      auth = goKeyOf(a)
-        ? { state: "ok", expiresAt: null, detail: null }
-        : { state: "missing", expiresAt: null, detail: a.isDefault ? "log in to OpenCode Go with `opencode auth login`" : "no key yet — log in and paste it" };
-    }
-    // Keep claude/codex auth current with the clock without waiting for the
-    // identity sweep: the cache expires after a minute and this re-reads.
-    if (a.provider === "claude" || a.provider === "codex") void this.maybeReidentify(a).catch(() => undefined);
+    const auth = this.identities.peek(a.id)?.auth ?? UNKNOWN_AUTH;
+    // Keep auth read from a file (claude, codex, an OpenCode Go account)
+    // current without waiting for the identity sweep: the cache expires after
+    // a minute and this re-reads.
+    if (a.provider !== "devin") void this.maybeReidentify(a).catch(() => undefined);
     return { ...a, auth, usage };
   }
 
@@ -282,7 +276,6 @@ export class AccountsService extends EventEmitter {
   private async afterLogin(account: Account): Promise<string | null> {
     const id = await this.reidentify(account.id, true);
     void this.usage.refresh(account.id).catch(() => undefined);
-    if (account.provider === "omp") return this.sameGoKey(account);
     if (!id?.email) return null;
     // Named after an email and logged into another: the login page used
     // whoever the browser was signed into.
@@ -297,14 +290,6 @@ export class AccountsService extends EventEmitter {
     return twin
       ? `logged in as ${id.email}, which is also account "${twin.label}" — both share one usage pool; forget one of them`
       : null;
-  }
-
-  /** Two accounts on one OpenCode Go key are one pool counted twice. */
-  private sameGoKey(account: Account): string | null {
-    const key = goKeyOf(account);
-    if (!key) return null;
-    const twin = listAccounts("omp").find((o) => o.id !== account.id && goKeyOf(o) === key);
-    return twin ? `this is the same OpenCode Go key as account "${twin.label}" — its spend would be counted twice; paste another key or forget one of them` : null;
   }
 }
 
