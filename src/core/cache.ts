@@ -10,6 +10,8 @@
  * usage overage. A provider that does not say gets `claimIdleMin`.
  */
 
+import { isFleetNote, unwrapPaste } from "./sent";
+
 export const CACHE_TTL_1H_MS = 60 * 60_000;
 export const CACHE_TTL_5M_MS = 5 * 60_000;
 
@@ -65,22 +67,27 @@ export interface WarmSpell {
   at: number;
 }
 
+/** The transcript records these prompts and their replies. They refresh the
+ * cache, but are not new work and must not restart a wait's count or clock. */
+export function isKeepWarmNote(text: string): boolean {
+  return isFleetNote(text) && unwrapPaste(text).startsWith("[agentbox: keeping this session's prompt cache warm while it waits (");
+}
+
 /**
  * Whether a session waiting on work that will wake it gets the keep-warm
  * message now: the spell that sending it makes, or null. Not before its cache
  * is about to go cold, nor for a five-minute cache; not again before the last
  * one has been answered; and not past `KEEP_WARM_MAX` in one wait. A wait
- * starts over once you have said something to it since the last, or it has
- * worked since it answered.
+ * starts over on real activity, recorded separately from warming replies.
  */
 export function keepWarmPlan(
-  s: { now: number; warmUntil: number; cacheTtlMs?: number | null; lastTurnAt?: number | null; lastPromptAt?: number | null },
+  s: { now: number; warmUntil: number; cacheTtlMs?: number | null; lastTurnAt?: number | null; lastWorkAt?: number | null },
   spell: WarmSpell | undefined,
 ): WarmSpell | null {
   if (!cacheExpiring(s.now, s.warmUntil) || (s.cacheTtlMs ?? 0) < KEEP_WARM_MIN_TTL_MS) return null;
   const lastTurn = s.lastTurnAt ?? 0;
   if (spell && spell.at > lastTurn) return null;
-  const same = spell && (s.lastPromptAt ?? 0) <= spell.at && lastTurn <= spell.at + KEEP_WARM_LEAD_MS;
+  const same = spell && (s.lastWorkAt ?? 0) <= spell.at;
   const count = (same ? spell.count : 0) + 1;
   return count > KEEP_WARM_MAX ? null : { count, at: s.now };
 }

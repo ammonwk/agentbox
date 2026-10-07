@@ -21,7 +21,7 @@ import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type T
 import { isAgentSent, type TranscriptFacts, type TranscriptRef, type Wake } from "./types";
 import { dropPasteTags, isFleetNote } from "../sent";
 import { isStrandedNudge } from "../park";
-import { claudeCacheTtl } from "../cache";
+import { claudeCacheTtl, isKeepWarmNote, type WarmSpell } from "../cache";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
  *  collide), so it only ever proves a candidate, never recovers a path. */
@@ -476,6 +476,9 @@ export class ClaudeFold {
   private gitBranch: string | null = null;
   private startedAt: number | null = null;
   private lastActivityAt: number | null = null;
+  private lastWorkAt: number | null = null;
+  private keepWarm: WarmSpell | null = null;
+  private warming = false;
   /** The newest model call on the main chain (see TranscriptFacts.lastTurnAt). */
   private lastTurnAt: number | null = null;
   /** The cache lifetime the newest call that wrote any cache wrote it with. */
@@ -532,6 +535,7 @@ export class ClaudeFold {
     }
     if (typeof r.sessionId === "string" && !this.recordSessionId) this.recordSessionId = r.sessionId;
     const side = r.isSidechain === true;
+    if (!side && at !== null) this.workActivity(r, at);
     if (r.type === "user" || r.type === "assistant") {
       if (side) this.sawSidechain = true;
       else this.sawMain = true;
@@ -620,6 +624,41 @@ export class ClaudeFold {
         this.teammate(r);
         this.assistant(r, at);
         return;
+    }
+  }
+
+  /** A warming turn can take longer than five minutes on a loaded host.
+   * Follow the actual turn, rather than assuming its reply landed in time.
+   * Notifications, real prompts and tool calls always end that spell. */
+  private workActivity(r: any, at: number): void {
+    let real = false;
+    if (r.type === "user" && !r.isCompactSummary) {
+      const content = r.message?.content;
+      const text = typeof content === "string" ? content : blocksText(content);
+      if (isKeepWarmNote(text)) {
+        this.warming = true;
+        this.keepWarm = { count: (this.keepWarm?.count ?? 0) + 1, at };
+        return;
+      }
+      // Meta messages include delivered peer messages and task notifications.
+      real = !r.isMeta || classifyUserText(text) === "notification" || /^\s*<(agent-message|cross-session-message)\b/.test(text);
+    } else if (r.type === "attachment" && r.attachment?.type === "queued_command" && r.attachment.commandMode === "prompt") {
+      const text = typeof r.attachment.prompt === "string" ? r.attachment.prompt : blocksText(r.attachment.prompt);
+      if (isKeepWarmNote(text)) {
+        this.warming = true;
+        this.keepWarm = { count: (this.keepWarm?.count ?? 0) + 1, at };
+        return;
+      }
+      real = true;
+    } else if (r.type === "assistant" && !r.isApiErrorMessage && r.message?.model !== SYNTHETIC) {
+      real = !this.warming || (Array.isArray(r.message?.content) && r.message.content.some((b: any) => b?.type === "tool_use"));
+    } else if (r.type === "system" && r.subtype === "scheduled_task_fire") {
+      real = true;
+    }
+    if (real) {
+      this.warming = false;
+      this.keepWarm = null;
+      this.lastWorkAt = Math.max(this.lastWorkAt ?? 0, at);
     }
   }
 
@@ -902,6 +941,8 @@ export class ClaudeFold {
       prRepo: this.prRepo.repo,
       startedAt: this.startedAt,
       lastActivityAt: this.lastActivityAt,
+      lastWorkAt: this.lastWorkAt,
+      keepWarm: this.keepWarm ? { ...this.keepWarm } : null,
       lastTurnAt: this.lastTurnAt,
       cacheTtlMs: this.cacheTtlMs,
       turnOpen: this.turnOpen,

@@ -8,10 +8,15 @@ import {
   cacheWarmUntil,
   claudeCacheTtl,
   KEEP_WARM_MAX,
+  isKeepWarmNote,
   keepWarmNote,
   keepWarmPlan,
 } from "../cache";
 import { claudeReader } from "../providers/claude";
+import { ClaudeFold } from "../providers/claude-transcript";
+import { loadFields, saveFields } from "../providers/foldstate";
+import { deserialize, serialize } from "bun:jsc";
+import { classifyShell } from "../park";
 import { isAgentSent, readSent } from "../sent";
 
 const M = 60_000;
@@ -40,7 +45,7 @@ describe("the cache clock", () => {
 
 describe("keeping a cache warm", () => {
   const turn = 10 * H;
-  const base = { warmUntil: turn + H, cacheTtlMs: CACHE_TTL_1H_MS, lastTurnAt: turn, lastPromptAt: turn - M };
+  const base = { warmUntil: turn + H, cacheTtlMs: CACHE_TTL_1H_MS, lastTurnAt: turn, lastWorkAt: turn - M };
 
   test("comes in the last five minutes of an hour's cache", () => {
     expect(keepWarmPlan({ ...base, now: turn + 54 * M }, undefined)).toBeNull();
@@ -71,15 +76,51 @@ describe("keeping a cache warm", () => {
     const sent = { count: KEEP_WARM_MAX, at: turn + 55 * M };
     // You wrote to it after the last one.
     const later = turn + 2 * H;
-    expect(keepWarmPlan({ ...base, lastTurnAt: later, lastPromptAt: later - M, warmUntil: later + H, now: later + 55 * M }, sent)?.count).toBe(1);
+    expect(keepWarmPlan({ ...base, lastTurnAt: later, lastWorkAt: later - M, warmUntil: later + H, now: later + 55 * M }, sent)?.count).toBe(1);
     // A background task woke it and it worked, well after it answered.
-    expect(keepWarmPlan({ ...base, lastTurnAt: later, warmUntil: later + H, now: later + 55 * M }, sent)?.count).toBe(1);
+    expect(keepWarmPlan({ ...base, lastTurnAt: later, lastWorkAt: later, warmUntil: later + H, now: later + 55 * M }, sent)?.count).toBe(1);
   });
 
   test("says what it waits on and asks for one line", () => {
     const note = keepWarmNote("a background command is running (gh run watch 37338529329)");
     expect(note).toContain("(a background command is running (gh run watch 37338529329))");
     expect(note.startsWith("[agentbox: ") && note.endsWith("]")).toBe(true);
+  });
+
+  test("delayed warming replies and a restarted reader cannot extend a wait indefinitely", () => {
+    const ref = { path: "/tmp/warm.jsonl", agentSessionId: "warm" };
+    let fold = new ClaudeFold(ref);
+    const add = (type: string, at: number, message: object) => fold.add({ type, timestamp: new Date(at).toISOString(), message });
+    add("user", turn, { content: "Wait for the job" });
+    for (let i = 1; i <= KEEP_WARM_MAX; i++) {
+      const at = turn + i * H;
+      add("user", at, { content: keepWarmNote("a background command is waiting") });
+      // The former five-minute heuristic mistook this for new work.
+      add("assistant", at + 6 * M, { model: "claude-opus-5-5", usage: { input_tokens: 1 }, content: [{ type: "text", text: "Still waiting." }] });
+      const state = deserialize(serialize(saveFields(fold, ["ref"])));
+      fold = new ClaudeFold(ref);
+      loadFields(fold, state);
+    }
+    const f = fold.facts();
+    expect(f.lastWorkAt).toBe(turn);
+    expect(f.keepWarm?.count).toBe(KEEP_WARM_MAX);
+    expect(keepWarmPlan({ ...f, now: f.lastTurnAt! + 55 * M, warmUntil: f.lastTurnAt! + H, cacheTtlMs: H }, f.keepWarm!)).toBeNull();
+    add("user", turn + 10 * H, { content: "The job finished; carry on" });
+    expect(fold.facts().keepWarm).toBeNull();
+  });
+
+  test("only provably self-matching sleep waiters lose their hold; productive jobs remain protected", () => {
+    const stuck = 'until [ -s /tmp/prmon.txt ] && ! pgrep -f "pr-monitor.sh 8327" >/dev/null; do sleep 15; done; tail -25 /tmp/prmon.txt';
+    expect(classifyShell(stuck, ["sleep 15"])).toBe("follower");
+    expect(classifyShell(stuck, ["bun repair.ts --prod"])).toBe("work");
+    // These process checks can finish, and stopping them could kill work.
+    for (const cmd of [
+      'until ! pgrep -f "[r]un-arm.sh model-compare"; do sleep 10; done',
+      'until ! pgrep -A -f "run-arm.sh model-compare"; do sleep 10; done',
+      'until ! pgrep -f "run-arm.sh model-compare" || test -f done; do sleep 10; done',
+      'until ! pgrep -f "run-arm.sh model-compare"; do bun repair.ts --prod; sleep 10; done',
+      'sleep 1800; bun repair.ts --prod',
+    ]) expect(classifyShell(cmd, ["sleep 10"])).not.toBe("follower");
   });
 });
 
@@ -93,6 +134,7 @@ describe("agentbox's own notes", () => {
   test("put before your own message, it stays yours", () => {
     expect(isAgentSent("[agentbox: this session was parked while idle.]\n\nwhat about the tests?")).toBe(false);
     expect(isAgentSent("[agentbox: this session was parked while idle.]\n\nsee [the doc]")).toBe(false);
+    expect(isKeepWarmNote(`${keepWarmNote("a job")}\n\nPlease carry on with the other task`)).toBe(false);
   });
 });
 

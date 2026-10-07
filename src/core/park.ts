@@ -161,6 +161,17 @@ function idleProcess(c: string): boolean {
   return /(^|\/)sleep\s/.test(c) || FOLLOWERS.some((re) => re.test(c)) || (FILTER.test(c) && !QUITS.test(c));
 }
 
+/** A narrow, provably stuck waiter seen in real sessions: pgrep -f also
+ * matches its parent shell's command line. These literal patterns occur in
+ * that command verbatim; dots match themselves too. A sole sleep body has
+ * no way out. Do not generalize to regex tricks ([r]un), filtered pgrep,
+ * alternate conditions, or loop bodies doing real work. */
+function selfMatchingWaiter(command: string): boolean {
+  const loop = /^\s*until\s+([^;\n]+);\s*do\s+sleep\s+\d+(?:\.\d+)?\s*;\s*done\b/.exec(command);
+  if (!loop) return false;
+  return /^(?:\[\s+-[esf]\s+[\w./-]+\s*\]\s*&&\s*)?!\s*pgrep\s+-f\s+(["'])[\w./ :][\w./ :\-]*\1\s*(?:>\s*\/dev\/null\s*(?:2>&1\s*)?)?$/.test(loop[1]!.trim());
+}
+
 /**
  * What a background shell is: `work` (it will finish, and the session wants
  * to hear about it), `service` (serves until killed) or `follower` (can only
@@ -172,6 +183,9 @@ function idleProcess(c: string): boolean {
  * while, a wrong "follower" kills a job.
  */
 export function classifyShell(command: string, running: string[]): ShellKind {
+  // Only while it is actually waiting: a descendant doing anything else is
+  // protected as work, even if it came from a malformed waiter.
+  if (selfMatchingWaiter(command) && running.every((c) => /(^|\/)sleep\s/.test(c) || /^(?:\S*\/)?pgrep\s+-f\s/.test(c))) return "follower";
   if (SERVICES.some((re) => re.test(command)) || sshTunnel(command)) return "service";
   // Waiting on something outside it — a PR, a file, a remote job. Work, but
   // a poll whose condition cannot come true (`until ! pgrep -f x` matches

@@ -112,6 +112,12 @@ export interface TranscriptFacts {
   prRepo?: string | null;
   startedAt: number | null;
   lastActivityAt: number | null;
+  /** Newest real activity, excluding cache-warming prompts and their replies.
+   * Quiet-work holds use this; the cache still uses every model call. */
+  lastWorkAt?: number | null;
+  /** Cache-warming prompts in the current wait, folded from the transcript so
+   * a server restart cannot reset the cap. Real activity clears it. */
+  keepWarm?: { count: number; at: number } | null;
   /**
    * When the model last answered: the newest model call the transcript
    * records, not the newest line. Claude writes bookkeeping lines (a

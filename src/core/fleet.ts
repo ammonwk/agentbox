@@ -870,7 +870,13 @@ export class Fleet extends EventEmitter {
       // In the words crash recovery uses, which look back on it.
       const work = this.work.get(v.id)?.replace(/ were working\b/, " are working");
       if (!work || v.status !== "waiting" || facts.turnOpen) continue;
-      const spell = keepWarmPlan({ ...facts, now, warmUntil: v.cacheWarmUntil }, this.warmPings.get(v.id));
+      // The transcript survives restarts; the in-flight map covers a prompt
+      // typed but not yet read. Use whichever is newer, never a smaller count
+      // from before the server restarted in the middle of a wait.
+      const pending = this.warmPings.get(v.id);
+      const recorded = facts.keepWarm ?? undefined;
+      const prior = pending && pending.at > (recorded?.at ?? 0) && pending.at > (facts.lastWorkAt ?? 0) ? pending : recorded;
+      const spell = keepWarmPlan({ ...facts, now, warmUntil: v.cacheWarmUntil }, prior);
       if (!spell) continue;
       this.warmPings.set(v.id, spell);
       console.log(`agentbox: keeping ${v.id} (${v.title}) warm (${spell.count}/${KEEP_WARM_MAX}) while ${work}`);
@@ -1493,7 +1499,7 @@ export class Fleet extends EventEmitter {
     now: number,
     idleMs: number,
   ): Promise<string | ParkCheck> {
-    const quiet = now - v.lastActivityAt;
+    const quiet = now - (this.tracked.get(v.transcriptPath ?? "")?.facts?.lastWorkAt ?? v.lastActivityAt);
     if (panes.some((p) => p.clients > 0)) return "a terminal or browser is attached to it";
     const own = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
     if (!own?.facts) return "its transcript has not been read yet";
@@ -1634,7 +1640,7 @@ export class Fleet extends EventEmitter {
       for (const m of t.facts.monitors ?? []) monitors.add(m);
       if (this.subagentsWorking(t.ref, now)) return "its in-process subagents were working";
     }
-    return shellWork(table, pid, monitors, now - v.lastActivityAt, false).hold;
+    return shellWork(table, pid, monitors, now - (t?.facts?.lastWorkAt ?? v.lastActivityAt), false).hold;
   }
 
   /**
@@ -3540,6 +3546,8 @@ function compactFacts(f: TranscriptFacts, transcriptSize: number): StoredFacts {
     gitBranch: f.gitBranch,
     prRepo: f.prRepo ?? null,
     lastActivityAt: f.lastActivityAt,
+    lastWorkAt: f.lastWorkAt ?? null,
+    keepWarm: f.keepWarm ?? null,
     lastTurnAt: f.lastTurnAt ?? null,
     cacheTtlMs: f.cacheTtlMs ?? null,
     turnOpen: f.turnOpen,
