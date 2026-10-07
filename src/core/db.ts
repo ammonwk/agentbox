@@ -295,6 +295,17 @@ const MIGRATIONS: string[] = [
   DELETE FROM usage_samples WHERE account_id IN (SELECT id FROM accounts WHERE provider = 'omp' AND is_default = 1);
   DELETE FROM accounts WHERE provider = 'omp' AND is_default = 1;
   `,
+  // 19 — idempotent composer submissions, without a second transcript.
+  `
+  CREATE TABLE send_receipts (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    state TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    error TEXT
+  );
+  `,
 ];
 
 function migrate(d: Database) {

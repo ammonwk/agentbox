@@ -2576,11 +2576,11 @@ export class Fleet extends EventEmitter {
     return !!name && this.deps.runtime.listPanes().some((p) => p.name === name && !p.dead);
   }
 
-  resume(id: string, prompt?: string): Promise<Session> {
-    return this.serial(id, () => this.resumeNow(id, prompt));
+  resume(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
+    return this.serial(id, () => this.resumeNow(id, prompt, attempt));
   }
 
-  private async resumeNow(id: string, prompt?: string): Promise<Session> {
+  private async resumeNow(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
@@ -2598,6 +2598,7 @@ export class Fleet extends EventEmitter {
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
     const cwd = this.resumeCwd(rec);
     if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
+    attempt?.();
     if (view.cold) {
       await this.wake(rec, view, account, cwd, this.wakeTarget(rec, view), prompt);
     } else {
@@ -2886,9 +2887,9 @@ export class Fleet extends EventEmitter {
   /** Type into the session. A cold one wakes where there is room, which may
    *  mean restarting it on another account with `text` as its prompt; a
    *  parked one resumes with `text` as its prompt. */
-  send(id: string, text: string): Promise<void> {
+  send(id: string, text: string, attempt?: () => void): Promise<void> {
     return this.serial(id, async () => {
-      if (!(await this.wakeElsewhere(id, text))) await this.sendNow(id, text);
+      if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt);
     });
   }
 
@@ -2900,7 +2901,7 @@ export class Fleet extends EventEmitter {
 
   /** Wake a cold tmux session on the balancer's pick with `text` as its
    *  prompt, when that is another account; false when it stays put. */
-  private async wakeElsewhere(id: string, text: string): Promise<boolean> {
+  private async wakeElsewhere(id: string, text: string, attempt?: () => void): Promise<boolean> {
     const s = this.get(id);
     if (!s.cold || s.host !== "tmux") return false;
     const rec = getSessionRecord(id);
@@ -2914,12 +2915,13 @@ export class Fleet extends EventEmitter {
       return false; // cannot prove a resume: type into it where it is
     }
     if (!existsSync(cwd)) return false;
+    attempt?.();
     await this.wake(rec, s, from, cwd, target, text);
     await this.tick();
     return true;
   }
 
-  private async sendNow(id: string, text: string): Promise<void> {
+  private async sendNow(id: string, text: string, attempt?: () => void): Promise<void> {
     const s = this.get(id);
     if (s.host === "none") {
       const rec = getSessionRecord(id);
@@ -2928,11 +2930,12 @@ export class Fleet extends EventEmitter {
       if (rec?.tmux && this.paneAlive(rec.tmux)) {
         await this.untilReady(id);
         if (s.provider === "claude") await this.clearBtw(id, rec.tmux);
+        attempt?.();
         return this.deps.runtime.sendText(rec.tmux, text);
       }
       // Parked by the fleet, not stopped by you: this is what wakes it.
       if (rec?.parkedAt) {
-        await this.resumeNow(id, text);
+        await this.resumeNow(id, text, attempt);
         return;
       }
       throw new FleetError(409, "not running — resume it first");
@@ -2943,6 +2946,7 @@ export class Fleet extends EventEmitter {
     }
     await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
+    attempt?.();
     await this.deps.runtime.sendText(s.tmux, text);
     if (s.provider === "devin") await this.deliverDevinQueue(s.tmux);
   }
@@ -3073,13 +3077,14 @@ export class Fleet extends EventEmitter {
    * at once with the question recorded as asking; the answer, or why there is
    * none, follows as a `btw` event.
    */
-  askBtw(id: string, question: string): Btw {
+  askBtw(id: string, question: string, attempt?: () => void): Btw {
     const s = this.get(id);
     if (s.provider !== "claude") throw new FleetError(409, `/btw is Claude's; this is a ${s.provider} session`);
     if (s.host === "subagent") throw this.callersAgent(s);
     if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, s.host === "external" ? "running in another terminal — adopt it to ask here" : "not running — resume it first");
     if (s.status === "blocked") throw new FleetError(409, "it is showing a prompt; answer that first");
     const q = question.trim();
+    attempt?.();
     const row = insertBtw({ sessionId: id, question: q, source: "timeline", askedAt: this.now() });
     this.emit("btw", id);
     const asked = this.serial(id, async () => {

@@ -60,6 +60,7 @@ import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termse
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
 import { agentSentMark } from "../core/sent";
+import { SendReceiptConflict, sendReceipt, submitWithReceipt } from "../core/send-receipts";
 import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
@@ -642,9 +643,42 @@ const router = new Router(mapError)
     const fromSession =
       (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
       (b.from === "agent" && callerPid ? fleet.callerOf(callerPid) : null);
-    await fleet.send(params.id!, b.from === "agent" ? `${agentSentMark(fromSession)} ${text}` : text);
+    const body = b.from === "agent" ? `${agentSentMark(fromSession)} ${text}` : text;
+    if (b.sendId !== undefined) {
+      const id = requireString(b, "sendId");
+      if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, "invalid send ID");
+      try {
+        return json(await submitWithReceipt(params.id!, id, "send", body, (attempt) => fleet.send(params.id!, body, attempt)));
+      } catch (e) {
+        if (e instanceof SendReceiptConflict) throw new HttpError(409, e.message);
+        throw e;
+      }
+    }
+    await fleet.send(params.id!, body);
     return json(null);
   })
+  .add("POST", "/api/sessions/:id/submissions", async ({ req, params }) => {
+    const b = await readBody(req);
+    const id = requireString(b, "sendId");
+    if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, "invalid send ID");
+    const kind = requireString(b, "kind");
+    if (!["send", "resume", "btw"].includes(kind)) throw new HttpError(400, "invalid submission kind");
+    const text = typeof b.text === "string" ? b.text : requireString(b, "text");
+    if (kind !== "resume" && !text.trim()) throw new HttpError(400, "the message is empty");
+    try {
+      const receipt = await submitWithReceipt(params.id!, id, kind, text, (attempt) => {
+        if (kind === "send") return fleet.send(params.id!, text, attempt);
+        if (kind === "resume") return fleet.resume(params.id!, text || undefined, attempt);
+        return fleet.askBtw(params.id!, text, attempt);
+      });
+      scheduleHot();
+      return json(receipt);
+    } catch (e) {
+      if (e instanceof SendReceiptConflict) throw new HttpError(409, e.message);
+      throw e;
+    }
+  })
+  .add("GET", "/api/sessions/:id/submissions/:sendId", ({ params }) => json(sendReceipt(params.id!, params.sendId!)))
   .add("POST", "/api/sessions/:id/keys", async ({ req, params }) => {
     const b = await readBody(req);
     if (!Array.isArray(b.keys) || !b.keys.every((k) => typeof k === "string" && k.length > 0 && k.length < 64)) {

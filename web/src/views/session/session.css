@@ -1738,6 +1738,11 @@ a.sx-imgpath:hover { color: var(--accent); }
   font-size: 12.5px;
   color: var(--danger);
 }
+.cmp-pending { display: grid; gap: 6px; }
+.cmp-pending-body { flex: 1; min-width: 0; }
+.cmp-pending-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; }
+.cmp-pending .cmp-note { flex-wrap: wrap; }
+.cmp-pending .cmp-note > .btn { margin-left: 0; }
 .cmp-note {
   display: flex;
   align-items: center;

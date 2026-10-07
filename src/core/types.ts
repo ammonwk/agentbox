@@ -555,6 +555,15 @@ export type TimelineEvent = { id: string; at: number } & (
  * the running process's memory, never in the transcript, so agentbox keeps
  * them: asked from the Timeline, or seen asked in the terminal.
  */
+/** Delivery metadata only; the provider's transcript remains the record. */
+export interface SendReceipt {
+  id: string;
+  sessionId: string;
+  state: "pending" | "attempting" | "sent" | "failed" | "unconfirmed";
+  at: number;
+  error: string | null;
+}
+
 export interface Btw {
   id: number;
   sessionId: string;

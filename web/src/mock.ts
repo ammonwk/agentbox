@@ -17,6 +17,7 @@ import type {
   AgentSettings,
   AskAnswer,
   AppState,
+  SendReceipt,
   Attention,
   AttentionKind,
   Btw,
@@ -792,6 +793,7 @@ function metrics(): MetricsState {
 // ------------------------------------------------------------- timelines
 
 const timelines = new Map<string, TimelineEvent[]>();
+const submissions = new Map<string, SendReceipt>();
 
 function makeTimeline(s: Session): TimelineEvent[] {
   const ev: TimelineEvent[] = [];
@@ -1147,6 +1149,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   const [, head, id, action] = p;
 
   if (method === "GET") {
+    if (head === "sessions" && action === "submissions") return submissions.get(p[4]!) ?? null;
     if (head === "state") return appState();
     if (head === "health") {
       const health: Health = {
@@ -1257,6 +1260,16 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   }
 
   if (head === "sessions" && id) {
+    if (action === "submissions") {
+      const x = body<{ sendId: string; kind: "send" | "resume" | "btw"; text: string }>(b);
+      const sendId = x.sendId;
+      if (!sendId) throw new Error("mock: missing send ID");
+      if (submissions.has(sendId)) return submissions.get(sendId);
+      await handle("POST", `/api/sessions/${id}/${x.kind}`, x.kind === "btw" ? { question: x.text } : x.kind === "resume" ? { prompt: x.text } : { text: x.text });
+      const receipt: SendReceipt = { id: sendId, sessionId: id, state: "sent", at: Date.now(), error: null };
+      submissions.set(sendId, receipt);
+      return receipt;
+    }
     const s = mustSession(id);
     const x = body<{ label: string | null; text: string; keys: string[]; prompt: string; closed: boolean; question: string; answers: AskAnswer[] }>(b);
     switch (method === "PATCH" ? "patch" : action) {

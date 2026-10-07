@@ -43,6 +43,7 @@ import type {
   TimelineEvent,
   TimelinePage,
   TurnList,
+  SendReceipt,
   WorktreeScan,
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
@@ -67,7 +68,7 @@ const loadMock = (): Promise<MockModule> => (mockModule ??= import("./mock"));
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   if (MOCK) {
     const m = await loadMock();
     // The mock is typed loosely at its one boundary; everything past this line is the contract's type.
@@ -81,7 +82,7 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
 
   let res: Response;
   try {
-    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
   } catch (err) {
     // A dead server is the common case for a local tool; say which call died.
     throw new Error(`${path}: cannot reach agentbox (${(err as Error).message})`);
@@ -219,6 +220,9 @@ export const api = {
   patchSession: (id: string, patch: { label?: string | null; parent?: string | null }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
+  submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string) =>
+    request<SendReceipt>("POST", `/api/sessions/${enc(id)}/submissions`, { sendId, kind, text }, AbortSignal.timeout(30_000)),
+  submission: (id: string, sendId: string) => request<SendReceipt | null>("GET", `/api/sessions/${enc(id)}/submissions/${enc(sendId)}`, undefined, AbortSignal.timeout(10_000)),
   /** `background` leaves a browser tab behind the window in front (Ctrl-click). */
   openFile: (id: string, path: string, background = false) =>
     post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path, background }),

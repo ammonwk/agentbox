@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from "react";
 import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
 import { ago, api, fmtRetryAt, fmtTokens, useNow } from "../../api";
-import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
+import { AttachButton, AttachFrame, expandImages, tokensIn, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
-import { draftSent, loadDraft, onDraftSent, saveDraft } from "./drafts";
+import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend } from "./drafts";
+import { PendingSends, deliverPending } from "./submissions";
 import "../newsession.css";
 import { useAction } from "./useAction";
-import { echoSent } from "./echo";
 import { useVoiceNote, voiceNotes } from "./voicenote";
 import { accountProvider } from "../../../../src/core/providers/account";
 
@@ -56,7 +56,13 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   // The draft left here last time (the composer is keyed by session, so this
   // is read once per session). Sending clears it again.
   const draft = useMemo(() => loadDraft(session.id), [session.id]);
-  const [text, setText] = useState(draft?.text ?? "");
+  const [text, setTextState] = useState(draft?.text ?? "");
+  const revision = useRef(draft?.revision ?? newRevision());
+  const setText = useCallback((next: SetStateAction<string>) => {
+    revision.current = newRevision();
+    setTextState(next);
+  }, []);
+  const submitting = useRef(false);
   const { run, busy, error, clear } = useAction();
   /** A voice message is on its way to words. */
   const [hearing, setHearing] = useState(false);
@@ -98,40 +104,47 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   // Remember the draft as it changes; sending empties the box, which deletes it.
   const savedImages = images.saved();
   const savedKey = JSON.stringify(savedImages);
+  const editingRevision = revision.current;
   useEffect(() => {
-    saveDraft(session.id, text, savedImages);
-  }, [session.id, text, savedKey]);
-  // A send that began in a composer since left (this one opened on its draft) has landed.
+    void saveDraft(session.id, text, savedImages, editingRevision);
+  }, [session.id, text, savedKey, editingRevision]);
+  // Taking a revision clears every tab holding that revision, before delivery.
+  // A newer edit has its own revision, even if its text is identical.
   useEffect(
     () =>
-      onDraftSent((id, sent) => {
-        if (id !== session.id || sent !== text) return;
-        setText("");
+      onDraftWork(() => {
+        if (!draftTaken(session.id, revision.current)) return;
+        revision.current = newRevision();
+        setTextState("");
         images.clear();
       }),
-    [session.id, text],
+    [session.id, images.clear],
   );
 
   async function submit() {
-    if (busy) return;
+    if (busy || submitting.current || images.uploading) return;
     if (mode.kind === "send" && !text.trim()) return;
     setSpoke(false);
-    const sent = text;
-    const ok = await run(async () => {
-      const body = (await images.resolve(text)).trim();
+    submitting.current = true;
+    // Snapshot uploaded paths before clearing attachments. Text typed while
+    // storage or delivery is in flight belongs to a different revision.
+    const sent = { text, images: images.saved(), at: Date.now(), revision: revision.current };
+    try { await run(async () => {
+      const paths = new Map(sent.images.map((i) => [i.n, i.path]));
+      const missing = [...tokensIn(text)].filter((n) => !paths.has(n));
+      if (missing.length) throw new Error(`image #${missing.join(", #")} did not upload — retry it or remove it`);
+      const body = expandImages(text, paths).trim();
       const side = mode.kind === "send" && session.provider === "claude" ? BTW.exec(body) : null;
-      if (side) await api.btw(session.id, side[1]!);
-      else if (mode.kind === "send") {
-        await api.send(session.id, body);
-        echoSent(session.id, body);
-      }
-      else if (mode.kind === "resume") await api.resume(session.id, body || undefined);
-    });
-    if (ok) {
-      setText("");
-      images.clear();
-      draftSent(session.id, sent);
-    }
+      const bodyHash = submissionHash(body);
+      const pending: PendingSend = {
+        id: newRevision(), sessionId: session.id, draft: sent,
+        kind: side ? "btw" : mode.kind === "resume" ? "resume" : "send",
+        body: side ? side[1]! : body, bodyHash, at: Date.now(), state: "pending", error: null,
+      };
+      // Taking the draft notifies any composer holding this revision. A
+      // composer left meanwhile needs no cleanup: storage already took it.
+      await deliverPending(pending);
+    }); } finally { submitting.current = false; }
   }
 
   /** Put a voice message into words, after what is already in the box, to be read over before Send. */
@@ -172,6 +185,19 @@ export function Composer({ session, accounts, skills, textareaRef }: {
 
   return (
     <div className="cmp" data-mode={mode.kind}>
+      <PendingSends sessionId={session.id} onRestore={async (p) => {
+        const previousRevision = revision.current;
+        const restoredRevision = newRevision();
+        let n = Math.max(0, ...images.atts.map((a) => a.n), ...tokensIn(text));
+        const numbers = new Map(p.draft.images.map((a) => [a.n, ++n]));
+        const restoredImages = p.draft.images.map((a) => ({ ...a, n: numbers.get(a.n)! }));
+        const recovered = p.draft.text.replace(/\[Image #(\d+)\]/g, (token, old: string) => numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
+        const restored = [text.trimEnd(), recovered].filter(Boolean).join("\n\n");
+        await restorePending(session.id, p.id, { text: restored, images: [...images.saved(), ...restoredImages], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
+        images.restore(restoredImages);
+        revision.current = restoredRevision;
+        setTextState(restored);
+      }} />
       {error ? (
         <div className="cmp-error" role="alert">
           <Icon.alert size={13} /> {spoke ? "Not heard" : mode.kind === "resume" ? "Could not resume" : btw ? "Not asked" : "Not sent"}: {error}
