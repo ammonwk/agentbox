@@ -166,9 +166,19 @@ export function SessionView({
   // closed one; in the installed app Ctrl does too, and Ctrl+Tab and
   // Ctrl+Shift+Tab step through the sessions like a browser's tabs. Capture
   // these before the terminal handles its own keys (so there Ctrl+W no longer
-  // deletes a word: Ctrl+Backspace still does).
+  // deletes a word: Ctrl+Backspace still does). Shift+Tab in the terminal is
+  // taken here too: it steps back a tab as it does everywhere else, and never
+  // reaches the agent, where it would change the permission mode.
   useEffect(() => {
     const onShortcut = (e: KeyboardEvent) => {
+      if (e.key === "Tab" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && id && (e.target as HTMLElement | null)?.closest(".xterm")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.isComposing && !document.querySelector(".modal-backdrop")) {
+          onTab(SESSION_TABS[(SESSION_TABS.indexOf(tab) - 1 + SESSION_TABS.length) % SESSION_TABS.length]);
+        }
+        return;
+      }
       const app = e.ctrlKey && !e.altKey && isInstalledApp();
       if ((app || (e.altKey && !e.ctrlKey)) && !e.metaKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
         if (app && e.key === "Tab") {
@@ -195,6 +205,7 @@ export function SessionView({
     // j/k switch sessions and l/→ h fold, from anywhere that is not a text
     // field or the terminal; 1–4 pick a tab, and Tab and Shift+Tab step
     // through them, from the message box too (where Tab only moved focus on).
+    // In the terminal Tab is the agent's; Shift+Tab is taken above.
     // ← goes over to the list (from the message box too, once the cursor is at
     // its start), where the arrows walk the rows and Enter opens one.
     const onKey = (e: KeyboardEvent) => {

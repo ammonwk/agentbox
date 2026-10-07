@@ -139,8 +139,8 @@ export default function Terminal({
           safeFit();
           chan?.resize(term.cols, term.rows);
           // Not out of the message box: Tab there steps through the tabs, so
-          // arriving here by Tab and leaving by Shift+Tab must not land in the
-          // agent (whose Shift+Tab is its own), nor a reattach take keys mid-message.
+          // arriving here by Tab must not move the keys into the agent, nor a
+          // reattach take them mid-message.
           const a = document.activeElement;
           if (!(a instanceof HTMLTextAreaElement && a.id.startsWith("cmp-"))) term.focus();
         },
