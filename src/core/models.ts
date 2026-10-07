@@ -38,7 +38,7 @@ import { claudeHome } from "./providers/claude";
 import { codexHome } from "./providers/codex";
 import { devinAdapter } from "./providers/devin";
 import { BRIDGED } from "../bridge/models";
-import { agentDirOf } from "./providers/omp";
+import { agentDir } from "./providers/omp";
 import type { Account, ModelOption, ProviderId } from "./types";
 
 /** Re-read a file only when its mtime moves; models.dev's cache is ~5 MB. */
@@ -217,8 +217,8 @@ function codexModels(account: Account, dev: ModelsDev): ModelOption[] {
 /** omp's provider names are models.dev's, except zen, which models.dev calls `opencode`. */
 const OMP_DEV_PROVIDER: Record<string, string> = { "opencode-zen": "opencode", "opencode-zen-responses": "opencode", "opencode-go-responses": "opencode-go" };
 
-function ompModels(account: Account, dev: ModelsDev): ModelOption[] {
-  const dir = agentDirOf(account);
+function ompModels(dev: ModelsDev): ModelOption[] {
+  const dir = agentDir();
   const yml = readCached(join(dir, "models.yml"), (t) => Bun.YAML.parse(t) as { providers?: Record<string, { models?: { id: string; name?: string }[] }> });
   const providers = Object.entries(yml?.providers ?? {});
   if (providers.length === 0) return [];
@@ -390,7 +390,7 @@ export async function modelOptions(account: Account, provider: ProviderId = acco
     case "codex":
       return codexModels(account, dev);
     case "omp":
-      return ompModels(account, dev);
+      return ompModels(dev);
     default:
       return [];
   }

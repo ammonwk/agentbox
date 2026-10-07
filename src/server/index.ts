@@ -563,7 +563,7 @@ const provider = (v: unknown): ProviderId => {
 /** A provider that holds accounts: opencode runs on omp's. */
 const accountProvider = (v: unknown): AccountProvider => {
   const p = provider(v);
-  if (p === "opencode") throw new HttpError(400, "opencode has no accounts of its own: it runs on OpenCode Go through omp's account");
+  if (p === "opencode") throw new HttpError(400, "opencode has no accounts of its own: it runs on the OpenCode Go accounts, as omp does");
   return p;
 };
 
@@ -1323,7 +1323,8 @@ export async function startServer(): Promise<void> {
   }, STARTING_PUSH_MS);
 
   // Default accounts must exist before the first fleet tick, or every
-  // transcript found on it would be filed under no account.
+  // transcript found on it would be filed under no account. (omp has none:
+  // without an OpenCode Go account its sessions are not on the board.)
   await accounts.start();
   phase("accounts");
   fleet.start();

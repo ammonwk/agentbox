@@ -28,7 +28,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { userHome } from "../core/paths";
-import { GO_ACCOUNT_BEARER, GO_CONSOLE_UPSTREAM, GO_CONSOLE_USAGE, GO_KEY_UPSTREAM, defaultGoKey, goHomeForSelector } from "../core/accounts/gocred";
+import { GO_ACCOUNT_BEARER, GO_CONSOLE_UPSTREAM, GO_CONSOLE_USAGE, GO_KEY_UPSTREAM, goHomeForAccount } from "../core/accounts/gocred";
 import { freshGoLogin } from "../core/accounts/godevice";
 import { BRIDGED, bridgePort, bridgedModel, type BridgedModel } from "./models";
 import {
@@ -417,11 +417,12 @@ async function passThrough(req: Request, url: URL, body: Uint8Array | null): Pro
  * OpenCode Go on a given account's credential (src/core/accounts/gocred.ts):
  * `/go/<account>/v1/<rest>` and `/go/<account>/anthropic/v1/<rest>` are
  * forwarded to Go with that account's credential in place of whatever the
- * caller sent. `<account>` is "default" (opencode's own API key), an account
- * id (its Console sign-in, refreshed here when due or refused), or "caller":
- * omp, whose endpoint is fixed in its models.yml, names the account in its
- * key (`agentbox-account:<id>`), and any other key it sends is a real one
- * that goes through untouched. `/go/<account>/v1/usage` is Go's own usage
+ * caller sent. `<account>` is an account id (its Console sign-in, refreshed
+ * here when due or refused), or "caller": omp, whose endpoint is fixed in
+ * its models.yml, names the account in its key (`agentbox-account:<id>`).
+ * Any other key it sends is a real one, of an omp you ran in your own
+ * terminal, and goes through untouched: agentbox holds no key of its own.
+ * `/go/<account>/v1/usage` is Go's own usage
  * report for that credential (accounts/usage.ts). The session's own headers
  * (`x-opencode-session`) ride along; the reply streams back.
  */
@@ -447,16 +448,7 @@ async function goProxy(req: Request, url: URL, log: (line: string) => void): Pro
     if (headers.has("x-api-key")) headers.set("x-api-key", token);
   };
 
-  if (selector === "default") {
-    const key = defaultGoKey();
-    if (!key) return refuse("opencode has no OpenCode Go key — run `opencode auth login`");
-    credential(key);
-    // opencode signed into a workspace names it; a key is its own workspace.
-    headers.delete("x-opencode-org-id");
-    return goSend(`${GO_KEY_UPSTREAM}${rest}`, req, headers, body, log, selector);
-  }
-
-  const home = goHomeForSelector(selector);
+  const home = goHomeForAccount(selector);
   for (const force of [false, true]) {
     const login = home ? await freshGoLogin(home, { force }).catch((e: Error) => (log(`go ${selector}: ${e.message}`), null)) : null;
     if (!login) return refuse(`OpenCode Go account ${selector} is not signed in — log it in again in agentbox`);

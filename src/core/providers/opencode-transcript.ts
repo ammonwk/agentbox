@@ -185,7 +185,7 @@ export function summarize(row: OpencodeMessageRow, ver: number): RowSummary {
 }
 
 /** A limit the provider refused on, rather than a fault: 429s and quota
- *  errors, and an OpenCode Go key out of funds (`goOutOfFunds`), but not
+ *  errors, and an OpenCode Go account out of funds (`goOutOfFunds`), but not
  *  another provider's prepaid funds running out, which no wait fixes. */
 function isLimit(e: NonNullable<RowSummary["error"]>, provider: string | null): boolean {
   if (/insufficient (account )?(funds|balance|credits)/i.test(e.message)) return goOutOfFunds(provider, e.message);

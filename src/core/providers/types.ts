@@ -328,6 +328,15 @@ export interface ProviderAdapter {
    */
   moveSession?(opts: { from: Account; to: Account; agentSessionId: string; transcriptPath: string }): string;
 
+  /**
+   * Every account of this provider reads one session store (omp, opencode:
+   * an account is only whose credential a session's requests carry). So one
+   * account's listing is everyone's, a transcript's `accountId` says who
+   * listed it rather than whose it is, and a session whose account was
+   * forgotten resumes on another.
+   */
+  sharedStore?: boolean;
+
   /** The flags in a live process's argv worth keeping when adopt resumes it —
    *  permissions, directories, MCP config, model — and never the session id,
    *  the prompt, or anything that makes it a one-shot. */

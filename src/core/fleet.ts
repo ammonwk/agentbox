@@ -501,7 +501,8 @@ export class Fleet extends EventEmitter {
     if (now - this.lastDiscovery >= DISCOVERY_MS) {
       this.lastDiscovery = now;
       for (const adapter of this.adapters.values()) {
-        for (const account of accountsOf(adapter.id)) {
+        // One account's listing is everyone's where they share a store.
+        for (const account of adapter.sharedStore ? accountsOf(adapter.id).slice(0, 1) : accountsOf(adapter.id)) {
           let refs: TranscriptRef[] = [];
           try {
             refs = await adapter.listTranscripts(account, since);
@@ -1026,8 +1027,9 @@ export class Fleet extends EventEmitter {
           if (!f || f.isSubagent || t.ref.provider !== rec.provider || this.pool.has(poolKey(rec.provider, f.agentSessionId))) continue;
           // Devin records no account per session, so its adapter lists every
           // transcript under the default account; a session we started on
-          // another account still matches there.
-          if (t.ref.accountId !== rec.accountId && !defaults.has(t.ref.accountId)) continue;
+          // another account still matches there. As it does where every
+          // account reads one store, listed under whichever came first.
+          if (t.ref.accountId !== rec.accountId && !defaults.has(t.ref.accountId) && !this.adapter(rec.provider).sharedStore) continue;
           if (this.byAgentId.has(`${rec.provider}:${f.agentSessionId}`)) continue;
           if (findSessionRecord(rec.provider, f.agentSessionId)) continue;
           // Another process is writing it: a sibling started beside us, not ours.
@@ -2592,7 +2594,7 @@ export class Fleet extends EventEmitter {
     // Parked by a crash rather than for idling: what it lost, before what you say.
     if (prompt && rec.parkedAt && rec.parkedWhy) prompt = `[agentbox: ${rec.parkedWhy}]\n\n${prompt}`;
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to resume");
-    const account = rec.accountId ? getAccount(rec.accountId) : null;
+    const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
     const cwd = this.resumeCwd(rec);
     if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
@@ -2603,6 +2605,23 @@ export class Fleet extends EventEmitter {
     }
     await this.tick();
     return this.get(id);
+  }
+
+  /**
+   * The account a session resumes on: its own. Where every account reads one
+   * session store (omp, opencode) and its own was forgotten, the balancer's
+   * pick, which it is pinned to from here on; a forgotten account of any
+   * other provider took the session's transcript home with it.
+   */
+  private accountFor(rec: SessionRecord, view: Session): Account | null {
+    const own = rec.accountId ? getAccount(rec.accountId) : null;
+    if (own || !this.adapter(rec.provider).sharedStore) return own;
+    const pick = this.placement(rec.provider, view.model, null, rec.effort ?? null).accountId;
+    const account = pick ? getAccount(pick) : null;
+    if (!account) return null;
+    updateSessionRecord(rec.id, { accountId: account.id });
+    rec.accountId = account.id;
+    return account;
   }
 
   /**
@@ -2727,7 +2746,7 @@ export class Fleet extends EventEmitter {
     if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
     if (view.status === "running") throw new FleetError(409, "it is mid-turn; interrupt it first");
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
-    const from = rec.accountId ? getAccount(rec.accountId) : null;
+    const from = this.accountFor(rec, view);
     if (!from) throw new FleetError(409, "this session's account is no longer set up");
     const accountId = opts.accountId && opts.accountId !== "auto" ? opts.accountId : null;
     const target = this.wakeTarget(rec, view, accountId);
@@ -2830,7 +2849,7 @@ export class Fleet extends EventEmitter {
     if (view.host === "subagent") throw this.callersAgent(view);
     if (view.host !== "external" || !view.pid) throw new FleetError(409, "only a session running in another terminal can be adopted");
     if (!rec.agentSessionId) throw new FleetError(409, "cannot tell which conversation that process is");
-    const account = rec.accountId ? getAccount(rec.accountId) : null;
+    const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is not set up in agentbox");
     const cwd = this.resumeCwd(rec);
     if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);

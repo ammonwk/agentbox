@@ -17,8 +17,8 @@ export type { UserIdentity };
 export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode";
 
 /** The providers that hold accounts. opencode holds none of its own: it runs
- *  on OpenCode Go, the login omp's implicit account already holds and reports
- *  usage for, so its sessions sit on that account and share its balancer
+ *  on OpenCode Go, which omp's accounts are sign-ins to and report usage
+ *  for, so its sessions sit on those accounts and share their balancer
  *  (`accountProvider` in providers/index.ts). */
 export type AccountProvider = Exclude<ProviderId, "opencode">;
 

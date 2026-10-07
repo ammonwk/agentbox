@@ -181,7 +181,7 @@ export function isRateLimitError(msg: { errorStatus?: unknown; errorMessage?: un
 }
 
 /**
- * An OpenCode Go key out of funds. Elsewhere that is fatal (no wait fixes
+ * An OpenCode Go account out of funds. Elsewhere that is fatal (no wait fixes
  * it), but each Go key is an account of its own, so for Go it is that
  * account's limit: the session can go on on another key.
  */

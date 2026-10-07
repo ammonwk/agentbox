@@ -216,11 +216,7 @@ function AccountCard({
             </button>
           </h3>
         )}
-        {a.isDefault && a.provider === "omp" ? (
-          <span className="src ac-default" title="The OpenCode Go API key opencode itself holds (opencode auth login), which omp reads too.">
-            opencode's key
-          </span>
-        ) : a.isDefault ? (
+        {a.isDefault ? (
           <span className="src ac-default" title={`Your plain ${a.provider} CLI's own login. Logging the CLI in or out changes this card only.`}>
             CLI login
           </span>
@@ -236,7 +232,7 @@ function AccountCard({
       </header>
 
       <div className="ac-sub">
-        <span>{a.email ?? <span className="faint">{a.provider === "omp" && a.isDefault ? "OpenCode Go API key" : "no email yet"}</span>}</span>
+        <span>{a.email ?? <span className="faint">no email yet</span>}</span>
         {a.plan ? <span className="ac-plan">{a.plan}</span> : null}
         <AuthBadge account={a} now={now} />
       </div>
@@ -601,7 +597,7 @@ export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismis
   );
 }
 
-/** omp's accounts are OpenCode Go keys, which opencode sessions use too. */
+/** omp's accounts are OpenCode Go sign-ins, which opencode sessions use too. */
 function sectionTitle(p: ProviderId): string {
   return p === "omp" ? "OpenCode Go · omp and opencode" : PROVIDER_LABEL[p];
 }

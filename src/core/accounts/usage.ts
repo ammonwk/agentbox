@@ -29,7 +29,7 @@ import type { Account, AccountProvider, AccountUsage, ProviderId, UsageWindow, W
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
 import { bridgeUrl } from "../../bridge/models";
-import { goSelector, hasGoCredential } from "./gocred";
+import { hasGoCredential } from "./gocred";
 import { readClaudeCredentials, readClaudeJson, readCodexAuth, readDevinCredentials } from "./identity";
 
 const MIN = 60_000;
@@ -493,11 +493,11 @@ export function mapGoUsage(body: unknown, now: number): UsageWindow[] {
  *  credential (`/go/<account>/v1/usage`, src/bridge/devin.ts) and is the one
  *  thing that refreshes a Console sign-in, which asking here keeps alive. */
 async function fetchGoUsage(account: Account, deps: UsageDeps): Promise<Reading> {
-  if (!hasGoCredential(account)) return { kind: "skip", stale: account.isDefault ? "opencode has no OpenCode Go key" : "not signed in" };
+  if (!hasGoCredential(account)) return { kind: "skip", stale: "not signed in" };
   const now = deps.now();
   let res: Response;
   try {
-    res = await deps.fetch(`${bridgeUrl()}/go/${goSelector(account)}/v1/usage`, {
+    res = await deps.fetch(`${bridgeUrl()}/go/${account.id}/v1/usage`, {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
@@ -506,7 +506,7 @@ async function fetchGoUsage(account: Account, deps: UsageDeps): Promise<Reading>
   }
   if (res.status === 401 || res.status === 403) {
     await res.arrayBuffer().catch(() => undefined);
-    const stale = res.status === 403 ? "no OpenCode Go subscription in this workspace" : account.isDefault ? "OpenCode Go refused opencode's key" : "sign-in refused — log the account in again";
+    const stale = res.status === 403 ? "no OpenCode Go subscription in this workspace" : "sign-in refused — log the account in again";
     return { kind: "error", stale, unauthorized: true };
   }
   if (!res.ok) return httpError(res, "OpenCode Go usage", now);

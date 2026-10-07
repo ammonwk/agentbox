@@ -10,9 +10,10 @@
  *
  * Accounts. opencode keeps one login per provider (`auth.json`), and the one
  * that matters here — OpenCode Go — is the subscription omp also runs on. So
- * opencode has no account of its own: it shares omp's implicit one, and with
- * it omp's usage windows and its place in the balancer. The account handed in
- * is never used to find anything.
+ * opencode has no account of its own: it shares omp's OpenCode Go accounts,
+ * and with them their usage windows and their place in the balancer. Every
+ * account reads the one database (`sharedStore`), so the account handed in is
+ * never used to find anything.
  *
  * Launching. agentbox starts sessions `--standalone`, so the server that runs
  * the tools is a child of the TUI in the pane and inherits its environment
@@ -39,7 +40,6 @@ import { cwdOf, findProcesses, runsCli, startedAtOf } from "./procs";
 import { BRIEFING } from "./briefing";
 import { ensureBridge } from "../../bridge/service";
 import { bridgeUrl } from "../../bridge/models";
-import { goSelector } from "../accounts/gocred";
 import { anthropicGoModels } from "../accounts/gomodels";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import * as db from "./opencode-db";
@@ -408,7 +408,7 @@ const objectOr = (v: unknown): Record<string, unknown> =>
  *  its own stored login whatever its config says, and signed into a Console
  *  workspace it bills that one. The models with an endpoint of their own
  *  (accounts/gomodels.ts) are each pointed at the bridge as well. */
-function configEnv(account: Pick<Account, "id" | "isDefault">): Record<string, string> {
+function configEnv(account: Pick<Account, "id">): Record<string, string> {
   let cfg: Record<string, unknown> = {};
   const own = process.env.OPENCODE_CONFIG_CONTENT;
   if (own) {
@@ -419,7 +419,7 @@ function configEnv(account: Pick<Account, "id" | "isDefault">): Record<string, s
   const instructions = Array.isArray(cfg.instructions) ? cfg.instructions.filter((x) => x !== brief) : [];
   cfg = { ...cfg, instructions: [...instructions, brief] };
   ensureBridge();
-  const base = `${bridgeUrl()}/go/${goSelector(account)}`;
+  const base = `${bridgeUrl()}/go/${account.id}`;
   const providers = objectOr(cfg.provider);
   const go = objectOr(providers["opencode-go"]);
   const models = { ...objectOr(go.models) };
@@ -503,7 +503,9 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Pro
     },
 
     async liveProcesses(accounts) {
-      const account = accounts.find((a) => a.isDefault) ?? accounts[0] ?? null;
+      // One started in your own terminal runs on opencode's own login, which
+      // is no account here; it is filed under the first.
+      const account = accounts[0] ?? null;
       const matches = findProcesses(isOpencodeTui);
       if (matches.length === 0) return [];
       const pids = new Set(matches.map((m) => m.pid));
@@ -538,8 +540,9 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Pro
       return new OpencodeReader(ref, dbPath());
     },
 
-    // Every OpenCode Go account runs on the one database (only the key
+    // Every OpenCode Go account runs on the one database (only the sign-in
     // differs), so a session is already wherever it is resumed.
+    sharedStore: true,
     moveSession: ({ transcriptPath }) => transcriptPath,
 
     spawnCommand(opts: SpawnOptions) {

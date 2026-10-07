@@ -1,11 +1,13 @@
 /** The omp (oh-my-pi) adapter.
  *
- * omp balances its own credential pool across every provider account it is
- * logged into, so agentbox treats it as ONE implicit account whose home is
- * `~/.omp`. Everything here is read from omp's own files:
+ * omp keeps one data dir, `~/.omp`, whatever it is logged into; an account
+ * here is an OpenCode Go sign-in (accounts/gocred.ts) and changes only whose
+ * credential the bridge puts on a session's requests. So every account reads
+ * the one session store (`sharedStore`), and there is no default account.
+ * Everything here is read from omp's own files:
  *
- *   <home>/agent/sessions/<slug(cwd)>/<ISO>_<uuidv7>.jsonl   one session
- *   <home>/agent/sessions/<slug>/<ISO>_<uuidv7>/…            its subagents
+ *   ~/.omp/agent/sessions/<slug(cwd)>/<ISO>_<uuidv7>.jsonl   one session
+ *   ~/.omp/agent/sessions/<slug>/<ISO>_<uuidv7>/…            its subagents
  *       (`<Name>.jsonl`, `<Name>.md`, and `<Parent>/<Parent>.<Child>.jsonl`
  *       for nested ones, plus numbered tool-output logs we ignore)
  *
@@ -59,16 +61,14 @@ export { ompUsage, parseOmpUsage } from "./omp-usage";
 const TITLE_SLOT_BYTES = 256;
 const DEFAULT_PAGE = 50;
 
-/** omp's agent dir for an account. `PI_CODING_AGENT_DIR` in the server's own
- *  environment relocates the default one, exactly as it would for omp. */
-export function agentDirOf(account: Pick<Account, "home" | "isDefault">): string {
-  const override = process.env.PI_CODING_AGENT_DIR;
-  if (account.isDefault && override) return override;
-  return join(account.home, "agent");
+/** omp's agent dir, the same for every account. `PI_CODING_AGENT_DIR` in the
+ *  server's own environment relocates it, exactly as it would for omp. */
+export function agentDir(): string {
+  return process.env.PI_CODING_AGENT_DIR || join(userHome(), ".omp", "agent");
 }
 
-export function sessionsRootOf(account: Pick<Account, "home" | "isDefault">): string {
-  return join(agentDirOf(account), "sessions");
+export function sessionsRoot(): string {
+  return join(agentDir(), "sessions");
 }
 
 function canonical(p: string): string {
@@ -677,21 +677,27 @@ function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoA
 }
 
 /** omp's data dir is the same for every account; what differs is the
- *  OpenCode Go credential. `~/.omp/agent/models.yml` points omp's Go blocks
- *  at the bridge and sends `OPENCODE_GO_API_KEY` as the key, else opencode's
- *  own: for an account you added the "key" names the account, and the bridge
- *  puts its Console sign-in on the request; the default account sends the
- *  real key, which goes through (accounts/gocred.ts). What must not leak in
- *  from the server's shell is anything that silently points omp at another
- *  data dir: an XDG_*_HOME with an `omp/` under it, a profile, or a
- *  session-dir override. */
-function ompAccountCommand(account?: Pick<Account, "id" | "isDefault">): Pick<Command, "env" | "unset"> {
-  if (account && !account.isDefault) return { env: { OPENCODE_GO_API_KEY: `${GO_ACCOUNT_BEARER}${account.id}` }, unset: ompRedirectVars() };
-  return { env: {}, unset: [...ompRedirectVars(), "OPENCODE_GO_API_KEY"] };
+ *  OpenCode Go sign-in. `~/.omp/agent/models.yml` points omp's Go blocks at
+ *  the bridge and sends `OPENCODE_GO_API_KEY` as the key: here that "key"
+ *  names the session's account, and the bridge puts the account's Console
+ *  sign-in on the request (accounts/gocred.ts). No session is started
+ *  without one, so none falls back to the API key models.yml reads for an
+ *  omp in your own terminal. What must not leak in from the server's shell
+ *  is anything that silently points omp at another data dir: an XDG_*_HOME
+ *  with an `omp/` under it, a profile, or a session-dir override. */
+function ompAccountCommand(account: Pick<Account, "id">): Pick<Command, "env" | "unset"> {
+  return { env: { OPENCODE_GO_API_KEY: `${GO_ACCOUNT_BEARER}${account.id}` }, unset: ompRedirectVars() };
+}
+
+/** The account a running omp was started on, from the "key" it was given. */
+function accountOfEnv(env: Map<string, string> | null, accounts: readonly Account[]): Account | undefined {
+  const key = env?.get("OPENCODE_GO_API_KEY");
+  if (!key?.startsWith(GO_ACCOUNT_BEARER)) return undefined;
+  return accounts.find((a) => a.id === key.slice(GO_ACCOUNT_BEARER.length));
 }
 
 /** A session's account env, with the bridge its Go requests go through up. */
-function ompLaunch(account: Pick<Account, "id" | "isDefault">): Pick<Command, "env" | "unset"> {
+function ompLaunch(account: Pick<Account, "id">): Pick<Command, "env" | "unset"> {
   ensureBridge();
   return ompAccountCommand(account);
 }
@@ -710,11 +716,12 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   accountCommand: (account) => ompAccountCommand(account),
-  authEnv: () => ompAccountCommand(),
+  // Its sign-in is agentbox's own command (accounts/login.ts), not omp's.
+  authEnv: () => ({ env: {}, unset: ompRedirectVars() }),
 
   async listTranscripts(account, sinceMs) {
     const out: TranscriptRef[] = [];
-    for (const dir of slugDirs(sessionsRootOf(account))) {
+    for (const dir of slugDirs(sessionsRoot())) {
       for (const name of sessionFilesIn(dir)) {
         const ref = refFor(account, join(dir, name));
         if (ref && ref.mtimeMs >= sinceMs) out.push(ref);
@@ -724,10 +731,13 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   async liveProcesses(accounts) {
-    const account = accounts.find((a) => a.provider === "omp" && a.isDefault) ?? accounts.find((a) => a.provider === "omp");
+    // One started in your own terminal runs on whatever key its models.yml
+    // found, which is no account here; it is filed under the first.
+    const first = accounts.find((a) => a.provider === "omp");
     const matches = findProcesses(isOmpSessionArgv);
     const pids = new Set(matches.map((m) => m.pid));
     const procs: OmpProc[] = [];
+    const accountOf = new Map<number, string | null>();
     for (const m of matches) {
       // A child omp (a worker it spawned) is part of its parent's session.
       if (pids.has(m.ppid)) continue;
@@ -737,14 +747,14 @@ export const ompAdapter: ProviderAdapter = {
       const startedAt = startedAtOf(m.pid);
       if (cwd === null || startedAt === null) continue;
       procs.push({ pid: m.pid, ppid: m.ppid, argv: argvOf(m.pid) ?? m.argv, cwd, startedAt });
+      accountOf.set(m.pid, (accountOfEnv(env, accounts) ?? first)?.id ?? null);
     }
     if (procs.length === 0) return [];
-    const root = account ? sessionsRootOf(account) : join(userHome(), ".omp", "agent", "sessions");
-    const ids = attributeOmp(procs, root, filesWrittenBy);
+    const ids = attributeOmp(procs, sessionsRoot(), filesWrittenBy);
     return procs.map(
       (p): LiveProcess => ({
         pid: p.pid,
-        accountId: account?.id ?? null,
+        accountId: accountOf.get(p.pid) ?? null,
         agentSessionId: ids.get(p.pid) ?? null,
         cwd: p.cwd,
         startedAt: p.startedAt,
@@ -753,7 +763,7 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   async findTranscript(account, agentSessionId) {
-    const path = findSessionFile(sessionsRootOf(account), agentSessionId);
+    const path = findSessionFile(sessionsRoot(), agentSessionId);
     return path ? refFor(account, path) : null;
   },
 
@@ -763,8 +773,9 @@ export const ompAdapter: ProviderAdapter = {
 
   subagentLogDir: (ref) => ref.path.slice(0, -".jsonl".length),
 
-  // Every OpenCode Go account runs on the one session store (only the key
-  // differs), so a session is already wherever it is resumed.
+  // Every OpenCode Go account runs on the one session store (only the
+  // sign-in differs), so a session is already wherever it is resumed.
+  sharedStore: true,
   moveSession: ({ transcriptPath }) => transcriptPath,
 
   spawnCommand(opts: SpawnOptions) {
@@ -778,7 +789,7 @@ export const ompAdapter: ProviderAdapter = {
   resumeCommand(opts: ResumeOptions): Command {
     // Resume by path when we can find it: `-r <id>` searches and, from a
     // different project, stops to ask whether to move the session.
-    const path = findSessionFile(sessionsRootOf(opts.account), opts.agentSessionId, opts.cwd);
+    const path = findSessionFile(sessionsRoot(), opts.agentSessionId, opts.cwd);
     return {
       argv: withPrompt(["omp", "-r", path ?? opts.agentSessionId, ...commonFlags(opts)], opts.prompt),
       ...ompLaunch(opts.account),

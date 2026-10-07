@@ -87,7 +87,6 @@ describe("OpenCode Go sign-in", () => {
     const cmd = loginCommand({ provider: "omp", home: "/h", isDefault: false });
     expect(cmd.argv.slice(-2)).toEqual(["go-login", "/h"]);
     expect(cmd).toMatchObject({ needsPaste: false, credentialFile: `/h/${GO_LOGIN_FILE}` });
-    expect(() => loginCommand({ provider: "omp", home: "/h", isDefault: true })).toThrow(/opencode auth login/);
     const out = "Open this link in your browser and sign in to the OpenCode account you want here:\n   https://opencode.ai/console/device?user_code=TCXQ-SQFX&client_id=opencode-cli\nEnter code: TCXQ-SQFX\n";
     expect(parseLoginOutput("omp", out)).toEqual({ url: "https://opencode.ai/console/device?user_code=TCXQ-SQFX&client_id=opencode-cli", userCode: "TCXQ-SQFX" });
   });

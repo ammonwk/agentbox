@@ -17,7 +17,7 @@ import type { Account } from "../types";
 const dir = mkdtempSync(join(tmpdir(), "agentbox-opencode-"));
 const dbFile = join(dir, "opencode.db");
 const adapter = createOpencodeAdapter({ dataDir: () => dir });
-const account: Account = { id: "omp", provider: "omp", label: "omp", email: null, plan: null, home: "/nowhere", isDefault: true, enabled: true, createdAt: 0 };
+const account: Account = { id: "omp", provider: "omp", label: "omp", email: null, plan: null, home: "/nowhere", isDefault: false, enabled: true, createdAt: 0 };
 const savedHome = process.env.AGENTBOX_HOME;
 
 const S = "ses_f382f776effeH5gVsCj2bcC40x";

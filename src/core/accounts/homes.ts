@@ -72,8 +72,7 @@ export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault"
 }
 
 /** The file whose existence means "this home has logged in". For omp, an
- *  OpenCode Go account, its Console sign-in (the default account's is the
- *  API key opencode holds instead: accounts/gocred.ts). */
+ *  OpenCode Go account, its Console sign-in (accounts/gocred.ts). */
 export function credentialsPath(provider: AccountProvider, home: string): string | null {
   switch (provider) {
     case "claude": return join(home, ".credentials.json");
@@ -184,6 +183,9 @@ export function owners<A extends Pick<Account, "id" | "provider" | "email" | "is
  * Registered whether or not the default home has credentials — an installed
  * CLI you have not logged into is still an account, one whose auth shows
  * "missing" and whose Log in button fixes it. Returns what was added.
+ *
+ * Not omp: its accounts are OpenCode Go sign-ins, each one added (and
+ * forgotten) by you, and the CLI holds none that agentbox would borrow.
  */
 export async function ensureDefaultAccounts(
   detect: (p: ProviderId) => Promise<CliInfo> = detectCli,
@@ -191,7 +193,7 @@ export async function ensureDefaultAccounts(
   const hasDefault = (p: AccountProvider) => listAccounts(p).some((a) => a.isDefault || samePath(a.home, defaultHome(p)));
   // Only a provider without one is asked whether its CLI is installed: that
   // runs it (`omp --version` is a second), on every server start.
-  const missing = PROVIDERS.filter((p) => !hasDefault(p));
+  const missing = PROVIDERS.filter((p) => p !== "omp" && !hasDefault(p));
   const infos = await Promise.all(missing.map(async (p) => [p, await detect(p)] as const));
   const added: Account[] = [];
   for (const [provider, info] of infos) {

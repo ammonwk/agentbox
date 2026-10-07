@@ -2,7 +2,9 @@
  * where the bridge listens. Apart from the bridge so the devin adapter and
  * the model picker can ask "is this one bridged?" without loading a server. */
 
-import { defaultGoKey } from "../core/accounts/gocred";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { CatalogModel } from "./devin-wire";
 
 export const DEFAULT_BRIDGE_PORT = 4480;
@@ -22,9 +24,18 @@ export interface BridgedModel extends CatalogModel {
   keyHint: string;
 }
 
-/** OpenCode Go's key, from opencode's own login (`opencode auth login`). */
+/** OpenCode Go's key, from opencode's own login (`opencode auth login`).
+ *  For the free model below only: no OpenCode Go account is this key
+ *  (src/core/accounts/gocred.ts). */
 function opencodeGoKey(): string | null {
-  return process.env.OPENCODE_GO_API_KEY || defaultGoKey();
+  if (process.env.OPENCODE_GO_API_KEY) return process.env.OPENCODE_GO_API_KEY;
+  try {
+    const path = join(process.env.XDG_DATA_HOME || join(process.env.HOME || homedir(), ".local", "share"), "opencode", "auth.json");
+    const key = (JSON.parse(readFileSync(path, "utf8")) as Record<string, { key?: unknown }>)["opencode-go"]?.key;
+    return typeof key === "string" && key ? key : null;
+  } catch {
+    return null;
+  }
 }
 
 const envInt = (name: string, fallback: number): number => {

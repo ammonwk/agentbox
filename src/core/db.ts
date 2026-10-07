@@ -284,6 +284,17 @@ const MIGRATIONS: string[] = [
   DROP TABLE go_spend_cursors;
   DELETE FROM usage_samples WHERE source = 'transcripts';
   `,
+  // 18 — an OpenCode Go account is a sign-in you add and forget: omp has no
+  // default account (it was the API key opencode holds). Its sessions go to
+  // the oldest account there is, or to none, and resume on the balancer's
+  // pick (`Fleet.accountFor`).
+  `
+  UPDATE sessions
+     SET account_id = (SELECT id FROM accounts WHERE provider = 'omp' AND is_default = 0 ORDER BY created_at, id LIMIT 1)
+   WHERE account_id IN (SELECT id FROM accounts WHERE provider = 'omp' AND is_default = 1);
+  DELETE FROM usage_samples WHERE account_id IN (SELECT id FROM accounts WHERE provider = 'omp' AND is_default = 1);
+  DELETE FROM accounts WHERE provider = 'omp' AND is_default = 1;
+  `,
 ];
 
 function migrate(d: Database) {

@@ -50,9 +50,6 @@ export interface LoginCommand {
  */
 export function loginCommand(account: Pick<Account, "provider" | "home" | "isDefault">): LoginCommand {
   if (account.provider === "omp") {
-    if (account.isDefault) {
-      throw new AccountError(400, "the default OpenCode Go account is the API key opencode itself holds — run `opencode auth login` (OpenCode Go) in a terminal, or add an account here and sign in to it");
-    }
     // The OpenCode Console's device sign-in, run by agentbox so the login is
     // this account's own (accounts/godevice.ts): a link and a code, no paste.
     return {

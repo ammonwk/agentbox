@@ -1,17 +1,18 @@
 /** OpenCode Go credentials: one per omp account, which omp and opencode
  * sessions share (see `accountProvider`).
  *
- * An account you add is an OpenCode Console sign-in — the device flow
+ * Every account is an OpenCode Console sign-in — the device flow
  * `opencode auth login opencode` runs, done by agentbox itself
  * (`agentbox go-login`, godevice.ts) so the login is the account's own: its
  * tokens live alone in `<home>/opencode-console.json` (0600, in a 0700 home)
- * and are never opencode's, whose refresh would rotate ours away. The default
- * account is what the CLIs hold without agentbox: the `opencode-go` API key in
- * `<XDG data>/opencode/auth.json`, which omp's `models.yml` reads.
+ * and are never opencode's, whose refresh would rotate ours away. There is no
+ * default account: the API key the CLIs hold without agentbox
+ * (`<XDG data>/opencode/auth.json`) is not one, and no session agentbox
+ * starts is given it.
  *
- * Neither CLI can be handed a Console sign-in, and opencode cannot even be
- * handed a key (it prefers its stored login, and signed into a workspace it
- * bills that workspace), so a session reaches Go through the bridge
+ * Neither CLI can be handed a Console sign-in (opencode prefers its stored
+ * login, and signed into a workspace it bills that workspace), so a session
+ * reaches Go through the bridge
  * (`/go/<account>/…`, src/bridge/devin.ts), which puts the account's
  * credential on each request and refreshes a Console token when it is due.
  * The bridge is the only thing that refreshes: a refresh replaces the refresh
@@ -21,17 +22,18 @@
 
 import { chmodSync, existsSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { accountHomeFor, accountsRoot, userHome } from "../paths";
+import { accountHomeFor, accountsRoot } from "../paths";
 import type { Account } from "../types";
 
 export const GO_LOGIN_FILE = "opencode-console.json";
 
-/** Go by API key, and by Console sign-in (OpenAI- and Anthropic-shaped). */
+/** Go by an API key the caller sent itself (omp in your own terminal), and by
+ *  an account's Console sign-in (OpenAI- and Anthropic-shaped). */
 export const GO_KEY_UPSTREAM = "https://opencode.ai/zen/go/v1";
 export const GO_CONSOLE_UPSTREAM = { openai: "https://opencode.ai/inference/go/openai/v1", anthropic: "https://opencode.ai/inference/go/anthropic/v1" } as const;
 
 /** Go's usage report for a Console sign-in: beside the two shapes, not under
- *  either. By key it is `<GO_KEY_UPSTREAM>/usage`. */
+ *  either. */
 export const GO_CONSOLE_USAGE = "https://opencode.ai/inference/go/v1/usage";
 
 /** What omp sends as its key to name the account a request is for; anything
@@ -51,11 +53,6 @@ export interface GoLogin {
   orgName: string | null;
 }
 
-/** opencode's login file. */
-export function opencodeAuthPath(): string {
-  return join(process.env.XDG_DATA_HOME || join(userHome(), ".local", "share"), "opencode", "auth.json");
-}
-
 const cache = new Map<string, { mtimeMs: number; value: unknown }>();
 
 /** Read and parse a file, re-reading only when it changes. */
@@ -70,14 +67,6 @@ function readCached<T>(path: string, parse: (text: string) => T | null): T | nul
   } catch {
     return null;
   }
-}
-
-/** The default account's key: opencode's own `opencode-go` login. */
-export function defaultGoKey(): string | null {
-  return readCached(opencodeAuthPath(), (text) => {
-    const entry = (JSON.parse(text) as Record<string, { key?: unknown }>)["opencode-go"];
-    return typeof entry?.key === "string" && entry.key ? entry.key : null;
-  });
 }
 
 export function parseGoLogin(text: string): GoLogin | null {
@@ -122,17 +111,12 @@ export function goLoginHomes(): string[] {
 }
 
 /** Whether an account has what it needs to reach Go. */
-export function hasGoCredential(account: Pick<Account, "home" | "isDefault">): boolean {
-  return account.isDefault ? defaultGoKey() !== null : readGoLogin(account.home) !== null;
+export function hasGoCredential(account: Pick<Account, "home">): boolean {
+  return readGoLogin(account.home) !== null;
 }
 
-/** How the bridge names an account: "default", or a non-default account's
- *  id, whose home is always `accounts/<id>`. */
-export function goSelector(account: Pick<Account, "id" | "isDefault">): string {
-  return account.isDefault ? "default" : account.id;
-}
-
-/** The home behind a bridge selector other than "default", or null. */
-export function goHomeForSelector(selector: string): string | null {
-  return /^[\w-]+$/.test(selector) && selector !== "default" ? accountHomeFor(selector) : null;
+/** The home behind the account id the bridge is asked for (always
+ *  `accounts/<id>`), or null when that is no id. */
+export function goHomeForAccount(id: string): string | null {
+  return /^[\w-]+$/.test(id) ? accountHomeFor(id) : null;
 }
