@@ -65,7 +65,7 @@ function Schedules({ state }: { state: AppState }) {
       <h3>Scheduled sessions</h3>
       <p className="hint">
         Sessions that start on their own, each time a new one. Add one from New session: open the ▾ beside Start, pick{" "}
-        <strong>Schedule…</strong>, and say something like “every weekday at 9am” or “every 2 hours”. One-time ones wait in the
+        <strong>Schedule…</strong>, and say something like “every weekday at 9am”, “every 2 hours” or “whenever CD on staging is red”. One-time ones wait in the
         session list instead.
       </p>
       {recurring.length === 0 ? (
@@ -133,7 +133,7 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
         </span>
       </div>
       <p className="sched-meta">
-        {sc.enabled && sc.nextAt ? <>Next {lowerFirst(describeAt(sc.nextAt))}</> : "Paused"}
+        {!sc.enabled ? "Paused" : sc.nextAt ? <>Next {lowerFirst(describeAt(sc.nextAt))}</> : sc.rule.kind === "red" ? <>Watching {sc.rule.repo}</> : "Paused"}
         {where ? <> · <span className="mono">{where}</span></> : null}
         {sc.lastRunAt ? (
           <>
@@ -150,7 +150,7 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
       </p>
       {sc.lastError ? (
         <p className="error" role="alert">
-          Last time it did not start: {sc.lastError}
+          {sc.rule.kind === "red" && sc.lastError.startsWith("could not read") ? "" : "Last time it did not start: "}{sc.lastError}
         </p>
       ) : null}
       {editing ? (

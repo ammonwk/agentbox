@@ -76,7 +76,7 @@ export async function unschedule(api: Api, args: string[]): Promise<number> {
 /** `id  when (next)  what`: one line per schedule. */
 function line(sc: Schedule): string {
   const title = sc.label?.trim() || sc.spec.prompt?.split("\n")[0]?.slice(0, 70) || "";
-  const next = !sc.enabled ? "paused" : sc.nextAt ? until(sc.nextAt) : sc.rule.kind === "merge" ? "on merge" : "—";
+  const next = !sc.enabled ? "paused" : sc.nextAt ? until(sc.nextAt) : sc.rule.kind === "merge" ? "on merge" : sc.rule.kind === "red" ? "on red" : "—";
   const rule = isRecurring(sc.rule) ? `${describeRule(sc.rule)}, repeating` : describeRule(sc.rule);
   const failed = sc.lastError ? `  [last start failed: ${sc.lastError}]` : "";
   return `${sc.id}  ${next.padEnd(7)} ${rule} · ${sc.spec.provider} · ${title}${failed}`;

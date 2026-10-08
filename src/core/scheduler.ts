@@ -14,6 +14,10 @@
  * that says merged — and, for a new worktree, once the merge is in the
  * `origin/<default>` it will be cut from, so the session has it in its history.
  * GitHub is asked directly only once, when the rule is made.
+ *
+ * "Whenever CD on staging is red" is recurring with no time either: the
+ * workflow's runs are read every two minutes, and a session starts for each
+ * red streak (redwatch.ts), told which runs failed.
  */
 
 import { existsSync } from "node:fs";
@@ -21,13 +25,16 @@ import { homedir } from "node:os";
 import { deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
 import { FleetError, newSessionId, type Fleet } from "./fleet";
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
-import { describeRule, isRecurring, nextRun, parseWhen, type ScheduleRule } from "./schedule";
+import { defaultBranch, findWorkflow, readRuns, redNote, redStreak } from "./redwatch";
+import { describeRule, isRecurring, nextRun, onEvent, parseWhen, type ScheduleRule } from "./schedule";
 import type { Schedule, ScheduleSpec } from "./types";
 
 const TICK_MS = 15_000;
 /** How often a PR waited on is looked at: the copy it reads syncs once a
  *  minute, and a merge not yet in origin costs a `git fetch` each time. */
 const MERGE_CHECK_MS = 60_000;
+/** How often a workflow waited on to go red is read: a `gh run list` each. */
+const RED_CHECK_MS = 2 * 60_000;
 /** No account had room: try again this much later. */
 const RETRY_MS = 10 * 60_000;
 
@@ -45,6 +52,9 @@ export class Scheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private mergesCheckedAt = 0;
+  private redsCheckedAt = 0;
+  /** A red one whose session did not start: not tried again before this. */
+  private redHeldUntil = new Map<string, number>();
 
   constructor(
     private readonly fleet: Fleet,
@@ -110,7 +120,7 @@ export class Scheduler {
     } else if (edit.enabled !== undefined) patch.enabled = enabled;
     if (patch.rule || patch.enabled !== undefined) {
       const next = enabled ? nextRun(rule, now) : null;
-      if (enabled && next === null && rule.kind !== "merge") throw new FleetError(400, "That time has passed: give it a new one.");
+      if (enabled && next === null && !onEvent(rule)) throw new FleetError(400, "That time has passed: give it a new one.");
       patch.nextAt = next;
     }
     updateSchedule(id, patch);
@@ -127,7 +137,15 @@ export class Scheduler {
   /** Start it now. A one-time one is then done; a recurring one keeps its times. */
   async runNow(id: string): Promise<string> {
     const s = this.get(id);
-    const sid = await this.fire(s, this.now(), true);
+    let note: string | undefined;
+    if (s.rule.kind === "red") {
+      // Told what it would have been told, red or not; unread, it finds out.
+      note = await readRuns(s.rule).then(
+        (runs) => redNote(s.rule as Extract<ScheduleRule, { kind: "red" }>, redStreak(runs, null), s.lastSessionId),
+        () => undefined,
+      );
+    }
+    const sid = await this.fire(s, this.now(), true, note);
     if (!sid) throw new FleetError(409, this.get(id).lastError ?? "it did not start");
     return sid;
   }
@@ -143,6 +161,10 @@ export class Scheduler {
       if (now - this.mergesCheckedAt >= MERGE_CHECK_MS) {
         this.mergesCheckedAt = now;
         await this.checkMerges(now);
+      }
+      if (now - this.redsCheckedAt >= RED_CHECK_MS) {
+        this.redsCheckedAt = now;
+        await this.checkReds(now);
       }
     } catch (e) {
       console.error("agentbox: scheduler:", e);
@@ -188,6 +210,32 @@ export class Scheduler {
     }
   }
 
+  /** Each workflow waited on, read once: a session for a new red streak. */
+  private async checkReds(now: number): Promise<void> {
+    for (const s of listSchedules()) {
+      const rule = s.rule;
+      if (!s.enabled || rule.kind !== "red" || !rule.repo || !rule.branch) continue;
+      if ((this.redHeldUntil.get(s.id) ?? 0) > now) continue;
+      let runs;
+      try {
+        runs = await readRuns(rule);
+      } catch (e) {
+        const message = `could not read the runs of ${rule.workflow} on ${rule.branch}: ${(e as Error).message}`;
+        if (s.lastError !== message) {
+          updateSchedule(s.id, { lastError: message });
+          this.changed();
+        }
+        continue;
+      }
+      const streak = redStreak(runs, s.lastRunAt);
+      if (streak) await this.fire(s, now, false, redNote(rule, streak, s.lastSessionId));
+      else if (s.lastError) {
+        updateSchedule(s.id, { lastError: null });
+        this.changed();
+      }
+    }
+  }
+
   private get(id: string): Schedule {
     const s = getSchedule(id);
     if (!s) throw new FleetError(404, `no scheduled session ${id}`);
@@ -195,15 +243,19 @@ export class Scheduler {
   }
 
   /** The session it started, or null when it could not (said on the schedule). */
-  private async fire(s: Schedule, now: number, early: boolean): Promise<string | null> {
+  private async fire(s: Schedule, now: number, early: boolean, note?: string): Promise<string | null> {
     const once = !isRecurring(s.rule);
     const { accountId, ...spec } = s.spec;
     try {
       const { session } = await this.fleet.spawn({
         ...spec,
+        // What set it off, before what it was asked.
+        ...(note ? { prompt: spec.prompt ? `${note}\n\n${spec.prompt}` : note } : {}),
         accountId: accountId && accountId !== "auto" ? accountId : null,
         ...(once ? { id: s.id } : {}),
       });
+      // Its first prompt is the note, which makes a poor title.
+      if (note && s.label) await this.fleet.patch(session.id, { label: s.label }).catch(() => {});
       if (once) deleteSchedule(s.id);
       else {
         updateSchedule(s.id, {
@@ -223,6 +275,12 @@ export class Scheduler {
         // It got as far as a session, which now says what went wrong itself.
         deleteSchedule(s.id);
       } else if (early) {
+        updateSchedule(s.id, { lastError: message });
+      } else if (s.rule.kind === "red") {
+        // Still red, so it is tried again once the hold is over; its last
+        // start stays the last one that worked, which is what tells a streak
+        // with a session from one without.
+        this.redHeldUntil.set(s.id, now + RETRY_MS);
         updateSchedule(s.id, { lastError: message });
       } else {
         // No account with room is a moment, not a mistake: try again soon —
@@ -300,14 +358,10 @@ async function prState(repo: string, pr: number): Promise<PrState> {
  * PR that already has would otherwise wait forever.
  */
 async function settle(rule: ScheduleRule, spec: ScheduleSpec): Promise<ScheduleRule> {
+  if (rule.kind === "red") return settleRed(rule, spec);
   if (rule.kind !== "merge") return rule;
-  let repo = rule.repo;
-  if (!repo) {
-    const reg = spec.repoId ? getRepoById(spec.repoId) : null;
-    const dir = reg ? reg.ref : spec.cwd?.replace(/^~(?=$|\/)/, homedir());
-    repo = reg?.fullName ?? (dir && existsSync(dir) && isGitRepo(dir) ? repoFullNameOf(dir) : null);
-    if (!repo) throw new FleetError(400, `cannot tell which GitHub repo PR #${rule.pr} is in: name it, as in “when owner/repo#${rule.pr} merges”`);
-  }
+  const repo = rule.repo ?? repoOf(spec);
+  if (!repo) throw new FleetError(400, `cannot tell which GitHub repo PR #${rule.pr} is in: name it, as in “when owner/repo#${rule.pr} merges”`);
   const { state, title, baseRefName } = await prState(repo, rule.pr);
   if (state === "MERGED") throw new FleetError(400, `PR #${rule.pr} of ${repo} has already merged: use Start instead`);
   if (state === "CLOSED") throw new FleetError(400, `PR #${rule.pr} of ${repo} is closed`);
@@ -318,6 +372,25 @@ async function settle(rule: ScheduleRule, spec: ScheduleSpec): Promise<ScheduleR
     throw new FleetError(400, `PR #${rule.pr} merges into ${baseRefName}, not ${into.defaultBranch}: a new worktree is cut from ${into.defaultBranch}, so it would not have it`);
   }
   return { kind: "merge", pr: rule.pr, repo, title };
+}
+
+/** A red rule made whole: its repo, its branch, and its workflow as GitHub names it. */
+async function settleRed(rule: Extract<ScheduleRule, { kind: "red" }>, spec: ScheduleSpec): Promise<ScheduleRule> {
+  const repo = rule.repo ?? repoOf(spec);
+  if (!repo) throw new FleetError(400, `cannot tell which GitHub repo ${rule.workflow} is in: name it, as in “whenever owner/repo's ${rule.workflow} is red”`);
+  try {
+    const { name, file } = await findWorkflow(repo, rule.workflow);
+    return { kind: "red", workflow: name, file, repo, branch: rule.branch ?? (await defaultBranch(repo)) };
+  } catch (e) {
+    throw new FleetError(400, (e as Error).message);
+  }
+}
+
+/** The GitHub repo (`owner/name`) the session runs in, when it is one. */
+function repoOf(spec: ScheduleSpec): string | null {
+  const reg = spec.repoId ? getRepoById(spec.repoId) : null;
+  const dir = reg ? reg.ref : spec.cwd?.replace(/^~(?=$|\/)/, homedir());
+  return reg?.fullName ?? (dir && existsSync(dir) && isGitRepo(dir) ? repoFullNameOf(dir) : null);
 }
 
 /** Wrong now is wrong later: say so while you are still here to fix it. */
