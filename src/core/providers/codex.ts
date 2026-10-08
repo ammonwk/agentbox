@@ -37,7 +37,7 @@ import type { Account } from "../types";
 import { codexFormat, codexLineage, type CodexLineage } from "./codex-transcript";
 import { JsonlTranscriptReader } from "./jsonl-reader";
 import { cwdOf, environOf, findProcesses, runsCli, startedAtOf, type ProcMatch } from "./procs";
-import { pickOption, plainScreen } from "./tui-screen";
+import { pickOption, plainScreen, underInput } from "./tui-screen";
 import { BRIEFING } from "./briefing";
 import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
@@ -679,8 +679,14 @@ export function codexAutoAnswer(raw: string): string[] | null {
   return null;
 }
 
+/** The composer: a `›` line with nothing against it, where a menu's pointer
+ *  (the same glyph) sits on a numbered option among its neighbours. */
+const composer = (lines: string[], i: number): boolean =>
+  /^›(\s|$)/.test(lines[i]!) && !/^›\s+\d+[.)]\s/.test(lines[i]!) && !lines[i - 1]?.trim() && !lines[i + 1]?.trim();
+
 export function codexBlockedOn(raw: string): string | null {
-  const s = plainScreen(raw);
+  // Every prompt below stands where the composer was.
+  const s = underInput(plainScreen(raw), composer);
   if (/Sign in with ChatGPT/.test(s) && /Sign in with Device Code|Provide your own API key|Welcome to Codex/.test(s)) return "login required";
   if (/Would you like to run the following command\?/.test(s)) return "approval: run command";
   if (/Would you like to make the following edits\?/.test(s)) return "approval: apply edits";

@@ -32,7 +32,7 @@ import { JsonlTranscriptReader } from "./jsonl-reader";
 import { claudeFormat } from "./claude-transcript";
 import { SubagentTokens } from "./claude-subagents";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
-import { pickOption, plainScreen } from "./tui-screen";
+import { pickOption, plainScreen, RULE, underInput } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
 import { BRIEFING } from "./briefing";
 import { carryFlags, setsFlag, type Arity } from "../launch";
@@ -371,10 +371,9 @@ export function claudeApprovePrompt(raw: string): string[] | null {
  */
 function lastMessage(s: string): string | null {
   const lines = s.split("\n");
-  const rule = /^─{20,}\s*$/;
   let end = lines.length;
   for (let i = lines.length - 1; i > 0; i--) {
-    if (/^❯/.test(lines[i]!) && rule.test(lines[i - 1]!)) {
+    if (inputBox(lines, i)) {
       end = i - 1;
       break;
     }
@@ -382,11 +381,16 @@ function lastMessage(s: string): string | null {
   for (let i = end - 1; i >= 0; i--) {
     if (!/^\s*[●⏺]\s/.test(lines[i]!)) continue;
     const out = [lines[i]!.replace(/^\s*[●⏺]\s+/, "")];
-    for (let j = i + 1; j < end && lines[j]!.trim() && !rule.test(lines[j]!); j++) out.push(lines[j]!.trim());
+    for (let j = i + 1; j < end && lines[j]!.trim() && !RULE.test(lines[j]!); j++) out.push(lines[j]!.trim());
     return out.join(" ");
   }
   return null;
 }
+
+/** The input box: a `❯` line under a rule. A dialog's pointer is the same
+ *  glyph, on a numbered option ("Chat about this" sits under a rule too). */
+const inputBox = (lines: string[], i: number): boolean =>
+  i > 0 && /^❯/.test(lines[i]!) && !/^❯\s+\d+[.)]\s/.test(lines[i]!) && RULE.test(lines[i - 1]!);
 
 /** Claude's own refusal for want of a login, as a message in the conversation
  *  ("Please run /login · API Error: 401 …", "Not logged in · Please run
@@ -397,13 +401,15 @@ const LOGIN_ERROR = /^(?:Please run \/login|Not logged in|Invalid API key)/;
 
 /** What a Claude screen is waiting on you for, in a few words. */
 export function claudeBlockedOn(raw: string): string | null {
-  const s = plainScreen(raw);
-  if (/Select login method/.test(s)) return "login required";
+  const screen = plainScreen(raw);
   // An error line is history once anything follows it: only the session's
   // last message says it is still stopped there. A teammate's failure is in
   // a "Teammate @x failed:" line, which is not this session's login.
-  const last = lastMessage(s);
+  const last = lastMessage(screen);
   if (last && LOGIN_ERROR.test(last) && !/requires an access grant/i.test(last)) return "login required";
+  // Every dialog below stands where the input box was.
+  const s = underInput(screen, inputBox);
+  if (/Select login method/.test(s)) return "login required";
   // The options alone: in a short pane the dialog's heading has scrolled away.
   if (/Yes, I trust this folder/.test(s) && /No, exit/.test(s)) return "folder trust";
   if (/Bypass Permissions mode/.test(s) && /Yes, I accept/.test(s)) return "confirm bypass-permissions mode";

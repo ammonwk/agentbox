@@ -515,6 +515,12 @@ function openTerminal(ws: Socket): void {
   });
 }
 
+/** When you last typed into each session's terminal: a panel that opens
+ *  there at once is yours, and is not pushed (`notifyBlocked`). */
+const typedAt = new Map<string, number>();
+/** What xterm sends by itself: a focus change, or its answer to a query. */
+const TERM_REPORT = /^\x1b\[(?:[IO]|[?>]?[\d;]*[cnR])$/;
+
 function termOf(d: SocketData): { write(s: string): void; resize(c: number, r: number): void; close(): void } | null {
   if (d.kind !== "term" || !d.proc) return null;
   return (d.proc as unknown as { terminal?: { write(s: string): void; resize(c: number, r: number): void; close(): void } }).terminal ?? null;
@@ -530,8 +536,10 @@ function handleTermMessage(ws: Socket, raw: string | Buffer): void {
     return;
   }
   const m = msg as { type?: string; data?: unknown; cols?: unknown; rows?: unknown };
-  if (m.type === "input" && typeof m.data === "string") t.write(m.data);
-  else if (m.type === "resize" && typeof m.cols === "number" && typeof m.rows === "number") {
+  if (m.type === "input" && typeof m.data === "string") {
+    t.write(m.data);
+    if (ws.data.kind === "term" && !TERM_REPORT.test(m.data)) typedAt.set(ws.data.sessionId, Date.now());
+  } else if (m.type === "resize" && typeof m.cols === "number" && typeof m.rows === "number") {
     const cols = Math.max(20, Math.min(500, Math.floor(m.cols)));
     const rows = Math.max(5, Math.min(200, Math.floor(m.rows)));
     t.resize(cols, rows);
@@ -1388,7 +1396,11 @@ export async function startServer(): Promise<void> {
   startNightlyReclaim(() => fleet.sessions());
 
   fleet.on("sessions", () => {
-    notifyBlocked(fleet.sessions(), (id) => fleet.blockedReason(id));
+    notifyBlocked(
+      () => fleet.sessions(),
+      (id) => fleet.blockedReason(id),
+      (id) => typedAt.get(id) ?? 0,
+    );
     scheduleHot();
     // Claims move with sessions, and claims are on the Accounts page.
     scheduleCold();

@@ -2058,33 +2058,43 @@ export class Fleet extends EventEmitter {
       // panel is a dialog to Claude too, but a prompt to no one: while it
       // answers the side question the session is working, and with the
       // answer shown it is the idle prompt it was at, under the panel.
+      // A start-up dialog the fleet answers is not waiting on you either,
+      // whoever says it is up: the keys go in before anything reads it so.
+      const answering = this.autoAnswer(rec, pane, adapter, now);
       if (proc?.waitingOn) {
         const panel = pane && rec.provider === "claude" ? readBtwPanel(this.settledScreen(pane) ?? "") : null;
-        if (!panel) {
-          status = "blocked";
-          this.blocked.set(rec.id, proc.waitingOn);
-        } else {
+        if (panel) {
           status = panel.state === "asking" ? "running" : "waiting";
           this.blocked.delete(rec.id);
+        } else if (!answering) {
+          status = "blocked";
+          this.blocked.set(rec.id, proc.waitingOn);
         }
       }
       if (host === "tmux" && adapter?.blockedOn && pane) {
         const quietFor = now - (f?.lastActivityAt ?? 0);
         // A prompt waiting on you stalls the transcript, so only look at the
-        // screen when it has been quiet for a moment.
-        if (quietFor > 2_500 || status === "waiting") {
+        // screen when it has been quiet for a moment — or when it is said to
+        // be blocked already. By Claude, whose prompt may be one the fleet
+        // allows itself: left unread, it was yours for the 2.5s. Or by the
+        // last look, when a line written under a prompt that still stands
+        // would otherwise unblock it for a pass and announce it again.
+        if (quietFor > 2_500 || status !== "running" || this.blocked.has(rec.id)) {
           const screen = this.settledScreen(pane);
           const shown = screen ? adapter.blockedOn(screen) : null;
           if (!shown) this.approved.delete(rec.id);
           // A session told to skip permissions is not waiting on you for one.
           const allowed = !!shown && !!screen && !!f?.skipsPermissions && this.approvePrompt(rec.id, pane.name, adapter, screen, shown, now);
-          const why = allowed ? null : shown;
+          const why = allowed || answering ? null : shown;
           if (why) {
             status = "blocked";
             this.blocked.set(rec.id, why);
-          } else {
+          } else if (allowed) {
+            status = "running";
             this.blocked.delete(rec.id);
-            if (allowed) status = "running";
+          } else if (status !== "blocked") {
+            // (Blocked by Claude's word, with a screen that says no more: its reason stands.)
+            this.blocked.delete(rec.id);
           }
           if ((why === "rate limit" || why === "error") && screen) this.noteScreenWait(rec.id, screen, now);
           else this.screenWaits.delete(rec.id);
@@ -2098,7 +2108,6 @@ export class Fleet extends EventEmitter {
           }
         }
       }
-      this.autoAnswer(rec, pane, adapter, now);
       // Came back unable to act (`watchStarts`) and stopped trying: it needs you.
       const trouble = host === "tmux" ? this.trouble.get(rec.id) : undefined;
       if (trouble && status === "waiting") {
@@ -2228,30 +2237,40 @@ export class Fleet extends EventEmitter {
     else this.screens.set(pane.name, { key: screenKey(pane), at, pass: this.passes, screen });
   }
 
-  private autoAnswer(rec: SessionRecord, pane: PaneInfo | undefined, adapter: ProviderAdapter | undefined, now: number): void {
-    if (!pane || !adapter?.autoAnswer) return;
+  /**
+   * Answer the start-up dialog a session we started is showing (the
+   * adapter's `autoAnswer`). True while it is being handled: keys went in,
+   * or went in a moment ago and the screen has not caught up.
+   */
+  private autoAnswer(rec: SessionRecord, pane: PaneInfo | undefined, adapter: ProviderAdapter | undefined, now: number): boolean {
+    if (!pane || pane.dead || !adapter?.autoAnswer) return false;
     const started = this.startedAt.get(rec.id);
-    if (!started || now - started > AUTO_ANSWER_MS) return;
+    if (!started || now - started > AUTO_ANSWER_MS) return false;
     // With scrollback: a short pane (tmux sizes a window to its latest client)
     // scrolls a dialog's top — and any "pre-approves permissions" line — out
     // of view. Only the first minutes after a start get here, so the history
     // is this start-up's and nothing older.
     const screen = this.deps.runtime.capture(pane.name, { scrollback: 200 });
-    if (!screen) return;
+    if (!screen) return false;
     const keys = adapter.autoAnswer(screen, { bypassPermissions: getSettings().autoApprove });
-    if (!keys) return;
+    if (!keys) return false;
     // Claude's trust dialog ignores keys for a moment after it opens, so the
     // same screen again is worth another try — a few, spaced out, then stop:
-    // pressing keys forever into a dialog we misread is worse than leaving it.
+    // pressing keys forever into a dialog we misread is worse than leaving
+    // it, and from then it is yours.
     const sig = screen.trim().slice(-400);
     const prev = this.answered.get(rec.id);
-    if (prev && prev.sig === sig && (prev.tries >= 4 || now - prev.at < 1_500)) return;
+    if (prev && prev.sig === sig) {
+      if (prev.tries >= 4) return false;
+      if (now - prev.at < 1_500) return true;
+    }
     this.answered.set(rec.id, { sig, at: now, tries: prev && prev.sig === sig ? prev.tries + 1 : 1 });
     try {
       this.deps.runtime.sendKeys(pane.name, keys);
     } catch {
-      /* the pane went away between capture and keys */
+      return false; // the pane went away between capture and keys
     }
+    return true;
   }
 
   /**

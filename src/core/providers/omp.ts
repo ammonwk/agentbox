@@ -26,6 +26,7 @@ import { cliVersion } from "./cli-version";
 import { mostNamed } from "../prrepo";
 import { carryFlags, setsFlag, type Arity } from "../launch";
 import { ompAskStep, readOmpAsk } from "./omp-ask";
+import { underInput } from "./tui-screen";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import { JsonlTail, type JsonlTailState } from "./jsonl";
 import {
@@ -702,6 +703,10 @@ function ompLaunch(account: Pick<Account, "id">): Pick<Command, "env" | "unset">
   return ompAccountCommand(account);
 }
 
+/** The editor: the foot of its box holds what is typed, between the corners,
+ *  where a dialog's box closes on an unbroken rule. */
+const editor = (lines: string[], i: number): boolean => /^╰─\s.*\s─╯\s*$/.test(lines[i]!);
+
 export const ompAdapter: ProviderAdapter = {
   id: "omp",
   label: "omp",
@@ -797,12 +802,15 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   blockedOn(screen) {
-    const tool = /Allow tool: ([\w:.-]+)/.exec(screen);
-    if (tool) return `permission: ${tool[1]}`;
-    if (readOmpAsk(screen)) return "asking a question";
-    if (/Approve and execute/.test(screen) && /Refine plan/.test(screen)) return "plan approval";
+    // A message under the welcome box, with the editor there to type /login in.
     if (/No models available/.test(screen)) return "login";
-    if (/belongs to a directory that no longer exists|Move session/i.test(screen)) return "move session";
+    // Every dialog below stands where the editor was.
+    const s = underInput(screen, editor);
+    const tool = /Allow tool: ([\w:.-]+)/.exec(s);
+    if (tool) return `permission: ${tool[1]}`;
+    if (readOmpAsk(s)) return "asking a question";
+    if (/Approve and execute/.test(s) && /Refine plan/.test(s)) return "plan approval";
+    if (/belongs to a directory that no longer exists|Move session/i.test(s)) return "move session";
     return null;
   },
 
