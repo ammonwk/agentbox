@@ -1984,21 +1984,13 @@ a.sx-imgpath:hover { color: var(--accent); }
   .sx-panel { padding: 12px; }
   .cmp { padding: 8px 12px; }
   .sx-facts { flex-wrap: wrap; }
-  /* The session id beside the title: quiet until pointed at. */
-.copy-btn.sx-id {
-  min-height: 22px;
-  padding: 0 6px;
-  border-color: transparent;
-  background: none;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  flex: none;
-}
-.copy-btn.sx-id:hover {
-  border-color: var(--border-strong);
-}
-.resume-copy span { display: none; }
+  /* The provider's id is a uuid: its start is enough to know it by. */
+  .resume-copy span {
+    max-width: 9ch;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
   .sx-header-top { flex-wrap: wrap; }
   .cmp-row { flex-wrap: wrap; }
   .cmp textarea { flex-basis: 100%; }
@@ -2302,15 +2294,12 @@ a.sx-imgpath:hover { color: var(--accent); }
     min-width: 0;
     font-size: 16px;
   }
-  /* The id is a copy button with no room for its text. */
-  .copy-btn.sx-id {
-    min-width: 30px;
+  /* No hover to find the id by: it shows its border as a button. */
+  .sx-header-actions .copy-btn {
     min-height: 30px;
-    justify-content: center;
   }
-  .copy-btn.sx-id span,
-  .copy-btn.resume-copy {
-    display: none;
+  .sx-header-actions .copy-btn.sx-id {
+    border-color: var(--border);
   }
   .sx-header-actions {
     order: 5;

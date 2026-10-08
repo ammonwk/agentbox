@@ -578,6 +578,12 @@ function Detail({
     </div>
   );
 
+  // The session's id beside the title, and the provider's own id — what
+  // `claude -r` (or `codex resume`) takes — with the actions. A phone has no
+  // room by the title: both follow the buttons in the row you swipe, as text.
+  const idCopy = <CopyButton text={session.id} label={session.id} className="sx-id" />;
+  const resumeCopy = session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null;
+
   return (
     <div className="sv-main" onClick={(e) => {
       if (e.defaultPrevented || e.button !== 0 || e.detail > 1 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
@@ -592,14 +598,13 @@ function Detail({
         <div className="sx-header-top">
           <ProviderBadge provider={session.provider} />
           <TitleEdit session={session} />
-          <CopyButton text={session.id} label={session.id} className="sx-id" />
+          {narrow ? null : idCopy}
           <StatusPill status={shownStatus(session)} />
           {/* tmux is the normal case; only say where it runs when it is not ours. */}
           {session.host === "external" || session.host === "subagent" ? <HostBadge host={session.host} /> : null}
 
           <div className="sx-header-actions">
-            {/* The provider's own id: what `claude -r` (or `codex resume`) takes. */}
-            {session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null}
+            {narrow ? null : resumeCopy}
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt
@@ -641,7 +646,13 @@ function Detail({
                 Close
               </Button>
             )}
-            {narrow ? facts : null}
+            {narrow ? (
+              <>
+                {idCopy}
+                {resumeCopy}
+                {facts}
+              </>
+            ) : null}
           </div>
         </div>
 
