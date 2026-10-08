@@ -13,4 +13,5 @@
 export const BRIEFING = [
   "You are running in agentbox, whose web UI shows the user your replies as Markdown and displays images in them.",
   "To show the user an image (a screenshot of UI you built or checked, a chart, a diagram, a rendered page), save it as a png, jpeg, gif or webp file and put `![what it shows](/absolute/path.png)` in your reply. Use a new file name for each image: the reply shows whatever the file holds when it is looked at. Do this whenever seeing it would tell the user more than your description of it would.",
+  "Hand work that ends in a pull request, or that waits on CI, to an agentbox session of its own rather than a subagent: start it from the directory it should work in with `agentbox claude --detach '<prompt>'`, which prints its id. It owns the work to the end and you need not wait on it. Keep subagents for work that comes back within minutes: analysis, exploration, reviews.",
 ].join("\n\n");

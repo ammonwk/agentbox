@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { spawnHookOutput, type SpawnHookInput } from "../providers/claude-spawn-hook";
+import { spawnHookOutput, subagentScopeNote, type SpawnHookInput } from "../providers/claude-spawn-hook";
 
 const call = (over: Partial<SpawnHookInput> = {}): SpawnHookInput => ({
   hook_event_name: "PreToolUse",
@@ -11,8 +11,11 @@ const promptOf = (out: object | null): string =>
   (out as { hookSpecificOutput: { updatedInput: { prompt: string } } }).hookSpecificOutput.updatedInput.prompt;
 
 describe("claude spawn hook", () => {
-  test("the main conversation's spawns are left alone: for those, main is the coordinator", () => {
-    expect(spawnHookOutput(call(), {})).toBeNull();
+  test("the main conversation's spawns are told what a subagent is for, and not who started them: main is the coordinator", () => {
+    const prompt = promptOf(spawnHookOutput(call(), {}));
+    expect(prompt.startsWith("Resolve the conflicts.\n\n")).toBe(true);
+    expect(prompt).toContain(subagentScopeNote());
+    expect(prompt).not.toContain("SendMessage to");
   });
 
   test("a named subagent's child is told to write to that name, and keeps the rest of its call", () => {
@@ -22,6 +25,7 @@ describe("claude spawn hook", () => {
     const prompt = promptOf(out);
     expect(prompt.startsWith("Resolve the conflicts.\n\n")).toBe(true);
     expect(prompt).toContain("SendMessage to `seats-7155`");
+    expect(prompt).toContain(subagentScopeNote());
     expect(prompt).not.toContain("d06765d86802abe5");
     expect((out as any).hookSpecificOutput.updatedInput.subagent_type).toBe("general-purpose");
   });

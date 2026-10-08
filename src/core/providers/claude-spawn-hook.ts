@@ -1,7 +1,8 @@
 /**
  * Claude's PreToolUse hook on its Agent tool, run as a script by every claude
- * agentbox launches (`claude.ts` passes it with `--settings`). When the one
- * spawning is itself a subagent, the child's prompt is told who started it.
+ * agentbox launches (`claude.ts` passes it with `--settings`). Every child's
+ * prompt is told what a subagent is for (`subagentScopeNote`), and when the
+ * one spawning is itself a subagent, who started it.
  *
  * Claude keeps every subagent of a process in one flat list and resolves
  * `SendMessage({to: "main"})` to the top-level conversation, whoever did the
@@ -42,16 +43,34 @@ export function startedByNote(address: string): string {
   ].join(" ");
 }
 
+/**
+ * A subagent lives inside its parent's turn: a five-minute prompt cache, no
+ * way to wait without holding its turn open, messages it may not read until
+ * it finishes, and a parent that must stay up for as long as it runs. A pull
+ * request's CI and review rounds take hours, so a PR is handed to a session of
+ * its own, which waits at its prompt, keeps an hour's cache and owns the PR to
+ * the end.
+ */
+export function subagentScopeNote(): string {
+  return [
+    "(agentbox note) You are a subagent: your final message returns to whoever started you, who may be waiting on it.",
+    "If your task leads to a pull request, do not take it through CI and review yourself: once it is pushed, hand it to an agentbox session of its own,",
+    "started from the PR's worktree with `agentbox claude --detach '<the PR, what is left to do, and every constraint you were given>'`,",
+    "which owns it from there, and finish with the PR and that session's id in your final message.",
+  ].join(" ");
+}
+
 /** The hook's answer, or null to leave the call as it is. */
 export function spawnHookOutput(input: SpawnHookInput, metas: Record<string, { name?: unknown }>): object | null {
   if (input.hook_event_name !== "PreToolUse") return null;
-  const address = spawnerAddress(input, metas);
   const prompt = input.tool_input?.prompt;
-  if (!address || typeof prompt !== "string" || !prompt) return null;
+  if (typeof prompt !== "string" || !prompt) return null;
+  const address = spawnerAddress(input, metas);
+  const notes = [subagentScopeNote(), ...(address ? [startedByNote(address)] : [])];
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      updatedInput: { ...input.tool_input, prompt: `${prompt}\n\n${startedByNote(address)}` },
+      updatedInput: { ...input.tool_input, prompt: `${prompt}\n\n${notes.join("\n\n")}` },
     },
   };
 }
@@ -84,7 +103,7 @@ if (import.meta.main) {
   // prints something else would be shown to the agent as an error.
   try {
     const input = JSON.parse(await Bun.stdin.text()) as SpawnHookInput;
-    const out = input.agent_id ? spawnHookOutput(input, readMetas(input.transcript_path)) : null;
+    const out = spawnHookOutput(input, input.agent_id ? readMetas(input.transcript_path) : {});
     if (out) console.log(JSON.stringify(out));
   } catch {
     // Nothing to say.
