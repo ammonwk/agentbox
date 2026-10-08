@@ -31,6 +31,7 @@ import type { Account } from "../types";
 import { JsonlTranscriptReader } from "./jsonl-reader";
 import { claudeFormat } from "./claude-transcript";
 import { SubagentTokens } from "./claude-subagents";
+import * as darwin from "../darwin";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
 import { pickOption, plainScreen } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
@@ -185,6 +186,7 @@ function indexFor(home: string): ProjectsIndex {
 // ------------------------------------------------------------- processes
 
 function startTicks(pid: number): string | null {
+  if (darwin.isDarwin) return null;
   try {
     const s = readFileSync(`/proc/${pid}/stat`, "utf8");
     return s.slice(s.lastIndexOf(")") + 2).split(" ")[19] ?? null;
@@ -199,7 +201,7 @@ function startTicks(pid: number): string | null {
 function isClaudeCode(pid: number, argv: string[]): boolean {
   let exe = "";
   try {
-    exe = readlinkSync(`/proc/${pid}/exe`);
+    exe = darwin.isDarwin ? (darwin.exePath(pid) ?? "") : readlinkSync(`/proc/${pid}/exe`);
   } catch {
     /* not readable */
   }
@@ -257,7 +259,10 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
       if (!Number.isInteger(pid) || pid <= 0 || seen.has(pid)) continue;
       // A file outlives a crashed process, and its pid gets reused.
       if (rec.procStart !== undefined) {
-        if (startTicks(pid) !== String(rec.procStart)) continue;
+        if (darwin.isDarwin) {
+          const p = darwin.procInfo(pid);
+          if (!p || !darwin.lstarts(p.startMs).includes(String(rec.procStart))) continue;
+        } else if (startTicks(pid) !== String(rec.procStart)) continue;
       } else {
         const argv = argvOf(pid);
         if (!isAlive(pid) || !argv || !runsCli(argv, "claude")) continue;

@@ -26,6 +26,7 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { liveRoot } from "../core/paths";
+import { argvOf } from "../core/proc";
 
 /**
  * How long a line stays believable.
@@ -83,7 +84,7 @@ export function decode(line: string): LiveEntry | null {
  */
 function clientSessionId(): string | null {
   try {
-    const argv = readFileSync(`/proc/${process.ppid}/cmdline`, "utf8").split("\0");
+    const argv = argvOf(process.ppid) ?? [];
     const at = argv.indexOf("--session-id");
     const id = at === -1 ? undefined : argv[at + 1];
     return id !== undefined && /^[0-9a-f-]{36}$/i.test(id) ? id : null;

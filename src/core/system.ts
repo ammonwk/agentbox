@@ -1,5 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { cpus, loadavg } from "node:os";
+import { isDarwin, vmState } from "./darwin";
 import { worktreeRoot } from "./paths";
 import type { SystemState, TempReading } from "./types";
 
@@ -21,9 +23,11 @@ import type { SystemState, TempReading } from "./types";
  * battery, or a machine whose hwmon publishes nothing we can name.
  */
 
-/** Whether this platform can be measured at all. Linux-only by construction. */
+/** Whether this platform can be measured at all. Linux reads /proc and /sys;
+ *  macOS reads the kernel's own counters (darwin.ts) and has no PSI, hwmon or
+ *  throttle count, so those fields stay absent there. */
 export function metricsAvailable(): boolean {
-  return process.platform === "linux" && existsSync("/proc/stat");
+  return isDarwin || (process.platform === "linux" && existsSync("/proc/stat"));
 }
 
 // ─── CPU ────────────────────────────────────────────────────────────────────
@@ -43,6 +47,11 @@ export function parseCpuLine(parts: string[]): CpuTicks {
 
 /** Cumulative CPU counters mean nothing alone; these need two reads. */
 async function readCpuTicks(): Promise<{ all: CpuTicks; cores: CpuTicks[] }> {
+  if (isDarwin) {
+    const cores = cpus().map(({ times: t }) => ({ total: t.user + t.nice + t.sys + t.idle + t.irq, idle: t.idle }));
+    const all = cores.reduce((a, c) => ({ total: a.total + c.total, idle: a.idle + c.idle }), { total: 0, idle: 0 });
+    return { all, cores };
+  }
   const text = await readFile("/proc/stat", "utf8");
   let all: CpuTicks = { total: 0, idle: 0 };
   const cores: CpuTicks[] = [];
@@ -289,6 +298,13 @@ async function readDisk(path: string): Promise<{ free?: number; total?: number }
   return {};
 }
 
+/** macOS memory under parseMeminfo's names, in bytes, so one reader serves both. */
+function darwinMeminfo(): Record<string, number> {
+  const v = vmState();
+  if (!v) return {};
+  return { MemTotal: v.total, MemAvailable: v.available, Cached: v.cache, SwapTotal: v.swapTotal, SwapFree: v.swapTotal - v.swapUsed };
+}
+
 // ─── The sampler ────────────────────────────────────────────────────────────
 
 export class SystemMeter {
@@ -302,7 +318,7 @@ export class SystemMeter {
 
     const [mem, temps, throttle, freq, psiCpu, psiIo, psiMem, power, disk, loadText] =
       await Promise.all([
-        readFile("/proc/meminfo", "utf8").catch(() => "").then(parseMeminfo),
+        isDarwin ? darwinMeminfo() : readFile("/proc/meminfo", "utf8").catch(() => "").then(parseMeminfo),
         readTemps(),
         readThrottle(),
         readFreq(cores),
@@ -311,7 +327,7 @@ export class SystemMeter {
         readPsi("memory"),
         readPower(),
         readDisk(diskPath),
-        readFile("/proc/loadavg", "utf8").catch(() => ""),
+        isDarwin ? loadavg().join(" ") : readFile("/proc/loadavg", "utf8").catch(() => ""),
       ]);
 
     const perCore = ticks.cores.map((c, i) => busy(this.prev?.cores[i], c));

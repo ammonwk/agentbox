@@ -1,10 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shownImage } from "../images";
 
-const dir = mkdtempSync(join(tmpdir(), "agentbox-images-"));
+// Real path: macOS's tmpdir is a symlink into /private, which shownImage resolves.
+const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentbox-images-")));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
