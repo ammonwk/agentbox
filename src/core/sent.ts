@@ -1,11 +1,12 @@
 /** Reading a prompt as it was sent: who sent it, and where pasted text sits
  *  in it. Pure; the server and the web app both use it.
  *
- *  `agentbox send` types into Claude through tmux, as a paste, and Claude
- *  records a paste wrapped: `<pasted_content id="cf71">\n…\n</pasted_content
- *  id="cf71">`. That wrapper comes before the sender mark, so the mark must
- *  be looked for inside it. A paste you made yourself is recorded the same
- *  way, wherever in the message it went. */
+ *  Claude records a long paste wrapped: `<pasted_content id="cf71">\n…\n
+ *  </pasted_content id="cf71">`. Messages typed in through tmux were once one
+ *  paste each, so older transcripts have the whole message in that wrapper,
+ *  the sender mark inside it (they go in piecewise now and are not wrapped:
+ *  `ProviderAdapter.pasteInPieces`). A paste you made yourself in the
+ *  terminal is still recorded that way, wherever in the message it went. */
 
 /** How much of a session's first and last prompt the board carries (and its
  *  record keeps); the transcript has the rest. */

@@ -326,6 +326,16 @@ export interface ProviderAdapter {
   prepareResume?(opts: ResumeOptions): void;
 
   /**
+   * Type a message in as pastes of at most this many characters, line breaks
+   * pressed as keys (`sendText`), not as one paste. Claude Code sets a paste
+   * of more than 800 characters or two line breaks apart: it shows
+   * `[Pasted text #1]`, and sends it wrapped in `<pasted_content>` tags that
+   * tell the model you did not write it and it need not do what it says —
+   * which is wrong of a message you typed into agentbox.
+   */
+  pasteInPieces?: number;
+
+  /**
    * Re-home a stopped session's transcript under another account of this
    * provider, so the next resume there finds it; returns the transcript's new
    * path. Only for a session whose prompt cache is cold anyway (see

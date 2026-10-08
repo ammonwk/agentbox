@@ -173,7 +173,7 @@ const MATCH_WINDOW_MS = 10 * 60_000;
 export interface Runtime {
   newSession(s: NewSession): number;
   listPanes(): PaneInfo[];
-  sendText(name: string, text: string): Promise<void>;
+  sendText(name: string, text: string, opts?: { pieces?: number }): Promise<void>;
   sendKeys(name: string, keys: string[]): void;
   capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
   captureMany(names: string[]): Map<string, string | null>;
@@ -2780,7 +2780,7 @@ export class Fleet extends EventEmitter {
       throw new FleetError(409, this.adapter(rec.provider).moveSession ? `no ${rec.provider} account ${accountId}` : `${this.adapter(rec.provider).label} sessions cannot change account`);
     }
     if (!target && view.host === "tmux" && view.tmux) {
-      if (opts.prompt) await this.deps.runtime.sendText(view.tmux, opts.prompt);
+      if (opts.prompt) await this.typeInto(rec.provider, view.tmux, opts.prompt);
       return view;
     }
     const cwd = this.resumeCwd(rec);
@@ -2835,7 +2835,7 @@ export class Fleet extends EventEmitter {
     void this.serial(id, async () => {
       await this.untilReady(id);
       await this.untilSettled(id, pane);
-      await this.deps.runtime.sendText(pane, prompt);
+      await this.typeInto(this.get(id).provider, pane, prompt);
     }).catch((e) => console.error(`agentbox: typing ${id}'s prompt into it failed:`, e));
   }
 
@@ -2946,6 +2946,11 @@ export class Fleet extends EventEmitter {
     return true;
   }
 
+  /** Type a message into a session's pane, the way its TUI takes one as typed. */
+  private typeInto(provider: ProviderId, pane: string, text: string): Promise<void> {
+    return this.deps.runtime.sendText(pane, text, { pieces: this.adapter(provider).pasteInPieces });
+  }
+
   private async sendNow(id: string, text: string, attempt?: () => void): Promise<void> {
     const s = this.get(id);
     if (s.host === "none") {
@@ -2956,7 +2961,7 @@ export class Fleet extends EventEmitter {
         await this.untilReady(id);
         if (s.provider === "claude") await this.clearBtw(id, rec.tmux);
         attempt?.();
-        return this.deps.runtime.sendText(rec.tmux, text);
+        return this.typeInto(s.provider, rec.tmux, text);
       }
       // Parked by the fleet, not stopped by you: this is what wakes it.
       if (rec?.parkedAt) {
@@ -2972,7 +2977,7 @@ export class Fleet extends EventEmitter {
     await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
     attempt?.();
-    await this.deps.runtime.sendText(s.tmux, text);
+    await this.typeInto(s.provider, s.tmux, text);
     if (s.provider === "devin") await this.deliverDevinQueue(s.tmux);
   }
 
@@ -3117,7 +3122,7 @@ export class Fleet extends EventEmitter {
       if (!pane) throw new Error("it stopped before the question was asked");
       const rt = this.deps.runtime;
       await this.clearBtw(id, pane);
-      await rt.sendText(pane, `/btw ${q}`);
+      await this.typeInto(this.get(id).provider, pane, `/btw ${q}`);
       try {
         await awaitAnswer(rt, pane, q, 10_000);
         return await copyAnswer(rt, pane);

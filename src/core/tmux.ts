@@ -231,18 +231,68 @@ const PASTE_PROBE_MIN = 12;
  * paste — a newline, or nothing — and the message sits unsent in its input box.
  * A short message settles within the fixed pause; a long one is still being
  * ingested after it (Devin especially), so wait until the pane shows the
- * pasted text before pressing Enter. A TUI that collapses a long paste (Claude
- * shows `[Pasted text #1]`) never echoes it, so the wait gives up after
- * `PASTE_WAIT_MS` and presses Enter anyway.
+ * pasted text before pressing Enter. A TUI that collapses a long paste never
+ * echoes it, so the wait gives up after `PASTE_WAIT_MS` and presses Enter
+ * anyway.
+ *
+ * With `pieces` (`ProviderAdapter.pasteInPieces`), the message goes in as many
+ * small pastes, with the line breaks pressed as keys: see `pasteInPieces`.
  */
-export async function sendText(name: string, text: string): Promise<void> {
-  const buffer = `ab-${process.pid}-${Date.now()}`;
-  const load = tmux(["load-buffer", "-b", buffer, "-"], text);
-  if (load.code !== 0) throw new Error(`tmux load-buffer failed: ${load.stderr.trim()}`);
-  const paste = tmux([...LEAVE_MODE(name), "paste-buffer", "-p", "-d", "-b", buffer, "-t", `=${name}:`]);
-  if (paste.code !== 0) throw new Error(`tmux paste failed: ${paste.stderr.trim()}`);
+export async function sendText(name: string, text: string, opts: { pieces?: number } = {}): Promise<void> {
+  if (opts.pieces) pasteInPieces(name, text, opts.pieces);
+  else pasteBuffers(name, [text]);
   await settlePaste(name, text);
   sendKeys(name, ["Enter"]);
+}
+
+/** tmux refuses a command line past a length it does not document ("command
+ *  too long"); this many pastes and key presses at a time stays well inside. */
+const PASTE_BATCH = 40;
+
+/**
+ * Paste each line in pieces of at most `max` characters, and press Ctrl+J (a
+ * line break in the prompt, where Enter would send it) between lines. To the
+ * TUI the message was typed: no single paste is long enough, or has line
+ * breaks enough, for it to be set apart as pasted.
+ */
+function pasteInPieces(name: string, text: string, max: number): void {
+  const steps: (string | null)[] = [];
+  for (const [i, line] of text.split(/\r\n|\r|\n/).entries()) {
+    if (i > 0) steps.push(null);
+    steps.push(...pieces(line, max));
+  }
+  for (let i = 0; i < steps.length; i += PASTE_BATCH) pasteBuffers(name, steps.slice(i, i + PASTE_BATCH));
+}
+
+/** `line` cut every `max` UTF-16 units (what a TUI written in JS counts), never inside a surrogate pair. */
+function pieces(line: string, max: number): string[] {
+  const out: string[] = [];
+  for (let at = 0; at < line.length; ) {
+    let end = Math.min(line.length, at + max);
+    const last = line.charCodeAt(end - 1);
+    if (end < line.length && last >= 0xd800 && last <= 0xdbff && end - at > 1) end--;
+    out.push(line.slice(at, end));
+    at = end;
+  }
+  return out;
+}
+
+/** Paste each string, in order and in one tmux invocation; a `null` is a line break pressed as a key. */
+function pasteBuffers(name: string, steps: (string | null)[]): void {
+  const target = `=${name}:`;
+  const args = LEAVE_MODE(name).slice(0, -1);
+  for (const [i, step] of steps.entries()) {
+    if (step === null) {
+      args.push(";", "send-keys", "-t", target, "C-j");
+      continue;
+    }
+    const buffer = `ab-${process.pid}-${Date.now()}-${i}`;
+    const load = tmux(["load-buffer", "-b", buffer, "-"], step);
+    if (load.code !== 0) throw new Error(`tmux load-buffer failed: ${load.stderr.trim()}`);
+    args.push(";", "paste-buffer", "-p", "-d", "-b", buffer, "-t", target);
+  }
+  const paste = tmux(args);
+  if (paste.code !== 0) throw new Error(`tmux paste failed: ${paste.stderr.trim()}`);
 }
 
 /**

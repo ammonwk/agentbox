@@ -667,6 +667,7 @@ export const claudeAdapter: ProviderAdapter = {
   spawnCommand,
   resumeCommand,
   moveSession,
+  pasteInPieces: 400,
   carryOver: claudeCarryOver,
   headless: isHeadless,
   autoAnswer: claudeAutoAnswer,
