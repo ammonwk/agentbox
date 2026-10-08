@@ -26,6 +26,10 @@ export async function deliverPending(p: PendingSend): Promise<void> {
   } finally { active.delete(p.id); }
 }
 
+/** A send that lands quickly never shows its note: it would only flash. */
+const QUIET_MS = 500;
+const sending = (p: PendingSend) => p.state === "pending" || p.state === "attempting";
+
 const normalized = (text: string) => dropPasteTags(text).replace(/\r\n/g, "\n").trim();
 /** Full content, after this submission began; never scan ordinary drafts. */
 export function submissionLanded(p: PendingSend, users: readonly { text: string; at: number }[]): boolean {
@@ -66,8 +70,17 @@ async function reconcile(p: PendingSend): Promise<void> {
 
 export function PendingSends({ sessionId, onRestore }: { sessionId: string; onRestore: (p: PendingSend) => Promise<void> }) {
   const snapshot = useSyncExternalStore(onDraftWork, draftSnapshot);
-  const pending = useMemo(() => pendingSends(sessionId), [sessionId, snapshot]);
-  const ids = pending.map((p) => p.id).join(",");
+  const all = useMemo(() => pendingSends(sessionId), [sessionId, snapshot]);
+  const ids = all.map((p) => p.id).join(",");
+  const [now, setNow] = useState(Date.now);
+  const pending = all.filter((p) => !sending(p) || now - p.at >= QUIET_MS);
+  // Re-render when the next quiet send has waited long enough to be shown.
+  const reveal = Math.min(...all.filter((p) => sending(p) && now - p.at < QUIET_MS).map((p) => p.at + QUIET_MS));
+  useEffect(() => {
+    if (!Number.isFinite(reveal)) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, reveal - Date.now()));
+    return () => clearTimeout(timer);
+  }, [reveal]);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
