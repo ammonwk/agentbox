@@ -869,7 +869,9 @@ export class Fleet extends EventEmitter {
 
       // In the words crash recovery uses, which look back on it.
       const work = this.work.get(v.id)?.replace(/ were working\b/, " are working");
-      if (!work || v.status !== "waiting" || facts.turnOpen) continue;
+      // A parent left waiting on its background agents shows "running"; it
+      // waits for hours, and went cold every time before.
+      if (!work || (v.status !== "waiting" && !v.background) || facts.turnOpen) continue;
       // The transcript survives restarts; the in-flight map covers a prompt
       // typed but not yet read. Use whichever is newer, never a smaller count
       // from before the server restarted in the middle of a wait.
@@ -1585,12 +1587,15 @@ export class Fleet extends EventEmitter {
    * For every live session whose turn is over: the work it is still waiting
    * on, which a crash would kill — a background command, a monitor, a
    * wakeup, subagents. What decides, after a crash, between resuming it and
-   * leaving it for you (src/core/recovery.ts). Every `WORK_CHECK_MS`.
+   * leaving it for you (src/core/recovery.ts), and what keeps it warm
+   * (`keepWarm`). Every `WORK_CHECK_MS`. A Claude session whose background
+   * agents are working says "busy" with its turn over (`background`): it is
+   * waiting on them as much as one that says idle.
    */
   private async refreshWork(now: number): Promise<void> {
     if (now < this.nextWorkCheck) return;
     this.nextWorkCheck = now + WORK_CHECK_MS;
-    const idle = [...this.views.values()].filter((v) => (v.host === "tmux" || v.host === "external") && this.liveStatus.get(v.id) === "waiting");
+    const idle = [...this.views.values()].filter((v) => (v.host === "tmux" || v.host === "external") && (this.liveStatus.get(v.id) === "waiting" || v.background));
     if (idle.length === 0) {
       this.work.clear();
       return;
