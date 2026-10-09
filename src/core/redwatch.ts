@@ -8,7 +8,8 @@
  * nothing about the code, so they are passed over. A streak is the red runs
  * since the last green one, and it has had its session once one started after
  * that green run: the session owns the streak until it is green, so ten red
- * pushes in a row are one session, not ten.
+ * pushes in a row are one session, not ten. A new streak while that session
+ * is still at work is its too: the next starts once it stops, if still red.
  */
 
 import { basename } from "node:path";

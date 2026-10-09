@@ -228,11 +228,25 @@ export class Scheduler {
         continue;
       }
       const streak = redStreak(runs, s.lastRunAt);
+      // The last one still at it owns this streak too: green came and went
+      // under it, and it watches the deploy itself. Another starts once it
+      // stops, if it is still red.
+      if (streak && s.lastSessionId && this.atWork(s.lastSessionId)) continue;
       if (streak) await this.fire(s, now, false, redNote(rule, streak, s.lastSessionId));
       else if (s.lastError) {
         updateSchedule(s.id, { lastError: null });
         this.changed();
       }
+    }
+  }
+
+  /** Mid-turn, or showing a prompt it needs answered. */
+  private atWork(sessionId: string): boolean {
+    try {
+      const { status } = this.fleet.get(sessionId);
+      return status === "running" || status === "blocked";
+    } catch {
+      return false;
     }
   }
 
