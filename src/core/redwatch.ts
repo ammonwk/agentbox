@@ -71,14 +71,53 @@ export function redNote(rule: RedRule, streak: RedStreak | null, lastSessionId: 
   return `${lines.join("\n")}]`;
 }
 
-/** The workflow's newest runs on its branch. */
+/** What was read last for a workflow and branch, and GitHub's tag for it. */
+const read = new Map<string, { etag: string | null; runs: WorkflowRun[] }>();
+let token: string | null = null;
+
+interface RawRun {
+  id: number; status: string | null; conclusion: string | null; created_at: string; updated_at: string;
+  html_url: string; head_sha: string; display_title: string; event: string;
+}
+
+/**
+ * The workflow's newest runs on its branch: one conditional GET, which GitHub
+ * answers 304 and counts against nothing while no run has changed. `gh run
+ * list --workflow` was two calls each time, 60 an hour per rule, on the
+ * counter that ran dry (GitHub meters one run and workflows apart from run
+ * lists). A rule made before its workflow's file was recorded still asks `gh`.
+ */
 export async function readRuns(rule: RedRule): Promise<WorkflowRun[]> {
   if (!rule.repo || !rule.branch) throw new Error("it does not know its repo and branch yet");
-  const out = await gh([
-    "run", "list", "-R", rule.repo, "--workflow", rule.file ?? rule.workflow, "--branch", rule.branch,
-    "--limit", String(RUNS_READ), "--json", "databaseId,status,conclusion,createdAt,updatedAt,url,headSha,displayTitle,event",
-  ]);
-  return JSON.parse(out) as WorkflowRun[];
+  if (!rule.file) {
+    const out = await gh([
+      "run", "list", "-R", rule.repo, "--workflow", rule.workflow, "--branch", rule.branch,
+      "--limit", String(RUNS_READ), "--json", "databaseId,status,conclusion,createdAt,updatedAt,url,headSha,displayTitle,event",
+    ]);
+    return JSON.parse(out) as WorkflowRun[];
+  }
+  const path = `/repos/${rule.repo}/actions/workflows/${encodeURIComponent(rule.file)}/runs?branch=${encodeURIComponent(rule.branch)}&per_page=${RUNS_READ}`;
+  const had = read.get(path);
+  token ??= (await gh(["auth", "token", "--hostname", "github.com"])).trim();
+  const res = await fetch(`https://api.github.com${path}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(had?.etag ? { "If-None-Match": had.etag } : {}),
+    },
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (res.status === 304 && had) return had.runs;
+  if (res.status === 401) token = null;
+  if (!res.ok) throw new Error(`GitHub answered ${res.status} ${res.statusText}`.trim());
+  const body = (await res.json()) as { workflow_runs: RawRun[] };
+  const runs = body.workflow_runs.map((r) => ({
+    databaseId: r.id, status: r.status ?? "", conclusion: r.conclusion ?? "", createdAt: r.created_at, updatedAt: r.updated_at,
+    url: r.html_url, headSha: r.head_sha, displayTitle: r.display_title, event: r.event,
+  }));
+  read.set(path, { etag: res.headers.get("etag"), runs });
+  return runs;
 }
 
 /** The workflow named, by its name or its file, as GitHub has it. */
