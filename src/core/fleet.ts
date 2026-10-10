@@ -3271,7 +3271,7 @@ export class Fleet extends EventEmitter {
    * before its children — its death takes its MCP servers, and the pool
    * agents they run, with it.
    */
-  async close(id: string, closed: boolean): Promise<void> {
+  async close(id: string, closed: boolean, alone = false): Promise<void> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     if (!closed) {
@@ -3281,7 +3281,9 @@ export class Fleet extends EventEmitter {
     }
     const target = this.get(id);
     if (target.host === "subagent") throw this.callersAgent(target);
-    const family = [id, ...this.openDescendants(id)];
+    // `alone`: its successor has taken over what it started (`handOver`), and
+    // whatever is left under it must not be stopped for its sake.
+    const family = alone ? [id] : [id, ...this.openDescendants(id)];
     for (const sid of family) {
       let s: Session;
       try {
@@ -3305,6 +3307,28 @@ export class Fleet extends EventEmitter {
     const at = this.now();
     for (const sid of family) updateSessionRecord(sid, { archivedAt: at, parkedAt: null, parkedMates: null, parkedWhy: null });
     await this.tick();
+  }
+
+  /** The open sessions `from` started itself, other than its subagents (which
+   *  its process runs and cannot be moved): what a successor takes over. */
+  startedBy(from: string): string[] {
+    return listSessionRecords(0)
+      .filter((r) => r.parent === from && !r.archivedAt && r.id !== from && this.views.get(r.id)?.host !== "subagent")
+      .map((r) => r.id);
+  }
+
+  /**
+   * Put what `from` started under `to`, the session that takes over from it:
+   * closing `from` then takes none of them with it. Theirs is a parent by
+   * hand from here on, a grouping rather than a run their parent made, so one
+   * that stops is not shown closed and the fleet does not link it again.
+   */
+  async handOver(from: string, to: string): Promise<string[]> {
+    if (!getSessionRecord(to)) throw new FleetError(404, `no session ${to}`);
+    const moved = this.startedBy(from).filter((id) => id !== to);
+    for (const id of moved) updateSessionRecord(id, { parent: to, parentByHand: true });
+    if (moved.length) await this.tick();
+    return moved;
   }
 
   /** The sessions `id` started, at any depth, still open: what closing it takes with it. */

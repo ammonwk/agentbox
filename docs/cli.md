@@ -109,6 +109,8 @@ also reads them from stdin with `-`, so pipes and xargs work.
   `sub`): the parent runs them, so stopping or closing it stops every one
   mid-task, and none can be stopped, sent to or adopted on its own. Ask before
   stopping a session that has running subagents. What you start with `agentbox claude|codex --detach` is
-  top-level, never your child.
+  your child too (`show` lists it), so closing you would close it: a session
+  with work under it is stopped, not closed, or its children are moved first
+  (the board's drag; `PATCH /api/sessions/:id` with `parent`).
 - Prefer reading `show` and the tail of `log` over whole transcripts; they
   are long.

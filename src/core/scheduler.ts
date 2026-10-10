@@ -366,14 +366,23 @@ export class Scheduler {
       console.log(`agentbox: schedule ${s.id} spoke to its session ${last.id}`);
       return { sessionId: last.id };
     }
-    // A new one, told who it follows; the old one is closed once it is up.
+    // A new one, told who it follows. Once it is up, the sessions the old one
+    // started are put under it and the old one is closed alone: closing a
+    // session takes what it started with it, and those may be hours into work.
+    const closing = !!last && last.status !== "closed";
+    const theirs = closing ? this.fleet.startedBy(last.id) : [];
     const follows = s.sameSession && s.lastSessionId
-      ? `[agentbox: you take over from ${s.lastSessionId}, the session this schedule spoke to until now (${over ?? "it is gone"}). What it did is in \`agentbox log ${s.lastSessionId} | tail -60\`; it will not be spoken to again.]`
+      ? `[agentbox: you take over from ${s.lastSessionId}, the session this schedule spoke to until now (${over ?? "it is gone"}). What it did is in \`agentbox log ${s.lastSessionId} | tail -60\`; it will not be spoken to again.${theirs.length ? ` The sessions it started are still at their work and are now listed under you: ${theirs.join(" ")}.` : ""}]`
       : undefined;
     const sid = await this.fire(s, now, early, note, follows);
     if (!sid) return { quiet: this.get(s.id).lastError ?? "it did not start" };
-    if (last && last.status !== "closed" && !this.atWork(last.id)) {
-      await this.fleet.close(last.id, true).catch((e) => console.error(`agentbox: schedule ${s.id}: closing ${last.id}:`, e));
+    if (closing && !this.atWork(last.id)) {
+      try {
+        await this.fleet.handOver(last.id, sid);
+        await this.fleet.close(last.id, true, true);
+      } catch (e) {
+        console.error(`agentbox: schedule ${s.id}: closing ${last.id}:`, e);
+      }
     }
     return { sessionId: sid };
   }
