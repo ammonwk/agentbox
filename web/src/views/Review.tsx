@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import type { AppState, Card } from "../../../src/core/types";
 import { describeAt } from "../../../src/core/schedule";
 import { api } from "../api";
+import { stackOf } from "../lib/cardorder";
 import { Button, Empty, Icon, Modal, RelativeTime } from "../components";
 import { hrefOf } from "../route";
 import { Markdown } from "./session/Markdown";
@@ -42,14 +43,6 @@ function downOf(card: Card): "approve" | "seen" | null {
 
 const KIND: Record<Card["kind"], string> = { decision: "Decision", merged: "Merged", note: "Note" };
 
-/** The order of the stack: decisions first, each newest first, then the ones kept for later, longest kept first. */
-function stackOf(cards: readonly Card[]): Card[] {
-  const open = cards.filter((c) => c.state === "open");
-  const later = cards.filter((c) => c.state === "later").sort((a, b) => (a.laterAt ?? 0) - (b.laterAt ?? 0));
-  const newest = (a: Card, b: Card) => b.createdAt - a.createdAt;
-  return [...open.filter((c) => c.kind === "decision").sort(newest), ...open.filter((c) => c.kind !== "decision").sort(newest), ...later];
-}
-
 /** `owner/repo#12` from a pull request's URL, else the URL's last part. */
 function prLabel(url: string): string {
   const m = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(url);
@@ -72,7 +65,11 @@ export function Review({ state }: { state: AppState }) {
   }, [state.cards]);
 
   const stack = useMemo(() => stackOf(cards), [cards]);
-  const later = useMemo(() => cards.filter((c) => c.state === "later").sort((a, b) => (b.laterAt ?? 0) - (a.laterAt ?? 0)), [cards]);
+  // Under Later too, what asks comes before what reports.
+  const later = useMemo(
+    () => cards.filter((c) => c.state === "later").sort((a, b) => Number(b.kind === "decision") - Number(a.kind === "decision") || (b.laterAt ?? 0) - (a.laterAt ?? 0)),
+    [cards],
+  );
   const done = useMemo(
     () => cards.filter((c) => c.state === "answered" || c.state === "closed").sort((a, b) => (b.answeredAt ?? b.createdAt) - (a.answeredAt ?? a.createdAt)),
     [cards],
