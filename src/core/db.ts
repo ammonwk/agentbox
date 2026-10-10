@@ -313,6 +313,34 @@ const MIGRATIONS: string[] = [
   ALTER TABLE schedules ADD COLUMN same_session INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE schedules ADD COLUMN fresh_over INTEGER;
   `,
+  // 21 — cards: what a session hands the user to decide or to know, and the
+  // answer on its way back (src/core/cards.ts).
+  `
+  CREATE TABLE cards (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    short        TEXT NOT NULL,
+    long         TEXT,
+    pr           TEXT,
+    recommend    TEXT,
+    default_text TEXT,
+    default_at   INTEGER,
+    key          TEXT UNIQUE,
+    session_id   TEXT,
+    about        TEXT,
+    state        TEXT NOT NULL DEFAULT 'open',
+    answer       TEXT,
+    answered_at  INTEGER,
+    delivered_at INTEGER,
+    tried_at     INTEGER,
+    later_at     INTEGER,
+    created_at   INTEGER NOT NULL,
+    closed_why   TEXT,
+    undo         TEXT
+  );
+  CREATE INDEX cards_state ON cards(state);
+  `,
 ];
 
 function migrate(d: Database) {

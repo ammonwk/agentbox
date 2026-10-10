@@ -32,6 +32,7 @@
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { moveCards } from "./cards";
 import { deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
 import { FleetError, newSessionId, type Fleet } from "./fleet";
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
@@ -379,6 +380,8 @@ export class Scheduler {
     if (closing && !this.atWork(last.id)) {
       try {
         await this.fleet.handOver(last.id, sid);
+        // And what it asked the user: the answers go to the one that follows.
+        moveCards(last.id, sid);
         await this.fleet.close(last.id, true, true);
       } catch (e) {
         console.error(`agentbox: schedule ${s.id}: closing ${last.id}:`, e);

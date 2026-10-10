@@ -63,6 +63,17 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox schedules              # what is set to start: id  in  when · agent · title,
                                     # and for those: its session, its command, its last note
     agentbox unschedule <id>...     # it will not start
+    agentbox card add --kind decision --title T --short S [--long-file F] [--recommend R] [--pr URL]
+                      [--default D --default-at 'in 24 hours'] [--key K] [--for <session>]
+                                    # hand the user a card on the app's Review page and
+                                    # print its id. kind: decision (they owe an answer),
+                                    # merged, note (it happened). --short is two or three
+                                    # sentences; --long-file the long, extra clear version
+                                    # in Markdown. --key adds it once, however often you run it
+    agentbox card list [--open|--later|--answered [--unread]|--closed] [--json]
+    agentbox card show <id>         # all of it, with the answer
+    agentbox card ack <id>          # you have read an answer that was waiting (--unread)
+    agentbox card close <id> <why>  # withdraw it: the question went away
 
 ## Conventions
 
@@ -112,5 +123,13 @@ also reads them from stdin with `-`, so pipes and xargs work.
   your child too (`show` lists it), so closing you would close it: a session
   with work under it is stopped, not closed, or its children are moved first
   (the board's drag; `PATCH /api/sessions/:id` with `parent`).
+- A card is how you ask the user something when you are not the session
+  they are looking at, or tell them what you did without making them read
+  your conversation. Their answer is typed into you as their own message,
+  `[card 12 “title”] …`; an empty answer means they saw it, and nothing is
+  typed. Write the short version so it can be answered from a phone without
+  opening anything, give a recommendation, and never add a card for progress.
+  If the session that asked is gone, the answer waits: `card list --answered
+  --unread`, act on it, then `card ack`.
 - Prefer reading `show` and the tail of `log` over whole transcripts; they
   are long.

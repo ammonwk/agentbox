@@ -2315,12 +2315,13 @@ kbd {
   .nav-new {
     order: 3;
   }
-  /* Sessions, Voice, New, Accounts, Settings; Skills is a desk job. */
+  /* Sessions, Review, New, Voice, Accounts, Settings; Skills is a desk job. */
   .sidebar nav > :nth-child(1) { order: 1; }
   .sidebar nav > :nth-child(2) { order: 2; }
   .sidebar nav > :nth-child(3) { order: 4; }
-  .sidebar nav > :nth-child(4) { display: none; }
-  .sidebar nav > :nth-child(5) { order: 5; }
+  .sidebar nav > :nth-child(4) { order: 5; }
+  .sidebar nav > :nth-child(5) { display: none; }
+  .sidebar nav > :nth-child(6) { order: 6; }
   .nav-item .count,
   .sidebar:hover .nav-item .count {
     position: absolute;
@@ -2351,6 +2352,7 @@ kbd {
      worth more to the conversation. */
   .app[data-page="session"] .sysbar,
   .app[data-page="voice"] .sysbar,
+  .app[data-page="review"] .sysbar,
   :root[data-kb] .sysbar {
     display: none;
   }

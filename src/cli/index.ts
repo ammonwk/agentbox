@@ -26,6 +26,7 @@ import { identify } from "../core/accounts/identity";
 import { onboardingItems } from "../core/onboarding";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
+import * as cards from "./cards";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
@@ -395,6 +396,16 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
                         the rest by itself; this shows the last recovery (--last),
                         what one would do now (no ids), or recovers stopped ids
 
+cards (what a session hands the user to decide or to know; the app's Review page shows them):
+  card add --kind decision|merged|note --title T --short S [--long L | --long-file F] [--pr URL]
+           [--recommend R] [--default D --default-at <when>] [--key K] [--for <session>]
+                        prints the card's id; the answer is typed into the session that
+                        added it, as "[card N “title”] …". --key adds it once
+  card list [--open|--later|--answered [--unread]|--closed] [--session ID] [--json]
+  card show <id>        all of it, with the answer
+  card ack <id>...      you have the answer that was waiting on it (--unread no longer lists it)
+  card close <id> <why> withdraw it: the question went away
+
 scheduled sessions (one-time ones show in the app as sessions; recurring ones in Settings):
   schedule <when> [--agent claude] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N] <prompt…|->
                         start one later, in DIR (default: here). <when> is one quoted
@@ -514,6 +525,10 @@ export async function main(argv: string[]): Promise<number | null> {
         await ensureServer();
         return await verbs.each(api, cmd, argv.slice(1));
       // The old names, for scripts and agents that learnt them.
+      case "card":
+      case "cards":
+        await ensureServer();
+        return await cards.card(api, argv.slice(1));
       case "schedule":
         await ensureServer();
         return await schedules.schedule(api, argv.slice(1));

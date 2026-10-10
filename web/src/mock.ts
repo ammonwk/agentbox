@@ -50,6 +50,7 @@ import type {
   UsageWindow,
   WorktreeScan,
   Schedule,
+  Card,
   ScheduleSpec,
 } from "../../src/core/types";
 import type { RepoPatch, TermChannel, TermHandlers } from "./api";
@@ -262,6 +263,21 @@ const schedules: Schedule[] = [
     spec: { provider: "claude", cwd: `${HOME}/Documents/agentbox`, prompt: "You watch the fleet: handle what each note lists." },
     lastRunAt: T0 - 22 * M, lastSessionId: "k9d1", lastError: null, noteCmd: "./scripts/whats-open.sh", sameSession: true, freshOver: null,
   },
+];
+
+const card = (c: Pick<Card, "id" | "kind" | "title" | "short"> & Partial<Card>): Card => ({
+  hasLong: true, pr: null, recommend: null, default: null, defaultAt: null, key: null, sessionId: "k9d1", about: null, state: "open",
+  answer: null, answeredAt: null, deliveredAt: null, unread: false, laterAt: null, createdAt: T0 - 40 * M, closedWhy: null, ...c,
+});
+const cards: Card[] = [
+  card({
+    id: 3, kind: "decision", title: "Count multi-year agreements as one sale?",
+    short: "One customer counts only signed agreements as won. The open PR counts every multi-year row. Which should every org get?",
+    recommend: "Signed only: it matches what they audit against, and the PR is a one-line change either way.",
+    default: "leave the PR unmerged", defaultAt: T0 + 20 * H, pr: "https://github.com/you/agentbox/pull/212",
+  }),
+  card({ id: 2, kind: "merged", title: "Read codex usage from wham when nothing is running", short: "Usage for an idle codex account no longer reads as stale. risk: low — one file, read-only.", pr: "https://github.com/you/agentbox/pull/212", createdAt: T0 - 2 * H }),
+  card({ id: 1, kind: "note", title: "Staging was red for 40 minutes", short: "A flaky migration test; the fix session reran it and it is green again.", hasLong: false, state: "answered", answer: "", answeredAt: T0 - 3 * H, createdAt: T0 - 4 * H }),
 ];
 
 const repos: Repo[] = [
@@ -712,6 +728,7 @@ function cold(): ColdState {
     ],
     warnings: [],
     schedules: structuredClone(schedules),
+    cards: structuredClone(cards),
     onboarding: {
       identity: { name: "Dev", email: "dev@example.com", github: "dev", timezone: "UTC", context: "" },
       depsOk: true,
@@ -1208,6 +1225,17 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   if (head === "placement") {
     const x = body<{ provider: ProviderId }>(b);
     return placementFor(x.provider ?? "claude");
+  }
+
+  if (head === "cards") {
+    const c = cards.find((z) => String(z.id) === id);
+    if (!c) throw new Error(`no card ${id}`);
+    if (method === "GET") return { ...c, long: c.hasLong ? `## ${c.title}\n\n${c.short}\n\n- What changes for customers\n- What was checked\n- What it risks` : null };
+    if (action === "answer") Object.assign(c, { state: "answered", answer: body<{ text: string }>(b).text ?? "", answeredAt: Date.now() });
+    else if (action === "later") Object.assign(c, { state: "later", laterAt: Date.now() });
+    else if (action === "undo") Object.assign(c, { state: "open", answer: null, answeredAt: null, laterAt: null });
+    pushCold();
+    return c;
   }
 
   if (head === "schedules") {

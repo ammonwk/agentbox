@@ -1006,6 +1006,51 @@ export interface GrepHit {
   line: string;
 }
 
+// ------------------------------------------------------------------ cards
+
+/** A decision the user owes, or something that happened: a pull request
+ *  merged, a note. */
+export type CardKind = "decision" | "merged" | "note";
+/** `later`: kept for later, still to be answered. `closed`: withdrawn by its asker. */
+export type CardState = "open" | "later" | "answered" | "closed";
+
+/** What a session handed the user (src/core/cards.ts). */
+export interface Card {
+  /** Counted from 1: "card 12" is how both sides name it. */
+  id: number;
+  kind: CardKind;
+  title: string;
+  /** Two or three sentences. */
+  short: string;
+  hasLong: boolean;
+  /** The long, extra clear version, Markdown; only on `GET /api/cards/:id`. */
+  long?: string | null;
+  /** The pull request it is about, a URL. */
+  pr: string | null;
+  /** What the asker would do. */
+  recommend: string | null;
+  /** What the asker does if `defaultAt` passes unanswered; agentbox only shows it. */
+  default: string | null;
+  defaultAt: number | null;
+  /** The asker's own name for it: adding the same key again adds nothing. */
+  key: string | null;
+  /** The session that asked, and gets the answer. */
+  sessionId: string | null;
+  /** The session it is about, when that is another. */
+  about: string | null;
+  state: CardState;
+  /** The user's words; "" when it was only seen. */
+  answer: string | null;
+  answeredAt: number | null;
+  /** When the answer was typed into the asker, or a session said it has it. */
+  deliveredAt: number | null;
+  /** Answered in words that no session has yet. */
+  unread: boolean;
+  laterAt: number | null;
+  createdAt: number;
+  closedWhy: string | null;
+}
+
 /** Changes on a slower clock; pushed only when it moves. */
 export interface ColdState {
   accounts: AccountView[];
@@ -1020,6 +1065,9 @@ export interface ColdState {
   /** Set when something is missing, so the UI can say so instead of failing. */
   warnings: string[];
   schedules: Schedule[];
+  /** Every card still to be answered, then the newest answered and withdrawn
+   *  ones; without their long versions. */
+  cards: Card[];
   /** Who agentbox works for and what is still unsetup, for the first-run card. */
   onboarding: Onboarding;
 }

@@ -40,6 +40,8 @@ import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
+import { CARD_KINDS, Cards } from "../core/cards";
+import type { CardKind, CardState } from "../core/types";
 import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
@@ -113,6 +115,24 @@ export const fleet = new Fleet({
 setMetricsSource(() => fleet.sessions());
 /** Sessions to start later; on the board and in Settings, so cold state. */
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
+function cardId(raw: string): number {
+  if (!/^\d{1,9}$/.test(raw)) throw new HttpError(400, "a card's id is a number");
+  return Number(raw);
+}
+
+/** One push for a batch of new decisions, never for what merely happened. */
+export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
+  if (pushSubscriptions().length === 0) return;
+  const [first] = batch;
+  void pushToAll({
+    title: batch.length === 1 ? "A decision for you" : `${batch.length} decisions for you`,
+    body: batch.length === 1 ? first!.title : `${first!.title}, and ${batch.length - 1} more`,
+    url: "/#/review",
+    tag: "cards",
+  }).then((r) => {
+    for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
+  });
+});
 const turnIndex = new TurnIndex(fleet, {
   load: (id) => loadTurnState(fleet.get(id).provider, id),
   save: (id, state) => saveTurnState(fleet.get(id).provider, id, state),
@@ -284,6 +304,7 @@ function coldState(): ColdState {
     providers: slow.providers,
     warnings: warnings(),
     schedules: listSchedules(),
+    cards: cards.shown(),
     onboarding: {
       identity: readUserIdentity(),
       depsOk: slow.depsOk,
@@ -884,6 +905,49 @@ const router = new Router(mapError)
     scheduleHot();
     return json({ sessionId });
   })
+  // ----- cards (src/core/cards.ts)
+  .add("GET", "/api/cards", ({ url }) => {
+    const state = url.searchParams.get("state");
+    if (state && !["open", "later", "answered", "closed"].includes(state)) throw new HttpError(400, "state is one of open, later, answered, closed");
+    return json(cards.list({ state: (state as CardState | null) ?? undefined, unread: url.searchParams.get("unread") === "1", sessionId: url.searchParams.get("session") ?? undefined }));
+  })
+  .add("POST", "/api/cards", async ({ req }) => {
+    const b = await readBody(req);
+    const kind = requireString(b, "kind") as CardKind;
+    if (!CARD_KINDS.includes(kind)) throw new HttpError(400, `kind is one of ${CARD_KINDS.join(", ")}`);
+    const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
+    const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
+    return json(
+      cards.add({
+        kind,
+        title: requireString(b, "title"),
+        short: requireString(b, "short"),
+        long: optionalString(b, "long"),
+        pr: optionalString(b, "pr"),
+        recommend: optionalString(b, "recommend"),
+        default: optionalString(b, "default"),
+        defaultAt: typeof b.defaultAt === "number" ? b.defaultAt : null,
+        key: optionalString(b, "key"),
+        sessionId: id(b.session) ?? (callerPid ? fleet.callerOf(callerPid) : null),
+        about: id(b.about),
+        at: typeof b.at === "number" && b.at > 0 ? b.at : null,
+      }),
+      201,
+    );
+  })
+  .add("GET", "/api/cards/:id", ({ params }) => json(cards.get(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/answer", async ({ req, params }) => {
+    const b = await readBody(req);
+    if (typeof b.text !== "string") throw new HttpError(400, "text must be a string");
+    return json(cards.answer(cardId(params.id!), b.text));
+  })
+  .add("POST", "/api/cards/:id/later", ({ params }) => json(cards.later(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/undo", ({ params }) => json(cards.undo(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/ack", ({ params }) => json(cards.ack(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/close", async ({ req, params }) => {
+    const b = await readBody(req);
+    return json(cards.close(cardId(params.id!), typeof b.why === "string" ? b.why : ""));
+  })
   // What `agentbox watch` needs of each session, closed ones too (it must see
   // a reopen as one), and nothing else. With `after`, the rows it already has,
   // the answer waits until they differ or CHANGES_WAIT_MS passes.
@@ -1403,6 +1467,7 @@ export async function startServer(): Promise<void> {
   await fleet.ready;
   phase("first pass");
   scheduler.start();
+  cards.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
   // sessions and in your own terminals alike, and Go's usage is asked through
   // it (accounts/usage.ts), so it is up from the start.

@@ -25,6 +25,7 @@ import type {
   DepStatus,
   Health,
   HotState,
+  Card,
   PromptHistoryEntry,
   LoginFlow,
   MetricsState,
@@ -215,6 +216,13 @@ export const api = {
     request<Schedule>("PATCH", `/api/schedules/${enc(id)}`, patch),
   deleteSchedule: (id: string) => request<null>("DELETE", `/api/schedules/${enc(id)}`),
   runSchedule: (id: string) => post<{ sessionId: string }>(`/api/schedules/${enc(id)}/run`),
+  // cards (src/core/cards.ts)
+  /** One card whole, with its long version. */
+  card: (id: number) => get<Card>(`/api/cards/${id}`),
+  /** Your answer; "" for one that only wanted seeing. */
+  answerCard: (id: number, text: string) => post<Card>(`/api/cards/${id}/answer`, { text }),
+  laterCard: (id: number) => post<Card>(`/api/cards/${id}/later`),
+  undoCard: (id: number) => post<Card>(`/api/cards/${id}/undo`),
   createSession: (input: NewSessionInput) =>
     post<{ session: Session; placement: Placement }>("/api/sessions", input),
   patchSession: (id: string, patch: { label?: string | null; parent?: string | null }) =>
@@ -600,6 +608,7 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               providers: s.providers,
               warnings: s.warnings,
               schedules: s.schedules,
+              cards: s.cards,
               onboarding: s.onboarding,
             },
         );
