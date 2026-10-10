@@ -28,6 +28,7 @@ import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
 import { usageInsights } from "../core/insights";
 import { diffOf } from "../core/diff";
+import { grepInWorker } from "../core/grep";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
@@ -73,7 +74,6 @@ import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
   ColdState,
-  GrepHit,
   Health,
   HotState,
   MetricsState,
@@ -85,7 +85,6 @@ import type {
   RepoSetup,
   ServerMessage,
   SkillInfo,
-  TimelinePage,
 } from "../core/types";
 
 const PORT = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT);
@@ -1082,35 +1081,21 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/sessions/:id/attach", ({ params }) => json({ argv: fleet.attachCommand(params.id!) }))
   .add("GET", "/api/sessions/:id/screen", ({ params }) => json({ text: fleet.screen(params.id!) }))
-  .add("GET", "/api/grep", async ({ url }) => {
-    const q = url.searchParams.get("q") ?? "";
-    if (!q) throw new HttpError(400, "q is required");
-    let re: RegExp;
+  .add("GET", "/api/grep", async ({ req, url }) => {
+    const pattern = url.searchParams.get("q") ?? "";
+    if (!pattern) throw new HttpError(400, "q is required");
+    const flags = url.searchParams.get("i") === "1" ? "i" : "";
     try {
-      re = new RegExp(q, url.searchParams.get("i") === "1" ? "i" : "");
+      new RegExp(pattern, flags);
     } catch (e) {
       throw new HttpError(400, `bad pattern: ${(e as Error).message}`);
     }
     const all = url.searchParams.get("all") === "1";
-    const hits: GrepHit[] = [];
-    for (const s of fleet.sessions()) {
-      if ((!all && s.status === "closed") || !s.transcriptPath) continue;
-      let before: string | null = null;
-      try {
-        do {
-          const page: TimelinePage = await fleet.timeline(s.id, before, 1000);
-          for (const ev of page.events) {
-            const text = ev.kind === "tool" ? `${ev.name}: ${ev.summary}` : ev.text;
-            for (const line of text.split("\n")) if (re.test(line)) hits.push({ sessionId: s.id, at: ev.at, kind: ev.kind, line: line.trim().slice(0, 300) });
-          }
-          before = page.before;
-        } while (before && hits.length < 5000);
-      } catch {
-        // an unreadable transcript is skipped, not fatal
-      }
-      if (hits.length >= 5000) break;
-    }
-    return json(hits);
+    const sessions = fleet.sessions().flatMap((s) => {
+      const ref = (all || s.status !== "closed") && s.transcriptPath ? fleet.transcriptRef(s.id) : null;
+      return ref ? [{ id: s.id, ref }] : [];
+    });
+    return json(await grepInWorker({ pattern, flags, sessions }, req.signal));
   })
 
   // ---- accounts
@@ -1511,6 +1496,9 @@ export async function startServer(): Promise<void> {
         ? undefined
         : fail("websocket upgrade failed", 500);
     }
+    // A search reads every transcript, minutes on a loaded machine, and sends
+    // nothing until it is done: the idle timeout would cut it.
+    if (url.pathname === "/api/grep") srv.timeout(req, 0);
     return router.handle(req);
   };
 

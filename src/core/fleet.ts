@@ -108,7 +108,7 @@ import {
   type Step,
 } from "./recovery";
 import { agentboxHome } from "./paths";
-import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
+import { openReader, pruneReaderStates, saveReaderState } from "./readercache";
 import { UNFUNDED_HOLD_MS, unfundedSince, weeklyWindow } from "./balancer";
 import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusals";
 import { statedUntil, statedWaitMs } from "./retrywait";
@@ -1022,9 +1022,8 @@ export class Fleet extends EventEmitter {
    *  it, `readercache.ts`) if it was put away. */
   private load(t: Tracked): TranscriptReader {
     if (t.reader) return t.reader;
-    const reader = this.adapter(t.ref.provider).reader(t.ref);
-    const saved = reader.loadState ? loadReaderState(t.ref.provider, t.ref.path) : null;
-    t.restored = saved !== null && reader.loadState!(saved);
+    const { reader, restored } = openReader(this.adapter(t.ref.provider), t.ref);
+    t.restored = restored;
     t.reader = reader;
     return reader;
   }
@@ -2453,6 +2452,12 @@ export class Fleet extends EventEmitter {
 
   since(id: string, cursor: string): Promise<{ events: TimelineEvent[]; cursor: string; reset: boolean }> {
     return this.readerOf(id).since(cursor);
+  }
+
+  /** Where a session's transcript is, for a reader of someone else's (`grep.ts`). */
+  transcriptRef(id: string): TranscriptRef | null {
+    const path = getSessionRecord(id)?.transcriptPath;
+    return (path && this.tracked.get(path)?.ref) || null;
   }
 
   hasTranscript(id: string): boolean {
