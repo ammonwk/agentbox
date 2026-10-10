@@ -343,6 +343,16 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX cards_state ON cards(state);
   `,
+  // 22 — which session said it has which pull request (src/core/prclaims.ts).
+  `
+  CREATE TABLE pr_claims (
+    repo       TEXT NOT NULL,
+    number     INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    at         INTEGER NOT NULL,
+    PRIMARY KEY (repo, number)
+  );
+  `,
 ];
 
 function migrate(d: Database) {

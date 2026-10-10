@@ -35,14 +35,16 @@ import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushSubscriptions, pushToAll, removeSubscription } from "../core/push";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
-import { addRepo, deleteRepo, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
+import { addRepo, deleteRepo, getDb, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { CARD_KINDS, Cards } from "../core/cards";
 import type { CardKind, CardState } from "../core/types";
-import { openPrs, prWarnings, syncPrs } from "../core/prs";
+import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
+import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr } from "../core/prclaims";
+import { repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { shownImage } from "../core/images";
@@ -76,6 +78,7 @@ import type {
   Health,
   HotState,
   MetricsState,
+  PrClaim,
   PrInfo,
   AccountProvider,
   ProviderId,
@@ -292,13 +295,42 @@ function accountViews(): AccountView[] {
   });
 }
 
+/** Who has which pull request, now (src/core/prclaims.ts). */
+function prClaimsNow(): PrClaim[] {
+  const sessions = fleet.sessions();
+  return prClaims(sessions, branchHolders(sessions));
+}
+
+/** The PR a caller names, a bare number being one of the repo it called
+ *  from, else of the repo its session works in or names most. */
+function prNamed(b: Record<string, unknown>, sessionId: string | null): { repo: string; number: number } {
+  const s = sessionId ? fleet.sessions().find((x) => x.id === sessionId) : undefined;
+  const cwd = optionalString(b, "cwd");
+  try {
+    return parsePrRef(requireString(b, "pr"), (cwd ? repoFullNameOf(cwd) : null) ?? (s?.repoRoot ? repoSlugOf(s.repoRoot) : null) ?? s?.prRepo ?? null);
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message);
+  }
+}
+
+/** The session a request speaks for: the one it names, else the one it was made from inside. */
+function speaker(b: Record<string, unknown>): string | null {
+  const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
+  return (typeof b.session === "string" && /^[\w-]{1,64}$/.test(b.session) ? b.session : null) ?? (callerPid ? fleet.callerOf(callerPid) : null);
+}
+
+/** PRs a session is being started on, until it exists to hold them. */
+const startingOn = new Set<string>();
+
 function coldState(): ColdState {
   const views = accountViews();
+  const prClaims = prClaimsNow();
   return {
     accounts: views,
     logins: accounts.loginFlows(),
     repos: listRepos(),
-    prs: slow.prs,
+    prs: slow.prs.map((p) => ({ ...p, owner: holderOf(prClaims, p.repo, p.number)?.sessionId ?? null })),
+    prClaims,
     skills: slow.skills,
     settings: getSettings(),
     providers: slow.providers,
@@ -624,6 +656,16 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions", async ({ req }) => {
     const b = await readBody(req);
+    // Started to work a pull request: it has it from its first moment, or
+    // does not start, so two are never sent to the same one.
+    const claim = b.claim !== undefined ? prNamed({ pr: b.claim, cwd: b.cwd }, null) : null;
+    const key = claim ? `${claim.repo.toLowerCase()}#${claim.number}` : "";
+    if (claim) {
+      const held = holderOf(prClaimsNow(), claim.repo, claim.number);
+      if (held) throw new HttpError(409, new PrHeld(held, fleet.sessions().find((s) => s.id === held.sessionId)).message.replace(/^not claimed/, "not started"));
+      if (startingOn.has(key)) throw new HttpError(409, `not started: another session is being started on ${claim.repo}#${claim.number} this moment`);
+      startingOn.add(key);
+    }
     try {
       const out = await fleet.spawn({
         provider: provider(b.provider),
@@ -639,6 +681,7 @@ const router = new Router(mapError)
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
       });
+      if (claim) getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [claim.repo, claim.number, out.session.id, Date.now()]);
       scheduleHot();
       scheduleCold();
       return json(out, 201);
@@ -651,7 +694,41 @@ const router = new Router(mapError)
         });
       }
       throw e;
+    } finally {
+      startingOn.delete(key);
     }
+  })
+
+  // ---- who has which pull request
+  .add("GET", "/api/prs/claims", () => json(prClaimsNow()))
+  .add("POST", "/api/prs/who", async ({ req }) => {
+    const b = await readBody(req);
+    const pr = prNamed(b, speaker(b));
+    return json({ ...pr, claim: holderOf(prClaimsNow(), pr.repo, pr.number) });
+  })
+  .add("POST", "/api/prs/claim", async ({ req }) => {
+    const b = await readBody(req);
+    const who = speaker(b);
+    if (!who) throw new HttpError(400, "a session claims a pull request: run this from inside one, or name it with --for <session id>");
+    const sessions = fleet.sessions();
+    if (!sessions.some((s) => s.id === who)) throw new HttpError(404, `no session ${who}`);
+    const pr = prNamed(b, who);
+    try {
+      const c = claimPr(prClaimsNow(), sessions, pr.repo, pr.number, who, Date.now());
+      scheduleCold();
+      return json(c);
+    } catch (e) {
+      if (e instanceof PrHeld) throw new HttpError(409, e.message);
+      throw e;
+    }
+  })
+  .add("POST", "/api/prs/release", async ({ req }) => {
+    const b = await readBody(req);
+    const who = speaker(b);
+    if (!who) throw new HttpError(400, "a session releases what it claimed: run this from inside one, or name it with --for <session id>");
+    const released = releasePr(who, b.pr !== undefined ? prNamed(b, who) : null);
+    scheduleCold();
+    return json({ released });
   })
   .add("PATCH", "/api/sessions/:id", async ({ req, params }) => {
     const b = await readBody(req);

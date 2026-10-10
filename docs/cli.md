@@ -74,8 +74,21 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox card show <id>         # all of it, with the answer
     agentbox card ack <id>          # you have read an answer that was waiting (--unread)
     agentbox card close <id> <why>  # withdraw it: the question went away
+    agentbox pr who <n|owner/repo#n|url>   # the session that has this pull request, or "nobody" (exit 1)
+    agentbox pr claim <n|…>         # it is yours: refused, naming the holder, if a live session has it
+    agentbox pr release [<n|…>]     # let go of what you claimed (one, or all)
+    agentbox pr claims              # every pull request a live session has
 
 ## Conventions
+
+- One session has a pull request. You have yours by being on its branch, or
+  by having been started with `--claim <n>`. Before you work a pull request
+  you did not open (fix it, rebase it, push to it, take it to green), run
+  `agentbox pr claim <n>`; if it is refused, another live session is on it:
+  do not work it as well. To start a session on a PR, start it with
+  `--claim <n>` (`agentbox claude --detach --claim 8653 '…'`): it has the
+  PR from its first moment, or is not started. Reading or reviewing a PR
+  needs no claim. A claim lapses when its session stops or closes.
 
 - Statuses: running (mid-turn), blocked (a prompt needs answering), waiting
   (turn over, the user's move), stopped (no process, resumable), closed (stopped and

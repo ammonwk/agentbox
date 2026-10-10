@@ -718,7 +718,7 @@ function cold(): ColdState {
       {
         number: 212, repo: "you/agentbox", title: "Read codex usage from wham when nothing is running", headRef: "feat/wham-usage",
         state: "OPEN", isDraft: true, url: "https://github.com/you/agentbox/pull/212", author: "you",
-        createdAt: new Date(T0 - 2 * H).toISOString(), updatedAt: new Date(T0 - 20 * M).toISOString(), sessionId: "a81c",
+        createdAt: new Date(T0 - 2 * H).toISOString(), updatedAt: new Date(T0 - 20 * M).toISOString(), sessionId: "a81c", owner: "a81c",
       },
     ],
     skills,
@@ -732,6 +732,7 @@ function cold(): ColdState {
     warnings: [],
     schedules: structuredClone(schedules),
     cards: structuredClone(cards),
+    prClaims: [{ repo: "you/agentbox", number: 212, sessionId: "a81c", how: "branch", at: T0 - 2 * H }],
     onboarding: {
       identity: { name: "Dev", email: "dev@example.com", github: "dev", timezone: "UTC", context: "" },
       depsOk: true,

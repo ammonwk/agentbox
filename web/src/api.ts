@@ -603,6 +603,7 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               logins: s.logins,
               repos: s.repos,
               prs: s.prs,
+              prClaims: s.prClaims,
               skills: s.skills,
               settings: s.settings,
               providers: s.providers,

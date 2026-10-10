@@ -27,6 +27,7 @@ import { onboardingItems } from "../core/onboarding";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import * as cards from "./cards";
+import * as prs from "./prs";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
@@ -122,7 +123,7 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
       continue;
     }
     const [, key, inline] = m;
-    const takesValue = key === "account" || key === "model";
+    const takesValue = key === "account" || key === "model" || key === "claim";
     if (inline !== undefined) flags.set(key!, inline);
     else if (takesValue && args[i + 1] !== undefined) flags.set(key!, args[++i]!);
     else flags.set(key!, true);
@@ -158,6 +159,7 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       prompt: rest.join(" ") || undefined,
       model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
       accountId,
+      claim: typeof flags.get("claim") === "string" ? flags.get("claim") : undefined,
       // Started from inside another session, it is that session's child.
       callerPid: process.pid,
     });
@@ -396,6 +398,13 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
                         the rest by itself; this shows the last recovery (--last),
                         what one would do now (no ids), or recovers stopped ids
 
+pull requests (who has one: no two sessions work the same PR):
+  pr claim <n|owner/repo#n|url> [--for ID]   this session has it; refused, naming the holder, if a live session does
+  pr release [<n|…>]                 let go of what this session claimed (one, or all)
+  pr who <n|…> [--json]              the session that has it, or "nobody" (exit 1)
+  pr claims [--json]                 every PR a live session has
+  claude|codex|… --claim <n|…> …     start a session that has the PR from its first moment, or does not start
+
 cards (what a session hands the user to decide or to know; the app's Review page shows them):
   card add --kind decision|merged|note --title T --short S [--long L | --long-file F] [--pr URL]
            [--recommend R] [--default D --default-at <when>] [--key K] [--for <session>]
@@ -526,6 +535,9 @@ export async function main(argv: string[]): Promise<number | null> {
         return await verbs.each(api, cmd, argv.slice(1));
       // The old names, for scripts and agents that learnt them.
       case "card":
+      case "pr":
+      case "prs":
+        return await prs.pr(api, argv.slice(1));
       case "cards":
         await ensureServer();
         return await cards.card(api, argv.slice(1));

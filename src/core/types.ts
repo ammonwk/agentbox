@@ -763,6 +763,20 @@ export interface PrInfo {
   updatedAt: string;
   /** The agentbox session that produced it, when we can match the branch. */
   sessionId: string | null;
+  /** The live session that has it now (`AppState.prClaims`), or null: free. */
+  owner: string | null;
+}
+
+/** A pull request and the live session that has it (src/core/prclaims.ts). */
+export interface PrClaim {
+  repo: string;
+  number: number;
+  sessionId: string;
+  /** `said`: it claimed it (`agentbox pr claim`, `--claim` at its start).
+   *  `branch`: it is on the PR's branch and nobody claimed otherwise. */
+  how: "said" | "branch";
+  /** When it said so; for a branch, when the PR was opened. */
+  at: number;
 }
 
 export interface SkillInfo {
@@ -1080,6 +1094,9 @@ export interface ColdState {
   /** Every card still to be answered, then the newest answered and withdrawn
    *  ones; without their long versions. */
   cards: Card[];
+  /** Who has which pull request: every PR a live session holds. One not
+   *  listed is nobody's. */
+  prClaims: PrClaim[];
   /** Who agentbox works for and what is still unsetup, for the first-run card. */
   onboarding: Onboarding;
 }
