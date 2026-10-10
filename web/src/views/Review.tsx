@@ -15,7 +15,7 @@
  * it is typed into the session that asked.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { AppState, Card } from "../../../src/core/types";
 import { describeAt } from "../../../src/core/schedule";
 import { api } from "../api";
@@ -23,6 +23,10 @@ import { laterOf, stackOf } from "../lib/cardorder";
 import { Button, Empty, Icon, Modal, RelativeTime } from "../components";
 import { hrefOf } from "../route";
 import { Markdown } from "./session/Markdown";
+import { PrBase } from "./session/prbase";
+import { SessionLinks } from "./session/sessionlinks";
+import { buildSessionIndex } from "../lib/sessionrefs";
+import { prBaseFor } from "../lib/prlinks";
 import "./review.css";
 
 type Tab = "stack" | "later" | "done";
@@ -334,6 +338,26 @@ function Source({ card, state }: { card: Card; state: AppState }) {
   );
 }
 
+/**
+ * What a card's words link to: a session it names (matched against the
+ * board's, so a word that only looks like an id stays a word) opens that
+ * session, and `#123` the pull request, in the repo of the card's own PR,
+ * else of the session that made it.
+ */
+function CardLinks({ card, state, children }: { card: Card; state: AppState; children: ReactNode }) {
+  const links = useMemo(() => ({ index: buildSessionIndex(state.sessions), self: null }), [state.sessions]);
+  const base = useMemo(() => {
+    const own = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/pull\/\d+/.exec(card.pr ?? "")?.[1];
+    const asker = state.sessions.find((x) => x.id === card.sessionId);
+    return own ?? prBaseFor(asker ?? { repoRoot: null, prRepo: null }, state);
+  }, [card.pr, card.sessionId, state]);
+  return (
+    <PrBase.Provider value={base}>
+      <SessionLinks.Provider value={links}>{children}</SessionLinks.Provider>
+    </PrBase.Provider>
+  );
+}
+
 /** What the asker would do, and what it does unasked once its time passes. */
 function Leaning({ card }: { card: Card }) {
   const passed = card.defaultAt !== null && card.defaultAt <= Date.now();
@@ -342,12 +366,12 @@ function Leaning({ card }: { card: Card }) {
     <div className="card-leaning">
       {card.recommend ? (
         <p>
-          <strong>Recommended</strong> {card.recommend}
+          <strong>Recommended</strong> <Markdown inline text={card.recommend} />
         </p>
       ) : null}
       {card.default && card.state !== "answered" && card.state !== "closed" ? (
         <p className={passed ? "card-default-passed" : undefined}>
-          <strong>{passed ? "Default time passed" : card.defaultAt ? `Unanswered by ${describeAt(card.defaultAt).replace(/^T/, "t")}` : "By default"}</strong> {card.default}
+          <strong>{passed ? "Default time passed" : card.defaultAt ? `Unanswered by ${describeAt(card.defaultAt).replace(/^T/, "t")}` : "By default"}</strong> <Markdown inline text={card.default} />
         </p>
       ) : null}
     </div>
@@ -452,11 +476,15 @@ function SwipeCard({
         <span className="card-kind-chip">{KIND[card.kind]}</span>
         {card.state === "later" ? <span className="faint">kept for later</span> : null}
       </div>
-      <h3 className="card-title">{card.title}</h3>
-      <div className="card-short">
-        <Markdown text={card.short} />
-      </div>
-      <Leaning card={card} />
+      <CardLinks card={card} state={state}>
+        <h3 className="card-title">
+          <Markdown inline text={card.title} />
+        </h3>
+        <div className="card-short">
+          <Markdown text={card.short} />
+        </div>
+        <Leaning card={card} />
+      </CardLinks>
       <Source card={card} state={state} />
     </article>
   );
@@ -513,8 +541,11 @@ function LongView({
           Back
         </Button>
       </div>
+      <CardLinks card={card} state={state}>
       <div className="review-long-body">
-        <h2 className="card-title">{card.title}</h2>
+        <h2 className="card-title">
+          <Markdown inline text={card.title} />
+        </h2>
         <Source card={card} state={state} />
         <div className="card-short">
           <Markdown text={card.short} />
@@ -540,6 +571,7 @@ function LongView({
           <div className="review-long-text">{failed ? <p className="error">{failed}</p> : long === null ? <p className="faint">Loading…</p> : <Markdown text={long} />}</div>
         ) : null}
       </div>
+      </CardLinks>
       {open ? <Actions card={card} onLater={onLater} onApprove={onApprove} onAnswer={onAnswer} long /> : null}
     </div>
   );
