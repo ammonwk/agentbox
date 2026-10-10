@@ -427,7 +427,16 @@ export interface Session {
   cold: boolean;
   /** The provider's latest "you hit your limit", when that is the last thing
    *  the session did — it stopped there and is waiting to be continued. */
-  limitHit: { at: number; detail: string; provider?: string } | null;
+  limitHit: {
+    at: number;
+    detail: string;
+    provider?: string;
+    /** When the limit lifts, as far as is known: the reset of the account's
+     *  spent window, else the time the message names. Until then every
+     *  message is refused the same way, so nothing is sent (the fleet's own
+     *  nudges, and `agentbox send` from an agent). Null when nothing says. */
+    until?: number | null;
+  } | null;
   /**
    * The turn ended on the provider rather than finishing — cut off by the
    * output cap, a transient API error, or something a retry cannot fix —

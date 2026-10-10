@@ -53,6 +53,24 @@ export function wakeRefusal(s: Session, now: number): string | null {
   );
 }
 
+/**
+ * Why a message cannot get `s` going: it stopped at its account's usage limit
+ * and the limit has a known end that has not come. Every message before then
+ * is refused by the provider the same way and stays in its context, so `wake`
+ * does not lift this. Null when it is not at a limit, or nothing says when
+ * the limit ends.
+ */
+export function limitRefusal(s: Session, now: number): string | null {
+  const until = s.limitHit?.until;
+  if (!until || until <= now) return null;
+  const when = new Date(until).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return (
+    `not sent: ${s.id} stopped at its account's usage limit, which lasts until ${when} (in ${span(until - now)}). ` +
+    `Until then its provider refuses every message the same way, so there is nothing to retry and --wake does not help. ` +
+    `\`limitHit.until\` in \`agentbox ls --json\` is that time: wait for it, or if its work cannot, start a fresh session on another account or provider with a handoff that points at \`agentbox log ${s.id}\`.`
+  );
+}
+
 /** Agent messages delivered, by `sender→reader`, within the window. In memory:
  *  a restart forgets an hour of counts, which costs nothing worth a table. */
 const sent = new Map<string, number[]>();

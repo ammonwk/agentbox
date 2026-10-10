@@ -29,3 +29,15 @@ export function statedWaitMs(text: string): number | null {
   }
   return ms > 0 ? ms : null;
 }
+
+const AT = /\b(?:try again|resets?|available again|retry)\s+(?:at|on)\s+([A-Z][a-z]{2,8}\.? \d{1,2}(?:st|nd|rd|th)?,? \d{4},? \d{1,2}:\d{2}(?::\d{2})? ?(?:[AP]M)?)/gi;
+
+/** The moment an error says to come back at, when it names a date rather
+ *  than a wait — codex's "try again at Oct 14th, 2026 12:10 AM", in the
+ *  machine's time — or null. With several, the last. */
+export function statedUntil(text: string): number | null {
+  const m = [...text.replace(/\s+/g, " ").matchAll(AT)].at(-1);
+  if (!m) return null;
+  const at = Date.parse(m[1]!.replace(/(\d)(?:st|nd|rd|th)/, "$1").replace(/,/g, ""));
+  return Number.isFinite(at) ? at : null;
+}

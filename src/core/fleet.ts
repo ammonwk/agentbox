@@ -38,6 +38,7 @@ import {
   insertAssignment,
   insertBtw,
   insertRateLimitHit,
+  rateLimitHitsSince,
   insertSessionRecord,
   insertTokenSample,
   listAccounts,
@@ -105,8 +106,8 @@ import {
 } from "./recovery";
 import { agentboxHome } from "./paths";
 import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
-import { weeklyWindow } from "./balancer";
-import { statedWaitMs } from "./retrywait";
+import { UNFUNDED_HOLD_MS, unfundedSince, weeklyWindow } from "./balancer";
+import { statedUntil, statedWaitMs } from "./retrywait";
 import { retryClock } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
@@ -906,9 +907,28 @@ export class Fleet extends EventEmitter {
    * early. A minute over, for the reset the message rounded down.
    */
   private screenWaitUntil(v: Session): number | null {
+    // A limit with a known end, however far off: nothing before it.
+    if (v.limitHit?.until) return v.limitHit.until + 60_000;
     const hitWait = v.limitHit ? statedWaitMs(v.limitHit.detail) : null;
     if (v.limitHit && hitWait !== null) return v.limitHit.at + hitWait + 60_000;
     return this.screenWaits.get(v.id)?.until ?? null;
+  }
+
+  /**
+   * When a limit a session stopped at lifts, or null when nothing says: the
+   * latest reset among its account's spent windows (those of the provider
+   * that refused, where the account fronts several), else the wait or the
+   * date the message itself names. Past moments are no answer.
+   */
+  private limitUntil(accountId: string | null, hit: { at: number; detail: string; provider?: string }, now: number): number | null {
+    const windows = accountId ? (this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? []) : [];
+    const spent = windows
+      .filter((w) => !w.scope && (!hit.provider || !w.provider || hit.provider.startsWith(w.provider)) && w.usedPct >= 100 && w.resetsAt !== null && w.resetsAt > now)
+      .map((w) => w.resetsAt!);
+    if (spent.length) return Math.max(...spent);
+    const wait = statedWaitMs(hit.detail);
+    const named = wait !== null ? hit.at + wait : statedUntil(hit.detail);
+    return named !== null && named > now ? named : null;
   }
 
   /** Remember the wait an error screen names, from when it first showed: the
@@ -2140,7 +2160,7 @@ export class Fleet extends EventEmitter {
     // The limit message is the session's last word: nothing after it, bar the
     // odd bookkeeping line written in the same breath.
     const hit = f?.rateLimitHits?.at(-1) ?? null;
-    const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? hit : null;
+    const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? { ...hit, until: this.limitUntil(rec.accountId, hit, now) } : null;
     const warmUntil = cacheWarmUntil(f, lastActivityAt, this.coldAfterMs);
     const cold =
       this.movable.has(rec.provider) &&
@@ -2428,6 +2448,7 @@ export class Fleet extends EventEmitter {
     const all = listAccounts(accountProvider(provider));
     const owner = owners(all);
     const since = this.now() - 90 * 60_000;
+    const hits = rateLimitHitsSince(this.now() - UNFUNDED_HOLD_MS);
     return all
       .filter((a) => owner.get(a.id) === a.id)
       .map((a) => {
@@ -2444,6 +2465,7 @@ export class Fleet extends EventEmitter {
             : [],
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
+          unfunded: unfundedSince(hits.filter((h) => h.accountId === a.id), this.now()),
         };
       });
   }

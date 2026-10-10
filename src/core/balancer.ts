@@ -49,6 +49,8 @@ export interface AccountState {
   claims: { outstanding: number; since: number }[];
   /** No login in its home (a new account mid-login, or the CLI logged out). */
   loggedOut?: boolean;
+  /** Its provider lately refused a session for want of funds (`unfundedSince`). */
+  unfunded?: { at: number; detail: string } | null;
 }
 
 export interface PlaceRequest {
@@ -69,6 +71,32 @@ export interface PlaceRequest {
 
 const HOUR = 3_600_000;
 const WEEK = 7 * 24 * HOUR;
+
+/** "402 … Insufficient account funds": the account cannot pay, whatever its
+ *  usage windows say. Not a rate limit: waiting a few minutes changes nothing. */
+const UNFUNDED = /\b402\b|insufficient (?:account )?(?:funds|balance|credits?)|payment required|out of credits/i;
+/** How long such a refusal rules the account out, when no window says when
+ *  it resets: long enough not to feed it a session an hour, short enough that
+ *  one topped up is tried again the same day. */
+export const UNFUNDED_HOLD_MS = 12 * HOUR;
+
+/** The newest refusal for want of funds among an account's limit stops, while it still holds. */
+export function unfundedSince(hits: { at: number; detail: string }[], now: number): { at: number; detail: string } | null {
+  const hit = hits.filter((h) => UNFUNDED.test(h.detail)).sort((a, b) => b.at - a.at)[0];
+  return hit && now - hit.at < UNFUNDED_HOLD_MS ? hit : null;
+}
+
+/** A window longer than the week (omp's monthly) that is spent and has not
+ *  reset: nothing can be placed there, however empty its week is. */
+function spentLongWindow(windows: UsageWindow[], now: number): UsageWindow | null {
+  return windows.find((w) => !w.scope && w.kind !== "short" && w.kind !== "weekly" && usedNow(w, now) >= 100) ?? null;
+}
+
+/** A day and time for a sentence: "Sun, Oct 11, 9:15 AM". */
+function dayOf(at: number): string {
+  return new Date(at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 const FIVE_HOURS = 5 * HOUR;
 /** The pace is over about this much of the recent past… */
 const PACE_SPAN = 45 * 60_000;
@@ -259,6 +287,13 @@ function evaluate(
     c.reason = "not logged in";
   } else if (req.unmetered) {
     // Nothing of this account's will be used: no limit of its is in the way.
+  } else if (spentLongWindow(state.windows, now)) {
+    const w = spentLongWindow(state.windows, now)!;
+    c.eligible = false;
+    c.reason = `${w.label.toLowerCase()} limit reached (${round1(usedNow(w, now))}%)${w.resetsAt ? `, resets ${dayOf(w.resetsAt)}` : ""}`;
+  } else if (state.unfunded) {
+    c.eligible = false;
+    c.reason = `out of funds: its provider refused a session at ${clockOf(state.unfunded.at)} (${state.unfunded.detail.replace(/\s+/g, " ").slice(-80)}); tried again ${dayOf(state.unfunded.at + UNFUNDED_HOLD_MS)}`;
   } else if (atShortLimit(c)) {
     c.eligible = false;
     c.reason = `5-hour limit reached (${c.short}%)`;

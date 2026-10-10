@@ -62,7 +62,7 @@ import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termse
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
 import { agentSentMark } from "../core/sent";
-import { chatterRefusal, countSend, wakeRefusal } from "../core/sendguard";
+import { chatterRefusal, countSend, limitRefusal, wakeRefusal } from "../core/sendguard";
 import { SendReceiptConflict, sendReceipt, submitWithReceipt } from "../core/send-receipts";
 import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
@@ -680,7 +680,7 @@ const router = new Router(mapError)
     if (b.from === "agent") {
       const now = Date.now();
       const to = fleet.get(params.id!);
-      const refusal = (b.wake === true ? null : wakeRefusal(to, now)) ?? chatterRefusal(fromSession, to.id, now);
+      const refusal = limitRefusal(to, now) ?? (b.wake === true ? null : wakeRefusal(to, now)) ?? chatterRefusal(fromSession, to.id, now);
       if (refusal) throw new HttpError(409, refusal);
       // Asked to wake it: a stopped one is resumed with the message. Counted
       // once it is in, so one that could not be delivered costs nothing.
