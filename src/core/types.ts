@@ -514,6 +514,9 @@ export interface Session {
    *  grouping of yours, not a run its parent made, so it is not closed when it
    *  stops and the fleet never links it again. */
   parentByHand: boolean;
+  /** The session that took over from this one (`Fleet.handOver`), when one
+   *  has: an agent's message to this one goes there instead. */
+  successor: string | null;
   /** Set when this is an agent a session started through the subagent MCP
    *  (its `parent`); `answerWaiting` while that session has not collected a
    *  finished turn. */
@@ -1212,6 +1215,9 @@ export interface Schedule {
   /** Tokens of context past which a `sameSession` schedule starts afresh;
    *  null for the default (`FRESH_OVER`, src/core/schedule.ts). */
   freshOver: number | null;
+  /** The session it replaced while that one was mid-turn: handed over at
+   *  once, and closed once its turn is over. */
+  retiring: string | null;
 }
 
 // ----------------------------------------------------------------- health

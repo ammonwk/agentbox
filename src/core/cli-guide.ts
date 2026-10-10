@@ -119,6 +119,8 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
   \`show\` and \`log\`, or start a fresh session with a handoff; pass \`--wake\`
   only when waking it is the point (an answer it asked for, a blocker). More
   than 3 messages to one session in an hour are refused too: batch them.
+- A \`send\` to a session another has taken over (a schedule replaced it)
+  goes to the one that took over, and says so: send to that one from then on.
 - A sent message arrives marked \`[via agentbox send from <id>]\` with the
   sender's session id, so don't sign it yourself; reply to the id in that
   mark.

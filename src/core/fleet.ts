@@ -2215,6 +2215,7 @@ export class Fleet extends EventEmitter {
       origin: rec.origin,
       parent: rec.parent ?? null,
       parentByHand: !!rec.parentByHand,
+      successor: rec.successor ?? null,
       subagent: agent
         ? { name: agent.name, answerWaiting: host === "subagent" && !!pooled?.answerWaiting }
         : null,
@@ -3376,13 +3377,28 @@ export class Fleet extends EventEmitter {
    * closing `from` then takes none of them with it. Theirs is a parent by
    * hand from here on, a grouping rather than a run their parent made, so one
    * that stops is not shown closed and the fleet does not link it again.
+   * And `to` is its successor: from here on an agent's message to `from` goes
+   * to `to` (`heir`), so nothing wakes a replaced session by its old id.
    */
   async handOver(from: string, to: string): Promise<string[]> {
     if (!getSessionRecord(to)) throw new FleetError(404, `no session ${to}`);
+    if (getSessionRecord(from)?.successor !== to) updateSessionRecord(from, { successor: to });
     const moved = this.startedBy(from).filter((id) => id !== to);
     for (const id of moved) updateSessionRecord(id, { parent: to, parentByHand: true });
-    if (moved.length) await this.tick();
+    await this.tick();
     return moved;
+  }
+
+  /** The session that has taken over from `id`, following each handover to
+   *  the last: `id` itself when none has. */
+  heir(id: string): string {
+    const seen = new Set([id]);
+    let at = id;
+    for (let next = getSessionRecord(at)?.successor; next && !seen.has(next); next = getSessionRecord(at)?.successor) {
+      seen.add(next);
+      at = next;
+    }
+    return at;
   }
 
   /** The sessions `id` started, at any depth, still open: what closing it takes with it. */

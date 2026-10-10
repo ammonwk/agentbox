@@ -63,8 +63,7 @@ import { loadTurnState, saveTurnState } from "../core/readercache";
 import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
-import { agentSentMark } from "../core/sent";
-import { chatterRefusal, countSend, limitRefusal, wakeRefusal } from "../core/sendguard";
+import { sendAsAgent } from "../core/sendguard";
 import { SendReceiptConflict, sendReceipt, submitWithReceipt } from "../core/send-receipts";
 import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
@@ -750,32 +749,26 @@ const router = new Router(mapError)
     const fromSession =
       (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
       (b.from === "agent" && callerPid ? fleet.callerOf(callerPid) : null);
-    const body = b.from === "agent" ? `${agentSentMark(fromSession)} ${text}` : text;
     // An agent's message is refused, before anything is typed or resumed, when
-    // it would wake a cold or stopped session unasked or is one too many
-    // (src/core/sendguard.ts). Yours never is.
+    // it would wake a cold or stopped session unasked or is one too many, and
+    // one to a session another has taken over goes to that one
+    // (src/core/sendguard.ts). Yours never is, and goes where you send it.
     if (b.from === "agent") {
-      const now = Date.now();
-      const to = fleet.get(params.id!);
-      const refusal = limitRefusal(to, now) ?? (b.wake === true ? null : wakeRefusal(to, now)) ?? chatterRefusal(fromSession, to.id, now);
-      if (refusal) throw new HttpError(409, refusal);
-      // Asked to wake it: a stopped one is resumed with the message. Counted
-      // once it is in, so one that could not be delivered costs nothing.
-      await fleet.send(to.id, body, undefined, b.wake === true);
-      countSend(fromSession, to.id, now);
-      return json(null);
+      const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true }, Date.now());
+      if ("refused" in sent) throw new HttpError(409, sent.refused);
+      return json(sent);
     }
     if (b.sendId !== undefined) {
       const id = requireString(b, "sendId");
       if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, "invalid send ID");
       try {
-        return json(await submitWithReceipt(params.id!, id, "send", body, (attempt) => fleet.send(params.id!, body, attempt)));
+        return json(await submitWithReceipt(params.id!, id, "send", text, (attempt) => fleet.send(params.id!, text, attempt)));
       } catch (e) {
         if (e instanceof SendReceiptConflict) throw new HttpError(409, e.message);
         throw e;
       }
     }
-    await fleet.send(params.id!, body);
+    await fleet.send(params.id!, text);
     return json(null);
   })
   .add("POST", "/api/sessions/:id/submissions", async ({ req, params }) => {

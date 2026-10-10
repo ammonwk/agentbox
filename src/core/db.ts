@@ -353,6 +353,13 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (repo, number)
   );
   `,
+  // 23 — the session that took over from this one (a schedule's same-session
+  // replacement, `Fleet.handOver`): an agent's message to it goes there. And
+  // the one a schedule replaced mid-turn, closed once that turn is over.
+  `
+  ALTER TABLE sessions ADD COLUMN successor TEXT;
+  ALTER TABLE schedules ADD COLUMN retiring TEXT;
+  `,
 ];
 
 function migrate(d: Database) {
@@ -460,6 +467,8 @@ export interface SessionRecord {
   /** Why it is parked, when that is not idleness: its process was lost in a
    *  crash while it waited on you (src/core/recovery.ts). */
   parkedWhy?: string | null;
+  /** The session that took over from it (`Fleet.handOver`); null for none. */
+  successor?: string | null;
 }
 
 type SessionRow = {
@@ -469,7 +478,7 @@ type SessionRow = {
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
-  parent_by_hand: number | null;
+  parent_by_hand: number | null; successor: string | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -497,6 +506,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     parkedAt: r.parked_at ?? null,
     parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
     parkedWhy: r.parked_why ?? null,
+    successor: r.successor ?? null,
   };
 }
 
@@ -524,6 +534,7 @@ const RECORD_COLUMNS = {
   parkedAt: "parked_at",
   parkedMates: "parked_mates",
   parkedWhy: "parked_why",
+  successor: "successor",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;
@@ -619,7 +630,7 @@ export function listClosedRecords(): SessionRecord[] {
 type ScheduleRow = {
   id: string; rule: string; spec: string; label: string | null; enabled: number; next_at: number | null;
   created_at: number; last_run_at: number | null; last_session_id: string | null; last_error: string | null;
-  note_cmd: string | null; same_session: number; fresh_over: number | null;
+  note_cmd: string | null; same_session: number; fresh_over: number | null; retiring: string | null;
 };
 
 function rowToSchedule(r: ScheduleRow): Schedule {
@@ -637,6 +648,7 @@ function rowToSchedule(r: ScheduleRow): Schedule {
     noteCmd: r.note_cmd,
     sameSession: r.same_session === 1,
     freshOver: r.fresh_over,
+    retiring: r.retiring ?? null,
   };
 }
 
@@ -653,6 +665,7 @@ const SCHEDULE_COLUMNS = {
   noteCmd: "note_cmd",
   sameSession: "same_session",
   freshOver: "fresh_over",
+  retiring: "retiring",
 } as const satisfies Record<Exclude<keyof Schedule, "id">, string>;
 
 type ScheduleKey = keyof typeof SCHEDULE_COLUMNS;

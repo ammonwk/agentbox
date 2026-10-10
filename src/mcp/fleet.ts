@@ -151,8 +151,8 @@ export async function runMcp(base: string): Promise<void> {
       inputSchema: { id: z.string(), text: z.string().min(1), wake: z.boolean().optional() },
     },
     async ({ id, text: body, wake }) => {
-      await api("POST", `/api/sessions/${id}/send`, { text: body, from: "agent", wake: wake === true, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
-      return text(`sent to ${id}`);
+      const sent = await api<{ to: string } | null>("POST", `/api/sessions/${id}/send`, { text: body, from: "agent", wake: wake === true, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+      return text(sent && sent.to !== id ? `sent to ${sent.to}: it has taken over from ${id}, so send to it from now on` : `sent to ${id}`);
     },
   );
 

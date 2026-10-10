@@ -188,6 +188,7 @@ export async function show(api: Api, args: string[]): Promise<number> {
       ["id", x.id],
       ["title", x.label ?? x.title],
       ["status", `${x.status} — ${x.attention.reason}`],
+      ["replaced by", x.successor],
       ["parent", x.parent],
       ["children", sessions.filter((c) => c.parent === x.id).map((c) => c.id).join(" ") || null],
       ["host", x.host + (x.tmux ? ` (${x.tmux})` : "") + (x.pid ? ` pid ${x.pid}` : "")],
@@ -354,7 +355,12 @@ export async function send(api: Api, args: string[]): Promise<number> {
   if (!text) throw new Error("nothing to send");
   // Agents are who use this; you type in the app or the terminal. Voice mode
   // is the exception: what it sends is you, spoken (AGENTBOX_SEND_AS=you).
-  await api("POST", `/api/sessions/${ids[0]}/send`, process.env.AGENTBOX_SEND_AS === "you" ? { text } : { text, from: "agent", wake, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+  if (process.env.AGENTBOX_SEND_AS === "you") {
+    await api("POST", `/api/sessions/${ids[0]}/send`, { text });
+    return 0;
+  }
+  const sent = await api<{ to: string } | null>("POST", `/api/sessions/${ids[0]}/send`, { text, from: "agent", wake, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+  if (sent && sent.to !== ids[0]) console.log(`sent to ${sent.to}: it has taken over from ${ids[0]}, so send to it from now on`);
   return 0;
 }
 

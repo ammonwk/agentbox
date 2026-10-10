@@ -26,8 +26,11 @@
  * session the schedule started last, so its prompt cache stays warm between
  * notes, until that one is gone or has grown past `freshOver`: then a new one
  * takes over and the old one is closed, so it never becomes one huge cold
- * context. A session mid-turn is never typed into or closed: that time is
- * skipped, and the command says what is still true the next time.
+ * context. An agent's message to the old one goes to the new one
+ * (`Fleet.heir`). A session mid-turn is never typed into or closed: that time
+ * is skipped, and the command says what is still true the next time; one that
+ * was replaced and then got busy before it could be closed is closed once its
+ * turn is over (`retire`).
  */
 
 import { existsSync } from "node:fs";
@@ -128,6 +131,7 @@ export class Scheduler {
       lastRunAt: null,
       lastSessionId: null,
       lastError: null,
+      retiring: null,
       ...extras,
     };
     insertSchedule(s);
@@ -206,6 +210,7 @@ export class Scheduler {
     try {
       const now = this.now();
       for (const s of listSchedules()) {
+        if (s.retiring && s.lastSessionId && !this.atWork(s.retiring)) await this.retire(s.id, s.retiring, s.lastSessionId);
         if (!s.enabled || s.nextAt === null || s.nextAt > now) continue;
         // Not waited for: its command may take a while, and the rest are due too.
         if (s.noteCmd || s.sameSession) void this.come(s, now, false).catch((e) => console.error(`agentbox: schedule ${s.id}:`, e));
@@ -378,19 +383,32 @@ export class Scheduler {
       : undefined;
     const sid = await this.fire(s, now, early, note, follows);
     if (!sid) return { quiet: this.get(s.id).lastError ?? "it did not start" };
-    if (closing && !this.atWork(last.id)) {
-      try {
-        await this.fleet.handOver(last.id, sid);
-        // And what it asked the user: the answers go to the one that follows.
-        moveCards(last.id, sid);
-        // And the pull requests it said it has.
-        movePrClaims(last.id, sid);
-        await this.fleet.close(last.id, true, true);
-      } catch (e) {
-        console.error(`agentbox: schedule ${s.id}: closing ${last.id}:`, e);
-      }
-    }
+    if (closing) await this.retire(s.id, last.id, sid);
     return { sessionId: sid };
+  }
+
+  /**
+   * `from` is replaced by `to`: handed over at once, mid-turn or not, so
+   * what it started, what it asked the user, the pull requests it said it has
+   * and any agent's message to it go to `to` from now on. It is closed alone
+   * once it is not at work; until then it is the schedule's `retiring`, and
+   * each tick tries again, handing over whatever its last turn added.
+   */
+  private async retire(scheduleId: string, from: string, to: string): Promise<void> {
+    try {
+      await this.fleet.handOver(from, to);
+      moveCards(from, to);
+      movePrClaims(from, to);
+      const s = this.session(from);
+      if (s && s.status !== "closed" && this.atWork(from)) {
+        updateSchedule(scheduleId, { retiring: from });
+        return;
+      }
+      if (s && s.status !== "closed") await this.fleet.close(from, true, true);
+      updateSchedule(scheduleId, { retiring: null });
+    } catch (e) {
+      console.error(`agentbox: schedule ${scheduleId}: retiring ${from}:`, e);
+    }
   }
 
   private session(id: string): Session | null {

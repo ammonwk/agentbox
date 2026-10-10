@@ -14,8 +14,15 @@
  * context. Of 185 sender→reader pairs in this machine's transcripts, 169 never
  * passed two in an hour and 175 never passed three; the few that reached five
  * and six were coordinators narrating to workers.
+ *
+ * Taken over: a session another has taken over from (a schedule's
+ * replacement, `Fleet.handOver`) is not who an agent means any more, and
+ * waking it would give its job two sessions. The message goes to its heir,
+ * told who it was for, and the refusals above are its heir's.
  */
 
+import type { Fleet } from "./fleet";
+import { agentSentMark } from "./sent";
 import type { Session } from "./types";
 
 export const CHATTER_MAX = 3;
@@ -99,4 +106,28 @@ export function chatterRefusal(from: string | null, to: string, now: number): st
 /** A message from `from` reached `to`. */
 export function countSend(from: string | null, to: string, now: number): void {
   sent.set(pair(from, to), [...recent(pair(from, to), now), now]);
+}
+
+/**
+ * An agent's message to `id` (`from` is the sending session, when known):
+ * delivered to `id`, or to whoever has taken over from it, and counted; or
+ * refused before anything is typed or resumed. `wake`: waking it is the
+ * point, and a stopped one is resumed with the message.
+ */
+export async function sendAsAgent(
+  fleet: Pick<Fleet, "get" | "heir" | "send">,
+  id: string,
+  text: string,
+  opts: { from: string | null; wake: boolean },
+  now: number,
+): Promise<{ to: string } | { refused: string }> {
+  const meant = fleet.get(id).id;
+  const to = fleet.get(fleet.heir(meant));
+  const refusal = limitRefusal(to, now) ?? (opts.wake ? null : wakeRefusal(to, now)) ?? chatterRefusal(opts.from, to.id, now);
+  if (refusal) return { refused: to.id === meant ? refusal : `${meant} has been taken over by ${to.id}. ${refusal}` };
+  const told = to.id === meant ? "" : `[sent to ${meant}, which you took over from] `;
+  // Counted once it is in, so one that could not be delivered costs nothing.
+  await fleet.send(to.id, `${agentSentMark(opts.from)} ${told}${text}`, undefined, opts.wake);
+  countSend(opts.from, to.id, now);
+  return { to: to.id };
 }
