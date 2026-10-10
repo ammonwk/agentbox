@@ -7,7 +7,10 @@
  *   right (→) — answer it: a sheet with a text box. Empty, on a card that
  *               only wanted seeing, means "seen".
  *   left  (←) — keep it for later: to the back of the stack and the Later list.
- *   up    (↑) — the long version, from which the same two work.
+ *   up    (↑) — the long version, from which the others work.
+ *   down  (↓) — approve: the asker's recommendation is your answer. On a card
+ *               that only wanted seeing, seen. A decision with no
+ *               recommendation has nothing to approve, and springs back.
  * The last one can be taken back (u): an answer is held a few seconds before
  * it is typed into the session that asked.
  */
@@ -27,6 +30,15 @@ const UNDO_SHOWN_MS = 8_000;
 /** How far a card is dragged before letting go means it. */
 const SWIPE_X = 84;
 const SWIPE_UP = 72;
+const SWIPE_DOWN = 72;
+/** What approving a recommendation types into the session that asked. */
+const APPROVE = "Go with your recommendation.";
+
+/** What a down swipe does to this card: approve its recommendation, mark it seen, or nothing. */
+function downOf(card: Card): "approve" | "seen" | null {
+  if (card.kind !== "decision") return "seen";
+  return card.recommend ? "approve" : null;
+}
 
 const KIND: Record<Card["kind"], string> = { decision: "Decision", merged: "Merged", note: "Note" };
 
@@ -68,8 +80,15 @@ export function Review({ state }: { state: AppState }) {
 
   const [answering, setAnswering] = useState<Card | null>(null);
   const [reading, setReading] = useState<Card | null>(null);
-  const [leaving, setLeaving] = useState<{ id: number; to: "left" | "right" } | null>(null);
-  const [last, setLast] = useState<{ card: Card; what: "answered" | "seen" | "later"; at: number } | null>(null);
+  const [leaving, setLeaving] = useState<{ id: number; to: "left" | "right" | "down" } | null>(null);
+  const [last, setLast] = useState<{ card: Card; what: "answered" | "approved" | "seen" | "later"; at: number } | null>(null);
+  /** Said for a moment when a gesture had nothing to do. */
+  const [nothing, setNothing] = useState<string | null>(null);
+  useEffect(() => {
+    if (!nothing) return;
+    const t = setTimeout(() => setNothing(null), 2600);
+    return () => clearTimeout(t);
+  }, [nothing]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -79,12 +98,13 @@ export function Review({ state }: { state: AppState }) {
   }, [last]);
 
   /** Do it: the card leaves in the gesture's direction, then is gone from the stack. */
-  const act = useCallback((card: Card, what: "answered" | "seen" | "later", text = "") => {
+  const act = useCallback((card: Card, what: "answered" | "approved" | "seen" | "later", text = "") => {
     setError(null);
+    setNothing(null);
     setReading(null);
     setAnswering(null);
     const onStack = card.state === "open" || card.state === "later";
-    if (onStack) setLeaving({ id: card.id, to: what === "later" ? "left" : "right" });
+    if (onStack) setLeaving({ id: card.id, to: what === "later" ? "left" : what === "answered" ? "right" : "down" });
     const patch: Partial<Card> = what === "later" ? { state: "later", laterAt: Date.now() } : { state: "answered", answer: text, answeredAt: Date.now() };
     setTimeout(
       () => {
@@ -121,6 +141,17 @@ export function Review({ state }: { state: AppState }) {
     });
   }, [last]);
 
+  /** Down: the recommendation is the answer, or the card is seen; a decision without one stays. */
+  const approve = useCallback(
+    (card: Card) => {
+      const does = downOf(card);
+      if (does === "approve") act(card, "approved", APPROVE);
+      else if (does === "seen") act(card, "seen");
+      else setNothing("This one has no recommendation to approve: answer it, or keep it for later.");
+    },
+    [act],
+  );
+
   const top = tab === "stack" ? (stack.find((c) => c.id !== leaving?.id) ?? null) : null;
   const shownTop = stack[0] ?? null;
 
@@ -136,13 +167,14 @@ export function Review({ state }: { state: AppState }) {
       else if (e.key === "ArrowRight") setAnswering(card);
       else if (e.key === "ArrowLeft") act(card, "later");
       else if (e.key === "ArrowUp" && !reading) setReading(card);
+      else if (e.key === "ArrowDown" && !reading) approve(card);
       else return;
       e.preventDefault();
       e.stopPropagation();
     };
     addEventListener("keydown", onKey, true);
     return () => removeEventListener("keydown", onKey, true);
-  }, [answering, reading, tab, shownTop, act, undo]);
+  }, [answering, reading, tab, shownTop, act, undo, approve]);
 
   return (
     <div className="review">
@@ -193,15 +225,20 @@ export function Review({ state }: { state: AppState }) {
                       onRight={() => setAnswering(c)}
                       onLeft={() => act(c, "later")}
                       onUp={() => setReading(c)}
+                      onDown={() => approve(c)}
                     />
                   );
                 })}
             </div>
-            <p className="review-count" aria-live="polite">
-              {stack.length === 1 ? "The last one" : `1 of ${stack.length}`}
-              {shownTop?.state === "later" ? " · kept for later" : ""}
+            <p className={`review-count${nothing ? " review-nothing" : ""}`} aria-live="polite">
+              {nothing ?? (
+                <>
+                  {stack.length === 1 ? "The last one" : `1 of ${stack.length}`}
+                  {shownTop?.state === "later" ? " · kept for later" : ""}
+                </>
+              )}
             </p>
-            <Actions card={top ?? shownTop!} onLater={(c) => act(c, "later")} onRead={setReading} onAnswer={setAnswering} />
+            <Actions card={top ?? shownTop!} onLater={(c) => act(c, "later")} onRead={setReading} onApprove={approve} onAnswer={setAnswering} />
           </>
         )
       ) : (
@@ -211,7 +248,7 @@ export function Review({ state }: { state: AppState }) {
       {last ? (
         <div className="review-undo" role="status">
           <span>
-            {last.what === "later" ? "Kept for later" : last.what === "seen" ? "Marked seen" : "Answer on its way"}
+            {last.what === "later" ? "Kept for later" : last.what === "seen" ? "Marked seen" : last.what === "approved" ? "Recommendation approved" : "Answer on its way"}
             <span className="faint"> · {last.card.title}</span>
           </span>
           <Button size="sm" icon={Icon.undo} onClick={undo}>
@@ -226,6 +263,7 @@ export function Review({ state }: { state: AppState }) {
           state={state}
           onClose={() => setReading(null)}
           onLater={(c) => act(c, "later")}
+          onApprove={approve}
           onAnswer={setAnswering}
         />
       ) : null}
@@ -235,7 +273,22 @@ export function Review({ state }: { state: AppState }) {
 }
 
 /** The three gestures as buttons: for a desk, and for when a swipe misfires. */
-function Actions({ card, onLater, onRead, onAnswer, long }: { card: Card; onLater: (c: Card) => void; onRead?: (c: Card) => void; onAnswer: (c: Card) => void; long?: boolean }) {
+function Actions({
+  card,
+  onLater,
+  onRead,
+  onApprove,
+  onAnswer,
+  long,
+}: {
+  card: Card;
+  onLater: (c: Card) => void;
+  onRead?: (c: Card) => void;
+  onApprove: (c: Card) => void;
+  onAnswer: (c: Card) => void;
+  long?: boolean;
+}) {
+  const does = downOf(card);
   return (
     <div className={`review-actions${long ? " review-actions-long" : ""}`}>
       <button type="button" className="review-act review-act-later" onClick={() => onLater(card)} title="Keep it for later (←)" disabled={card.state === "later" && long}>
@@ -248,6 +301,16 @@ function Actions({ card, onLater, onRead, onAnswer, long }: { card: Card; onLate
           <span>More</span>
         </button>
       ) : null}
+      <button
+        type="button"
+        className="review-act review-act-approve"
+        onClick={() => onApprove(card)}
+        aria-disabled={does === null || undefined}
+        title={does === "approve" ? "Approve the recommendation (↓)" : does === "seen" ? "Seen, fine (↓)" : "It has no recommendation to approve"}
+      >
+        <Icon.check size={18} />
+        <span>{does === "seen" ? "Seen" : "Approve"}</span>
+      </button>
       <button type="button" className="review-act review-act-answer" onClick={() => onAnswer(card)} title="Answer it (→)">
         <span>{card.kind === "decision" ? "Answer" : "Respond"}</span>
         <Icon.chevronRight size={18} />
@@ -306,14 +369,16 @@ function SwipeCard({
   onLeft,
   onRight,
   onUp,
+  onDown,
 }: {
   card: Card;
   state: AppState;
   depth: number;
-  leaving: "left" | "right" | null;
+  leaving: "left" | "right" | "down" | null;
   onLeft: () => void;
   onRight: () => void;
   onUp: () => void;
+  onDown: () => void;
 }) {
   const ref = useRef<HTMLElement>(null);
   const drag = useRef<{ x: number; y: number; id: number; moved: boolean } | null>(null);
@@ -325,10 +390,11 @@ function SwipeCard({
     el.style.transition = moving ? "none" : "";
     el.style.transform = dx || dy ? `translate(${dx}px, ${dy}px) rotate(${dx / 28}deg)` : "";
     // Which gesture it is turning into, 0 to 1, for the label that fades in.
-    const up = -dy > Math.abs(dx);
-    el.style.setProperty("--to-right", String(!up && dx > 0 ? Math.min(1, dx / SWIPE_X) : 0));
-    el.style.setProperty("--to-left", String(!up && dx < 0 ? Math.min(1, -dx / SWIPE_X) : 0));
-    el.style.setProperty("--to-up", String(up ? Math.min(1, -dy / SWIPE_UP) : 0));
+    const tall = Math.abs(dy) > Math.abs(dx);
+    el.style.setProperty("--to-right", String(!tall && dx > 0 ? Math.min(1, dx / SWIPE_X) : 0));
+    el.style.setProperty("--to-left", String(!tall && dx < 0 ? Math.min(1, -dx / SWIPE_X) : 0));
+    el.style.setProperty("--to-up", String(tall && dy < 0 ? Math.min(1, -dy / SWIPE_UP) : 0));
+    el.style.setProperty("--to-down", String(tall && dy > 0 ? Math.min(1, dy / SWIPE_DOWN) : 0));
   };
 
   const down = (e: ReactPointerEvent<HTMLElement>) => {
@@ -339,7 +405,7 @@ function SwipeCard({
     const d = drag.current;
     if (!d || d.id !== e.pointerId) return;
     const dx = e.clientX - d.x;
-    const dy = Math.min(0, e.clientY - d.y);
+    const dy = e.clientY - d.y;
     if (!d.moved) {
       if (Math.hypot(dx, dy) < 8) return;
       d.moved = true;
@@ -353,10 +419,11 @@ function SwipeCard({
     drag.current = null;
     if (!d.moved) return;
     const dx = e.clientX - d.x;
-    const dy = Math.min(0, e.clientY - d.y);
+    const dy = e.clientY - d.y;
     place(0, 0, false);
-    if (-dy > Math.abs(dx)) {
+    if (Math.abs(dy) > Math.abs(dx)) {
       if (-dy >= SWIPE_UP) onUp();
+      else if (dy >= SWIPE_DOWN) onDown();
     } else if (dx >= SWIPE_X) onRight();
     else if (dx <= -SWIPE_X) onLeft();
   };
@@ -385,6 +452,9 @@ function SwipeCard({
       <span className="card-hint card-hint-up" aria-hidden="true">
         Long version
       </span>
+      <span className={`card-hint card-hint-down${downOf(card) ? "" : " card-hint-none"}`} aria-hidden="true">
+        {downOf(card) === "approve" ? "Approve the recommendation" : downOf(card) === "seen" ? "Seen" : "No recommendation to approve"}
+      </span>
       <div className="card-kind">
         <span className="card-kind-chip">{KIND[card.kind]}</span>
         {card.state === "later" ? <span className="faint">kept for later</span> : null}
@@ -400,7 +470,21 @@ function SwipeCard({
 }
 
 /** The long, extra clear version: the whole card, scrolling, with the same two ways out. */
-function LongView({ card, state, onClose, onLater, onAnswer }: { card: Card; state: AppState; onClose: () => void; onLater: (c: Card) => void; onAnswer: (c: Card) => void }) {
+function LongView({
+  card,
+  state,
+  onClose,
+  onLater,
+  onApprove,
+  onAnswer,
+}: {
+  card: Card;
+  state: AppState;
+  onClose: () => void;
+  onLater: (c: Card) => void;
+  onApprove: (c: Card) => void;
+  onAnswer: (c: Card) => void;
+}) {
   const [long, setLong] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
@@ -463,7 +547,7 @@ function LongView({ card, state, onClose, onLater, onAnswer }: { card: Card; sta
           <div className="review-long-text">{failed ? <p className="error">{failed}</p> : long === null ? <p className="faint">Loading…</p> : <Markdown text={long} />}</div>
         ) : null}
       </div>
-      {open ? <Actions card={card} onLater={onLater} onAnswer={onAnswer} long /> : null}
+      {open ? <Actions card={card} onLater={onLater} onApprove={onApprove} onAnswer={onAnswer} long /> : null}
     </div>
   );
 }
@@ -484,7 +568,7 @@ function AnswerSheet({ card, onClose, onSend }: { card: Card; onClose: () => voi
         }}
       >
         {card.recommend ? (
-          <button type="button" className="review-take" onClick={() => setText("Go with your recommendation.")}>
+          <button type="button" className="review-take" onClick={() => setText(APPROVE)}>
             <Icon.check size={13} /> Go with the recommendation
           </button>
         ) : null}
