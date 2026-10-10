@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { place, type AccountState } from "../balancer";
+import { elsewhere, place, type AccountState } from "../balancer";
 import type { BalancerSettings, UsageWindow } from "../types";
 
 const M = 60_000;
@@ -113,10 +113,35 @@ test("an account that cannot finish its weekly at half load is loaded as far as 
   expect(rush.accountId).toBe("B");
 });
 
-test("an account without the weekly left for a session's claim is passed over, and one whose week has not started goes last", () => {
+test("an account with any weekly left takes one session more than fits, then no other; one whose week has not started goes last", () => {
   const b = acct("B", { short: 5, weekly: 25, weeklyResetsIn: 5 * D });
-  expect(run([acct("A", { short: 0, weekly: 98, weeklyResetsIn: 38 * H }), b]).accountId).toBe("B");
+  // 2 points left and a session claims 3: it goes there, to use them up.
+  expect(run([acct("A", { short: 0, weekly: 98, weeklyResetsIn: 38 * H }), b]).accountId).toBe("A");
+  // With that session's claim on it the account is spoken for.
+  const taken = run([acct("A", { short: 0, weekly: 98, weeklyResetsIn: 38 * H, claims: [{ outstanding: 3, since: NOW }] }), b]);
+  expect(taken.accountId).toBe("B");
+  expect(taken.candidates.find((c) => c.accountId === "A")!.reason).toContain("weekly is spoken for");
   const fresh = acct("C", { short: 0, weekly: 0 });
   fresh.windows[1]!.resetsAt = null;
   expect(run([fresh, b]).accountId).toBe("B");
+});
+
+test("a claim measured from sessions like it replaces the model's listed one", () => {
+  const a = acct("A", { short: 30, weekly: 50, weeklyResetsIn: 38 * H });
+  const b = acct("B", { short: 5, weekly: 25, weeklyResetsIn: 5 * D });
+  // Listed, a session needs 12.5 of a window and A has room; measured at 6 points it needs 25 and does not.
+  expect(place({ provider: "claude", accounts: [a, b], settings, now: NOW }).accountId).toBe("A");
+  const p = place({ provider: "claude", accounts: [a, b], settings, now: NOW, claim: 6 });
+  expect(p.claim).toBe(6);
+  expect(p.accountId).toBe("B");
+});
+
+test("a session cut off at its account's limit goes to the balancer's next account that can take one, or nowhere", () => {
+  // A is where it stopped: its reading is a minute stale and still looks open, and it is first to reset.
+  const a = acct("A", { short: 96, weekly: 60, weeklyResetsIn: 38 * H });
+  const b = acct("B", { short: 5, weekly: 25, weeklyResetsIn: 5 * D });
+  const c = acct("C", { short: 5, weekly: 25, weeklyResetsIn: 3 * D });
+  expect(elsewhere(run([a, b, c]), "A")!.accountId).toBe("C");
+  const full = acct("B", { short: 100, weekly: 25, weeklyResetsIn: 5 * D });
+  expect(elsewhere(run([a, full]), "A")).toBeNull();
 });

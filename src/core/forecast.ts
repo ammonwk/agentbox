@@ -29,6 +29,7 @@
  */
 
 import { attributionsSince, tokenSampleAt, tokenSamplesAfter, tokenSamplesSince } from "./db";
+import { familyOf } from "./claim";
 import type { ForecastReport, ProviderId } from "./types";
 
 const MIN = 60_000;
@@ -110,10 +111,67 @@ interface Cell {
 
 export type ForecastTable = Map<string, Cell>;
 
+/** What stretches went on to spend from their start, summed: per provider,
+ *  model family and whether it was the session's first, and per provider
+ *  under family `*`. */
+export type StartTable = Map<string, { sum: number; stretches: number }>;
+
+const startKey = (provider: string, family: string, first: boolean): string => `${provider}|${family}|${first ? 1 : 0}`;
+
 export interface SessionSeries {
   provider: string;
   startedAt: number;
   samples: Sample[];
+  /** For `fitStarts`: its model, and whether the balancer placed it (a session
+   *  begun by hand in a terminal is not what a placed one looks like). */
+  model?: string | null;
+  placed?: boolean;
+}
+
+/** Each finished stretch of `s`: its samples' range, what the session had
+ *  spent before it, and what it spent in all. */
+function* stretchesOf(s: SessionSeries, until: number): Generator<{ i: number; j: number; base: number; final: number }> {
+  const xs = s.samples;
+  let i = 0;
+  while (i < xs.length) {
+    let j = i;
+    while (j + 1 < xs.length && xs[j + 1]!.at - xs[j]!.at <= STRETCH_GAP_MS) j++;
+    const base = baseOf(xs, i, s.startedAt);
+    const final = xs[j]!.cost - base;
+    // A cumulative count that went down is a transcript that was rewritten.
+    if (xs[j]!.at + STRETCH_GAP_MS < until && final >= 0) yield { i, j, base, final };
+    i = j + 1;
+  }
+}
+
+/**
+ * What a stretch spends from its start, for a claim: a session's first
+ * stretch when the balancer placed it, and every later one (a wake) whoever
+ * started it.
+ */
+export function fitStarts(sessions: SessionSeries[], until: number): StartTable {
+  const table: StartTable = new Map();
+  for (const s of sessions) {
+    for (const { i, final } of stretchesOf(s, until)) {
+      const first = i === 0 && s.samples[0]!.at - s.startedAt < FRESH_MS;
+      if (first && !s.placed) continue;
+      for (const key of [startKey(s.provider, familyOf(s.model), first), startKey(s.provider, "*", first)]) {
+        const cell = table.get(key) ?? { sum: 0, stretches: 0 };
+        cell.sum += final;
+        cell.stretches++;
+        table.set(key, cell);
+      }
+    }
+  }
+  return table;
+}
+
+/** Cost-equivalent a stretch on `provider` is expected to spend from its
+ *  start: the average of `model`'s family, or with `model` absent of every
+ *  model's. Null where too few have run to say. */
+export function startCost(table: StartTable, provider: string, first: boolean, model?: string | null): number | null {
+  const cell = table.get(startKey(provider, model === undefined ? "*" : familyOf(model), first));
+  return cell && cell.stretches >= MIN_STRETCHES ? cell.sum / cell.stretches : null;
 }
 
 /**
@@ -126,36 +184,27 @@ export function fitForecast(sessions: SessionSeries[], until: number): ForecastT
   const table: ForecastTable = new Map();
   for (const s of sessions) {
     const xs = s.samples;
-    let i = 0;
-    while (i < xs.length) {
-      let j = i;
-      while (j + 1 < xs.length && xs[j + 1]!.at - xs[j]!.at <= STRETCH_GAP_MS) j++;
-      const base = baseOf(xs, i, s.startedAt);
-      const final = xs[j]!.cost - base;
-      // A cumulative count that went down is a transcript that was rewritten.
-      if (xs[j]!.at + STRETCH_GAP_MS < until && final >= 0) {
-        const seen = new Set<string>();
-        let at = i; // the newest sample at or before t
-        let old = i; // the newest at or before t − RECENT_MS, when there is one
-        for (let t = xs[i]!.at; t <= xs[j]!.at + STRETCH_GAP_MS; t += STEP_MS) {
-          while (at < j && xs[at + 1]!.at <= t) at++;
-          while (old < j && xs[old + 1]!.at <= t - RECENT_MS) old++;
-          const soFar = Math.max(0, xs[at]!.cost - base);
-          const before = xs[old]!.at <= t - RECENT_MS ? xs[old]!.cost - base : 0;
-          const reading = { recent: Math.max(0, soFar - before), soFar };
-          for (const key of [keyOf(s.provider, reading), keyOf("*", reading)]) {
-            let cell = table.get(key);
-            if (!cell) table.set(key, (cell = { sum: 0, readings: 0, stretches: 0 }));
-            cell.sum += Math.max(0, final - soFar);
-            cell.readings++;
-            if (!seen.has(key)) {
-              seen.add(key);
-              cell.stretches++;
-            }
+    for (const { i, j, base, final } of stretchesOf(s, until)) {
+      const seen = new Set<string>();
+      let at = i; // the newest sample at or before t
+      let old = i; // the newest at or before t − RECENT_MS, when there is one
+      for (let t = xs[i]!.at; t <= xs[j]!.at + STRETCH_GAP_MS; t += STEP_MS) {
+        while (at < j && xs[at + 1]!.at <= t) at++;
+        while (old < j && xs[old + 1]!.at <= t - RECENT_MS) old++;
+        const soFar = Math.max(0, xs[at]!.cost - base);
+        const before = xs[old]!.at <= t - RECENT_MS ? xs[old]!.cost - base : 0;
+        const reading = { recent: Math.max(0, soFar - before), soFar };
+        for (const key of [keyOf(s.provider, reading), keyOf("*", reading)]) {
+          let cell = table.get(key);
+          if (!cell) table.set(key, (cell = { sum: 0, readings: 0, stretches: 0 }));
+          cell.sum += Math.max(0, final - soFar);
+          cell.readings++;
+          if (!seen.has(key)) {
+            seen.add(key);
+            cell.stretches++;
           }
         }
       }
-      i = j + 1;
     }
   }
   return table;
@@ -202,6 +251,7 @@ export interface ForecastInput {
  */
 export class Forecaster {
   private table: ForecastTable = new Map();
+  private starts: StartTable = new Map();
   private fittedAt = 0;
   private rates = new Map<string, { at: number; perCost: number | null }>();
   private memo = new Map<string, { at: number; points: number | null }>();
@@ -211,7 +261,31 @@ export class Forecaster {
     this.fittedAt = now;
     const { sessions, until } = history(now - HISTORY_MS);
     this.table = fitForecast(sessions, until);
+    this.starts = fitStarts(sessions, until);
     this.memo.clear();
+  }
+
+  /** Weekly points per cost-equivalent on the median of `accountIds` that has a price. */
+  private medianRate(accountIds: string[], now: number): number | null {
+    const rates = accountIds
+      .map((id) => this.rate(id, now))
+      .filter((r): r is number => r !== null)
+      .sort((a, b) => a - b);
+    return rates.length ? rates[Math.floor((rates.length - 1) / 2)]! : null;
+  }
+
+  /**
+   * The claim of a session about to start (`first`) or wake: weekly points
+   * such stretches of work have gone on to use — those of `model`'s family,
+   * or of the whole provider when `model` is left out — at the price of the
+   * provider's median account (`accountIds`: the claim is made before an
+   * account is chosen). Null where too few have run, or nothing has a price.
+   */
+  claim(s: { provider: ProviderId; model?: string | null; first: boolean; accountIds: string[] }, now: number): number | null {
+    this.fit(now);
+    const cost = startCost(this.starts, s.provider, s.first, s.model);
+    const perCost = cost === null ? null : this.medianRate(s.accountIds, now);
+    return cost === null || perCost === null ? null : Math.round(cost * perCost * 100) / 100;
   }
 
   /**
@@ -270,12 +344,7 @@ export class Forecaster {
     this.fit(now);
     const providers: ForecastReport["providers"] = [];
     for (const provider of [...new Set(accounts.map((a) => a.provider))]) {
-      const rates = accounts
-        .filter((a) => a.provider === provider)
-        .map((a) => this.rate(a.id, now))
-        .filter((r): r is number => r !== null)
-        .sort((a, b) => a - b);
-      const perCost = rates.length ? rates[Math.floor((rates.length - 1) / 2)]! : null;
+      const perCost = this.medianRate(accounts.filter((a) => a.provider === provider).map((a) => a.id), now);
       const cells: ForecastReport["providers"][number]["cells"] = [];
       for (let r = 0; r <= RECENT_EDGES.length; r++) {
         for (let c = 0; c <= SO_FAR_EDGES.length; c++) {
@@ -299,7 +368,7 @@ function history(since: number): { sessions: SessionSeries[]; until: number } {
   let cur: (SessionSeries & { id: string }) | null = null;
   for (const r of tokenSamplesSince(since)) {
     if (!cur || cur.id !== r.sessionId) {
-      cur = { id: r.sessionId, provider: r.provider, startedAt: r.startedAt, samples: [] };
+      cur = { id: r.sessionId, provider: r.provider, model: r.model, placed: !!r.placed, startedAt: r.startedAt, samples: [] };
       sessions.push(cur);
     }
     cur.samples.push({ at: r.at, cost: r.costEquiv });

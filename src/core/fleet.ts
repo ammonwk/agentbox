@@ -23,8 +23,8 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { owners } from "./accounts/homes";
-import { place, type AccountState } from "./balancer";
-import { claimFor } from "./claim";
+import { elsewhere, place, type AccountState } from "./balancer";
+import { claimFor, listedClaim } from "./claim";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import { Forecaster } from "./forecast";
 import {
@@ -124,8 +124,8 @@ import type {
   AccountUsage,
   AskAnswer,
   AskQuestion,
-  BalancerSettings,
   Btw,
+  Candidate,
   ClaimView,
   Placement,
   PromptHistoryEntry,
@@ -333,6 +333,9 @@ export class Fleet extends EventEmitter {
   private movable = new Set<ProviderId>();
   /** Limit hits already acted on (`continueStalled`): session → the hit's time. */
   private stallsSeen = new Map<string, number>();
+  /** A session is being moved off an account at its limit; one at a time, so
+   *  each move is placed knowing the one before it. */
+  private hopping = false;
   /** Sessions nudged past an error (`nudgeErrored`): the spell's last nudge
    *  and how many it has had. A spell ends an hour after its last nudge, or
    *  when a turn ends cleanly. */
@@ -621,7 +624,7 @@ export class Fleet extends EventEmitter {
     // Every transcript gets a record; changed ones get their record refreshed.
     for (const [path, t] of this.tracked) {
       if (!t.facts || this.ignored.has(path)) continue;
-      const id = this.recordFor(t, settings.balancer, now);
+      const id = this.recordFor(t, now);
       if (changed.has(path)) {
         this.persistFacts(id, t, now);
         this.collectMetrics(id, t, now);
@@ -693,10 +696,17 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * A session that stopped at its account's 5-hour limit carries on where it
-   * is: a minute after the window resets it is told to go on. It never moves
-   * to another account by itself — a move throws away the prompt cache, so
-   * that is yours to choose (the limit banner). A weekly limit is left to you.
+   * A session that stopped at its account's limit is moved, once in its
+   * life, to another account that can take it, and told to carry on: the
+   * balancer deliberately runs an account to its last point, so the session
+   * that finds the end of it should not be the one that pays. Once, so that a
+   * runaway session cannot run through every account: the second limit it
+   * meets stops it for good, though every other session cut off with it
+   * still has its own move. A manual move (the limit banner) is always yours.
+   *
+   * One that has had its move, or has nowhere to go, carries on where it is
+   * when the limit was the 5-hour one: a minute after the window resets it is
+   * told to go on. A weekly limit is left to you.
    *
    * Once per hit, and only for a hit inside the window still running, so a
    * restart in the middle of a wait picks it back up (the deadline lives only
@@ -718,21 +728,60 @@ export class Fleet extends EventEmitter {
       const hit = v.limitHit;
       if (!hit || this.stallsSeen.get(v.id) === hit.at) continue;
       if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
-      const accountId = getSessionRecord(v.id)?.accountId;
-      if (!accountId) continue;
+      const rec = getSessionRecord(v.id);
+      const accountId = rec?.accountId;
+      if (!rec || !accountId) continue;
+      const next = rec.hoppedAt ? null : this.hopTarget(rec, v);
+      // Another is on its way over: this one is looked at again once it has landed.
+      if (next && this.hopping) continue;
       this.stallsSeen.set(v.id, hit.at);
-      // An account that fronts several providers (omp) has windows for each:
-      // the ones that matter are those of the provider that refused.
-      const windows = (this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? []).filter(
-        (w) => !w.scope && (!hit.provider || !w.provider || w.provider === hit.provider),
-      );
-      const short = windows.find((w) => w.kind === "short");
-      // A longer window that is spent outlasts the 5-hour reset.
-      if (windows.some((w) => w.kind !== "short" && w.usedPct >= 100 && (w.resetsAt === null || w.resetsAt > now))) continue;
-      if (!short?.resetsAt || short.resetsAt <= now || hit.at < short.resetsAt - short.windowMs) continue;
-      this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
-      console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
+      if (next) {
+        this.hop(rec, v, next, now);
+        continue;
+      }
+      this.waitOutReset(v, hit, accountId, now);
     }
+  }
+
+  /** Where a session stopped at its account's limit can go: the balancer's
+   *  first choice among the other accounts that can take a session. */
+  private hopTarget(rec: SessionRecord, v: Session): Candidate | null {
+    if (!this.movable.has(rec.provider) || !rec.agentSessionId) return null;
+    const own = this.ownerOf(rec.accountId ?? "");
+    return elsewhere(this.placement(rec.provider, v.model, null, rec.effort ?? null, false), own);
+  }
+
+  private hop(rec: SessionRecord, v: Session, to: Candidate, now: number): void {
+    this.hopping = true;
+    console.log(`agentbox: ${v.id} (${v.title}) stopped at its account's limit (${oneLine(v.limitHit!.detail, 80)}); moving it to ${to.label}, its one move`);
+    void this.moveAndContinue(v.id, {
+      accountId: to.accountId,
+      prompt: "[agentbox: the account you were running on reached its usage limit, so you have been moved to another. Carry on where you left off.]",
+    })
+      .then(() => updateSessionRecord(v.id, { hoppedAt: now }))
+      .catch((e) => {
+        console.error(`agentbox: moving ${v.id} off its account's limit failed:`, e);
+        const at = this.views.get(v.id);
+        if (at?.limitHit && rec.accountId) this.waitOutReset(at, at.limitHit, rec.accountId, this.now());
+      })
+      .finally(() => {
+        this.hopping = false;
+      });
+  }
+
+  /** Have a session stopped at a 5-hour limit told to carry on once it resets. */
+  private waitOutReset(v: Session, hit: NonNullable<Session["limitHit"]>, accountId: string, now: number): void {
+    // An account that fronts several providers (omp) has windows for each:
+    // the ones that matter are those of the provider that refused.
+    const windows = (this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? []).filter(
+      (w) => !w.scope && (!hit.provider || !w.provider || w.provider === hit.provider),
+    );
+    const short = windows.find((w) => w.kind === "short");
+    // A longer window that is spent outlasts the 5-hour reset.
+    if (windows.some((w) => w.kind !== "short" && w.usedPct >= 100 && (w.resetsAt === null || w.resetsAt > now))) return;
+    if (!short?.resetsAt || short.resetsAt <= now || hit.at < short.resetsAt - short.windowMs) return;
+    this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
+    console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
   }
 
   /**
@@ -1150,7 +1199,7 @@ export class Fleet extends EventEmitter {
     return undefined;
   }
 
-  private recordFor(t: Tracked, settings: BalancerSettings, now: number): string {
+  private recordFor(t: Tracked, now: number): string {
     const f = t.facts!;
     const key = `${t.ref.provider}:${f.agentSessionId}`;
     const cached = this.byAgentId.get(key);
@@ -1173,7 +1222,8 @@ export class Fleet extends EventEmitter {
       // A session started outside agentbox still uses its account, so it
       // claims like any other; it just was not placed. Its model is known
       // from its transcript, so the claim is the model's.
-      claim: claimFor({ model: f.model }, settings),
+      // It was not placed: what it claims is what any stretch of work does.
+      claim: this.claimOf(t.ref.provider, f.model, null, false),
       origin: "external",
       tmux: null,
       transcriptPath: t.ref.path,
@@ -1276,9 +1326,8 @@ export class Fleet extends EventEmitter {
     // A model switch (/model) changes what the session costs: its claim
     // follows. A wake's claim already counts what was consumed before it, so
     // only a real change rewrites it, never the same model re-read.
-    if (f.model && f.model !== (rec.facts as Partial<TranscriptFacts> | null)?.model) {
-      patch.claim = claimFor({ model: f.model, effort: rec.effort ?? null }, getSettings().balancer);
-    }
+    const was = (rec.facts as Partial<TranscriptFacts> | null)?.model;
+    if (f.model && f.model !== was) patch.claim = this.claimOf(rec.provider, f.model, rec.effort ?? null, !was);
     // A message from you to a closed session means you went back to it.
     // Its own activity does not: an agent still finishing, or one another
     // agent wrote to, stays where you put it.
@@ -2165,7 +2214,7 @@ export class Fleet extends EventEmitter {
     // The limit message is the session's last word: nothing after it, bar the
     // odd bookkeeping line written in the same breath.
     const hit = f?.rateLimitHits?.at(-1) ?? null;
-    const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? { ...hit, until: this.limitUntil(rec.accountId, hit, now) } : null;
+    const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? { ...hit, until: this.limitUntil(rec.accountId, hit, now), ...(rec.hoppedAt ? { hopped: true as const } : {}) } : null;
     const warmUntil = cacheWarmUntil(f, lastActivityAt, this.coldAfterMs);
     const cold =
       this.movable.has(rec.provider) &&
@@ -2441,6 +2490,29 @@ export class Fleet extends EventEmitter {
     return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), now);
   }
 
+  /** The accounts whose weekly points price a claim on `provider`. */
+  private pricedBy(provider: ProviderId): string[] {
+    return listAccounts(accountProvider(provider)).map((a) => this.ownerOf(a.id));
+  }
+
+  /**
+   * What a session on `model` claims when it starts (`first`) or wakes: what
+   * such stretches of work on its model have gone on to use here
+   * (`Forecaster.claim`); for a model that has not run enough to say, its
+   * listed claim — a model listed as heavy is not taken for an average one —
+   * else what the provider's sessions use, else `claimNormal`.
+   */
+  private claimOf(provider: ProviderId, model: string | null | undefined, effort: string | null, first: boolean): number {
+    const of = { provider, first, accountIds: this.pricedBy(provider) };
+    const now = this.now();
+    return (
+      this.forecaster.claim({ ...of, model: model ?? null }, now) ??
+      listedClaim({ model, effort }) ??
+      this.forecaster.claim(of, now) ??
+      claimFor({ model, effort }, getSettings().balancer)
+    );
+  }
+
   /** The account a home belongs to (itself unless it is a twin). */
   ownerOf(homeId: string): string {
     return this.owner.get(homeId) ?? homeId;
@@ -2501,13 +2573,14 @@ export class Fleet extends EventEmitter {
     return out;
   }
 
-  placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null): Placement {
+  placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true): Placement {
     const adapter = this.adapter(provider);
     const asked = model || getSettings().models[provider] || null;
     return place({
       provider,
       model: asked,
       effort: effort ?? null,
+      claim: this.claimOf(provider, asked, effort ?? null, first),
       // A model the devin bridge serves draws on its own provider, not on
       // the devin account the session is signed in as.
       unmetered: provider === "devin" && bridgedModel(asked) !== null,
@@ -2717,7 +2790,7 @@ export class Fleet extends EventEmitter {
    */
   private wakeTarget(rec: SessionRecord, view: Session, accountId?: string | null): { account: Account; placement: Placement } | null {
     if (!this.adapter(rec.provider).moveSession) return null;
-    const placement = this.placement(rec.provider, view.model, accountId, rec.effort ?? null);
+    const placement = this.placement(rec.provider, view.model, accountId, rec.effort ?? null, false);
     // Another home on the same login is the same account: moving there would
     // cost a cold start and change nothing about the limits.
     if (!placement.accountId || placement.mode === "none" || placement.accountId === this.ownerOf(rec.accountId ?? "")) return null;
@@ -2764,7 +2837,7 @@ export class Fleet extends EventEmitter {
     const consumed = consumedBy([rec.id]).get(rec.id) ?? 0;
     // It claims afresh, and the claim is its model's: what it used before it
     // went cold was used, and the balancer should count what it is about to.
-    const fresh = claimFor({ model: view.model, effort: rec.effort ?? null }, settings.balancer);
+    const fresh = this.claimOf(rec.provider, view.model, rec.effort ?? null, false);
     const claim = Math.round((consumed + fresh) * 100) / 100;
     const patch: Partial<SessionRecord> = { claim };
     if (account.id !== from.id) {

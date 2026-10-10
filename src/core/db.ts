@@ -360,6 +360,9 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN successor TEXT;
   ALTER TABLE schedules ADD COLUMN retiring TEXT;
   `,
+  // 24 — when the fleet moved a session that stopped at its account's limit
+  // to another account (`Fleet.continueStalled`): it does that once.
+  `ALTER TABLE sessions ADD COLUMN hopped_at INTEGER;`,
 ];
 
 function migrate(d: Database) {
@@ -469,6 +472,8 @@ export interface SessionRecord {
   parkedWhy?: string | null;
   /** The session that took over from it (`Fleet.handOver`); null for none. */
   successor?: string | null;
+  /** When the fleet moved it off an account at its limit; it does not again. */
+  hoppedAt?: number | null;
 }
 
 type SessionRow = {
@@ -478,7 +483,7 @@ type SessionRow = {
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
-  parent_by_hand: number | null; successor: string | null;
+  parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -507,6 +512,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
     parkedWhy: r.parked_why ?? null,
     successor: r.successor ?? null,
+    hoppedAt: r.hopped_at ?? null,
   };
 }
 
@@ -535,6 +541,7 @@ const RECORD_COLUMNS = {
   parkedMates: "parked_mates",
   parkedWhy: "parked_why",
   successor: "successor",
+  hoppedAt: "hopped_at",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;
@@ -925,15 +932,16 @@ export function sessionsOnAccounts(accountIds: string[], sinceMs: number): { id:
  * another session started is in its caller's), by session, oldest first, with
  * what the forecast needs of each session.
  */
-export function tokenSamplesSince(sinceMs: number): { sessionId: string; provider: string; startedAt: number; at: number; costEquiv: number }[] {
+export function tokenSamplesSince(sinceMs: number): { sessionId: string; provider: string; model: string | null; placed: number; startedAt: number; at: number; costEquiv: number }[] {
   return getDb()
     .query(
-      `SELECT t.session_id AS sessionId, s.provider AS provider, s.started_at AS startedAt, t.at AS at, t.cost_equiv AS costEquiv
+      `SELECT t.session_id AS sessionId, s.provider AS provider, COALESCE(json_extract(s.facts, '$.model'), s.model) AS model,
+              s.origin = 'agentbox' AS placed, s.started_at AS startedAt, t.at AS at, t.cost_equiv AS costEquiv
          FROM token_samples t JOIN sessions s ON s.id = t.session_id
         WHERE t.at >= ? AND s.account_id IS NOT NULL AND (s.parent IS NULL OR s.parent_by_hand = 1 OR s.origin = 'agentbox')
         ORDER BY t.session_id, t.at`,
     )
-    .all(sinceMs) as { sessionId: string; provider: string; startedAt: number; at: number; costEquiv: number }[];
+    .all(sinceMs) as { sessionId: string; provider: string; model: string | null; placed: number; startedAt: number; at: number; costEquiv: number }[];
 }
 
 /** Weekly points attributed on `accountId` since `sinceMs`, per session. */
@@ -1208,7 +1216,7 @@ function remoteDefaultBranch(slug: string): string {
 // -------------------------------------------------------------- settings
 
 export const DEFAULT_BALANCER: BalancerSettings = {
-  claimNormal: 3,
+  claimNormal: 1.5,
   shortWindowInWeekly: 24,
   claimIdleMin: 60,
   resetHorizonMin: 60,

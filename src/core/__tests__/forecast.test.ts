@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { expectedCost, fitForecast, readingAt, type Sample, type SessionSeries } from "../forecast";
+import { expectedCost, fitForecast, fitStarts, readingAt, startCost, type Sample, type SessionSeries } from "../forecast";
 
 const M = 60_000;
 const H = 60 * M;
@@ -72,4 +72,23 @@ test("a stretch still running when the samples end is not evidence", () => {
   const key = "claude|0|4";
   expect(table.get(key)!.stretches).toBe(29);
   expect(all.get(key)!.stretches).toBe(30);
+});
+
+test("a claim is what stretches of that model went on to spend from their start, first ones and wakes apart", () => {
+  const until = T0 + 90 * 24 * H;
+  // Thirty opus sessions the balancer placed: 12 at first, then 2 when woken three hours on.
+  const opus: SessionSeries[] = Array.from({ length: 30 }, (_, i) => {
+    const from = i * 24 * H;
+    return { provider: "claude", model: "claude-opus-5-5", placed: true, startedAt: T0 + from, samples: [...burn(from, 60, 0.2), ...burn(from + 4 * H, 10, 0.2, 12)] };
+  });
+  // Five haiku ones, too few to say, and thirty begun by hand, which are not what a placed session looks like.
+  const haiku = fleetOf(5, 10, 0.01).map((s) => ({ ...s, model: "claude-haiku-5-5", placed: true }));
+  const byHand = fleetOf(30, 600, 1).map((s) => ({ ...s, model: "claude-opus-5-5", placed: false }));
+  const table = fitStarts([...opus, ...haiku, ...byHand], until);
+  expect(startCost(table, "claude", true, "claude-opus-5-5")).toBeCloseTo(12, 5);
+  expect(startCost(table, "claude", false, "claude-opus-5-5[1m]")).toBeCloseTo(2, 5);
+  // A family with too little history says nothing; its provider as a whole does, and one with none does not.
+  expect(startCost(table, "claude", true, "claude-haiku-5-5")).toBeNull();
+  expect(startCost(table, "claude", true)).toBeCloseTo((30 * 12 + 5 * 0.1) / 35, 5);
+  expect(startCost(table, "codex", true)).toBeNull();
 });

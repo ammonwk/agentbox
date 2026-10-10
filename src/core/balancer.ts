@@ -72,6 +72,9 @@ export interface PlaceRequest {
   model?: string | null;
   /** The reasoning effort it starts with; scales the claim. */
   effort?: string | null;
+  /** What it claims, where sessions like it have run before
+   *  (`Forecaster.claim`); absent, its model's listed claim (claim.ts). */
+  claim?: number | null;
   /** A specific account instead of the balancer's pick. */
   accountId?: string | null;
   /** The model is someone else's to meter (one agentbox's devin bridge
@@ -237,7 +240,6 @@ function evaluate(
     shortEffective: null,
     shortResetsAt: short?.resetsAt ?? null,
     legRoom: null,
-    shortRoom: null,
     shortLoadTo: null,
     weeklyPerHour: null,
     shortPace: null,
@@ -280,18 +282,11 @@ function evaluate(
     const horizonH = settings.resetHorizonMin / 60;
     const left = short.resetsAt !== null && short.resetsAt > now ? hoursLeft(short, now) : (short.windowMs || FIVE_HOURS) / HOUR;
     if (horizonH > 0 && left < horizonH) room += (100 - room) * (1 - left / horizonH);
-    c.shortRoom = round1(room);
     // How full it may be loaded: the setting, or as full as it takes to get
     // through its weekly before that resets, when that is more.
     const windowH = (short.windowMs || FIVE_HOURS) / HOUR;
     const needs = c.weeklyPerHour === null ? 0 : (c.weeklyPerHour * windowH * 100) / settings.shortWindowInWeekly;
     c.shortLoadTo = round1(Math.min(MAX_LOAD, Math.max(settings.shortLoadPct, needs)));
-    // Short-window room is only room if there is weekly behind it. An account
-    // at 97% weekly with a fresh 5-hour window can run about an eighth of a
-    // window before it hits the weekly wall, so that is its room — not 100.
-    if (c.weeklyEffective !== null) {
-      room = Math.min(room, inShort(100 - c.weeklyEffective));
-    }
     c.legRoom = round1(Math.max(0, room));
     c.score = round1(room);
   } else if (weekly) {
@@ -346,13 +341,16 @@ function evaluate(
 }
 
 /**
- * Room for a session needing `need` of a 5-hour window: its claim fits in
- * what the window and the weekly behind it have left (`legRoom`), and the
- * window stays under its load line with it.
+ * Room for a session needing `need` of a 5-hour window: the window stays
+ * under its load line with it. The weekly is no part of this. An account
+ * with any weekly left takes a session whatever that session claims — the
+ * last points are only used by a session that may overrun them, and one that
+ * does is moved on (`Fleet.continueStalled`) — and with that claim on it the
+ * account is spoken for (`weeklyEffective ≥ 100`) and takes no other.
  */
 function fits(c: Candidate, need: number): boolean {
-  if (c.legRoom === null || c.legRoom < need) return false;
-  return c.shortRoom === null || c.shortLoadTo === null || 100 - c.shortRoom + need <= c.shortLoadTo;
+  if (c.legRoom === null) return false;
+  return c.shortLoadTo === null ? c.legRoom >= need : 100 - c.legRoom + need <= c.shortLoadTo;
 }
 
 /** When its weekly resets, for ordering. One that has not started, or has
@@ -389,6 +387,15 @@ function rank(candidates: Candidate[], need: number, now: number): Candidate[] {
   return [...order(candidates.filter((c) => c.eligible)), ...order(candidates.filter((c) => !c.eligible))];
 }
 
+/**
+ * Where a session cut off at `own`'s limit can carry on: the first of the
+ * other accounts, in the balancer's order, that can take a session. Null when
+ * none can — it stays where it is.
+ */
+export function elsewhere(p: Placement, own: string): Candidate | null {
+  return p.candidates.find((c) => c.eligible && c.accountId !== own) ?? null;
+}
+
 /** A claim in the short window's points: 3 weekly points is an eighth of a window at 24. */
 function needOf(claim: number, settings: BalancerSettings): number {
   return (claim * 100) / settings.shortWindowInWeekly;
@@ -397,7 +404,7 @@ function needOf(claim: number, settings: BalancerSettings): number {
 export function place(req: PlaceRequest): Placement {
   // The claim is the model's, not one number for everything: a GLM-Flash
   // session and a Fable one are not the same guest (see claim.ts).
-  const claim = req.unmetered ? 0 : claimFor({ model: req.model, effort: req.effort }, req.settings);
+  const claim = req.unmetered ? 0 : (req.claim ?? claimFor({ model: req.model, effort: req.effort }, req.settings));
   const candidates = req.accounts.map((a) => evaluate(a, req));
   const need = needOf(claim, req.settings);
   const ordered = rank(candidates, need, req.now);

@@ -404,11 +404,11 @@ const CONTINUE = "Usage limits have reset, continue";
 const MOVABLE = new Set(["claude", "devin", "omp", "opencode"]);
 
 /**
- * The session stopped at its account's limit. Nothing moves it on its own —
- * a move is a cache miss you should choose — so this offers the one-click
- * version: continue on the account with the most room (the balancer's pick,
- * shown before you click), or on whichever account you pick instead, telling
- * the agent to carry on.
+ * The session stopped at its account's limit. The fleet moves it to another
+ * account once in its life (`Fleet.continueStalled`); this is what is left
+ * when it has had that move or there was nowhere to go: continue on the
+ * balancer's pick (shown before you click), or on whichever account you pick
+ * instead, telling the agent to carry on.
  */
 function LimitBanner({ session, accounts }: { session: Session; accounts: readonly AccountView[] }) {
   const { run, busy, error, clear } = useAction();
@@ -462,6 +462,9 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
           {short.charAt(0).toUpperCase() + short.slice(1)} · {ago(hit.at)}
         </strong>
         <span className="cmp-limit-detail">{hit.detail}</span>
+        {hit.hopped ? (
+          <span className="cmp-limit-auto">agentbox already moved it off one account at its limit, and does that once: from here a move is yours.</span>
+        ) : null}
         {session.autoResume ? (
           <span className="cmp-limit-auto">
             agentbox tells it to carry on here {fmtRetryAt(session.autoResume.at, now)}, a minute after the window resets — or send it

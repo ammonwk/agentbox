@@ -74,7 +74,7 @@ const settings: AgentSettings = {
   reclaimNightly: false,
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "" },
   balancer: {
-    claimNormal: 3,
+    claimNormal: 1.5,
     shortWindowInWeekly: 24,
     claimIdleMin: 60,
     resetHorizonMin: 60,
@@ -629,7 +629,6 @@ function candidateFor(a: MockAccount, now: number): Candidate {
     shortEffective,
     shortResetsAt: shortW?.resetsAt ?? null,
     legRoom,
-    shortRoom: legRoom,
     shortLoadTo: legRoom == null ? null : b.shortLoadPct,
     weeklyPerHour,
     outstanding,

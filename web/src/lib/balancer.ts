@@ -4,7 +4,7 @@ import type { BalancerSettings } from "../../../src/core/types";
 
 /** What each balancer knob means, in one line.  */
 export const BALANCER_HELP: Record<keyof BalancerSettings, { label: string; unit: string; help: string }> = {
-  claimNormal: { label: "Default claim", unit: "pts", help: "Weekly points a session on an unknown model is assumed to use until it has actually used them. Known models claim what their model says (Fable 6, Opus 2.4, Sonnet 1.6, the small ones 0.8)." },
+  claimNormal: { label: "Default claim", unit: "pts", help: "Weekly points a session is assumed to use before it has spent anything, when no session of its model has run here and the model is not a listed one. Otherwise a session claims what sessions of its model have gone on to use, or failing that its model's listed claim (Fable 3, Opus 1.2, Sonnet 0.8, the small ones 0.4), or what its provider's sessions use." },
   shortWindowInWeekly: {
     label: "5-hour window in weekly",
     unit: "pts",

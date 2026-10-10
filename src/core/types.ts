@@ -164,13 +164,11 @@ export interface Candidate {
   shortEffective: number | null;
   shortResetsAt: number | null;
   /** 0–100: short-window room left by `shortEffective`, raised by reset
-   *  proximity and capped by weekly headroom. */
+   *  proximity. */
   legRoom: number | null;
-  /** The 5-hour window's own room, before weekly headroom caps it (below
-   *  zero: overrun), and how full the balancer will load that window:
-   *  `shortLoadPct`, or more when its weekly needs more to be used up before
-   *  it resets. A session has room here while the window stays under that. */
-  shortRoom: number | null;
+  /** How full the balancer will load the 5-hour window: `shortLoadPct`, or
+   *  more when its weekly needs more to be used up before it resets. A
+   *  session has room here while the window stays under that. */
   shortLoadTo: number | null;
   /** Weekly points left per hour until the weekly reset. */
   weeklyPerHour: number | null;
@@ -469,6 +467,9 @@ export interface Session {
      *  message is refused the same way, so nothing is sent (the fleet's own
      *  nudges, and `agentbox send` from an agent). Null when nothing says. */
     until?: number | null;
+    /** The fleet already moved it off an account at its limit once
+     *  (`Fleet.continueStalled`), so from here a move is yours. */
+    hopped?: true;
   } | null;
   /**
    * The turn ended on the provider rather than finishing — cut off by the

@@ -72,8 +72,9 @@ once: commit your own files by path, never `git add -A`.
   account. After that it is shown unpinned, and a resume or a
   message wakes it on the balancer's pick (`Fleet.wake`, which moves — never
   copies — the transcript into that account's home; claude and devin only).
-  A session stopped at a limit is never moved on its own: the UI offers a
-  button. Transcripts are not shared between account homes, so a plain
+  The one exception: a session stopped at its account's limit is moved once
+  in its life to an account that can take it (`Fleet.continueStalled`);
+  after that the UI offers a button. Transcripts are not shared between account homes, so a plain
   `claude --resume` cannot cross accounts.
 - **Never kill before proving the resume.** Adopt checks the transcript exists
   and (claude) the resume cwd slugs to the transcript's directory, *then*

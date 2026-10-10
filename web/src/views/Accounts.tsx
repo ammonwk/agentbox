@@ -348,7 +348,7 @@ function AccountCard({
             <thead>
               <tr>
                 <th>Session</th>
-                <th className="num" title="Weekly points its model claimed at placement">Claim</th>
+                <th className="num" title="Weekly points it claimed when it started or last woke: what sessions of its model have gone on to use">Claim</th>
                 <th className="num" title="Weekly points attributed to it so far">Used</th>
                 <th className="num" title="Weekly points it is expected to still use here: forecast from what it spent in the last ten minutes and so far this stretch, or what is left of its claim until it has spent anything">Held</th>
               </tr>
