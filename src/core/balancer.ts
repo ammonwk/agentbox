@@ -30,6 +30,7 @@
  */
 
 import { claimFor } from "./claim";
+import type { Refusal } from "./refusals";
 import type {
   Account,
   BalancerSettings,
@@ -51,6 +52,9 @@ export interface AccountState {
   loggedOut?: boolean;
   /** Its provider lately refused a session for want of funds (`unfundedSince`). */
   unfunded?: { at: number; detail: string } | null;
+  /** The provider is refusing the model being started to this account
+   *  (`refusedRoutes`): what the sessions already on it were last told. */
+  refused?: Refusal | null;
 }
 
 export interface PlaceRequest {
@@ -285,6 +289,12 @@ function evaluate(
   } else if (state.loggedOut) {
     c.eligible = false;
     c.reason = "not logged in";
+  } else if (state.refused) {
+    // Whoever meters it: a route that answers nothing runs nothing.
+    const r = state.refused;
+    c.eligible = false;
+    c.refused = true;
+    c.reason = `${req.model ?? "its model"} is refused here: ${r.sessions} sessions stand refused, the last at ${clockOf(r.at)} (${r.detail.replace(/\s+/g, " ").slice(-80)}), and none has answered since; tried again ${clockOf(r.until)}`;
   } else if (req.unmetered) {
     // Nothing of this account's will be used: no limit of its is in the way.
   } else if (spentLongWindow(state.windows, now)) {
@@ -383,7 +393,7 @@ export function place(req: PlaceRequest): Placement {
     // One on pace to run out goes last: overflow is for estimates that
     // overran, and a measured pace is not an estimate.
     const open = candidates
-      .filter((c) => req.accounts.find((a) => a.account.id === c.accountId)?.account.enabled && (c.weekly === null || c.weekly < 100) && !atShortLimit(c))
+      .filter((c) => req.accounts.find((a) => a.account.id === c.accountId)?.account.enabled && !c.refused && (c.weekly === null || c.weekly < 100) && !atShortLimit(c))
       .sort(
         (a, b) =>
           Number(runsOut(a)) - Number(runsOut(b)) ||
@@ -397,6 +407,16 @@ export function place(req: PlaceRequest): Placement {
         accountId: least.accountId,
         mode: "overflow",
         why: `no ${req.provider} account has both unclaimed weekly and an open 5-hour window; ${least.label} is the least claimed (${least.weekly}% used + ${least.outstanding} claimed)`,
+      };
+    }
+    // The model's doing, not the accounts': say so, since another model would go.
+    const refused = candidates.filter((c) => c.refused);
+    if (refused.length > 0) {
+      return {
+        ...base,
+        accountId: null,
+        mode: "none",
+        why: `${req.model ?? `${req.provider}'s model`} is refused on every ${req.provider} account that could otherwise take it (${refused[0]!.label}: ${refused[0]!.reason}) — start it on another model, or pick an account by hand to try this one anyway`,
       };
     }
     return {

@@ -20,6 +20,8 @@ import type {
   UsageWindow,
 } from "./types";
 
+import type { ModelOutcome } from "./providers/types";
+
 let db: Database | null = null;
 let openedAt = "";
 
@@ -970,6 +972,16 @@ export function rateLimitHitsSince(sinceMs: number): { sessionId: string; accoun
     session_id: string; account_id: string | null; at: number; detail: string;
   }[];
   return rows.map((r) => ({ sessionId: r.session_id, accountId: r.account_id, at: r.at, detail: r.detail }));
+}
+
+/** A provider's sessions active since `sinceMs`: the model each was started
+ *  on, and what that model last told it (`TranscriptFacts.modelOutcome`, as
+ *  stored with its facts), null for one that has not heard yet. */
+export function modelOutcomesSince(provider: ProviderId, sinceMs: number): { accountId: string | null; model: string | null; startedAt: number; outcome: ModelOutcome | null }[] {
+  const rows = getDb()
+    .query("SELECT account_id, model, started_at, json_extract(facts, '$.modelOutcome') AS outcome FROM sessions WHERE provider = ? AND last_activity_at >= ?")
+    .all(provider, sinceMs) as { account_id: string | null; model: string | null; started_at: number; outcome: string | null }[];
+  return rows.map((r) => ({ accountId: r.account_id, model: r.model, startedAt: r.started_at, outcome: r.outcome ? (JSON.parse(r.outcome) as ModelOutcome) : null }));
 }
 
 // -------------------------------------------------------------------- btw

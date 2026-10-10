@@ -21,7 +21,7 @@
  */
 
 import type { AskQuestion, TimelineEvent, TokenTotals } from "../types";
-import type { LimitHit, TranscriptFacts, Wake } from "./types";
+import { nextOutcome, type LimitHit, type ModelOutcome, type TranscriptFacts, type Wake } from "./types";
 import { addUsage, emptyTotals } from "../pricing";
 import { capJson } from "./jsonl-reader";
 import { countPrRepos } from "../prrepo";
@@ -59,6 +59,8 @@ export interface OmpState {
   rateLimitHits: LimitHit[];
   /** The error the turn ended on, until a prompt or an answer follows. */
   turnError: TranscriptFacts["turnError"];
+  /** What the provider last did with the model (`ModelOutcome`). */
+  modelOutcome: ModelOutcome | null;
   /** Record indices that produce at least one timeline event, ascending. */
   anchors: number[];
   /** toolCallId → record index of the assistant message that made the call. */
@@ -95,6 +97,7 @@ export function newOmpState(): OmpState {
     contextUsed: null,
     rateLimitHits: [],
     turnError: null,
+    modelOutcome: null,
     anchors: [],
     calls: new Map(),
     results: new Map(),
@@ -203,6 +206,23 @@ export function ompErrorKind(msg: { errorStatus?: unknown; errorMessage?: unknow
   return /insufficient (account )?(funds|balance|credits)|invalid_request|unauthori[sz]ed|forbidden|context (length|window)|too many tokens|prompt is too long/i.test(m)
     ? "fatal"
     : "transient";
+}
+
+/** An error that blames what was sent, its size or its shape, and so says
+ *  nothing about what the next session would be told. */
+const ABOUT_THE_REQUEST = /invalid[_ ]request|valid JSON|context (length|window)|too many tokens|prompt is too long|maximum tokens|max_tokens|tool[_ ]choice/i;
+/** An empty balance, on whatever provider: the account's to top up, and a
+ *  limit stop where the provider is one whose balance is an account's here. */
+const UNPAID = /insufficient (account )?(funds|balance|credits?)|payment required|out of credits/i;
+
+/** The provider turned down the model or the account, whatever was sent
+ *  (`ModelOutcome`): a 4xx that is not about the request. Limits and empty
+ *  balances are limit stops and never reach here. */
+export function refusesTheRoute(msg: { errorStatus?: unknown; errorMessage?: unknown }): boolean {
+  const status = typeof msg.errorStatus === "number" ? msg.errorStatus : null;
+  if (status === null || status < 400 || status >= 500 || status === 402 || status === 408 || status === 413 || status === 429) return false;
+  const m = typeof msg.errorMessage === "string" ? msg.errorMessage : "";
+  return !ABOUT_THE_REQUEST.test(m) && !UNPAID.test(m);
 }
 
 interface FoldOptions {
@@ -338,8 +358,12 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
           s.rateLimitHits.push(hit);
         } else {
           s.turnError = { at: when, kind: ompErrorKind(m), detail: oneLine(first, 300) };
+          if (who.includes("/")) s.modelOutcome = nextOutcome(s.modelOutcome, who, when, refusesTheRoute(m) ? { refused: oneLine(first, 200) } : null);
         }
-      } else if (m.stopReason === "length") {
+      } else if (s.model && m.stopReason !== "aborted") {
+        s.modelOutcome = nextOutcome(s.modelOutcome, s.model, when, "answered");
+      }
+      if (m.stopReason === "length") {
         s.turnError = { at: when, kind: "output-cap", detail: "the reply hit the model's output token limit" };
       }
       // A tool call means the turn goes on; anything else ends it.

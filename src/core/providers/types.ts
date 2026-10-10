@@ -84,6 +84,35 @@ export interface Wake {
   durable?: boolean;
 }
 
+/**
+ * A model as one session has found it: when a call to it last answered, and
+ * the refusal standing since, if any. A refusal is the provider turning down
+ * the model or the account (4xx: "Model is unavailable", a region or plan it
+ * is not offered on, a rejected key), not this request (too long, malformed)
+ * and not a limit or an empty balance (`rateLimitHits`). Only an answer
+ * clears it: a prompt sent to a refused session is not the route working.
+ */
+export interface ModelOutcome {
+  /** `provider/model`, as placement names it. */
+  model: string;
+  okAt: number | null;
+  refusedAt: number | null;
+  detail: string | null;
+  /** The account the newer of the two was earned on. The transcript does not
+   *  know; the fleet stamps it when it stores the facts, since a session can
+   *  wake on another account with its last word still standing. */
+  accountId?: string | null;
+}
+
+/** `prev` after one more call to `model`: answered, refused, or neither (an
+ *  error that says nothing about the route leaves it as it stood). */
+export function nextOutcome(prev: ModelOutcome | null, model: string, at: number, call: { refused: string } | "answered" | null): ModelOutcome | null {
+  const okAt = prev?.model === model ? prev.okAt : null;
+  if (call === "answered") return { model, okAt: at, refusedAt: null, detail: null };
+  if (call) return { model, okAt, refusedAt: at, detail: call.refused };
+  return prev?.model === model ? prev : null;
+}
+
 /** Everything an adapter can say about one transcript. */
 export interface TranscriptFacts {
   agentSessionId: string;
@@ -144,6 +173,9 @@ export interface TranscriptFacts {
    * has followed.
    */
   turnError?: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string; retryAfterMs?: number } | null;
+  /** What the provider last did with this session's model, for placement
+   *  (core/refusals.ts). Null when the provider cannot tell. */
+  modelOutcome?: ModelOutcome | null;
   contextUsed: number | null;
   contextLimit: number | null;
   /** Cumulative over the whole session, including subagents where the
@@ -352,6 +384,10 @@ export interface ProviderAdapter {
    * forgotten resumes on another.
    */
   sharedStore?: boolean;
+
+  /** The model a session started without one runs on (`provider/model`, as
+   *  its transcript names it), where the CLI's own config says. */
+  defaultModel?(): string | null;
 
   /** The flags in a live process's argv worth keeping when adopt resumes it —
    *  permissions, directories, MCP config, model — and never the session id,

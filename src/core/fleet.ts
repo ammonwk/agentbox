@@ -39,6 +39,7 @@ import {
   insertBtw,
   insertRateLimitHit,
   rateLimitHitsSince,
+  modelOutcomesSince,
   insertSessionRecord,
   insertTokenSample,
   listAccounts,
@@ -55,6 +56,7 @@ import { attachArgv, tmuxName, type NewSession, type PaneInfo } from "./tmux";
 import {
   transcriptFile,
   type LiveProcess,
+  type ModelOutcome,
   type ProviderAdapter,
   type TranscriptFacts,
   type TranscriptReader,
@@ -107,6 +109,7 @@ import {
 import { agentboxHome } from "./paths";
 import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
 import { UNFUNDED_HOLD_MS, unfundedSince, weeklyWindow } from "./balancer";
+import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusals";
 import { statedUntil, statedWaitMs } from "./retrywait";
 import { retryClock } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
@@ -1175,7 +1178,7 @@ export class Fleet extends EventEmitter {
       startedAt: started,
       lastActivityAt: f.lastActivityAt ?? t.ref.mtimeMs,
       archivedAt: null,
-      facts: compactFacts(f, t.ref.size),
+      facts: compactFacts(f, t.ref.size, t.ref.accountId),
       createdAt: now,
     });
     this.byAgentId.set(key, id);
@@ -1262,7 +1265,7 @@ export class Fleet extends EventEmitter {
     const f = t.facts!;
     const rec = getSessionRecord(id);
     if (!rec) return;
-    const patch: Partial<SessionRecord> = { facts: compactFacts(f, t.ref.size), transcriptPath: t.ref.path };
+    const patch: Partial<SessionRecord> = { facts: compactFacts(f, t.ref.size, rec.accountId, rec.facts), transcriptPath: t.ref.path };
     const last = f.lastActivityAt ?? t.ref.mtimeMs;
     // The transcript's newest turn is the record, so it also corrects a value
     // that was set too late; an mtime is only a guess and may only move it on.
@@ -2443,14 +2446,21 @@ export class Fleet extends EventEmitter {
    * not a candidate, and its sessions' claims are already the owner's (a
    * session's `accountId` is its home's owner).
    */
-  accountStates(provider: ProviderId): AccountState[] {
+  accountStates(provider: ProviderId, model?: string | null): AccountState[] {
     const claims = this.claims();
     const all = listAccounts(accountProvider(provider));
     const owner = owners(all);
     const since = this.now() - 90 * 60_000;
     const hits = rateLimitHitsSince(this.now() - UNFUNDED_HOLD_MS);
-    return all
-      .filter((a) => owner.get(a.id) === a.id)
+    const mine = all.filter((a) => owner.get(a.id) === a.id);
+    // What the sessions already on this model were last told, by account.
+    const refused = refusedRoutes(
+      model ? this.routeOutcomes(provider) : [],
+      model,
+      mine.map((a) => a.id),
+      this.now(),
+    );
+    return mine
       .map((a) => {
         const windows = this.deps.usage.usageOf(a.id)?.windows ?? [];
         const short = windows.find((w) => w.kind === "short" && !w.scope);
@@ -2466,12 +2476,28 @@ export class Fleet extends EventEmitter {
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
           unfunded: unfundedSince(hits.filter((h) => h.accountId === a.id), this.now()),
+          refused: refused.get(a.id) ?? null,
         };
       });
   }
 
+  /** What each of this provider's sessions of the last day was last told by
+   *  its model, and the ones started that have not heard yet. */
+  private routeOutcomes(provider: ProviderId): RouteOutcome[] {
+    const fallback = this.adapter(provider).defaultModel?.() ?? null;
+    const out: RouteOutcome[] = [];
+    for (const r of modelOutcomesSince(provider, this.now() - REFUSAL_LOOKBACK_MS)) {
+      const o = r.outcome;
+      const model = o?.model ?? r.model ?? fallback;
+      const accountId = o?.accountId ?? r.accountId;
+      if (!model || !accountId) continue;
+      out.push({ model, okAt: o?.okAt ?? null, refusedAt: o?.refusedAt ?? null, detail: o?.detail ?? null, accountId: this.ownerOf(accountId), startedAt: r.startedAt });
+    }
+    return out;
+  }
+
   placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null): Placement {
-    this.adapter(provider);
+    const adapter = this.adapter(provider);
     const asked = model || getSettings().models[provider] || null;
     return place({
       provider,
@@ -2481,7 +2507,9 @@ export class Fleet extends EventEmitter {
       // the devin account the session is signed in as.
       unmetered: provider === "devin" && bridgedModel(asked) !== null,
       accountId: accountId && accountId !== "auto" ? accountId : null,
-      accounts: this.accountStates(provider),
+      // One started without a model runs on the CLI's own default: that is
+      // the route whose refusals count against it.
+      accounts: this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null),
       settings: getSettings().balancer,
       now: this.now(),
     });
@@ -3614,7 +3642,15 @@ function checkAnswers(questions: AskQuestion[], answers: AskAnswer[]): void {
  *  of the file they are of: the same size later means nothing new to read. */
 type StoredFacts = Partial<TranscriptFacts> & { transcriptSize?: number };
 
-function compactFacts(f: TranscriptFacts, transcriptSize: number): StoredFacts {
+/** The outcome as stored: on the account it was earned on, which is the one
+ *  already stored for the same last word, or else the session's now. */
+function outcomeOn(o: ModelOutcome | null | undefined, stored: ModelOutcome | null | undefined, accountId: string | null): ModelOutcome | null {
+  if (!o) return null;
+  const same = stored && stored.model === o.model && stored.okAt === o.okAt && stored.refusedAt === o.refusedAt && stored.accountId !== undefined;
+  return { ...o, accountId: same ? stored.accountId : accountId };
+}
+
+function compactFacts(f: TranscriptFacts, transcriptSize: number, accountId: string | null, stored?: unknown): StoredFacts {
   return {
     transcriptSize,
     cwd: f.cwd,
@@ -3638,6 +3674,7 @@ function compactFacts(f: TranscriptFacts, transcriptSize: number): StoredFacts {
     tokens: f.tokens,
     rateLimitHits: f.rateLimitHits.slice(-1),
     turnError: f.turnError ?? null,
+    modelOutcome: outcomeOn(f.modelOutcome, (stored as StoredFacts | null | undefined)?.modelOutcome, accountId),
   };
 }
 

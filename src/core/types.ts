@@ -142,6 +142,9 @@ export interface Candidate {
   eligible: boolean;
   /** Why not, in a sentence, when not eligible. */
   reason: string | null;
+  /** Not eligible because the provider is refusing the model here
+   *  (core/refusals.ts): no estimate, so overflow does not go there either. */
+  refused?: boolean;
   /** Weekly used, and with outstanding claims added. */
   weekly: number | null;
   weeklyEffective: number | null;

@@ -18,7 +18,7 @@
  * those processes are reported with no session until the file appears.
  */
 
-import { closeSync, openSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { userHome } from "../paths";
@@ -459,6 +459,7 @@ class OmpReader implements TranscriptReader {
       lastActivityAt: s.lastActivityAt,
       turnOpen: s.turnOpen,
       turnError: s.turnError,
+      modelOutcome: s.modelOutcome,
       contextUsed: s.contextUsed,
       contextLimit: null,
       tokens,
@@ -690,6 +691,38 @@ function ompAccountCommand(account: Pick<Account, "id">): Pick<Command, "env" | 
   return { env: { OPENCODE_GO_API_KEY: `${GO_ACCOUNT_BEARER}${account.id}` }, unset: ompRedirectVars() };
 }
 
+/** The model omp's config gives a session started without one: `modelRoles.default`. */
+export function defaultModelIn(configYml: string): string | null {
+  try {
+    const m = (Bun.YAML.parse(configYml) as { modelRoles?: { default?: unknown } } | null)?.modelRoles?.default;
+    return typeof m === "string" && m ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+let defaultModelRead: { path: string; mtimeMs: number; model: string | null } | null = null;
+
+/** `defaultModelIn` of the file, read again only when it has changed. */
+function defaultModel(path: string): string | null {
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+  if (defaultModelRead?.path !== path || defaultModelRead.mtimeMs !== mtimeMs) {
+    let text = "";
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      // gone between the stat and the read: no default to name
+    }
+    defaultModelRead = { path, mtimeMs, model: defaultModelIn(text) };
+  }
+  return defaultModelRead.model;
+}
+
 /** The account a running omp was started on, from the "key" it was given. */
 function accountOfEnv(env: Map<string, string> | null, accounts: readonly Account[]): Account | undefined {
   const key = env?.get("OPENCODE_GO_API_KEY");
@@ -721,6 +754,10 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   accountCommand: (account) => ompAccountCommand(account),
+
+  defaultModel() {
+    return defaultModel(join(agentDir(), "config.yml"));
+  },
   // Its sign-in is agentbox's own command (accounts/login.ts), not omp's.
   authEnv: () => ({ env: {}, unset: ompRedirectVars() }),
 

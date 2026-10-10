@@ -26,12 +26,12 @@
  */
 
 import type { AskQuestion, TimelineEvent, TokenTotals } from "../types";
-import type { LimitHit, TranscriptFacts, Wake } from "./types";
+import { nextOutcome, type LimitHit, type ModelOutcome, type TranscriptFacts, type Wake } from "./types";
 import { addUsage, emptyTotals } from "../pricing";
 import { capJson } from "./jsonl-reader";
 import { countSlugs, mostNamed, prReposIn } from "../prrepo";
 import { askQuestionsOf } from "./ask";
-import { clip, goOutOfFunds, ompErrorKind, toolSummary } from "./omp-transcript";
+import { clip, goOutOfFunds, ompErrorKind, refusesTheRoute, toolSummary } from "./omp-transcript";
 import type { OpencodeChildRow, OpencodeMessageRow, OpencodeSessionRow } from "./opencode-db";
 
 const PROMPT_CAP = 2000;
@@ -215,6 +215,7 @@ export function opencodeFacts({ id, row, rows, children }: FactsInput): Transcri
   let contextUsed: number | null = null;
   let turnOpen = false;
   let turnError: TranscriptFacts["turnError"] = null;
+  let modelOutcome: ModelOutcome | null = null;
   let pendingAsk: TranscriptFacts["pendingAsk"] = null;
   let dir: string | null = null;
 
@@ -250,11 +251,14 @@ export function opencodeFacts({ id, row, rows, children }: FactsInput): Transcri
             if (provider) hit.provider = provider;
             hits.push(hit);
           } else {
-            turnError = { at: r.at, kind: ompErrorKind({ errorStatus: r.error.status, errorMessage: r.error.message }), detail: oneLine(r.error.message || r.error.type, 300) };
+            const err = { errorStatus: r.error.status, errorMessage: r.error.message };
+            turnError = { at: r.at, kind: ompErrorKind(err), detail: oneLine(r.error.message || r.error.type, 300) };
+            if (r.model) modelOutcome = nextOutcome(modelOutcome, r.model, r.at, refusesTheRoute(err) ? { refused: oneLine(r.error.message, 200) } : null);
           }
         } else if (r.finish === "length") {
           turnError = { at: r.at, kind: "output-cap", detail: "the reply hit the model's output token limit" };
         }
+        if (!r.error && r.model && r.completedAt) modelOutcome = nextOutcome(modelOutcome, r.model, r.completedAt, "answered");
         break;
       case "idle":
         turnOpen = false;
@@ -300,6 +304,7 @@ export function opencodeFacts({ id, row, rows, children }: FactsInput): Transcri
     lastTurnAt,
     turnOpen,
     turnError,
+    modelOutcome,
     contextUsed,
     contextLimit: null,
     tokens,
