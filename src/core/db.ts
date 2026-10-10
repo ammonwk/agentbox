@@ -1199,6 +1199,7 @@ export const DEFAULT_BALANCER: BalancerSettings = {
   shortWindowInWeekly: 24,
   claimIdleMin: 60,
   resetHorizonMin: 60,
+  shortLoadPct: 50,
 };
 
 export const DEFAULT_SETTINGS: AgentSettings = {

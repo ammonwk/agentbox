@@ -137,6 +137,9 @@ export interface BalancerSettings {
   claimIdleMin: number;
   /** A short window this close to resetting is treated as partly fresh. */
   resetHorizonMin: number;
+  /** How full, in percent, a 5-hour window is loaded before new sessions go
+   *  to the next account to reset. */
+  shortLoadPct: number;
 }
 
 /** One account, as the balancer saw it when placing a session. */
@@ -163,6 +166,12 @@ export interface Candidate {
   /** 0–100: short-window room left by `shortEffective`, raised by reset
    *  proximity and capped by weekly headroom. */
   legRoom: number | null;
+  /** The 5-hour window's own room, before weekly headroom caps it (below
+   *  zero: overrun), and how full the balancer will load that window:
+   *  `shortLoadPct`, or more when its weekly needs more to be used up before
+   *  it resets. A session has room here while the window stays under that. */
+  shortRoom: number | null;
+  shortLoadTo: number | null;
   /** Weekly points left per hour until the weekly reset. */
   weeklyPerHour: number | null;
   /** 5-hour points an hour at the pace of the last readings; null when there

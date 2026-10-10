@@ -78,6 +78,7 @@ const settings: AgentSettings = {
     shortWindowInWeekly: 24,
     claimIdleMin: 60,
     resetHorizonMin: 60,
+    shortLoadPct: 50,
   },
 };
 
@@ -627,6 +628,8 @@ function candidateFor(a: MockAccount, now: number): Candidate {
     shortEffective,
     shortResetsAt: shortW?.resetsAt ?? null,
     legRoom,
+    shortRoom: legRoom,
+    shortLoadTo: legRoom == null ? null : b.shortLoadPct,
     weeklyPerHour,
     outstanding,
     score: eligible ? score : score - 1000,

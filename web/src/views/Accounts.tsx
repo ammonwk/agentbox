@@ -50,7 +50,8 @@ function AccountList({ state }: { state: AppState }) {
   return (
     <div className="acs">
       <p className="hint acs-lede">
-        New sessions go to the account with the most room, counting what running sessions are still expected to use — the hatched
+        New sessions go to the account whose weekly resets soonest, until its 5-hour window is half spoken for, then to the next to
+        reset — so what expires first is used first. That counts what running sessions are still expected to use: the hatched
         part of each weekly bar, and of a 5-hour bar where it is headed by its reset. The tick on a bar marks how far through its
         window we are. <a href={hrefOf({ page: "accounts", sub: "calibration" })}>Calibration</a> shows what those expectations are
         made of.
@@ -383,6 +384,12 @@ function AccountCard({
             <span>
               Balancer: <strong>eligible</strong>
               {c.legRoom != null ? <> · 5-hour room {fmtPts(c.legRoom)}</> : null}
+              {c.shortLoadTo != null ? (
+                <span title="New sessions go to the account whose weekly resets soonest until its 5-hour window is forecast this full, then to the next to reset">
+                  {" "}
+                  · loads to {fmtPts(c.shortLoadTo)}%
+                </span>
+              ) : null}
               {c.shortPace != null ? (
                 <span title="How fast its 5-hour window has been filling over the last 45 minutes, in that window's percent an hour">
                   {" "}

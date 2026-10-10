@@ -105,6 +105,7 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
       shortWindowInWeekly: [1, 100],
       claimIdleMin: [1, 24 * 60],
       resetHorizonMin: [0, 300],
+      shortLoadPct: [1, 100],
     };
     for (const [k, v] of Object.entries(b)) {
       const range = ranges[k];

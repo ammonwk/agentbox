@@ -20,4 +20,9 @@ export const BALANCER_HELP: Record<keyof BalancerSettings, { label: string; unit
     unit: "min",
     help: "A 5-hour window this close to resetting counts as partly fresh.",
   },
+  shortLoadPct: {
+    label: "Load a 5-hour window to",
+    unit: "%",
+    help: "New sessions go to the account whose weekly resets soonest until its 5-hour window is forecast this full, then to the next to reset. The rest is the margin for sessions that turn out bigger than forecast. An account that could not use up its weekly at this rate is loaded further, up to 90%.",
+  },
 };
