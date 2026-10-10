@@ -134,6 +134,11 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
 /** `agentbox claude [--account X] [--model M] [--detach] [prompt…]` */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
   const { flags, rest } = parseFlags(args);
+  // Asking how is not asking to start one.
+  if (flags.has("help")) {
+    console.log(USAGE);
+    return 0;
+  }
   await ensureServer();
 
   let accountId: string | null = null;
@@ -491,6 +496,11 @@ async function devinBridge(verb = "status"): Promise<number | null> {
 
 export async function main(argv: string[]): Promise<number | null> {
   const cmd = argv[0] ?? "serve";
+  // `agentbox <any verb> --help` asks how, and does nothing.
+  if (argv[1] === "--help" || argv[1] === "-h") {
+    console.log(USAGE);
+    return 0;
+  }
   try {
     switch (cmd) {
       case "serve": {
@@ -535,12 +545,13 @@ export async function main(argv: string[]): Promise<number | null> {
         return await verbs.each(api, cmd, argv.slice(1));
       // The old names, for scripts and agents that learnt them.
       case "card":
-      case "pr":
-      case "prs":
-        return await prs.pr(api, argv.slice(1));
       case "cards":
         await ensureServer();
         return await cards.card(api, argv.slice(1));
+      case "pr":
+      case "prs":
+        await ensureServer();
+        return await prs.pr(api, argv.slice(1));
       case "schedule":
         await ensureServer();
         return await schedules.schedule(api, argv.slice(1));
