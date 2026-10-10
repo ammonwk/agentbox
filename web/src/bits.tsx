@@ -268,33 +268,47 @@ export function ContextBar({
 // ------------------------------------------------------------------ usage
 
 /**
- * One rate-limit window as a bar. The weekly bar can carry the account's
- * outstanding claims as a hatched segment on top of real use, which is the
- * picture the balancer actually gates on. A small tick marks how far through
- * the window we are, so "60% used, 90% of the way through" reads as fine.
+ * One rate-limit window as a bar, with where it is headed as a hatched
+ * segment on top of real use, which is the picture the balancer actually
+ * gates on: the weekly bar carries the account's outstanding claims
+ * (`outstanding`), the 5-hour bar where the balancer expects it to stand at
+ * its reset (`forecast`, and `how` it got there). A small tick marks how far
+ * through the window we are, so "60% used, 90% of the way through" reads as
+ * fine.
  */
 export function UsageBar({
   window: w,
   outstanding = 0,
+  forecast,
   now,
 }: {
   window: UsageWindow;
   outstanding?: number;
+  forecast?: { at: number; how: string } | null;
   now: number;
 }) {
   const used = usedNow(w, now);
-  const seg = barSegments(used, outstanding);
-  const tone = usageTone(outstanding > 0 ? seg.effective : used);
+  const ahead = forecast && forecast.at > used ? forecast : null;
+  const seg = barSegments(used, ahead ? ahead.at - used : outstanding);
+  const tone = usageTone(ahead || outstanding > 0 ? seg.effective : used);
   const elapsed = windowElapsed(w, now);
   const label = windowLabel(w);
-  const claimText = outstanding > 0 ? ` + ${Math.round(outstanding * 10) / 10} claimed = ${Math.round(seg.effective)}` : "";
+  const claimText = ahead
+    ? `, ${Math.round(ahead.at)}% ${ahead.how}`
+    : outstanding > 0
+      ? ` + ${Math.round(outstanding * 10) / 10} claimed = ${Math.round(seg.effective)}`
+      : "";
   return (
     <div className={`ubar ubar-${w.kind}${w.scope ? " ubar-scoped" : ""}`} data-tone={tone}>
       <div className="ubar-head">
         <span className="ubar-label">{label}</span>
         <span className="ubar-pct">
           {Math.round(used)}%
-          {outstanding > 0 ? <span className="ubar-claim"> +{Math.round(outstanding * 10) / 10}</span> : null}
+          {ahead ? (
+            <span className="ubar-claim"> → {Math.round(ahead.at)}%</span>
+          ) : outstanding > 0 ? (
+            <span className="ubar-claim"> +{Math.round(outstanding * 10) / 10}</span>
+          ) : null}
         </span>
         <span className="ubar-reset">{resetText(w.resetsAt, now)}</span>
       </div>

@@ -907,6 +907,29 @@ export function sessionsOnAccounts(accountIds: string[], sinceMs: number): { id:
   return rows.map((r) => ({ id: r.id, agentSessionId: r.agent_session_id, label: r.label, cwd: r.cwd, model: r.model }));
 }
 
+/**
+ * Every token sample since `sinceMs` of the sessions that hold claims (one
+ * another session started is in its caller's), by session, oldest first, with
+ * what the forecast needs of each session.
+ */
+export function tokenSamplesSince(sinceMs: number): { sessionId: string; provider: string; startedAt: number; at: number; costEquiv: number }[] {
+  return getDb()
+    .query(
+      `SELECT t.session_id AS sessionId, s.provider AS provider, s.started_at AS startedAt, t.at AS at, t.cost_equiv AS costEquiv
+         FROM token_samples t JOIN sessions s ON s.id = t.session_id
+        WHERE t.at >= ? AND s.account_id IS NOT NULL AND (s.parent IS NULL OR s.parent_by_hand = 1 OR s.origin = 'agentbox')
+        ORDER BY t.session_id, t.at`,
+    )
+    .all(sinceMs) as { sessionId: string; provider: string; startedAt: number; at: number; costEquiv: number }[];
+}
+
+/** Weekly points attributed on `accountId` since `sinceMs`, per session. */
+export function attributionsSince(sinceMs: number, accountId: string): { sessionId: string; points: number }[] {
+  return getDb()
+    .query("SELECT session_id AS sessionId, SUM(points) AS points FROM attributions WHERE account_id = ? AND at >= ? GROUP BY session_id")
+    .all(accountId, sinceMs) as { sessionId: string; points: number }[];
+}
+
 /** A session's token samples after `sinceMs`, oldest first. */
 export function tokenSamplesAfter(sessionId: string, sinceMs: number): TokenSampleRow[] {
   const rows = getDb()

@@ -603,6 +603,13 @@
   text-align: right;
   white-space: nowrap;
 }
+.cal-scroll {
+  overflow-x: auto;
+}
+.cal-forecast th,
+.cal-forecast td {
+  white-space: nowrap;
+}
 .cal-key {
   font-weight: 600;
   white-space: nowrap;

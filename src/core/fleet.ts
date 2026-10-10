@@ -26,6 +26,7 @@ import { owners } from "./accounts/homes";
 import { place, type AccountState } from "./balancer";
 import { claimFor } from "./claim";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
+import { Forecaster } from "./forecast";
 import {
   dismissBtw,
   failUnfinishedBtw,
@@ -325,6 +326,7 @@ export class Fleet extends EventEmitter {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking: Promise<void> | null = null;
   private attributor = new Attributor();
+  readonly forecaster = new Forecaster();
   private lastWeekly = new Map<string, string>();
   /** Providers whose sessions can wake on another account: the adapter can
    *  move a session, and there is another account to move it to. */
@@ -2423,14 +2425,16 @@ export class Fleet extends EventEmitter {
       // placed it and its parent's claim already counts it. What it really
       // spends shows in the account's measured pace.
       if ((s.parent && !s.parentByHand && s.origin !== "agentbox") || s.subagent) continue;
+      const running = s.status === "running" || s.status === "blocked";
       inputs.push({
         sessionId: s.id,
         accountId: s.accountId,
         title: s.title,
         claim: s.claim,
         warmUntil: s.cacheWarmUntil,
-        running: s.status === "running" || s.status === "blocked",
+        running,
         since: Math.max(s.startedAt, this.wokeAt.get(s.id) ?? 0),
+        expected: this.forecaster.expected({ sessionId: s.id, provider: s.provider, accountId: s.accountId, startedAt: s.startedAt, open: running }, now),
       });
     }
     return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), now);

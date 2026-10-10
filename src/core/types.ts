@@ -114,8 +114,12 @@ export interface ClaimView {
   claim: number;
   /** Weekly points attributed to this session so far. */
   consumed: number;
-  /** max(0, claim − consumed), or 0 once the claim has lapsed. */
+  /** What it is still expected to use here: forecast from what it has been
+   *  spending (forecast.ts), or `max(0, claim − consumed)` while there is
+   *  nothing to forecast from; 0 once the claim has lapsed. */
   outstanding: number;
+  /** Which of the two `outstanding` is. */
+  basis: "forecast" | "claim";
   lapsed: boolean;
   /** Since when it has been spending on this account: started, or woken
    *  there. A 5-hour pace measured before then has not seen it. */
@@ -198,6 +202,23 @@ export interface CalibrationReport {
   hitAfterPlacement: number;
   suggested: Partial<BalancerSettings>;
   current: BalancerSettings;
+  forecast: ForecastReport;
+}
+
+/** The table sessions' outstanding claims are forecast from (forecast.ts). */
+export interface ForecastReport {
+  fittedAt: number;
+  /** Bucket edges, in cost-equivalent: spent in the last ten minutes, and so far this stretch. */
+  recentEdges: number[];
+  soFarEdges: number[];
+  providers: {
+    provider: string;
+    /** Weekly points per cost-equivalent on its median account; null when none has a price yet. */
+    pointsPerCost: number | null;
+    /** `recent` and `soFar` index the buckets the edges make. `points` is null
+     *  where too few stretches were seen, or the points have no price. */
+    cells: { recent: number; soFar: number; stretches: number; points: number | null }[];
+  }[];
 }
 
 export interface Percentiles {

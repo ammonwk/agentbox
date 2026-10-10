@@ -3,7 +3,7 @@ import type { AccountView, Candidate, Placement } from "../../../../src/core/typ
 import { accountHue } from "../../bits";
 import { Icon, Spinner } from "../../components";
 import { fmtPts } from "../../lib/format";
-import { headlineWindows, usageTone } from "../../lib/usage";
+import { headlineWindows, shortForecastHow, usageTone } from "../../lib/usage";
 import { scrollActiveIntoView, useDismiss, useFloating } from "./popover";
 
 /**
@@ -215,7 +215,7 @@ function AccountLine({ account: a, all, candidate: c }: { account: AccountView; 
         label="5h"
         used={c?.short ?? short?.usedPct ?? null}
         effective={c?.shortEffective ?? null}
-        forecast={c?.shortPace != null ? `by its reset at ${fmtPts(c.shortPace)}%/h and new claims` : undefined}
+        forecast={shortForecastHow(c?.shortPace)}
       />
       <MiniBar label="wk" used={c?.weekly ?? weekly?.usedPct ?? null} effective={c?.weeklyEffective ?? null} />
     </span>

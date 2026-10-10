@@ -2,7 +2,7 @@
  *  placement preview. Pure: `now` is always passed in. */
 
 import type { AccountUsage, AccountView, ClaimView, UsageWindow } from "../../../src/core/types";
-import { clamp, fmtCountdown } from "./format";
+import { clamp, fmtCountdown, fmtPts } from "./format";
 
 export type Tone = "ok" | "warn" | "bad";
 
@@ -36,6 +36,12 @@ export function barSegments(usedPct: number, outstanding: number): BarSegments {
   const claimed = clamp(out, 0, 100 - used);
   const effective = usedPct + out;
   return { used, claimed, effective, overCommitted: effective >= 100 };
+}
+
+/** How a 5-hour forecast (`Candidate.shortEffective`) was reached, to follow
+ *  "15%": a measured pace carried to the reset, or claims alone. */
+export function shortForecastHow(pace: number | null | undefined): string {
+  return pace != null ? `by its reset at ${fmtPts(pace)}%/h and new claims` : "with claims";
 }
 
 /** Sum of what an account's live claims still hold, lapsed ones excluded. */

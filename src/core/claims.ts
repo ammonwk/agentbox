@@ -5,9 +5,11 @@
  * the model is unknown. As it runs, the account's weekly percentage rises,
  * and that rise is apportioned across the account's sessions by how much each
  * did in the same interval (token-weighted cost, see pricing.ts). What a
- * session has been apportioned is its consumption; its outstanding claim is
- * what is left of its estimate. Without this the balancer would count every
- * session's usage twice: once in the live percentage and again in the claim.
+ * session has been apportioned is its consumption. What it still holds is
+ * what it is expected to go on to use: once it has spent anything, a forecast
+ * from how it is spending (forecast.ts); until then, what is left of its
+ * claim. Either way the balancer does not count a session's usage twice, once
+ * in the live percentage and again in the claim.
  *
  * The apportioned amounts are also the calibration data: after a week, the
  * distribution of what sessions actually consumed says what the claim sizes
@@ -33,6 +35,9 @@ export interface ClaimInput {
   running: boolean;
   /** Since when it has been spending on this account. */
   since: number;
+  /** Weekly points it is expected to still use, from what it has been
+   *  spending (forecast.ts); null when there is nothing to forecast from. */
+  expected?: number | null;
 }
 
 /**
@@ -52,7 +57,8 @@ export function claimsByAccount(sessions: ClaimInput[], consumed: Map<string, nu
       title: s.title,
       claim: s.claim,
       consumed: Math.round(used * 100) / 100,
-      outstanding: lapsed ? 0 : Math.round(Math.max(0, s.claim - used) * 100) / 100,
+      outstanding: lapsed ? 0 : Math.round(Math.max(0, s.expected ?? s.claim - used) * 100) / 100,
+      basis: s.expected == null ? "claim" : "forecast",
       lapsed,
       since: s.since,
     };

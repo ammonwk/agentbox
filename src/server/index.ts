@@ -1199,7 +1199,9 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/calibration", ({ url }) => {
     const days = Math.min(60, Math.max(1, Number(url.searchParams.get("days") ?? 7) || 7));
-    return json(calibrate(days));
+    const homes = accounts.list();
+    const owner = owners(homes);
+    return json(calibrate(fleet.forecaster.report(homes.filter((a) => owner.get(a.id) === a.id), Date.now()), days));
   })
 
   // ---- settings, repos, worktrees, skills

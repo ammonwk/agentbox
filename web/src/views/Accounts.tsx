@@ -5,7 +5,7 @@ import { accountProvider } from "../../../src/core/providers/account";
 import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
 import { Button, Confirm, Empty, Field, Icon, Modal, RelativeTime, Spinner, Toggle } from "../components";
 import { fmtCountdown, fmtPts, guessHome, tildify } from "../lib/format";
-import { outstandingOf, sortWindows } from "../lib/usage";
+import { outstandingOf, shortForecastHow, sortWindows } from "../lib/usage";
 import { hrefOf, type Route } from "../route";
 import { Calibration } from "./Calibration";
 import { Insights } from "./Insights";
@@ -50,9 +50,10 @@ function AccountList({ state }: { state: AppState }) {
   return (
     <div className="acs">
       <p className="hint acs-lede">
-        New sessions go to the account with the most room, counting what running sessions still <em>claim</em> — the hatched part of
-        each weekly bar. The tick on a bar marks how far through its window we are.{" "}
-        <a href={hrefOf({ page: "accounts", sub: "calibration" })}>Calibration</a> checks those claims against what sessions really use.
+        New sessions go to the account with the most room, counting what running sessions are still expected to use — the hatched
+        part of each weekly bar, and of a 5-hour bar where it is headed by its reset. The tick on a bar marks how far through its
+        window we are. <a href={hrefOf({ page: "accounts", sub: "calibration" })}>Calibration</a> shows what those expectations are
+        made of.
       </p>
 
       {providers.map((p) => {
@@ -290,7 +291,13 @@ function AccountCard({
           </p>
         ) : (
           windows.map((w) => (
-            <UsageBar key={w.id} window={w} now={now} outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0} />
+            <UsageBar
+              key={w.id}
+              window={w}
+              now={now}
+              outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0}
+              forecast={w.kind === "short" && !w.scope && c?.shortEffective != null ? { at: c.shortEffective, how: shortForecastHow(c.shortPace) } : null}
+            />
           ))
         )}
       </div>
@@ -340,9 +347,9 @@ function AccountCard({
             <thead>
               <tr>
                 <th>Session</th>
-                <th className="num" title="Weekly points claimed at placement">Claim</th>
+                <th className="num" title="Weekly points its model claimed at placement">Claim</th>
                 <th className="num" title="Weekly points attributed to it so far">Used</th>
-                <th className="num" title="Still held against this account">Held</th>
+                <th className="num" title="Weekly points it is expected to still use here: forecast from what it spent in the last ten minutes and so far this stretch, or what is left of its claim until it has spent anything">Held</th>
               </tr>
             </thead>
             <tbody>
@@ -356,7 +363,12 @@ function AccountCard({
                   </td>
                   <td className="num">{fmtPts(cl.claim)}</td>
                   <td className="num">{fmtPts(cl.consumed)}</td>
-                  <td className="num">{fmtPts(cl.outstanding)}</td>
+                  <td
+                    className="num"
+                    title={cl.basis === "forecast" ? "Forecast from what it has been spending" : "What is left of its claim: nothing to forecast from yet"}
+                  >
+                    {fmtPts(cl.outstanding)}
+                  </td>
                 </tr>
               ))}
             </tbody>

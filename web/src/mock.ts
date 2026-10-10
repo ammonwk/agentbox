@@ -566,6 +566,7 @@ function claimsFor(accountId: string): ClaimView[] {
         claim: s.claim,
         consumed: Math.round(consumed * 10) / 10,
         outstanding: Math.round(outstanding * 10) / 10,
+        basis: "claim" as const,
         lapsed,
         since: s.startedAt,
       };
@@ -1167,6 +1168,20 @@ function calibration(days: number): CalibrationReport {
     hitAfterPlacement: 4,
     suggested: { shortWindowInWeekly: 21.4, claimNormal: 6 },
     current: structuredClone(settings.balancer) as BalancerSettings,
+    forecast: {
+      fittedAt: T0 - 3 * H,
+      recentEdges: [0.001, 0.2, 1, 4],
+      soFarEdges: [0.1, 1, 4, 16, 64],
+      providers: [
+        {
+          provider: "claude",
+          pointsPerCost: 0.035,
+          cells: [0.01, 0.2, 0.5, 0.9, 2.4].flatMap((base, recent) =>
+            [0.4, 0.6, 1, 1.4, 2, 3].map((scale, soFar) => ({ recent, soFar, stretches: 400 - 60 * recent, points: Math.round(base * scale * 100) / 100 })),
+          ),
+        },
+      ],
+    },
   };
 }
 

@@ -15,7 +15,7 @@ import {
   usageSamplesSince,
   type UsageSampleRow,
 } from "./db";
-import type { BalancerSettings, CalibrationReport, Percentiles } from "./types";
+import type { BalancerSettings, CalibrationReport, ForecastReport, Percentiles } from "./types";
 
 const DAY = 86_400_000;
 
@@ -119,7 +119,7 @@ export function estimateShortInWeekly(
 /** Round a claim suggestion to a half point, never below one. */
 const claimOf = (v: number): number => Math.max(1, Math.round(v * 2) / 2);
 
-export function calibrate(days = 7, now = Date.now()): CalibrationReport {
+export function calibrate(forecast: ForecastReport, days = 7, now = Date.now()): CalibrationReport {
   const since = now - days * DAY;
   const current = getSettings().balancer;
 
@@ -157,5 +157,6 @@ export function calibrate(days = 7, now = Date.now()): CalibrationReport {
     hitAfterPlacement,
     suggested,
     current,
+    forecast,
   };
 }
