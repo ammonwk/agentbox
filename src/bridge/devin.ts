@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { userHome } from "../core/paths";
 import { GO_ACCOUNT_BEARER, GO_CONSOLE_UPSTREAM, GO_CONSOLE_USAGE, GO_KEY_UPSTREAM, goHomeForAccount } from "../core/accounts/gocred";
 import { freshGoLogin } from "../core/accounts/godevice";
+import { repairToolArguments } from "./toolargs";
 import { BRIDGED, bridgePort, bridgedModel, type BridgedModel } from "./models";
 import {
   ChatReply,
@@ -435,7 +436,14 @@ async function goProxy(req: Request, url: URL, log: (line: string) => void): Pro
   const headers = new Headers(req.headers);
   for (const h of HOP) headers.delete(h);
   headers.set("accept-encoding", "identity");
-  const body = req.body ? await req.arrayBuffer() : undefined;
+  let body = req.body ? await req.arrayBuffer() : undefined;
+  if (body && shape === "openai" && req.method === "POST") {
+    const fixed = repairToolArguments(new TextDecoder().decode(body));
+    if (fixed) {
+      log(`go ${m[1]} ${m[3]}: sent {} for the unparseable arguments of ${fixed.repaired.length} replayed tool call(s): ${fixed.repaired.join(", ")}`);
+      body = new TextEncoder().encode(fixed.body).buffer as ArrayBuffer;
+    }
+  }
 
   let selector = m[1]!;
   if (selector === "caller") {
