@@ -38,7 +38,7 @@ import { codexFormat, codexLineage, type CodexLineage } from "./codex-transcript
 import { JsonlTranscriptReader } from "./jsonl-reader";
 import { cwdOf, environOf, findProcesses, runsCli, startedAtOf, type ProcMatch } from "./procs";
 import { pickOption, plainScreen, underInput } from "./tui-screen";
-import { BRIEFING } from "./briefing";
+import { briefing } from "./briefing";
 import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
@@ -711,7 +711,7 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
 }
 
 /** A JSON string is a TOML basic string, which is what `-c` parses. */
-const TOLD = ["-c", `developer_instructions=${JSON.stringify(BRIEFING)}`];
+const told = (): string[] => ["-c", `developer_instructions=${JSON.stringify(briefing())}`];
 
 /** clap reads a leading `-` as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
@@ -755,7 +755,7 @@ function sessionFlags(opts: { model?: string; effort?: string; autoApprove: bool
   if (opts.model && !(c && setsFlag(c, "-m", "--model"))) a.push("--model", opts.model);
   if (opts.effort && !configs.some((x) => /(^|=)model_reasoning_effort=/.test(x))) a.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox");
-  if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...TOLD);
+  if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told());
   return a;
 }
 

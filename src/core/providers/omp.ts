@@ -45,7 +45,7 @@ import { ompRedirectVars } from "./omp-usage";
 import { GO_ACCOUNT_BEARER } from "../accounts/gocred";
 import { ensureBridge } from "../../bridge/service";
 import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
-import { BRIEFING } from "./briefing";
+import { briefing } from "./briefing";
 import type {
   Command,
   LiveProcess,
@@ -671,7 +671,7 @@ function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoA
   if (opts.model && !(c && setsFlag(c, "--model"))) a.push("--model", opts.model);
   if (opts.effort && !(c && setsFlag(c, "--thinking"))) a.push(`--thinking=${opts.effort}`);
   if (!c && opts.autoApprove) a.push("--auto-approve");
-  if (!(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${BRIEFING}`);
+  if (!(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${briefing()}`);
   // omp silently moves a session started in ~ to a temp dir unless told not to.
   if (canonical(opts.cwd) === canonical(homedir()) && !(c && setsFlag(c, "--allow-home"))) a.push("--allow-home");
   return a;

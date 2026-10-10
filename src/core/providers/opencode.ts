@@ -37,7 +37,7 @@ import { agentboxHome, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import { carryFlags, type Arity } from "../launch";
 import { cwdOf, findProcesses, runsCli, startedAtOf } from "./procs";
-import { BRIEFING } from "./briefing";
+import { briefing } from "./briefing";
 import { ensureBridge } from "../../bridge/service";
 import { bridgeUrl } from "../../bridge/models";
 import { anthropicGoModels } from "../accounts/gomodels";
@@ -389,8 +389,9 @@ export function modelRef(model: string | null | undefined, variant?: string | nu
  *  reads from its environment; written when it differs. */
 function briefingFile(): string {
   const path = join(agentboxHome(), "opencode-briefing.md");
+  const told = briefing();
   try {
-    if (!existsSync(path) || readFileSync(path, "utf8") !== BRIEFING) writeFileSync(path, BRIEFING);
+    if (!existsSync(path) || readFileSync(path, "utf8") !== told) writeFileSync(path, told);
   } catch {
     /* the session starts unbriefed */
   }

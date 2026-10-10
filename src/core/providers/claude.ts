@@ -34,7 +34,7 @@ import { SubagentTokens } from "./claude-subagents";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
 import { pickOption, plainScreen, RULE, underInput } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
-import { BRIEFING } from "./briefing";
+import { briefing } from "./briefing";
 import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
@@ -445,7 +445,7 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
  *  timeline has nothing to show. */
 const THINKING = ["--thinking-display", "summarized"];
 
-const TOLD = ["--append-system-prompt", BRIEFING];
+const told = (): string[] => ["--append-system-prompt", briefing()];
 
 /** A subagent's own subagents are told who started them, or they take "main"
  *  for their coordinator and write to the conversation the user is reading
@@ -479,7 +479,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-  argv.push(...THINKING, ...TOLD, ...HOOKED);
+  argv.push(...THINKING, ...told(), ...HOOKED);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: id };
 }
@@ -494,13 +494,13 @@ function resumeCommand(opts: ResumeOptions): Command {
     if (!setsFlag(opts.carry, "--thinking-display")) argv.push(...THINKING);
     // One it was launched with is its own, or ours from an earlier launch; a
     // second would replace it.
-    if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...TOLD);
+    if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...told());
     if (!setsFlag(opts.carry, "--settings")) argv.push(...HOOKED);
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-    argv.push(...THINKING, ...TOLD, ...HOOKED);
+    argv.push(...THINKING, ...told(), ...HOOKED);
   }
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
