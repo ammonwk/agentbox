@@ -144,11 +144,14 @@ export async function runMcp(base: string): Promise<void> {
       description:
         "Sends `text` to a session running in agentbox, exactly as if typed at its prompt and submitted. " +
         "Works only for sessions agentbox runs (not ones in another terminal — adopt those first) and " +
-        "only sensibly when the session is waiting for input.",
-      inputSchema: { id: z.string(), text: z.string().min(1) },
+        "only sensibly when the session is waiting for input. Refused, with the reason, when the session " +
+        "is stopped or its prompt cache is cold (a message would make it re-read its whole context: read " +
+        "its transcript instead, or pass `wake: true` when waking it is the point — an answer it asked " +
+        "for, a blocker), and when you have sent it more than a few messages in the last hour.",
+      inputSchema: { id: z.string(), text: z.string().min(1), wake: z.boolean().optional() },
     },
-    async ({ id, text: body }) => {
-      await api("POST", `/api/sessions/${id}/send`, { text: body, from: "agent", fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+    async ({ id, text: body, wake }) => {
+      await api("POST", `/api/sessions/${id}/send`, { text: body, from: "agent", wake: wake === true, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
       return text(`sent to ${id}`);
     },
   );

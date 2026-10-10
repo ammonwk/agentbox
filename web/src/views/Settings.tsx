@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentSettings, AppState, BalancerSettings, NightlyReclaim, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
-import { describeAt, describeRule, isRecurring } from "../../../src/core/schedule";
+import { describeAt, describeRule, FRESH_OVER, isRecurring } from "../../../src/core/schedule";
 import { api, fmtBytes, healthRows, type Health, type RepoPatch, type SettingsPatch } from "../api";
 import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
 import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle } from "../components";
@@ -138,7 +138,7 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
         {sc.lastRunAt ? (
           <>
             {" "}
-            · last ran <RelativeTime ts={sc.lastRunAt} />
+            · {sc.sameSession ? "last spoke" : "last ran"} <RelativeTime ts={sc.lastRunAt} />
             {sc.lastSessionId && !sc.lastError ? (
               <>
                 {" "}
@@ -148,9 +148,26 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
           </>
         ) : null}
       </p>
+      {sc.sameSession || sc.noteCmd ? (
+        <p className="sched-meta">
+          {sc.sameSession ? (
+            <>
+              Keeps to one session, and starts a new one once it holds over {Math.round((sc.freshOver ?? FRESH_OVER) / 1000)}k tokens
+            </>
+          ) : (
+            "Starts a session each time"
+          )}
+          {sc.noteCmd ? (
+            <>
+              {" "}
+              · only when <span className="mono">{sc.noteCmd}</span> prints something, which it is told first
+            </>
+          ) : null}
+        </p>
+      ) : null}
       {sc.lastError ? (
         <p className="error" role="alert">
-          {sc.rule.kind === "red" && sc.lastError.startsWith("could not read") ? "" : "Last time it did not start: "}{sc.lastError}
+          {(sc.rule.kind === "red" && sc.lastError.startsWith("could not read")) || sc.noteCmd || sc.sameSession ? "" : "Last time it did not start: "}{sc.lastError}
         </p>
       ) : null}
       {editing ? (

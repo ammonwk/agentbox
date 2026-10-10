@@ -1,0 +1,84 @@
+/**
+ * What stops one agent's `agentbox send` (and the fleet MCP's `send`) from
+ * costing more than it is worth. Two refusals, both said to the sender in
+ * words it can act on, and neither ever applied to you — the app, voice mode —
+ * or to the fleet's own notes (keep-warm, recovery, a schedule's note).
+ *
+ * Waking: a message to a session that is stopped, parked, or whose prompt
+ * cache has gone cold (`Session.cacheWarmUntil`, cache.ts) makes it read its
+ * whole context again at full price to hear one line. That is refused unless
+ * the sender says waking it is the point (`wake`).
+ *
+ * Chatter: more than `CHATTER_MAX` messages from one session to another in
+ * `CHATTER_WINDOW_MS`. Each one interrupts the reader and stays in its
+ * context. Of 185 sender→reader pairs in this machine's transcripts, 169 never
+ * passed two in an hour and 175 never passed three; the few that reached five
+ * and six were coordinators narrating to workers.
+ */
+
+import type { Session } from "./types";
+
+export const CHATTER_MAX = 3;
+export const CHATTER_WINDOW_MS = 60 * 60_000;
+
+/** `312k`, `8k`: a context size as the board says it. */
+const size = (tokens: number | null): string => (tokens ? `${Math.max(1, Math.round(tokens / 1000))}k tokens` : "an unknown amount");
+
+function span(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60_000));
+  return m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.round(m / 1440)}d`;
+}
+
+/**
+ * Why an agent's message to `s` would wake it, or null when it would not:
+ * it runs and its cache is warm, or it is mid-turn (the message joins a turn
+ * that is paying for the context anyway).
+ */
+export function wakeRefusal(s: Session, now: number): string | null {
+  const asleep = s.host === "none";
+  const cold = s.cold || now > s.cacheWarmUntil;
+  if (!asleep && (!cold || s.status === "running" || s.status === "blocked")) return null;
+  const state = asleep
+    ? s.status === "closed"
+      ? "is closed"
+      : s.status === "stopped"
+        ? "is stopped"
+        : "was parked for sitting idle"
+    : `has a cold prompt cache (it ran out ${span(now - s.cacheWarmUntil)} ago)`;
+  return (
+    `not sent: ${s.id} ${state} and holds ${size(s.contextUsed)} of context, so a message ${asleep ? "resumes" : "wakes"} it and it re-reads all of that at full price. ` +
+    `Read it instead: \`agentbox show ${s.id}\`, \`agentbox log ${s.id} | tail -60\`. ` +
+    `If its work must go on, start a fresh session with a handoff that points at that log. ` +
+    `Send again with --wake only when waking it is the point: the answer to a question it asked, or a blocker only it can clear.`
+  );
+}
+
+/** Agent messages delivered, by `sender→reader`, within the window. In memory:
+ *  a restart forgets an hour of counts, which costs nothing worth a table. */
+const sent = new Map<string, number[]>();
+
+function recent(key: string, now: number): number[] {
+  const kept = (sent.get(key) ?? []).filter((t) => now - t < CHATTER_WINDOW_MS);
+  if (kept.length) sent.set(key, kept);
+  else sent.delete(key);
+  return kept;
+}
+
+/** A sender that could not be told is one sender: unknown ones share a count. */
+const pair = (from: string | null, to: string): string => `${from ?? "?"}→${to}`;
+
+/** Why `from` has said enough to `to` for now, or null. */
+export function chatterRefusal(from: string | null, to: string, now: number): string | null {
+  const times = recent(pair(from, to), now);
+  if (times.length < CHATTER_MAX) return null;
+  return (
+    `not sent: ${from ?? "this session"} has already sent ${to} ${times.length} messages in the last hour, and each one interrupts it and stays in its context. ` +
+    `Put everything it still needs from you into one message and send that in ${span(times[0]! + CHATTER_WINDOW_MS - now)}, when the limit (${CHATTER_MAX} an hour to one session) next has room; ` +
+    `or do not send it: \`agentbox watch ${to}\` tells you when its turn ends, and \`agentbox log ${to} | tail\` what it did.`
+  );
+}
+
+/** A message from `from` reached `to`. */
+export function countSend(from: string | null, to: string, now: number): void {
+  sent.set(pair(from, to), [...recent(pair(from, to), now), now]);
+}

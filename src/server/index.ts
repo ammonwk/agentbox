@@ -60,6 +60,7 @@ import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termse
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
 import { agentSentMark } from "../core/sent";
+import { chatterRefusal, countSend, wakeRefusal } from "../core/sendguard";
 import { SendReceiptConflict, sendReceipt, submitWithReceipt } from "../core/send-receipts";
 import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
@@ -652,6 +653,20 @@ const router = new Router(mapError)
       (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
       (b.from === "agent" && callerPid ? fleet.callerOf(callerPid) : null);
     const body = b.from === "agent" ? `${agentSentMark(fromSession)} ${text}` : text;
+    // An agent's message is refused, before anything is typed or resumed, when
+    // it would wake a cold or stopped session unasked or is one too many
+    // (src/core/sendguard.ts). Yours never is.
+    if (b.from === "agent") {
+      const now = Date.now();
+      const to = fleet.get(params.id!);
+      const refusal = (b.wake === true ? null : wakeRefusal(to, now)) ?? chatterRefusal(fromSession, to.id, now);
+      if (refusal) throw new HttpError(409, refusal);
+      // Asked to wake it: a stopped one is resumed with the message. Counted
+      // once it is in, so one that could not be delivered costs nothing.
+      await fleet.send(to.id, body, undefined, b.wake === true);
+      countSend(fromSession, to.id, now);
+      return json(null);
+    }
     if (b.sendId !== undefined) {
       const id = requireString(b, "sendId");
       if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, "invalid send ID");
@@ -835,6 +850,9 @@ const router = new Router(mapError)
         effort: optionalString(spec, "effort"),
         accountId: optionalString(spec, "accountId") ?? null,
       },
+      noteCmd: optionalString(b, "noteCmd") ?? null,
+      sameSession: b.sameSession === true,
+      freshOver: typeof b.freshOver === "number" ? b.freshOver : null,
     });
     return json(s, 201);
   })
@@ -849,6 +867,12 @@ const router = new Router(mapError)
     if (b.label !== undefined) edit.label = b.label === null ? null : requireString(b, "label");
     if (b.enabled !== undefined) edit.enabled = requireBoolean(b, "enabled");
     if (b.repoId !== undefined) edit.repoId = requireString(b, "repoId");
+    if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : requireString(b, "noteCmd");
+    if (b.sameSession !== undefined) edit.sameSession = requireBoolean(b, "sameSession");
+    if (b.freshOver !== undefined) {
+      if (b.freshOver !== null && typeof b.freshOver !== "number") throw new HttpError(400, "freshOver must be a number of tokens");
+      edit.freshOver = b.freshOver as number | null;
+    }
     return json(await scheduler.update(params.id!, edit));
   })
   .add("DELETE", "/api/schedules/:id", ({ params }) => {

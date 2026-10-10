@@ -16,10 +16,13 @@ export const PROMPT_PREVIEW = 500;
  *  agentbox id follows `from` when it is known (`AGENTBOX_SESSION`). */
 export const AGENT_SENT_MARK = "[via agentbox send]";
 export const agentSentMark = (from?: string | null): string => (from ? `[via agentbox send from ${from}]` : AGENT_SENT_MARK);
+/** What a schedule that keeps to one session puts before each note it types
+ *  into it (src/core/scheduler.ts): not you, and not another session. */
+export const scheduleSentMark = (scheduleId: string): string => `[via agentbox schedule ${scheduleId}]`;
 
 // The removed Project session signed its messages `[Project session]`; old
 // transcripts still carry that form.
-const MARK = /^\s*\[(?:via agentbox send(?: from ([\w-]+))?|Project session)\]\s*/;
+const MARK = /^\s*\[(?:via agentbox send(?: from ([\w-]+))?|via agentbox (schedule) [\w-]+|Project session)\]\s*/;
 const PASTE_OPEN = /<pasted_content\s+id="[^"]*"\s*>/;
 const PASTE_CLOSE = /<\/pasted_content(?:\s+id="[^"]*")?\s*>/;
 const PASTE = new RegExp(`${PASTE_OPEN.source}([\\s\\S]*?)(?:${PASTE_CLOSE.source}|$)`, "g");
@@ -44,8 +47,9 @@ export interface Sent {
   /** Who sent it, when the message says: an agentbox id from the send mark,
    *  the name a delivered message carries, or "agentbox" for its own note. */
   from: string | null;
-  /** How it came: `agentbox send`, or Claude's own delivery between sessions. */
-  via: "agentbox send" | "Claude" | null;
+  /** How it came: `agentbox send`, a schedule's note, or Claude's own
+   *  delivery between sessions. */
+  via: "agentbox send" | "a schedule" | "Claude" | null;
   /** The message without its wrapper and mark. */
   text: string;
 }
@@ -59,7 +63,7 @@ export function readSent(raw: string): Sent {
   const text = unwrapPaste(raw);
   if (FLEET_NOTE.test(text)) return { agent: true, from: "agentbox", via: null, text: text.trim() };
   const m = MARK.exec(text);
-  if (m) return { agent: true, from: m[1] ?? null, via: "agentbox send", text: text.slice(m[0].length).trim() };
+  if (m) return { agent: true, from: m[2] ? "agentbox" : (m[1] ?? null), via: m[2] ? "a schedule" : "agentbox send", text: text.slice(m[0].length).trim() };
   const d = DELIVERED.exec(text);
   if (d) {
     const from = d[1] === "cross-session-message" ? (attr(d[2]!, "from-name") ?? null) : attr(d[2]!, "from");

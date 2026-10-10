@@ -248,13 +248,19 @@ const schedules: Schedule[] = [
   {
     id: "s9x4", rule: { kind: "once", at: T0 + 3 * H }, label: null, enabled: true, nextAt: T0 + 3 * H, createdAt: T0 - 20 * M,
     spec: { provider: "claude", repoId: "r-agentbox", worktree: true, prompt: "Re-run the balancer calibration once tonight's usage samples are in, and open a PR if the suggested claims moved." },
-    lastRunAt: null, lastSessionId: null, lastError: null,
+    lastRunAt: null, lastSessionId: null, lastError: null, noteCmd: null, sameSession: false, freshOver: null,
   },
   {
     id: "d7w2", rule: { kind: "weekly", days: [1, 2, 3, 4, 5], minute: 9 * 60 }, label: "Morning PR sweep", enabled: true,
     nextAt: nextRun({ kind: "weekly", days: [1, 2, 3, 4, 5], minute: 9 * 60 }, T0), createdAt: T0 - 6 * 24 * H,
     spec: { provider: "claude", repoId: "r-agentbox", worktree: false, prompt: "Go through open PRs: rebase what is stale, answer review comments, and list what needs me." },
-    lastRunAt: T0 - 24 * H, lastSessionId: "k9d1", lastError: null,
+    lastRunAt: T0 - 24 * H, lastSessionId: "k9d1", lastError: null, noteCmd: null, sameSession: false, freshOver: null,
+  },
+  {
+    id: "w3k8", rule: { kind: "every", minutes: 10, from: T0 - 5 * H }, label: "Fleet watch", enabled: true,
+    nextAt: nextRun({ kind: "every", minutes: 10, from: T0 - 5 * H }, T0), createdAt: T0 - 5 * H,
+    spec: { provider: "claude", cwd: `${HOME}/Documents/agentbox`, prompt: "You watch the fleet: handle what each note lists." },
+    lastRunAt: T0 - 22 * M, lastSessionId: "k9d1", lastError: null, noteCmd: "./scripts/whats-open.sh", sameSession: true, freshOver: null,
   },
 ];
 
@@ -1216,6 +1222,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       const sc: Schedule = {
         id: Math.random().toString(36).slice(2, 6), rule: r, spec: x.spec!, label: x.label ?? null, enabled: true,
         nextAt: nextRun(r, Date.now()), createdAt: Date.now(), lastRunAt: null, lastSessionId: null, lastError: null,
+        noteCmd: null, sameSession: false, freshOver: null,
       };
       schedules.push(sc);
       pushCold();

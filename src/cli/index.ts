@@ -380,7 +380,8 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   grep <regex> [-i] [--all]                     search every conversation
   screen <id>...        what its terminal shows now
   diff <id>... [--stat] its worktree's changes
-  send <id> <text…|->   type a message into it
+  send <id> [--wake] <text…|->   type a message into it; from an agent, refused when it would wake a
+                        cold or stopped session (--wake: waking it is the point) or is one too many
   watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once] [--now]
                         a line each time one starts asking, finishes its turn
                         (with the end of its last message), or stops; until killed
@@ -399,6 +400,11 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
                         start one later, in DIR (default: here). <when> is one quoted
                         argument: "in 4 hours", "tomorrow at 9am", "friday 5pm",
                         "every weekday at 8:30", "every 2 hours"
+           [--note-cmd CMD] [--same-session [--fresh-over 150k]]
+                        for a recurring one: run CMD in DIR each time it comes due and
+                        say what it prints before the prompt, nothing when it prints
+                        nothing; --same-session says it to the session it started last,
+                        and starts afresh once that holds over --fresh-over tokens
   schedules [--json]    what is set to start, soonest first
   unschedule <id>...    delete one; it will not start (sessions it started stay)
   mcp                   run the fleet MCP server on stdio (for a conductor session)

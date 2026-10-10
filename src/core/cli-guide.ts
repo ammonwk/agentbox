@@ -36,6 +36,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
 ## Doing
 
     agentbox send <id> 'text'       # type a message into it (echo ... | agentbox send <id> -)
+    agentbox send <id> --wake 'text'   # ...when it is stopped or cold and waking it is the point
     agentbox close <id>...          # stop it and take it off the board; transcript and worktree kept
     agentbox reopen <id>...         # back on the board (still stopped; resume to run it)
     agentbox stop <id>...           # end its process; it stays resumable
@@ -47,7 +48,20 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.
                                     # Prints the id and when it was understood to start
-    agentbox schedules              # what is set to start: id  in  when · agent · title
+    agentbox schedule 'every 10 minutes' --note-cmd './whats-open.sh' --same-session [--fresh-over 150k] 'prompt'
+                                    # a recurring one that speaks only when there is
+                                    # something to say, and to one session. Each time
+                                    # it comes due the command runs in --cwd (2 minutes
+                                    # at most); what it prints goes before the prompt,
+                                    # and when it prints nothing, nothing happens.
+                                    # --same-session types the note into the session it
+                                    # started last instead of starting another, skips
+                                    # the time while that one is mid-turn, and starts a
+                                    # fresh one (closing the old) once it is gone or
+                                    # holds over --fresh-over tokens of context. Either
+                                    # flag works without the other
+    agentbox schedules              # what is set to start: id  in  when · agent · title,
+                                    # and for those: its session, its command, its last note
     agentbox unschedule <id>...     # it will not start
 
 ## Conventions
@@ -76,6 +90,11 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
   does its work: each message interrupts it and stays in its context. A
   session you started says when its turn ends; \`watch\` it instead of
   checking in.
+- A \`send\` to a session that is stopped, or whose prompt cache is cold, is
+  refused: it would re-read its whole context to hear you. Read it with
+  \`show\` and \`log\`, or start a fresh session with a handoff; pass \`--wake\`
+  only when waking it is the point (an answer it asked for, a blocker). More
+  than 3 messages to one session in an hour are refused too: batch them.
 - A sent message arrives marked \`[via agentbox send from <id>]\` with the
   sender's session id, so don't sign it yourself; reply to the id in that
   mark.

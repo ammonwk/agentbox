@@ -306,6 +306,13 @@ const MIGRATIONS: string[] = [
     error TEXT
   );
   `,
+  // 20 — a recurring schedule's note command, and whether it keeps to the one
+  // session it started (src/core/scheduler.ts).
+  `
+  ALTER TABLE schedules ADD COLUMN note_cmd TEXT;
+  ALTER TABLE schedules ADD COLUMN same_session INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE schedules ADD COLUMN fresh_over INTEGER;
+  `,
 ];
 
 function migrate(d: Database) {
@@ -572,6 +579,7 @@ export function listClosedRecords(): SessionRecord[] {
 type ScheduleRow = {
   id: string; rule: string; spec: string; label: string | null; enabled: number; next_at: number | null;
   created_at: number; last_run_at: number | null; last_session_id: string | null; last_error: string | null;
+  note_cmd: string | null; same_session: number; fresh_over: number | null;
 };
 
 function rowToSchedule(r: ScheduleRow): Schedule {
@@ -586,6 +594,9 @@ function rowToSchedule(r: ScheduleRow): Schedule {
     lastRunAt: r.last_run_at,
     lastSessionId: r.last_session_id,
     lastError: r.last_error,
+    noteCmd: r.note_cmd,
+    sameSession: r.same_session === 1,
+    freshOver: r.fresh_over,
   };
 }
 
@@ -599,6 +610,9 @@ const SCHEDULE_COLUMNS = {
   lastRunAt: "last_run_at",
   lastSessionId: "last_session_id",
   lastError: "last_error",
+  noteCmd: "note_cmd",
+  sameSession: "same_session",
+  freshOver: "fresh_over",
 } as const satisfies Record<Exclude<keyof Schedule, "id">, string>;
 
 type ScheduleKey = keyof typeof SCHEDULE_COLUMNS;

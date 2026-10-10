@@ -30,6 +30,11 @@ const MIN = 60_000;
 /** Shorter than this, a recurring session is a loop, not a schedule. */
 const MIN_EVERY = 5;
 
+/** Tokens of context past which a schedule that keeps to one session starts a
+ *  new one, unless it names its own (`Schedule.freshOver`): large enough to
+ *  hold hours of notes, small enough that waking it cold is not a monolith. */
+export const FRESH_OVER = 150_000;
+
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];

@@ -340,16 +340,21 @@ export async function watch(api: Api, args: string[]): Promise<number> {
   }
 }
 
-/** `agentbox send <id> <text…>` or `… | agentbox send <id> -` */
+/** `agentbox send [--wake] <id> <text…>` or `… | agentbox send <id> -`. From
+ *  an agent, the server refuses one that would wake a cold or stopped session
+ *  without `--wake`, or is one too many (src/core/sendguard.ts). */
 export async function send(api: Api, args: string[]): Promise<number> {
-  const [target, ...words] = args;
+  // Only as a flag of its own before the text: a message may hold the word.
+  const at = [0, 1, args.length - 1].find((i) => args[i] === "--wake");
+  const wake = at !== undefined;
+  const [target, ...words] = wake ? args.filter((_, i) => i !== at) : args;
   if (!target) throw new Error("send needs a session id and text");
   const { ids } = await resolveIds(api, [target]);
   const text = words.length === 1 && words[0] === "-" ? (await new Response(Bun.stdin.stream()).text()).trim() : words.join(" ");
   if (!text) throw new Error("nothing to send");
   // Agents are who use this; you type in the app or the terminal. Voice mode
   // is the exception: what it sends is you, spoken (AGENTBOX_SEND_AS=you).
-  await api("POST", `/api/sessions/${ids[0]}/send`, process.env.AGENTBOX_SEND_AS === "you" ? { text } : { text, from: "agent", fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+  await api("POST", `/api/sessions/${ids[0]}/send`, process.env.AGENTBOX_SEND_AS === "you" ? { text } : { text, from: "agent", wake, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
   return 0;
 }
 

@@ -2916,10 +2916,11 @@ export class Fleet extends EventEmitter {
 
   /** Type into the session. A cold one wakes where there is room, which may
    *  mean restarting it on another account with `text` as its prompt; a
-   *  parked one resumes with `text` as its prompt. */
-  send(id: string, text: string, attempt?: () => void): Promise<void> {
+   *  parked one resumes with `text` as its prompt — and with `resume`, so
+   *  does one that was stopped or closed, which otherwise is an error. */
+  send(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
     return this.serial(id, async () => {
-      if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt);
+      if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt, resume);
     });
   }
 
@@ -2927,6 +2928,12 @@ export class Fleet extends EventEmitter {
    *  fleet's own nudges, which must never move a session. */
   private sendInPlace(id: string, text: string): Promise<void> {
     return this.serial(id, () => this.sendNow(id, text));
+  }
+
+  /** A schedule's note for the session it keeps to: typed where it is, as
+   *  the fleet's own nudges are, and a stopped one is resumed with it. */
+  note(id: string, text: string): Promise<void> {
+    return this.serial(id, () => this.sendNow(id, text, undefined, true));
   }
 
   /** Wake a cold tmux session on the balancer's pick with `text` as its
@@ -2956,7 +2963,7 @@ export class Fleet extends EventEmitter {
     return this.deps.runtime.sendText(pane, text, { pieces: this.adapter(provider).pasteInPieces });
   }
 
-  private async sendNow(id: string, text: string, attempt?: () => void): Promise<void> {
+  private async sendNow(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
     const s = this.get(id);
     if (s.host === "none") {
       const rec = getSessionRecord(id);
@@ -2969,7 +2976,7 @@ export class Fleet extends EventEmitter {
         return this.typeInto(s.provider, rec.tmux, text);
       }
       // Parked by the fleet, not stopped by you: this is what wakes it.
-      if (rec?.parkedAt) {
+      if (rec?.parkedAt || resume) {
         await this.resumeNow(id, text, attempt);
         return;
       }
