@@ -713,9 +713,11 @@ const router = new Router(mapError)
     if (!sessions.some((s) => s.id === who)) throw new HttpError(404, `no session ${who}`);
     const pr = prNamed(b, who);
     try {
-      const c = claimPr(prClaimsNow(), sessions, pr.repo, pr.number, who, Date.now());
+      const claims = prClaimsNow();
+      const before = holderOf(claims, pr.repo, pr.number);
+      const c = claimPr(claims, sessions, pr.repo, pr.number, who, Date.now());
       scheduleCold();
-      return json(c);
+      return json({ ...c, already: before?.sessionId === who });
     } catch (e) {
       if (e instanceof PrHeld) throw new HttpError(409, e.message);
       throw e;

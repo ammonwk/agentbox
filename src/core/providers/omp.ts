@@ -46,6 +46,7 @@ import { GO_ACCOUNT_BEARER } from "../accounts/gocred";
 import { ensureBridge } from "../../bridge/service";
 import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
 import { briefing } from "./briefing";
+import { getSessionRecord } from "../db";
 import type {
   Command,
   LiveProcess,
@@ -219,14 +220,22 @@ interface OmpProc {
  *     own for the life of the session, and opens others' only to read them
  *     (its recent-sessions list) — counting those would credit a starting
  *     omp with a sibling's conversation;
- *  2. `-r <id|path>` in argv;
- *  3. the newest session file in the cwd's slug dir created after the
+ *  2. the conversation of the agentbox session it was started as
+ *     (`AGENTBOX_SESSION` in its environment), once agentbox has matched that
+ *     session to its file: omp opens its file only some way into its first
+ *     turn, and until then siblings started beside it in one checkout read
+ *     alike to rule 4, which handed nine omp sessions started in four seconds
+ *     each other's ids, so a session's own `agentbox pr claim` was refused as
+ *     held by itself;
+ *  3. `-r <id|path>` in argv;
+ *  4. the newest session file in the cwd's slug dir created after the
  *     process started and not already claimed.
  */
 export function attributeOmp(
   procs: OmpProc[],
   root: string,
   filesWritten: (pid: number, keep: (path: string) => boolean) => string[],
+  startedAs: (pid: number) => string | null = () => null,
 ): Map<number, string | null> {
   const out = new Map<number, string | null>();
   const claimed = new Set<string>();
@@ -255,7 +264,17 @@ export function attributeOmp(
     }
   }
 
-  // 2. The session named on the command line.
+  // 2. The session agentbox started it as.
+  for (const p of procs) {
+    if (out.has(p.pid)) continue;
+    const id = startedAs(p.pid);
+    if (id && !claimed.has(id)) {
+      out.set(p.pid, id);
+      claimed.add(id);
+    }
+  }
+
+  // 3. The session named on the command line.
   for (const p of procs) {
     if (out.has(p.pid)) continue;
     const arg = resumeArg(p.argv);
@@ -275,7 +294,7 @@ export function attributeOmp(
     }
   }
 
-  // 3. A file born after the process started, in its cwd.
+  // 4. A file born after the process started, in its cwd.
   for (const p of procs) {
     if (out.has(p.pid)) continue;
     const dir = slugDirFor(root, p.cwd);
@@ -780,6 +799,7 @@ export const ompAdapter: ProviderAdapter = {
     const pids = new Set(matches.map((m) => m.pid));
     const procs: OmpProc[] = [];
     const accountOf = new Map<number, string | null>();
+    const startedAs = new Map<number, string>();
     for (const m of matches) {
       // A child omp (a worker it spawned) is part of its parent's session.
       if (pids.has(m.ppid)) continue;
@@ -790,9 +810,11 @@ export const ompAdapter: ProviderAdapter = {
       if (cwd === null || startedAt === null) continue;
       procs.push({ pid: m.pid, ppid: m.ppid, argv: argvOf(m.pid) ?? m.argv, cwd, startedAt });
       accountOf.set(m.pid, (accountOfEnv(env, accounts) ?? first)?.id ?? null);
+      const rec = env?.get("AGENTBOX_SESSION") ? getSessionRecord(env.get("AGENTBOX_SESSION")!) : null;
+      if (rec?.provider === "omp" && rec.agentSessionId) startedAs.set(m.pid, rec.agentSessionId);
     }
     if (procs.length === 0) return [];
-    const ids = attributeOmp(procs, sessionsRoot(), filesWrittenBy);
+    const ids = attributeOmp(procs, sessionsRoot(), filesWrittenBy, (pid) => startedAs.get(pid) ?? null);
     return procs.map(
       (p): LiveProcess => ({
         pid: p.pid,

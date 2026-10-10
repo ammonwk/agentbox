@@ -75,7 +75,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox card ack <id>          # you have read an answer that was waiting (--unread)
     agentbox card close <id> <why>  # withdraw it: the question went away
     agentbox pr who <n|owner/repo#n|url>   # the session that has this pull request, or "nobody" (exit 1)
-    agentbox pr claim <n|…>         # it is yours: refused, naming the holder, if a live session has it
+    agentbox pr claim <n|…>         # it is yours: refused, naming the holder, if another live session has it
     agentbox pr release [<n|…>]     # let go of what you claimed (one, or all)
     agentbox pr claims              # every pull request a live session has
 

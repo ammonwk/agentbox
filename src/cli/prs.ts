@@ -10,12 +10,18 @@ const HOW = { said: "claimed it", branch: "on its branch" } as const;
 export async function pr(api: Api, args: string[]): Promise<number> {
   const [verb, ...more] = args;
   const { flags, rest } = parseArgs(more, ["for"], ["json"]);
-  const body = { pr: rest[0], session: str(flags.get("for")), callerPid: process.pid, cwd: process.cwd() };
+  // The session is the one named, else the one this runs in, as `send` and
+  // `card add` say it; the server walks up from the caller's process only
+  // when neither reached here (Codex runs commands without the environment).
+  const body = { pr: rest[0], session: str(flags.get("for")) ?? process.env.AGENTBOX_SESSION, callerPid: process.pid, cwd: process.cwd() };
   switch (verb) {
     case "claim": {
       if (!rest[0]) throw new Error("pr claim needs the pull request: its number, owner/repo#number, or its URL");
-      const c = await api<PrClaim>("POST", "/api/prs/claim", body);
-      console.log(flags.has("json") ? JSON.stringify(c) : `${c.repo}#${c.number} is ${c.sessionId}'s until it stops, closes, or runs \`agentbox pr release ${c.number}\``);
+      const c = await api<PrClaim & { already?: boolean }>("POST", "/api/prs/claim", body);
+      // Claiming what you hold is no news: a session started with --claim
+      // that runs `pr claim` itself (green-and-clean does) hears nothing.
+      if (flags.has("json")) console.log(JSON.stringify(c));
+      else if (!c.already) console.log(`${c.repo}#${c.number} is ${c.sessionId}'s until it stops, closes, or runs \`agentbox pr release ${c.number}\``);
       return 0;
     }
     case "release": {
