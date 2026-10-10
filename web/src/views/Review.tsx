@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import type { AppState, Card } from "../../../src/core/types";
 import { describeAt } from "../../../src/core/schedule";
 import { api } from "../api";
-import { stackOf } from "../lib/cardorder";
+import { laterOf, stackOf } from "../lib/cardorder";
 import { Button, Empty, Icon, Modal, RelativeTime } from "../components";
 import { hrefOf } from "../route";
 import { Markdown } from "./session/Markdown";
@@ -65,11 +65,7 @@ export function Review({ state }: { state: AppState }) {
   }, [state.cards]);
 
   const stack = useMemo(() => stackOf(cards), [cards]);
-  // Under Later too, what asks comes before what reports.
-  const later = useMemo(
-    () => cards.filter((c) => c.state === "later").sort((a, b) => Number(b.kind === "decision") - Number(a.kind === "decision") || (b.laterAt ?? 0) - (a.laterAt ?? 0)),
-    [cards],
-  );
+  const later = useMemo(() => laterOf(cards), [cards]);
   const done = useMemo(
     () => cards.filter((c) => c.state === "answered" || c.state === "closed").sort((a, b) => (b.answeredAt ?? b.createdAt) - (a.answeredAt ?? a.createdAt)),
     [cards],

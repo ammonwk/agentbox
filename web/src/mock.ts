@@ -277,6 +277,9 @@ const cards: Card[] = [
     default: "leave the PR unmerged", defaultAt: T0 + 20 * H, pr: "https://github.com/you/agentbox/pull/212",
   }),
   card({ id: 2, kind: "merged", title: "Read codex usage from wham when nothing is running", short: "Usage for an idle codex account no longer reads as stale. risk: low — one file, read-only.", pr: "https://github.com/you/agentbox/pull/212", createdAt: T0 - 2 * H }),
+  card({ id: 4, kind: "decision", title: "Keep the nightly export on the old bucket?", short: "The new bucket is ready but two dashboards still read the old one. Move now and fix them, or wait a week?", recommend: "Wait a week: nothing is lost and both dashboards move on Monday.", createdAt: T0 - 9 * H }),
+  card({ id: 5, kind: "decision", title: "Raise the review timeout to 20 minutes?", short: "Three reviews this week were cut off at 10 minutes on large PRs.", createdAt: T0 - 1 * H }),
+  card({ id: 6, kind: "merged", title: "Show the account a session runs on in its header", short: "The header names the account beside the model. risk: low — display only.", pr: "https://github.com/you/agentbox/pull/215", createdAt: T0 - 6 * H }),
   card({ id: 1, kind: "note", title: "Staging was red for 40 minutes", short: "A flaky migration test; the fix session reran it and it is green again.", hasLong: false, state: "answered", answer: "", answeredAt: T0 - 3 * H, createdAt: T0 - 4 * H }),
 ];
 
