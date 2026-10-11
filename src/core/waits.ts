@@ -48,8 +48,8 @@ const HEAD_GRACE_MS = 5 * 60_000;
 /** A named check missing this long with nothing running or queued will not come by
  *  waiting. Long, because a job behind `needs` is not listed until those finish. */
 const ABSENT_AFTER_MS = 30 * 60_000;
-/** "Every check concluded" is believed on a second look this much later: workflows register one by one. */
-const READY_TWICE_MS = 45_000;
+/** "Every check concluded" is believed on a second look this much later: workflows register one by one, and a push or a "ready for review" starts its runs some seconds after. */
+const READY_TWICE_MS = 80_000;
 /** A job with no unit and no result this long is gone, not between states. */
 const GONE_AFTER_MS = 30_000;
 const TELL_EVERY_MS = 60_000;
