@@ -18,6 +18,8 @@ import type {
   Schedule,
   TokenTotals,
   UsageWindow,
+  Wait,
+  WaitSpec,
 } from "./types";
 
 import type { ModelOutcome } from "./providers/types";
@@ -363,6 +365,27 @@ const MIGRATIONS: string[] = [
   // 24 — when the fleet moved a session that stopped at its account's limit
   // to another account (`Fleet.continueStalled`): it does that once.
   `ALTER TABLE sessions ADD COLUMN hopped_at INTEGER;`,
+  // 25 — what a session is waiting on, and how each wait ended
+  // (src/core/waits.ts). `spec` and `memo` are JSON.
+  `
+  CREATE TABLE waits (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    TEXT NOT NULL,
+    spec          TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    deadline      INTEGER NOT NULL,
+    ended         TEXT,
+    outcome       TEXT,
+    ended_at      INTEGER,
+    told_at       INTEGER,
+    untold        TEXT,
+    checked_at    INTEGER,
+    seen          TEXT,
+    failing_since INTEGER,
+    memo          TEXT
+  );
+  CREATE INDEX waits_open ON waits(ended, told_at);
+  `,
 ];
 
 function migrate(d: Database) {
@@ -630,6 +653,82 @@ export function listClosedRecords(): SessionRecord[] {
     .query("SELECT * FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC")
     .all() as SessionRow[];
   return rows.map(rowToRecord);
+}
+
+// ------------------------------------------------------------------ waits
+
+type WaitRow = {
+  id: number; session_id: string; spec: string; created_at: number; deadline: number; ended: string | null;
+  outcome: string | null; ended_at: number | null; told_at: number | null; untold: string | null;
+  checked_at: number | null; seen: string | null; failing_since: number | null; memo: string | null;
+};
+
+function rowToWait(r: WaitRow): Wait {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    spec: parseJson(r.spec) as WaitSpec,
+    createdAt: r.created_at,
+    deadline: r.deadline,
+    ended: r.ended as Wait["ended"],
+    outcome: r.outcome,
+    endedAt: r.ended_at,
+    toldAt: r.told_at,
+    untold: r.untold,
+    checkedAt: r.checked_at,
+    seen: r.seen,
+    failingSince: r.failing_since,
+    memo: (r.memo ? parseJson(r.memo) : {}) as Wait["memo"],
+  };
+}
+
+const WAIT_COLUMNS = {
+  deadline: "deadline",
+  ended: "ended",
+  outcome: "outcome",
+  endedAt: "ended_at",
+  toldAt: "told_at",
+  untold: "untold",
+  checkedAt: "checked_at",
+  seen: "seen",
+  failingSince: "failing_since",
+  memo: "memo",
+} as const;
+
+export function insertWait(w: Pick<Wait, "sessionId" | "spec" | "createdAt" | "deadline">): Wait {
+  const { lastInsertRowid } = getDb().run("INSERT INTO waits (session_id, spec, created_at, deadline) VALUES (?,?,?,?)", [
+    w.sessionId, JSON.stringify(w.spec), w.createdAt, w.deadline,
+  ]);
+  return getWait(Number(lastInsertRowid))!;
+}
+
+export function getWait(id: number): Wait | null {
+  const row = getDb().query("SELECT * FROM waits WHERE id = ?").get(id) as WaitRow | null;
+  return row ? rowToWait(row) : null;
+}
+
+/** Those still going, and those that ended since `since` with their session not yet told. */
+export function listOpenWaits(since: number): Wait[] {
+  return (getDb().query("SELECT * FROM waits WHERE ended IS NULL OR (told_at IS NULL AND ended != 'cancelled' AND ended_at >= ?) ORDER BY id").all(since) as WaitRow[]).map(rowToWait);
+}
+
+/** Every wait made or ended since `since`, and all still going; one session's when named. */
+export function listWaits(since: number, sessionId?: string): Wait[] {
+  const rows = sessionId
+    ? getDb().query("SELECT * FROM waits WHERE session_id = ? AND (ended IS NULL OR told_at IS NULL OR ended_at >= ?) ORDER BY id").all(sessionId, since)
+    : getDb().query("SELECT * FROM waits WHERE ended IS NULL OR told_at IS NULL OR ended_at >= ? ORDER BY id").all(since);
+  return (rows as WaitRow[]).map(rowToWait);
+}
+
+export function updateWait(id: number, patch: Partial<Pick<Wait, keyof typeof WAIT_COLUMNS>>): void {
+  const sets: string[] = [];
+  const vals: (string | number | null)[] = [];
+  for (const key of Object.keys(patch) as (keyof typeof WAIT_COLUMNS)[]) {
+    const v = patch[key];
+    sets.push(`${WAIT_COLUMNS[key]} = ?`);
+    vals.push(v === undefined || v === null ? null : key === "memo" ? JSON.stringify(v) : (v as string | number));
+  }
+  if (sets.length) getDb().run(`UPDATE waits SET ${sets.join(", ")} WHERE id = ?`, [...vals, id]);
 }
 
 // -------------------------------------------------------------- schedules

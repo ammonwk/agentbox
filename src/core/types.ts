@@ -1159,6 +1159,69 @@ export interface Onboarding {
 
 export interface AppState extends HotState, ColdState {}
 
+// ----------------------------------------------------------------- waits
+
+/** What a session waits on (src/core/waits.ts). */
+export type WaitSpec =
+  /** A pull request: its checks concluding on a head, or its merge. */
+  | {
+      kind: "pr";
+      repo: string;
+      number: number;
+      /** The head the checks are waited for on; null takes the one first read. */
+      head: string | null;
+      /** Every check on the head has concluded. */
+      all: boolean;
+      /** Checks that must be there and concluded. A name also takes the
+       *  checks that begin with it and a space: `API Tests (shard 1/3)`. */
+      checks: string[];
+      /** Only its merge (or its closing) ends the wait. */
+      merged: boolean;
+    }
+  /** A GitHub Actions run concluding. */
+  | { kind: "run"; repo: string; run: number }
+  /** A command started as a unit of its own, which a stopped session does not take with it. */
+  | { kind: "job"; unit: string; command: string; log: string; result: string }
+  /** Other sessions: the first whose turn ends, or that stops. */
+  | { kind: "session"; ids: string[] }
+  /** A command asked again and again: exit 0 is the event, 1 is not yet. */
+  | { kind: "until"; cmd: string; cwd: string; everyMs: number }
+  /** Nothing but its deadline. */
+  | { kind: "time" };
+
+/**
+ * How a wait ended. Every wait ends in one of these and its session is told
+ * which: what it waited for happened, can no longer happen by waiting (a head
+ * that moved, a check that never came with nothing left running), did not
+ * happen by the deadline, or could not be watched any longer.
+ */
+export type WaitEnd = "happened" | "stuck" | "timeout" | "broken" | "cancelled";
+
+export interface Wait {
+  id: number;
+  /** The session that is told how it ends. */
+  sessionId: string;
+  spec: WaitSpec;
+  createdAt: number;
+  deadline: number;
+  /** Null while it is still going. */
+  ended: WaitEnd | null;
+  /** What its session is told. */
+  outcome: string | null;
+  endedAt: number | null;
+  /** When its session took the message; null until it has. */
+  toldAt: number | null;
+  /** Why it has not been told yet. */
+  untold: string | null;
+  checkedAt: number | null;
+  /** What the last look found, in words. */
+  seen: string | null;
+  /** Since when every look has failed; null while they answer. */
+  failingSince: number | null;
+  /** What one look hands the next. */
+  memo: { head?: string; readyAt?: number; headWrongAt?: number; goneAt?: number; idle?: Record<string, number>; absentAt?: number; failures?: number; error?: string };
+}
+
 // ------------------------------------------------------------- schedules
 
 /** What a scheduled session starts with: the new-session request, as asked. */

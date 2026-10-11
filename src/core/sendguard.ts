@@ -99,7 +99,7 @@ export function chatterRefusal(from: string | null, to: string, now: number): st
   return (
     `not sent: ${from ?? "this session"} has already sent ${to} ${times.length} messages in the last hour, and each one interrupts it and stays in its context. ` +
     `Put everything it still needs from you into one message and send that in ${span(times[0]! + CHATTER_WINDOW_MS - now)}, when the limit (${CHATTER_MAX} an hour to one session) next has room; ` +
-    `or do not send it: \`agentbox watch ${to}\` tells you when its turn ends, and \`agentbox log ${to} | tail\` what it did.`
+    `or do not send it: \`agentbox wait session ${to}\` tells you when its turn ends, and \`agentbox log ${to} | tail\` what it did.`
   );
 }
 

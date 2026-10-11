@@ -6,7 +6,8 @@ import type { Api } from "../client";
 import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, type ChangeRow } from "../core/changes";
 import { accountProvider } from "../core/providers/account";
 import { agentAncestor, stillRunning } from "../core/providers/procs";
-import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage } from "../core/types";
+import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
+import { describe } from "../core/waits";
 
 type Row = AppState["sessions"][number];
 
@@ -181,6 +182,7 @@ export async function show(api: Api, args: string[]): Promise<number> {
   const s0 = await state(api);
   const acct = new Map(s0.accounts.map((a) => [a.id, a.label]));
   const now = s0.serverTime;
+  const waits = await api<Wait[]>("GET", "/api/waits");
   for (const [n, id] of ids.entries()) {
     const x = sessions.find((s) => s.id === id)!;
     const ctx = x.contextUsed && x.contextLimit ? `${Math.round((100 * x.contextUsed) / x.contextLimit)}% of ${Math.round(x.contextLimit / 1000)}k` : "-";
@@ -201,6 +203,7 @@ export async function show(api: Api, args: string[]): Promise<number> {
       ["branch", x.branch],
       ["worktree", x.worktree],
       ["pr", pr ? `#${pr.number} ${pr.title} (${pr.url})` : null],
+      ["waiting on", waits.filter((w) => w.sessionId === id && !w.ended).map((w) => `${describe(w.spec)} [wait ${w.id}: ${w.seen ?? "not looked at yet"}]`).join(" ⏎ ") || null],
       ["context", ctx],
       ["started", `${clock(x.startedAt)} (${ageOf(now - x.startedAt)} ago)`],
       ["active", `${clock(x.lastActivityAt)} (${ageOf(now - x.lastActivityAt)} ago)`],

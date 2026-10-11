@@ -26,6 +26,7 @@ import { identify } from "../core/accounts/identity";
 import { onboardingItems } from "../core/onboarding";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
+import * as waits from "./waits";
 import * as cards from "./cards";
 import * as prs from "./prs";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
@@ -408,6 +409,23 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
                         the rest by itself; this shows the last recovery (--last),
                         what one would do now (no ids), or recovers stopped ids
 
+waiting (the one way a session waits on anything outside its own turn: it is typed into the
+session when it happened, when it can no longer happen, when the wait itself failed, or at its
+timeout, each saying which; a parked session is resumed to hear it):
+  wait pr <n|owner/repo#n|url> [--require 'Reviewed head'] [--only 'Build,API Tests'] [--head <sha>]
+                        its checks concluding on that head (a failure ends it at once):
+                        every check; --require names ones that must be among them;
+                        --only waits for just those
+  wait pr <n> --merged  its merge
+  wait run <run id|url> [-R owner/repo]      a GitHub Actions run concluding
+  wait job [--name N] -- <command…>          start a long command as a unit of its own, which
+                        outlives this session's process, and be told how it ended
+  wait session <id>...  the first of those sessions to end its turn or stop
+  wait until [--every 2m] -- <command>       asked again and again: exit 0 is the event, 1 not yet
+  wait time <45m>       nothing but the time
+  waits [--session ID | --mine] [--all] [--json]   what is waited on, and how the rest ended
+  unwait <id>...        cancel one; its session is not told
+
 pull requests (who has one: no two sessions work the same PR):
   pr claim <n|owner/repo#n|url> [--for ID]   this session has it; refused, naming the holder, if a live session does
   pr release [<n|…>]                 let go of what this session claimed (one, or all)
@@ -567,6 +585,15 @@ export async function main(argv: string[]): Promise<number | null> {
       case "unschedule":
         await ensureServer();
         return await schedules.unschedule(api, argv.slice(1));
+      case "wait":
+        await ensureServer();
+        return await waits.wait(api, argv.slice(1));
+      case "waits":
+        await ensureServer();
+        return await waits.list(api, argv.slice(1));
+      case "unwait":
+        await ensureServer();
+        return await waits.unwait(api, argv.slice(1));
       case "archive":
       case "unarchive":
         await ensureServer();

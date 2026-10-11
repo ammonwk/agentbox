@@ -29,9 +29,59 @@ also reads them from stdin with `-`, so pipes and xargs work.
                                     # exits after the first. --now first reports any
                                     # already blocked, waiting or stopped; without it a
                                     # session that is already idle never produces a line.
-                                    # To be woken by sessions you started, keep a
-                                    # background `watch <ids> --once --now` armed and
-                                    # re-arm it after each line you act on.
+                                    # For a terminal or a script to follow the board: it
+                                    # stops with the process that runs it, so an agent
+                                    # waits with `agentbox wait session` instead.
+
+## Waiting
+
+    agentbox wait pr <n|owner/repo#n|url> [--require 'Reviewed head'] [--only 'Build,API Tests'] [--head <sha>]
+                                    # a pull request's checks concluding on that head (the
+                                    # one it has now, unless named): every check. --require
+                                    # names checks that must be among them, for one that
+                                    # reports only when it has something to say (a review
+                                    # that marks the head it read); --only waits for just
+                                    # those named (a name takes its shards too: "API Tests
+                                    # (shard 1/3)"). A check that fails ends it at once and
+                                    # is named
+    agentbox wait pr <n> --merged   # its merge
+    agentbox wait run <id|url> [-R owner/repo]   # a GitHub Actions run concluding
+    agentbox wait job [--name N] -- <command…>   # start a long command as a systemd unit of
+                                    # its own, in this directory and environment, and be
+                                    # told how it ended (exit, signal, out of memory) with
+                                    # the end of its output. One argument is a shell
+                                    # command line ('a | b > out.log'); several are an argv
+    agentbox wait session <id>...   # the first of those sessions to end its turn, ask
+                                    # something or stop (at once if one already has)
+    agentbox wait until [--every 2m] -- <command>
+                                    # run in this directory every --every (two minutes at
+                                    # most each time, in the server's environment): exit 0
+                                    # is the event and what it prints is said; exit 1 is
+                                    # not yet; any other exit, five times running, is a
+                                    # wait that cannot watch
+    agentbox wait time 45m          # nothing but the time
+    agentbox waits [--mine | --session <id>] [--all] [--json]
+                                    # what is waited on and what the last look found;
+                                    # those that ended in the last day, and how
+    agentbox unwait <id>...         # cancel one; a job it started keeps running
+
+Each takes `--timeout <3h>` (it has one regardless: 3h for a pull request, 2h a
+run or a command, 12h a job, 4h a session; a week at most) and `--for <session>`
+(default: the session it is run in). It prints the wait's id and returns at
+once. The server does the waiting, not your process: end your turn, or carry
+on with other work, and the wait is typed into the session as agentbox's own
+note the moment it ends, which is one of exactly four ways, each named:
+
+- HAPPENED: what it waited for (a failed check or job is this too, and says so);
+- CANNOT HAPPEN: waiting will not bring it: the head moved, the PR was closed, a
+  named check never reported though nothing has run for half an hour;
+- TIMED OUT: with what the last look found;
+- THE WAIT FAILED: it could not be watched: GitHub answered nothing for twenty
+  minutes, a job's unit vanished without a result, the command kept failing.
+
+A parked session is resumed to hear it; one that was stopped by hand, or is at
+a usage limit, hears it when it next runs (`agentbox waits` shows NOT TOLD and
+why). Arming the same wait twice is one wait.
 
 ## Doing
 
@@ -118,8 +168,16 @@ also reads them from stdin with `-`, so pipes and xargs work.
   waiting on, a blocker, a handoff, two sessions about to collide on the same
   files. Never send to narrate your progress or to direct how another session
   does its work: each message interrupts it and stays in its context. A
-  session you started says when its turn ends; `watch` it instead of
-  checking in.
+  session you started says when its turn ends; `agentbox wait session <id>`
+  tells you, instead of checking in.
+- Waiting is `agentbox wait`'s, never your own process's. A background shell
+  loop over `gh`, `gh run watch`, `sleep`, `pidwait`, `agentbox watch` in
+  the background, a script that messages you when something exits: each one
+  stops when your session is parked, moved or restarted, and each can end
+  without the thing having happened and without saying so. A long command
+  started in the background stops the same way, taking its work with it:
+  start it with `agentbox wait job`. Say what you are waiting on only after
+  the wait is armed.
 - A `send` to a session that is stopped, or whose prompt cache is cold, is
   refused: it would re-read its whole context to hear you. Read it with
   `show` and `log`, or start a fresh session with a handoff; pass `--wake`

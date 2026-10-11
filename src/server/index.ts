@@ -41,6 +41,7 @@ import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
+import { parseSpec, Waits } from "../core/waits";
 import { CARD_KINDS, Cards } from "../core/cards";
 import type { CardKind, CardState } from "../core/types";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
@@ -116,6 +117,8 @@ export const fleet = new Fleet({
 setMetricsSource(() => fleet.sessions());
 /** Sessions to start later; on the board and in Settings, so cold state. */
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
+/** What sessions wait on, and how each is told (src/core/waits.ts). */
+export const waits = new Waits(fleet);
 function cardId(raw: string): number {
   if (!/^\d{1,9}$/.test(raw)) throw new HttpError(400, "a card's id is a number");
   return Number(raw);
@@ -978,6 +981,24 @@ const router = new Router(mapError)
     scheduleHot();
     return json({ sessionId });
   })
+  // ----- waits (src/core/waits.ts)
+  .add("GET", "/api/waits", ({ url }) => json(waits.list(url.searchParams.get("session") ?? undefined, url.searchParams.get("all") === "1")))
+  .add("POST", "/api/waits", async ({ req }) => {
+    const b = await readBody(req);
+    if (b.timeoutMs !== undefined && typeof b.timeoutMs !== "number") throw new HttpError(400, "timeoutMs must be a number");
+    const who = speaker(b);
+    if (!who) throw new HttpError(400, "a wait tells a session how it ended: run this from inside one, or name it with --for <session id>");
+    const spec = (b.spec && typeof b.spec === "object" ? { ...b.spec } : {}) as Record<string, unknown>;
+    // A pull request as it was typed, a run with no repo named: the repo is the caller's.
+    if (spec.kind === "pr" && b.pr !== undefined) Object.assign(spec, prNamed(b, who));
+    const cwd = optionalString(b, "cwd");
+    if (spec.kind === "run" && !spec.repo) spec.repo = (cwd ? repoFullNameOf(cwd) : null) ?? undefined;
+    return json(waits.arm(fleet.heir(who), parseSpec(spec), b.timeoutMs as number | undefined), 201);
+  })
+  .add("DELETE", "/api/waits/:id", ({ params }) => {
+    if (!/^\d{1,9}$/.test(params.id!)) throw new HttpError(400, "a wait's id is a number");
+    return json(waits.cancel(Number(params.id)));
+  })
   // ----- cards (src/core/cards.ts)
   .add("GET", "/api/cards", ({ url }) => {
     const state = url.searchParams.get("state");
@@ -1411,6 +1432,7 @@ export async function startServer(): Promise<void> {
       ws.close(1012, "restarting");
     }
     scheduler.stop();
+    waits.stop();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -1531,6 +1553,7 @@ export async function startServer(): Promise<void> {
   await fleet.ready;
   phase("first pass");
   scheduler.start();
+  waits.start();
   cards.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
   // sessions and in your own terminals alike, and Go's usage is asked through

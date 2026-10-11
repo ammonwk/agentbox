@@ -1640,7 +1640,7 @@ export class Fleet extends EventEmitter {
       const owners = [`pid:${a.pid}`, ...(a.sessionId ? [a.sessionId] : []), ...family.map((m) => m.t.facts!.agentSessionId)];
       if (live.some((e) => owners.includes(e.owner))) return "MCP subagents are running";
       cpuTicks += subtreeCpuTicks(subtree(table, a.pid));
-      const found = shellWork(table, a.pid, monitors, quiet, true);
+      const found = shellWork(table, a.pid, v.provider, monitors, quiet, true);
       shells.push(...found.shells);
       if (found.hold) return found.hold;
     }
@@ -1720,7 +1720,7 @@ export class Fleet extends EventEmitter {
       for (const m of t.facts.monitors ?? []) monitors.add(m);
       if (this.subagentsWorking(t.ref, now)) return "its in-process subagents were working";
     }
-    return shellWork(table, pid, monitors, now - (t?.facts?.lastWorkAt ?? v.lastActivityAt), false).hold;
+    return shellWork(table, pid, v.provider, monitors, now - (t?.facts?.lastWorkAt ?? v.lastActivityAt), false).hold;
   }
 
   /**
@@ -3704,11 +3704,16 @@ function childrenOf(pid: number): number[] {
  * server counts: it holds a session up, but a crash that killed one is not a
  * reason to resume the session that started it.
  */
-function shellWork(table: ProcTable, pid: number, monitors: ReadonlySet<string>, quietMs: number, services: boolean): { shells: number[]; hold: string | null } {
+function shellWork(table: ProcTable, pid: number, provider: ProviderId, monitors: ReadonlySet<string>, quietMs: number, services: boolean): { shells: number[]; hold: string | null } {
   const shells: number[] = [];
-  for (const kid of table.children.get(pid) ?? []) {
+  // A CLI that starts itself again runs its shells under that copy: Codex's
+  // launcher is `node …/bin/codex`, and the binary it starts owns every tool
+  // shell. Looking only under the launcher saw no work in a Codex session,
+  // and parked one whose production job was an hour into its run.
+  const kids = (of: number): number[] => (table.children.get(of) ?? []).flatMap((kid) => (runsCli(argvOf(kid) ?? [], provider) ? [kid, ...kids(kid)] : [kid]));
+  for (const kid of kids(pid)) {
     const cmd = argvOf(kid)?.join(" ");
-    if (!cmd || !isToolShell(cmd)) continue; // an MCP server
+    if (!cmd || !isToolShell(cmd)) continue; // an MCP server, or the CLI's own copy
     shells.push(kid);
     const command = shellCommand(cmd);
     const label = describe({ ...table.byPid.get(kid)!, cmd });
