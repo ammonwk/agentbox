@@ -261,17 +261,26 @@ export async function sendText(name: string, text: string, opts: { pieces?: numb
 
 const screenRows = (name: string): string[] => (capture(name) ?? "").split("\n");
 
-/** What a row says, without its box border or prompt glyph and with no spaces: its first words. */
-const rowKey = (row: string): string =>
-  row
-    .replace(/^(?:[\s>|]|[^\x20-\x7e])+|(?:[\s|]|[^\x20-\x7e])+$/g, "")
-    .replace(/\s+/g, "")
-    .slice(0, 24);
-
-interface DraftRow {
-  index: number;
-  key: string;
+/** A row as an input box holds it: its border or prompt glyph, and its first words, both without spaces. */
+interface RowHead {
+  frame: string;
+  words: string;
 }
+
+function rowHead(row: string): RowHead {
+  const [, frame = "", rest = ""] = /^((?:[\s>|]|[^\x20-\x7e])*)(.*)$/.exec(row) ?? [];
+  const words = rest.replace(/(?:[\s|]|[^\x20-\x7e])+$/, "").replace(/\s+/g, "");
+  return { frame: frame.replace(/\s+/g, ""), words: words.slice(0, 24) };
+}
+
+interface DraftRow extends RowHead {
+  index: number;
+  /** Rows with anything on them under it: a TUI that prints the sent message
+   *  where its box was puts the reply and the box under that. */
+  below: number;
+}
+
+const rowsBelow = (rows: string[], index: number): number => rows.slice(index + 1).filter((r) => r.trim()).length;
 
 /**
  * The topmost row the paste drew: one that changed and starts with words of
@@ -285,21 +294,27 @@ async function draftRow(name: string, text: string, before: string[]): Promise<D
   const started = Date.now();
   for (;;) {
     const rows = screenRows(name);
-    const changed = rows.map((row, index) => ({ index, key: rowKey(row), row })).filter((r) => r.row !== before[r.index] && r.key);
-    const shown = changed.find((r) => r.key.length >= Math.min(6, said.length) && said.includes(r.key));
+    const changed = rows.map((row, index) => ({ index, row, ...rowHead(row) })).filter((r) => r.row !== before[r.index] && r.words);
+    const shown = changed.find((r) => r.words.length >= Math.min(6, said.length) && said.includes(r.words));
     const waited = Date.now() - started;
     const found = shown ?? (waited >= PASTE_SHOWN_MS ? changed[0] : undefined);
-    if (found) return { index: found.index, key: found.key };
+    if (found) return { index: found.index, frame: found.frame, words: found.words, below: rowsBelow(rows, found.index) };
     if (waited >= PASTE_WAIT_MS) return null;
     await Bun.sleep(PASTE_POLL_MS);
   }
 }
 
-/** Whether the draft's first row stopped saying what it said, within one Enter's wait. */
+/**
+ * Whether the draft left its row within one Enter's wait. It is still there
+ * while the row has the same frame and words with no more under it; the same
+ * words in another frame, or over a reply, are the sent message shown back.
+ */
 async function leftRow(name: string, draft: DraftRow): Promise<boolean> {
   const deadline = Date.now() + ENTER_WAIT_MS;
   for (;;) {
-    if (rowKey(screenRows(name)[draft.index] ?? "") !== draft.key) return true;
+    const rows = screenRows(name);
+    const now = rowHead(rows[draft.index] ?? "");
+    if (now.words !== draft.words || now.frame !== draft.frame || rowsBelow(rows, draft.index) > draft.below) return true;
     if (Date.now() >= deadline) return false;
     await Bun.sleep(PASTE_POLL_MS);
   }
