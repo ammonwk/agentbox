@@ -55,7 +55,7 @@ const REACHES: [string[], string][] = [
 ];
 for (const [args, request] of REACHES) {
   test(`agentbox ${args.join(" ")} → ${request}`, async () => {
-    expect((await agentbox(...args)).asked).toEqual([request]);
+    expect((await agentbox({ session: "s0000000" }, ...args)).asked).toEqual([request]);
   });
 }
 
@@ -101,24 +101,58 @@ const CLAIM = { repo: "o/r", number: 8679, how: "said", at: 1 };
 for (const [provider, session] of [["claude", "c1aude00"], ["omp", "vzp795ac"], ["codex", null]] as const) {
   test(`pr claim in a session of ${provider} names ${session ?? "the caller's process"}`, async () => {
     replies.set("/api/prs/claim", { ...CLAIM, sessionId: session ?? "c0dex000", already: false });
+    // Codex's command has no AGENTBOX_SESSION: the server says who called.
+    replies.set("/api/whoami", { id: "c0dex000" });
     const r = await agentbox({ session }, "pr", "claim", "8679");
-    expect(r.asked).toEqual(["POST /api/prs/claim"]);
+    expect(r.asked).toEqual(session ? ["POST /api/prs/claim"] : ["POST /api/prs/claim", "POST /api/whoami"]);
     expect(bodies[0]!.session).toBe(session ?? undefined);
     expect(typeof bodies[0]!.callerPid).toBe("number");
-    expect(r.out).toContain(`o/r#8679 is ${session ?? "c0dex000"}'s until`);
+    expect(r.out).toBe(`you hold o/r#8679 now (you are ${session ?? "c0dex000"}): it is yours to work until you stop or close, or run \`agentbox pr release 8679\`\n`);
   });
 
-  test(`pr claim of what a session of ${provider} already holds succeeds and says nothing`, async () => {
+  /**
+   * A session told its own claim in its own id took it for another's: at
+   * 11:40 on 2026-10-11 j2g254q4 ran `agentbox pr claim` on four pull
+   * requests, read "plaibook-dev/plaibook-platform#8154 is j2g254q4's until
+   * it stops…", concluded another live session had them and stood down, and
+   * the four sat with nobody on them for an hour and a half.
+   */
+  test(`pr claim of what a session of ${provider} already holds says it is yours`, async () => {
+    replies.set("/api/whoami", { id: "c0dex000" });
     replies.set("/api/prs/claim", { ...CLAIM, sessionId: session ?? "c0dex000", already: true });
     const r = await agentbox({ session }, "pr", "claim", "8679");
     expect(r.code).toBe(0);
-    expect(r.out).toBe("");
+    expect(r.out).toBe(`you already hold o/r#8679 (you are ${session ?? "c0dex000"}): it is yours to work\n`);
+    expect(r.out).not.toMatch(/'s until/);
     expect(r.err).toBe("");
   });
 }
 
-test("--for names the session over the one it runs in", async () => {
+test("--for names the session over the one it runs in, and says it is not yours", async () => {
   replies.set("/api/prs/claim", { ...CLAIM, sessionId: "other000", already: false });
-  await agentbox({ session: "vzp795ac" }, "pr", "claim", "8679", "--for", "other000");
+  const r = await agentbox({ session: "vzp795ac" }, "pr", "claim", "8679", "--for", "other000");
   expect(bodies[0]!.session).toBe("other000");
+  expect(r.out).toStartWith("o/r#8679 is other000's, not yours, until");
+});
+
+/** Every line that names who has a PR marks the caller's own. */
+test("pr who, pr claims and ls mark the caller's own as (you)", async () => {
+  const mine = { ...CLAIM, sessionId: "j2g254q4" };
+  const theirs = { ...CLAIM, number: 8680, sessionId: "kny787jm" };
+  replies.set("/api/prs/who", { repo: "o/r", number: 8679, claim: mine });
+  replies.set("/api/prs/claims", [mine, theirs]);
+  const row = (id: string) => ({ id, status: "running", lastActivityAt: 0, host: "tmux", provider: "omp", cwd: "/r", title: id, attention: { rank: 0 } });
+  replies.set("/api/state", { serverTime: 0, sessions: [row("j2g254q4"), row("kny787jm")], accounts: [], prs: [], prClaims: [mine] });
+  const who = await agentbox({ session: "j2g254q4" }, "pr", "who", "8679");
+  expect(who.out).toStartWith("o/r#8679  j2g254q4 (you)  claimed it");
+  const claims = (await agentbox({ session: "j2g254q4" }, "pr", "claims")).out.split("\n");
+  expect(claims[0]).toContain("j2g254q4 (you)");
+  expect(claims[1]).not.toContain("(you)");
+  const ls = (await agentbox({ session: "j2g254q4" }, "ls")).out.split("\n");
+  expect(ls.find((l) => l.startsWith("j2g254q4"))).toStartWith("j2g254q4 (you)");
+  expect(ls.find((l) => l.startsWith("kny787jm"))).not.toContain("(you)");
+  replies.set("/api/state", { serverTime: 0, sessions: [row("j2g254q4")], accounts: [], prs: [], prClaims: [mine] });
+  const show = await agentbox({ session: "j2g254q4" }, "show", "j2g254q4");
+  expect(show.out).toContain("id:           j2g254q4 (you");
+  expect(show.out).toContain("holds:        o/r#8679 (claimed)");
 });

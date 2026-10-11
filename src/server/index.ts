@@ -701,6 +701,9 @@ const router = new Router(mapError)
   })
 
   // ---- who has which pull request
+  // The session a command runs in, for the CLI to tell "you" from another:
+  // AGENTBOX_SESSION when it reached the command, else the walk up from it.
+  .add("POST", "/api/whoami", async ({ req }) => json({ id: speaker(await readBody(req)) }))
   .add("GET", "/api/prs/claims", () => json(prClaimsNow()))
   .add("POST", "/api/prs/who", async ({ req }) => {
     const b = await readBody(req);

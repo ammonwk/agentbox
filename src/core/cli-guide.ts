@@ -131,7 +131,8 @@ why). Arming the same wait twice is one wait.
     agentbox card ack <id>          # you have read an answer that was waiting (--unread)
     agentbox card close <id> <why>  # withdraw it: the question went away
     agentbox pr who <n|owner/repo#n|url>   # the session that has this pull request, or "nobody" (exit 1)
-    agentbox pr claim <n|…>         # it is yours: refused, naming the holder, if another live session has it
+    agentbox pr claim <n|…>         # it is yours, and says so ("you hold", "you already hold"); refused,
+                                    # naming "another session", if another live session has it
     agentbox pr release [<n|…>]     # let go of what you claimed (one, or all)
     agentbox pr claims              # every pull request a live session has
 
@@ -144,7 +145,9 @@ why). Arming the same wait twice is one wait.
   do not work it as well. To start a session on a PR, start it with
   \`--claim <n>\` (\`agentbox claude --detach --claim 8653 '…'\`): it has the
   PR from its first moment, or is not started. Reading or reviewing a PR
-  needs no claim. A claim lapses when its session stops or closes.
+  needs no claim. A claim lapses when its session stops or closes. Your own
+  id is \`$AGENTBOX_SESSION\`; wherever ls, show, pr who and pr claims name
+  you, the id has "(you)" after it.
 
 - Statuses: running (mid-turn), blocked (a prompt needs answering), waiting
   (turn over, the user's move), stopped (no process, resumable), closed (stopped and

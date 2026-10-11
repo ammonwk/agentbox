@@ -57,13 +57,16 @@ export function holderOf(claims: readonly PrClaim[], repo: string, number: numbe
   return claims.find((c) => c.number === number && c.repo.toLowerCase() === repo.toLowerCase()) ?? null;
 }
 
-/** Another live session has it. */
+/** Another live session has it. `asker` is the session that asked, named
+ *  beside the holder: j2g254q4 read "#8154 is j2g254q4's" as another
+ *  session's and stood down from four PRs it held itself. */
 export class PrHeld extends Error {
-  constructor(readonly claim: PrClaim, holder: Session | undefined) {
+  constructor(readonly claim: PrClaim, holder: Session | undefined, asker?: string) {
     super(
-      `not claimed: ${claim.repo}#${claim.number} is held by ${claim.sessionId}` +
+      `not claimed: ${claim.repo}#${claim.number} is held by another session, ${claim.sessionId}` +
         `${holder ? ` (“${holder.label ?? holder.title}”, ${holder.status})` : ""}, ` +
-        `${claim.how === "said" ? "which claimed it" : "which is on its branch"}. ` +
+        `${claim.how === "said" ? "which claimed it" : "which is on its branch"}` +
+        `${asker ? `; you are ${asker}` : ""}. ` +
         `Do not work it as well: read \`agentbox show ${claim.sessionId}\`, and say what you know to that session if it matters. ` +
         `Its hold lapses when it stops or closes${claim.how === "said" ? ", or when it runs `agentbox pr release`" : ""}.`,
     );
@@ -74,7 +77,7 @@ export class PrHeld extends Error {
  *  again is no change. */
 export function claimPr(claims: readonly PrClaim[], sessions: readonly Session[], repo: string, number: number, sessionId: string, now: number): PrClaim {
   const held = holderOf(claims, repo, number);
-  if (held && held.sessionId !== sessionId) throw new PrHeld(held, sessions.find((s) => s.id === held.sessionId));
+  if (held && held.sessionId !== sessionId) throw new PrHeld(held, sessions.find((s) => s.id === held.sessionId), sessionId);
   if (held?.how === "said") return held;
   getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held?.repo ?? repo, number, sessionId, now]);
   return { repo: held?.repo ?? repo, number, sessionId, how: "said", at: now };
