@@ -145,3 +145,17 @@ test("a session cut off at its account's limit goes to the balancer's next accou
   const full = acct("B", { short: 100, weekly: 25, weeklyResetsIn: 5 * D });
   expect(elsewhere(run([a, full]), "A")).toBeNull();
 });
+
+test("a session's one move goes to an account whose weekly has room for it", () => {
+  // 2026-10-11: nymkiect, claiming 2.4 points, was moved to the account first
+  // to reset, which had 1.2 left, past two with 23 and 46.
+  const own = acct("A", { short: 49, weekly: 100, weeklyResetsIn: 3 * D });
+  const last = acct("B", { short: 10, weekly: 98.8, weeklyResetsIn: 3.5 * D });
+  const roomy = acct("C", { short: 9, weekly: 77, weeklyResetsIn: 4 * D });
+  const p = place({ provider: "claude", accounts: [own, last, roomy], settings, now: NOW, claim: 2.4 });
+  expect(p.accountId).toBe("B");
+  expect(elsewhere(p, "A")!.accountId).toBe("C");
+  // With no such account, the one with the most weekly left rather than nowhere.
+  const tight = acct("C", { short: 9, weekly: 98, weeklyResetsIn: 4 * D });
+  expect(elsewhere(place({ provider: "claude", accounts: [own, last, tight], settings, now: NOW, claim: 2.4 }), "A")!.accountId).toBe("C");
+});

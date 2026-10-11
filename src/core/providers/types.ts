@@ -292,6 +292,12 @@ export interface Command {
   unset?: string[];
 }
 
+/** What `blockedOn` says of the dialog a CLI puts up at its account's usage
+ *  limit (Claude: stop, wait here, or add funds). It asks nothing the fleet
+ *  wants answered: the session is stopped at its limit like one that only
+ *  printed the message, and is moved or waited out the same way. */
+export const LIMIT_DIALOG = "usage limit";
+
 export interface ProviderAdapter {
   readonly id: ProviderId;
   readonly label: string;
@@ -425,7 +431,8 @@ export interface ProviderAdapter {
   approvePrompt?(screen: string): string[] | null;
 
   /** Given the visible terminal text, what the session is waiting on a human
-   *  for (a permission prompt, a login), in a few words — or null. */
+   *  for (a permission prompt, a login), in a few words — or null.
+   *  `LIMIT_DIALOG` is the one answer that is not a prompt for you. */
   blockedOn?(screen: string): string | null;
 
   /** The next keys to press toward answering an AskUserQuestion dialog on

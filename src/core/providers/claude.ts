@@ -45,6 +45,7 @@ import type {
   TranscriptReader,
   TranscriptRef,
 } from "./types";
+import { LIMIT_DIALOG } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_JSONL = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
@@ -399,6 +400,15 @@ const inputBox = (lines: string[], i: number): boolean =>
  *  with the same token (claudeTurnErrorKind). */
 const LOGIN_ERROR = /^(?:Please run \/login|Not logged in|Invalid API key)/;
 
+/** The dialog Claude puts up when a message meets the account's usage limit:
+ *  "What do you want to do? 1. Stop and wait for limit to reset / 2. Wait
+ *  here, then continue automatically at … / 3. Add funds …". At the foot of
+ *  the screen, its first option numbered, so not one quoted in a message. */
+const limitDialog = (under: string): boolean => {
+  const foot = under.trimEnd().split("\n").slice(-12).join("\n");
+  return /^\s*(?:❯\s*)?1\.\s+Stop and wait for limit to reset/m.test(foot) && /Esc to cancel/.test(foot);
+};
+
 /** What a Claude screen is waiting on you for, in a few words. */
 export function claudeBlockedOn(raw: string): string | null {
   const screen = plainScreen(raw);
@@ -410,6 +420,7 @@ export function claudeBlockedOn(raw: string): string | null {
   // Every dialog below stands where the input box was.
   const s = underInput(screen, inputBox);
   if (/Select login method/.test(s)) return "login required";
+  if (limitDialog(s)) return LIMIT_DIALOG;
   // The options alone: in a short pane the dialog's heading has scrolled away.
   if (/Yes, I trust this folder/.test(s) && /No, exit/.test(s)) return "folder trust";
   if (/Bypass Permissions mode/.test(s) && /Yes, I accept/.test(s)) return "confirm bypass-permissions mode";

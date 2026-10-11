@@ -397,6 +397,11 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   reopen <id>...        put a closed one back on the list (still stopped)
   stop <id>...          end its process; it stays resumable
   resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not
+  move <id> [--account NAME] [--force] [text…]
+                        continue it on another account, conversation and all: for one
+                        stopped at its account's limit (agentbox moves each once by
+                        itself). The account with room unless named; refused when
+                        none can take it, or it is warm and not at a limit (--force)
   label <id> [name]     rename it on the board (no name clears)
   recover [--last | --dry-run] [<id>...]
                         after a crash agentbox resumes what was working and parks
@@ -535,6 +540,7 @@ export async function main(argv: string[]): Promise<number | null> {
       case "diff":
       case "send":
       case "label":
+      case "move":
       case "watch":
         await ensureServer();
         return await verbs[cmd](api, argv.slice(1));

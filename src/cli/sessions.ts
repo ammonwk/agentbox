@@ -4,6 +4,7 @@
 
 import type { Api } from "../client";
 import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, type ChangeRow } from "../core/changes";
+import { accountProvider } from "../core/providers/account";
 import { agentAncestor, stillRunning } from "../core/providers/procs";
 import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage } from "../core/types";
 
@@ -194,6 +195,8 @@ export async function show(api: Api, args: string[]): Promise<number> {
       ["host", x.host + (x.tmux ? ` (${x.tmux})` : "") + (x.pid ? ` pid ${x.pid}` : "")],
       ["provider", `${x.provider}${x.model ? ` · ${x.model}` : ""}`],
       ["account", x.accountId ? acct.get(x.accountId) ?? x.accountId : null],
+      // Stopped there until moved (`agentbox move`) or the limit lifts.
+      ["limit", x.limitHit ? `${x.limitHit.detail}${x.limitHit.hopped ? " — agentbox has moved it once already" : ""}` : null],
       ["cwd", x.cwd],
       ["branch", x.branch],
       ["worktree", x.worktree],
@@ -385,6 +388,30 @@ export async function each(api: Api, verb: "close" | "reopen" | "stop" | "resume
     }
   }
   return failed ? 1 : 0;
+}
+
+/**
+ * `agentbox move <id> [--account NAME] [--force] [text…]`: continue a session
+ * on another account, with its conversation: the limit banner's button, for
+ * an agent. The account is the one named, else where the fleet's own move
+ * would send it. The refusals are the server's.
+ */
+export async function move(api: Api, args: string[]): Promise<number> {
+  const { flags, rest } = parseArgs(args, ["account"], ["force"]);
+  const [target, ...words] = rest;
+  if (!target) throw new Error("move needs a session id");
+  const { ids } = await resolveIds(api, [target]);
+  const s = await state(api);
+  const row = s.sessions.find((x) => x.id === ids[0]);
+  const mine = s.accounts.filter((a) => row && a.provider === accountProvider(row.provider));
+  const wanted = str(flags.get("account"));
+  const to = wanted ? mine.find((a) => a.id === wanted || a.label === wanted || a.email === wanted) : null;
+  if (wanted && !to) throw new Error(`no ${row ? accountProvider(row.provider) : ""} account "${wanted}" — have: ${mine.map((a) => a.label).join(", ") || "none"}`);
+  const by = process.env.AGENTBOX_SESSION;
+  const prompt = words.join(" ") || `[agentbox: you have been moved to another account${by ? ` by session ${by}` : ""}${row?.limitHit ? ", because the one you were on reached its usage limit" : ""}. Carry on where you left off.]`;
+  const moved = await api<Session>("POST", `/api/sessions/${ids[0]}/move`, { accountId: to?.id ?? "auto", prompt, must: true, force: flags.has("force") });
+  console.log(`${ids[0]}  moved to ${s.accounts.find((a) => a.id === moved.accountId)?.label ?? moved.accountId}`);
+  return 0;
 }
 
 export async function label(api: Api, args: string[]): Promise<number> {

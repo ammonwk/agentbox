@@ -55,6 +55,7 @@ import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./g
 import { setUpWorktree } from "./setup";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import {
+  LIMIT_DIALOG,
   transcriptFile,
   type LiveProcess,
   type ModelOutcome,
@@ -75,6 +76,7 @@ import {
   normalCommand,
   shellHold,
   STALE_TURN_MS,
+  limitStop,
   stoppedAtLimit,
   strandedNudge,
   strandedNudgeAfter,
@@ -2160,15 +2162,23 @@ export class Fleet extends EventEmitter {
         if (quietFor > 2_500 || status !== "running" || this.blocked.has(rec.id)) {
           const screen = this.settledScreen(pane);
           const shown = screen ? adapter.blockedOn(screen) : null;
+          // The dialog a CLI puts up at its account's limit is a prompt to no
+          // one: the session is stopped at the limit (`limitHit`), and is
+          // moved, waited out or offered its banner as one that only printed
+          // the message is. Read as blocked, none of that looked at it.
+          const atLimit = shown === LIMIT_DIALOG;
           if (!shown) this.approved.delete(rec.id);
           // A session told to skip permissions is not waiting on you for one.
           const allowed = !!shown && !!screen && !!f?.skipsPermissions && this.approvePrompt(rec.id, pane.name, adapter, screen, shown, now);
-          const why = allowed || answering ? null : shown;
+          const why = allowed || answering || atLimit ? null : shown;
           if (why) {
             status = "blocked";
             this.blocked.set(rec.id, why);
           } else if (allowed) {
             status = "running";
+            this.blocked.delete(rec.id);
+          } else if (atLimit) {
+            status = "waiting";
             this.blocked.delete(rec.id);
           } else if (status !== "blocked") {
             // (Blocked by Claude's word, with a screen that says no more: its reason stands.)
@@ -2210,10 +2220,10 @@ export class Fleet extends EventEmitter {
 
     const cwd = f?.cwd || rec.cwd;
     const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;
-    // The limit message is the session's last word: nothing after it, bar the
-    // odd bookkeeping line written in the same breath.
-    const hit = f?.rateLimitHits?.at(-1) ?? null;
-    const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? { ...hit, until: this.limitUntil(rec.accountId, hit, now), ...(rec.hoppedAt ? { hopped: true as const } : {}) } : null;
+    // The limit message is the last thing the model was asked that it did
+    // not answer (`limitStop`), whatever was queued behind it since.
+    const hit = f ? limitStop({ ...f, lastActivityAt }) : null;
+    const limitHit = hit && live !== "running" ? { ...hit, until: this.limitUntil(rec.accountId, hit, now), ...(rec.hoppedAt ? { hopped: true as const } : {}) } : null;
     const warmUntil = cacheWarmUntil(f, lastActivityAt, this.coldAfterMs);
     const cold =
       this.movable.has(rec.provider) &&
@@ -2900,9 +2910,14 @@ export class Fleet extends EventEmitter {
    * Continue a session on another account: the "limits reset" button for a
    * session that stopped at its account's limit. `accountId` absent or
    * "auto" is the balancer's pick; the pick being where it already is just
-   * continues it there.
+   * continues it there. For a session stopped at its limit the pick is where
+   * the fleet's own move would send it (`hopTarget`).
+   *
+   * `must` is `agentbox move`: an agent asking for a move and nothing else,
+   * so one that would not change account is refused instead of typed into,
+   * and so is a warm session that is not at a limit (`force` moves it anyway).
    */
-  async moveAndContinue(id: string, opts: { accountId?: string | null; prompt?: string }): Promise<Session> {
+  async moveAndContinue(id: string, opts: { accountId?: string | null; prompt?: string; must?: boolean; force?: boolean }): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
@@ -2912,10 +2927,18 @@ export class Fleet extends EventEmitter {
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
     const from = this.accountFor(rec, view);
     if (!from) throw new FleetError(409, "this session's account is no longer set up");
-    const accountId = opts.accountId && opts.accountId !== "auto" ? opts.accountId : null;
+    const named = opts.accountId && opts.accountId !== "auto" ? opts.accountId : null;
+    const accountId = named ?? (view.limitHit ? (this.hopTarget(rec, view)?.accountId ?? null) : null);
     const target = this.wakeTarget(rec, view, accountId);
     if (accountId && accountId !== this.ownerOf(from.id) && !target) {
       throw new FleetError(409, this.adapter(rec.provider).moveSession ? `no ${rec.provider} account ${accountId}` : `${this.adapter(rec.provider).label} sessions cannot change account`);
+    }
+    if (opts.must) {
+      if (!this.adapter(rec.provider).moveSession) throw new FleetError(409, `${this.adapter(rec.provider).label} sessions cannot change account`);
+      if (!target) throw new FleetError(409, named ? `it is already on ${from.label}` : `no other ${rec.provider} account can take a session now, so it stays on ${from.label} (agentbox usage)`);
+      if (!opts.force && !view.limitHit && !view.cold) {
+        throw new FleetError(409, `it is not stopped at a usage limit and its prompt cache is warm: a move re-sends its ${view.contextUsed ? `${Math.round(view.contextUsed / 1000)}k tokens of ` : ""}context uncached. --force moves it anyway`);
+      }
     }
     if (!target && view.host === "tmux" && view.tmux) {
       if (opts.prompt) await this.typeInto(rec.id, rec.provider, view.tmux, opts.prompt);
@@ -3112,6 +3135,7 @@ export class Fleet extends EventEmitter {
       if (rec?.tmux && this.paneAlive(rec.tmux)) {
         await this.untilReady(id);
         if (s.provider === "claude") await this.clearBtw(id, rec.tmux);
+        await this.clearLimitDialog(s.provider, rec.tmux);
         attempt?.();
         return this.typeInto(id, s.provider, rec.tmux, text);
       }
@@ -3128,6 +3152,7 @@ export class Fleet extends EventEmitter {
     }
     await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
+    await this.clearLimitDialog(s.provider, s.tmux);
     attempt?.();
     await this.typeInto(id, s.provider, s.tmux, text);
     if (s.provider === "devin") await this.deliverDevinQueue(s.tmux);
@@ -3353,6 +3378,16 @@ export class Fleet extends EventEmitter {
   private async clearBtw(id: string, pane: string): Promise<void> {
     await this.btwWatching.get(id);
     await clearPanel(this.deps.runtime, pane);
+  }
+
+  /** Put away the dialog a CLI left up at its account's limit (`LIMIT_DIALOG`),
+   *  so that what is typed next reaches the input box: Esc is its "stop and
+   *  wait", and a message typed over it would pick one of its options. */
+  private async clearLimitDialog(provider: ProviderId, pane: string): Promise<void> {
+    const before = this.deps.runtime.capture(pane) ?? "";
+    if (this.adapter(provider).blockedOn?.(before) !== LIMIT_DIALOG) return;
+    this.deps.runtime.sendKeys(pane, ["Escape"]);
+    await this.settled(pane, before);
   }
 
   /** The screen once it has changed from `before` and held still a moment.

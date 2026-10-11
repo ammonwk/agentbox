@@ -834,6 +834,8 @@ const router = new Router(mapError)
     const s = await fleet.moveAndContinue(params.id!, {
       accountId: optionalString(b, "accountId") ?? null,
       prompt: typeof b.prompt === "string" && b.prompt.trim() ? b.prompt : undefined,
+      must: b.must === true,
+      force: b.force === true,
     });
     scheduleHot();
     scheduleCold();

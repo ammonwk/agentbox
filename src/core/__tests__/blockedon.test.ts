@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { claudeBlockedOn } from "../providers/claude";
+import { LIMIT_DIALOG } from "../providers/types";
 import { codexBlockedOn } from "../providers/codex";
 import { ompAdapter } from "../providers/omp";
 import { claudeTurnErrorKind } from "../providers/claude-transcript";
@@ -87,6 +88,37 @@ describe("claudeBlockedOn: a dialog is where the input box was", () => {
 
   test("an input box left higher up the screen does not hide the dialog under it", () => {
     expect(claudeBlockedOn(`${input}\n${bashDialog}`)).toBe("permission: bash command");
+  });
+});
+
+/** Claude 2.1 at its account's limit, as f9w4chcp showed it on 2026-10-11:
+ *  the refused message, and a dialog where the input box was. */
+const limitDialog = `❯ [agentbox: keeping this session's prompt cache warm while it waits; nothing has finished yet.]
+  ⎿  You've hit your weekly limit · resets Oct 14, 11am (America/Denver)
+
+✻ Churned for 0s · done 3:51 AM · 1 shell still running
+${"▔".repeat(80)}
+   What do you want to do?
+
+   ❯ 1. Stop and wait for limit to reset
+     2. Wait here, then continue automatically at Oct 14, 11am
+     3. Add funds to continue with usage credits
+
+   Enter to confirm · Esc to cancel
+`;
+
+describe("claudeBlockedOn: the usage limit dialog", () => {
+  // Read as a prompt for you ("dialog open"), seven sessions sat at it for
+  // hours while another account had half its week left: the fleet moves a
+  // session that is stopped at its limit, and did not look at a blocked one.
+  test("is the limit, not a prompt", () => {
+    expect(claudeBlockedOn(limitDialog)).toBe(LIMIT_DIALOG);
+    expect(claudeBlockedOn(`${input}\n${limitDialog}`)).toBe(LIMIT_DIALOG);
+  });
+
+  test("its words in the conversation, or once it is put away, are not", () => {
+    expect(claudeBlockedOn(screen("It showed: 1. Stop and wait for limit to reset … Esc to cancel"))).toBeNull();
+    expect(claudeBlockedOn(`${limitDialog}\n${input}`)).toBeNull();
   });
 });
 

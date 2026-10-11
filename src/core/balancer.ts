@@ -389,11 +389,20 @@ function rank(candidates: Candidate[], need: number, now: number): Candidate[] {
 
 /**
  * Where a session cut off at `own`'s limit can carry on: the first of the
- * other accounts, in the balancer's order, that can take a session. Null when
- * none can — it stays where it is.
+ * other accounts, in the balancer's order, that can take a session and whose
+ * weekly has room for what this one claims. Null when none can take a session
+ * — it stays where it is.
+ *
+ * The room is asked of this placement alone. A new session may be given an
+ * account's last weekly points (`fits`), because one that overruns them is
+ * moved on; this is that move, and the session has no other. Sent to the
+ * account first to reset, it went to one with 1.2 points left while two more
+ * had 23 and 46. Where none has the room, the one with the most weekly left.
  */
 export function elsewhere(p: Placement, own: string): Candidate | null {
-  return p.candidates.find((c) => c.eligible && c.accountId !== own) ?? null;
+  const others = p.candidates.filter((c) => c.eligible && c.accountId !== own);
+  const left = (c: Candidate): number => 100 - (c.weeklyEffective ?? 0);
+  return others.find((c) => left(c) >= p.claim) ?? others.reduce<Candidate | null>((best, c) => (best && left(best) >= left(c) ? best : c), null);
 }
 
 /** A claim in the short window's points: 3 weekly points is an eighth of a window at 24. */

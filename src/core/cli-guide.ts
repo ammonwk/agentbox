@@ -41,6 +41,12 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox reopen <id>...         # back on the board (still stopped; resume to run it)
     agentbox stop <id>...           # end its process; it stays resumable
     agentbox resume <id>... --detach
+    agentbox move <id> [--account X]   # continue it on another account, its conversation intact:
+                                    # for one stopped at its account's usage limit (show has a
+                                    # "limit:" line; agentbox moves each once by itself, so this is
+                                    # for the second time, or the one it missed). Cheaper than
+                                    # a successor that rebuilds the context from the log.
+                                    # Refused when no other account can take it
     agentbox adopt <id>... --detach # move a session from another terminal into agentbox
     agentbox label <id> 'name'      # rename it on the board
     agentbox claude|codex|omp|opencode|devin --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in

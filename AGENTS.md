@@ -142,7 +142,7 @@ once: commit your own files by path, never `git add -A`.
 - `src/cli/index.ts` — `agentbox claude|codex|…`, `attach`, `usage`, `mcp`,
   `subagent-mcp`, `devin-bridge`, `doctor`; `src/cli/sessions.ts` — the Unix-shaped session
   verbs (`ls`, `show`, `log`, `grep`, `screen`, `diff`, `send`, `watch`, `close`,
-  `stop`, `resume`, `adopt`, `label`): ids first on every line, `-` reads ids
+  `stop`, `resume`, `adopt`, `move`, `label`): ids first on every line, `-` reads ids
   from stdin.
 - `src/voice/` — hands-free mode (the Voice page, `/ws/voice`): Deepgram Flux
   hears, Claude (`claude-opus-5-5`, low effort, on the API key in
