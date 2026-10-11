@@ -2935,9 +2935,18 @@ export class Fleet extends EventEmitter {
     }
     if (opts.must) {
       if (!this.adapter(rec.provider).moveSession) throw new FleetError(409, `${this.adapter(rec.provider).label} sessions cannot change account`);
-      if (!target) throw new FleetError(409, named ? `it is already on ${from.label}` : `no other ${rec.provider} account can take a session now, so it stays on ${from.label} (agentbox usage)`);
       if (!opts.force && !view.limitHit && !view.cold) {
         throw new FleetError(409, `it is not stopped at a usage limit and its prompt cache is warm: a move re-sends its ${view.contextUsed ? `${Math.round(view.contextUsed / 1000)}k tokens of ` : ""}context uncached. --force moves it anyway`);
+      }
+      if (!target) {
+        throw new FleetError(
+          409,
+          named
+            ? `it is already on ${from.label}`
+            : view.limitHit
+              ? `no other ${rec.provider} account can take a session now, so it stays on ${from.label} (agentbox usage)`
+              : `the balancer would keep it on ${from.label}; name another with --account`,
+        );
       }
     }
     if (!target && view.host === "tmux" && view.tmux) {
