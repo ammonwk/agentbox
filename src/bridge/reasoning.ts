@@ -16,10 +16,11 @@
  * The history is the CLI's to keep; which sign-in a request goes out on is
  * the proxy's doing, so the proxy leaves out what that sign-in cannot send.
  * A blob cannot be read for who issued it, so the refusal is the evidence:
- * every blob in a refused request is the other account's (nothing of this
- * account's own is among them the first time, and a session moved back to
- * where it began loses only reasoning), remembered so later requests go out
- * right the first time. A reasoning item keeps its summary, which is plain
+ * every blob in a refused request is taken for the other account's and
+ * remembered, so later requests go out right the first time. That takes this
+ * account's own with it where there is any (omp's one unreplayed turn, a
+ * session moved back to where it began), which costs the model that turn's
+ * hidden reasoning and nothing it said or did. A reasoning item keeps its summary, which is plain
  * text any account may send; one with no summary goes altogether. What is
  * remembered lives as long as the bridge does: after a restart the first
  * request of such a session is refused once more and repaired again.
