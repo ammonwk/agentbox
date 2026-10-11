@@ -457,13 +457,15 @@ export interface Session {
    */
   cold: boolean;
   /** The provider's latest "you hit your limit", when that is the last thing
-   *  the session did — it stopped there and is waiting to be continued. */
+   *  the session did — it stopped there and is waiting to be continued — and
+   *  its account's usage does not say that limit is gone (`Fleet.limitEnd`). */
   limitHit: {
     at: number;
     detail: string;
     provider?: string;
     /** When the limit lifts, as far as is known: the reset of the account's
-     *  spent window, else the time the message names. Until then every
+     *  spent window, or the time the message names where no window of the
+     *  account ever accounted for the hit. Until then every
      *  message is refused the same way, so nothing is sent (the fleet's own
      *  nudges, and `agentbox send` from an agent). Null when nothing says. */
     until?: number | null;
@@ -486,7 +488,8 @@ export interface Session {
   turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string; retryAfterMs?: number } | null;
   /**
    * When the fleet will tell it to go on by itself — past an error, a rate
-   * limit or a 5-hour reset (`Fleet.autoResumeOf`) — and which try that is:
+   * limit or the reset of a spent window due within five hours of the hit
+   * (`Fleet.autoResumeOf`) — and which try that is:
    * `attempt` of `of`, `of` null when it keeps trying until it works. About:
    * nudges go out one at a time across the fleet. Anything you send it first
    * does the same and calls this off. Null when nothing will. `after` says

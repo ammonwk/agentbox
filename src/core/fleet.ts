@@ -40,6 +40,7 @@ import {
   insertBtw,
   insertRateLimitHit,
   rateLimitHitsSince,
+  windowSpentAt,
   modelOutcomesSince,
   insertSessionRecord,
   insertTokenSample,
@@ -77,7 +78,6 @@ import {
   shellHold,
   STALE_TURN_MS,
   limitStop,
-  stoppedAtLimit,
   strandedNudge,
   strandedNudgeAfter,
   SUBAGENT_QUIET_MS,
@@ -352,9 +352,13 @@ export class Fleet extends EventEmitter {
   /** Error screens that name their own wait ("will reset in 55 minutes"):
    *  the error, as first seen, and when that wait is up. */
   private screenWaits = new Map<string, { key: string; until: number }>();
-  /** Sessions waiting out a 5-hour reset: tell them to go on at `at`, if still
-   *  stopped at the hit `hitAt`. */
-  private resumeAfterReset = new Map<string, { hitAt: number; at: number }>();
+  /** Sessions still sitting at the message of a limit that has lifted
+   *  (`limitEnd`): the hit, when the fleet first saw it lifted, and whether
+   *  `continueStalled` has acted on that. */
+  private lifted = new Map<string, { hitAt: number; since: number; seen?: true }>();
+  /** `account|hit time` → was a window of that account spent when the hit
+   *  struck (`spentAtHit`), once that can no longer change. */
+  private spentAtHits = new Map<string, boolean>();
   /** Home → the account it belongs to (see `owners`), as of the last pass. */
   private owner = new Map<string, string>();
   private coldAfterMs = 60 * 60_000;
@@ -707,23 +711,26 @@ export class Fleet extends EventEmitter {
    * still has its own move. A manual move (the limit banner) is always yours.
    *
    * One that has had its move, or has nowhere to go, carries on where it is
-   * when the limit was the 5-hour one: a minute after the window resets it is
-   * told to go on. A weekly limit is left to you.
+   * once its account's usage says the limit has lifted (`limitEnd`): a minute
+   * after, it is told to go on. Whatever lifted it: the 5-hour window's
+   * reset, a reset redeemed at the provider, a bigger plan. Only when that
+   * comes within `CARRY_ON_WITHIN_MS` of the hit: a weekly limit that runs
+   * its days out is left to you.
    *
-   * Once per hit, and only for a hit inside the window still running, so a
-   * restart in the middle of a wait picks it back up (the deadline lives only
-   * in memory).
+   * Once per hit, and what has lifted is read from the account each pass, so
+   * a restart in the middle of a wait picks it back up.
    */
   private continueStalled(now: number): void {
-    for (const [id, w] of this.resumeAfterReset) {
-      if (now < w.at) continue;
-      this.resumeAfterReset.delete(id);
+    for (const [id, l] of this.lifted) {
       const v = this.views.get(id);
-      // Still stopped at that same hit, and nobody has written to it since.
-      if (!v || v.limitHit?.at !== w.hitAt || v.status !== "waiting" || v.host !== "tmux") continue;
-      console.log(`agentbox: ${id} (${v.title}): its 5-hour window has reset; telling it to carry on`);
-      void this.sendInPlace(id, "[agentbox: the 5-hour usage limit has reset. Carry on where you left off.]").catch((e) =>
-        console.error(`agentbox: continuing ${id} after its reset failed:`, e),
+      if (!v) this.lifted.delete(id);
+      // Still sitting at that hit's message: nobody has written to it since.
+      if (!v || l.seen || now - l.since < 60_000 || v.status !== "waiting" || v.host !== "tmux" || this.busy.has(id)) continue;
+      l.seen = true;
+      if (l.since - l.hitAt > CARRY_ON_WITHIN_MS) continue;
+      console.log(`agentbox: ${id} (${v.title}): the usage limit it stopped at has lifted; telling it to carry on`);
+      void this.sendInPlace(id, "[agentbox: the usage limit you stopped at has lifted. Carry on where you left off.]").catch((e) =>
+        console.error(`agentbox: continuing ${id} after its limit lifted failed:`, e),
       );
     }
     for (const v of this.views.values()) {
@@ -731,17 +738,12 @@ export class Fleet extends EventEmitter {
       if (!hit || this.stallsSeen.get(v.id) === hit.at) continue;
       if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
       const rec = getSessionRecord(v.id);
-      const accountId = rec?.accountId;
-      if (!rec || !accountId) continue;
+      if (!rec?.accountId) continue;
       const next = rec.hoppedAt ? null : this.hopTarget(rec, v);
       // Another is on its way over: this one is looked at again once it has landed.
       if (next && this.hopping) continue;
       this.stallsSeen.set(v.id, hit.at);
-      if (next) {
-        this.hop(rec, v, next, now);
-        continue;
-      }
-      this.waitOutReset(v, hit, accountId, now);
+      if (next) this.hop(v, next, now);
     }
   }
 
@@ -753,7 +755,7 @@ export class Fleet extends EventEmitter {
     return elsewhere(this.placement(rec.provider, v.model, null, rec.effort ?? null, false), own);
   }
 
-  private hop(rec: SessionRecord, v: Session, to: Candidate, now: number): void {
+  private hop(v: Session, to: Candidate, now: number): void {
     this.hopping = true;
     console.log(`agentbox: ${v.id} (${v.title}) stopped at its account's limit (${oneLine(v.limitHit!.detail, 80)}); moving it to ${to.label}, its one move`);
     void this.moveAndContinue(v.id, {
@@ -761,29 +763,10 @@ export class Fleet extends EventEmitter {
       prompt: "[agentbox: the account you were running on reached its usage limit, so you have been moved to another. Carry on where you left off.]",
     })
       .then(() => updateSessionRecord(v.id, { hoppedAt: now }))
-      .catch((e) => {
-        console.error(`agentbox: moving ${v.id} off its account's limit failed:`, e);
-        const at = this.views.get(v.id);
-        if (at?.limitHit && rec.accountId) this.waitOutReset(at, at.limitHit, rec.accountId, this.now());
-      })
+      .catch((e) => console.error(`agentbox: moving ${v.id} off its account's limit failed:`, e))
       .finally(() => {
         this.hopping = false;
       });
-  }
-
-  /** Have a session stopped at a 5-hour limit told to carry on once it resets. */
-  private waitOutReset(v: Session, hit: NonNullable<Session["limitHit"]>, accountId: string, now: number): void {
-    // An account that fronts several providers (omp) has windows for each:
-    // the ones that matter are those of the provider that refused.
-    const windows = (this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? []).filter(
-      (w) => !w.scope && (!hit.provider || !w.provider || w.provider === hit.provider),
-    );
-    const short = windows.find((w) => w.kind === "short");
-    // A longer window that is spent outlasts the 5-hour reset.
-    if (windows.some((w) => w.kind !== "short" && w.usedPct >= 100 && (w.resetsAt === null || w.resetsAt > now))) return;
-    if (!short?.resetsAt || short.resetsAt <= now || hit.at < short.resetsAt - short.windowMs) return;
-    this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
-    console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
   }
 
   /**
@@ -866,11 +849,11 @@ export class Fleet extends EventEmitter {
   }
 
   /** When the fleet will tell this session to go on by itself, if it will:
-   *  after its 5-hour reset (`continueStalled`), or past an error
-   *  (`nudgeErrored`). */
+   *  after the reset of the window its account has spent, when that comes
+   *  soon enough (`continueStalled`), or past an error (`nudgeErrored`). */
   private autoResumeOf(v: Session, now: number): Session["autoResume"] {
-    const reset = this.resumeAfterReset.get(v.id);
-    if (reset && v.limitHit?.at === reset.hitAt && v.status === "waiting" && v.host === "tmux") return { at: reset.at, attempt: 1, of: 1, after: "reset" };
+    const reset = v.limitHit && v.status === "waiting" && v.host === "tmux" ? this.spentUntil(v.accountId, v.limitHit, now) : null;
+    if (reset !== null && reset - v.limitHit!.at <= CARRY_ON_WITHIN_MS) return { at: reset + 60_000, attempt: 1, of: 1, after: "reset" };
     const plan = this.nudgePlan(v, now);
     return plan && { at: plan.at, attempt: plan.attempt, of: plan.of, after: "error" };
   }
@@ -899,7 +882,7 @@ export class Fleet extends EventEmitter {
    * five-minute one would need a message every few minutes), and at most
    * `KEEP_WARM_MAX` times in one wait.
    *
-   * Neither to a session stopped at a usage limit (`stoppedAtLimit`): the
+   * Neither to a session stopped at a usage limit (`Session.limitHit`): the
    * message would only meet the limit again.
    */
   private keepWarm(now: number, parkIdleMin: number): void {
@@ -910,7 +893,7 @@ export class Fleet extends EventEmitter {
       if (v.status !== "waiting" && v.status !== "running") continue;
       const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
       const facts = t?.facts;
-      if (!t || !facts || stoppedAtLimit(facts)) continue;
+      if (!t || !facts || v.limitHit) continue;
 
       const stranded = this.strandedOf(v);
       const newest = stranded.at(-1)?.at;
@@ -970,21 +953,55 @@ export class Fleet extends EventEmitter {
     return this.screenWaits.get(v.id)?.until ?? null;
   }
 
-  /**
-   * When a limit a session stopped at lifts, or null when nothing says: the
-   * latest reset among its account's spent windows (those of the provider
-   * that refused, where the account fronts several), else the wait or the
-   * date the message itself names. Past moments are no answer.
-   */
-  private limitUntil(accountId: string | null, hit: { at: number; detail: string; provider?: string }, now: number): number | null {
+  /** The windows a limit hit can be one of: its account's, of the provider
+   *  that refused where the account fronts several, and not one model's. */
+  private limitWindows(accountId: string | null, hit: { provider?: string }): UsageWindow[] {
     const windows = accountId ? (this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? []) : [];
-    const spent = windows
-      .filter((w) => !w.scope && (!hit.provider || !w.provider || hit.provider.startsWith(w.provider)) && w.usedPct >= 100 && w.resetsAt !== null && w.resetsAt > now)
+    return windows.filter((w) => !w.scope && (!hit.provider || !w.provider || hit.provider.startsWith(w.provider)));
+  }
+
+  /** The latest reset among the windows the account has spent now, or null
+   *  when its usage shows none spent with a reset still to come. */
+  private spentUntil(accountId: string | null, hit: { provider?: string }, now: number): number | null {
+    const ends = this.limitWindows(accountId, hit)
+      .filter((w) => w.usedPct >= 100 && w.resetsAt !== null && w.resetsAt > now)
       .map((w) => w.resetsAt!);
-    if (spent.length) return Math.max(...spent);
+    return ends.length ? Math.max(...ends) : null;
+  }
+
+  /**
+   * When a limit a session stopped at ends, as the account's usage has it
+   * now: the latest reset among its spent windows; "lifted" when a window
+   * was spent as the hit struck and none is any more (it reset, or a reset
+   * was redeemed at the provider, or the plan grew); else, where no window
+   * ever accounted for the hit (a rate limit, an empty balance, an account
+   * whose usage cannot be read), the wait or the date the message itself
+   * names, null when it names none or that has passed. The message's time
+   * is never held against usage that has moved on: on 2026-10-11 a codex
+   * account's weekly reset was redeemed nine minutes after two sessions
+   * stopped on it, usage read 0%, and both were still refused every message
+   * "until Oct 17", the date their limit message named.
+   */
+  private limitEnd(accountId: string | null, hit: { at: number; detail: string; provider?: string }, now: number): number | "lifted" | null {
+    const spent = this.spentUntil(accountId, hit, now);
+    if (spent !== null) return spent;
+    const windows = this.limitWindows(accountId, hit);
+    if (windows.length > 0 && !windows.some((w) => w.usedPct >= 100 && w.resetsAt === null) && this.spentAtHit(this.ownerOf(accountId!), windows, hit.at, now)) return "lifted";
     const wait = statedWaitMs(hit.detail);
     const named = wait !== null ? hit.at + wait : statedUntil(hit.detail);
     return named !== null && named > now ? named : null;
+  }
+
+  /** Did the account's usage have one of these windows spent as the hit
+   *  struck (`windowSpentAt`)? Asked every pass of every session that sits at
+   *  a hit, so the answer is kept once no later reading can change it. */
+  private spentAtHit(accountId: string, windows: UsageWindow[], hitAt: number, now: number): boolean {
+    const key = `${accountId}|${hitAt}`;
+    const known = this.spentAtHits.get(key);
+    if (known !== undefined) return known;
+    const was = windowSpentAt(accountId, windows.map((w) => w.id), hitAt);
+    if (was || now > hitAt + 60 * 60_000) this.spentAtHits.set(key, was);
+    return was;
   }
 
   /** Remember the wait an error screen names, from when it first showed: the
@@ -1583,7 +1600,7 @@ export class Fleet extends EventEmitter {
     // Told first (`keepWarm`), parked only if it goes quiet again. One
     // already nudged holds nothing: a nudge that never landed must not keep
     // the session up for good.
-    const stranded = stoppedAtLimit(own.facts) ? [] : this.strandedOf(v);
+    const stranded = v.limitHit ? [] : this.strandedOf(v);
     if (stranded.length > 0 && this.strandedSeen.get(v.id) !== stranded.at(-1)!.at) {
       return `${stranded.length} finished background task${stranded.length === 1 ? "" : "s"} never woke it; it is told first`;
     }
@@ -2091,7 +2108,9 @@ export class Fleet extends EventEmitter {
     const f = t?.facts ?? (rec.facts as Partial<TranscriptFacts> | null);
     const cold = this.movable.has(rec.provider) && now > cacheWarmUntil(f, rec.lastActivityAt, this.coldAfterMs);
     const parentRuns = !!rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none";
-    return `${cold}|${parentRuns}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}`;
+    // A limit it stopped at ends when its account's usage says so, not when the view was drawn.
+    const hit = f ? limitStop({ ...f, lastActivityAt: f.lastActivityAt ?? rec.lastActivityAt }) : null;
+    return `${cold}|${parentRuns}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}|${hit ? this.limitEnd(rec.accountId, hit, now) : ""}`;
   }
 
   private viewOf(rec: SessionRecord, now: number): Session | null {
@@ -2222,8 +2241,12 @@ export class Fleet extends EventEmitter {
     const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;
     // The limit message is the last thing the model was asked that it did
     // not answer (`limitStop`), whatever was queued behind it since.
-    const hit = f ? limitStop({ ...f, lastActivityAt }) : null;
-    const limitHit = hit && live !== "running" ? { ...hit, until: this.limitUntil(rec.accountId, hit, now), ...(rec.hoppedAt ? { hopped: true as const } : {}) } : null;
+    // And only while its account's usage does not say that limit is gone.
+    const hit = f && live !== "running" ? limitStop({ ...f, lastActivityAt }) : null;
+    const end = hit ? this.limitEnd(rec.accountId, hit, now) : null;
+    if (!hit || end !== "lifted") this.lifted.delete(rec.id);
+    else if (this.lifted.get(rec.id)?.hitAt !== hit.at) this.lifted.set(rec.id, { hitAt: hit.at, since: now });
+    const limitHit = hit && end !== "lifted" ? { ...hit, until: end, ...(rec.hoppedAt ? { hopped: true as const } : {}) } : null;
     const warmUntil = cacheWarmUntil(f, lastActivityAt, this.coldAfterMs);
     const cold =
       this.movable.has(rec.provider) &&
@@ -3583,6 +3606,10 @@ export class Fleet extends EventEmitter {
  *  minute is work nothing else caught. */
 /** A turn error older than this is not retried on its own: it stalled before
  *  we were watching. */
+/** A session whose limit lifts within this of the hit is told to carry on: a
+ *  5-hour window's length, the longest a 5-hour limit lasts. One that lifts
+ *  later is old work, and yours to pick up or leave. */
+const CARRY_ON_WITHIN_MS = 5 * 60 * 60_000;
 const STALL_FRESH_MS = 15 * 60_000;
 /** A session stuck on an error screen is nudged once the error's reset window
  *  ("will reset in N seconds") has passed: this long after it last moved. */

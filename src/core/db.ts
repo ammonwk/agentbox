@@ -988,6 +988,19 @@ export function usageSamplesSince(sinceMs: number, accountId?: string): UsageSam
   }));
 }
 
+/** Was one of these windows of an account read as spent when `at` struck: a
+ *  reading at 100% whose reset lay beyond that moment, taken no later than
+ *  an hour after it (the next reading of an account nobody is running on). */
+export function windowSpentAt(accountId: string, windowIds: string[], at: number): boolean {
+  if (windowIds.length === 0) return false;
+  return !!getDb()
+    .query(
+      `SELECT 1 FROM usage_samples WHERE account_id = ? AND window_id IN (${windowIds.map(() => "?").join(",")})
+        AND used_pct >= 100 AND resets_at > ? AND at <= ? LIMIT 1`,
+    )
+    .get(accountId, ...windowIds, at, at + 60 * 60_000);
+}
+
 export function insertTokenSample(sessionId: string, at: number, t: TokenTotals): void {
   getDb().run(
     `INSERT INTO token_samples (session_id,at,input,output,cache_read,cache_write,cost_equiv)
