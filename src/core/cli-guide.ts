@@ -121,6 +121,14 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
   than 3 messages to one session in an hour are refused too: batch them.
 - A \`send\` to a session another has taken over (a schedule replaced it)
   goes to the one that took over, and says so: send to that one from then on.
+- \`send\` prints \`sent: <id> took it\` and exits 0 only when the session
+  took the message. Refused, or typed and left in its input box, it prints
+  \`not sent: …\` and exits 1: read that before you say you sent anything,
+  and never pipe \`send\` into \`tail\` or \`grep\`, which hides the exit code.
+- A message is a nudge, not a record. A result another session waits on (a
+  PR that is ready, a verdict, a finished batch item) is written first where
+  it will be looked for (a PR comment, a ledger such as \`steward.py report\`),
+  and then sent; the reader that never gets the nudge still finds the result.
 - A sent message arrives marked \`[via agentbox send from <id>]\` with the
   sender's session id, so don't sign it yourself; reply to the id in that
   mark.

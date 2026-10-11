@@ -360,7 +360,9 @@ export async function send(api: Api, args: string[]): Promise<number> {
     return 0;
   }
   const sent = await api<{ to: string } | null>("POST", `/api/sessions/${ids[0]}/send`, { text, from: "agent", wake, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+  // Said only once the session has taken it: no line, no send.
   if (sent && sent.to !== ids[0]) console.log(`sent to ${sent.to}: it has taken over from ${ids[0]}, so send to it from now on`);
+  else console.log(`sent: ${ids[0]} took it`);
   return 0;
 }
 

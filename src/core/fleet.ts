@@ -53,7 +53,7 @@ import {
 } from "./db";
 import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
-import { attachArgv, tmuxName, type NewSession, type PaneInfo } from "./tmux";
+import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import {
   transcriptFile,
   type LiveProcess,
@@ -2918,7 +2918,7 @@ export class Fleet extends EventEmitter {
       throw new FleetError(409, this.adapter(rec.provider).moveSession ? `no ${rec.provider} account ${accountId}` : `${this.adapter(rec.provider).label} sessions cannot change account`);
     }
     if (!target && view.host === "tmux" && view.tmux) {
-      if (opts.prompt) await this.typeInto(rec.provider, view.tmux, opts.prompt);
+      if (opts.prompt) await this.typeInto(rec.id, rec.provider, view.tmux, opts.prompt);
       return view;
     }
     const cwd = this.resumeCwd(rec);
@@ -2973,7 +2973,7 @@ export class Fleet extends EventEmitter {
     void this.serial(id, async () => {
       await this.untilReady(id);
       await this.untilSettled(id, pane);
-      await this.typeInto(this.get(id).provider, pane, prompt);
+      await this.typeInto(id, this.get(id).provider, pane, prompt);
     }).catch((e) => console.error(`agentbox: typing ${id}'s prompt into it failed:`, e));
   }
 
@@ -3091,9 +3091,15 @@ export class Fleet extends EventEmitter {
     return true;
   }
 
-  /** Type a message into a session's pane, the way its TUI takes one as typed. */
-  private typeInto(provider: ProviderId, pane: string, text: string): Promise<void> {
-    return this.deps.runtime.sendText(pane, text, { pieces: this.adapter(provider).pasteInPieces });
+  /** Type a message into a session's pane, the way its TUI takes one as typed.
+   *  One its TUI did not take is a refusal the sender must hear, never a send. */
+  private async typeInto(id: string, provider: ProviderId, pane: string, text: string): Promise<void> {
+    try {
+      await this.deps.runtime.sendText(pane, text, { pieces: this.adapter(provider).pasteInPieces });
+    } catch (e) {
+      if (!(e instanceof Unsubmitted)) throw e;
+      throw new FleetError(409, `not sent: ${e.message}. Do not send it again before reading \`agentbox screen ${id}\`: a draft left in its input box goes out with the next message that is submitted.`);
+    }
   }
 
   private async sendNow(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
@@ -3106,7 +3112,7 @@ export class Fleet extends EventEmitter {
         await this.untilReady(id);
         if (s.provider === "claude") await this.clearBtw(id, rec.tmux);
         attempt?.();
-        return this.typeInto(s.provider, rec.tmux, text);
+        return this.typeInto(id, s.provider, rec.tmux, text);
       }
       // Parked by the fleet, not stopped by you: this is what wakes it.
       if (rec?.parkedAt || resume) {
@@ -3122,7 +3128,7 @@ export class Fleet extends EventEmitter {
     await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
     attempt?.();
-    await this.typeInto(s.provider, s.tmux, text);
+    await this.typeInto(id, s.provider, s.tmux, text);
     if (s.provider === "devin") await this.deliverDevinQueue(s.tmux);
   }
 
@@ -3267,7 +3273,7 @@ export class Fleet extends EventEmitter {
       if (!pane) throw new Error("it stopped before the question was asked");
       const rt = this.deps.runtime;
       await this.clearBtw(id, pane);
-      await this.typeInto(this.get(id).provider, pane, `/btw ${q}`);
+      await this.typeInto(id, this.get(id).provider, pane, `/btw ${q}`);
       try {
         await awaitAnswer(rt, pane, q, 10_000);
         return await copyAnswer(rt, pane);
