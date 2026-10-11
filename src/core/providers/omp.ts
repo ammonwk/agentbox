@@ -874,6 +874,7 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   answerStep: ompAskStep,
+  pasteEnd: " ",
   carryOver: (argv) => carryFlags(argv, CARRIED),
   headless: isHeadless,
 };

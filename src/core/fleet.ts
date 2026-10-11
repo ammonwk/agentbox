@@ -3095,7 +3095,8 @@ export class Fleet extends EventEmitter {
    *  One its TUI did not take is a refusal the sender must hear, never a send. */
   private async typeInto(id: string, provider: ProviderId, pane: string, text: string): Promise<void> {
     try {
-      await this.deps.runtime.sendText(pane, text, { pieces: this.adapter(provider).pasteInPieces });
+      const adapter = this.adapter(provider);
+      await this.deps.runtime.sendText(pane, text + (adapter.pasteEnd ?? ""), { pieces: adapter.pasteInPieces });
     } catch (e) {
       if (!(e instanceof Unsubmitted)) throw e;
       throw new FleetError(409, `not sent: ${e.message}. Do not send it again before reading \`agentbox screen ${id}\`: a draft left in its input box goes out with the next message that is submitted.`);

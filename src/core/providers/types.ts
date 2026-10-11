@@ -368,6 +368,14 @@ export interface ProviderAdapter {
   pasteInPieces?: number;
 
   /**
+   * Typed after a message, before its Enter. omp opens a completion popup
+   * when the text before the cursor ends in `#123`, `@name` or a link, and
+   * Enter then picks the completion (`#8832` becomes `pr://8832`) and leaves
+   * the message in the input box; a space after it opens none.
+   */
+  pasteEnd?: string;
+
+  /**
    * Re-home a stopped session's transcript under another account of this
    * provider, so the next resume there finds it; returns the transcript's new
    * path. Only for a session whose prompt cache is cold anyway (see
