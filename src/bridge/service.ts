@@ -12,6 +12,7 @@
  * (`agentbox devin-bridge restart`): a reply in flight is retried by devin.
  */
 
+import { spawn } from "node:child_process";
 import { openSync } from "node:fs";
 import { join } from "node:path";
 import { logDir } from "../core/paths";
@@ -70,6 +71,12 @@ function start(): void {
     // No systemd-run on this machine.
   }
   const log = openSync(bridgeLog(), "a");
+  // macOS has no setsid(1); a detached child calls setsid() itself.
+  if (process.platform === "darwin") {
+    const [cmd, ...args] = argv();
+    spawn(cmd!, args, { detached: true, stdio: ["ignore", log, log] }).unref();
+    return;
+  }
   Bun.spawn(["setsid", ...argv()], { stdin: "ignore", stdout: log, stderr: log }).unref();
 }
 
