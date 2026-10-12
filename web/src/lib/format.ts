@@ -29,6 +29,13 @@ export function fmtHourMin(ts: number): string {
   return HOUR_MIN.format(ts);
 }
 
+/** When the fleet tells a session to go on by itself (`Session.autoResume`):
+ *  "at 1:51 AM (in 4m)", or "shortly" once that is past and it waits its turn
+ *  behind other sessions' nudges. */
+export function fmtRetryAt(at: number, now: number): string {
+  return at <= now ? "shortly" : `at ${HOUR_MIN.format(at)} (in ${fmtCountdown(at - now)})`;
+}
+
 /** How long a step took: "2.1s", "38s", "2m 05s", "1h 04m". */
 export function fmtDur(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "0s";

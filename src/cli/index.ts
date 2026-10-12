@@ -26,11 +26,15 @@ import { identify } from "../core/accounts/identity";
 import { onboardingItems } from "../core/onboarding";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
+import * as waits from "./waits";
+import * as cards from "./cards";
+import * as prs from "./prs";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
+import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
 
 const BASE = serverBase();
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 
 // ------------------------------------------------------------------ client
 
@@ -120,7 +124,7 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
       continue;
     }
     const [, key, inline] = m;
-    const takesValue = key === "account" || key === "model";
+    const takesValue = key === "account" || key === "model" || key === "claim";
     if (inline !== undefined) flags.set(key!, inline);
     else if (takesValue && args[i + 1] !== undefined) flags.set(key!, args[++i]!);
     else flags.set(key!, true);
@@ -131,17 +135,23 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
 /** `agentbox claude [--account X] [--model M] [--detach] [prompt…]` */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
   const { flags, rest } = parseFlags(args);
+  // Asking how is not asking to start one.
+  if (flags.has("help")) {
+    console.log(USAGE);
+    return 0;
+  }
   await ensureServer();
 
   let accountId: string | null = null;
   const wanted = flags.get("account");
   if (typeof wanted === "string") {
     const state = await api<AppState>("GET", "/api/state");
+    const holder = accountProvider(provider);
     const match = state.accounts.find(
-      (a) => a.provider === provider && (a.id === wanted || a.label === wanted || a.email === wanted),
+      (a) => a.provider === holder && (a.id === wanted || a.label === wanted || a.email === wanted),
     );
     if (!match) {
-      console.error(`no ${provider} account "${wanted}" — have: ${state.accounts.filter((a) => a.provider === provider).map((a) => a.label).join(", ") || "none"}`);
+      console.error(`no ${holder} account "${wanted}" — have: ${state.accounts.filter((a) => a.provider === holder).map((a) => a.label).join(", ") || "none"}`);
       return 2;
     }
     accountId = match.id;
@@ -155,6 +165,7 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       prompt: rest.join(" ") || undefined,
       model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
       accountId,
+      claim: typeof flags.get("claim") === "string" ? flags.get("claim") : undefined,
       // Started from inside another session, it is that session's child.
       callerPid: process.pid,
     });
@@ -363,7 +374,7 @@ async function recover(args: string[]): Promise<number> {
 
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
-  claude|codex|devin|omp [--account NAME] [--model M] [--detach] [prompt…]
+  claude|codex|devin|omp|opencode [--account NAME] [--model M] [--detach] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d)
   usage                 each account's limits and what running sessions claim
@@ -378,7 +389,8 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   grep <regex> [-i] [--all]                     search every conversation
   screen <id>...        what its terminal shows now
   diff <id>... [--stat] its worktree's changes
-  send <id> <text…|->   type a message into it
+  send <id> [--wake] <text…|->   type a message into it; from an agent, refused when it would wake a
+                        cold or stopped session (--wake: waking it is the point) or is one too many
   watch [<id>...|-] [--status blocked,waiting,running,stopped] [--once] [--now]
                         a line each time one starts asking, finishes its turn
                         (with the end of its last message), or stops; until killed
@@ -386,29 +398,132 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   reopen <id>...        put a closed one back on the list (still stopped)
   stop <id>...          end its process; it stays resumable
   resume|adopt <id>... [--detach]   one id on a terminal attaches; --detach or many do not
+  move <id> [--account NAME] [--force] [text…]
+                        continue it on another account, conversation and all: for one
+                        stopped at its account's limit (agentbox moves each once by
+                        itself). The account with room unless named; refused when
+                        none can take it, or it is warm and not at a limit (--force)
   label <id> [name]     rename it on the board (no name clears)
   recover [--last | --dry-run] [<id>...]
                         after a crash agentbox resumes what was working and parks
                         the rest by itself; this shows the last recovery (--last),
                         what one would do now (no ids), or recovers stopped ids
 
+waiting (the one way a session waits on anything outside its own turn: it is typed into the
+session when it happened, when it can no longer happen, when the wait itself failed, or at its
+timeout, each saying which; a parked session is resumed to hear it):
+  wait pr <n|owner/repo#n|url> [--require 'Reviewed head'] [--only 'Build,API Tests'] [--head <sha>]
+                        its checks concluding on that head (a failure ends it at once):
+                        every check; --require names ones that must be among them;
+                        --only waits for just those
+  wait pr <n> --merged  its merge
+  wait run <run id|url> [-R owner/repo]      a GitHub Actions run concluding
+  wait job [--name N] -- <command…>          start a long command as a unit of its own, which
+                        outlives this session's process, and be told how it ended
+  wait session <id>...  the first of those sessions to end its turn or stop
+  wait until [--every 2m] -- <command>       asked again and again: exit 0 is the event, 1 not yet
+  wait time <45m>       nothing but the time
+  waits [--session ID | --mine] [--all] [--json]   what is waited on, and how the rest ended
+  unwait <id>...        cancel one; its session is not told
+
+pull requests (who has one: no two sessions work the same PR):
+  pr claim <n|owner/repo#n|url> [--for ID]   this session has it; refused, naming the holder, if a live session does
+  pr release [<n|…>]                 let go of what this session claimed (one, or all)
+  pr who <n|…> [--json]              the session that has it, or "nobody" (exit 1)
+  pr claims [--json]                 every PR a live session has
+  claude|codex|… --claim <n|…> …     start a session that has the PR from its first moment, or does not start
+
+cards (what a session hands the user to decide or to know; the app's Review page shows them):
+  card add --kind decision|merged|note --title T --short S [--long L | --long-file F] [--pr URL]
+           [--recommend R] [--default D --default-at <when>] [--key K] [--for <session>]
+                        prints the card's id; the answer is typed into the session that
+                        added it, as "[card N “title”] …". --key adds it once
+  card list [--open|--later|--answered [--unread]|--closed] [--session ID] [--json]
+  card show <id>        all of it, with the answer
+  card ack <id>...      you have the answer that was waiting on it (--unread no longer lists it)
+  card close <id> <why> withdraw it: the question went away
+
 scheduled sessions (one-time ones show in the app as sessions; recurring ones in Settings):
   schedule <when> [--agent claude] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N] <prompt…|->
                         start one later, in DIR (default: here). <when> is one quoted
                         argument: "in 4 hours", "tomorrow at 9am", "friday 5pm",
                         "every weekday at 8:30", "every 2 hours"
+           [--note-cmd CMD] [--same-session [--fresh-over 150k]]
+                        for a recurring one: run CMD in DIR each time it comes due and
+                        say what it prints before the prompt, nothing when it prints
+                        nothing; --same-session says it to the session it started last,
+                        and starts afresh once that holds over --fresh-over tokens
   schedules [--json]    what is set to start, soonest first
   unschedule <id>...    delete one; it will not start (sessions it started stay)
   mcp                   run the fleet MCP server on stdio (for a conductor session)
   subagent-mcp          run the omp/devin subagent MCP server on stdio (needs no server)
+  devin-bridge [status|start|restart|check]
+                        the bridge that runs other providers' models in devin
+                        (docs/devin-bridge.md); check tests it end to end
   doctor                check that everything agentbox needs is present
   onboard               derive who agentbox works for (git, gh, the system),
                         write user.env, and say what is still missing
   guide                 how an agent drives the fleet with this CLI
   version               print the version`;
 
+/** `agentbox devin-bridge [status|start|restart|check|run]`. */
+async function devinBridge(verb = "status"): Promise<number | null> {
+  const service = await import("../bridge/service");
+  const { bridgeUrl } = await import("../bridge/models");
+  switch (verb) {
+    case "run": {
+      const { appendFileSync } = await import("node:fs");
+      const { startBridge } = await import("../bridge/devin");
+      startBridge({
+        log: (line) => {
+          const stamped = `${new Date().toISOString()} ${line}`;
+          console.log(stamped);
+          try {
+            appendFileSync(service.bridgeLog(), stamped + "\n");
+          } catch {}
+        },
+      });
+      return null;
+    }
+    case "start":
+    case "restart":
+    case "status": {
+      if (verb === "start") service.ensureBridge();
+      if (verb === "restart") service.restartBridge();
+      if (verb !== "status" && !(await service.bridgeUp())) {
+        console.error(`agentbox: the devin bridge did not come up on ${bridgeUrl()}; \`agentbox devin-bridge run\` shows why`);
+        return 1;
+      }
+      const res = await fetch(`${bridgeUrl()}/healthz`, { signal: AbortSignal.timeout(2000) }).catch(() => null);
+      if (!res?.ok) {
+        console.log(`not running (${bridgeUrl()}); it starts with the first session on a bridged model, or \`agentbox devin-bridge start\``);
+        return 1;
+      }
+      const h = (await res.json()) as { pid: number; upstream: string; chats: number; failed: number; lastChatAt: string | null; models: { uid: string; contextTokens: number; compaction: { spawn: number; apply: number; hard: number }; key: boolean }[] };
+      console.log(`running on ${bridgeUrl()} (pid ${h.pid}) in front of ${h.upstream}; log ${service.bridgeLog()}`);
+      console.log(`${h.chats} replies served, ${h.failed} failed${h.lastChatAt ? `, last ${h.lastChatAt}` : ""}`);
+      for (const m of h.models) {
+        console.log(`  ${m.uid}  window ${m.contextTokens}, summary from ${m.compaction.spawn}, swapped in at ${m.compaction.apply}${m.key ? "" : "  (no key)"}`);
+      }
+      return 0;
+    }
+    case "check": {
+      const { checkBridge } = await import("../bridge/check");
+      return await checkBridge();
+    }
+    default:
+      console.error("usage: agentbox devin-bridge [status|start|restart|check|run]");
+      return 2;
+  }
+}
+
 export async function main(argv: string[]): Promise<number | null> {
   const cmd = argv[0] ?? "serve";
+  // `agentbox <any verb> --help` asks how, and does nothing.
+  if (argv[1] === "--help" || argv[1] === "-h") {
+    console.log(USAGE);
+    return 0;
+  }
   try {
     switch (cmd) {
       case "serve": {
@@ -419,10 +534,18 @@ export async function main(argv: string[]): Promise<number | null> {
         await startServer();
         return null;
       }
+      case "go-login": {
+        // The OpenCode Console sign-in for one OpenCode Go account, run by
+        // the login manager in a terminal it reads (accounts/godevice.ts).
+        if (!argv[1]) throw new Error("usage: agentbox go-login <account home>");
+        const { runGoLogin } = await import("../core/accounts/godevice");
+        return await runGoLogin(argv[1]);
+      }
       case "claude":
       case "codex":
       case "devin":
       case "omp":
+      case "opencode":
         return await startSession(cmd, argv.slice(1));
       case "ls":
       case "list":
@@ -435,6 +558,7 @@ export async function main(argv: string[]): Promise<number | null> {
       case "diff":
       case "send":
       case "label":
+      case "move":
       case "watch":
         await ensureServer();
         return await verbs[cmd](api, argv.slice(1));
@@ -444,6 +568,14 @@ export async function main(argv: string[]): Promise<number | null> {
         await ensureServer();
         return await verbs.each(api, cmd, argv.slice(1));
       // The old names, for scripts and agents that learnt them.
+      case "card":
+      case "cards":
+        await ensureServer();
+        return await cards.card(api, argv.slice(1));
+      case "pr":
+      case "prs":
+        await ensureServer();
+        return await prs.pr(api, argv.slice(1));
       case "schedule":
         await ensureServer();
         return await schedules.schedule(api, argv.slice(1));
@@ -453,6 +585,15 @@ export async function main(argv: string[]): Promise<number | null> {
       case "unschedule":
         await ensureServer();
         return await schedules.unschedule(api, argv.slice(1));
+      case "wait":
+        await ensureServer();
+        return await waits.wait(api, argv.slice(1));
+      case "waits":
+        await ensureServer();
+        return await waits.list(api, argv.slice(1));
+      case "unwait":
+        await ensureServer();
+        return await waits.unwait(api, argv.slice(1));
       case "archive":
       case "unarchive":
         await ensureServer();
@@ -484,6 +625,9 @@ export async function main(argv: string[]): Promise<number | null> {
         await runSubagentMcp();
         return null;
       }
+      // A server of its own too: devin sessions on a bridged model talk to it.
+      case "devin-bridge":
+        return await devinBridge(argv[1]);
       case "doctor":
         return doctor();
       case "onboard":

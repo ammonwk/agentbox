@@ -52,6 +52,9 @@ import {
 import { cwdOf, environOf, findProcesses, runsCli, startedAtOf } from "./procs";
 import { askFromScreen, askStep } from "./devin-ask";
 import { askQuestionsOf } from "./ask";
+import { bridgeUrl, bridgedModel } from "../../bridge/models";
+import { ensureBridge } from "../../bridge/service";
+import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
   LiveProcess,
@@ -557,13 +560,49 @@ class DevinReader implements TranscriptReader {
 
 // ----------------------------------------------------------- adapter
 
-function flags(opts: { model?: string; autoApprove: boolean }): string[] {
-  const a: string[] = [];
-  if (opts.model) a.push("--model", opts.model);
+/** Flags adopt carries over (`carryFlags`). */
+const CARRIED: Record<string, Arity> = {
+  "--model": "one",
+  "--permission-mode": "one",
+  "--config": "one",
+  "--sandbox": "none",
+};
+
+/** `devin -p`: something is reading the output. */
+const isHeadless = (argv: string[]): boolean => argv.some((a) => a === "-p" || a === "--print" || a.startsWith("--print="));
+
+/** The flags a session starts with. A carried launch decides model and
+ *  permissions (ResumeOptions.carry); what it does not set is ours. */
+function flags(opts: { model?: string; autoApprove: boolean; carry?: string[] }): string[] {
+  const c = opts.carry;
+  const a: string[] = [...(c ?? [])];
+  if (opts.model && !(c && setsFlag(c, "--model"))) a.push("--model", opts.model);
   // devin's own name for "approve every tool"; its sessions record it as
   // agent_mode "bypass".
-  if (opts.autoApprove) a.push("--permission-mode", "dangerous");
+  if (!c && opts.autoApprove) a.push("--permission-mode", "dangerous");
   return a;
+}
+
+/**
+ * A session on a model devin does not sell (`src/bridge/models.ts`) takes its
+ * catalog and its replies from agentbox's bridge instead of devin's server,
+ * which the bridge stands in front of. Started here if it is not running: a
+ * session that needs it is the only thing that does.
+ */
+function bridgeEnv(model: string | null | undefined): Record<string, string> {
+  if (!bridgedModel(model)) return {};
+  ensureBridge();
+  return { WINDSURF_API_SERVER_URL: bridgeUrl() };
+}
+
+/** The value of a flag among those carried over from an adopted launch. */
+function carried(carry: string[] | undefined, flag: string): string | null {
+  for (let i = 0; i < (carry?.length ?? 0); i++) {
+    const a = carry![i]!;
+    if (a === flag) return carry![i + 1] ?? null;
+    if (a.startsWith(`${flag}=`)) return a.slice(flag.length + 1);
+  }
+  return null;
 }
 
 /** devin takes the initial prompt after `--`. */
@@ -680,7 +719,13 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     },
 
     spawnCommand(opts: SpawnOptions) {
-      return { argv: withPrompt(["devin", ...flags(opts)], opts.prompt), ...accountCommand(opts.account), agentSessionId: null };
+      const account = accountCommand(opts.account);
+      return {
+        argv: withPrompt(["devin", ...flags(opts)], opts.prompt),
+        ...account,
+        env: { ...account.env, ...bridgeEnv(opts.model) },
+        agentSessionId: null,
+      };
     },
 
     // Every account runs on the one session store (only the key differs), so
@@ -688,17 +733,21 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     moveSession: ({ transcriptPath }) => transcriptPath,
 
     resumeCommand(opts: ResumeOptions): Command {
+      const account = accountCommand(opts.account);
+      // With no model given devin resumes on the one it saved, which is then
+      // the one that says whether the session needs the bridge.
+      const model = opts.model ?? carried(opts.carry, "--model") ?? db.sessionById(paths().db, opts.agentSessionId)?.model;
       return {
         argv: withPrompt(["devin", "-r", opts.agentSessionId, ...flags(opts)], opts.prompt),
-        ...accountCommand(opts.account),
+        ...account,
+        env: { ...account.env, ...bridgeEnv(model) },
       };
     },
 
     // `--permission-mode dangerous` on a resume is not enough: devin runs in
     // the mode it saved for the session ("bypass" is how it saves dangerous).
     prepareResume(opts: ResumeOptions) {
-      const at = opts.carry?.indexOf("--permission-mode") ?? -1;
-      if (opts.carry ? opts.carry[at + 1] !== "dangerous" || at === -1 : !opts.autoApprove) return;
+      if (opts.carry ? carried(opts.carry, "--permission-mode") !== "dangerous" : !opts.autoApprove) return;
       if (db.setAgentMode(paths().db, opts.agentSessionId, "bypass")) {
         console.log(`agentbox: devin ${opts.agentSessionId} was saved in a mode that asks before commands; set to bypass for its resume`);
       }
@@ -710,6 +759,9 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
       if (/Do you trust the authors of/.test(screen) && /Yes, trust/.test(screen)) return ["Enter"];
       return null;
     },
+
+    carryOver: (argv) => carryFlags(argv, CARRIED),
+    headless: isHeadless,
 
     blockedOn(screen) {
       if (/Do you trust the authors of/.test(screen)) return "folder trust";

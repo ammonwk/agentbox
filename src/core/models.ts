@@ -14,10 +14,13 @@
  *     in its `.claude.json`, e.g. a `[1m]` variant the server pushed).
  *   - omp: the providers declared in `models.yml`, with omp's own catalog for
  *     each (`models.db`), as `provider/id`.
+ *   - opencode: `opencode models`, kept to OpenCode Go and Zen — the login
+ *     its sessions share with omp's account. Its ids are models.dev's.
  *   - devin: `devin models list --format json` — the CLI's own per-account
  *     list, run under the account's home. Effort is part of the model id
  *     there (`-low` … `-max`, `-fast`, `-priority`), which is why the list is
- *     hundreds of variants long and why devin has no effort picker.
+ *     hundreds of variants long and why devin has no effort picker. Ahead of
+ *     it, the models agentbox's own bridge runs in devin (`src/bridge/`).
  *
  * Release dates come from models.dev. agentbox downloads its own copy to
  * `<agentbox home>/cache/models-dev.json`, refreshed in the background once a
@@ -34,8 +37,9 @@ import { exec } from "./accounts/exec";
 import { claudeHome } from "./providers/claude";
 import { codexHome } from "./providers/codex";
 import { devinAdapter } from "./providers/devin";
-import { agentDirOf } from "./providers/omp";
-import type { Account, ModelOption } from "./types";
+import { BRIDGED } from "../bridge/models";
+import { agentDir } from "./providers/omp";
+import type { Account, ModelOption, ProviderId } from "./types";
 
 /** Re-read a file only when its mtime moves; models.dev's cache is ~5 MB. */
 const fileCache = new Map<string, { mtimeMs: number; value: unknown }>();
@@ -213,8 +217,8 @@ function codexModels(account: Account, dev: ModelsDev): ModelOption[] {
 /** omp's provider names are models.dev's, except zen, which models.dev calls `opencode`. */
 const OMP_DEV_PROVIDER: Record<string, string> = { "opencode-zen": "opencode", "opencode-zen-responses": "opencode", "opencode-go-responses": "opencode-go" };
 
-function ompModels(account: Account, dev: ModelsDev): ModelOption[] {
-  const dir = agentDirOf(account);
+function ompModels(dev: ModelsDev): ModelOption[] {
+  const dir = agentDir();
   const yml = readCached(join(dir, "models.yml"), (t) => Bun.YAML.parse(t) as { providers?: Record<string, { models?: { id: string; name?: string }[] }> });
   const providers = Object.entries(yml?.providers ?? {});
   if (providers.length === 0) return [];
@@ -256,6 +260,36 @@ function ompModels(account: Account, dev: ModelsDev): ModelOption[] {
     }
   }
   return byRelease(out);
+}
+
+// ------------------------------------------------------------- opencode
+
+/** opencode's providers whose models it offers here: OpenCode Go, the login
+ *  omp's account holds, first, then Zen. Others it may be logged into (a
+ *  Bedrock key from the environment) are not on that account. */
+const OPENCODE_PROVIDERS = ["opencode-go", "opencode"];
+
+let opencodeCatalog: { at: number; ids: string[] } | null = null;
+
+async function opencodeModels(dev: ModelsDev): Promise<ModelOption[]> {
+  if (!opencodeCatalog || Date.now() - opencodeCatalog.at >= DEVIN_TTL_MS) {
+    // Through opencode's background service: `--standalone` lists nothing.
+    const r = await exec(["opencode", "models"], { timeoutMs: 20_000 });
+    const ids = r.code === 0 ? r.stdout.split("\n").map((l) => l.trim()).filter((l) => /^[\w.-]+\/\S+$/.test(l)) : [];
+    // The last good answer stands in for a failed one.
+    if (ids.length > 0 || !opencodeCatalog) opencodeCatalog = { at: Date.now(), ids };
+  }
+  const out: ModelOption[] = [];
+  for (const provider of OPENCODE_PROVIDERS) {
+    const mine: ModelOption[] = [];
+    for (const id of opencodeCatalog.ids) {
+      if (!id.startsWith(`${provider}/`)) continue;
+      const d = devEntry(dev, provider, id.slice(provider.length + 1));
+      mine.push({ id, label: d?.name ?? id.slice(provider.length + 1), releasedAt: d?.release_date ?? null });
+    }
+    out.push(...byRelease(mine));
+  }
+  return out;
 }
 
 // --------------------------------------------------------------- devin
@@ -320,26 +354,43 @@ async function listDevinModels(account: Account): Promise<ModelOption[] | null> 
   return byRelease(out);
 }
 
+/** The models agentbox's bridge adds to devin (`src/bridge/`), for whichever
+ *  have a key to run on. First, since devin's own list is hundreds long. */
+function bridgedOptions(): ModelOption[] {
+  return BRIDGED.filter((m) => m.apiKey() !== null).map((m) => ({
+    id: m.uid,
+    label: m.label,
+    releasedAt: null,
+    note: `not devin's: run in its harness by agentbox's bridge · compacts by ${Math.round(m.compaction.hard / 1000)}k`,
+  }));
+}
+
 async function devinModels(account: Account): Promise<ModelOption[]> {
   const hit = devinCatalog.get(account.id);
-  if (hit && Date.now() - hit.at < DEVIN_TTL_MS) return hit.options;
-  const options = await listDevinModels(account);
-  if (options) devinCatalog.set(account.id, { at: Date.now(), options });
-  return options ?? hit?.options ?? [];
+  let options = hit?.options ?? [];
+  if (!hit || Date.now() - hit.at >= DEVIN_TTL_MS) {
+    const fresh = await listDevinModels(account);
+    if (fresh) devinCatalog.set(account.id, { at: Date.now(), options: fresh });
+    options = fresh ?? options;
+  }
+  return [...bridgedOptions(), ...options];
 }
 
 // ------------------------------------------------------------------ api
 
-export async function modelOptions(account: Account): Promise<ModelOption[]> {
+/** `provider` is the session's, when it is not the account's: an opencode
+ *  session runs on omp's account but picks from opencode's models. */
+export async function modelOptions(account: Account, provider: ProviderId = account.provider): Promise<ModelOption[]> {
   if (account.provider === "devin") return devinModels(account);
   const dev = await modelsDev();
+  if (provider === "opencode") return opencodeModels(dev);
   switch (account.provider) {
     case "claude":
       return claudeModels(account, dev);
     case "codex":
       return codexModels(account, dev);
     case "omp":
-      return ompModels(account, dev);
+      return ompModels(dev);
     default:
       return [];
   }

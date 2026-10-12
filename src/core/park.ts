@@ -1,16 +1,17 @@
 /** Parking: stopping sessions nobody is using, and what counts as "using".
  *
- * An idle Claude process is not free. Measured on this machine with 82 of
- * them idle: 1–2% of a core each (the allocator's scavenger and GC threads,
- * plus a once-a-second poll of the worktree's git HEAD and `.claude.json`)
- * and ~240 MB each — 1.4 cores and 19.6 GB between them. After `parkIdleMin`
+ * An idle agent process is not free. Measured on this machine with 82 Claude
+ * processes idle: 1–2% of a core each (the allocator's scavenger and GC
+ * threads, plus a once-a-second poll of the worktree's git HEAD and
+ * `.claude.json`) and ~240 MB each — 1.4 cores and 19.6 GB between them; 64
+ * idle omp sessions held ~29 GB with their MCP servers. After `parkIdleMin`
  * the prompt cache is cold anyway, so keeping the process costs that and buys
  * nothing: the fleet stops it (`Fleet.parkIdle`), the board keeps showing it
  * as waiting on you, and the next message — from the web, the CLI or the
  * fleet MCP — resumes it with that message as the prompt.
  *
  * The hard part is "idle". A session whose turn is over can still be doing
- * work that will wake it: a background command, a subagent, a `/loop`
+ * work that will wake it: a background command or job, a subagent, a `/loop`
  * wakeup, a cron job, a teammate. Stopping the process kills all of that, so
  * each is a *hold* — a reason, in words, why the session stays up. This file
  * decides the holds; the fleet gathers the inputs and does the stopping.
@@ -25,8 +26,9 @@
  * command costing 2% of a core is cheap next to killing one of those.
  */
 
-import { closeSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { Wake } from "./providers/types";
 
 /** How often the fleet looks for sessions to park. */
 export const PARK_CHECK_MS = 60_000;
@@ -52,11 +54,9 @@ export const POLL_MAX_MS = 24 * 3_600_000;
  *  long, because one large generation (a big Write, long thinking) writes
  *  nothing until it ends. */
 export const SUBAGENT_QUIET_MS = 30 * 60_000;
-/** A `/loop` wakeup this overdue is taken to have fired (or died). Wakeups
- *  land late on a loaded machine; the turn they start is activity anyway. */
+/** A wake this overdue is taken to have fired (or died). Wakeups land late
+ *  on a loaded machine; the turn they start is activity anyway. */
 export const WAKE_GRACE_MS = 10 * 60_000;
-/** A one-shot cron job whose fire time cannot be read is given this long. */
-export const ONE_SHOT_MAX_MS = 24 * 3_600_000;
 
 // ---------------------------------------------------------------- shells
 
@@ -161,6 +161,17 @@ function idleProcess(c: string): boolean {
   return /(^|\/)sleep\s/.test(c) || FOLLOWERS.some((re) => re.test(c)) || (FILTER.test(c) && !QUITS.test(c));
 }
 
+/** A narrow, provably stuck waiter seen in real sessions: pgrep -f also
+ * matches its parent shell's command line. These literal patterns occur in
+ * that command verbatim; dots match themselves too. A sole sleep body has
+ * no way out. Do not generalize to regex tricks ([r]un), filtered pgrep,
+ * alternate conditions, or loop bodies doing real work. */
+function selfMatchingWaiter(command: string): boolean {
+  const loop = /^\s*until\s+([^;\n]+);\s*do\s+sleep\s+\d+(?:\.\d+)?\s*;\s*done\b/.exec(command);
+  if (!loop) return false;
+  return /^(?:\[\s+-[esf]\s+[\w./-]+\s*\]\s*&&\s*)?!\s*pgrep\s+-f\s+(["'])[\w./ :][\w./ :\-]*\1\s*(?:>\s*\/dev\/null\s*(?:2>&1\s*)?)?$/.test(loop[1]!.trim());
+}
+
 /**
  * What a background shell is: `work` (it will finish, and the session wants
  * to hear about it), `service` (serves until killed) or `follower` (can only
@@ -172,6 +183,9 @@ function idleProcess(c: string): boolean {
  * while, a wrong "follower" kills a job.
  */
 export function classifyShell(command: string, running: string[]): ShellKind {
+  // Only while it is actually waiting: a descendant doing anything else is
+  // protected as work, even if it came from a malformed waiter.
+  if (selfMatchingWaiter(command) && running.every((c) => /(^|\/)sleep\s/.test(c) || /^(?:\S*\/)?pgrep\s+-f\s/.test(c))) return "follower";
   if (SERVICES.some((re) => re.test(command)) || sshTunnel(command)) return "service";
   // Waiting on something outside it — a PR, a file, a remote job. Work, but
   // a poll whose condition cannot come true (`until ! pgrep -f x` matches
@@ -205,176 +219,38 @@ export function normalCommand(c: string): string {
   return c.replace(/\s+/g, " ").trim();
 }
 
-// ---------------------------------------------------------------- timers
+// ---------------------------------------------------------------- wakes
 
 /**
- * What a Claude session set up to wake itself, read from its transcript:
- * `ScheduleWakeup` (dynamic `/loop`) and `CronCreate` are timers inside the
- * process with no child to find, and `Monitor` commands are shells whose
- * every line of output is a message to the session — the one kind of
- * never-ending loop that is work.
- *
- * Read incrementally, in chunks with a yield between them (a first read can
- * be tens of megabytes), and only the lines that mention one of the tools are
- * parsed. An idle session's transcript does not grow, so after the first
- * read a check costs one stat.
+ * Why the session must stay up to be woken (TranscriptFacts.wakes), or null.
+ * `since` is when the running process started: what was set going before it
+ * died with the process that set it, durable cron jobs aside. One that runs
+ * until it reports back is given `POLL_MAX_MS`: a transcript cannot show that
+ * it was killed.
  */
-export class WakeScan {
-  private offset = 0;
-  private wake: { due: number; setAt: number } | null = null;
-  private crons = new Map<string, { until: number; setAt: number; durable: boolean }>();
-  /** Every command a Monitor call started, whitespace-collapsed. */
-  readonly monitors = new Set<string>();
-
-  constructor(private readonly path: string) {}
-
-  /**
-   * Why the session must stay up to be woken, or null. `since` is when the
-   * running process started: a wakeup or session-only cron set before it
-   * died with the process that set it.
-   */
-  async hold(now: number, since: number): Promise<string | null> {
-    await this.read();
-    const w = this.wake;
-    if (w && w.setAt >= since && w.due > now - WAKE_GRACE_MS) {
-      return `a /loop wakeup is due ${w.due > now ? `in ${minutes(w.due - now)}` : "now"}`;
-    }
-    for (const [id, c] of this.crons) if (c.until > now && (c.durable || c.setAt >= since)) return `cron job ${id} is scheduled`;
-    return null;
+export function wakeHold(wakes: readonly Wake[] | undefined, now: number, since: number): string | null {
+  for (const w of wakes ?? []) {
+    if (!w.durable && w.setAt < since) continue;
+    if (w.until === null ? now - w.setAt < POLL_MAX_MS : w.until > now - WAKE_GRACE_MS) return `${w.label} will wake it`;
   }
-
-  private async read(): Promise<void> {
-    let size: number;
-    try {
-      size = statSync(this.path).size;
-    } catch {
-      return;
-    }
-    if (size < this.offset) {
-      // Rewritten from scratch: start over.
-      this.offset = 0;
-      this.wake = null;
-      this.crons.clear();
-      this.monitors.clear();
-    }
-    if (size === this.offset) return;
-    let fd: number;
-    try {
-      fd = openSync(this.path, "r");
-    } catch {
-      return;
-    }
-    try {
-      const chunk = Buffer.alloc(4 << 20);
-      let carry = "";
-      while (this.offset < size) {
-        const n = readSync(fd, chunk, 0, Math.min(chunk.length, size - this.offset), this.offset);
-        if (n <= 0) break;
-        this.offset += n;
-        const text = carry + chunk.toString("utf8", 0, n);
-        const cut = text.lastIndexOf("\n");
-        carry = cut === -1 ? text : text.slice(cut + 1);
-        if (cut !== -1) this.scan(text.slice(0, cut));
-        await Bun.sleep(0);
-      }
-      // An unfinished last line is read again next time.
-      this.offset -= Buffer.byteLength(carry);
-    } finally {
-      closeSync(fd);
-    }
-  }
-
-  /** Parse the lines of `text` that mention a tool of interest, in order. */
-  private scan(text: string): void {
-    const starts = new Set<number>();
-    for (const marker of MARKERS) {
-      for (let i = text.indexOf(marker); i !== -1; i = text.indexOf(marker, i + marker.length)) {
-        starts.add(text.lastIndexOf("\n", i) + 1);
-      }
-    }
-    for (const start of [...starts].sort((a, b) => a - b)) {
-      const end = text.indexOf("\n", start);
-      this.line(text.slice(start, end === -1 ? undefined : end));
-    }
-  }
-
-  private line(line: string): void {
-    let r: any;
-    try {
-      r = JSON.parse(line);
-    } catch {
-      return;
-    }
-    const at = typeof r?.timestamp === "string" ? Date.parse(r.timestamp) : NaN;
-    // The CronCreate result: `toolUseResult: {id, humanSchedule, recurring}`,
-    // and the text says how long a recurring job lives.
-    const tur = r?.toolUseResult;
-    if (tur && typeof tur.id === "string" && typeof tur.humanSchedule === "string" && Number.isFinite(at)) {
-      const text = JSON.stringify(r.message?.content ?? "");
-      const durable = tur.durable === true;
-      if (tur.recurring) {
-        const days = Number(/expires after (\d+) days?/i.exec(text)?.[1] ?? 7);
-        this.crons.set(tur.id, { until: at + days * 86_400_000, setAt: at, durable });
-      } else {
-        this.crons.set(tur.id, { until: oneShotFire(tur.humanSchedule, at) + WAKE_GRACE_MS, setAt: at, durable });
-      }
-      return;
-    }
-    const content = r?.message?.content;
-    if (!Array.isArray(content)) return;
-    for (const b of content) {
-      if (b?.type !== "tool_use") continue;
-      if (b.name === "ScheduleWakeup") {
-        const delay = Number(b.input?.delaySeconds);
-        this.wake = b.input?.stop || !Number.isFinite(at) || !Number.isFinite(delay) ? null : { due: at + delay * 1000, setAt: at };
-      } else if (b.name === "CronDelete") {
-        this.crons.delete(String(b.input?.id ?? ""));
-      } else if (b.name === "Monitor" && typeof b.input?.command === "string") {
-        this.monitors.add(normalCommand(b.input.command));
-      }
-    }
-  }
-}
-
-const MARKERS = ['"ScheduleWakeup"', '"humanSchedule"', '"CronDelete"', '"name":"Monitor"'];
-
-/**
- * When a one-shot cron job fires: its minute, hour, day and month are fixed
- * numbers (that is how Claude writes "tomorrow at 9"), in local time, at the
- * first such moment after it was set. Anything else is given a day.
- */
-export function oneShotFire(cron: string, setAt: number): number {
-  const f = cron.trim().split(/\s+/);
-  const [min, hour, dom, mon] = f.map(Number);
-  if (f.length < 5 || ![min, hour, dom, mon].every((x) => Number.isInteger(x))) return setAt + ONE_SHOT_MAX_MS;
-  const set = new Date(setAt);
-  for (const year of [set.getFullYear(), set.getFullYear() + 1]) {
-    const t = new Date(year, mon! - 1, dom!, hour!, min!).getTime();
-    if (t >= setAt - 60_000) return t;
-  }
-  return setAt + ONE_SHOT_MAX_MS;
+  return null;
 }
 
 // ---------------------------------------------------------------- subagents
 
-/**
- * When a Claude session's in-process subagents last wrote anything:
- * `<transcript dir>/<session id>/subagents/**.jsonl`. Background agents and
- * workflows run inside the session's process and leave no child to find, but
- * they write as they work. Null when it has none.
- */
-export function subagentsLastWrite(transcriptPath: string, agentSessionId: string): number | null {
-  const root = join(transcriptPath.slice(0, transcriptPath.lastIndexOf("/")), agentSessionId, "subagents");
+/** When anything under `dir` (an adapter's `subagentLogDir`) was last
+ *  written, or null when there is nothing there. */
+export function lastWriteUnder(dir: string): number | null {
   let newest: number | null = null;
-  const walk = (dir: string, depth: number) => {
+  const walk = (d: string, depth: number) => {
     let names: string[];
     try {
-      names = readdirSync(dir);
+      names = readdirSync(d);
     } catch {
       return;
     }
     for (const n of names) {
-      const p = join(dir, n);
+      const p = join(d, n);
       try {
         const st = statSync(p);
         if (st.isDirectory()) {
@@ -385,7 +261,7 @@ export function subagentsLastWrite(transcriptPath: string, agentSessionId: strin
       }
     }
   };
-  walk(root, 0);
+  walk(dir, 0);
   return newest;
 }
 
@@ -416,6 +292,29 @@ const STRANDED_LEAD_MS = 5 * 60_000;
 export function strandedNudgeAfter(parkIdleMin: number): number {
   if (!parkIdleMin) return STRANDED_NUDGE_MS;
   return Math.max(60_000, Math.min(STRANDED_NUDGE_MS, parkIdleMin * 60_000 - STRANDED_LEAD_MS));
+}
+
+/** Did the session's last try at a turn hit a usage limit, with no answer
+ *  since? A notification lines up behind the limit like anything else, and
+ *  telling the session about it only meets the limit again: Claude does not
+ *  retry on its own, and moving or continuing it is the limit banner's. The
+ *  newest model call, not the newest line: notifications queued after the
+ *  hit move `lastActivityAt` on but answer nothing. */
+export function stoppedAtLimit(facts: { rateLimitHits: { at: number }[]; lastTurnAt?: number | null; lastActivityAt?: number | null }): boolean {
+  return limitStop(facts) !== null;
+}
+
+/** The limit hit the session is still stopped at (`stoppedAtLimit`), or null.
+ *  The one rule for it: the board's `limitHit`, and so the move off the
+ *  account (`Fleet.continueStalled`), read a hit as answered once any line
+ *  followed it by a minute, and a session waiting on CI gets a monitor event
+ *  every few minutes. Where the provider's transcript does not say when the
+ *  model last answered, the hit has to be the session's last word. */
+export function limitStop<H extends { at: number }>(facts: { rateLimitHits?: H[]; lastTurnAt?: number | null; lastActivityAt?: number | null }): H | null {
+  const hit = facts.rateLimitHits?.at(-1);
+  if (!hit) return null;
+  if (facts.lastTurnAt != null) return hit.at > facts.lastTurnAt ? hit : null;
+  return hit.at >= (facts.lastActivityAt ?? 0) - 60_000 ? hit : null;
 }
 
 const STRANDED_NUDGE_HEAD = "[agentbox: ";

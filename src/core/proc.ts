@@ -348,14 +348,16 @@ const DASH_C = /^-[a-z]*c[a-z]*$/;
  * Structural rather than string-matched, because the four providers do not
  * share a shape. Claude Code runs every Bash call through `bash -c source
  * <shell snapshot>`, which nothing else does, so that marker is exact. Codex
- * runs `bash -lc <command>` (its rollouts record the argv). omp's and devin's
- * shapes have not been sampled mid-turn; an idle agent has no children at all,
- * so the subtree only exists while a turn is running.
+ * runs `bash -lc <command>` (its rollouts record the argv). omp does not fit:
+ * it runs the command itself (`bash script.sh`, `node …/tsc`), so its tool
+ * calls read as servers here, and its background work is read from its
+ * transcript instead (TranscriptFacts.wakes). devin's shape has not been
+ * sampled.
  *
- * So the rule is the one that holds for any of them: a direct child that is a
- * shell running `-c` is work the agent asked for, and a direct child that is
- * anything else is a server it started at boot. To check a provider against
- * it, sample a subtree while a turn is in flight:
+ * So the rule: a direct child that is a shell running `-c` is work the agent
+ * asked for, and a direct child that is anything else is a server it started
+ * at boot. To check a provider against it, sample a subtree while a turn is
+ * in flight:
  *   ps -e -o pid,ppid,args --no-headers | awk '$2==<agent pid>'
  */
 export function isToolShell(cmd: string | undefined): boolean {
@@ -366,16 +368,25 @@ export function isToolShell(cmd: string | undefined): boolean {
   return SHELLS.has(base) && parts.some((p) => DASH_C.test(p));
 }
 
+/** An agent starts its MCP servers as it boots; anything it starts this long
+ *  after is something it was asked to do. */
+const BOOT_S = 20;
+
 /**
  * What a process in a session's subtree is doing there.
  *
  * The distinction that earns its place is mcp-versus-tool: an MCP server
  * holding a gigabyte is a configuration problem you fix once, and a tool call
- * holding a gigabyte is just today's type-check.
+ * holding a gigabyte is just today's type-check. A direct child is a tool
+ * when it is a shell tool call (`isToolShell`) or started after the agent
+ * booted — omp runs commands without a shell, and Claude's Grep runs `rg` —
+ * and an MCP server otherwise. A server reconnected later reads as a tool.
  */
-export function classify(row: ProcRow, agentPid: number, parentRole?: ProcRole): ProcRole {
-  if (row.pid === agentPid) return "agent";
-  if (parentRole === "agent") return isToolShell(row.cmd) ? "tool" : "mcp";
+export function classify(row: ProcRow, agent: Pick<ProcRow, "pid" | "startTicks">, parentRole?: ProcRole): ProcRole {
+  if (row.pid === agent.pid) return "agent";
+  if (parentRole === "agent") {
+    return isToolShell(row.cmd) || row.startTicks - agent.startTicks > BOOT_S * clockHz() ? "tool" : "mcp";
+  }
   return parentRole === "tool" ? "tool" : parentRole ?? "child";
 }
 
@@ -466,12 +477,14 @@ export async function breakdown(
 ): Promise<ProcDetail[]> {
   const rows = withCmdlines(subtree(cur, agentPid));
   const byPid = new Map(rows.map((r) => [r.pid, r]));
+  const agent = byPid.get(agentPid);
+  if (!agent) return [];
 
   const out: ProcDetail[] = [];
   const walk = async (pid: number, depth: number, parentRole?: ProcRole) => {
     const row = byPid.get(pid);
     if (!row) return;
-    const role = classify(row, agentPid, parentRole);
+    const role = classify(row, agent, parentRole);
 
     let cpuPct = 0;
     const before = prev?.byPid.get(pid);
@@ -502,24 +515,6 @@ export async function breakdown(
   };
   await walk(agentPid, 0);
   return out;
-}
-
-/**
- * Shell tool calls still alive directly under a session.
- *
- * When the agent's turn has ended, these are background commands that outlived
- * it — dev servers and watchers, mostly. They are worth counting because they
- * are the reason such a session looks busy from the outside, and because a
- * `while true` loop nobody remembers starting will poll until the laptop is
- * rebooted.
- *
- * Direct children only, and only their command lines: a handful of small reads
- * per session rather than the full-subtree walk the drilldown does.
- */
-export async function backgroundShells(table: ProcTable, pid: number): Promise<number> {
-  const kids = table.children.get(pid) ?? [];
-  if (kids.length === 0) return 0;
-  return kids.filter((k) => isToolShell(argvOf(k)?.join(" "))).length;
 }
 
 /** Read command lines for a set of processes. Only for the drilldown. */

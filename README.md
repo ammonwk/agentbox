@@ -102,7 +102,7 @@ needed). `AGENTBOX_SUBAGENT_OMP_MODEL` and `AGENTBOX_SUBAGENT_DEVIN_MODEL` pick
 their models; devin's defaults to its own configured one:
 
 ```bash
-claude mcp add subagents -e AGENTBOX_SUBAGENT_OMP_MODEL=opencode-go/space-bunny-free -- bun /path/to/agentbox/bin/agentbox subagent-mcp
+claude mcp add subagents -e AGENTBOX_SUBAGENT_OMP_MODEL=opencode-go/deepseek-flash -- bun /path/to/agentbox/bin/agentbox subagent-mcp
 ```
 
 ## Develop

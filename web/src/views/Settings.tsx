@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AgentSettings, AppState, BalancerSettings, NightlyReclaim, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
-import { describeAt, describeRule, isRecurring } from "../../../src/core/schedule";
+import { describeAt, describeRule, FRESH_OVER, isRecurring } from "../../../src/core/schedule";
 import { api, fmtBytes, healthRows, type Health, type RepoPatch, type SettingsPatch } from "../api";
 import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
 import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle } from "../components";
@@ -66,7 +66,7 @@ function Schedules({ state }: { state: AppState }) {
       <h3>Scheduled sessions</h3>
       <p className="hint">
         Sessions that start on their own, each time a new one. Add one from New session: open the ▾ beside Start, pick{" "}
-        <strong>Schedule…</strong>, and say something like “every weekday at 9am” or “every 2 hours”. One-time ones wait in the
+        <strong>Schedule…</strong>, and say something like “every weekday at 9am”, “every 2 hours” or “whenever CD on staging is red”. One-time ones wait in the
         session list instead.
       </p>
       {recurring.length === 0 ? (
@@ -134,12 +134,12 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
         </span>
       </div>
       <p className="sched-meta">
-        {sc.enabled && sc.nextAt ? <>Next {lowerFirst(describeAt(sc.nextAt))}</> : "Paused"}
+        {!sc.enabled ? "Paused" : sc.nextAt ? <>Next {lowerFirst(describeAt(sc.nextAt))}</> : sc.rule.kind === "red" ? <>Watching {sc.rule.repo}</> : "Paused"}
         {where ? <> · <span className="mono">{where}</span></> : null}
         {sc.lastRunAt ? (
           <>
             {" "}
-            · last ran <RelativeTime ts={sc.lastRunAt} />
+            · {sc.sameSession ? "last spoke" : "last ran"} <RelativeTime ts={sc.lastRunAt} />
             {sc.lastSessionId && !sc.lastError ? (
               <>
                 {" "}
@@ -149,9 +149,26 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
           </>
         ) : null}
       </p>
+      {sc.sameSession || sc.noteCmd ? (
+        <p className="sched-meta">
+          {sc.sameSession ? (
+            <>
+              Keeps to one session, and starts a new one once it holds over {Math.round((sc.freshOver ?? FRESH_OVER) / 1000)}k tokens
+            </>
+          ) : (
+            "Starts a session each time"
+          )}
+          {sc.noteCmd ? (
+            <>
+              {" "}
+              · only when <span className="mono">{sc.noteCmd}</span> prints something, which it is told first
+            </>
+          ) : null}
+        </p>
+      ) : null}
       {sc.lastError ? (
         <p className="error" role="alert">
-          Last time it did not start: {sc.lastError}
+          {(sc.rule.kind === "red" && sc.lastError.startsWith("could not read")) || sc.noteCmd || sc.sameSession ? "" : "Last time it did not start: "}{sc.lastError}
         </p>
       ) : null}
       {editing ? (

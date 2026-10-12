@@ -25,7 +25,7 @@ import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "n
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { moveInto } from "./move";
 import { randomUUID } from "node:crypto";
-import { userHome } from "../paths";
+import { packageRoot, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import type { Account } from "../types";
 import { JsonlTranscriptReader } from "./jsonl-reader";
@@ -33,9 +33,10 @@ import { claudeFormat } from "./claude-transcript";
 import { SubagentTokens } from "./claude-subagents";
 import * as darwin from "../darwin";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
-import { pickOption, plainScreen } from "./tui-screen";
+import { pickOption, plainScreen, RULE, underInput } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
-import { BRIEFING } from "./briefing";
+import { briefing } from "./briefing";
+import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
   LiveProcess,
@@ -45,6 +46,7 @@ import type {
   TranscriptReader,
   TranscriptRef,
 } from "./types";
+import { LIMIT_DIALOG } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_JSONL = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
@@ -368,10 +370,62 @@ export function claudeApprovePrompt(raw: string): string[] | null {
   return pickOption(tail, /^Yes$/);
 }
 
+/**
+ * The last message above the input box: its bullet line and what wraps under
+ * it, up to a blank line. The agent list under the input box has bullets too,
+ * so the input box (a `❯` line under a rule) bounds the search when shown.
+ */
+function lastMessage(s: string): string | null {
+  const lines = s.split("\n");
+  let end = lines.length;
+  for (let i = lines.length - 1; i > 0; i--) {
+    if (inputBox(lines, i)) {
+      end = i - 1;
+      break;
+    }
+  }
+  for (let i = end - 1; i >= 0; i--) {
+    if (!/^\s*[●⏺]\s/.test(lines[i]!)) continue;
+    const out = [lines[i]!.replace(/^\s*[●⏺]\s+/, "")];
+    for (let j = i + 1; j < end && lines[j]!.trim() && !RULE.test(lines[j]!); j++) out.push(lines[j]!.trim());
+    return out.join(" ");
+  }
+  return null;
+}
+
+/** The input box: a `❯` line under a rule. A dialog's pointer is the same
+ *  glyph, on a numbered option ("Chat about this" sits under a rule too). */
+const inputBox = (lines: string[], i: number): boolean =>
+  i > 0 && /^❯/.test(lines[i]!) && !/^❯\s+\d+[.)]\s/.test(lines[i]!) && RULE.test(lines[i - 1]!);
+
+/** Claude's own refusal for want of a login, as a message in the conversation
+ *  ("Please run /login · API Error: 401 …", "Not logged in · Please run
+ *  /login"). It prefixes every 403 the same way, including an account's
+ *  access grant to a model failing for a few minutes, which a retry gets past
+ *  with the same token (claudeTurnErrorKind). */
+const LOGIN_ERROR = /^(?:Please run \/login|Not logged in|Invalid API key)/;
+
+/** The dialog Claude puts up when a message meets the account's usage limit:
+ *  "What do you want to do? 1. Stop and wait for limit to reset / 2. Wait
+ *  here, then continue automatically at … / 3. Add funds …". At the foot of
+ *  the screen, its first option numbered, so not one quoted in a message. */
+const limitDialog = (under: string): boolean => {
+  const foot = under.trimEnd().split("\n").slice(-12).join("\n");
+  return /^\s*(?:❯\s*)?1\.\s+Stop and wait for limit to reset/m.test(foot) && /Esc to cancel/.test(foot);
+};
+
 /** What a Claude screen is waiting on you for, in a few words. */
 export function claudeBlockedOn(raw: string): string | null {
-  const s = plainScreen(raw);
-  if (/Select login method|Please run \/login|Not logged in/.test(s)) return "login required";
+  const screen = plainScreen(raw);
+  // An error line is history once anything follows it: only the session's
+  // last message says it is still stopped there. A teammate's failure is in
+  // a "Teammate @x failed:" line, which is not this session's login.
+  const last = lastMessage(screen);
+  if (last && LOGIN_ERROR.test(last) && !/requires an access grant/i.test(last)) return "login required";
+  // Every dialog below stands where the input box was.
+  const s = underInput(screen, inputBox);
+  if (/Select login method/.test(s)) return "login required";
+  if (limitDialog(s)) return LIMIT_DIALOG;
   // The options alone: in a short pane the dialog's heading has scrolled away.
   if (/Yes, I trust this folder/.test(s) && /No, exit/.test(s)) return "folder trust";
   if (/Bypass Permissions mode/.test(s) && /Yes, I accept/.test(s)) return "confirm bypass-permissions mode";
@@ -407,7 +461,30 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
  *  timeline has nothing to show. */
 const THINKING = ["--thinking-display", "summarized"];
 
-const TOLD = ["--append-system-prompt", BRIEFING];
+const told = (): string[] => ["--append-system-prompt", briefing()];
+
+/** A subagent's own subagents are told who started them, or they take "main"
+ *  for their coordinator and write to the conversation the user is reading
+ *  (`claude-spawn-hook.ts`). Hooks given by flag add to the user's own. */
+const HOOKED = [
+  "--settings",
+  JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "Agent|Task",
+          hooks: [
+            {
+              type: "command",
+              command: `"${process.execPath}" "${join(packageRoot, "src", "core", "providers", "claude-spawn-hook.ts")}"`,
+              timeout: 10,
+            },
+          ],
+        },
+      ],
+    },
+  }),
+];
 
 /** A prompt that starts with `-` would be parsed as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
@@ -418,7 +495,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-  argv.push(...THINKING, ...TOLD);
+  argv.push(...THINKING, ...told(), ...HOOKED);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: id };
 }
@@ -428,29 +505,25 @@ function resumeCommand(opts: ResumeOptions): Command {
   if (opts.carry) {
     // An adopted session keeps how it was launched, permissions included.
     argv.push(...opts.carry);
-    if (opts.model && !opts.carry.some((a) => a === "--model" || a.startsWith("--model="))) argv.push("--model", opts.model);
-    if (opts.effort && !opts.carry.some((a) => a === "--effort" || a.startsWith("--effort="))) argv.push("--effort", opts.effort);
-    if (!opts.carry.some((a) => a === "--thinking-display" || a.startsWith("--thinking-display="))) argv.push(...THINKING);
+    if (opts.model && !setsFlag(opts.carry, "--model")) argv.push("--model", opts.model);
+    if (opts.effort && !setsFlag(opts.carry, "--effort")) argv.push("--effort", opts.effort);
+    if (!setsFlag(opts.carry, "--thinking-display")) argv.push(...THINKING);
     // One it was launched with is its own, or ours from an earlier launch; a
     // second would replace it.
-    if (!opts.carry.some((a) => a.startsWith("--append-system-prompt"))) argv.push(...TOLD);
+    if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...told());
+    if (!setsFlag(opts.carry, "--settings")) argv.push(...HOOKED);
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-    argv.push(...THINKING, ...TOLD);
+    argv.push(...THINKING, ...told(), ...HOOKED);
   }
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
 }
 
-/**
- * Flags adopt carries over, by how many values each takes (`many` runs to the
- * next flag, as commander parses it). An allowlist, not a denylist: a flag we
- * do not know the arity of could swallow the prompt, and one we do not know
- * the meaning of could be the session id.
- */
-const CARRIED: Record<string, "none" | "one" | "many"> = {
+/** Flags adopt carries over, by how many values each takes (`carryFlags`). */
+const CARRIED: Record<string, Arity> = {
   "--dangerously-skip-permissions": "none",
   "--allow-dangerously-skip-permissions": "none",
   "--permission-mode": "one",
@@ -489,24 +562,7 @@ const CARRIED: Record<string, "none" | "one" | "many"> = {
   "--verbose": "none",
 };
 
-export function claudeCarryOver(argv: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    const eq = a.indexOf("=");
-    const flag = a.startsWith("--") && eq > 0 ? a.slice(0, eq) : a;
-    const arity = CARRIED[flag];
-    if (!arity) continue;
-    out.push(a);
-    if (arity === "none" || eq > 0) continue;
-    if (arity === "one") {
-      if (argv[i + 1] !== undefined) out.push(argv[++i]!);
-      continue;
-    }
-    while (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith("-")) out.push(argv[++i]!);
-  }
-  return out;
-}
+export const claudeCarryOver = (argv: string[]): string[] => carryFlags(argv, CARRIED);
 
 /**
  * Move a stopped session to another account's home: the transcript and its
@@ -559,9 +615,14 @@ function refOf(account: Account, path: string, id: string, mtimeMs: number, size
   return { provider: "claude", accountId: account.id, agentSessionId: id, path, mtimeMs, size };
 }
 
+/** `<slug>/<sessionId>/subagents/`, beside the session's transcript. */
+function subagentLogDir(ref: TranscriptRef): string {
+  return ref.path.replace(/\.jsonl$/, "") + "/subagents";
+}
+
 export function claudeReader(ref: TranscriptRef): TranscriptReader {
   const isSub = ref.path.includes("/subagents/");
-  const subs = isSub ? null : new SubagentTokens(ref.path.replace(/\.jsonl$/, "") + "/subagents");
+  const subs = isSub ? null : new SubagentTokens(subagentLogDir(ref));
   return new JsonlTranscriptReader(
     ref,
     claudeFormat(ref, subs ?? undefined),
@@ -618,9 +679,11 @@ export const claudeAdapter: ProviderAdapter = {
   },
 
   reader: claudeReader,
+  subagentLogDir,
   spawnCommand,
   resumeCommand,
   moveSession,
+  pasteInPieces: 400,
   carryOver: claudeCarryOver,
   headless: isHeadless,
   autoAnswer: claudeAutoAnswer,

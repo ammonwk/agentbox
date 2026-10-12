@@ -18,6 +18,7 @@ import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
 import { Skills } from "./views/Skills";
 import { InboxBell } from "./Inbox";
+import { Review } from "./views/Review";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -60,6 +61,7 @@ function isTyping(e: KeyboardEvent): boolean {
 
 const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
+  { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
   { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
   { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
@@ -68,6 +70,7 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
 
 const PAGE_TITLE: Record<NavId, string> = {
   sessions: "Sessions",
+  review: "Review",
   voice: "Voice",
   accounts: "Accounts",
   skills: "Skills",
@@ -128,7 +131,7 @@ export function App() {
     };
   }, []);
 
-  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice";
+  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
@@ -265,6 +268,8 @@ export function App() {
               <Suspense fallback={<Empty title="Loading…" />}>
                 <Voice />
               </Suspense>
+            ) : route.page === "review" ? (
+              <Review state={state} />
             ) : route.page === "skills" ? (
               <Skills skills={state.skills} />
             ) : (
@@ -315,11 +320,13 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { sessions: 0, voice: 0, accounts: 0, skills: 0, settings: 0 };
+  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
     sessions: needsYou(state.sessions),
+    // Kept for later is still yours, but you have seen it: it does not nag.
+    review: state.cards.filter((c) => c.state === "open").length,
     voice: 0,
     accounts: Math.max(loginsOpen, authBad),
     skills: 0,
@@ -328,6 +335,7 @@ function countsOf(state: AppState | null): Record<NavId, number> {
 }
 
 function countTitle(id: NavId, n: number): string {
+  if (id === "review") return `${n} card${n === 1 ? "" : "s"} to review`;
   if (id === "accounts") return `${n} account${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} a login`;
   return `${n} session${n === 1 ? "" : "s"} waiting on you`;
 }

@@ -18,9 +18,10 @@ import { askQuestionsOf } from "./ask";
 import { PrRepoFold } from "../prrepo";
 import { loadFields, saveFields } from "./foldstate";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
-import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
-import { dropPasteTags } from "../sent";
+import { isAgentSent, type TranscriptFacts, type TranscriptRef, type Wake } from "./types";
+import { dropPasteTags, isFleetNote } from "../sent";
 import { isStrandedNudge } from "../park";
+import { claudeCacheTtl, isKeepWarmNote, type WarmSpell } from "../cache";
 
 /** Claude's project directory name for a cwd. Lossy (`a_b` and `a-b`
  *  collide), so it only ever proves a candidate, never recovers a path. */
@@ -367,8 +368,14 @@ const OUTPUT_CAP_TEXT = /exceeded the \d+ output token (maximum|limit)|output to
 const FATAL_ERROR_TEXT =
   /Prompt is too long|organization has disabled|issue with the selected model|does not support this model|not logged in|please run \/login|dimension limit for many-image|Failed to authenticate|exceeds the maximum/i;
 
+/** A 403 for a model's access grant, which Claude prefixes with "Please run
+ *  /login" like any 403. One account's grant to Opus 5.5 failed for five
+ *  minutes and came back with the same token; a new login was never needed. */
+const GRANT_ERROR_TEXT = /requires an access grant/i;
+
 export function claudeTurnErrorKind(text: string): "output-cap" | "transient" | "fatal" {
   if (OUTPUT_CAP_TEXT.test(text)) return "output-cap";
+  if (GRANT_ERROR_TEXT.test(text)) return "transient";
   if (FATAL_ERROR_TEXT.test(text)) return "fatal";
   return "transient";
 }
@@ -412,6 +419,8 @@ const MAX_CWDS = 64;
 const MAX_TEAMS = 64;
 /** Claude's queue rarely holds more than a few; a long one is a missed `remove`. */
 const MAX_QUEUED = 20;
+const MAX_CRONS = 64;
+const MAX_MONITORS = 64;
 const QUEUED_CAP = 4000;
 
 /** Token totals over assistant records, deduplicated by message id. Used for
@@ -467,8 +476,13 @@ export class ClaudeFold {
   private gitBranch: string | null = null;
   private startedAt: number | null = null;
   private lastActivityAt: number | null = null;
+  private lastWorkAt: number | null = null;
+  private keepWarm: WarmSpell | null = null;
+  private warming = false;
   /** The newest model call on the main chain (see TranscriptFacts.lastTurnAt). */
   private lastTurnAt: number | null = null;
+  /** The cache lifetime the newest call that wrote any cache wrote it with. */
+  private cacheTtlMs: number | null = null;
   private turnOpen = false;
   /** Messages Claude is holding until the current step yields: see `queueOp`. */
   private queue: { text: string; at: number }[] = [];
@@ -488,6 +502,12 @@ export class ClaudeFold {
   private sawSidechain = false;
   private recordSessionId: string | null = null;
   private prRepo = new PrRepoFold();
+  /** The newest ScheduleWakeup (dynamic /loop) and the live CronCreate jobs,
+   *  by id: timers inside the process, with no child to find. */
+  private wakeup: { due: number; setAt: number } | null = null;
+  private crons = new Map<string, { until: number; setAt: number; durable: boolean }>();
+  /** Every command a Monitor call started, whitespace-collapsed. */
+  private monitors = new Set<string>();
 
   constructor(
     private readonly ref: Pick<TranscriptRef, "path" | "agentSessionId">,
@@ -515,12 +535,14 @@ export class ClaudeFold {
     }
     if (typeof r.sessionId === "string" && !this.recordSessionId) this.recordSessionId = r.sessionId;
     const side = r.isSidechain === true;
+    if (!side && at !== null) this.workActivity(r, at);
     if (r.type === "user" || r.type === "assistant") {
       if (side) this.sawSidechain = true;
       else this.sawMain = true;
     }
     // Sidechain tokens are this session's spend, recorded in this file.
     this.tokens.add(r);
+    if (at !== null && (r.type === "user" || r.type === "assistant")) this.timers(r, at);
 
     if (!side && typeof r.permissionMode === "string" && (r.type === "permission-mode" || r.type === "user")) this.permissionMode = r.permissionMode;
 
@@ -605,6 +627,41 @@ export class ClaudeFold {
     }
   }
 
+  /** A warming turn can take longer than five minutes on a loaded host.
+   * Follow the actual turn, rather than assuming its reply landed in time.
+   * Notifications, real prompts and tool calls always end that spell. */
+  private workActivity(r: any, at: number): void {
+    let real = false;
+    if (r.type === "user" && !r.isCompactSummary) {
+      const content = r.message?.content;
+      const text = typeof content === "string" ? content : blocksText(content);
+      if (isKeepWarmNote(text)) {
+        this.warming = true;
+        this.keepWarm = { count: (this.keepWarm?.count ?? 0) + 1, at };
+        return;
+      }
+      // Meta messages include delivered peer messages and task notifications.
+      real = !r.isMeta || classifyUserText(text) === "notification" || /^\s*<(agent-message|cross-session-message)\b/.test(text);
+    } else if (r.type === "attachment" && r.attachment?.type === "queued_command" && r.attachment.commandMode === "prompt") {
+      const text = typeof r.attachment.prompt === "string" ? r.attachment.prompt : blocksText(r.attachment.prompt);
+      if (isKeepWarmNote(text)) {
+        this.warming = true;
+        this.keepWarm = { count: (this.keepWarm?.count ?? 0) + 1, at };
+        return;
+      }
+      real = true;
+    } else if (r.type === "assistant" && !r.isApiErrorMessage && r.message?.model !== SYNTHETIC) {
+      real = !this.warming || (Array.isArray(r.message?.content) && r.message.content.some((b: any) => b?.type === "tool_use"));
+    } else if (r.type === "system" && r.subtype === "scheduled_task_fire") {
+      real = true;
+    }
+    if (real) {
+      this.warming = false;
+      this.keepWarm = null;
+      this.lastWorkAt = Math.max(this.lastWorkAt ?? 0, at);
+    }
+  }
+
   /**
    * Agent teams. A member stamps `teamName` and `agentName` on its records —
    * its name is a better title than its directory, since its first prompt is
@@ -623,12 +680,53 @@ export class ClaudeFold {
     if (team) this.teamsLed.add(team);
   }
 
+  /** What the session set up to wake itself (TranscriptFacts.wakes), and its
+   *  monitors. A CronCreate result says the job's id and schedule, and its
+   *  text how long a recurring one lives. */
+  private timers(r: any, at: number): void {
+    const tur = r.toolUseResult;
+    if (tur && typeof tur.id === "string" && typeof tur.humanSchedule === "string") {
+      const durable = tur.durable === true;
+      if (tur.recurring) {
+        const days = Number(/expires after (\d+) days?/i.exec(JSON.stringify(r.message?.content ?? ""))?.[1] ?? 7);
+        this.crons.set(tur.id, { until: at + days * 86_400_000, setAt: at, durable });
+      } else {
+        this.crons.set(tur.id, { until: oneShotFire(tur.humanSchedule, at), setAt: at, durable });
+      }
+      if (this.crons.size > MAX_CRONS) this.crons.delete(this.crons.keys().next().value!);
+      return;
+    }
+    const content = r.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const b of content) {
+      if (b?.type !== "tool_use") continue;
+      if (b.name === "ScheduleWakeup") {
+        const delay = Number(b.input?.delaySeconds);
+        this.wakeup = b.input?.stop || !Number.isFinite(delay) ? null : { due: at + delay * 1000, setAt: at };
+      } else if (b.name === "CronDelete") {
+        this.crons.delete(String(b.input?.id ?? ""));
+      } else if (b.name === "Monitor" && typeof b.input?.command === "string") {
+        this.monitors.add(b.input.command.replace(/\s+/g, " ").trim());
+        if (this.monitors.size > MAX_MONITORS) this.monitors.delete(this.monitors.values().next().value!);
+      }
+    }
+  }
+
+  private wakes(): Wake[] {
+    const out: Wake[] = [];
+    if (this.wakeup) out.push({ label: "a /loop wakeup", setAt: this.wakeup.setAt, until: this.wakeup.due });
+    for (const [id, c] of this.crons) out.push({ label: `cron job ${id}`, setAt: c.setAt, until: c.until, durable: c.durable });
+    return out;
+  }
+
   private prompt(text: string): void {
     // A paste is recorded wrapped in `<pasted_content>`; a title is its words.
     const t = dropPasteTags(text).trim().slice(0, PROMPT_CAP);
     if (!t) return;
     // The fleet's nudge names the notifications Claude never delivered.
     if (isStrandedNudge(t)) this.queue = this.queue.filter((q) => !isTaskNotification(q));
+    // Nor is a note of its own what the session was asked.
+    if (isFleetNote(t)) return;
     this.firstPrompt ??= t;
     this.lastPrompt = t;
   }
@@ -768,6 +866,7 @@ export class ClaudeFold {
     if (m.usage) {
       const u = m.usage;
       if (at !== null && (this.lastTurnAt === null || at > this.lastTurnAt)) this.lastTurnAt = at;
+      this.cacheTtlMs = claudeCacheTtl(u) ?? this.cacheTtlMs;
       const used = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
       if (used > 0) {
         this.contextUsed = used;
@@ -842,7 +941,10 @@ export class ClaudeFold {
       prRepo: this.prRepo.repo,
       startedAt: this.startedAt,
       lastActivityAt: this.lastActivityAt,
+      lastWorkAt: this.lastWorkAt,
+      keepWarm: this.keepWarm ? { ...this.keepWarm } : null,
       lastTurnAt: this.lastTurnAt,
+      cacheTtlMs: this.cacheTtlMs,
       turnOpen: this.turnOpen,
       // Background-task notifications queue too; only messages are shown.
       queued: this.queue.filter((q) => classifyUserText(q.text) === "prompt").map((q) => ({ ...q })),
@@ -862,8 +964,30 @@ export class ClaudeFold {
       teamsLed: [...this.teamsLed],
       pendingAsk: this.pendingAsk,
       skipsPermissions: this.permissionMode === "bypassPermissions",
+      wakes: this.wakes(),
+      monitors: [...this.monitors],
     };
   }
+}
+
+/** A one-shot cron job whose fire time cannot be read is given this long. */
+const ONE_SHOT_MAX_MS = 24 * 3_600_000;
+
+/**
+ * When a one-shot cron job fires: its minute, hour, day and month are fixed
+ * numbers (that is how Claude writes "tomorrow at 9"), in local time, at the
+ * first such moment after it was set. Anything else is given a day.
+ */
+export function oneShotFire(cron: string, setAt: number): number {
+  const f = cron.trim().split(/\s+/);
+  const [min, hour, dom, mon] = f.map(Number);
+  if (f.length < 5 || ![min, hour, dom, mon].every((x) => Number.isInteger(x))) return setAt + ONE_SHOT_MAX_MS;
+  const set = new Date(setAt);
+  for (const year of [set.getFullYear(), set.getFullYear() + 1]) {
+    const t = new Date(year, mon! - 1, dom!, hour!, min!).getTime();
+    if (t >= setAt - 60_000) return t;
+  }
+  return setAt + ONE_SHOT_MAX_MS;
 }
 
 // ------------------------------------------------------------- timeline

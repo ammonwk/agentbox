@@ -201,7 +201,7 @@ export function isUsageLimit(e: any): boolean {
  * A turn refused because the model has no room for it: `task_complete.error =
  * {message: "Selected model is at capacity. Please try a different model.",
  * codex_error_info: "server_overloaded"}`. Codex gives up on the turn and
- * waits; the capacity comes back by itself, in minutes rather than seconds.
+ * waits; the capacity comes back by itself, in a minute or in many.
  */
 export function isAtCapacity(e: any): boolean {
   if (!e || typeof e !== "object") return false;
@@ -209,7 +209,8 @@ export function isAtCapacity(e: any): boolean {
   return /model is at capacity/i.test(String(e.message ?? ""));
 }
 
-/** How long a turn refused for capacity is left before it is retried. */
+/** The longest a turn refused for capacity is left before it is retried: the
+ *  fleet backs off up to this (`nudgeErrored`). */
 const CAPACITY_RETRY_MS = 10 * 60_000;
 
 const MAX_HITS = 200;

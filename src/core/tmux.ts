@@ -214,56 +214,160 @@ export function listPanes(): PaneInfo[] {
  */
 const LEAVE_MODE = (name: string): string[] => ["copy-mode", "-q", "-t", `=${name}:`, ";"];
 
-/** The pause after a short paste, before Enter: an Enter that arrives inside
- *  the paste is taken as a newline in the prompt by some TUIs. */
+/** The pause after a paste before its first look at the pane. */
 const PASTE_SETTLE_MS = 120;
-/** Poll cadence and cap while waiting for a longer paste to be taken. */
 const PASTE_POLL_MS = 30;
-const PASTE_WAIT_MS = 1_500;
-/** Below this, the message is too short to recognise on screen. */
-const PASTE_PROBE_MIN = 12;
+/** How long to look for the message's own words in the pane before settling
+ *  for any row the paste changed: a TUI that collapses a long paste shows a marker. */
+const PASTE_SHOWN_MS = 2_000;
+/** A pane that shows nothing of a paste for this long has not taken it. */
+const PASTE_WAIT_MS = 10_000;
+/** How long one Enter has to empty the input box, and how many are pressed. */
+const ENTER_WAIT_MS = 3_000;
+const ENTER_TRIES = 3;
+
+/** The message is in the pane's input box, or nowhere, and was not submitted. */
+export class Unsubmitted extends Error {}
 
 /**
  * Type `text` into the session as one prompt: a bracketed paste (so a
- * multi-line message is not submitted line by line), then Enter on its own.
+ * multi-line message is not submitted line by line), then Enter on its own,
+ * and return only once the message has left the input box.
  *
  * The Enter must be read *after* the paste, or the TUI takes it as part of the
- * paste — a newline, or nothing — and the message sits unsent in its input box.
- * A short message settles within the fixed pause; a long one is still being
- * ingested after it (Devin especially), so wait until the pane shows the
- * pasted text before pressing Enter. A TUI that collapses a long paste (Claude
- * shows `[Pasted text #1]`) never echoes it, so the wait gives up after
- * `PASTE_WAIT_MS` and presses Enter anyway.
+ * paste, so it is pressed once the pane shows what was pasted. One Enter is
+ * not proof either: a completion popup the pasted text opened takes it, as
+ * does a TUI that is slow to read. The row the draft starts on is watched, and
+ * Enter pressed again while the draft still sits there; a draft that outlasts
+ * them throws `Unsubmitted`, so nothing reports a message sent that was only typed.
+ *
+ * With `pieces` (`ProviderAdapter.pasteInPieces`), the message goes in as many
+ * small pastes, with the line breaks pressed as keys: see `pasteInPieces`.
  */
-export async function sendText(name: string, text: string): Promise<void> {
-  const buffer = `ab-${process.pid}-${Date.now()}`;
-  const load = tmux(["load-buffer", "-b", buffer, "-"], text);
-  if (load.code !== 0) throw new Error(`tmux load-buffer failed: ${load.stderr.trim()}`);
-  const paste = tmux([...LEAVE_MODE(name), "paste-buffer", "-p", "-d", "-b", buffer, "-t", `=${name}:`]);
-  if (paste.code !== 0) throw new Error(`tmux paste failed: ${paste.stderr.trim()}`);
-  await settlePaste(name, text);
-  sendKeys(name, ["Enter"]);
+export async function sendText(name: string, text: string, opts: { pieces?: number } = {}): Promise<void> {
+  const before = screenRows(name);
+  if (opts.pieces) pasteInPieces(name, text, opts.pieces);
+  else pasteBuffers(name, [text]);
+  const draft = await draftRow(name, text, before);
+  if (!draft) {
+    throw new Unsubmitted(`its pane showed nothing of the message for ${PASTE_WAIT_MS / 1000}s, so Enter was not pressed: a dialog may be up, or it is not reading its terminal`);
+  }
+  for (let press = 0; press < ENTER_TRIES; press++) {
+    sendKeys(name, ["Enter"]);
+    if (await leftRow(name, draft)) return;
+  }
+  throw new Unsubmitted(`the message was typed, but it is still in the input box after Enter was pressed ${ENTER_TRIES} times: something on its screen is taking the key`);
+}
+
+const screenRows = (name: string): string[] => (capture(name) ?? "").split("\n");
+
+/** A row as an input box holds it: its border or prompt glyph, and its first words, both without spaces. */
+interface RowHead {
+  frame: string;
+  words: string;
+}
+
+function rowHead(row: string): RowHead {
+  const [, frame = "", rest = ""] = /^((?:[\s>|]|[^\x20-\x7e])*)(.*)$/.exec(row) ?? [];
+  const words = rest.replace(/(?:[\s|]|[^\x20-\x7e])+$/, "").replace(/\s+/g, "");
+  return { frame: frame.replace(/\s+/g, ""), words: words.slice(0, 24) };
+}
+
+interface DraftRow extends RowHead {
+  index: number;
+  /** Rows with anything on them under it: a TUI that prints the sent message
+   *  where its box was puts the reply and the box under that. */
+  below: number;
+}
+
+const rowsBelow = (rows: string[], index: number): number => rows.slice(index + 1).filter((r) => r.trim()).length;
+
+/**
+ * The topmost row the paste drew: one that changed and starts with words of
+ * the message, or, when none shows them in time, the topmost that changed.
+ * Null when the pane never changed. The top row, because a completion popup
+ * and the tail of the draft are below it, and both change without a submit.
+ */
+async function draftRow(name: string, text: string, before: string[]): Promise<DraftRow | null> {
+  await Bun.sleep(PASTE_SETTLE_MS);
+  const said = text.replace(/\s+/g, "");
+  const started = Date.now();
+  for (;;) {
+    const rows = screenRows(name);
+    const changed = rows.map((row, index) => ({ index, row, ...rowHead(row) })).filter((r) => r.row !== before[r.index] && r.words);
+    const shown = changed.find((r) => r.words.length >= Math.min(6, said.length) && said.includes(r.words));
+    const waited = Date.now() - started;
+    const found = shown ?? (waited >= PASTE_SHOWN_MS ? changed[0] : undefined);
+    if (found) return { index: found.index, frame: found.frame, words: found.words, below: rowsBelow(rows, found.index) };
+    if (waited >= PASTE_WAIT_MS) return null;
+    await Bun.sleep(PASTE_POLL_MS);
+  }
 }
 
 /**
- * Wait for the pasted text to appear in the pane. The head and the tail of the
- * message are looked for (the tail, because a TUI whose input box scrolls shows
- * the end of a long paste), with all whitespace flattened so wrapping and
- * indentation do not hide it.
+ * Whether the draft left its row within one Enter's wait. It is still there
+ * while the row has the same frame and words with no more under it; the same
+ * words in another frame, or over a reply, are the sent message shown back.
  */
-async function settlePaste(name: string, text: string): Promise<void> {
-  await Bun.sleep(PASTE_SETTLE_MS);
-  const flat = text.replace(/\s+/g, " ").trim();
-  if (flat.length < PASTE_PROBE_MIN) return;
-  const probes = [...new Set([flat.slice(0, 32), flat.slice(-32)])];
-  const deadline = Date.now() + PASTE_WAIT_MS;
+async function leftRow(name: string, draft: DraftRow): Promise<boolean> {
+  const deadline = Date.now() + ENTER_WAIT_MS;
   for (;;) {
-    const screen = capture(name) ?? "";
-    const seen = screen.replace(/\s+/g, " ");
-    if (probes.some((p) => seen.includes(p))) return;
-    if (Date.now() >= deadline) return;
+    const rows = screenRows(name);
+    const now = rowHead(rows[draft.index] ?? "");
+    if (now.words !== draft.words || now.frame !== draft.frame || rowsBelow(rows, draft.index) > draft.below) return true;
+    if (Date.now() >= deadline) return false;
     await Bun.sleep(PASTE_POLL_MS);
   }
+}
+
+/** tmux refuses a command line past a length it does not document ("command
+ *  too long"); this many pastes and key presses at a time stays well inside. */
+const PASTE_BATCH = 40;
+
+/**
+ * Paste each line in pieces of at most `max` characters, and press Ctrl+J (a
+ * line break in the prompt, where Enter would send it) between lines. To the
+ * TUI the message was typed: no single paste is long enough, or has line
+ * breaks enough, for it to be set apart as pasted.
+ */
+function pasteInPieces(name: string, text: string, max: number): void {
+  const steps: (string | null)[] = [];
+  for (const [i, line] of text.split(/\r\n|\r|\n/).entries()) {
+    if (i > 0) steps.push(null);
+    steps.push(...pieces(line, max));
+  }
+  for (let i = 0; i < steps.length; i += PASTE_BATCH) pasteBuffers(name, steps.slice(i, i + PASTE_BATCH));
+}
+
+/** `line` cut every `max` UTF-16 units (what a TUI written in JS counts), never inside a surrogate pair. */
+function pieces(line: string, max: number): string[] {
+  const out: string[] = [];
+  for (let at = 0; at < line.length; ) {
+    let end = Math.min(line.length, at + max);
+    const last = line.charCodeAt(end - 1);
+    if (end < line.length && last >= 0xd800 && last <= 0xdbff && end - at > 1) end--;
+    out.push(line.slice(at, end));
+    at = end;
+  }
+  return out;
+}
+
+/** Paste each string, in order and in one tmux invocation; a `null` is a line break pressed as a key. */
+function pasteBuffers(name: string, steps: (string | null)[]): void {
+  const target = `=${name}:`;
+  const args = LEAVE_MODE(name).slice(0, -1);
+  for (const [i, step] of steps.entries()) {
+    if (step === null) {
+      args.push(";", "send-keys", "-t", target, "C-j");
+      continue;
+    }
+    const buffer = `ab-${process.pid}-${Date.now()}-${i}`;
+    const load = tmux(["load-buffer", "-b", buffer, "-"], step);
+    if (load.code !== 0) throw new Error(`tmux load-buffer failed: ${load.stderr.trim()}`);
+    args.push(";", "paste-buffer", "-p", "-d", "-b", buffer, "-t", target);
+  }
+  const paste = tmux(args);
+  if (paste.code !== 0) throw new Error(`tmux paste failed: ${paste.stderr.trim()}`);
 }
 
 /** The paste buffers' names, newest first. A TUI that copies inside tmux adds one (`load-buffer`). */

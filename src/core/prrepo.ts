@@ -33,28 +33,41 @@ export function prReposIn(text: string): string[] {
 
 const MAX_REPOS = 20;
 
-/**
- * Folds what a session writes into the repo it names most — the one it works
- * on, not the upstream PR it cited once. A tie goes to the latest named.
- */
+/** Count the repos `text` names into `counts` (times named, in the order last
+ *  named, oldest first), for `mostNamed`. A Map, so a fold holding one stays
+ *  plain data. */
+export function countPrRepos(counts: Map<string, number>, text: unknown): void {
+  if (typeof text === "string" && text) countSlugs(counts, prReposIn(text));
+}
+
+/** `countPrRepos` for repos already picked out of their text (`prReposIn`). */
+export function countSlugs(counts: Map<string, number>, slugs: readonly string[]): void {
+  for (const slug of slugs) {
+    const n = (counts.get(slug) ?? 0) + 1;
+    counts.delete(slug);
+    if (n === 1 && counts.size >= MAX_REPOS) continue;
+    counts.set(slug, n);
+  }
+}
+
+/** The repo named most — the one a session works on, not the upstream PR it
+ *  cited once. A tie goes to the latest named. */
+export function mostNamed(counts: ReadonlyMap<string, number>): string | null {
+  let best: string | null = null;
+  let most = 0;
+  for (const [slug, n] of counts) if (n >= most) [best, most] = [slug, n];
+  return best;
+}
+
+/** `countPrRepos` and `mostNamed` as a fold. */
 export class PrRepoFold {
-  /** Times named; a Map keeps them in the order last named, oldest first. */
   private counts = new Map<string, number>();
 
   add(text: unknown): void {
-    if (typeof text !== "string" || !text) return;
-    for (const slug of prReposIn(text)) {
-      const n = (this.counts.get(slug) ?? 0) + 1;
-      this.counts.delete(slug);
-      if (n === 1 && this.counts.size >= MAX_REPOS) continue;
-      this.counts.set(slug, n);
-    }
+    countPrRepos(this.counts, text);
   }
 
   get repo(): string | null {
-    let best: string | null = null;
-    let most = 0;
-    for (const [slug, n] of this.counts) if (n >= most) [best, most] = [slug, n];
-    return best;
+    return mostNamed(this.counts);
   }
 }

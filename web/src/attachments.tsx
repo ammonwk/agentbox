@@ -167,6 +167,13 @@ export function useAttachments({
     setAtts([]);
   }
 
+  /** Reattach a failed submission's already uploaded images, with numbers
+   *  chosen by the composer so they do not collide with its newer input. */
+  function restore(uploaded: readonly SavedAttachment[]) {
+    for (const a of uploaded) saved.current.set(a.n, { name: a.name, path: a.path });
+    setAtts((xs) => [...xs, ...uploaded.map((a): Attachment => ({ n: a.n, url: uploadUrl(a.name), state: "ready", error: null }))]);
+  }
+
   /** Backspace right after a token deletes the whole token, not its `]`. */
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
     if (e.key !== "Backspace" && e.key !== "Delete") return false;
@@ -213,6 +220,7 @@ export function useAttachments({
     retry,
     resolve,
     clear,
+    restore,
     onKeyDown,
     handlers,
     dropping,

@@ -28,9 +28,11 @@ import { basename, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
 import { adapterFor } from "../providers";
-import type { Account, ProviderId } from "../types";
+import { GO_LOGIN_FILE } from "./gocred";
+import type { Account, AccountProvider, ProviderId } from "../types";
 
-export const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
+/** The providers that hold accounts; opencode runs on omp's (see AccountProvider). */
+export const PROVIDERS: AccountProvider[] = ["claude", "codex", "devin", "omp"];
 
 /**
  * A request this module refuses, with the HTTP status that says why: 404 for
@@ -69,14 +71,14 @@ export function authEnv(account: Pick<Account, "provider" | "home" | "isDefault"
   return { env: e.env, unset: e.unset ?? [] };
 }
 
-/** The file whose existence means "this home has logged in". Null for omp,
- *  which keeps its own credential pool we do not look inside. */
-export function credentialsPath(provider: ProviderId, home: string): string | null {
+/** The file whose existence means "this home has logged in". For omp, an
+ *  OpenCode Go account, its Console sign-in (accounts/gocred.ts). */
+export function credentialsPath(provider: AccountProvider, home: string): string | null {
   switch (provider) {
     case "claude": return join(home, ".credentials.json");
     case "codex": return join(home, "auth.json");
     case "devin": return join(home, "devin", "credentials.toml");
-    case "omp": return null;
+    case "omp": return join(home, GO_LOGIN_FILE);
   }
 }
 
@@ -181,14 +183,17 @@ export function owners<A extends Pick<Account, "id" | "provider" | "email" | "is
  * Registered whether or not the default home has credentials — an installed
  * CLI you have not logged into is still an account, one whose auth shows
  * "missing" and whose Log in button fixes it. Returns what was added.
+ *
+ * Not omp: its accounts are OpenCode Go sign-ins, each one added (and
+ * forgotten) by you, and the CLI holds none that agentbox would borrow.
  */
 export async function ensureDefaultAccounts(
   detect: (p: ProviderId) => Promise<CliInfo> = detectCli,
 ): Promise<Account[]> {
-  const hasDefault = (p: ProviderId) => listAccounts(p).some((a) => a.isDefault || samePath(a.home, defaultHome(p)));
+  const hasDefault = (p: AccountProvider) => listAccounts(p).some((a) => a.isDefault || samePath(a.home, defaultHome(p)));
   // Only a provider without one is asked whether its CLI is installed: that
   // runs it (`omp --version` is a second), on every server start.
-  const missing = PROVIDERS.filter((p) => !hasDefault(p));
+  const missing = PROVIDERS.filter((p) => p !== "omp" && !hasDefault(p));
   const infos = await Promise.all(missing.map(async (p) => [p, await detect(p)] as const));
   const added: Account[] = [];
   for (const [provider, info] of infos) {
@@ -234,7 +239,7 @@ function expandHome(p: string): string {
 /** What each provider shares from its default home. `statusline*` is a prefix
  *  match: people keep status-line scripts next to settings.json and reference
  *  them by path. */
-const SHARED: Record<Exclude<ProviderId, "omp" | "devin">, { names: string[]; prefixes: string[] }> = {
+const SHARED: Record<Exclude<AccountProvider, "omp" | "devin">, { names: string[]; prefixes: string[] }> = {
   claude: {
     names: ["settings.json", "CLAUDE.md", "skills", "agents", "commands", "plugins", "hooks", "output-styles", "keybindings.json"],
     prefixes: ["statusline"],
@@ -378,10 +383,7 @@ function syncClaudeJson(home: string): boolean {
  * Returns the home path. The directory is 0700: it is about to hold a refresh
  * token.
  */
-export function createAccountHome(provider: ProviderId, id: string): string {
-  if (provider === "omp") {
-    throw new AccountError(400, "omp manages its own credential pool — it has one implicit account and no extra homes");
-  }
+export function createAccountHome(provider: AccountProvider, id: string): string {
   const home = accountHomeFor(id);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   chmodSync(home, 0o700);
@@ -428,11 +430,11 @@ export interface ImportDeps {
  * last one because both homes would then refresh from one token family.
  */
 export async function importHome(
-  provider: ProviderId,
+  provider: AccountProvider,
   path: string,
   deps: ImportDeps,
 ): Promise<{ account: Account; email: string | null }> {
-  if (provider === "omp") throw new AccountError(400, "omp has one implicit account; there is no home to import");
+  if (provider === "omp") throw new AccountError(400, "an OpenCode Go account has no home to import — add one and sign in to it");
   const home = canonical(expandHome(path.trim()));
   if (!existsSync(home) || !statSync(home).isDirectory()) throw new AccountError(400, `${home} is not a directory`);
   const cred = credentialsPath(provider, home)!;

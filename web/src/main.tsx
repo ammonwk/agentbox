@@ -7,6 +7,7 @@ import { isPhone } from "./lib/phone";
 import { startPush } from "./lib/push";
 import { reloadForMissingChunk } from "./lib/update";
 import { followLinks, listUnderSession } from "./route";
+import { openLinksBehind } from "./lib/backgroundlinks";
 
 // On a phone the app is lifted by the on-screen keyboard's height, so the
 // keyboard shrinks it rather than covering it (iOS never resizes the layout
@@ -73,3 +74,4 @@ createRoot(root).render(
   </React.StrictMode>
 );
 followLinks(root);
+openLinksBehind(root);

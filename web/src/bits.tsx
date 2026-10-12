@@ -3,9 +3,9 @@
  *  live in components.tsx; these know what a session and an account are. */
 
 import { useEffect, useRef, useState } from "react";
-import type { AccountView, ProviderId, SessionHost, SessionStatus, UsageWindow } from "../../src/core/types";
+import type { AccountView, ProviderId, SessionHost, UsageWindow } from "../../src/core/types";
 import { Icon } from "./components";
-import { contextPct, type Shape } from "./lib/board";
+import { contextPct, type Shape, type ShownStatus } from "./lib/board";
 import { fmtTokens } from "./lib/format";
 import { barSegments, resetText, usageTone, usedNow, windowElapsed, windowLabel } from "./lib/usage";
 
@@ -16,9 +16,10 @@ export const PROVIDER_LABEL: Record<ProviderId, string> = {
   codex: "Codex",
   devin: "Devin",
   omp: "omp",
+  opencode: "opencode",
 };
 
-export const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "devin", "omp"];
+export const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 
 /** A text badge in the provider's colour. No logos: no external assets, and
  *  the word is more legible at 11px than any mark. */
@@ -117,7 +118,8 @@ export function AccountChip({
 
 // ----------------------------------------------------------------- status
 
-const STATUS_LABEL: Record<SessionStatus, string> = {
+const STATUS_LABEL: Record<ShownStatus, string> = {
+  retrying: "Retrying",
   blocked: "Blocked",
   waiting: "Your turn",
   running: "Running",
@@ -125,7 +127,8 @@ const STATUS_LABEL: Record<SessionStatus, string> = {
   closed: "Closed",
 };
 
-const STATUS_TITLE: Record<SessionStatus, string> = {
+const STATUS_TITLE: Record<ShownStatus, string> = {
+  retrying: "Stopped on an error that agentbox retries by itself — nothing for you to do",
   blocked: "Showing a prompt it needs answered — a permission, a trust dialog, a login",
   waiting: "The turn is over; the process is alive and waiting for you",
   running: "Mid-turn",
@@ -133,7 +136,7 @@ const STATUS_TITLE: Record<SessionStatus, string> = {
   closed: "Stopped and off the list; still resumable",
 };
 
-export function StatusPill({ status }: { status: SessionStatus }) {
+export function StatusPill({ status }: { status: ShownStatus }) {
   return (
     <span className={`pill pill-${status}`} title={STATUS_TITLE[status]}>
       <span className="pill-dot" aria-hidden="true" />
@@ -165,7 +168,7 @@ export function ShapeMark({ shape }: { shape: Shape }) {
  *  is the repo — a list sorted by time still says both at a glance. With
  *  `copy` (a session id) clicking it copies the id instead of following the
  *  row's link, a check says so for a moment. */
-export function StatusDot({ status, shape, repo, copy }: { status: SessionStatus; shape?: Shape; repo?: string; copy?: string }) {
+export function StatusDot({ status, shape, repo, copy }: { status: ShownStatus; shape?: Shape; repo?: string; copy?: string }) {
   const [done, setDone] = useState(false);
   const t = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -265,33 +268,47 @@ export function ContextBar({
 // ------------------------------------------------------------------ usage
 
 /**
- * One rate-limit window as a bar. The weekly bar can carry the account's
- * outstanding claims as a hatched segment on top of real use, which is the
- * picture the balancer actually gates on. A small tick marks how far through
- * the window we are, so "60% used, 90% of the way through" reads as fine.
+ * One rate-limit window as a bar, with where it is headed as a hatched
+ * segment on top of real use, which is the picture the balancer actually
+ * gates on: the weekly bar carries the account's outstanding claims
+ * (`outstanding`), the 5-hour bar where the balancer expects it to stand at
+ * its reset (`forecast`, and `how` it got there). A small tick marks how far
+ * through the window we are, so "60% used, 90% of the way through" reads as
+ * fine.
  */
 export function UsageBar({
   window: w,
   outstanding = 0,
+  forecast,
   now,
 }: {
   window: UsageWindow;
   outstanding?: number;
+  forecast?: { at: number; how: string } | null;
   now: number;
 }) {
   const used = usedNow(w, now);
-  const seg = barSegments(used, outstanding);
-  const tone = usageTone(outstanding > 0 ? seg.effective : used);
+  const ahead = forecast && forecast.at > used ? forecast : null;
+  const seg = barSegments(used, ahead ? ahead.at - used : outstanding);
+  const tone = usageTone(ahead || outstanding > 0 ? seg.effective : used);
   const elapsed = windowElapsed(w, now);
   const label = windowLabel(w);
-  const claimText = outstanding > 0 ? ` + ${Math.round(outstanding * 10) / 10} claimed = ${Math.round(seg.effective)}` : "";
+  const claimText = ahead
+    ? `, ${Math.round(ahead.at)}% ${ahead.how}`
+    : outstanding > 0
+      ? ` + ${Math.round(outstanding * 10) / 10} claimed = ${Math.round(seg.effective)}`
+      : "";
   return (
     <div className={`ubar ubar-${w.kind}${w.scope ? " ubar-scoped" : ""}`} data-tone={tone}>
       <div className="ubar-head">
         <span className="ubar-label">{label}</span>
         <span className="ubar-pct">
           {Math.round(used)}%
-          {outstanding > 0 ? <span className="ubar-claim"> +{Math.round(outstanding * 10) / 10}</span> : null}
+          {ahead ? (
+            <span className="ubar-claim"> → {Math.round(ahead.at)}%</span>
+          ) : outstanding > 0 ? (
+            <span className="ubar-claim"> +{Math.round(outstanding * 10) / 10}</span>
+          ) : null}
         </span>
         <span className="ubar-reset">{resetText(w.resetsAt, now)}</span>
       </div>

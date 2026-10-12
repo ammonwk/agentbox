@@ -115,6 +115,7 @@ const SKILL_SOURCES: Record<ProviderId, readonly SkillSource[] | null> = {
   codex: ["codex", "agents"],
   omp: ["project", "omp", "global", "agents"],
   devin: null,
+  opencode: null,
 };
 
 /** The registered repo a session runs in (a worktree's `repoRoot` is its main checkout). */
@@ -199,14 +200,23 @@ export function parseWorktreeRef(text: string, prs: readonly PrInfo[]): Worktree
   return { kind: "branch", branch: t };
 }
 
+/** `[Image #1]`, or `[Image #1: /path]` once sent (attachments.tsx): its `#1`, bracket to bracket. */
+const IMAGE_TOKEN = /^\[Image #\d+[\]:]/;
+
 /**
  * The PRs a prompt names, once each, in order: `PR 6759`, a pull URL of this
- * repo, or `#6759` or a bare number that is one of the repo's open PRs.
+ * repo, or `#6759` or a bare number that is one of the repo's open PRs — and
+ * that last only when the number has four digits or more, or the prompt says
+ * "PR" somewhere.
  *
  * Stricter than the links in agent output (prlinks.ts), because this one acts:
  * it picks the branch the session starts on. Issues share PRs' numbering, so
  * "read issue #6724" is not a PR, and a `#` alone is not enough to guess one —
- * a wrong guess fails the start on a branch that does not exist.
+ * a wrong guess fails the start on a branch that does not exist. A short
+ * number is a count, a step or a list item far more often than a PR: a repo
+ * whose PR 1 is still open would otherwise start every prompt with a `#1` in
+ * it there. And a pasted image's `[Image #1]` is the dialog's own token,
+ * never a reference.
  */
 export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string | null): number[] {
   const out: number[] = [];
@@ -218,12 +228,14 @@ export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string
     if (!repoSlug || m[1]!.toLowerCase() === repoSlug.toLowerCase()) found.push({ at: m.index, n: Number(m[2]) });
   }
   const known = new Set(prs.map((p) => p.number));
+  const saysPr = /(?<![\p{L}\p{N}_])(?:PRs?|pull requests?)(?![\p{L}\p{N}_])/iu.test(text);
   for (const r of prRefs(text)) {
+    if (IMAGE_TOKEN.test(text.slice(Math.max(0, r.start - 7), r.end + 1))) continue;
     if (r.repo && r.repo.toLowerCase() !== repoSlug?.toLowerCase()) continue;
     const explicit = /^pr/i.test(text.slice(r.start, r.end));
     const before = text.slice(Math.max(0, r.start - 16), r.start);
     if (/\b(issues?|tickets?|bugs?|tasks?|stor(y|ies))\s*$/i.test(before)) continue;
-    if (!explicit && !known.has(r.number)) continue;
+    if (!explicit && (!known.has(r.number) || (r.number < 1000 && !saysPr))) continue;
     found.push({ at: r.start, n: r.number });
   }
   for (const f of found.sort((a, b) => a.at - b.at)) add(f.n);
