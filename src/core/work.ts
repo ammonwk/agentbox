@@ -5,14 +5,18 @@
  * Read on demand, for the one session that is open.
  *
  * Subagents through the subagent MCP and teammates are sessions of their own,
- * on the board already; the page finds those by `parent`.
+ * on the board already; the page finds those by `parent`. The agents a
+ * session runs inside itself are not, so `agentTimeline` reads one's own
+ * transcript for the view the list opens.
  */
 
 import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Session } from "./types";
+import type { Session, TimelineEvent } from "./types";
 import { argvOf, runsCli, startedAtOf } from "./providers/procs";
 import { transcriptFile } from "./providers/types";
+import { claudeFormat } from "./providers/claude-transcript";
+import { JsonlTranscriptReader, type TranscriptFormat } from "./providers/jsonl-reader";
 import { describe, isToolShell, sharedProcTable, subtree, type ProcTable } from "./proc";
 import { classifyShell, normalCommand, shellCommand, SUBAGENT_QUIET_MS, type ShellKind } from "./park";
 
@@ -182,6 +186,87 @@ function workflowsOf(dir: string, processStart: number, scan: LaunchScan): WorkW
     out.push({ runId, name: w.name, since: w.since, agents: [...running.values()] });
   }
   return out.sort((a, b) => a.since - b.since);
+}
+
+export interface AgentTimeline {
+  events: TimelineEvent[];
+  /** Pass back as `since` for what it did after these. */
+  cursor: string;
+  /** The events replace what the page holds: a first read, or a cursor that no longer fits. */
+  reset: boolean;
+  /** A reset page left earlier events out. */
+  more: boolean;
+  /** Still working; ended on its final answer; or neither, and nothing will
+   *  write to it again (its process is gone, or it has been quiet too long). */
+  state: "running" | "done" | "stopped";
+}
+
+/** Claude's agent and workflow-run ids: hex, a name and hex
+ *  (`r2-builder-247e0c1c9f09ae60`), `wf_0f98cd63-6bd`. Nothing that leaves a directory. */
+const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+/**
+ * An agent's transcript under a session's directory: `subagents/agent-<id>.jsonl`,
+ * or `subagents/workflows/<run>/agent-<id>.jsonl` for one a workflow runs.
+ * Null for an id that is not one, and for one that has no file there.
+ */
+export function agentFile(sessionDir: string, agentId: string): string | null {
+  if (!AGENT_ID.test(agentId)) return null;
+  const subs = join(sessionDir, "subagents");
+  const own = join(subs, `agent-${agentId}.jsonl`);
+  if (exists(own)) return own;
+  let runs: string[];
+  try {
+    runs = readdirSync(join(subs, "workflows"));
+  } catch {
+    return null;
+  }
+  for (const run of runs) {
+    const f = join(subs, "workflows", run, `agent-${agentId}.jsonl`);
+    if (AGENT_ID.test(run) && exists(f)) return f;
+  }
+  return null;
+}
+
+/** Readers kept for the agent views open now, so a poll reads only what was appended. */
+const agentReaders = new Map<string, JsonlTranscriptReader>();
+const MAX_AGENT_READERS = 8;
+const AGENT_PAGE = 300;
+
+/**
+ * What one of a Claude session's in-process agents did, as the session's
+ * timeline shows it: the newest page, or with `since` what came after it.
+ * Null when the session has no such agent.
+ */
+export async function agentTimeline(s: Session, agentId: string, since: string | null): Promise<AgentTimeline | null> {
+  const main = s.provider === "claude" && s.transcriptPath && s.agentSessionId ? transcriptFile(s.transcriptPath) : null;
+  const file = main ? agentFile(join(dirname(main), s.agentSessionId!), agentId) : null;
+  if (!file) return null;
+  let reader = agentReaders.get(file);
+  if (reader) agentReaders.delete(file);
+  else reader = new JsonlTranscriptReader({ provider: "claude", accountId: s.accountId ?? "", agentSessionId: agentId, path: file, mtimeMs: 0, size: 0 }, ownSide(claudeFormat({ path: file, agentSessionId: agentId })));
+  // Most recently used last, so the first is the one to let go.
+  agentReaders.set(file, reader);
+  if (agentReaders.size > MAX_AGENT_READERS) agentReaders.delete(agentReaders.keys().next().value!);
+
+  let page: Omit<AgentTimeline, "state">;
+  if (since) {
+    const r = await reader.since(since);
+    page = { events: r.events, cursor: r.cursor, reset: r.reset, more: r.reset };
+  } else {
+    const r = await reader.timeline({ limit: AGENT_PAGE });
+    page = { events: r.events, cursor: r.cursor, reset: true, more: r.before !== null };
+  }
+  const state = finished(file) ? "done" : !s.pid || Date.now() - statSync(file).mtimeMs > SUBAGENT_QUIET_MS ? "stopped" : "running";
+  return { ...page, state };
+}
+
+/** Claude flags every record of an agent's own file `isSidechain`, which the
+ *  session's reader drops (agents were once written inline, into the
+ *  caller's file). Here they are the conversation. */
+function ownSide(f: TranscriptFormat): TranscriptFormat {
+  const own = (v: any) => (v?.isSidechain === true ? { ...v, isSidechain: false } : v);
+  return { ...f, add: (v, i) => f.add(own(v), i), links: (v) => f.links(own(v)), pieces: (v, i) => f.pieces(own(v), i) };
 }
 
 function exists(path: string): boolean {

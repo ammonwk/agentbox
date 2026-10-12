@@ -49,7 +49,7 @@ import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr } from "../c
 import { repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
-import { sessionWork } from "../core/work";
+import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
@@ -1105,6 +1105,12 @@ const router = new Router(mapError)
   })
   // What it waits on: shells, monitors and in-process agents (src/core/work.ts).
   .add("GET", "/api/sessions/:id/work", async ({ params }) => json(await sessionWork(fleet.get(params.id!))))
+  // One of those agents' own transcript, for the view a click in the list opens.
+  .add("GET", "/api/sessions/:id/agents/:agentId/timeline", async ({ params, url }) => {
+    const t = await agentTimeline(fleet.get(params.id!), params.agentId!, url.searchParams.get("since"));
+    if (!t) throw new HttpError(404, "no such agent in this session");
+    return json(t);
+  })
   .add("GET", "/api/sessions/:id/attach", ({ params }) => json({ argv: fleet.attachCommand(params.id!) }))
   .add("GET", "/api/sessions/:id/screen", ({ params }) => json({ text: fleet.screen(params.id!) }))
   .add("GET", "/api/grep", async ({ req, url }) => {

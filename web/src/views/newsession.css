@@ -1,141 +1,218 @@
 /* New-session dialog. `ns-` prefixed; tokens only. */
 
-/* One column now that placement lives in the account picker: narrower than
- * `.modal-wide`, wider than a plain dialog. */
 .modal-wide:has(> .ns) {
-  max-width: 680px;
+  max-width: 640px;
 }
 .ns {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin-top: 8px;
+  gap: 10px;
+  margin-top: 10px;
 }
-.ns-top {
+
+/* agent, where, worktree: one line above the prompt */
+.ns-row {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
   flex-wrap: wrap;
-}
-.ns-top .field {
+  align-items: center;
   gap: 6px;
 }
-.ns-where-field {
-  align-items: flex-end;
+.ns-row .ns-pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 9px 0 11px;
 }
-.ns-providers {
-  flex-wrap: wrap;
+.ns-row .ns-pill:hover,
+.ns-row .ns-pill[aria-expanded="true"] {
+  border-color: var(--border-strong);
 }
 .ns-pdot {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--prov);
-  padding: 0;
-  box-shadow: none;
-}
-.ns-where {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: -4px;
-}
-.ns-where select {
-  flex: 1;
-  min-width: 0;
-}
-.ns-wt {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.ns-wt input {
-  accent-color: var(--accent);
-  width: 15px;
-  height: 15px;
-  margin: 0;
 }
 
-.ns-wtbox {
-  flex: none;
-  width: 170px;
+/* the prompt card; account, model and effort sit in its bottom edge */
+.ns-promptbox.att-frame {
+  border-radius: 12px;
+  border-color: var(--border-strong);
 }
-.ns-wtbox input {
-  font-size: 12.5px;
-}
-.ns-wt-hint {
-  font-size: 11.5px;
-  color: var(--faint);
-  margin-top: -8px;
-}
-.ns-wt-opt {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 6px 8px;
-}
-.ns-wt-num {
-  flex: none;
-  min-width: 44px;
-  font-weight: 600;
-  color: var(--text);
-}
-.ns-wt-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ns-wt-title .ns-tag {
-  margin-right: 6px;
-}
-.ns-wt-meta {
-  flex: none;
-  max-width: 40%;
-  font-size: 11px;
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* prompt */
-.ns .ns-prompt-head {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 6px;
-}
-.ns-prompt-head .field-hint {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-}
-.ns-linkbtn {
-  border: 0;
-  background: none;
-  color: var(--accent);
-  font-size: inherit;
-  cursor: pointer;
-  padding: 0 0 0 6px;
-}
-.ns-linkbtn:hover {
-  text-decoration: underline;
+.ns-promptbox.att-frame:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-strong));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .ns-prompt {
-  min-height: 140px;
-  resize: vertical;
-  line-height: 1.5;
+  min-height: 132px;
+  max-height: 45vh;
+  padding: 14px 14px 6px;
+  font-size: 14px;
+  line-height: 1.55;
+  resize: none;
+  field-sizing: content;
 }
-.ns-label {
-  margin-bottom: 6px;
+/* Right-aligned, so a pill that wraps on a phone stays under the others. */
+.ns-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 4px 6px 6px;
+}
+.ns-bar > .att-pick {
+  margin-right: auto;
+}
+
+/* a pill: what is chosen, and a menu under it (Dropdown.tsx) */
+.ns-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  height: 30px;
+  padding: 0 7px 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ns-pill:hover,
+.ns-pill[aria-expanded="true"] {
+  background: var(--hover);
+}
+.ns-pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.ns-pill > svg {
+  flex: none;
+  color: var(--muted);
+}
+.ns-pill > .ns-pill-chev {
+  color: var(--faint);
+}
+.ns-pill-text {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ns-pill-tag {
+  font-size: 11px;
+  font-weight: 450;
+  color: var(--faint);
+}
+.ns-pill[data-tone="warn"] .ns-pill-text {
+  color: var(--warning);
+}
+.ns-pill[data-tone="danger"] .ns-pill-text {
+  color: var(--danger);
+}
+.ns-pill[data-tone="accent"] .ns-pill-text {
+  color: var(--accent);
+}
+
+/* the menu */
+.ns-menu {
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  animation: ns-menu-in 0.12s ease-out;
+}
+@keyframes ns-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+.ns-menu-search {
+  flex: none;
+  min-height: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  font-size: 13px;
+}
+.ns-menu-search:focus {
+  border-color: var(--border);
+  box-shadow: none;
+}
+.ns-menu-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+.ns-menu-group {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.ns-menu-foot {
+  flex: none;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.ns-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ns-item[data-active] {
+  background: var(--hover);
+}
+.ns-item[aria-disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+.ns-item > svg {
+  flex: none;
+  color: var(--muted);
+}
+.ns-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ns-item-sub {
+  flex: 0 1 auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.ns > .modal-actions {
+  margin-top: 6px;
+}
+.ns-item > .ns-item-check {
+  color: var(--accent);
 }
 
 /* floating lists (popover.ts places them) */
@@ -144,7 +221,7 @@
   overflow: auto;
   background: var(--raised);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   box-shadow: var(--shadow-lg);
   padding: 4px;
   font-size: 13px;
@@ -279,7 +356,7 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 8px 10px 8px 8px;
+  padding: 8px 10px;
 }
 .ns-acct-opt + .ns-acct-opt {
   margin-top: 1px;
@@ -289,27 +366,17 @@
   border-radius: 5px 5px 0 0 !important;
   margin-bottom: 3px;
 }
-.ns-acct-opt[aria-selected="true"] {
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-}
-.ns-acct-opt[aria-selected="true"][data-active] {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
 .ns-acct-opt[data-ineligible] .ns-acct-label,
 .ns-acct-opt[data-ineligible] .ns-mbar {
   opacity: 0.6;
 }
-.ns-radio {
+.ns-acct-check {
   flex: none;
+  display: grid;
+  place-items: center;
   width: 14px;
-  height: 14px;
-  margin-top: 2px;
-  border-radius: 50%;
-  border: 1.5px solid var(--border-strong);
-}
-.ns-acct-opt[aria-selected="true"] .ns-radio {
-  border-color: var(--accent);
-  background: radial-gradient(circle, var(--accent) 0 3.5px, transparent 4px);
+  align-self: center;
+  color: var(--accent);
 }
 .ns-acct-body {
   flex: 1;
@@ -392,76 +459,6 @@
   color: var(--muted);
 }
 
-/* model picker */
-.ns-model {
-  position: relative;
-}
-.ns-model input {
-  padding-right: 30px;
-}
-.ns-model-name {
-  position: absolute;
-  right: 32px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 11.5px;
-  color: var(--faint);
-  pointer-events: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 45%;
-}
-.ns-model-caret {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  border: 0;
-  background: none;
-  color: var(--faint);
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  border-radius: 4px;
-}
-.ns-model-caret:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-.ns-model-pop {
-  min-width: 300px;
-}
-.ns-model-opt {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 6px 8px;
-}
-.ns-model-opt[aria-selected="true"] {
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.ns-model-label {
-  white-space: nowrap;
-}
-.ns-model-id {
-  font-size: 11px;
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.ns-model-when {
-  margin-left: auto;
-  flex: none;
-  font-size: 11px;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-
 /* skill completion */
 .ns-promptbox {
   position: relative;
@@ -533,9 +530,10 @@
   z-index: 60;
   padding: 4px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  box-shadow: var(--shadow-md);
+  border-radius: 10px;
+  background: var(--raised);
+  box-shadow: var(--shadow-lg);
+  animation: ns-menu-in 0.12s ease-out;
 }
 .ns-split-menu button {
   display: flex;
@@ -544,7 +542,7 @@
   width: 100%;
   padding: 8px 8px 8px 10px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: none;
   color: var(--text);
   text-align: left;
@@ -585,8 +583,8 @@
 }
 
 @media (max-width: 700px) {
-  .ns-foot-hint {
-    display: none;
+  .ns-pill-text {
+    max-width: 150px;
   }
   /* A phone is too narrow for label, plan, two bars and a tag on one line:
      unwrapped, the label shrank to nothing and the tag sat on the bars. */
@@ -597,61 +595,7 @@
   }
 }
 
-/* effort, beside the model */
-.ns-model-row {
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-}
-.ns-model-row .ns-model {
-  flex: 1;
-  min-width: 0;
-}
-.ns-effort-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: none;
-  min-height: 36px;
-  padding: 0 8px 0 10px;
-  background: var(--panel);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 550;
-  cursor: pointer;
-}
-.ns-effort-btn[data-default] .ns-effort-val {
-  color: var(--faint);
-  font-weight: 450;
-}
-.ns-effort-btn svg {
-  color: var(--faint);
-}
-.ns-effort-btn:focus-visible,
-.ns-effort-btn[aria-expanded="true"] {
-  border-color: var(--accent);
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
-}
-.ns-effort-val {
-  min-width: 42px;
-  text-align: left;
-}
-.ns-effort-opt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
-}
-.ns-effort-opt[aria-selected="true"] {
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.ns-effort-note {
-  margin-left: auto;
-  font-size: 11px;
-}
+/* effort meter */
 .ns-meter {
   display: inline-flex;
   align-items: flex-end;
@@ -665,14 +609,4 @@
 }
 .ns-meter i[data-on] {
   background: var(--accent);
-}
-
-/* the prompt's hint row: the attach button sits in the line */
-.ns-prompt-head .att-pick {
-  width: 22px;
-  height: 22px;
-  align-self: center;
-}
-.ns-wt-hint .ns-tag {
-  margin-right: 6px;
 }

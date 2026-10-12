@@ -3,7 +3,8 @@
  *  agents it started inside itself, its background shells and monitors — as
  *  a small tab on the composer, and a list that rises from the tab while
  *  you point at it. The terminal shows these too; this is so the timeline
- *  does. */
+ *  does. A subagent's row goes to its session; an agent's opens what it is
+ *  doing (AgentView.tsx). */
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, useNow, type SessionWork } from "../../api";
@@ -12,6 +13,7 @@ import { Icon } from "../../components";
 import { titleOf, type SessionRow } from "../../lib/board";
 import { fmtCountdown } from "../../lib/format";
 import { hrefOf } from "../../route";
+import { AgentView, type OpenAgent } from "./AgentView";
 
 /** How often the open session's shells and agents are read again. */
 const POLL_MS = 3_000;
@@ -21,6 +23,9 @@ export function WorkStrip({ session, sessions }: { session: SessionRow; sessions
   const now = useNow(10_000);
   // Pinned open by a click or a tap; pointing at the tab opens it too.
   const [pinned, setPinned] = useState(false);
+  /** The agent whose view is open: kept as it was clicked, so the view
+   *  stays when the agent ends and leaves the list. */
+  const [open, setOpen] = useState<OpenAgent | null>(null);
   const kids = useMemo(
     () => sessions.filter((s) => s.parent === session.id && (s.status === "running" || s.status === "blocked")),
     [sessions, session.id],
@@ -35,7 +40,8 @@ export function WorkStrip({ session, sessions }: { session: SessionRow; sessions
     return () => removeEventListener("keydown", onKey);
   }, [pinned]);
   const total = kids.length + workflows.length + agents.length + shells.length;
-  if (total === 0) return null;
+  const view = open ? <AgentView sessionId={session.id} agent={open} onClose={() => setOpen(null)} /> : null;
+  if (total === 0) return view;
 
   const monitors = shells.filter((s) => s.monitor).length;
   const summary = [
@@ -49,7 +55,11 @@ export function WorkStrip({ session, sessions }: { session: SessionRow; sessions
     .join(" · ");
   const age = (since: number | null) => (since ? <span className="wk-age">{fmtCountdown(now - since)}</span> : null);
 
+  // Beside the strip, not in it: the strip lets the pointer through and
+  // stacks under the page's own layers.
   return (
+    <>
+    {view}
     <div className="wk" data-open={pinned || undefined}>
       <div className="wk-col">
       <div className="wk-pop">
@@ -69,7 +79,15 @@ export function WorkStrip({ session, sessions }: { session: SessionRow; sessions
           <div key={w.runId} className="wk-group">
             <Row mark={<span className="wk-pulse" aria-hidden="true" />} kind="workflow" name={w.name} age={age(w.since)} />
             {w.agents.map((a) => (
-              <Row key={a.id} sub mark={<span className="wk-tick" aria-hidden="true" />} kind={a.phase ?? "agent"} name={a.label} />
+              <Row
+                key={a.id}
+                sub
+                mark={<span className="wk-tick" aria-hidden="true" />}
+                kind={a.phase ?? "agent"}
+                name={a.label}
+                title={`Show what ${a.label || "it"} is doing`}
+                onOpen={() => setOpen({ id: a.id, kind: a.phase ?? "agent", name: a.label, since: null, from: `Workflow ${w.name}` })}
+              />
             ))}
           </div>
         ))}
@@ -80,7 +98,8 @@ export function WorkStrip({ session, sessions }: { session: SessionRow; sessions
             kind={a.name ?? "agent"}
             name={a.description}
             age={age(a.since)}
-            title={`${a.background ? "Background agent" : "Agent"}: ${a.description}`}
+            title={`${a.background ? "Background agent" : "Agent"}: ${a.description} — show what it is doing`}
+            onOpen={() => setOpen({ id: a.id, kind: a.name ?? "agent", name: a.description, since: a.since, from: "This session" })}
           />
         ))}
         {shells.map((sh) => (
@@ -107,6 +126,7 @@ export function WorkStrip({ session, sessions }: { session: SessionRow; sessions
       </button>
       </div>
     </div>
+    </>
   );
 }
 
@@ -114,7 +134,25 @@ function count(n: number, word: string): string | null {
   return n ? `${n} ${word}${n === 1 ? "" : "s"}` : null;
 }
 
-function Row({ href, mark, kind, name, age, title, sub }: { href?: string; mark: ReactNode; kind: string; name: string; age?: ReactNode; title?: string; sub?: boolean }) {
+function Row({
+  href,
+  onOpen,
+  mark,
+  kind,
+  name,
+  age,
+  title,
+  sub,
+}: {
+  href?: string;
+  onOpen?: () => void;
+  mark: ReactNode;
+  kind: string;
+  name: string;
+  age?: ReactNode;
+  title?: string;
+  sub?: boolean;
+}) {
   const body = (
     <>
       <span className="wk-mark">{mark}</span>
@@ -128,6 +166,10 @@ function Row({ href, mark, kind, name, age, title, sub }: { href?: string; mark:
     <a className={cls} href={href} title={title}>
       {body}
     </a>
+  ) : onOpen ? (
+    <button type="button" className={cls} title={title} onClick={onOpen}>
+      {body}
+    </button>
   ) : (
     <div className={cls} title={title}>
       {body}

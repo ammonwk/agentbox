@@ -1,0 +1,61 @@
+/* An in-process agent's view (AgentView.tsx), and the work strip's rows that
+   open one. `agv-` prefixed. */
+
+/* A row in the work strip's list that opens the agent: a link's look. */
+button.wk-item {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+button.wk-item.is-sub {
+  font-size: 12px;
+}
+button.wk-item:hover,
+button.wk-item:focus-visible {
+  background: var(--hover);
+}
+
+.agv {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+.agv-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.agv-state[data-state="done"] svg {
+  color: var(--success);
+}
+.agv-kind {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 18px;
+  color: var(--muted);
+}
+.agv-body {
+  height: min(68vh, 760px);
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  scrollbar-gutter: stable;
+}
+@media (max-width: 700px) {
+  .agv-body {
+    height: 64dvh;
+    padding: 10px;
+  }
+}
