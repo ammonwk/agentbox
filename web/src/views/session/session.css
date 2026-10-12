@@ -1803,8 +1803,9 @@ a.sx-imgpath:hover { color: var(--accent); }
   margin-inline: auto;
 }
 /* What the session waits on: a tab on the composer's top edge says how much,
- * and a list rises out of the composer while the pointer is on it, or after a
- * click on the tab. It lies over the end of the timeline; nothing moves. */
+ * and the list rises from the tab while the pointer is on the tab or the
+ * list, or after a click on the tab. It lies over the end of the timeline;
+ * nothing moves. */
 .cmp-dock {
   position: relative;
 }
@@ -1875,9 +1876,9 @@ a.sx-imgpath:hover { color: var(--accent); }
   visibility: visible;
   transition: opacity 0.14s, transform 0.14s, visibility 0s;
 }
-/* Only a pointer that hovers: a tap into the box on a phone opens nothing. */
+/* Only a pointer that hovers; a phone opens it with a tap on the tab. */
 @media (hover: hover) {
-  .cmp-dock:hover .wk-pop {
+  .wk:hover .wk-pop {
     opacity: 1;
     transform: none;
     visibility: visible;

@@ -1,9 +1,9 @@
 /** What the session waits on — the sessions it started that still run
  *  (subagents, teammates), its workflows and the agents each runs now, the
  *  agents it started inside itself, its background shells and monitors — as
- *  a small pill on the composer, and a list that rises out of the composer
- *  while you point at it. The terminal shows these too; this is so the
- *  timeline does. */
+ *  a small tab on the composer, and a list that rises from the tab while
+ *  you point at it. The terminal shows these too; this is so the timeline
+ *  does. */
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, useNow, type SessionWork } from "../../api";
@@ -19,7 +19,7 @@ const POLL_MS = 3_000;
 export function WorkStrip({ session, sessions }: { session: SessionRow; sessions: readonly SessionRow[] }) {
   const work = useWork(session);
   const now = useNow(10_000);
-  // Pinned open by a click or a tap; pointing at the composer opens it too.
+  // Pinned open by a click or a tap; pointing at the tab opens it too.
   const [pinned, setPinned] = useState(false);
   const kids = useMemo(
     () => sessions.filter((s) => s.parent === session.id && (s.status === "running" || s.status === "blocked")),

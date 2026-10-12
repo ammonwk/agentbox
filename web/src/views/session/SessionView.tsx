@@ -717,8 +717,8 @@ function Detail({
       </PrBase.Provider>
       </FamilyContext.Provider>
 
-      {/* What it waits on rises out of the composer while you point at it.
-          The terminal shows that itself. */}
+      {/* What it waits on: a tab on the composer, and a list that rises from
+          it while you point at the tab. The terminal shows that itself. */}
       <div className="cmp-dock">
         {tab === "terminal" ? null : <WorkStrip session={session} sessions={state.sessions} />}
         {/* Keyed by session: each one keeps its own draft (see drafts.ts),
