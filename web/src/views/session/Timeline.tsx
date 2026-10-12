@@ -810,9 +810,12 @@ function NowDoing({ rows }: { rows: Flat[] }) {
   if (r?.type === "tools") {
     const e = r.events[r.events.length - 1]!;
     if (e.status === "running") {
+      // An MCP tool by its own name, and its input only when it is not raw JSON.
+      const name = e.name.startsWith("mcp__") ? e.name.split("__").pop() : e.name;
+      const what = e.title || (/^\s*[[{]/.test(e.summary) ? "" : shortCommand(e.summary));
       return (
         <>
-          <b>{e.name}</b> {e.title || shortCommand(e.summary)}
+          <b>{name}</b> {what}
         </>
       );
     }
