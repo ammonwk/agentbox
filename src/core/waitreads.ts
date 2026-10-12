@@ -204,8 +204,10 @@ const UNTIL_MAX = 4_000;
 
 /**
  * One asking of an `until` command: `yes` with what it printed when it exits
- * 0, `no` (with its last line) when it exits 1. Any other exit, or not
- * finishing, throws: that is the command failing, not an answer. Run by
+ * 0, `no` (with its last line) when it exits 1 and writes nothing to stderr.
+ * Any other exit, an exit 1 with an error on stderr (a `gh` read that failed
+ * makes a test after it false), or not finishing, throws: that is the command
+ * failing to look, not an answer. Run by
  * `sh -c` in the directory the wait was made in, at the lowest priority, in
  * the server's environment (not the session's), told which wait and session
  * it answers for.
@@ -222,7 +224,8 @@ export async function readUntil(spec: UntilSpec, wait: number, session: string):
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   const said = out.trim();
   if (code === 0) return { yes: true, said: said.length > UNTIL_MAX ? `${said.slice(0, UNTIL_MAX)}\n(cut here, at ${UNTIL_MAX} characters)` : said };
-  if (code === 1) return { yes: false, said: said.split("\n").pop()!.slice(0, 200) };
+  const error = err.trim().split("\n").pop()!.slice(0, 300);
+  if (code === 1 && !error) return { yes: false, said: said.split("\n").pop()!.slice(0, 200) };
   if (code === 124 || code === 137) throw new Error(`the command did not finish in ${UNTIL_TIMEOUT_S}s`);
-  throw new Error(`the command exited ${code}${err.trim() ? `: ${err.trim().split("\n").pop()!.slice(0, 300)}` : ""} (0 means it happened, 1 not yet)`);
+  throw new Error(`the command exited ${code}${error ? `: ${error}` : ""} (0 means it happened, 1 with nothing on stderr not yet)`);
 }

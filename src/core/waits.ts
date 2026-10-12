@@ -89,7 +89,7 @@ const oneLine = (s: string, max: number): string => {
 export function describe(spec: WaitSpec): string {
   switch (spec.kind) {
     case "pr": {
-      if (spec.merged) return `PR #${spec.number} merging`;
+      if (spec.merged) return `PR #${spec.number} merging${spec.head ? ` from ${short(spec.head)}` : ""}`;
       const what = oneLine([...(spec.all ? ["every check"] : []), ...spec.checks].join(", "), 120);
       return `PR #${spec.number}: ${what}${spec.head ? ` on ${short(spec.head)}` : ""}`;
     }
@@ -128,7 +128,7 @@ export function parseSpec(raw: unknown): WaitSpec {
       const head = typeof o.head === "string" && o.head.trim() ? o.head.trim().toLowerCase() : null;
       if (head && !/^[0-9a-f]{7,40}$/.test(head)) throw new FleetError(400, `--head takes a commit (7 to 40 hex), not "${head}"`);
       const merged = o.merged === true;
-      if (merged && (checks.length || o.all === true || head)) throw new FleetError(400, "a wait for the merge is its own wait: arm one for the checks and another with --merged");
+      if (merged && (checks.length || o.all === true)) throw new FleetError(400, "a wait for the merge is its own wait: arm one for the checks and another with --merged");
       return { kind: "pr", repo: repo(), number: whole("number", 1e9), head, all: !merged && (o.all === true || checks.length === 0), checks, merged };
     }
     case "run":
@@ -159,20 +159,22 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
   const name = `PR #${spec.number}`;
   if (pr.state === "MERGED") return { end: { how: "happened", text: `${name} merged.` } };
   if (pr.state === "CLOSED") return { end: { how: "stuck", text: `${name} was closed without merging.` } };
-  if (spec.merged) return { seen: "open, not merged" };
 
-  const want = spec.head ?? memo.head ?? pr.head;
+  const want = spec.merged ? (spec.head ?? pr.head) : (spec.head ?? memo.head ?? pr.head);
   if (!sameCommit(pr.head, want)) {
     if (spec.head && !memo.head && now - createdAt < HEAD_GRACE_MS) return { seen: `GitHub still shows head ${short(pr.head)}, not ${short(want)}`, memo };
     return {
       end: {
         how: "stuck",
-        text: memo.head
-          ? `${name}'s head moved to ${short(pr.head)}; this wait was for ${short(want)}, whose checks no longer decide anything. Arm it again for the new head.`
-          : `${name}'s head is ${short(pr.head)}, and ${short(want)} never became it. Check the push went to this PR's branch.`,
+        text: spec.merged
+          ? `${name}'s head moved to ${short(pr.head)} before it merged; this wait was for ${short(want)}. Arm it again with --head ${short(pr.head)}.`
+          : memo.head
+            ? `${name}'s head moved to ${short(pr.head)}; this wait was for ${short(want)}, whose checks no longer decide anything. Arm it again for the new head.`
+            : `${name}'s head is ${short(pr.head)}, and ${short(want)} never became it. Check the push went to this PR's branch.`,
       },
     };
   }
+  if (spec.merged) return { seen: `open on ${short(pr.head)}, not merged`, memo: spec.head ? { head: pr.head } : {} };
   const base = { head: pr.head };
 
   const asked = spec.checks.map((n) => ({ n, found: pr.checks.filter((c) => named(c.name, n)) }));

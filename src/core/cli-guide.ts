@@ -44,7 +44,10 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
                                     # those named (a name takes its shards too: "API Tests
                                     # (shard 1/3)"). A check that fails ends it at once and
                                     # is named
-    agentbox wait pr <n> --merged   # its merge
+    agentbox wait pr <n> --merged [--head <sha>]
+                                    # its merge (or its closing); with --head, also its
+                                    # head moving off that commit: the wait for a PR
+                                    # yours is stacked on. Use this, not an until over gh
     agentbox wait run <id|url> [-R owner/repo]   # a GitHub Actions run concluding
     agentbox wait job [--name N] -- <command…>   # start a long command as a systemd unit of
                                     # its own, in this directory and environment, and be
@@ -56,9 +59,14 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox wait until [--every 2m] -- <command>
                                     # run in this directory every --every (two minutes at
                                     # most each time, in the server's environment): exit 0
-                                    # is the event and what it prints is said; exit 1 is
-                                    # not yet; any other exit, five times running, is a
-                                    # wait that cannot watch
+                                    # is the event and what it prints is said; exit 1
+                                    # with nothing on stderr is not yet; any other exit,
+                                    # or an exit 1 with an error on stderr, is a look that
+                                    # failed, and five running end the wait as one that
+                                    # cannot watch. One argument is a shell command line;
+                                    # several are an argv (\`-- bash -c '<script>'\`).
+                                    # Let a read that fails fail: \`|| exit 2\`, not
+                                    # \`2>/dev/null\` then a test that reads as not yet
     agentbox wait time 45m          # nothing but the time
     agentbox waits [--mine | --session <id>] [--all] [--json]
                                     # what is waited on and what the last look found;

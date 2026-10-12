@@ -23,13 +23,17 @@ const USAGE = `wait takes what to wait for:
                         its checks concluding on a head: every check, with --require
                         those among them (each must report), or with --only just those
                         (a name takes its shards too)
-  agentbox wait pr <n> --merged      its merge
+  agentbox wait pr <n> --merged [--head <sha>]
+                        its merge; with --head, also its head moving off that commit
+                        (a PR yours is stacked on)
   agentbox wait run <run id|url> [-R owner/repo]     a GitHub Actions run concluding
   agentbox wait job [--name N] -- <command…>         start a long command as a unit of its
                         own, which outlives this session's process; told when it ends
   agentbox wait session <id>...      the first of those sessions to end its turn or stop
   agentbox wait until [--every 2m] -- <command>      asked again and again: exit 0 is the
-                        event (what it prints is said), exit 1 is not yet
+                        event (what it prints is said), exit 1 with nothing on stderr is
+                        not yet, anything else is a look that failed. One argument is a
+                        shell line, several an argv. For a PR, use wait pr
   agentbox wait time <45m>           nothing but the time
 all take --timeout <3h> and --for <session id>.`;
 
@@ -71,7 +75,7 @@ export async function wait(api: Api, args: string[]): Promise<number> {
     case "until": {
       if (rest.length === 0) throw new Error("wait until needs the command to ask, after --: exit 0 when it has happened, 1 while it has not");
       const every = str(flags.get("every"));
-      spec = { kind: "until", cmd: rest.join(" "), cwd: process.cwd(), ...(every ? { everyMs: duration(every, "--every") } : {}) };
+      spec = { kind: "until", cmd: commandLine(rest), cwd: process.cwd(), ...(every ? { everyMs: duration(every, "--every") } : {}) };
       break;
     }
     case "time":
@@ -104,6 +108,9 @@ export async function wait(api: Api, args: string[]): Promise<number> {
 
 const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/** One argument is a shell command line; several are an argv, each quoted, so `bash -c '<script>'` reaches sh whole. */
+export const commandLine = (argv: string[]): string => (argv.length === 1 ? argv[0]! : argv.map(shq).join(" "));
+
 /**
  * Start the command as a systemd service of the user's own, in this
  * directory and environment. It is no part of the session's process tree, so
@@ -126,7 +133,7 @@ function startJob(argv: string[], name: string | undefined): Extract<WaitSpec, {
   const runtime = join(process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}`, "agentbox-jobs");
   mkdirSync(runtime, { recursive: true, mode: 0o700 });
   const launcher = join(runtime, `${id}.sh`);
-  const command = argv.length === 1 ? argv[0]! : argv.map(shq).join(" ");
+  const command = commandLine(argv);
   const env = Object.entries(process.env)
     .filter(([k, v]) => v !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
     .map(([k, v]) => `export ${k}=${shq(v!)}`)

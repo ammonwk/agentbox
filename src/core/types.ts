@@ -1181,14 +1181,14 @@ export type WaitSpec =
       kind: "pr";
       repo: string;
       number: number;
-      /** The head the checks are waited for on; null takes the one first read. */
+      /** The head the checks are waited for on, or the merge of; null takes the one first read (for a merge, any head). */
       head: string | null;
       /** Every check on the head has concluded. */
       all: boolean;
       /** Checks that must be there and concluded. A name also takes the
        *  checks that begin with it and a space: `API Tests (shard 1/3)`. */
       checks: string[];
-      /** Only its merge (or its closing) ends the wait. */
+      /** Only its merge, its closing, or a head named being replaced ends the wait. */
       merged: boolean;
     }
   /** A GitHub Actions run concluding. */
