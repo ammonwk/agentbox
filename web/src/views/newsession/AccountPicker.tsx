@@ -11,7 +11,8 @@ import { scrollActiveIntoView, useDismiss, useFloating } from "./popover";
  * the account it will actually land on — for Auto, the balancer's current
  * pick — and the open list is the placement preview: every account with its
  * 5-hour and weekly use, the room the balancer ranks by, and why an account
- * is out.
+ * is out. `pill` is the new-session dialog's quiet trigger; the composer's
+ * limit card keeps the full-width one with its bars.
  */
 export function AccountPicker({
   accounts,
@@ -22,6 +23,7 @@ export function AccountPicker({
   placing,
   placeErr,
   claimIdleMin,
+  pill,
 }: {
   /** This provider's accounts. */
   accounts: AccountView[];
@@ -33,12 +35,13 @@ export function AccountPicker({
   placing: boolean;
   placeErr: string | null;
   claimIdleMin: number;
+  pill?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const style = useFloating(btnRef, open, 440);
+  const style = useFloating(btnRef, open, 440, pill ? 500 : 0, pill ? "end" : "start");
   useDismiss(open, () => setOpen(false), [btnRef, listRef]);
 
   const cand = (id: string): Candidate | null => placement?.candidates.find((c) => c.accountId === id) ?? null;
@@ -97,8 +100,38 @@ export function AccountPicker({
   }
 
   const listId = "ns-acct-list";
+  const autoNote = manual && autoPick && autoPick.id !== manual.id ? `Auto would pick ${autoPick.label}.` : "";
+  const authOff = shown && shown.auth.state !== "ok" ? shown.auth.state : null;
   return (
     <>
+      {pill ? (
+        <button
+          ref={btnRef}
+          type="button"
+          className="ns-pill"
+          data-tone={none ? "danger" : pinnedOut || authOff ? "warn" : undefined}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={listId}
+          aria-activedescendant={open ? `ns-acct-${active}` : undefined}
+          title={
+            [pinnedOut ? `${pinnedOut.reason ?? "Auto would not place a session here"}.` : "", authOff ? `Login: ${authOff}.` : "", autoNote]
+              .filter(Boolean)
+              .join(" ") || undefined
+          }
+          onClick={() => setOpen((o) => !o)}
+          onKeyDown={onKeyDown}
+        >
+          <span className="sr-only">Account: </span>
+          {shown && !none ? (
+            <span className="acct-dot" aria-hidden="true" style={{ ["--acct" as string]: `var(--acct-${accountHue(shown.id, allAccounts)})` }} />
+          ) : null}
+          <span className="ns-pill-text">{none ? "No account can take it" : shown ? shown.label : accounts.length === 0 ? "No account" : "Auto"}</span>
+          {!manual && shown && !none ? <span className="ns-pill-tag">auto</span> : null}
+          {placing ? <Spinner size={11} /> : null}
+          <Icon.chevronDown size={13} className="ns-pill-chev" />
+        </button>
+      ) : (
       <button
         ref={btnRef}
         type="button"
@@ -125,10 +158,11 @@ export function AccountPicker({
         {placing ? <Spinner size={12} /> : null}
         <Icon.chevronDown size={14} />
       </button>
-      {manual && (pinnedOut || (autoPick && autoPick.id !== manual.id)) ? (
+      )}
+      {!pill && manual && (pinnedOut || autoNote) ? (
         <span className={`ns-acct-note${pinnedOut ? " warn" : ""}`}>
           {pinnedOut ? `${pinnedOut.reason ?? "Auto would not place a session here"}. ` : ""}
-          {autoPick && autoPick.id !== manual.id ? `Auto would pick ${autoPick.label}.` : ""}
+          {autoNote}
         </span>
       ) : null}
 
@@ -145,7 +179,6 @@ export function AccountPicker({
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => pick("auto")}
           >
-            <span className="ns-radio" aria-hidden="true" />
             <div className="ns-acct-body">
               <div className="ns-acct-title">
                 <strong>Auto</strong>
@@ -161,6 +194,7 @@ export function AccountPicker({
                 </p>
               ) : null}
             </div>
+            <span className="ns-acct-check">{value === "auto" ? <Icon.check size={14} /> : null}</span>
           </div>
           {ordered.map((a, i) => {
             const c = cand(a.id);
@@ -178,7 +212,6 @@ export function AccountPicker({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => pick(a.id)}
               >
-                <span className="ns-radio" aria-hidden="true" />
                 <div className="ns-acct-body">
                   <div className="ns-acct-title">
                     <AccountLine account={a} all={allAccounts} candidate={c} />
@@ -193,6 +226,7 @@ export function AccountPicker({
                     <small>room</small>
                   </span>
                 ) : null}
+                <span className="ns-acct-check">{value === a.id ? <Icon.check size={14} /> : null}</span>
               </div>
             );
           })}

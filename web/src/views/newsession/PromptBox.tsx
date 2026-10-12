@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Ref } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import type { SkillInfo } from "../../../../src/core/types";
 import { AttachFrame, type Attachments } from "../../attachments";
 import { recallPrompt, type PromptHistoryEntry } from "../../lib/prompthistory";
@@ -7,7 +7,7 @@ import { useSkillComplete } from "./skillcomplete";
 /**
  * The prompt, with `/skill` completion (skillcomplete.tsx) and, while empty,
  * earlier prompts on Up. Enter submits, Shift+Enter is a new line. Images
- * pasted or dropped in attach to it.
+ * pasted or dropped in attach to it. `footer` sits inside the box, under them.
  */
 export function PromptBox({
   value,
@@ -18,6 +18,7 @@ export function PromptBox({
   attachments,
   onSubmit,
   id,
+  footer,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -27,6 +28,7 @@ export function PromptBox({
   attachments: Attachments;
   onSubmit: () => void;
   id?: string;
+  footer?: ReactNode;
 }) {
   const localRef = useRef<HTMLTextAreaElement | null>(null);
   const skill = useSkillComplete({ value, onChange, skills, textareaRef: localRef, onComplete: leaveHistory });
@@ -82,7 +84,7 @@ export function PromptBox({
   }
 
   return (
-    <AttachFrame a={attachments} className="ns-promptbox">
+    <AttachFrame a={attachments} className="ns-promptbox" footer={footer}>
       <textarea
         id={id}
         className="ns-prompt"
@@ -92,8 +94,9 @@ export function PromptBox({
           else if (textareaRef) textareaRef.current = el;
         }}
         value={value}
-        placeholder="What should it do? Type / for skills; paste or drop images."
-        rows={6}
+        placeholder="What should it do?"
+        aria-label="Prompt"
+        rows={5}
         {...skill.props}
         aria-busy={historyBusy}
         onChange={(e) => {

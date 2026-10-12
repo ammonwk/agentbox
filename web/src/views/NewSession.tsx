@@ -7,8 +7,10 @@ import { AttachButton, useAttachments } from "../attachments";
 import type { PromptHistoryEntry } from "../lib/prompthistory";
 import { Button, Icon, Modal } from "../components";
 import {
+  loadFolderChoices,
   loadPrefs,
   loadRepoChoices,
+  noteFolderChoice,
   noteRepoChoice,
   parseWorktreeRef,
   promptPrs,
@@ -27,17 +29,18 @@ import { ModelPicker } from "./newsession/ModelPicker";
 import { EffortPicker } from "./newsession/EffortPicker";
 import { PromptBox } from "./newsession/PromptBox";
 import { WorktreeField } from "./newsession/WorktreeField";
+import { WherePicker } from "./newsession/WherePicker";
 import { WhenField } from "./newsession/WhenField";
+import { Dropdown } from "./newsession/Dropdown";
 import { useDismiss, useFloating } from "./newsession/popover";
 import "./newsession.css";
 
-/** The select's extra row: picking it opens the "other repo" input below. */
-const OTHER = "__other__";
-
 /**
  * Start a session: which CLI, where, what to do, on which model and account.
+ * The prompt is the dialog; every other choice is a pill that opens a menu —
+ * agent and where above it, account, model and effort inside its bottom edge.
  * Every choice is remembered (lib/newsession.ts), so the next session starts
- * the way the last one did; the account picker carries the balancer's
+ * the way the last one did; the account menu carries the balancer's
  * reasoning, so "Auto" is never a black box.
  */
 export function NewSession({
@@ -219,13 +222,7 @@ export function NewSession({
   // names wins: the effect above puts the session on it. Every pick is
   // remembered, so the list sorts by most recently chosen next time.
   function pickRepo(id: string) {
-    if (id === OTHER) {
-      setOtherRef("");
-      setOtherErr(null);
-      setOtherOpen(true);
-      return;
-    }
-    setOtherOpen(false);
+    setWhere("repo");
     noteRepoChoice(id);
     setRepoChoices((c) => ({ ...c, [id]: Date.now() }));
     setRepoId(id);
@@ -237,40 +234,35 @@ export function NewSession({
     setWtText("");
   }
 
-  // "Select other…": register a repo the list does not know — a local path or
-  // an owner/repo slug — and run against it from now on. The server resolves
-  // the branch and the GitHub slug, so a slug that is not local yet clones
-  // first and can take a while.
-  const [otherOpen, setOtherOpen] = useState(false);
-  const [otherRef, setOtherRef] = useState("");
+  // A folder picked or typed in the Where menu, remembered for the next time.
+  const [folderChoices, setFolderChoices] = useState<Record<string, number>>(loadFolderChoices);
+  function pickFolder(p: string) {
+    setWhere("path");
+    setPath(p);
+    noteFolderChoice(p);
+    setFolderChoices((c) => ({ ...c, [p]: Date.now() }));
+  }
+
+  // "Add repository …" in the Where menu: register a repo the list does not
+  // know — a local path or an owner/repo slug — and run against it from now
+  // on. The server resolves the branch and the GitHub slug, so a slug that is
+  // not local yet clones first and can take a while.
   const [otherBusy, setOtherBusy] = useState(false);
   const [otherErr, setOtherErr] = useState<string | null>(null);
-  const otherInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (otherOpen) otherInputRef.current?.focus();
-  }, [otherOpen]);
-  // Escape and an outside press close the input, not the dialog (the Modal's
-  // own Escape listener is document-capture; this one is window-capture).
-  useDismiss(otherOpen, () => setOtherOpen(false), [otherInputRef]);
 
-  async function addOther() {
-    const value = otherRef.trim();
+  async function addOther(value: string) {
     if (!value || otherBusy) return;
     setOtherBusy(true);
     setOtherErr(null);
     try {
       const r = await api.addRepo(value);
-      if (!r) {
-        // The mock registers nothing; closing is its no-op.
-        setOtherOpen(false);
-        return;
-      }
+      // The mock registers nothing.
+      if (!r) return;
       noteRepoChoice(r.id);
       setRepoChoices((c) => ({ ...c, [r.id]: Date.now() }));
       setAdded((a) => [...a.filter((x) => x.id !== r.id), r]);
       setRepoId(r.id);
-      setOtherOpen(false);
-      setOtherRef("");
+      setWhere("repo");
       if (promptPrs(prompt, prsOf(state.prs, r), r.fullName).length > 0) return;
       const def = worktreeDefault(r);
       if (def !== null) {
@@ -299,7 +291,10 @@ export function NewSession({
     }
   }, [worktree, wt.kind]);
   const skills = useMemo(() => skillsFor(state.skills, provider, where === "repo" ? repo : null), [state.skills, provider, where, repo]);
-  const folders = useMemo(() => recentFolders(state.sessions), [state.sessions]);
+  const folders = useMemo(
+    () => recentFolders(state.sessions, folderChoices, knownRepos.map((r) => r.ref)),
+    [state.sessions, folderChoices, knownRepos],
+  );
 
   const noEligible = !manual && placement?.mode === "none";
   const whereOk = where === "repo" ? !!repoId : path.trim().length > 0;
@@ -344,6 +339,7 @@ export function NewSession({
         return;
       }
       const r = await api.createSession(input);
+      if (where === "path") noteFolderChoice(path.trim());
       savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider });
       onCreated(r.session.id);
     } catch (e) {
@@ -352,7 +348,11 @@ export function NewSession({
     }
   }
 
-  const defaultModel = state.settings.models[provider] ? `Default (${state.settings.models[provider]})` : `${PROVIDER_LABEL[provider]}'s default`;
+  const hint = where === "repo" && !worktree ? worktreeHint(wt, repo?.ref ?? null, repoPrs) : undefined;
+  const wtNote =
+    where === "repo" && worktree && mentioned.length > 1
+      ? `The prompt names ${mentioned.length} PRs (${mentioned.map((n) => `#${n}`).join(", ")}), so it gets a new worktree.`
+      : undefined;
 
   return (
     <Modal title="New session" onClose={onClose} wide>
@@ -376,188 +376,107 @@ export function NewSession({
           }
         }}
       >
-        <div className="ns-top">
-          <div className="field">
-            <span className="field-label" id="ns-agent">
-              Agent
-            </span>
-            <div className="seg ns-providers" role="group" aria-labelledby="ns-agent">
-              {PROVIDERS.map((p, i) => {
-                const info = state.providers.find((x) => x.id === p);
-                const ok = !!info?.installed;
-                return (
-                  <button
-                    key={p}
-                    type="button"
-                    aria-pressed={provider === p}
-                    disabled={!ok}
-                    title={ok ? `${PROVIDER_LABEL[p]} ${info?.version ?? ""} · Alt+${i + 1}`.trim() : `${PROVIDER_LABEL[p]} is not installed`}
-                    onClick={() => setProvider(p)}
-                  >
-                    <span className={`ns-pdot prov-${p}`} aria-hidden="true" />
-                    {PROVIDER_LABEL[p]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="field ns-where-field">
-            <span className="field-label" id="ns-where">
-              Where
-            </span>
-            <div className="seg" role="group" aria-labelledby="ns-where">
-              <button type="button" aria-pressed={where === "repo"} disabled={state.repos.length === 0} onClick={() => setWhere("repo")}>
-                <Icon.branch size={13} />
-                Repository
-              </button>
-              <button type="button" aria-pressed={where === "path"} onClick={() => setWhere("path")}>
-                <Icon.folder size={13} />
-                Folder
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {where === "repo" ? (
-          <>
-            <div className="ns-where">
-              <select aria-label="Repository" value={repoId} onChange={(e) => pickRepo(e.target.value)}>
-                {repos.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.displayName} — {r.fullName ?? r.ref}
-                  </option>
-                ))}
-                <option value={OTHER}>Select other…</option>
-              </select>
-              <WorktreeField on={worktree} onToggle={setWorktree} text={wtText} onText={setWtText} prs={repoPrs} />
-            </div>
-            {otherOpen ? (
-              <>
-                <input
-                  ref={otherInputRef}
-                  aria-label="Repository path or owner/repo slug"
-                  className="mono"
-                  placeholder="/path/to/repo or owner/repo"
-                  value={otherRef}
-                  disabled={otherBusy}
-                  spellCheck={false}
-                  autoComplete="off"
-                  onChange={(e) => setOtherRef(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Enter would submit the whole dialog: here it registers
-                    // the repo instead. Escape is useDismiss's.
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void addOther();
-                    }
-                  }}
-                />
-                {otherErr ? (
-                  <p className="error-line" role="alert">
-                    {otherErr}
-                  </p>
-                ) : null}
-              </>
-            ) : null}
-            {!worktree ? (
-              <p className="ns-wt-hint">
-                {wtFromPrompt ? <span className="ns-tag">from the prompt</span> : null}
-                {worktreeHint(wt, repo?.ref ?? null, repoPrs)}
-              </p>
-            ) : mentioned.length > 1 ? (
-              <p className="ns-wt-hint">
-                The prompt names {mentioned.length} PRs ({mentioned.map((n) => `#${n}`).join(", ")}), so it gets a new worktree; untick to pick one.
-              </p>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <input
-              aria-label="Folder path"
-              className="mono"
-              placeholder="/home/you/code/project"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              spellCheck={false}
-              list="ns-folders"
-            />
-            <datalist id="ns-folders">
-              {folders.map((f) => (
-                <option key={f} value={f} />
-              ))}
-            </datalist>
-          </>
-        )}
-
-        <div className="field">
-          <label className="field-head ns-prompt-head" htmlFor="ns-prompt">
-            <span className="field-label">Prompt</span>
-            <span className="field-hint">
-              {mode === "schedule" ? "Needed to schedule." : "Optional."} <kbd>/</kbd> for skills{skills.length ? ` (${skills.length})` : ""}, <kbd>↑</kbd> for history when empty, paste images.
-              <AttachButton a={images} />
-              {prompt ? (
-                <button type="button" className="ns-linkbtn" onClick={() => setPrompt("")}>
-                  Clear
-                </button>
-              ) : null}
-            </span>
-          </label>
-          <PromptBox id="ns-prompt" value={prompt} onChange={setPrompt} skills={skills} history={history} textareaRef={promptRef} attachments={images} onSubmit={() => void submit()} />
-        </div>
-
-        <div className="field">
-          <span className="field-label ns-label">Account</span>
-          <AccountPicker
-            accounts={accounts}
-            allAccounts={state.accounts}
-            value={accountId}
-            onChange={(id) => setChoice({ accountId: id })}
-            placement={placement}
-            placing={placing}
-            placeErr={placeErr}
-            claimIdleMin={b.claimIdleMin}
+        <div className="ns-row">
+          <AgentPicker state={state} value={provider} onChange={setProvider} />
+          <WherePicker
+            repos={repos}
+            folders={folders}
+            where={where}
+            repoId={repoId}
+            path={path}
+            adding={otherBusy}
+            onRepo={pickRepo}
+            onFolder={pickFolder}
+            onAddRepo={(v) => void addOther(v)}
           />
+          {where === "repo" && repo ? (
+            <WorktreeField on={worktree} onToggle={setWorktree} text={wtText} onText={setWtText} prs={repoPrs} hint={hint} fromPrompt={wtFromPrompt} note={wtNote} />
+          ) : null}
         </div>
 
-        <div className="field">
-          <label className="field-label ns-label" htmlFor="ns-model">
-            Model
-          </label>
-          <div className="ns-model-row">
-            <ModelPicker
-              id="ns-model"
-              models={models}
-              value={model}
-              onChange={(m) => setChoice({ model: m })}
-              defaultLabel={defaultModel}
-            />
-            {efforts.length ? <EffortPicker levels={efforts} value={effort} onChange={(e) => setChoice({ effort: e })} /> : null}
-          </div>
-        </div>
+        <PromptBox
+          id="ns-prompt"
+          value={prompt}
+          onChange={setPrompt}
+          skills={skills}
+          history={history}
+          textareaRef={promptRef}
+          attachments={images}
+          onSubmit={() => void submit()}
+          footer={
+            <div className="ns-bar">
+              <AttachButton a={images} />
+              <AccountPicker
+                pill
+                accounts={accounts}
+                allAccounts={state.accounts}
+                value={accountId}
+                onChange={(id) => setChoice({ accountId: id })}
+                placement={placement}
+                placing={placing}
+                placeErr={placeErr}
+                claimIdleMin={b.claimIdleMin}
+              />
+              <ModelPicker
+                models={models}
+                value={model}
+                onChange={(m) => setChoice({ model: m })}
+                defaultId={state.settings.models[provider] || null}
+                agent={PROVIDER_LABEL[provider]}
+              />
+              {efforts.length ? <EffortPicker levels={efforts} value={effort} onChange={(e) => setChoice({ effort: e })} /> : null}
+            </div>
+          }
+        />
 
         {mode === "schedule" ? <WhenField value={when} onChange={setWhen} inputRef={whenRef} /> : null}
 
-        {error ? (
+        {otherErr || error ? (
           <p className="error-line" role="alert">
-            {error}
+            {otherErr ? `Could not add the repository: ${otherErr}` : error}
           </p>
         ) : null}
 
         <div className="modal-actions">
-          <span className="ns-foot-hint faint">
-            {mode === "schedule" && !prompt.trim() ? (
-              "A scheduled session needs a prompt"
-            ) : (
-              <>
-                <kbd>Enter</kbd> to {mode === "now" ? "start" : "schedule"} · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line
-              </>
-            )}
-          </span>
-          <Button onClick={onClose}>Cancel</Button>
+          {mode === "schedule" && !prompt.trim() ? <span className="ns-foot-hint faint">A scheduled session needs a prompt</span> : null}
           <StartButton mode={mode} onMode={setMode} busy={busy} disabled={!canSubmit} />
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** Which CLI: the installed ones, with their versions. */
+function AgentPicker({ state, value, onChange }: { state: AppState; value: ProviderId; onChange: (p: ProviderId) => void }) {
+  return (
+    <Dropdown
+      label="Agent"
+      width={220}
+      selected={value}
+      onPick={(k) => onChange(k as ProviderId)}
+      trigger={
+        <>
+          <span className={`ns-pdot prov-${value}`} aria-hidden="true" />
+          <span className="ns-pill-text">{PROVIDER_LABEL[value]}</span>
+        </>
+      }
+      items={PROVIDERS.map((p, i) => {
+        const info = state.providers.find((x) => x.id === p);
+        return {
+          key: p,
+          disabled: !info?.installed,
+          children: (
+            <>
+              <span className={`ns-pdot prov-${p}`} aria-hidden="true" />
+              <span className="ns-item-main">{PROVIDER_LABEL[p]}</span>
+              <span className="ns-item-sub" title={info?.installed ? `Alt+${i + 1}` : undefined}>
+                {info?.installed ? (info.version ?? "") : "not installed"}
+              </span>
+            </>
+          ),
+        };
+      })}
+    />
   );
 }
 
