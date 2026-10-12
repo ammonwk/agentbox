@@ -51,8 +51,8 @@ import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
-import type { SessionWork } from "../../src/core/work";
-export type { SessionWork, WorkAgent, WorkShell } from "../../src/core/work";
+import type { AgentTimeline, SessionWork } from "../../src/core/work";
+export type { AgentTimeline, SessionWork, WorkAgent, WorkShell } from "../../src/core/work";
 export * from "./lib/format";
 
 // ------------------------------------------------------------------- mock
@@ -256,6 +256,9 @@ export const api = {
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
   load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
   work: (id: string) => get<SessionWork>(`/api/sessions/${enc(id)}/work`),
+  /** One of its in-process agents' transcript: the newest page, or what came after `since`. */
+  agentTimeline: (id: string, agentId: string, since: string | null) =>
+    get<AgentTimeline>(`/api/sessions/${enc(id)}/agents/${enc(agentId)}/timeline${since ? `?since=${encodeURIComponent(since)}` : ""}`),
 
   // accounts
   addAccount: (provider: ProviderId, label?: string) =>

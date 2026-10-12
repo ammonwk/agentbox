@@ -396,6 +396,44 @@ export function Timeline({ session }: { session: Session }) {
   );
 }
 
+/**
+ * An agent's work, every step in view, for the agents a session runs inside
+ * itself (AgentView.tsx): the same rows as the timeline, without the folding
+ * into turns — one agent's run is one turn, and its steps are the point. What
+ * it was asked was not typed by you, so it is framed as `from` sent it.
+ */
+export function AgentSteps({ events, live, from }: { events: readonly TimelineEvent[]; live: boolean; from: string }) {
+  const rows = useMemo(() => groupTimeline(events), [events]);
+  const now = useNow(live);
+  return (
+    <div className="tl-stream">
+      {rows.map((r) =>
+        r.type === "tools" ? (
+          <ToolRun key={r.id} events={r.events} now={now} />
+        ) : r.type === "idle" ? (
+          <IdleRow key={r.id} events={r.events} />
+        ) : r.type === "ask" ? (
+          <AskRow key={r.event.id} ev={r.event} />
+        ) : r.type === "sent" ? (
+          <SentRow key={r.event.id} ev={r.event} send={r.send} />
+        ) : r.type === "event" && r.event.kind === "user" ? (
+          <div key={r.event.id} className="tl-user tl-sent" data-ev={r.event.id}>
+            <div className="tl-who">
+              <Icon.send size={12} /> {from}
+              <time className="tl-time">{fmtHourMin(r.event.at)}</time>
+            </div>
+            <Clamp lines={8}>
+              <Markdown text={r.event.text} />
+            </Clamp>
+          </div>
+        ) : r.type === "event" ? (
+          <EventRow key={r.event.id} ev={r.event} />
+        ) : null,
+      )}
+    </div>
+  );
+}
+
 /** Who "you" are, for the picture beside your messages. */
 const Me = createContext<{ name: string; github: string }>({ name: "", github: "" });
 
