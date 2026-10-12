@@ -86,33 +86,33 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding-bottom: 16px;
+  padding: 2px 0 16px;
   scrollbar-gutter: stable;
 }
-/* Search and the sort menu, above everything that scrolls. */
+/* Search and the sort menu, above everything that scrolls. The search box is
+ * the composer's: rounded, a lighter ground, a hairline border, no ring. */
 .rail-top {
   display: flex;
   align-items: center;
   gap: 4px;
   flex: none;
-  padding: 8px 8px 0;
+  padding: 10px 8px 0;
 }
 .rail-search {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex: 1;
   min-width: 0;
-  height: 30px;
-  padding: 0 6px 0 9px;
+  height: 34px;
+  padding: 0 7px 0 11px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
+  border-radius: 12px;
+  background: var(--raised);
   color: var(--faint);
 }
 .rail-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  border-color: var(--border-strong);
 }
 .rail-search input,
 .rail-search input:focus {
@@ -128,6 +128,7 @@
 }
 .rail-search kbd {
   flex: none;
+  opacity: 0.7;
 }
 .rail-sort {
   position: relative;
@@ -137,10 +138,10 @@
   position: relative;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   background: none;
   color: var(--faint);
   cursor: pointer;
@@ -150,26 +151,33 @@
   color: var(--text);
   background: var(--hover);
 }
-/* Active and Inactive: under the search, the same underline as the session tabs. */
+/* Active and Inactive: a two-way switch under the search. The chosen side is
+ * a raised chip on a sunken track; no accent, so the list keeps the colour. */
 .rail-views {
   display: flex;
   flex: none;
   gap: 2px;
-  padding: 4px 8px 0;
-  border-bottom: 1px solid var(--border);
+  margin: 8px 8px 6px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 .rail-view {
   flex: 1;
+  height: 26px;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-radius: 8px;
   background: none;
-  padding: 6px 8px;
+  padding: 0 8px;
   color: var(--muted);
   font: inherit;
   font-size: 12.5px;
   cursor: pointer;
+  transition: background 0.12s, color 0.12s;
 }
 .rail-view span {
+  margin-left: 2px;
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
@@ -181,7 +189,8 @@
 }
 .rail-view[aria-selected="true"] {
   color: var(--text);
-  border-bottom-color: var(--accent);
+  background: var(--raised);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
   font-weight: 600;
 }
 .rail-menu {
@@ -190,10 +199,10 @@
   right: 0;
   z-index: 20;
   min-width: 180px;
-  padding: 4px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--raised);
   box-shadow: var(--shadow-md);
 }
 .rail-menu-label {
@@ -209,10 +218,10 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  min-height: 28px;
+  min-height: 30px;
   padding: 0 8px 0 4px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 8px;
   background: none;
   color: var(--text);
   font-size: 12.5px;
@@ -234,28 +243,31 @@
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
-/* See closed: folded under the list, loads as it scrolls. */
+/* See closed: folded under the list, loads as it scrolls. A quiet line, the
+ * way a finished turn's trace is. */
 .rail-closed {
-  margin-top: 8px;
-  border-top: 1px solid var(--border);
+  margin-top: 10px;
 }
 .rail-closed-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  min-height: 34px;
-  padding: 0 12px;
+  width: calc(100% - 16px);
+  min-height: 32px;
+  margin: 0 8px;
+  padding: 0 9px;
   border: 0;
+  border-radius: 10px;
   background: none;
   color: var(--faint);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   text-align: left;
   cursor: pointer;
 }
 .rail-closed-toggle:hover {
   color: var(--text);
+  background: var(--hover);
 }
 .rail-closed .rail-title {
   color: var(--muted);
@@ -265,26 +277,27 @@
   height: 1px;
 }
 .rail-err {
-  margin: 8px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
+  margin: 8px 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--danger) 12%, var(--panel));
   color: var(--danger);
   font-size: 12px;
 }
 .rail-none {
-  padding: 16px 14px;
+  padding: 16px 17px;
   font-size: 12.5px;
   color: var(--muted);
 }
+/* A section's name, in line with the rows' text. */
 .rail-label {
   position: sticky;
   top: 0;
   z-index: 1;
   background: var(--panel);
-  padding: 10px 12px 4px;
+  padding: 12px 17px 5px;
   font-size: 10.5px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--faint);
@@ -304,27 +317,32 @@
   color: var(--warning);
 }
 /* One line per session: status, title, age. The account, provider (when it
- * is the usual one) and last message are a hover away, not on every row. */
+ * is the usual one) and last message are a hover away, not on every row.
+ * Each row is a rounded chip set in from the edges; the open one is tinted
+ * in the accent, as your messages are. */
 .rail-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 0 12px 0 12px;
-  border-left: 2px solid transparent;
+  gap: 9px;
+  min-height: 34px;
+  margin: 1px 8px;
+  padding: 0 9px;
+  border-radius: 10px;
   color: inherit;
   text-decoration: none;
+  transition: background 0.1s;
 }
 .rail-row:hover {
   background: var(--hover);
 }
 .rail-row:focus-visible {
   outline-offset: -2px;
-  border-radius: 0;
 }
 .rail-row[aria-current="page"] {
-  background: var(--active);
-  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+[data-theme="dark"] .rail-row[aria-current="page"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .rail-text {
   flex: 1;
@@ -334,7 +352,7 @@
 }
 .rail-title {
   flex: 1;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   min-width: 0;
   overflow: hidden;
@@ -348,7 +366,7 @@
 .rail-proj {
   margin-right: 6px;
   color: var(--faint);
-  font-weight: 500;
+  font-weight: 450;
 }
 .rail-row[data-status="stopped"] .rail-title,
 .rail-row[data-status="closed"] .rail-title {
@@ -356,7 +374,7 @@
   font-weight: 450;
 }
 .rail-row[data-depth] {
-  padding-left: calc(12px + var(--depth) * 14px);
+  padding-left: calc(9px + var(--depth) * 14px);
 }
 /* Dragging a session: the row it would go under, or the whole list when it
  * would go to the top level, and a line at the foot saying which is which. */
@@ -368,7 +386,7 @@
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .rail-drophint {
-  padding: 8px 12px;
+  padding: 9px 17px;
   border-top: 1px solid var(--border);
   font-size: 11.5px;
   color: var(--muted);
@@ -392,8 +410,15 @@
 .sv[data-rail="full"] .rail-row {
   align-items: flex-start;
   min-height: 60px;
-  padding-top: 10px;
-  padding-bottom: 10px;
+  margin: 2px 8px;
+  padding-top: 11px;
+  padding-bottom: 11px;
+  border-radius: 14px;
+}
+/* A scheduled session has no last message: one line, no gap under it. */
+.sv[data-rail="full"] .rail-row.rail-sched {
+  align-items: center;
+  min-height: 48px;
 }
 .sv[data-rail="full"] .rail-row > .rail-dot {
   margin-top: 1px;
@@ -434,7 +459,8 @@
   line-height: 1.4;
 }
 .sv[data-rail="full"] .rail-search {
-  height: 38px;
+  height: 40px;
+  border-radius: 14px;
 }
 .sv[data-rail="full"] .rail-search kbd {
   display: none;
@@ -444,11 +470,11 @@
   flex: none;
   align-items: center;
   gap: 1px;
-  height: 17px;
-  padding: 0 5px 0 2px;
-  border: 1px solid var(--border-strong);
+  height: 18px;
+  padding: 0 6px 0 3px;
+  border: 0;
   border-radius: 999px;
-  background: none;
+  background: var(--hover);
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 600;
@@ -458,31 +484,46 @@
 .rail-kids:hover,
 .rail-kids[aria-expanded="true"] {
   color: var(--text);
-  background: var(--hover);
+  background: var(--active);
 }
 .rail-when {
   flex: none;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 /* CPU over memory, for the session's whole process tree. The column keeps
-   its width when empty, so the times stay in line. */
+   its width when empty, so the times stay in line. Quiet by default: an idle
+   process shows nothing and a busy one its CPU; the pointer, or the open
+   row, shows both figures. A hot CPU always shows, in amber. */
 .rail-load {
   flex: none;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: flex-end;
-  width: 30px;
-  font-size: 9px;
+  width: 28px;
+  font-size: 9.5px;
   line-height: 11px;
-  color: var(--muted);
+  color: var(--faint);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.rail-load[data-idle] {
-  color: var(--faint);
+.rail-load > :last-child {
+  display: none;
+}
+.rail-load[data-idle] > :first-child {
+  visibility: hidden;
+}
+.rail-row:hover .rail-load > *,
+.rail-row[aria-current="page"] .rail-load > * {
+  display: block;
+  visibility: visible;
+}
+.rail-row:hover .rail-load,
+.rail-row[aria-current="page"] .rail-load {
+  color: var(--muted);
 }
 .rail-load[data-hot] > :first-child {
   color: var(--warning);
@@ -494,12 +535,12 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
-  height: 20px;
+  min-width: 22px;
+  height: 22px;
   margin: -2px -4px -2px 0;
   padding: 0 3px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 7px;
   background: none;
   color: var(--muted);
   font-size: 10.5px;
