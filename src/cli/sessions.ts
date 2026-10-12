@@ -6,7 +6,7 @@ import type { Api } from "../client";
 import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, type ChangeRow } from "../core/changes";
 import { accountProvider } from "../core/providers/account";
 import { agentAncestor, stillRunning } from "../core/providers/procs";
-import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
+import type { AppState, Closed, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
 import { describe } from "../core/waits";
 
 type Row = AppState["sessions"][number];
@@ -397,9 +397,13 @@ export async function each(api: Api, verb: "close" | "reopen" | "stop" | "resume
   let failed = 0;
   for (const id of ids) {
     try {
-      if (verb === "close" || verb === "reopen") await api("POST", `/api/sessions/${id}/close`, { closed: verb === "close" });
-      else await api("POST", `/api/sessions/${id}/${verb}`, {});
-      console.log(`${id}  ${DONE[verb]}`);
+      if (verb === "close" || verb === "reopen") {
+        const out = (await api("POST", `/api/sessions/${id}/close`, { closed: verb === "close" })) as Closed | null;
+        console.log(`${id}  ${DONE[verb]}${out?.said ?? ""}`);
+      } else {
+        await api("POST", `/api/sessions/${id}/${verb}`, {});
+        console.log(`${id}  ${DONE[verb]}`);
+      }
     } catch (e) {
       failed++;
       console.error(`${id}  ${verb} failed: ${(e as Error).message}`);

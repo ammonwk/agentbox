@@ -805,6 +805,16 @@ export interface PrInfo {
 }
 
 /** A pull request and the live session that has it (src/core/prclaims.ts). */
+/** What a close did: the sessions it closed, those it started that it left
+ *  open for the work they hold, and what the one asked for gave up. */
+export interface Closed {
+  closed: string[];
+  kept: { id: string; holds: string[] }[];
+  dropped: string[];
+  /** The above in words, to follow "closed <id>"; empty when it took nothing else. */
+  said: string;
+}
+
 export interface PrClaim {
   repo: string;
   number: number;

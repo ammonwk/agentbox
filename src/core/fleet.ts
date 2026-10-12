@@ -47,6 +47,7 @@ import {
   listAccounts,
   listBtw,
   listClosedRecords,
+  listOpenWaits,
   listSessionRecords,
   updateSessionRecord,
   usageSamplesSince,
@@ -54,6 +55,8 @@ import {
 } from "./db";
 import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
+import { prsHad } from "./prclaims";
+import { branchHolders } from "./prs";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import {
   LIMIT_DIALOG,
@@ -129,6 +132,7 @@ import type {
   Btw,
   Candidate,
   ClaimView,
+  Closed,
   Placement,
   PromptHistoryEntry,
   QueuedMessage,
@@ -213,6 +217,15 @@ export interface FleetDeps {
   now?: () => number;
 }
 
+/** What a close took with it, and what it left open, to follow "closed <id>". */
+function closedWords(also: string[], kept: Closed["kept"], dropped: string[]): string {
+  return (
+    (also.length ? `, with the sessions it started: ${also.join(" ")}` : "") +
+    (dropped.length ? `; it gave up ${dropped.join(", ")}, which no session holds now` : "") +
+    kept.map((k) => `; left ${k.id} open, with what it started, for what it holds: ${k.holds.join(", ")} (close it by its own id to close it)`).join("")
+  );
+}
+
 export class FleetError extends Error {
   constructor(
     readonly status: number,
@@ -293,6 +306,8 @@ export class Fleet extends EventEmitter {
   private poolStates = new Map<string, NonNullable<ReturnType<typeof poolState>>>();
   /** Session ids on the list (not closed), as of this pass. */
   private openIds = new Set<string>();
+  /** What each session has going, as of this pass (`workHeld`). */
+  private holding = new Map<string, string[]>();
   /** `${provider}:${agentSessionId}` → session id. */
   private byAgentId = new Map<string, string>();
   private views = new Map<string, Session>();
@@ -2053,6 +2068,7 @@ export class Fleet extends EventEmitter {
   private rebuildViews(since: number, now: number): void {
     const records = listSessionRecords(since);
     this.openIds = new Set(records.filter((r) => !r.archivedAt).map((r) => r.id));
+    this.holding = this.workHeld();
     const seen = new Set<string>();
     let dirty = false;
     for (const rec of records) {
@@ -2110,7 +2126,7 @@ export class Fleet extends EventEmitter {
     const parentRuns = !!rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none";
     // A limit it stopped at ends when its account's usage says so, not when the view was drawn.
     const hit = f ? limitStop({ ...f, lastActivityAt: f.lastActivityAt ?? rec.lastActivityAt }) : null;
-    return `${cold}|${parentRuns}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}|${hit ? this.limitEnd(rec.accountId, hit, now) : ""}`;
+    return `${cold}|${parentRuns}|${this.holding.has(rec.id)}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}|${hit ? this.limitEnd(rec.accountId, hit, now) : ""}`;
   }
 
   private viewOf(rec: SessionRecord, now: number): Session | null {
@@ -2232,8 +2248,9 @@ export class Fleet extends EventEmitter {
     // A stopped child was a call in its parent's run — a pool agent, a
     // teammate, a `codex exec` from a Bash tool: listed while that run goes
     // on, then history (resumable by id), never stranded at the root of the
-    // board or piled under a caller that has stopped.
-    else if (rec.parent && !rec.parentByHand && host === "none" && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
+    // board or piled under a caller that has stopped. One with a wait armed or
+    // a PR still open is parked work, not a finished call: hiding it drops its claim.
+    else if (rec.parent && !rec.parentByHand && host === "none" && !this.holding.has(rec.id) && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
       status = "closed";
     }
 
@@ -3476,21 +3493,26 @@ export class Fleet extends EventEmitter {
    * it: they were calls in its run, and a parent gone from the board leaves
    * them stranded at the root. Running ones are stopped first, the parent
    * before its children — its death takes its MCP servers, and the pool
-   * agents they run, with it.
+   * agents they run, with it. A session it started that has work going (a
+   * wait armed, a PR open: `workHeld`) is left open with what it started,
+   * and said in `kept`; closing it is asked by its own id, and what that
+   * one gives up is said in `dropped`.
    */
-  async close(id: string, closed: boolean, alone = false): Promise<void> {
+  async close(id: string, closed: boolean, alone = false): Promise<Closed> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     if (!closed) {
       updateSessionRecord(id, { archivedAt: null });
       await this.tick();
-      return;
+      return { closed: [], kept: [], dropped: [], said: "" };
     }
     const target = this.get(id);
     if (target.host === "subagent") throw this.callersAgent(target);
+    const held = this.workHeld();
+    const kept: Closed["kept"] = [];
     // `alone`: its successor has taken over what it started (`handOver`), and
     // whatever is left under it must not be stopped for its sake.
-    const family = alone ? [id] : [id, ...this.openDescendants(id)];
+    const family = alone ? [id] : [id, ...this.openDescendants(id, held, kept)];
     for (const sid of family) {
       let s: Session;
       try {
@@ -3514,6 +3536,16 @@ export class Fleet extends EventEmitter {
     const at = this.now();
     for (const sid of family) updateSessionRecord(sid, { archivedAt: at, parkedAt: null, parkedMates: null, parkedWhy: null });
     await this.tick();
+    const dropped = held.get(id) ?? [];
+    return { closed: family, kept, dropped, said: closedWords(family.slice(1), kept, dropped) };
+  }
+
+  /** What each session has going that a stop must not drop unseen: its
+   *  waits still armed, and the PRs it has that are not finished (`prsHad`). */
+  private workHeld(): Map<string, string[]> {
+    const out = prsHad(branchHolders([...this.views.values()]));
+    for (const w of listOpenWaits(0)) if (!w.ended) out.set(w.sessionId, [...(out.get(w.sessionId) ?? []), `wait ${w.id}`]);
+    return out;
   }
 
   /** The open sessions `from` started itself, other than its subagents (which
@@ -3553,16 +3585,27 @@ export class Fleet extends EventEmitter {
     return at;
   }
 
-  /** The sessions `id` started, at any depth, still open: what closing it takes with it. */
-  private openDescendants(id: string): string[] {
+  /** The sessions `id` started, at any depth, still open: what closing it
+   *  takes with it. One holding work is put in `kept` instead, with all it started. */
+  private openDescendants(id: string, held: ReadonlyMap<string, string[]>, kept: Closed["kept"]): string[] {
     const kids = new Map<string, string[]>();
     for (const r of listSessionRecords(0)) {
       if (r.archivedAt || !r.parent || r.parent === r.id) continue;
       kids.set(r.parent, [...(kids.get(r.parent) ?? []), r.id]);
     }
     const out: string[] = [];
+    const seen = new Set([id]);
     const walk = (p: string) => {
-      for (const c of kids.get(p) ?? []) if (!out.includes(c)) { out.push(c); walk(c); }
+      for (const c of kids.get(p) ?? []) {
+        if (seen.has(c)) continue;
+        seen.add(c);
+        const holds = held.get(c);
+        if (holds) kept.push({ id: c, holds });
+        else {
+          out.push(c);
+          walk(c);
+        }
+      }
     };
     walk(id);
     return out;

@@ -452,13 +452,15 @@ function RowLoad({ id }: { id: string }) {
   );
 }
 
-/** A close the server refused: the row is back, and this says why. */
+/** A close the server refused: the row is back, and this says why. Or what a
+ *  close left open: the sessions it started that hold work stay on the list. */
 function CloseFailure() {
   const { failure, dismiss } = useClosing();
   if (!failure) return null;
   return (
     <p className="rail-err" role="alert">
-      Could not {failure.verb ?? "close"} “{failure.title}”: {failure.message}{" "}
+      {failure.left ? `Closed “${failure.title}”: ` : `Could not ${failure.verb ?? "close"} “${failure.title}”: `}
+      {failure.message}{" "}
       <button type="button" className="linkish" onClick={dismiss}>
         dismiss
       </button>

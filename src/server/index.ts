@@ -927,9 +927,9 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions/:id/close", async ({ req, params }) => {
     const b = await readBody(req);
-    await fleet.close(params.id!, requireBoolean(b, "closed"));
+    const out = await fleet.close(params.id!, requireBoolean(b, "closed"));
     scheduleHot();
-    return json(null);
+    return json(out);
   })
   // ----- scheduled sessions (src/core/scheduler.ts)
   .add("POST", "/api/schedules", async ({ req }) => {
