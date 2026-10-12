@@ -550,59 +550,6 @@
   border-radius: 0;
 }
 
-.sx-title {
-  font-size: 16px;
-  font-weight: 650;
-  margin: 0;
-  /* Never squeezed to nothing: a crowded header wraps its actions instead. */
-  min-width: 6em;
-  flex: 0 1 auto;
-  overflow: hidden;
-  /* On the h2, not the button inside it: a negative margin on the child made
-   * the h2's max-content 4px narrower than the button, so every title was
-   * truncated by one character with half the header empty. */
-  margin-left: -4px;
-}
-.sx-title-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  border: 0;
-  background: none;
-  padding: 1px 4px;
-  border-radius: 5px;
-  font: inherit;
-  color: inherit;
-  cursor: text;
-  text-align: left;
-  max-width: 100%;
-  white-space: nowrap;
-}
-.sx-title-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.sx-title-btn:hover {
-  background: var(--hover);
-}
-.sx-title-pen {
-  color: var(--faint);
-  opacity: 0;
-  flex: none;
-}
-.sx-title-btn:hover .sx-title-pen,
-.sx-title-btn:focus-visible .sx-title-pen {
-  opacity: 1;
-}
-.sx-header .sx-title-input {
-  flex: 1 1 320px;
-  font-size: 15px;
-  font-weight: 600;
-  min-height: 32px;
-  padding: 3px 8px;
-}
-
 .sx-header-actions {
   display: flex;
   align-items: center;
@@ -610,31 +557,11 @@
   margin-left: auto;
   flex: none;
 }
-/* The session id beside the title: quiet until pointed at. */
-.copy-btn.sx-id {
-  min-height: 22px;
-  padding: 0 6px;
-  border-color: transparent;
-  background: none;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  flex: none;
-}
-.copy-btn.sx-id:hover {
-  border-color: var(--border-strong);
-}
-.resume-copy span {
-  font-family: var(--mono);
-  font-size: 11.5px;
-}
-
 .sx-facts {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 6px 16px;
-  margin-top: 7px;
   min-width: 0;
   overflow: hidden;
   font-size: 12px;
@@ -730,11 +657,25 @@
   flex: none;
 }
 
+/* The tabs, and the session's actions at the right end of the same row. */
+.sx-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
 .sx-tabs {
   display: flex;
   gap: 2px;
-  margin-top: 4px;
+  min-width: 0;
   margin-left: -12px;
+}
+.sx-tabbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex: none;
 }
 .sx-tab {
   border: 0;
@@ -2002,21 +1943,6 @@ a.sx-imgpath:hover { color: var(--accent); }
   .sx-panel { padding: 12px; }
   .cmp { padding: 8px 12px; }
   .sx-facts { flex-wrap: wrap; }
-  /* The session id beside the title: quiet until pointed at. */
-.copy-btn.sx-id {
-  min-height: 22px;
-  padding: 0 6px;
-  border-color: transparent;
-  background: none;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  flex: none;
-}
-.copy-btn.sx-id:hover {
-  border-color: var(--border-strong);
-}
-.resume-copy span { display: none; }
   .sx-header-top { flex-wrap: wrap; }
   .cmp-row { flex-wrap: wrap; }
   .cmp textarea { flex-basis: 100%; }
@@ -2298,10 +2224,10 @@ a.sx-imgpath:hover { color: var(--accent); }
 
 /* ------------------------------------------------------------------- phone */
 
-/* The header shrinks to two lines — title and status, then the actions and
-   the facts after them in one row you can swipe — above the tabs, and the
-   composer to the box and a row of keys, so the conversation keeps most of
-   the screen. */
+/* The header shrinks to two lines — the facts in one row you can swipe, then
+   the tabs with the actions — and the composer to the box and a row of keys,
+   so the conversation keeps most of the screen. A scheduled session's header
+   is its title and status, then its actions. */
 @media (max-width: 640px) {
   .sx-header {
     padding: 6px 12px 0;
@@ -2309,21 +2235,6 @@ a.sx-imgpath:hover { color: var(--accent); }
   .sx-header-top {
     flex-wrap: wrap;
     gap: 6px 8px;
-  }
-  .sx-title {
-    flex: 1 1 0;
-    min-width: 0;
-    font-size: 16px;
-  }
-  /* The id is a copy button with no room for its text. */
-  .copy-btn.sx-id {
-    min-width: 30px;
-    min-height: 30px;
-    justify-content: center;
-  }
-  .copy-btn.sx-id span,
-  .copy-btn.resume-copy {
-    display: none;
   }
   .sx-header-actions {
     order: 5;
@@ -2342,22 +2253,32 @@ a.sx-imgpath:hover { color: var(--accent); }
   .sx-header-actions > * {
     flex: none;
   }
-  .sx-header-actions .sx-facts {
-    flex: none;
-    overflow: visible;
-    margin: 0 0 0 6px;
-    padding-left: 12px;
-    border-left: 1px solid var(--border);
+  .sx-facts {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
   .sx-facts .fact-cwd {
     display: none;
   }
-  .sx-tabs {
+  .sx-tabbar {
     margin-top: 2px;
+    gap: 4px;
   }
   .sx-tab {
     min-height: 36px;
-    padding: 6px 14px;
+    padding: 6px 12px;
+  }
+  /* Icons only, so all four tabs fit beside them. The label stays the
+     button's name for a screen reader. */
+  .sx-tabbar-actions {
+    gap: 2px;
+  }
+  .sx-tabbar-actions .btn {
+    min-width: var(--tap);
+    padding: 0;
+    gap: 0;
+    font-size: 0;
   }
 
   .cmp {

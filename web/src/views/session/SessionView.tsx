@@ -1,16 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
-import {
-  AccountChip,
-  ContextBar,
-  CopyButton,
-  HostBadge,
-  PROVIDER_LABEL,
-  ProviderBadge,
-  StatusPill,
-  UsageBar,
-} from "../../bits";
+import { AccountChip, ContextBar, PROVIDER_LABEL, UsageBar } from "../../bits";
 import { Button, Confirm, Empty, Icon } from "../../components";
 import {
   descendantsOf,
@@ -532,49 +523,6 @@ function Detail({
     [state.skills, state.repos, session.provider, session.repoRoot, session.cwd],
   );
 
-  // The facts under the title; a phone runs them on from the actions, in the
-  // one row you swipe, rather than spending a row of its own on them.
-  const facts = (
-    <div className="sx-facts">
-      <span className="fact">
-        <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
-      </span>
-      <span className="fact mono fact-cwd" title={session.cwd}>
-        <Icon.folder size={12} />
-        <span className="fact-cwd-text">
-          <span dir="ltr">{tildify(session.cwd, home)}</span>
-        </span>
-      </span>
-      {session.branch ? (
-        <span className="fact mono">
-          <Icon.branch size={12} /> {session.branch}
-        </span>
-      ) : null}
-      {session.model ? (
-        <span className="fact mono">
-          {session.model}
-          {session.effort ? <span className="muted"> · {session.effort}</span> : null}
-        </span>
-      ) : null}
-      <span className="fact">
-        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
-      </span>
-      <span
-        className="fact"
-        title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
-      >
-        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {fmtTokens(session.tokens.cacheRead)} cached ·{" "}
-        <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
-      </span>
-      {pr && (
-        <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
-          <Icon.prs size={12} /> #{pr.number}
-          {pr.isDraft ? " (draft)" : ""}
-        </a>
-      )}
-    </div>
-  );
-
   return (
     <div className="sv-main" onClick={(e) => {
       if (e.defaultPrevented || e.button !== 0 || e.detail > 1 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
@@ -585,18 +533,85 @@ function Detail({
       if (window.getSelection()?.isCollapsed === false) return;
       composerRef.current?.focus({ preventScroll: true });
     }}>
+      {/* No title, ids or status: the list shows which session is open and
+          what it is doing. The facts, then the tabs with the actions. */}
       <header className="sx-header">
-        <div className="sx-header-top">
-          <ProviderBadge provider={session.provider} />
-          <TitleEdit session={session} />
-          <CopyButton text={session.id} label={session.id} className="sx-id" />
-          <StatusPill status={session.status} />
-          {/* tmux is the normal case; only say where it runs when it is not ours. */}
-          {session.host === "external" || session.host === "subagent" ? <HostBadge host={session.host} /> : null}
+        <div className="sx-facts">
+          <span className="fact">
+            <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
+          </span>
+          <span className="fact mono fact-cwd" title={session.cwd}>
+            <Icon.folder size={12} />
+            <span className="fact-cwd-text">
+              <span dir="ltr">{tildify(session.cwd, home)}</span>
+            </span>
+          </span>
+          {session.branch ? (
+            <span className="fact mono">
+              <Icon.branch size={12} /> {session.branch}
+            </span>
+          ) : null}
+          {session.model ? (
+            <span className="fact mono">
+              {session.model}
+              {session.effort ? <span className="muted"> · {session.effort}</span> : null}
+            </span>
+          ) : null}
+          <span className="fact">
+            <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
+          </span>
+          <span
+            className="fact"
+            title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
+          >
+            {fmtTokens(session.tokens.input + session.tokens.output)} tok · {fmtTokens(session.tokens.cacheRead)} cached ·{" "}
+            <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
+          </span>
+          {pr && (
+            <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
+              <Icon.prs size={12} /> #{pr.number}
+              {pr.isDraft ? " (draft)" : ""}
+            </a>
+          )}
+        </div>
 
-          <div className="sx-header-actions">
-            {/* The provider's own id: what `claude -r` (or `codex resume`) takes. */}
-            {session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null}
+        {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
+        {(session.status === "blocked" && !session.question) || error ? (
+          <div className="sx-attention-line bad" role={error ? "alert" : undefined}>
+            {error ? (
+              <>
+                That did not work: {error}{" "}
+                <button className="linkish" onClick={clear}>
+                  dismiss
+                </button>
+              </>
+            ) : (
+              <>
+                <Icon.alert size={13} /> {session.attention.reason}.{" "}
+                The Terminal tab shows the prompt.
+              </>
+            )}
+          </div>
+        ) : session.status === "waiting" && session.turnError ? (
+          <TurnErrorLine session={session} />
+        ) : null}
+
+        <div className="sx-tabbar">
+          <div className="sx-tabs" role="tablist" aria-label="Session views">
+            {SESSION_TABS.map((t, i) => (
+              <button
+                key={t}
+                className="sx-tab"
+                role="tab"
+                aria-selected={tab === t}
+                title={`${TAB_LABEL[t]} (${i + 1})`}
+                onClick={() => onTab(t)}
+              >
+                {TAB_LABEL[t]}
+              </button>
+            ))}
+          </div>
+          <div className="sx-tabbar-actions">
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt
@@ -638,46 +653,7 @@ function Detail({
                 Close
               </Button>
             )}
-            {narrow ? facts : null}
           </div>
-        </div>
-
-        {narrow ? null : facts}
-
-        {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
-        {(session.status === "blocked" && !session.question) || error ? (
-          <div className="sx-attention-line bad" role={error ? "alert" : undefined}>
-            {error ? (
-              <>
-                That did not work: {error}{" "}
-                <button className="linkish" onClick={clear}>
-                  dismiss
-                </button>
-              </>
-            ) : (
-              <>
-                <Icon.alert size={13} /> {session.attention.reason}.{" "}
-                The Terminal tab shows the prompt.
-              </>
-            )}
-          </div>
-        ) : session.status === "waiting" && session.turnError ? (
-          <TurnErrorLine session={session} />
-        ) : null}
-
-        <div className="sx-tabs" role="tablist" aria-label="Session views">
-          {SESSION_TABS.map((t, i) => (
-            <button
-              key={t}
-              className="sx-tab"
-              role="tab"
-              aria-selected={tab === t}
-              title={`${TAB_LABEL[t]} (${i + 1})`}
-              onClick={() => onTab(t)}
-            >
-              {TAB_LABEL[t]}
-            </button>
-          ))}
         </div>
       </header>
 
@@ -838,63 +814,6 @@ function TranscriptInstead({
         <Timeline session={session} />
       </Suspense>
     </div>
-  );
-}
-
-/** The title, click to rename. Clearing it falls back to the derived title. */
-function TitleEdit({ session }: { session: SessionRow }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const { run, busy } = useAction();
-  const title = titleOf(session);
-
-  if (!editing) {
-    return (
-      <h2 className="sx-title">
-        <button
-          className="sx-title-btn"
-          title="Rename"
-          onClick={() => {
-            setDraft(session.label ?? title);
-            setEditing(true);
-          }}
-        >
-          <span className="sx-title-text">{title}</span>
-          <Icon.edit size={13} className="sx-title-pen" />
-        </button>
-      </h2>
-    );
-  }
-
-  const commit = async () => {
-    const next = draft.trim();
-    if (next === (session.label ?? title)) {
-      setEditing(false);
-      return;
-    }
-    if (await run(() => api.patchSession(session.id, { label: next || null }))) setEditing(false);
-  };
-
-  return (
-    <input
-      className="sx-title-input"
-      aria-label="Session label"
-      autoFocus
-      value={draft}
-      disabled={busy}
-      placeholder={session.title || "Label"}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => void commit()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          void commit();
-        } else if (e.key === "Escape") {
-          e.stopPropagation();
-          setEditing(false);
-        }
-      }}
-    />
   );
 }
 
