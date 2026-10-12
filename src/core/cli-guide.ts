@@ -205,7 +205,8 @@ why). Arming the same wait twice is one wait.
   Every verb acts on exactly the ids it is given, except close: closing a
   parent closes the sessions it started, at any depth, with it (running ones
   are stopped, and the app asks first when any are), but leaves open, and
-  names, any that has a wait armed or a PR open, with what that one started. Stopping a parent
+  names, any that has a wait armed or has claimed an open PR, with what that
+  one started. Stopping a parent
   leaves its children alone, so list them (\`ls | grep\`, or \`ls --json | jq\`
   on \`.parent\`) to act on them too. The exception is subagents (host
   \`sub\`): the parent runs them, so stopping or closing it stops every one

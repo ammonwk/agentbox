@@ -54,24 +54,18 @@ export function prClaims(sessions: readonly Session[], byBranch: readonly Omit<P
 }
 
 /**
- * The PRs each session has, whatever its status: those it said it has that
- * are not known to be finished (open, or missing from the PR copy), and the
- * open ones whose branch it is on. `prClaims` asks which of these a live
- * session holds; this is what must not lapse unseen when a session is folded
- * into history or closed along with another (`Fleet.workHeld`).
+ * The PRs each session said it has that are not known to be finished (open,
+ * or missing from the PR copy), whatever its status: `prClaims` asks which a
+ * live session holds; these must not lapse unseen when a session is folded
+ * into history or closed along with another (`Fleet.workHeld`). A branch is
+ * not one: finished sessions sit on open PRs' branches by the dozen.
  */
-export function prsHad(byBranch: readonly Omit<PrClaim, "how">[]): Map<string, string[]> {
+export function unfinishedClaims(): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  const add = (id: string, repo: string, number: number) => {
-    const pr = `${repo}#${number}`;
-    const had = out.get(id) ?? [];
-    if (!had.includes(pr)) out.set(id, [...had, pr]);
-  };
-  const said = getDb()
+  const rows = getDb()
     .query("SELECT c.* FROM pr_claims c LEFT JOIN prs p ON p.repo = c.repo AND p.number = c.number WHERE p.state IS NULL OR p.state = 'OPEN'")
     .all() as Row[];
-  for (const r of said) add(r.session_id, r.repo, r.number);
-  for (const b of byBranch) add(b.sessionId, b.repo, b.number);
+  for (const r of rows) out.set(r.session_id, [...(out.get(r.session_id) ?? []), `${r.repo}#${r.number}`]);
   return out;
 }
 

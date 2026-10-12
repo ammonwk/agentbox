@@ -55,8 +55,7 @@ import {
 } from "./db";
 import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
-import { prsHad } from "./prclaims";
-import { branchHolders } from "./prs";
+import { unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import {
   LIMIT_DIALOG,
@@ -2249,7 +2248,7 @@ export class Fleet extends EventEmitter {
     // teammate, a `codex exec` from a Bash tool: listed while that run goes
     // on, then history (resumable by id), never stranded at the root of the
     // board or piled under a caller that has stopped. One with a wait armed or
-    // a PR still open is parked work, not a finished call: hiding it drops its claim.
+    // a claim on an open PR is parked work, not a finished call: hiding it drops the claim.
     else if (rec.parent && !rec.parentByHand && host === "none" && !this.holding.has(rec.id) && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
       status = "closed";
     }
@@ -3494,7 +3493,7 @@ export class Fleet extends EventEmitter {
    * them stranded at the root. Running ones are stopped first, the parent
    * before its children — its death takes its MCP servers, and the pool
    * agents they run, with it. A session it started that has work going (a
-   * wait armed, a PR open: `workHeld`) is left open with what it started,
+   * wait armed, an open PR claimed: `workHeld`) is left open with what it started,
    * and said in `kept`; closing it is asked by its own id, and what that
    * one gives up is said in `dropped`.
    */
@@ -3541,9 +3540,9 @@ export class Fleet extends EventEmitter {
   }
 
   /** What each session has going that a stop must not drop unseen: its
-   *  waits still armed, and the PRs it has that are not finished (`prsHad`). */
+   *  waits still armed, and the PRs it claimed that are not finished. */
   private workHeld(): Map<string, string[]> {
-    const out = prsHad(branchHolders([...this.views.values()]));
+    const out = unfinishedClaims();
     for (const w of listOpenWaits(0)) if (!w.ended) out.set(w.sessionId, [...(out.get(w.sessionId) ?? []), `wait ${w.id}`]);
     return out;
   }
