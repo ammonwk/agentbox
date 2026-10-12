@@ -206,6 +206,69 @@
   padding: 8px 0 2px;
 }
 
+.ac-resets {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.ac-resets > svg {
+  color: var(--accent);
+  flex: none;
+  margin-top: 1px;
+}
+.ac-resets-text {
+  min-width: 0;
+  flex: 1;
+}
+.ac-resets-text strong {
+  font-weight: 600;
+}
+.ac-resets-sub {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.ac-resets > .btn {
+  flex: none;
+}
+.ac-resets-done {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.ac-resets > .error-line {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+}
+.reset-choices {
+  display: grid;
+  gap: 9px;
+}
+.reset-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.reset-choice input {
+  margin-top: 3px;
+  flex: none;
+}
+.reset-choice > span {
+  min-width: 0;
+}
+.reset-desc {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .ac-usage-foot {
   display: flex;
   align-items: center;

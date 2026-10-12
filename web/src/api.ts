@@ -34,6 +34,7 @@ import type {
   Placement,
   ProcDetail,
   ProviderId,
+  ResetConsumeResult,
   NightlyReclaim,
   ReclaimResult,
   Repo,
@@ -283,6 +284,9 @@ export const api = {
   forgetAccount: (id: string) => request<unknown>("DELETE", `/api/accounts/${enc(id)}`),
   login: (id: string) => post<LoginFlow>(`/api/accounts/${enc(id)}/login`),
   refreshUsage: (id: string) => post<AccountUsage>(`/api/accounts/${enc(id)}/usage`),
+  /** Spend one of a codex account's usage-limit resets; `creditId` picks one. */
+  useResetCredit: (id: string, creditId?: string) =>
+    post<ResetConsumeResult>(`/api/accounts/${enc(id)}/reset`, creditId ? { creditId } : {}),
   loginPaste: (id: string, text: string) => post<LoginFlow>(`/api/logins/${enc(id)}/paste`, { text }),
   loginCancel: (id: string) => post<unknown>(`/api/logins/${enc(id)}/cancel`),
   calibration: (days = 7) => get<CalibrationReport>(`/api/calibration?days=${days}`),

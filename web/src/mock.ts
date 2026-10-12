@@ -185,7 +185,34 @@ const accounts: MockAccount[] = [
     enabled: true,
     createdAt: T0 - 90 * D,
     auth: { state: "ok", expiresAt: null, detail: null },
-    usage: usage("cx-main", [win("weekly", "weekly", "Weekly", 34, 4 * D + 3 * H)], { source: "rollout", at: T0 - 40 * 1000 }),
+    usage: usage("cx-main", [win("weekly", "weekly", "Weekly", 34, 4 * D + 3 * H)], {
+      source: "rollout",
+      at: T0 - 40 * 1000,
+      resets: {
+        availableCount: 2,
+        applicableCount: 0,
+        credits: [
+          {
+            id: "credit_main_1",
+            resetType: "codex_rate_limits",
+            status: "available",
+            grantedAt: T0 - 6 * D,
+            expiresAt: T0 + 24 * D,
+            title: "Full reset",
+            description: "Thanks for using Codex! You've been granted one free rate limit reset.",
+          },
+          {
+            id: "credit_main_2",
+            resetType: "codex_rate_limits",
+            status: "available",
+            grantedAt: T0 - 2 * D,
+            expiresAt: T0 + 28 * D,
+            title: "Full reset",
+            description: "Granted for the outage on Tuesday.",
+          },
+        ],
+      },
+    }),
   },
   {
     id: "cx-alt",
@@ -1472,6 +1499,25 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       else a.usage = { ...a.usage, stale: a.usage.stale ?? "token expired" };
       pushCold();
       return a.usage;
+    } else if (action === "reset") {
+      await sleep(500);
+      const resets = a.usage.resets;
+      if (!resets || resets.availableCount <= 0) return { outcome: "no-credit", windowsReset: 0 };
+      const chosen = body<{ creditId?: string }>(b).creditId;
+      const spent = chosen ? resets.credits.find((c) => c.id === chosen) : resets.credits[0];
+      a.usage = {
+        ...a.usage,
+        at: Date.now(),
+        stale: null,
+        windows: a.usage.windows.map((w) => ({ ...w, usedPct: 0 })),
+        resets: {
+          ...resets,
+          availableCount: Math.max(0, resets.availableCount - 1),
+          credits: resets.credits.filter((c) => c !== spent),
+        },
+      };
+      pushCold();
+      return { outcome: "reset", windowsReset: a.usage.windows.length };
     } else if (action === "login") {
       const login: LoginFlow = {
         id: `lg-${id}-${Date.now()}`, provider: a.provider, accountId: id, state: "starting", url: null, userCode: null,

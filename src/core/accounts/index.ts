@@ -24,7 +24,7 @@ import {
 } from "./homes";
 import { identify, IdentityCache, type Identity } from "./identity";
 import { LoginManager, type LoginCommand } from "./login";
-import { UsageService, type UsageDeps } from "./usage";
+import { UsageService, type UsageDeps, type ResetConsumeResult } from "./usage";
 
 export { AccountError } from "./homes";
 
@@ -198,6 +198,13 @@ export class AccountsService extends EventEmitter {
     return this.usage.refresh(accountId);
   }
 
+  /** Spend one of a codex account's usage-limit resets (the UI's button, or
+   *  nothing else yet), then re-read its usage so the reset takes effect on
+   *  the board. */
+  consumeReset(accountId: string, creditId?: string | null): Promise<ResetConsumeResult> {
+    return this.usage.consumeReset(accountId, creditId);
+  }
+
   paste(loginId: string, text: string): LoginFlow {
     return this.logins.paste(loginId, text);
   }
@@ -296,4 +303,5 @@ export class AccountsService extends EventEmitter {
 export { defaultHome, detectCli, ensureDefaultAccounts, createAccountHome, owners, resyncShared, twinOf } from "./homes";
 export { identify } from "./identity";
 export { UsageService } from "./usage";
+export type { ResetConsumeResult, ResetOutcome } from "./usage";
 export { LoginManager } from "./login";

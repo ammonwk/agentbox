@@ -1168,6 +1168,12 @@ const router = new Router(mapError)
     scheduleCold();
     return json(u);
   })
+  .add("POST", "/api/accounts/:id/reset", async ({ req, params }) => {
+    const b = await readBody(req);
+    const out = await accounts.consumeReset(params.id!, optionalString(b, "creditId") ?? null);
+    scheduleCold();
+    return json(out);
+  })
   .add("POST", "/api/logins/:id/paste", async ({ req, params }) => {
     const b = await readBody(req);
     const flow = accounts.paste(params.id!, requireString(b, "text"));

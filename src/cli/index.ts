@@ -209,7 +209,9 @@ async function usage(): Promise<number> {
     const claimed = Math.round(a.claims.reduce((n, c) => n + c.outstanding, 0));
     const n = a.claims.filter((c) => c.outstanding > 0).length;
     const claims = claimed ? `  +${claimed}% weekly claimed by ${n} session${n === 1 ? "" : "s"}` : "";
-    console.log(`${a.provider.padEnd(6)} ${a.label.slice(0, 28).padEnd(28)} ${windows || "no reading"}${claims}${a.usage.stale ? `  [${a.usage.stale}]` : ""}`);
+    const have = a.usage.resets?.availableCount ?? 0;
+    const resets = have > 0 ? `  ${have} usage reset${have === 1 ? "" : "s"} available` : "";
+    console.log(`${a.provider.padEnd(6)} ${a.label.slice(0, 28).padEnd(28)} ${windows || "no reading"}${claims}${resets}${a.usage.stale ? `  [${a.usage.stale}]` : ""}`);
   }
   return 0;
 }

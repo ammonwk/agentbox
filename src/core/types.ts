@@ -68,6 +68,46 @@ export interface UsageWindow {
   provider?: string;
 }
 
+/** One Codex usage-limit reset you can spend: the CLI's `/usage` menu's "Full
+ *  reset". Spending one clears the account's spent windows so sessions stopped
+ *  at the limit can carry on. */
+export interface ResetCredit {
+  id: string;
+  /** "codex_rate_limits" today; kept as a string for whatever comes next. */
+  resetType: string;
+  status: "available" | "redeeming" | "redeemed" | "unknown";
+  /** Epoch ms the provider granted it. */
+  grantedAt: number | null;
+  /** Epoch ms it stops being usable; null means it does not expire. */
+  expiresAt: number | null;
+  /** The provider's own words for it: "Full reset". */
+  title: string | null;
+  description: string | null;
+}
+
+/** Codex usage-limit resets you have left. Codex only. */
+export interface ResetCredits {
+  /** How many are left to spend, spent or not. */
+  availableCount: number;
+  /** Of those, how many the provider says apply to a window that is at its
+   *  limit right now. It is advice, not a gate: a credit can be spent when
+   *  this is zero (observed: `applicable_available_count: 0`, consume still
+   *  cleared the window), so the UI offers the button on `availableCount`. */
+  applicableCount: number | null;
+  /** The credits themselves, newest first, when the details endpoint answered.
+   *  Empty when only the count is known. */
+  credits: ResetCredit[];
+}
+
+/** What spending a reset did, as the provider worded it. */
+export type ResetOutcome = "reset" | "nothing-to-reset" | "no-credit" | "already-redeemed" | "unknown";
+
+export interface ResetConsumeResult {
+  outcome: ResetOutcome;
+  /** How many windows the provider says it cleared. */
+  windowsReset: number;
+}
+
 export interface AccountUsage {
   accountId: string;
   /** When these numbers were true, not when we last tried. */
@@ -78,6 +118,9 @@ export interface AccountUsage {
   source: "endpoint" | "cache" | "rollout" | "cli" | "none";
   /** Anything else worth a line: extra-usage state, credits, a locked reason. */
   notes: string[];
+  /** Codex: usage-limit resets left to spend (docs/v2.md, Usage). Absent for
+   *  every other provider, and on readings that never carried one. */
+  resets?: ResetCredits | null;
 }
 
 /** Credential health as far as we can tell without refreshing anything. */
