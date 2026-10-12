@@ -1,7 +1,7 @@
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
-import { api, fmtClock, useAppState, useBtw, useTimeline } from "../../api";
-import { fmtDur } from "../../lib/format";
+import { api, useAppState, useBtw, useTimeline } from "../../api";
+import { fmtDur, fmtHourMin } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline, rowEventIds, traceTurns, withBtw, type TimelineRow } from "../../lib/timeline";
 import { field, type SendCall } from "../../lib/sendtool";
@@ -429,11 +429,6 @@ function useNow(active: boolean): number {
   return Date.now();
 }
 
-/** The moment a row landed, shown while you hover it. */
-function Stamp({ at, float }: { at: number; float?: boolean }) {
-  return <time className={`tl-stamp${float ? " tl-stamp-float" : ""}`}>{fmtClock(at)}</time>;
-}
-
 const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number }) {
   switch (ev.kind) {
     case "user":
@@ -441,14 +436,13 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
     case "assistant":
       return <AssistantRow ev={ev} />;
     case "thinking":
-      return <Thinking text={ev.text} at={ev.at} dur={dur} />;
+      return <Thinking text={ev.text} dur={dur} />;
     case "meta":
-      if (ev.mate) return <MateRow id={ev.id} mate={ev.mate} at={ev.at} />;
+      if (ev.mate) return <MateRow id={ev.id} mate={ev.mate} />;
       return (
-        <div className={`tl-meta tone-${ev.tone ?? "info"}`} title={fmtClock(ev.at)}>
+        <div className={`tl-meta tone-${ev.tone ?? "info"}`}>
           {ev.tone === "warn" || ev.tone === "error" ? <Icon.alert size={12} /> : null}
           <span>{ev.text}</span>
-          <Stamp at={ev.at} />
         </div>
       );
   }
@@ -482,7 +476,7 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
     );
   }
   return (
-    <div className={`tl-user tl-sent${queued ? " tl-queued" : ""}`} title={fmtClock(ev.at)} data-ev={ev.id}>
+    <div className={`tl-user tl-sent${queued ? " tl-queued" : ""}`} data-ev={ev.id}>
       <div className="tl-who">
         <Icon.send size={12} /> <Party name={sent.from} />
         <span className="tl-via">via {sent.via}</span>
@@ -492,7 +486,7 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
             · queued
           </span>
         ) : null}
-        <time className="tl-time">{fmtClock(ev.at)}</time>
+        <time className="tl-time">{fmtHourMin(ev.at)}</time>
       </div>
       <Clamp lines={6}>{body}</Clamp>
     </div>
@@ -514,7 +508,7 @@ function Bubble({ id, at, className, note, title, copy, children }: { id?: strin
       <div className="tl-me-foot">
         <CopyIcon text={copy} />
         {note ? <span>{note}</span> : null}
-        <time dateTime={new Date(at).toISOString()}>{fmtClock(at)}</time>
+        <time dateTime={new Date(at).toISOString()}>{fmtHourMin(at)}</time>
       </div>
     </div>
   );
@@ -612,7 +606,7 @@ function SentRow({ ev, send }: { ev: ToolEvent; send: SendCall }) {
       </button>
     ) : null;
   return (
-    <div className={`tl-user tl-sent tl-out${failed ? " is-failed" : ""}`} title={fmtClock(ev.at)} data-ev={ev.id}>
+    <div className={`tl-user tl-sent tl-out${failed ? " is-failed" : ""}`} data-ev={ev.id}>
       <div className="tl-who">
         <Icon.send size={12} /> <span className="tl-to">To</span> <Party name={send.to} />
         <span className="tl-via">via {send.via}</span>
@@ -625,7 +619,7 @@ function SentRow({ ev, send }: { ev: ToolEvent; send: SendCall }) {
             <Icon.alert size={12} /> not delivered
           </span>
         ) : null}
-        <time className="tl-time">{fmtClock(ev.at)}</time>
+        <time className="tl-time">{fmtHourMin(ev.at)}</time>
       </div>
       {send.text ? (
         <Clamp lines={6} foot={call}>
@@ -721,7 +715,7 @@ function citations(text: string): { text: string; cites: string[] } {
 function AssistantRow({ ev }: { ev: Extract<TimelineEvent, { kind: "assistant" }> }) {
   const { text, cites } = useMemo(() => citations(ev.text), [ev.text]);
   return (
-    <div className="tl-assistant" title={fmtClock(ev.at)}>
+    <div className="tl-assistant">
       <Markdown text={text} />
       {cites.length ? (
         <div className="tl-cites">
@@ -736,7 +730,6 @@ function AssistantRow({ ev }: { ev: Extract<TimelineEvent, { kind: "assistant" }
           })}
         </div>
       ) : null}
-      <Stamp at={ev.at} float />
     </div>
   );
 }
@@ -829,7 +822,7 @@ function NowDoing({ rows }: { rows: Flat[] }) {
  * session; what it said opens in place. An idle notice that reported nothing
  * is one quiet line — a lead hears one every time a teammate's turn ends.
  */
-function MateRow({ id, mate, at }: { id: string; mate: MateMessage; at: number }) {
+function MateRow({ id, mate }: { id: string; mate: MateMessage }) {
   const [open, setOpen] = useState(false);
   const { byName, tab } = useFamily();
   const local = useLocalAgents();
@@ -865,22 +858,20 @@ function MateRow({ id, mate, at }: { id: string; mate: MateMessage; at: number }
   const said = mate.summary ?? firstLine(mate.body);
   if (!mate.body) {
     return (
-      <div className={`tl-mate tl-mate-quiet${failed ? " is-failed" : ""}`} title={fmtClock(at)} data-ev={id}>
+      <div className={`tl-mate tl-mate-quiet${failed ? " is-failed" : ""}`} data-ev={id}>
         {who}
         <span className="tl-mate-said">{mate.idle !== undefined ? (failed ? mate.idle.replace(/^failed: ?/, "stopped: ") : "is idle") : <Markdown inline text={said} />}</span>
-        <Stamp at={at} />
       </div>
     );
   }
   return (
     <div className={`tl-mate${failed ? " is-failed" : ""}`} data-ev={id}>
-      <button className="tl-mate-head" aria-expanded={open} onClick={() => setOpen(!open)} title={fmtClock(at)}>
+      <button className="tl-mate-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         {who}
         <span className="tl-mate-said">
           {mate.idle !== undefined ? <span className="faint">finished · </span> : null}
           <Markdown inline text={said} />
         </span>
-        <Stamp at={at} />
         <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
       </button>
       {open ? (
@@ -899,11 +890,11 @@ function MateRow({ id, mate, at }: { id: string; mate: MateMessage; at: number }
 function BtwCard({ btw, sessionId }: { btw: Btw; sessionId: string }) {
   const [busy, setBusy] = useState(false);
   return (
-    <div className={`tl-btw is-${btw.status}`} title={fmtClock(btw.askedAt)}>
+    <div className={`tl-btw is-${btw.status}`}>
       <div className="tl-who">
         <span className="tl-btw-tag">/btw</span> You
         {btw.source === "terminal" ? <span className="faint"> · in the terminal</span> : null}
-        <time className="tl-time">{fmtClock(btw.askedAt)}</time>
+        <time className="tl-time">{fmtHourMin(btw.askedAt)}</time>
         <Button
           variant="ghost"
           size="sm"
@@ -943,7 +934,7 @@ function IdleRow({ events }: { events: { at: number; mate: MateMessage }[] }) {
   const { byName, tab } = useFamily();
   const names = [...new Set(events.map((e) => e.mate.name))];
   return (
-    <div className="tl-mate tl-mate-quiet" title={fmtClock(events[events.length - 1]!.at)}>
+    <div className="tl-mate tl-mate-quiet">
       <span className="tl-mate-said">
         {names.map((n, i) => {
           const to = byName.get(n);
@@ -956,23 +947,21 @@ function IdleRow({ events }: { events: { at: number; mate: MateMessage }[] }) {
         })}{" "}
         {names.length === 1 ? "is" : "are"} idle
       </span>
-      <Stamp at={events[events.length - 1]!.at} />
     </div>
   );
 }
 
 /** One line — how long, and how the thought began — and the whole of it on click. */
-function Thinking({ text, at, dur }: { text: string; at: number; dur?: number }) {
+function Thinking({ text, dur }: { text: string; dur?: number }) {
   const [open, setOpen] = useState(false);
   const body = text.trim();
   return (
     <div className="tl-thinking">
-      <button className="tl-thinking-head" aria-expanded={open} onClick={() => setOpen(!open)} title={fmtClock(at)}>
+      <button className="tl-thinking-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon.brain size={13} />
         <span className="tl-thinking-label">Thinking</span>
         {dur !== undefined ? <span className="tl-dur">{fmtDur(dur)}</span> : null}
         <span className="tl-thinking-fill">{open ? null : <Markdown inline text={firstLine(body, 400)} />}</span>
-        <Stamp at={at} />
         <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
       </button>
       {open ? (
@@ -1030,7 +1019,7 @@ const ToolRow = memo(function ToolRow({ ev, now }: { ev: ToolEvent; now: number 
         aria-expanded={hasDetail ? open : undefined}
         disabled={!hasDetail}
         onClick={() => setOpen(!open)}
-        title={running && took !== null ? `${fmtClock(ev.at)} · running for ${fmtDur(took)}` : fmtClock(ev.at)}
+        title={running && took !== null ? `Running for ${fmtDur(took)}` : undefined}
       >
         <span className="sx-tool-glyph" aria-hidden="true">
           {running ? <Spinner size={11} /> : ev.status === "error" ? <Icon.x size={13} /> : <Icon.check size={13} />}

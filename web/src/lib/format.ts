@@ -22,6 +22,13 @@ export function fmtClock(ts: number): string {
   return CLOCK.format(ts);
 }
 
+const HOUR_MIN = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+
+/** Time of day to the minute, as a chat app shows it: "12:20 PM". */
+export function fmtHourMin(ts: number): string {
+  return HOUR_MIN.format(ts);
+}
+
 /** How long a step took: "2.1s", "38s", "2m 05s", "1h 04m". */
 export function fmtDur(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "0s";
