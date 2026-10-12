@@ -9,16 +9,13 @@ export function isPhone(): boolean {
 }
 
 /**
- * The tab a session opens on: the terminal. A session with no pane shows its
- * transcript there, and gets the live terminal back when it resumes. On a
- * phone it is the timeline, which reads top to bottom and reflows to any
- * width (a phone-sized terminal would also shrink the agent's tmux window for
- * the desktop, `window-size latest`). A blocked session still opens on the
- * terminal there: the prompt it is waiting on is only there. Unless the
- * prompt is a question, which is answered under the timeline.
+ * The tab a session opens on: the timeline, which reads top to bottom and
+ * reflows to any width (a phone-sized terminal would also shrink the agent's
+ * tmux window for the desktop, `window-size latest`). A blocked session still
+ * opens on the terminal: the prompt it is waiting on is only there. Unless
+ * the prompt is a question, which is answered under the timeline.
  */
 export function openingTab(s?: { status: string; question?: unknown }): SessionTab {
-  if (!isPhone()) return "terminal";
   return s?.status === "blocked" && !s.question ? "terminal" : "timeline";
 }
 

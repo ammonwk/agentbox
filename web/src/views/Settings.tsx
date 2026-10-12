@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AgentSettings, AppState, BalancerSettings, NightlyReclaim, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
 import { describeAt, describeRule, isRecurring } from "../../../src/core/schedule";
 import { api, fmtBytes, healthRows, type Health, type RepoPatch, type SettingsPatch } from "../api";
 import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
 import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle } from "../components";
+import { ACCENT_PRESETS, chooseAccent, useAccent } from "../lib/accent";
 import { BALANCER_HELP } from "../lib/balancer";
 import { disablePush, enablePush, pushState, type PushState } from "../lib/push";
 import { hrefOf } from "../route";
@@ -218,6 +219,10 @@ function General({ settings, save, saveStateOf }: SectionProps) {
       </Field>
       <SaveMark state={saveStateOf("theme")} />
 
+      <Field label="Accent colour" hint="Buttons, links and the open tab. This browser keeps it; other devices keep their own.">
+        {(id) => <AccentPicker id={id} />}
+      </Field>
+
       <Field label="Board history" hint="How many days a session with no activity stays on the board before it drops off. Open sessions agentbox started are kept regardless; closed ones stay findable under See closed while they are inside this window.">
         {(id) => (
           <div className="input-row">
@@ -249,6 +254,36 @@ function General({ settings, save, saveStateOf }: SectionProps) {
         </p>
       )}
     </section>
+  );
+}
+
+/** A swatch for each preset, then a custom colour. The chosen one has a ring
+ *  in its own colour. Each swatch shows its value for the current theme. */
+function AccentPicker({ id }: { id: string }) {
+  const pick = useAccent();
+  const custom = pick.startsWith("#") ? pick : null;
+  const name = custom ?? ACCENT_PRESETS.find((p) => p.id === pick)?.label ?? "";
+  return (
+    <div className="accent-pick" id={id}>
+      <div className="accent-swatches" role="radiogroup" aria-label="Accent colour">
+        {ACCENT_PRESETS.map((p) => (
+          <label key={p.id} className="accent-swatch" title={p.label} style={{ "--sw-dark": p.dark, "--sw-light": p.light } as CSSProperties}>
+            <input type="radio" name="accent" className="sr-only" checked={pick === p.id} onChange={() => chooseAccent(p.id)} />
+            <span className="sr-only">{p.label}</span>
+          </label>
+        ))}
+      </div>
+      <label
+        className="accent-swatch accent-custom"
+        title="Custom colour"
+        data-on={custom ? "" : undefined}
+        // The values in use, which lib/accent.ts moves away from the panels until they read.
+        style={custom ? ({ "--sw-dark": "var(--pick-dark)", "--sw-light": "var(--pick-light)" } as CSSProperties) : undefined}
+      >
+        <input type="color" aria-label="Custom accent colour" value={custom ?? "#8b5cf6"} onChange={(e) => chooseAccent(e.target.value)} />
+      </label>
+      <span className="accent-name">{name}</span>
+    </div>
   );
 }
 

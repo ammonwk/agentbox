@@ -34,6 +34,22 @@
         document.documentElement.dataset.theme = dark ? "dark" : "light";
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
       })();
+      // The accent chosen in Settings, from the values lib/accent.ts stores.
+      // With none stored, the stylesheet's orange stays.
+      (function () {
+        try {
+          var s = JSON.parse(localStorage.getItem("agentbox.accent") || "null");
+          if (!s || typeof s.pick !== "string") return;
+          var root = document.documentElement;
+          root.dataset.accent = s.pick;
+          root.style.setProperty("--pick-dark", s.dark);
+          root.style.setProperty("--pick-light", s.light);
+          root.style.setProperty("--pick-dark-on", s.darkOn);
+          root.style.setProperty("--pick-light-on", s.lightOn);
+        } catch (err) {
+          // Private mode or a bad value: the orange is fine.
+        }
+      })();
     </script>
   </head>
   <body>

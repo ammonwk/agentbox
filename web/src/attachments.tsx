@@ -255,7 +255,7 @@ export function AttachButton({ a, className }: { a: Attachments; className?: str
         aria-label="Attach images"
         onClick={() => input.current?.click()}
       >
-        <Icon.image size={15} />
+        <Icon.paperclip size={17} />
       </button>
       <input
         ref={input}

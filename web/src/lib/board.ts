@@ -44,6 +44,20 @@ export function repoKey(s: Pick<Session, "repoRoot" | "cwd">): string {
   return s.repoRoot ?? s.cwd;
 }
 
+/** Folders that hold projects: the folder under one of these is the project. */
+const CODE_ROOTS = new Set(["dev", "developer", "code", "src", "projects", "repos", "git", "work", "workspace"]);
+
+/**
+ * The project a session works on, for the prefix on its name: the folder
+ * under a code folder (~/Dev/Plaibook/Plaibook-dev/… is "plaibook"), else
+ * the repo's own folder. The first two folders are the home, never a match.
+ */
+export function projectOf(s: Pick<Session, "repoRoot" | "cwd">): string {
+  const parts = repoKey(s).split("/").filter(Boolean);
+  const i = parts.findIndex((p, n) => n >= 2 && n < parts.length - 1 && CODE_ROOTS.has(p.toLowerCase()));
+  return (i === -1 ? baseName(repoKey(s)) : parts[i + 1]).toLowerCase();
+}
+
 export function filterSessions<T extends SessionRow>(rows: readonly T[], f: BoardFilter): T[] {
   const q = f.query.trim().toLowerCase();
   return rows.filter((s) => {

@@ -6,6 +6,7 @@ import { go } from "../../route";
 import { prRefs, prUrl } from "../../lib/prlinks";
 import { sessionRefs, type SessionIndex } from "../../lib/sessionrefs";
 import { backoffMs, openTerm, type TermChannel } from "../../api";
+import { terminalAccent } from "../../lib/accent";
 import { Button, Icon } from "../../components";
 
 /**
@@ -88,7 +89,8 @@ export default function Terminal({
       lineHeight: 1.15,
       cursorBlink: true,
       scrollback: 5000,
-      theme: THEME,
+      // The cursor and the selection in the accent chosen in Settings.
+      theme: { ...THEME, cursor: terminalAccent(), selectionBackground: `${terminalAccent()}55` },
       allowProposedApi: false,
       macOptionIsMeta: true,
     });

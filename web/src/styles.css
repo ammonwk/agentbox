@@ -117,6 +117,20 @@
   color-scheme: dark;
 }
 
+/* An accent chosen in Settings replaces the orange (lib/accent.ts sets the
+ * `--pick-*` values on <html>). Each theme has its own value, and the text
+ * colour that reads on it. */
+:root[data-accent] {
+  --accent: var(--pick-light);
+  --accent-hover: color-mix(in srgb, var(--pick-light) 80%, black);
+  --on-accent: var(--pick-light-on);
+}
+:root[data-accent][data-theme="dark"] {
+  --accent: var(--pick-dark);
+  --accent-hover: color-mix(in srgb, var(--pick-dark) 80%, white);
+  --on-accent: var(--pick-dark-on);
+}
+
 /* -------------------------------------------------------------------- base */
 
 * {

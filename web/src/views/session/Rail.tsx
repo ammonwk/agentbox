@@ -9,6 +9,7 @@ import { Icon, RelativeTime } from "../../components";
 import {
   descendantsOf,
   EMPTY_FILTER,
+  projectOf,
   repoKey,
   repoShapes,
   SORT_LABEL,
@@ -379,7 +380,7 @@ function Row({
       data-status={s.status}
       data-depth={s.depth || undefined}
       style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
-      title={[titleOf(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
+      title={[namedTitle(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
       draggable={movable}
       data-drop={target || undefined}
       onDragStart={(e) => {
@@ -405,7 +406,7 @@ function Row({
     >
       <StatusDot status={s.status} shape={shape} repo={baseName(repoKey(s))} copy={s.id} />
       <span className="rail-text">
-        <span className="rail-title">{titleOf(s)}</span>
+        <RowTitle s={s} />
         {said ? <span className={`rail-snippet${s.status === "blocked" ? " blocked" : ""}`}>{said}</span> : null}
       </span>
       {s.kids ? (
@@ -504,6 +505,19 @@ function CloseFailure() {
     </p>
   );
 }
+
+/** The session's name, after the project it works on, in quieter type. */
+function RowTitle({ s }: { s: SessionRow }) {
+  const project = projectOf(s);
+  return (
+    <span className="rail-title">
+      {project ? <span className="rail-proj">{project}</span> : null}
+      {titleOf(s)}
+    </span>
+  );
+}
+
+const namedTitle = (s: SessionRow) => [projectOf(s), titleOf(s)].filter(Boolean).join(" · ");
 
 /** What it last said, what it is asking, or that its answer is waiting. */
 function snippetOf(s: SessionRow): string {
@@ -659,11 +673,11 @@ function ClosedList({ query, current, stamp, shapes }: { query: string; current:
               href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })}
               aria-current={s.id === current ? "page" : undefined}
               data-status={s.status}
-              title={titleOf(s)}
+              title={namedTitle(s)}
             >
               <StatusDot status={s.status} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} copy={s.id} />
               <span className="rail-text">
-                <span className="rail-title">{titleOf(s)}</span>
+                <RowTitle s={s} />
               </span>
               <span className="rail-when">
                 {s.closedAt ? <RelativeTime ts={s.closedAt} short title={`Closed ${new Date(s.closedAt).toLocaleString()}`} /> : null}
