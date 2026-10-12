@@ -150,6 +150,40 @@
   color: var(--text);
   background: var(--hover);
 }
+/* Active and Inactive: under the search, the same underline as the session tabs. */
+.rail-views {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.rail-view {
+  flex: 1;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 6px 8px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rail-view span {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.rail-view:hover {
+  color: var(--text);
+}
+.rail-view:focus-visible {
+  outline-offset: -2px;
+}
+.rail-view[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
 .rail-menu {
   position: absolute;
   top: calc(100% + 4px);

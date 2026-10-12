@@ -1,10 +1,10 @@
-/** The session list beside whatever session is open: search, a sort, and one
- *  row per session. It is the whole Sessions page's list; on a narrow screen
- *  with nothing open it is the page. */
+/** The session list beside whatever session is open: search, a sort, the
+ *  Active and Inactive tabs, and one row per session. It is the whole
+ *  Sessions page's list; on a narrow screen with nothing open it is the page. */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
-import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
+import { ProviderBadge, StatusDot } from "../../bits";
 import { Icon, RelativeTime } from "../../components";
 import {
   descendantsOf,
@@ -18,6 +18,7 @@ import {
   usualProvider,
   type BoardFilter,
   type Nested,
+  type RailView,
   type Section,
   type SessionRow,
   type Shape,
@@ -34,7 +35,8 @@ import { ScheduledRow } from "./Scheduled";
 // ------------------------------------------------------------------- state
 
 const SORT_KEY = "agentbox.sort";
-const SORTS: readonly SortKey[] = ["mine", "all", "status", "repo"];
+const SORTS: readonly SortKey[] = ["mine", "all", "status"];
+const VIEW_KEY = "agentbox.railView";
 
 function readSort(): SortKey {
   try {
@@ -45,9 +47,17 @@ function readSort(): SortKey {
   }
 }
 
+function readView(): RailView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "inactive" ? "inactive" : "active";
+  } catch {
+    return "active";
+  }
+}
+
 /** Survive a trip to Accounts and back: a list that forgets its search every
- *  time you look away is a list you stop searching. The sort is a preference,
- *  so it outlives the tab too. */
+ *  time you look away is a list you stop searching. The sort and the
+ *  Active/Inactive tab are preferences, so they outlive the browser tab too. */
 let rememberedFilter: BoardFilter = EMPTY_FILTER;
 /** Parents whose children are shown. Folded by default: a lead with nine
  *  teammates is one row until you open it. */
@@ -59,6 +69,7 @@ let railTop = 0;
 export function useListState() {
   const [filter, setFilterState] = useState<BoardFilter>(rememberedFilter);
   const [sort, setSortState] = useState<SortKey>(readSort);
+  const [view, setViewState] = useState<RailView>(readView);
   const [open, setOpenState] = useState(openParents);
   return {
     filter,
@@ -74,6 +85,15 @@ export function useListState() {
         /* private mode: this tab remembers it */
       }
       setSortState(s);
+    },
+    view,
+    setView: (v: RailView) => {
+      try {
+        localStorage.setItem(VIEW_KEY, v);
+      } catch {
+        /* private mode: this tab remembers it */
+      }
+      setViewState(v);
     },
     open,
     setOpen: (id: string, on: boolean) => {
@@ -92,6 +112,7 @@ export type ListState = ReturnType<typeof useListState>;
 
 export function Rail({
   sections,
+  counts,
   state,
   current,
   forcedOpen,
@@ -101,7 +122,10 @@ export function Rail({
   scheduled,
   onCancelSchedule,
 }: {
+  /** The sections of the tab `list.view` names. */
   sections: Section<Nested<SessionRow>>[];
+  /** Top-level rows in each tab, after the search. */
+  counts: Record<RailView, number>;
   state: AppState;
   current: string | null;
   /** Ancestors of the open session, held open so it is never folded away. */
@@ -121,7 +145,7 @@ export function Rail({
     () => state.closedStamp ?? state.sessions.reduce((n, s) => (s.status === "closed" ? n + 1 + (s.closedAt ?? 0) : n), 0),
     [state.closedStamp, state.sessions],
   );
-  const { filter, setFilter, sort } = list;
+  const { filter, setFilter, sort, view } = list;
   const cur = useRef<HTMLAnchorElement>(null);
   // Before paint, and before the effect below brings the open session into view.
   const scroller = useRef<HTMLDivElement>(null);
@@ -214,6 +238,21 @@ export function Rail({
         </label>
         <SortMenu list={list} />
       </div>
+      <div className="rail-views" role="tablist" aria-label="Which sessions">
+        {(["active", "inactive"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            className="rail-view"
+            aria-selected={view === v}
+            title={v === "active" ? "Running, or did something in the last 3 hours" : "Nothing in the last 3 hours"}
+            onClick={() => list.setView(v)}
+          >
+            {v === "active" ? "Active" : "Inactive"} <span>{counts[v]}</span>
+          </button>
+        ))}
+      </div>
 
       <div
         className="rail-scroll"
@@ -236,7 +275,7 @@ export function Rail({
         }}
       >
         <CloseFailure />
-        {scheduled.length ? (
+        {view === "active" && scheduled.length ? (
           <div className="rail-sec" data-kind="scheduled">
             <div className="rail-label">
               Scheduled <span>{scheduled.length}</span>
@@ -246,14 +285,15 @@ export function Rail({
             ))}
           </div>
         ) : null}
-        {rows.length === 0 && scheduled.length === 0 ? (
-          <p className="rail-none">{filter.query ? "Nothing open matches." : state.sessions.length ? "Nothing open." : "No sessions yet."}</p>
+        {rows.length === 0 && (view === "inactive" || scheduled.length === 0) ? (
+          <p className="rail-none">
+            {filter.query ? `Nothing ${view} matches.` : state.sessions.length ? `Nothing ${view}.` : "No sessions yet."}
+          </p>
         ) : null}
         {sections.map((sec) => (
           <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
             {sec.label ? (
-              <div className="rail-label" title={sort === "repo" ? sec.key : undefined}>
-                {sort === "repo" && shapes.has(sec.key) ? <ShapeMark shape={shapes.get(sec.key)!} /> : null}
+              <div className="rail-label">
                 {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length}</span>
               </div>
             ) : null}
@@ -280,7 +320,7 @@ export function Rail({
             ))}
           </div>
         ))}
-        <ClosedList query={filter.query} current={current} stamp={closedStamp} shapes={shapes} />
+        {view === "inactive" ? <ClosedList query={filter.query} current={current} stamp={closedStamp} shapes={shapes} /> : null}
       </div>
       {drag ? (
         <div className="rail-drophint" data-active={over === "root" || undefined} aria-hidden="true">

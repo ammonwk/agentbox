@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
-import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
+import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
 import {
   AccountChip,
   ContextBar,
@@ -12,7 +12,18 @@ import {
   UsageBar,
 } from "../../bits";
 import { Button, Confirm, Empty, Icon } from "../../components";
-import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
+import {
+  descendantsOf,
+  filterSessions,
+  neighbourId,
+  parentsOf,
+  runningDescendants,
+  runningSubagents,
+  sectionsOf,
+  splitActive,
+  titleOf,
+  type SessionRow,
+} from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
@@ -94,7 +105,9 @@ export function SessionView({
   }, [missing, id]);
   const narrow = useIsNarrow();
   const list = useListState();
-  const { filter, sort, open, setOpen } = list;
+  const { filter, sort, view, open, setOpen } = list;
+  // Moves a session to Inactive once its last activity is 3 hours old, with no new state frame.
+  const now = useNow(60_000);
   const closing = useClosing().pending;
 
   // The open session's ancestors, held open so it is never folded out of sight.
@@ -106,14 +119,19 @@ export function SessionView({
   }, [state.sessions, session?.parent]);
 
   // Folded as the user left it, but never with the open session folded out of
-  // sight. Closed ones are not here: they have their own list at the bottom.
-  const sections = useMemo(() => {
+  // sight. Closed ones are not here: they have their own list under Inactive.
+  const { sections, counts } = useMemo(() => {
     const rows = filterSessions(
       state.sessions.filter((s) => s.status !== "closed" && !closing.has(s.id)),
       filter,
     );
-    return sectionsOf(rows, (x) => open.has(x) || above.has(x), sort);
-  }, [state.sessions, above, filter, sort, open, closing]);
+    const tabs = splitActive(rows, now);
+    const roots = (r: SessionRow[]) => r.length - parentsOf(r).size;
+    return {
+      sections: sectionsOf(tabs[view], (x) => open.has(x) || above.has(x), sort),
+      counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
+    };
+  }, [state.sessions, above, filter, sort, view, now, open, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
@@ -247,7 +265,7 @@ export function SessionView({
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
-      {showRail ? <Rail sections={sections} state={state} current={id} forcedOpen={above} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
+      {showRail ? <Rail sections={sections} counts={counts} state={state} current={id} forcedOpen={above} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
       {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
       ) : sched ? (
