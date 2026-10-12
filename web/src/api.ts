@@ -51,6 +51,8 @@ import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
+import type { SessionWork } from "../../src/core/work";
+export type { SessionWork, WorkAgent, WorkShell } from "../../src/core/work";
 export * from "./lib/format";
 
 // ------------------------------------------------------------------- mock
@@ -253,6 +255,7 @@ export const api = {
   diff: (id: string) => get<SessionDiff>(`/api/sessions/${enc(id)}/diff`),
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
   load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
+  work: (id: string) => get<SessionWork>(`/api/sessions/${enc(id)}/work`),
 
   // accounts
   addAccount: (provider: ProviderId, label?: string) =>

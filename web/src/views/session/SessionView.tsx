@@ -22,6 +22,7 @@ import { ScheduledDetail, scheduleTitle } from "./Scheduled";
 import { isRecurring } from "../../../../src/core/schedule";
 import { go, hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
+import { WorkStrip } from "./WorkStrip";
 import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
@@ -715,6 +716,9 @@ function Detail({
       </SessionLinks.Provider>
       </PrBase.Provider>
       </FamilyContext.Provider>
+
+      {/* The terminal shows what it waits on itself. */}
+      {tab === "terminal" ? null : <WorkStrip session={session} sessions={state.sessions} />}
 
       {/* Keyed by session: each one keeps its own draft (see drafts.ts),
           rather than one box carrying its text into the next session. */}

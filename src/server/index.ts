@@ -42,6 +42,7 @@ import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { openPrs, prWarnings, syncPrs } from "../core/prs";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
+import { sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
 import { checkRequest } from "./csrf";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
@@ -851,6 +852,8 @@ const router = new Router(mapError)
     if (!s.pid) throw new HttpError(409, "session has no running process");
     return json(await procDetail(s.pid));
   })
+  // What it waits on: shells, monitors and in-process agents (src/core/work.ts).
+  .add("GET", "/api/sessions/:id/work", async ({ params }) => json(await sessionWork(fleet.get(params.id!))))
   .add("GET", "/api/sessions/:id/attach", ({ params }) => json({ argv: fleet.attachCommand(params.id!) }))
   .add("GET", "/api/sessions/:id/screen", ({ params }) => json({ text: fleet.screen(params.id!) }))
   .add("GET", "/api/grep", async ({ url }) => {

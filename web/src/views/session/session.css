@@ -840,7 +840,8 @@
 .tl-queued {
   opacity: 0.6;
 }
-.tl-queued {
+/* Only a card has a border to dash; on a bubble this drew a 3px box. */
+.tl-user.tl-queued {
   border-style: dashed;
 }
 
@@ -1759,6 +1760,94 @@ a.sx-imgpath:hover { color: var(--accent); }
   width: 100%;
   max-width: 920px;
   margin-inline: auto;
+}
+/* What the session waits on: one row of quiet chips over the composer, as
+ * wide as it. More than fit scroll sideways. */
+.wk {
+  background: var(--bg);
+  padding: 8px 18px 0;
+}
+.wk-row {
+  display: flex;
+  gap: 6px;
+  max-width: 920px;
+  margin-inline: auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.wk-row::-webkit-scrollbar {
+  display: none;
+}
+/* More to the right: the row fades out there. */
+.wk-row[data-more] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+.wk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  max-width: 340px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+a.wk-chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.wk-chip > svg {
+  flex: none;
+  color: var(--faint);
+}
+.wk-kind {
+  flex: none;
+  color: var(--faint);
+}
+.wk-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.wk-age {
+  flex: none;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+/* An agent at work: a soft pulse in the accent. */
+.wk-pulse {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: wk-pulse 1.6s ease-in-out infinite;
+}
+@keyframes wk-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wk-pulse {
+    animation: none;
+  }
+}
+@media (max-width: 640px) {
+  .wk {
+    padding: 6px 10px 0;
+  }
+  .wk-chip {
+    max-width: 260px;
+  }
 }
 .cmp-row {
   display: flex;
