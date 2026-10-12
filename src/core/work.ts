@@ -1,7 +1,8 @@
 /**
- * What a session waits on now, for the strip above its composer: the shells
- * and monitors that run under its process, and the agents it started inside
- * itself that still work. Read on demand, for the one session that is open.
+ * What a session waits on now, for the list above its composer: the shells
+ * and monitors that run under its process, the agents it started inside
+ * itself that still work, and its workflows with the agents each runs now.
+ * Read on demand, for the one session that is open.
  *
  * Subagents through the subagent MCP and teammates are sessions of their own,
  * on the board already; the page finds those by `parent`.
@@ -38,12 +39,22 @@ export interface WorkAgent {
   since: number;
 }
 
+export interface WorkWorkflow {
+  runId: string;
+  /** The workflow's `meta.name`. */
+  name: string;
+  since: number;
+  /** Its agents that started and have no result yet. */
+  agents: { id: string; label: string; phase: string | null }[];
+}
+
 export interface SessionWork {
   shells: WorkShell[];
   agents: WorkAgent[];
+  workflows: WorkWorkflow[];
 }
 
-const NONE: SessionWork = { shells: [], agents: [] };
+const NONE: SessionWork = { shells: [], agents: [], workflows: [] };
 
 /** One transcript scan per session, kept: after the first read a check costs one stat. */
 const scans = new Map<string, LaunchScan>();
@@ -59,9 +70,11 @@ export async function sessionWork(s: Session): Promise<SessionWork> {
   if (!scan) scans.set(file, (scan = new LaunchScan(file)));
   await scan.read();
   const started = startedAtOf(agent);
+  const own = s.agentSessionId && started !== null ? { dir: join(dirname(file), s.agentSessionId), started } : null;
   return {
     shells: shellsUnder(table, agent, scan.launched),
-    agents: s.agentSessionId && started !== null ? agentsOf(file, s.agentSessionId, started) : [],
+    agents: own ? agentsOf(join(own.dir, "subagents"), own.started) : [],
+    workflows: own ? workflowsOf(own.dir, own.started, scan) : [],
   };
 }
 
@@ -111,8 +124,7 @@ function shellsUnder(table: ProcTable, agent: number, launched: ReadonlyMap<stri
  * transcript ends on a final answer. One started before this process died
  * with the process before, and one quiet for SUBAGENT_QUIET_MS was stopped.
  */
-function agentsOf(file: string, agentSessionId: string, processStart: number): WorkAgent[] {
-  const dir = join(dirname(file), agentSessionId, "subagents");
+function agentsOf(dir: string, processStart: number): WorkAgent[] {
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -142,6 +154,43 @@ function agentsOf(file: string, agentSessionId: string, processStart: number): W
     }
   }
   return out.sort((a, b) => a.since - b.since);
+}
+
+/**
+ * The workflows a Claude session launched in this process that have not
+ * ended, each with the agents it runs now. A run's agents write under
+ * `<session>/subagents/workflows/<run>/`, and its `journal.jsonl` says which
+ * started and which gave a result. A run that ended has a
+ * `<session>/workflows/<run>.json`, or a task notification said so.
+ */
+function workflowsOf(dir: string, processStart: number, scan: LaunchScan): WorkWorkflow[] {
+  const out: WorkWorkflow[] = [];
+  for (const [runId, w] of scan.workflows) {
+    if (w.since < processStart || scan.ended.has(w.taskId) || exists(join(dir, "workflows", `${runId}.json`))) continue;
+    const running = new Map<string, { id: string; label: string; phase: string | null }>();
+    try {
+      for (const line of readFileSync(join(dir, "subagents", "workflows", runId, "journal.jsonl"), "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        const r = JSON.parse(line);
+        if (typeof r?.agentId !== "string") continue;
+        if (r.type === "started") running.set(r.agentId, { id: r.agentId, label: String(r.label ?? ""), phase: typeof r.phase === "string" ? r.phase : null });
+        else if (r.type === "result" || r.type === "failed") running.delete(r.agentId);
+      }
+    } catch {
+      /* no agent started yet, or a line still being written */
+    }
+    out.push({ runId, name: w.name, since: w.since, agents: [...running.values()] });
+  }
+  return out.sort((a, b) => a.since - b.since);
+}
+
+function exists(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The transcript's last record is the agent's final answer. */
@@ -186,6 +235,10 @@ interface Launch {
 class LaunchScan {
   private offset = 0;
   readonly launched = new Map<string, Launch>();
+  /** Workflows launched, by run id. */
+  readonly workflows = new Map<string, { name: string; taskId: string; since: number }>();
+  /** Background tasks a notification or a TaskStop ended, by task id. */
+  readonly ended = new Set<string>();
 
   constructor(private readonly path: string) {}
 
@@ -199,6 +252,8 @@ class LaunchScan {
     if (size < this.offset) {
       this.offset = 0;
       this.launched.clear();
+      this.workflows.clear();
+      this.ended.clear();
     }
     if (size === this.offset) return;
     const fd = openSync(this.path, "r");
@@ -223,16 +278,29 @@ class LaunchScan {
   }
 
   private line(line: string): void {
-    if (!line.includes('"run_in_background":true') && !line.includes('"name":"Monitor"')) return;
+    // A task notification ends its task unless it only reports progress.
+    // Read from the raw line: it comes in a queued message as often as in a record.
+    if (line.includes("<task-notification>")) {
+      const id = /<task-id>([^<]+)<\/task-id>/.exec(line)?.[1];
+      const status = /<status>([^<]+)<\/status>/.exec(line)?.[1];
+      if (id && status !== "running" && status !== "progress") this.ended.add(id.trim());
+    }
+    if (!line.includes('"run_in_background":true') && !line.includes('"name":"Monitor"') && !line.includes('"local_workflow"') && !line.includes('"name":"TaskStop"')) return;
     let r: any;
     try {
       r = JSON.parse(line);
     } catch {
       return;
     }
+    const launched = r?.toolUseResult;
+    if (launched?.status === "async_launched" && launched.taskType === "local_workflow" && typeof launched.runId === "string") {
+      const at = typeof r.timestamp === "string" ? Date.parse(r.timestamp) : NaN;
+      this.workflows.set(launched.runId, { name: String(launched.workflowName ?? "workflow"), taskId: String(launched.taskId ?? ""), since: Number.isFinite(at) ? at : 0 });
+    }
     const content = r?.message?.content;
     if (!Array.isArray(content)) return;
     for (const b of content) {
+      if (b?.type === "tool_use" && b.name === "TaskStop") this.ended.add(String(b.input?.task_id ?? b.input?.shell_id ?? ""));
       if (b?.type !== "tool_use" || typeof b.input?.command !== "string") continue;
       const monitor = b.name === "Monitor";
       if (!monitor && !(b.name === "Bash" && b.input.run_in_background === true)) continue;

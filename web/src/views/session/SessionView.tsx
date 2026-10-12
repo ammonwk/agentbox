@@ -717,19 +717,21 @@ function Detail({
       </PrBase.Provider>
       </FamilyContext.Provider>
 
-      {/* The terminal shows what it waits on itself. */}
-      {tab === "terminal" ? null : <WorkStrip session={session} sessions={state.sessions} />}
-
-      {/* Keyed by session: each one keeps its own draft (see drafts.ts),
-          rather than one box carrying its text into the next session. */}
-      <Composer
-        key={session.id}
-        session={session}
-        accounts={state.accounts}
-        claimIdleMin={state.settings.balancer.claimIdleMin}
-        skills={skills}
-        textareaRef={composerRef}
-      />
+      {/* What it waits on rises out of the composer while you point at it.
+          The terminal shows that itself. */}
+      <div className="cmp-dock">
+        {tab === "terminal" ? null : <WorkStrip session={session} sessions={state.sessions} />}
+        {/* Keyed by session: each one keeps its own draft (see drafts.ts),
+            rather than one box carrying its text into the next session. */}
+        <Composer
+          key={session.id}
+          session={session}
+          accounts={state.accounts}
+          claimIdleMin={state.settings.balancer.claimIdleMin}
+          skills={skills}
+          textareaRef={composerRef}
+        />
+      </div>
 
       {confirmClose ? (
         <ConfirmClose

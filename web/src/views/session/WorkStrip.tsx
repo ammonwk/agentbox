@@ -1,9 +1,11 @@
-/** What the session waits on, in one quiet row above its composer: the
- *  sessions it started that still run (subagents, teammates), the agents it
- *  started inside itself, and its background shells and monitors. The
- *  terminal shows these too; this is so the timeline does. */
+/** What the session waits on — the sessions it started that still run
+ *  (subagents, teammates), its workflows and the agents each runs now, the
+ *  agents it started inside itself, its background shells and monitors — as
+ *  a small pill on the composer, and a list that rises out of the composer
+ *  while you point at it. The terminal shows these too; this is so the
+ *  timeline does. */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, useNow, type SessionWork } from "../../api";
 import { StatusDot } from "../../bits";
 import { Icon } from "../../components";
@@ -17,49 +19,118 @@ const POLL_MS = 3_000;
 export function WorkStrip({ session, sessions }: { session: SessionRow; sessions: readonly SessionRow[] }) {
   const work = useWork(session);
   const now = useNow(10_000);
+  // Pinned open by a click or a tap; pointing at the composer opens it too.
+  const [pinned, setPinned] = useState(false);
   const kids = useMemo(
     () => sessions.filter((s) => s.parent === session.id && (s.status === "running" || s.status === "blocked")),
     [sessions, session.id],
   );
   const shells = work?.shells ?? [];
   const agents = work?.agents ?? [];
-  // Chips past the right edge: the row fades out there until it is scrolled to its end.
-  const row = useRef<HTMLDivElement>(null);
-  const [more, setMore] = useState(false);
-  const measure = () => {
-    const el = row.current;
-    setMore(!!el && el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
-  };
-  useLayoutEffect(measure, [kids, shells, agents]);
-  if (kids.length + shells.length + agents.length === 0) return null;
+  const workflows = work?.workflows ?? [];
+  useEffect(() => {
+    if (!pinned) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPinned(false);
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [pinned]);
+  const total = kids.length + workflows.length + agents.length + shells.length;
+  if (total === 0) return null;
+
+  const monitors = shells.filter((s) => s.monitor).length;
+  const summary = [
+    count(kids.length, "subagent"),
+    count(workflows.length, "workflow"),
+    count(agents.length, "agent"),
+    count(shells.length - monitors, "shell"),
+    count(monitors, "monitor"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const age = (since: number | null) => (since ? <span className="wk-age">{fmtCountdown(now - since)}</span> : null);
+
   return (
-    <div className="wk" role="status" aria-label="What it waits on">
-      <div className="wk-row" ref={row} data-more={more || undefined} onScroll={measure}>
+    <div className="wk" data-open={pinned || undefined}>
+      <div className="wk-col">
+      <div className="wk-pop">
+      <div className="wk-list" role="region" aria-label="What it waits on">
         {kids.map((k) => (
-          <a key={k.id} className="wk-chip" href={hrefOf({ page: "session", id: k.id, tab: "timeline" })} title={`Open ${titleOf(k)}`}>
-            <StatusDot status={k.status} />
-            <span className="wk-name">{k.subagent?.name ?? titleOf(k)}</span>
-            {age(k.lastPromptAt)}
-          </a>
+          <Row
+            key={k.id}
+            href={hrefOf({ page: "session", id: k.id, tab: "timeline" })}
+            mark={<StatusDot status={k.status} />}
+            kind="subagent"
+            name={k.subagent?.name ?? titleOf(k)}
+            age={age(k.lastPromptAt)}
+            title={`Open ${titleOf(k)}`}
+          />
+        ))}
+        {workflows.map((w) => (
+          <div key={w.runId} className="wk-group">
+            <Row mark={<span className="wk-pulse" aria-hidden="true" />} kind="workflow" name={w.name} age={age(w.since)} />
+            {w.agents.map((a) => (
+              <Row key={a.id} sub mark={<span className="wk-tick" aria-hidden="true" />} kind={a.phase ?? "agent"} name={a.label} />
+            ))}
+          </div>
         ))}
         {agents.map((a) => (
-          <span key={a.id} className="wk-chip" title={`${a.background ? "Background agent" : "Agent"}: ${a.description}`}>
-            <span className="wk-pulse" aria-hidden="true" />
-            <span className="wk-kind">{a.name ?? "agent"}</span>
-            <span className="wk-name">{a.description}</span>
-            {age(a.since)}
-          </span>
+          <Row
+            key={a.id}
+            mark={<span className="wk-pulse" aria-hidden="true" />}
+            kind={a.name ?? "agent"}
+            name={a.description}
+            age={age(a.since)}
+            title={`${a.background ? "Background agent" : "Agent"}: ${a.description}`}
+          />
         ))}
         {shells.map((sh) => (
-          <span key={sh.pid} className="wk-chip" title={sh.command}>
-            {sh.monitor ? <Icon.gauge size={12} /> : <Icon.terminal size={12} />}
-            <span className="wk-kind">{sh.monitor ? "monitor" : sh.kind === "service" ? "server" : "shell"}</span>
-            <span className="wk-name">{sh.label}</span>
-            {age(sh.since)}
-          </span>
+          <Row
+            key={sh.pid}
+            mark={sh.monitor ? <Icon.gauge size={12} /> : <Icon.terminal size={12} />}
+            kind={sh.monitor ? "monitor" : sh.kind === "service" ? "server" : "shell"}
+            name={sh.label}
+            age={age(sh.since)}
+            title={sh.command}
+          />
         ))}
       </div>
+      </div>
+      <button
+        type="button"
+        className="wk-tab"
+        aria-expanded={pinned}
+        title={pinned ? "Hide (Esc)" : "Show what it waits on"}
+        onClick={() => setPinned(!pinned)}
+      >
+        <span className="wk-pulse" aria-hidden="true" />
+        {summary}
+      </button>
+      </div>
+    </div>
+  );
+}
+
+function count(n: number, word: string): string | null {
+  return n ? `${n} ${word}${n === 1 ? "" : "s"}` : null;
+}
+
+function Row({ href, mark, kind, name, age, title, sub }: { href?: string; mark: ReactNode; kind: string; name: string; age?: ReactNode; title?: string; sub?: boolean }) {
+  const body = (
+    <>
+      <span className="wk-mark">{mark}</span>
+      <span className="wk-kind">{kind}</span>
+      <span className="wk-name">{name}</span>
+      {age}
+    </>
+  );
+  const cls = `wk-item${sub ? " is-sub" : ""}`;
+  return href ? (
+    <a className={cls} href={href} title={title}>
+      {body}
+    </a>
+  ) : (
+    <div className={cls} title={title}>
+      {body}
     </div>
   );
 }

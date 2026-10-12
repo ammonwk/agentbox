@@ -1761,50 +1761,119 @@ a.sx-imgpath:hover { color: var(--accent); }
   max-width: 920px;
   margin-inline: auto;
 }
-/* What the session waits on: one row of quiet chips over the composer, as
- * wide as it. More than fit scroll sideways. */
-.wk {
-  background: var(--bg);
-  padding: 8px 18px 0;
+/* What the session waits on: a tab on the composer's top edge says how much,
+ * and a list rises out of the composer while the pointer is on it, or after a
+ * click on the tab. It lies over the end of the timeline; nothing moves. */
+.cmp-dock {
+  position: relative;
 }
-.wk-row {
+.wk {
+  position: absolute;
+  /* The tab's foot on the box's top edge, under the composer's 6px padding. */
+  bottom: calc(100% - 6px);
+  left: 0;
+  right: 0;
+  z-index: 6;
+  padding: 0 18px;
+  pointer-events: none;
+}
+.wk-col {
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
   max-width: 920px;
   margin-inline: auto;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-.wk-row::-webkit-scrollbar {
-  display: none;
+.wk-col > * {
+  pointer-events: auto;
 }
-/* More to the right: the row fades out there. */
-.wk-row[data-more] {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
-}
-.wk-chip {
+.wk-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  flex: none;
-  max-width: 340px;
-  height: 26px;
-  padding: 0 10px;
+  gap: 7px;
+  height: 24px;
+  margin: 0 0 -1px 16px;
+  padding: 0 11px 0 9px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
   background: var(--raised);
   color: var(--muted);
-  font-size: 12px;
+  font: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.wk-tab:hover,
+.wk-tab[aria-expanded="true"] {
+  color: var(--text);
+}
+/* The padding under the list is the way up from the tab: the pointer keeps
+ * it open across the gap. */
+.wk-pop {
+  width: min(460px, 100%);
+  padding-bottom: 8px;
+  opacity: 0;
+  transform: translateY(6px);
+  visibility: hidden;
+  transition: opacity 0.14s, transform 0.14s, visibility 0s 0.14s;
+}
+.wk-list {
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: var(--shadow-lg);
+}
+.wk[data-open] .wk-pop,
+.wk:focus-within .wk-pop {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition: opacity 0.14s, transform 0.14s, visibility 0s;
+}
+/* Only a pointer that hovers: a tap into the box on a phone opens nothing. */
+@media (hover: hover) {
+  .cmp-dock:hover .wk-pop {
+    opacity: 1;
+    transform: none;
+    visibility: visible;
+    transition: opacity 0.14s, transform 0.14s, visibility 0s;
+  }
+}
+.wk-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
   text-decoration: none;
   white-space: nowrap;
 }
-a.wk-chip:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
+a.wk-item:hover {
+  background: var(--hover);
 }
-.wk-chip > svg {
+/* A workflow's agents, under it. */
+.wk-item.is-sub {
+  min-height: 26px;
+  padding-left: 30px;
+  font-size: 12px;
+}
+.wk-group + .wk-item,
+.wk-item + .wk-group,
+.wk-group + .wk-group {
+  margin-top: 2px;
+}
+.wk-mark {
+  display: grid;
+  place-items: center;
   flex: none;
+  width: 14px;
   color: var(--faint);
 }
 .wk-kind {
@@ -1819,10 +1888,12 @@ a.wk-chip:hover {
 }
 .wk-age {
   flex: none;
+  margin-left: auto;
+  padding-left: 10px;
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
-/* An agent at work: a soft pulse in the accent. */
+/* Something at work: a soft pulse in the accent. */
 .wk-pulse {
   flex: none;
   width: 7px;
@@ -1830,6 +1901,12 @@ a.wk-chip:hover {
   border-radius: 50%;
   background: var(--accent);
   animation: wk-pulse 1.6s ease-in-out infinite;
+}
+.wk-tick {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-strong);
 }
 @keyframes wk-pulse {
   50% {
@@ -1840,13 +1917,16 @@ a.wk-chip:hover {
   .wk-pulse {
     animation: none;
   }
+  .wk-pop {
+    transition: none;
+  }
 }
 @media (max-width: 640px) {
   .wk {
-    padding: 6px 10px 0;
+    padding: 0 10px;
   }
-  .wk-chip {
-    max-width: 260px;
+  .wk-tab {
+    margin-left: 12px;
   }
 }
 .cmp-row {
