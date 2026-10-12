@@ -17,7 +17,7 @@ import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
 import { Skills } from "./views/Skills";
-import { OnboardingCard } from "./views/Onboarding";
+import { InboxBell } from "./Inbox";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -201,6 +201,7 @@ export function App() {
             <span><kbd>Alt+W</kbd> close</span>
           </div>
           <UpdateReady />
+          <InboxBell state={state} themeError={theme.error} />
           <ConnectionChip />
           <ThemeControl value={theme.pref} onChange={theme.set} />
         </aside>
@@ -233,18 +234,8 @@ export function App() {
           </header>
         )}
 
+        {/* The one banner left: the rest are in the inbox (Inbox.tsx). */}
         <StaleBanner />
-        {theme.error ? (
-          <Banner tone="warn" icon={Icon.alert}>
-            Theme not saved: {theme.error}
-          </Banner>
-        ) : null}
-        {state?.warnings.map((w) => (
-          <Banner key={w} tone="warn" icon={Icon.alert}>
-            {w}
-          </Banner>
-        ))}
-        {state ? <OnboardingCard ob={state.onboarding} sessions={state.sessions} /> : null}
 
         <SysbarSlot.Provider value={sysbarSlot}>
         <main className={`content ${(flush || route.page === "skills") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1}>
@@ -391,32 +382,16 @@ function ConnectionChip() {
   );
 }
 
-/** The app keeps rendering the last state it had; this says so out loud. */
+/**
+ * The app keeps rendering the last state it had; this says so out loud. Only
+ * a failed connection is a banner: then the whole page is out of date. A
+ * restart the server announced, and its first read of the transcripts, are
+ * expected and over in seconds, so they go in the inbox (Inbox.tsx).
+ */
 function StaleBanner() {
-  const { connected, downSince, retryAt, attempts, lastError, failing, restarting, starting, retryNow } = useConnection();
+  const { connected, downSince, retryAt, attempts, lastError, failing, restarting, retryNow } = useConnection();
   const secs = useCountdown(retryAt);
-  // Down on purpose: a restart the server announced, then its first read of
-  // the transcripts. Expected, and over in seconds, so no alarm.
-  if (connected && starting) {
-    return (
-      <Banner tone="warn" icon={Icon.clock}>
-        <span>
-          <strong>agentbox is starting.</strong> Reading transcripts
-          {starting.of > 0 ? ` (${starting.read} of ${starting.of})` : ""}; what you see is from before the restart until it is done.
-        </span>
-      </Banner>
-    );
-  }
-  if (!connected && restarting) {
-    return (
-      <Banner tone="warn" icon={Icon.refresh}>
-        <span>
-          <strong>agentbox is restarting…</strong> Reconnecting as soon as it is back; what you see is from before the restart.
-        </span>
-      </Banner>
-    );
-  }
-  if (connected || downSince === null || !failing) return null;
+  if (connected || restarting || downSince === null || !failing) return null;
   const downFor = Math.round((Date.now() - downSince) / 1000);
   return (
     <Banner tone="danger" icon={Icon.wifiOff}>
