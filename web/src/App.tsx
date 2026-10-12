@@ -11,6 +11,7 @@ import { go, hrefOf, navOf, onGo, parseHash, type NavId, type Route } from "./ro
 import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
 import { useUpdateReady } from "./lib/update";
 import { SystemBar } from "./SystemBar";
+import { SysbarSlot } from "./sysbarslot";
 import { SessionView } from "./views/session/SessionView";
 import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
@@ -79,6 +80,8 @@ export function App() {
   const theme = useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
   const nav = navOf(route);
+  // The start of the system bar, where an open session puts its facts.
+  const [sysbarSlot, setSysbarSlot] = useState<HTMLElement | null>(null);
 
   const counts = useMemo(() => countsOf(state), [state]);
 
@@ -243,6 +246,7 @@ export function App() {
         ))}
         {state ? <OnboardingCard ob={state.onboarding} sessions={state.sessions} /> : null}
 
+        <SysbarSlot.Provider value={sysbarSlot}>
         <main className={`content ${(flush || route.page === "skills") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
@@ -277,9 +281,10 @@ export function App() {
             )}
           </ErrorBoundary>
         </main>
+        </SysbarSlot.Provider>
 
         <ErrorBoundary label="The system bar">
-          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} />
+          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} slotRef={setSysbarSlot} />
         </ErrorBoundary>
       </div>
 

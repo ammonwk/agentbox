@@ -1108,6 +1108,49 @@ textarea,
   opacity: 0.55;
 }
 
+/* The open session's facts, then the machine. The facts give way first when
+ * the window is narrow: they shrink, and the machine figures keep their size. */
+.sysbar-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  container-type: inline-size;
+}
+/* A session's facts and every figure need about 1460px. With less, the
+ * subscriptions give way; the sheet the bar opens still lists them. */
+@container (max-width: 1460px) {
+  .sys-session:not(:empty) + .sysbar-row .sys-limits,
+  .sys-session:not(:empty) + .sysbar-row .sys-div:has(+ .sys-limits) {
+    display: none;
+  }
+}
+.sysbar-line > .sysbar-row {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 320px;
+}
+.sys-session {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 42px;
+  padding: 0 14px;
+  border-right: 1px solid var(--border);
+}
+.sys-session:empty,
+.sysbar-bare:has(> .sys-session:empty) {
+  display: none;
+}
+.sys-session .sx-facts {
+  margin: 0;
+  gap: 14px;
+}
+/* The sidebar names the project; the path is in the branch's tooltip. */
+.sys-session .fact-cwd {
+  display: none;
+}
+
 .sysbar-row {
   display: flex;
   align-items: center;
@@ -1201,9 +1244,10 @@ textarea,
   height: 24px;
   flex: none;
 }
+/* The bar's fills are the accent chosen in Settings; amber and red still say "hot". */
 .corebars i {
   width: 5px;
-  background: var(--success);
+  background: var(--accent);
   opacity: 0.62;
   display: block;
 }
@@ -1232,7 +1276,7 @@ textarea,
   width: auto;
 }
 .seg-used {
-  background: var(--success);
+  background: var(--accent);
   display: block;
 }
 .seg-cache {
@@ -1290,7 +1334,7 @@ textarea,
   background: color-mix(in srgb, var(--text) 45%, transparent);
 }
 .sys-limit-bar[data-kind="5h"] i {
-  background: color-mix(in srgb, var(--info) 75%, transparent);
+  background: color-mix(in srgb, var(--accent) 75%, transparent);
 }
 .sys-limit-bar[data-tone="warn"] i {
   background: var(--warning);
@@ -1472,7 +1516,7 @@ textarea,
 .corebar-h i {
   display: block;
   height: 100%;
-  background: var(--success);
+  background: var(--accent);
   opacity: 0.62;
 }
 .corebar-h i[data-hot="true"] {

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
 import { AccountChip, ContextBar, PROVIDER_LABEL, UsageBar } from "../../bits";
@@ -25,7 +26,8 @@ import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
-import { isInstalledApp } from "../../lib/phone";
+import { isInstalledApp, useIsPhone } from "../../lib/phone";
+import { useSysbarSlot } from "../../sysbarslot";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
 import { ago } from "../../lib/format";
@@ -523,6 +525,54 @@ function Detail({
     [state.skills, state.repos, session.provider, session.repoRoot, session.cwd],
   );
 
+  // What it runs as and on, and what it has spent.
+  const sysbarSlot = useSysbarSlot();
+  const phone = useIsPhone();
+  // The bar is one line beside the machine's figures: there the context is a
+  // percentage, the cache reads are in the tooltip, and the account chip says
+  // the provider, so a Claude model is "opus-5-5".
+  const inBar = !!sysbarSlot && !phone;
+  const facts = (
+    <div className="sx-facts">
+      <span className="fact">
+        <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
+      </span>
+      <span className="fact mono fact-cwd" title={session.cwd}>
+        <Icon.folder size={12} />
+        <span className="fact-cwd-text">
+          <span dir="ltr">{tildify(session.cwd, home)}</span>
+        </span>
+      </span>
+      {session.branch ? (
+        <span className="fact mono" title={session.cwd}>
+          <Icon.branch size={12} /> {session.branch}
+        </span>
+      ) : null}
+      {session.model ? (
+        <span className="fact mono" title={session.model}>
+          {inBar ? session.model.replace(/^claude-/, "") : session.model}
+          {session.effort ? <span className="muted"> · {session.effort}</span> : null}
+        </span>
+      ) : null}
+      <span className="fact">
+        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide={!inBar} />
+      </span>
+      <span
+        className="fact"
+        title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
+      >
+        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {inBar ? null : <>{fmtTokens(session.tokens.cacheRead)} cached · </>}
+        <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
+      </span>
+      {pr && (
+        <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
+          <Icon.prs size={12} /> #{pr.number}
+          {pr.isDraft ? " (draft)" : ""}
+        </a>
+      )}
+    </div>
+  );
+
   return (
     <div className="sv-main" onClick={(e) => {
       if (e.defaultPrevented || e.button !== 0 || e.detail > 1 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
@@ -536,44 +586,9 @@ function Detail({
       {/* No title, ids or status: the list shows which session is open and
           what it is doing. The facts, then the tabs with the actions. */}
       <header className="sx-header">
-        <div className="sx-facts">
-          <span className="fact">
-            <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
-          </span>
-          <span className="fact mono fact-cwd" title={session.cwd}>
-            <Icon.folder size={12} />
-            <span className="fact-cwd-text">
-              <span dir="ltr">{tildify(session.cwd, home)}</span>
-            </span>
-          </span>
-          {session.branch ? (
-            <span className="fact mono">
-              <Icon.branch size={12} /> {session.branch}
-            </span>
-          ) : null}
-          {session.model ? (
-            <span className="fact mono">
-              {session.model}
-              {session.effort ? <span className="muted"> · {session.effort}</span> : null}
-            </span>
-          ) : null}
-          <span className="fact">
-            <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
-          </span>
-          <span
-            className="fact"
-            title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
-          >
-            {fmtTokens(session.tokens.input + session.tokens.output)} tok · {fmtTokens(session.tokens.cacheRead)} cached ·{" "}
-            <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
-          </span>
-          {pr && (
-            <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
-              <Icon.prs size={12} /> #{pr.number}
-              {pr.isDraft ? " (draft)" : ""}
-            </a>
-          )}
-        </div>
+        {/* On a computer the facts go in the system bar along the bottom. A
+            phone hides that bar in a session, so there they stay here. */}
+        {inBar && sysbarSlot ? createPortal(facts, sysbarSlot) : facts}
 
         {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
         {(session.status === "blocked" && !session.question) || error ? (
