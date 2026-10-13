@@ -13,6 +13,7 @@
  * subscriptions are in the database's key-value rows.
  */
 
+import { retrying } from "./attention";
 import { getKv, setKv } from "./db";
 import type { Session } from "./types";
 
@@ -201,40 +202,94 @@ export async function pushToAll(msg: PushMessage): Promise<{ sent: number; faile
 
 // ---------------------------------------------------- when a session blocks
 
+/**
+ * How long a session must stay blocked before it is pushed. One the fleet
+ * unblocks itself — a start-up dialog it answers, a permission prompt in a
+ * session that skips them — or a screen caught half-drawn is blocked for a
+ * pass or two at most, and a notification cannot be taken back.
+ */
+export const PUSH_HOLD_MS = 5_000;
+/** All Claude says of a panel you opened in its terminal (/model, /config):
+ *  a dialog to Claude, and nothing the screen check knows as a prompt. */
+const OWN_PANEL = "dialog open";
+/** One that opens this soon after you typed there is taken for yours. */
+const PUSH_YOURS_MS = 5_000;
+
 /** The sessions already told about, for as long as they stay blocked. */
 const told = new Set<string>();
+/** When each blocked session not yet told about was first seen so. */
+const since = new Map<string, number>();
 let seeded = false;
+let recheck: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Called with the board whenever it changes: a session that has turned
- * blocked is pushed once, and again only after it has been unblocked. What
- * was blocked when the server started is not news. A stop the fleet retries
- * by itself (a rate limit with a stated reset) is not yours to answer, so it
- * waits until it is.
+ * blocked, and stayed so for `PUSH_HOLD_MS`, is pushed once, and again only
+ * after it has been unblocked. What was blocked when the server started is
+ * not news, nor is a panel you opened by typing into the session's
+ * terminal (`typedAt`: when you last did). A stop the fleet retries by itself (an
+ * error or rate-limit screen, `retrying`) is not yours to answer, so it
+ * waits until the retries are spent. An error screen is never pushed, spent
+ * or not: the board shows it, and it is no question to answer.
  */
-export function notifyBlocked(sessions: readonly Session[], reasonOf: (id: string) => string | null): void {
+export function notifyBlocked(board: () => readonly Session[], reasonOf: (id: string) => string | null, typedAt: (id: string) => number = () => 0): void {
+  const { news, next } = blockedNews(board(), reasonOf, typedAt);
+  for (const msg of news) {
+    if (pushSubscriptions().length === 0) continue;
+    void pushToAll(msg).then((r) => {
+      for (const f of r.failed) console.error(`agentbox: push for ${msg.tag} failed — ${f}`);
+    });
+  }
+  // The board may not change again before a held block is due.
+  if (recheck) clearTimeout(recheck);
+  recheck = next === null ? null : setTimeout(() => notifyBlocked(board, reasonOf, typedAt), Math.max(0, next - Date.now()));
+  recheck?.unref?.();
+}
+
+/** What `notifyBlocked` sends for this board: one message per session newly
+ *  blocked on you, and when the next block still held comes due. */
+export function blockedNews(
+  sessions: readonly Session[],
+  reasonOf: (id: string) => string | null,
+  typedAt: (id: string) => number = () => 0,
+  now = Date.now(),
+): { news: PushMessage[]; next: number | null } {
   const blocked = sessions.filter((s) => s.status === "blocked");
   const ids = new Set(blocked.map((s) => s.id));
   for (const id of told) if (!ids.has(id)) told.delete(id);
+  for (const id of since.keys()) if (!ids.has(id)) since.delete(id);
   if (!seeded) {
     seeded = true;
     for (const id of ids) told.add(id);
-    return;
+    return { news: [], next: null };
   }
+  const news: PushMessage[] = [];
+  let next: number | null = null;
   for (const s of blocked) {
     if (told.has(s.id)) continue;
+    const first = since.get(s.id) ?? now;
+    since.set(s.id, first);
+    if (retrying(s)) continue;
     const reason = reasonOf(s.id) ?? "waiting on a prompt";
-    if (reason.includes("agentbox retries it")) continue;
+    // Not marked told: the prompt that replaces the error is still news.
+    if (reason === "error") continue;
+    if (reason === OWN_PANEL && first - typedAt(s.id) < PUSH_YOURS_MS) {
+      told.add(s.id);
+      continue;
+    }
+    const due = first + PUSH_HOLD_MS;
+    if (now < due) {
+      next = Math.min(next ?? due, due);
+      continue;
+    }
     told.add(s.id);
-    if (pushSubscriptions().length === 0) continue;
     const ask = s.question?.questions[0]?.question;
-    void pushToAll({
+    news.push({
       title: s.label ?? s.title,
       body: ask ? `Asks: ${ask}` : `Blocked: ${reason}`,
       url: `/#/s/${encodeURIComponent(s.id)}${s.question ? "" : "/terminal"}`,
       tag: s.id,
-    }).then((r) => {
-      for (const f of r.failed) console.error(`agentbox: push for ${s.id} failed — ${f}`);
     });
   }
+  return { news, next };
 }

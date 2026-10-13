@@ -52,6 +52,8 @@ const I =
 export const Icon = {
   sessions: I("M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", "M3 9h18M9 9v12"),
   settings: I("M4 7h8M16 7h4M4 17h4M12 17h8", "M14 4v6M8 14v6"),
+  /** A card on a stack. */
+  cards: I("M6 3h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M7 19.5h10M9.5 22h5"),
 
   plus: I("M12 5v14M5 12h14"),
   play: I("M7 4.5v15l12-7.5z"),

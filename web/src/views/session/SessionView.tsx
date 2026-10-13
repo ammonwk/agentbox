@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
-import { api, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
+import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
 import {
   AccountChip,
   ContextBar,
@@ -12,7 +12,7 @@ import {
   UsageBar,
 } from "../../bits";
 import { Button, Confirm, Empty, Icon } from "../../components";
-import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, titleOf, type SessionRow } from "../../lib/board";
+import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, shownStatus, titleOf, type SessionRow } from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
@@ -26,7 +26,7 @@ import { useIsNarrow } from "./useIsNarrow";
 import { isInstalledApp } from "../../lib/phone";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
-import { ago } from "../../lib/format";
+import { ago, fmtRetryAt } from "../../lib/format";
 import { outstandingOf, sortWindows } from "../../lib/usage";
 import { useDismiss, useFloating } from "../newsession/popover";
 import { buildSessionIndex } from "../../lib/sessionrefs";
@@ -166,9 +166,19 @@ export function SessionView({
   // closed one; in the installed app Ctrl does too, and Ctrl+Tab and
   // Ctrl+Shift+Tab step through the sessions like a browser's tabs. Capture
   // these before the terminal handles its own keys (so there Ctrl+W no longer
-  // deletes a word: Ctrl+Backspace still does).
+  // deletes a word: Ctrl+Backspace still does). Shift+Tab in the terminal is
+  // taken here too: it steps back a tab as it does everywhere else, and never
+  // reaches the agent, where it would change the permission mode.
   useEffect(() => {
     const onShortcut = (e: KeyboardEvent) => {
+      if (e.key === "Tab" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && id && (e.target as HTMLElement | null)?.closest(".xterm")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.isComposing && !document.querySelector(".modal-backdrop")) {
+          onTab(SESSION_TABS[(SESSION_TABS.indexOf(tab) - 1 + SESSION_TABS.length) % SESSION_TABS.length]);
+        }
+        return;
+      }
       const app = e.ctrlKey && !e.altKey && isInstalledApp();
       if ((app || (e.altKey && !e.ctrlKey)) && !e.metaKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
         if (app && e.key === "Tab") {
@@ -193,9 +203,11 @@ export function SessionView({
       }
     };
     // j/k switch sessions and l/→ h fold, from anywhere that is not a text
-    // field or the terminal; 1–4 pick a tab. ← goes over to the list (from
-    // the message box too, once the cursor is at its start), where the arrows
-    // walk the rows and Enter opens one.
+    // field or the terminal; 1–4 pick a tab, and Tab and Shift+Tab step
+    // through them, from the message box too (where Tab only moved focus on).
+    // In the terminal Tab is the agent's; Shift+Tab is taken above.
+    // ← goes over to the list (from the message box too, once the cursor is at
+    // its start), where the arrows walk the rows and Enter opens one.
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
@@ -206,6 +218,15 @@ export function SessionView({
         if (row && (!field || (box && box.selectionStart === 0 && box.selectionEnd === 0))) {
           e.preventDefault();
           row.focus();
+          return;
+        }
+      }
+      if (e.key === "Tab" && id && t && !t.closest(".xterm") && !e.isComposing && !document.querySelector(".modal-backdrop")) {
+        const box = t instanceof HTMLTextAreaElement && t.id.startsWith("cmp-");
+        if (box || !["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) {
+          e.preventDefault();
+          const i = SESSION_TABS.indexOf(tab);
+          onTab(SESSION_TABS[(i + (e.shiftKey ? -1 : 1) + SESSION_TABS.length) % SESSION_TABS.length]);
           return;
         }
       }
@@ -557,6 +578,12 @@ function Detail({
     </div>
   );
 
+  // The session's id beside the title, and the provider's own id — what
+  // `claude -r` (or `codex resume`) takes — with the actions. A phone has no
+  // room by the title: both follow the buttons in the row you swipe, as text.
+  const idCopy = <CopyButton text={session.id} label={session.id} className="sx-id" />;
+  const resumeCopy = session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null;
+
   return (
     <div className="sv-main" onClick={(e) => {
       if (e.defaultPrevented || e.button !== 0 || e.detail > 1 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
@@ -571,14 +598,13 @@ function Detail({
         <div className="sx-header-top">
           <ProviderBadge provider={session.provider} />
           <TitleEdit session={session} />
-          <CopyButton text={session.id} label={session.id} className="sx-id" />
-          <StatusPill status={session.status} />
+          {narrow ? null : idCopy}
+          <StatusPill status={shownStatus(session)} />
           {/* tmux is the normal case; only say where it runs when it is not ours. */}
           {session.host === "external" || session.host === "subagent" ? <HostBadge host={session.host} /> : null}
 
           <div className="sx-header-actions">
-            {/* The provider's own id: what `claude -r` (or `codex resume`) takes. */}
-            {session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null}
+            {narrow ? null : resumeCopy}
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt
@@ -620,14 +646,20 @@ function Detail({
                 Close
               </Button>
             )}
-            {narrow ? facts : null}
+            {narrow ? (
+              <>
+                {idCopy}
+                {resumeCopy}
+                {facts}
+              </>
+            ) : null}
           </div>
         </div>
 
         {narrow ? null : facts}
 
         {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
-        {(session.status === "blocked" && !session.question) || error ? (
+        {(session.status === "blocked" && !session.question && shownStatus(session) !== "retrying") || error ? (
           <div className="sx-attention-line bad" role={error ? "alert" : undefined}>
             {error ? (
               <>
@@ -643,6 +675,10 @@ function Detail({
               </>
             )}
           </div>
+        ) : session.status === "blocked" && !session.question ? (
+          <div className="sx-attention-line info" role="status">
+            <Icon.refresh size={13} /> {session.attention.reason}. Nothing for you to do; the Terminal tab shows the error.
+          </div>
         ) : session.status === "waiting" && session.turnError ? (
           <TurnErrorLine session={session} />
         ) : null}
@@ -654,7 +690,7 @@ function Detail({
               className="sx-tab"
               role="tab"
               aria-selected={tab === t}
-              title={`${TAB_LABEL[t]} (${i + 1})`}
+              title={`${TAB_LABEL[t]} (${i + 1}; Tab and Shift+Tab step through)`}
               onClick={() => onTab(t)}
             >
               {TAB_LABEL[t]}
@@ -713,7 +749,6 @@ function Detail({
         key={session.id}
         session={session}
         accounts={state.accounts}
-        claimIdleMin={state.settings.balancer.claimIdleMin}
         skills={skills}
         textareaRef={composerRef}
       />
@@ -883,10 +918,14 @@ function TitleEdit({ session }: { session: SessionRow }) {
 /** A turn the provider ended — the output cap cut its reply off, or an API
  *  error stopped it — so it sits at the prompt without meaning to. Retryable
  *  kinds get the button that sends the message the CLI asks for; a fatal one
- *  only says what is wrong, since a retry cannot fix it. */
+ *  only says what is wrong, since a retry cannot fix it. When the fleet will
+ *  retry it by itself it says when; the button, or anything you send, does it
+ *  now instead. */
 function TurnErrorLine({ session }: { session: SessionRow }) {
   const { run, busy, error, clear } = useAction();
+  const now = useNow(15_000);
   const err = session.turnError!;
+  const auto = session.autoResume;
   const retryable = err.kind !== "fatal";
   const nudge =
     err.kind === "output-cap"
@@ -899,12 +938,13 @@ function TurnErrorLine({ session }: { session: SessionRow }) {
         ? "Stopped on an error"
         : "Stopped on an error a retry cannot fix";
   return (
-    <div className="sx-attention-line warn" role="status">
-      <Icon.alert size={13} />
+    <div className={`sx-attention-line warn${auto ? " info" : ""}`} role="status">
+      {auto ? <Icon.refresh size={13} /> : <Icon.alert size={13} />}
       <span>
         {said}
         {session.lastActivityAt ? ` ${ago(err.at || session.lastActivityAt)}` : ""}
-        {err.kind !== "output-cap" ? `: ${err.detail}` : " — it stopped without meaning to."}
+        {err.kind !== "output-cap" ? `: ${err.detail}${auto && !/[.!?]$/.test(err.detail) ? "." : ""}` : " — it stopped without meaning to."}
+        {auto ? <AutoResumeNote auto={auto} now={now} what={err.kind === "output-cap" ? "continues it" : "retries it"} /> : null}
         {error ? (
           <>
             {" "}
@@ -917,9 +957,21 @@ function TurnErrorLine({ session }: { session: SessionRow }) {
       </span>
       {retryable ? (
         <Button size="sm" variant="ghost" icon={Icon.play} loading={busy} onClick={() => void run(() => api.send(session.id, nudge))}>
-          {err.kind === "output-cap" ? "Continue" : "Retry"}
+          {auto ? (err.kind === "output-cap" ? "Continue now" : "Retry now") : err.kind === "output-cap" ? "Continue" : "Retry"}
         </Button>
       ) : null}
     </div>
+  );
+}
+
+/** " agentbox retries it at 1:51 AM (in 4m), try 2 of 3 — or send it something yourself." */
+export function AutoResumeNote({ auto, now, what }: { auto: NonNullable<SessionRow["autoResume"]>; now: number; what: string }) {
+  const nth = auto.of === 1 ? "" : auto.of === null ? (auto.attempt > 1 ? `, try ${auto.attempt}` : "") : `, try ${auto.attempt} of ${auto.of}`;
+  return (
+    <span className="sx-auto-resume">
+      {" "}
+      agentbox {what} {fmtRetryAt(auto.at, now)}
+      {nth} — or send it something yourself.
+    </span>
   );
 }

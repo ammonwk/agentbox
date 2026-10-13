@@ -14,7 +14,7 @@ import { MessageRail, useTurns } from "./MessageRail";
 import { takeJump } from "./jump";
 import { useFamily } from "./family";
 import { StatusDot } from "../../bits";
-import { titleOf } from "../../lib/board";
+import { shownStatus, titleOf } from "../../lib/board";
 import { hrefOf } from "../../route";
 import { readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
@@ -481,7 +481,7 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
       <div className={`tl-user tl-sent${cls}`} title={fmtClock(ev.at)} data-ev={ev.id}>
         <div className="tl-who">
           <Icon.send size={12} /> <Party name={sent.from} />
-          <span className="tl-via">via {sent.via}</span>
+          {sent.via ? <span className="tl-via">via {sent.via}</span> : null}
           {wait}
           <time className="tl-time">{fmtClock(ev.at)}</time>
         </div>
@@ -537,7 +537,7 @@ function Party({ name }: { name: string | null }) {
   }
   return (
     <a className="tl-sender" href={hrefOf({ page: "session", id: s.id, tab })} title={`Open ${titleOf(s)} (${s.id})`}>
-      <StatusDot status={s.status} />
+      <StatusDot status={shownStatus(s)} />
       <span className="tl-sender-name">{titleOf(s)}</span>
       <span className="tl-sender-id">{s.id}</span>
     </a>
@@ -749,7 +749,7 @@ function MateRow({ id, mate, at }: { id: string; mate: MateMessage; at: number }
   const name = to && mate.name === "team-lead" ? `${titleOf(to)} (lead)` : mate.name;
   const who = (
     <span className="tl-mate-who" data-color={mate.color}>
-      {to ? <StatusDot status={to.status} /> : <span className="tl-mate-swatch" aria-hidden="true" />}
+      {to ? <StatusDot status={shownStatus(to)} /> : <span className="tl-mate-swatch" aria-hidden="true" />}
       {to ? (
         <a href={hrefOf({ page: "session", id: to.id, tab })} title={`Open ${titleOf(to)}`} onClick={(e) => e.stopPropagation()}>
           {name}

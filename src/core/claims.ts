@@ -5,9 +5,11 @@
  * the model is unknown. As it runs, the account's weekly percentage rises,
  * and that rise is apportioned across the account's sessions by how much each
  * did in the same interval (token-weighted cost, see pricing.ts). What a
- * session has been apportioned is its consumption; its outstanding claim is
- * what is left of its estimate. Without this the balancer would count every
- * session's usage twice: once in the live percentage and again in the claim.
+ * session has been apportioned is its consumption. What it still holds is
+ * what it is expected to go on to use: once it has spent anything, a forecast
+ * from how it is spending (forecast.ts); until then, what is left of its
+ * claim. Either way the balancer does not count a session's usage twice, once
+ * in the live percentage and again in the claim.
  *
  * The apportioned amounts are also the calibration data: after a week, the
  * distribution of what sessions actually consumed says what the claim sizes
@@ -20,43 +22,43 @@ import {
   lastUsageSample,
   tokenSampleAt,
 } from "./db";
-import type { BalancerSettings, ClaimView } from "./types";
+import type { ClaimView } from "./types";
 
 export interface ClaimInput {
   sessionId: string;
   accountId: string;
   title: string;
   claim: number;
-  lastActivityAt: number;
+  /** When its prompt cache goes cold (`Session.cacheWarmUntil`). */
+  warmUntil: number;
   /** Mid-turn right now. A running session's claim never lapses. */
   running: boolean;
   /** Since when it has been spending on this account. */
   since: number;
+  /** Weekly points it is expected to still use, from what it has been
+   *  spending (forecast.ts); null when there is nothing to forecast from. */
+  expected?: number | null;
 }
 
 /**
- * Claims per account. A claim lapses once its session has been idle for
- * `claimIdleMin`: a session left open overnight should not hold an account's
- * weekly hostage, and if it is picked up again its use shows in the live
- * percentage anyway.
+ * Claims per account. A claim lapses once its session's cache has gone cold:
+ * a session left open overnight should not hold an account's weekly hostage,
+ * it wakes on whichever account has room by then, and if it is picked up
+ * again its use shows in the live percentage anyway.
  */
-export function claimsByAccount(
-  sessions: ClaimInput[],
-  consumed: Map<string, number>,
-  settings: BalancerSettings,
-  now: number,
-): Map<string, ClaimView[]> {
+export function claimsByAccount(sessions: ClaimInput[], consumed: Map<string, number>, now: number): Map<string, ClaimView[]> {
   const out = new Map<string, ClaimView[]>();
   for (const s of sessions) {
     if (s.claim <= 0) continue;
     const used = consumed.get(s.sessionId) ?? 0;
-    const lapsed = !s.running && now - s.lastActivityAt > settings.claimIdleMin * 60_000;
+    const lapsed = !s.running && now > s.warmUntil;
     const view: ClaimView = {
       sessionId: s.sessionId,
       title: s.title,
       claim: s.claim,
       consumed: Math.round(used * 100) / 100,
-      outstanding: lapsed ? 0 : Math.round(Math.max(0, s.claim - used) * 100) / 100,
+      outstanding: lapsed ? 0 : Math.round(Math.max(0, s.expected ?? s.claim - used) * 100) / 100,
+      basis: s.expected == null ? "claim" : "forecast",
       lapsed,
       since: s.since,
     };

@@ -31,6 +31,8 @@ const VNODE_INFO = 152;
 const MAXPATHLEN = 1024;
 /** sizeof(struct proc_fileinfo), ahead of the vnode_info_path in vnode_fdinfowithpath. */
 const FILEINFO = 24;
+/** The kernel's FWRITE bit in proc_fileinfo's fi_openflags, its first field. */
+const FWRITE = 0x2;
 
 type Lib = ReturnType<typeof open>;
 
@@ -163,8 +165,9 @@ export function cwdPath(pid: number): string | null {
   return cstr(buf, VNODE_INFO, MAXPATHLEN) || null;
 }
 
-/** Paths of the files a process holds open; sockets and pipes are skipped. */
-export function openFiles(pid: number): string[] {
+/** Paths of the files a process holds open, or only those open for writing;
+ *  sockets and pipes are skipped. */
+export function openFiles(pid: number, writtenOnly = false): string[] {
   const s = sys();
   const need = s.proc_pidinfo(pid, PROC_PIDLISTFDS, 0, null, 0);
   if (need <= 0) return [];
@@ -178,6 +181,7 @@ export function openFiles(pid: number): string[] {
   for (let i = 0; i + 8 <= got; i += 8) {
     if (view.getUint32(i + 4, true) !== PROX_FDTYPE_VNODE) continue;
     if (s.proc_pidfdinfo(pid, view.getInt32(i, true), PROC_PIDFDVNODEPATHINFO, ptr(info), size) !== size) continue;
+    if (writtenOnly && (new DataView(info.buffer).getUint32(0, true) & FWRITE) === 0) continue;
     const path = cstr(info, FILEINFO + VNODE_INFO, MAXPATHLEN);
     if (path) out.push(path);
   }

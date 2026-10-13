@@ -17,16 +17,18 @@
  * session, bytes both ways. Closing it detaches; the agent keeps running.
  */
 
+import { ensureBridge } from "../bridge/service";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { DEFAULT_PORT, webDist } from "../core/paths";
 import { Fleet, FleetError } from "../core/fleet";
 import * as tmux from "../core/tmux";
-import { attentionOf, byAttention } from "../core/attention";
+import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
 import { usageInsights } from "../core/insights";
 import { diffOf } from "../core/diff";
+import { grepInWorker } from "../core/grep";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
@@ -34,15 +36,21 @@ import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushSubscriptions, pushToAll, removeSubscription } from "../core/push";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
-import { addRepo, deleteRepo, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
+import { addRepo, deleteRepo, getDb, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
-import { openPrs, prWarnings, syncPrs } from "../core/prs";
+import { parseSpec, Waits } from "../core/waits";
+import { CARD_KINDS, Cards } from "../core/cards";
+import type { CardKind, CardState } from "../core/types";
+import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
+import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr } from "../core/prclaims";
+import { repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { shownImage } from "../core/images";
+import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
@@ -57,7 +65,8 @@ import { loadTurnState, saveTurnState } from "../core/readercache";
 import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
-import { agentSentMark } from "../core/sent";
+import { sendAsAgent } from "../core/sendguard";
+import { SendReceiptConflict, sendReceipt, submitWithReceipt } from "../core/send-receipts";
 import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
@@ -66,17 +75,17 @@ import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
   ColdState,
-  GrepHit,
   Health,
   HotState,
   MetricsState,
+  PrClaim,
   PrInfo,
+  AccountProvider,
   ProviderId,
   Repo,
   RepoSetup,
   ServerMessage,
   SkillInfo,
-  TimelinePage,
 } from "../core/types";
 
 const PORT = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT);
@@ -90,7 +99,7 @@ const BUILD_POLL_MS = 2_000;
 const TIMELINE_PAGE = 200;
 /** Opening prompts the new-session box can recall. */
 const PROMPT_HISTORY = 1_000;
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 
 // ------------------------------------------------------------- the pieces
 
@@ -108,6 +117,26 @@ export const fleet = new Fleet({
 setMetricsSource(() => fleet.sessions());
 /** Sessions to start later; on the board and in Settings, so cold state. */
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
+/** What sessions wait on, and how each is told (src/core/waits.ts). */
+export const waits = new Waits(fleet);
+function cardId(raw: string): number {
+  if (!/^\d{1,9}$/.test(raw)) throw new HttpError(400, "a card's id is a number");
+  return Number(raw);
+}
+
+/** One push for a batch of new decisions, never for what merely happened. */
+export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
+  if (pushSubscriptions().length === 0) return;
+  const [first] = batch;
+  void pushToAll({
+    title: batch.length === 1 ? "A decision for you" : `${batch.length} decisions for you`,
+    body: batch.length === 1 ? first!.title : `${first!.title}, and ${batch.length - 1} more`,
+    url: "/#/review",
+    tag: "cards",
+  }).then((r) => {
+    for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
+  });
+});
 const turnIndex = new TurnIndex(fleet, {
   load: (id) => loadTurnState(fleet.get(id).provider, id),
   save: (id, state) => saveTurnState(fleet.get(id).provider, id, state),
@@ -267,18 +296,48 @@ function accountViews(): AccountView[] {
   });
 }
 
+/** Who has which pull request, now (src/core/prclaims.ts). */
+function prClaimsNow(): PrClaim[] {
+  const sessions = fleet.sessions();
+  return prClaims(sessions, branchHolders(sessions));
+}
+
+/** The PR a caller names, a bare number being one of the repo it called
+ *  from, else of the repo its session works in or names most. */
+function prNamed(b: Record<string, unknown>, sessionId: string | null): { repo: string; number: number } {
+  const s = sessionId ? fleet.sessions().find((x) => x.id === sessionId) : undefined;
+  const cwd = optionalString(b, "cwd");
+  try {
+    return parsePrRef(requireString(b, "pr"), (cwd ? repoFullNameOf(cwd) : null) ?? (s?.repoRoot ? repoSlugOf(s.repoRoot) : null) ?? s?.prRepo ?? null);
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message);
+  }
+}
+
+/** The session a request speaks for: the one it names, else the one it was made from inside. */
+function speaker(b: Record<string, unknown>): string | null {
+  const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
+  return (typeof b.session === "string" && /^[\w-]{1,64}$/.test(b.session) ? b.session : null) ?? (callerPid ? fleet.callerOf(callerPid) : null);
+}
+
+/** PRs a session is being started on, until it exists to hold them. */
+const startingOn = new Set<string>();
+
 function coldState(): ColdState {
   const views = accountViews();
+  const prClaims = prClaimsNow();
   return {
     accounts: views,
     logins: accounts.loginFlows(),
     repos: listRepos(),
-    prs: slow.prs,
+    prs: slow.prs.map((p) => ({ ...p, owner: holderOf(prClaims, p.repo, p.number)?.sessionId ?? null })),
+    prClaims,
     skills: slow.skills,
     settings: getSettings(),
     providers: slow.providers,
     warnings: warnings(),
     schedules: listSchedules(),
+    cards: cards.shown(),
     onboarding: {
       identity: readUserIdentity(),
       depsOk: slow.depsOk,
@@ -345,7 +404,8 @@ function changeRows(only: Set<string> | null): ChangeRow[] {
     .filter((s) => !only || only.has(s.id))
     .map((s) => ({
       id: s.id,
-      status: s.status,
+      // One agentbox will retry has not stopped on you.
+      status: retrying(s) ? "running" : s.status,
       label: s.label,
       title: s.title,
       firstPrompt: s.firstPrompt?.split("\n")[0]?.slice(0, 80) ?? null,
@@ -510,6 +570,12 @@ function openTerminal(ws: Socket): void {
   });
 }
 
+/** When you last typed into each session's terminal: a panel that opens
+ *  there at once is yours, and is not pushed (`notifyBlocked`). */
+const typedAt = new Map<string, number>();
+/** What xterm sends by itself: a focus change, or its answer to a query. */
+const TERM_REPORT = /^\x1b\[(?:[IO]|[?>]?[\d;]*[cnR])$/;
+
 function termOf(d: SocketData): { write(s: string): void; resize(c: number, r: number): void; close(): void } | null {
   if (d.kind !== "term" || !d.proc) return null;
   return (d.proc as unknown as { terminal?: { write(s: string): void; resize(c: number, r: number): void; close(): void } }).terminal ?? null;
@@ -525,8 +591,10 @@ function handleTermMessage(ws: Socket, raw: string | Buffer): void {
     return;
   }
   const m = msg as { type?: string; data?: unknown; cols?: unknown; rows?: unknown };
-  if (m.type === "input" && typeof m.data === "string") t.write(m.data);
-  else if (m.type === "resize" && typeof m.cols === "number" && typeof m.rows === "number") {
+  if (m.type === "input" && typeof m.data === "string") {
+    t.write(m.data);
+    if (ws.data.kind === "term" && !TERM_REPORT.test(m.data)) typedAt.set(ws.data.sessionId, Date.now());
+  } else if (m.type === "resize" && typeof m.cols === "number" && typeof m.rows === "number") {
     const cols = Math.max(20, Math.min(500, Math.floor(m.cols)));
     const rows = Math.max(5, Math.min(200, Math.floor(m.rows)));
     t.resize(cols, rows);
@@ -544,6 +612,7 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
+  if (e instanceof DesktopError) return new HttpError(e.status, e.message);
   if (e instanceof FleetError || e instanceof AccountError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }
@@ -554,6 +623,16 @@ const provider = (v: unknown): ProviderId => {
   }
   return v as ProviderId;
 };
+
+/** A provider that holds accounts: opencode runs on omp's. */
+const accountProvider = (v: unknown): AccountProvider => {
+  const p = provider(v);
+  if (p === "opencode") throw new HttpError(400, "opencode has no accounts of its own: it runs on the OpenCode Go accounts, as omp does");
+  return p;
+};
+
+/** Requests from a browser on this machine, whose desktop is the server's. */
+const fromThisMachine = new WeakSet<Request>();
 
 const router = new Router(mapError)
   .add("GET", "/api/state", ({ url }) => stateResponse(url.searchParams.get("open") === "1"))
@@ -578,6 +657,16 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions", async ({ req }) => {
     const b = await readBody(req);
+    // Started to work a pull request: it has it from its first moment, or
+    // does not start, so two are never sent to the same one.
+    const claim = b.claim !== undefined ? prNamed({ pr: b.claim, cwd: b.cwd }, null) : null;
+    const key = claim ? `${claim.repo.toLowerCase()}#${claim.number}` : "";
+    if (claim) {
+      const held = holderOf(prClaimsNow(), claim.repo, claim.number);
+      if (held) throw new HttpError(409, new PrHeld(held, fleet.sessions().find((s) => s.id === held.sessionId)).message.replace(/^not claimed/, "not started"));
+      if (startingOn.has(key)) throw new HttpError(409, `not started: another session is being started on ${claim.repo}#${claim.number} this moment`);
+      startingOn.add(key);
+    }
     try {
       const out = await fleet.spawn({
         provider: provider(b.provider),
@@ -593,6 +682,7 @@ const router = new Router(mapError)
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
       });
+      if (claim) getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [claim.repo, claim.number, out.session.id, Date.now()]);
       scheduleHot();
       scheduleCold();
       return json(out, 201);
@@ -605,7 +695,43 @@ const router = new Router(mapError)
         });
       }
       throw e;
+    } finally {
+      startingOn.delete(key);
     }
+  })
+
+  // ---- who has which pull request
+  .add("GET", "/api/prs/claims", () => json(prClaimsNow()))
+  .add("POST", "/api/prs/who", async ({ req }) => {
+    const b = await readBody(req);
+    const pr = prNamed(b, speaker(b));
+    return json({ ...pr, claim: holderOf(prClaimsNow(), pr.repo, pr.number) });
+  })
+  .add("POST", "/api/prs/claim", async ({ req }) => {
+    const b = await readBody(req);
+    const who = speaker(b);
+    if (!who) throw new HttpError(400, "a session claims a pull request: run this from inside one, or name it with --for <session id>");
+    const sessions = fleet.sessions();
+    if (!sessions.some((s) => s.id === who)) throw new HttpError(404, `no session ${who}`);
+    const pr = prNamed(b, who);
+    try {
+      const claims = prClaimsNow();
+      const before = holderOf(claims, pr.repo, pr.number);
+      const c = claimPr(claims, sessions, pr.repo, pr.number, who, Date.now());
+      scheduleCold();
+      return json({ ...c, already: before?.sessionId === who });
+    } catch (e) {
+      if (e instanceof PrHeld) throw new HttpError(409, e.message);
+      throw e;
+    }
+  })
+  .add("POST", "/api/prs/release", async ({ req }) => {
+    const b = await readBody(req);
+    const who = speaker(b);
+    if (!who) throw new HttpError(400, "a session releases what it claimed: run this from inside one, or name it with --for <session id>");
+    const released = releasePr(who, b.pr !== undefined ? prNamed(b, who) : null);
+    scheduleCold();
+    return json({ released });
   })
   .add("PATCH", "/api/sessions/:id", async ({ req, params }) => {
     const b = await readBody(req);
@@ -627,9 +753,50 @@ const router = new Router(mapError)
     const fromSession =
       (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
       (b.from === "agent" && callerPid ? fleet.callerOf(callerPid) : null);
-    await fleet.send(params.id!, b.from === "agent" ? `${agentSentMark(fromSession)} ${text}` : text);
+    // An agent's message is refused, before anything is typed or resumed, when
+    // it would wake a cold or stopped session unasked or is one too many, and
+    // one to a session another has taken over goes to that one
+    // (src/core/sendguard.ts). Yours never is, and goes where you send it.
+    if (b.from === "agent") {
+      const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true }, Date.now());
+      if ("refused" in sent) throw new HttpError(409, sent.refused);
+      return json(sent);
+    }
+    if (b.sendId !== undefined) {
+      const id = requireString(b, "sendId");
+      if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, "invalid send ID");
+      try {
+        return json(await submitWithReceipt(params.id!, id, "send", text, (attempt) => fleet.send(params.id!, text, attempt)));
+      } catch (e) {
+        if (e instanceof SendReceiptConflict) throw new HttpError(409, e.message);
+        throw e;
+      }
+    }
+    await fleet.send(params.id!, text);
     return json(null);
   })
+  .add("POST", "/api/sessions/:id/submissions", async ({ req, params }) => {
+    const b = await readBody(req);
+    const id = requireString(b, "sendId");
+    if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, "invalid send ID");
+    const kind = requireString(b, "kind");
+    if (!["send", "resume", "btw"].includes(kind)) throw new HttpError(400, "invalid submission kind");
+    const text = typeof b.text === "string" ? b.text : requireString(b, "text");
+    if (kind !== "resume" && !text.trim()) throw new HttpError(400, "the message is empty");
+    try {
+      const receipt = await submitWithReceipt(params.id!, id, kind, text, (attempt) => {
+        if (kind === "send") return fleet.send(params.id!, text, attempt);
+        if (kind === "resume") return fleet.resume(params.id!, text || undefined, attempt);
+        return fleet.askBtw(params.id!, text, attempt);
+      });
+      scheduleHot();
+      return json(receipt);
+    } catch (e) {
+      if (e instanceof SendReceiptConflict) throw new HttpError(409, e.message);
+      throw e;
+    }
+  })
+  .add("GET", "/api/sessions/:id/submissions/:sendId", ({ params }) => json(sendReceipt(params.id!, params.sendId!)))
   .add("POST", "/api/sessions/:id/keys", async ({ req, params }) => {
     const b = await readBody(req);
     if (!Array.isArray(b.keys) || !b.keys.every((k) => typeof k === "string" && k.length > 0 && k.length < 64)) {
@@ -670,6 +837,8 @@ const router = new Router(mapError)
     const s = await fleet.moveAndContinue(params.id!, {
       accountId: optionalString(b, "accountId") ?? null,
       prompt: typeof b.prompt === "string" && b.prompt.trim() ? b.prompt : undefined,
+      must: b.must === true,
+      force: b.force === true,
     });
     scheduleHot();
     scheduleCold();
@@ -720,6 +889,18 @@ const router = new Router(mapError)
     if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
     return new Response(Bun.file(img.path), { headers });
   })
+  // A browser on this machine; anywhere else the link opens where it was clicked.
+  .add("GET", "/api/desktop", ({ req }) => json({ backgroundTabs: fromThisMachine.has(req) && backgroundTabs() }))
+  .add("POST", "/api/open-url", async ({ req }) => {
+    if (!fromThisMachine.has(req)) throw new HttpError(403, "only a browser on this machine opens links on its desktop");
+    await openUrlBehind(requireString(await readBody(req), "url"));
+    return json(null);
+  })
+  .add("POST", "/api/sessions/:id/open-file", async ({ req, params }) => {
+    const s = fleet.get(params.id!);
+    const body = await readBody(req);
+    return json(await openLocalFile(requireString(body, "path"), s.cwd || null, body.background === true));
+  })
   .add("POST", "/api/sessions/:id/adopt", async ({ params }) => {
     const s = await fleet.adopt(params.id!);
     scheduleHot();
@@ -766,6 +947,9 @@ const router = new Router(mapError)
         effort: optionalString(spec, "effort"),
         accountId: optionalString(spec, "accountId") ?? null,
       },
+      noteCmd: optionalString(b, "noteCmd") ?? null,
+      sameSession: b.sameSession === true,
+      freshOver: typeof b.freshOver === "number" ? b.freshOver : null,
     });
     return json(s, 201);
   })
@@ -780,6 +964,12 @@ const router = new Router(mapError)
     if (b.label !== undefined) edit.label = b.label === null ? null : requireString(b, "label");
     if (b.enabled !== undefined) edit.enabled = requireBoolean(b, "enabled");
     if (b.repoId !== undefined) edit.repoId = requireString(b, "repoId");
+    if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : requireString(b, "noteCmd");
+    if (b.sameSession !== undefined) edit.sameSession = requireBoolean(b, "sameSession");
+    if (b.freshOver !== undefined) {
+      if (b.freshOver !== null && typeof b.freshOver !== "number") throw new HttpError(400, "freshOver must be a number of tokens");
+      edit.freshOver = b.freshOver as number | null;
+    }
     return json(await scheduler.update(params.id!, edit));
   })
   .add("DELETE", "/api/schedules/:id", ({ params }) => {
@@ -790,6 +980,67 @@ const router = new Router(mapError)
     const sessionId = await scheduler.runNow(params.id!);
     scheduleHot();
     return json({ sessionId });
+  })
+  // ----- waits (src/core/waits.ts)
+  .add("GET", "/api/waits", ({ url }) => json(waits.list(url.searchParams.get("session") ?? undefined, url.searchParams.get("all") === "1")))
+  .add("POST", "/api/waits", async ({ req }) => {
+    const b = await readBody(req);
+    if (b.timeoutMs !== undefined && typeof b.timeoutMs !== "number") throw new HttpError(400, "timeoutMs must be a number");
+    const who = speaker(b);
+    if (!who) throw new HttpError(400, "a wait tells a session how it ended: run this from inside one, or name it with --for <session id>");
+    const spec = (b.spec && typeof b.spec === "object" ? { ...b.spec } : {}) as Record<string, unknown>;
+    // A pull request as it was typed, a run with no repo named: the repo is the caller's.
+    if (spec.kind === "pr" && b.pr !== undefined) Object.assign(spec, prNamed(b, who));
+    const cwd = optionalString(b, "cwd");
+    if (spec.kind === "run" && !spec.repo) spec.repo = (cwd ? repoFullNameOf(cwd) : null) ?? undefined;
+    return json(waits.arm(fleet.heir(who), parseSpec(spec), b.timeoutMs as number | undefined), 201);
+  })
+  .add("DELETE", "/api/waits/:id", ({ params }) => {
+    if (!/^\d{1,9}$/.test(params.id!)) throw new HttpError(400, "a wait's id is a number");
+    return json(waits.cancel(Number(params.id)));
+  })
+  // ----- cards (src/core/cards.ts)
+  .add("GET", "/api/cards", ({ url }) => {
+    const state = url.searchParams.get("state");
+    if (state && !["open", "later", "answered", "closed"].includes(state)) throw new HttpError(400, "state is one of open, later, answered, closed");
+    return json(cards.list({ state: (state as CardState | null) ?? undefined, unread: url.searchParams.get("unread") === "1", sessionId: url.searchParams.get("session") ?? undefined }));
+  })
+  .add("POST", "/api/cards", async ({ req }) => {
+    const b = await readBody(req);
+    const kind = requireString(b, "kind") as CardKind;
+    if (!CARD_KINDS.includes(kind)) throw new HttpError(400, `kind is one of ${CARD_KINDS.join(", ")}`);
+    const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
+    const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
+    return json(
+      cards.add({
+        kind,
+        title: requireString(b, "title"),
+        short: requireString(b, "short"),
+        long: optionalString(b, "long"),
+        pr: optionalString(b, "pr"),
+        recommend: optionalString(b, "recommend"),
+        default: optionalString(b, "default"),
+        defaultAt: typeof b.defaultAt === "number" ? b.defaultAt : null,
+        key: optionalString(b, "key"),
+        sessionId: id(b.session) ?? (callerPid ? fleet.callerOf(callerPid) : null),
+        about: id(b.about),
+        at: typeof b.at === "number" && b.at > 0 ? b.at : null,
+      }),
+      201,
+    );
+  })
+  .add("GET", "/api/cards/:id", ({ params }) => json(cards.get(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/answer", async ({ req, params }) => {
+    const b = await readBody(req);
+    if (typeof b.text !== "string") throw new HttpError(400, "text must be a string");
+    return json(cards.answer(cardId(params.id!), b.text));
+  })
+  .add("POST", "/api/cards/:id/later", ({ params }) => json(cards.later(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/undo", ({ params }) => json(cards.undo(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/ack", ({ params }) => json(cards.ack(cardId(params.id!))))
+  .add("POST", "/api/cards/:id/close", async ({ req, params }) => {
+    const b = await readBody(req);
+    return json(cards.close(cardId(params.id!), typeof b.why === "string" ? b.why : ""));
   })
   // What `agentbox watch` needs of each session, closed ones too (it must see
   // a reopen as one), and nothing else. With `after`, the rows it already has,
@@ -853,35 +1104,21 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/sessions/:id/attach", ({ params }) => json({ argv: fleet.attachCommand(params.id!) }))
   .add("GET", "/api/sessions/:id/screen", ({ params }) => json({ text: fleet.screen(params.id!) }))
-  .add("GET", "/api/grep", async ({ url }) => {
-    const q = url.searchParams.get("q") ?? "";
-    if (!q) throw new HttpError(400, "q is required");
-    let re: RegExp;
+  .add("GET", "/api/grep", async ({ req, url }) => {
+    const pattern = url.searchParams.get("q") ?? "";
+    if (!pattern) throw new HttpError(400, "q is required");
+    const flags = url.searchParams.get("i") === "1" ? "i" : "";
     try {
-      re = new RegExp(q, url.searchParams.get("i") === "1" ? "i" : "");
+      new RegExp(pattern, flags);
     } catch (e) {
       throw new HttpError(400, `bad pattern: ${(e as Error).message}`);
     }
     const all = url.searchParams.get("all") === "1";
-    const hits: GrepHit[] = [];
-    for (const s of fleet.sessions()) {
-      if ((!all && s.status === "closed") || !s.transcriptPath) continue;
-      let before: string | null = null;
-      try {
-        do {
-          const page: TimelinePage = await fleet.timeline(s.id, before, 1000);
-          for (const ev of page.events) {
-            const text = ev.kind === "tool" ? `${ev.name}: ${ev.summary}` : ev.text;
-            for (const line of text.split("\n")) if (re.test(line)) hits.push({ sessionId: s.id, at: ev.at, kind: ev.kind, line: line.trim().slice(0, 300) });
-          }
-          before = page.before;
-        } while (before && hits.length < 5000);
-      } catch {
-        // an unreadable transcript is skipped, not fatal
-      }
-      if (hits.length >= 5000) break;
-    }
-    return json(hits);
+    const sessions = fleet.sessions().flatMap((s) => {
+      const ref = (all || s.status !== "closed") && s.transcriptPath ? fleet.transcriptRef(s.id) : null;
+      return ref ? [{ id: s.id, ref }] : [];
+    });
+    return json(await grepInWorker({ pattern, flags, sessions }, req.signal));
   })
 
   // ---- accounts
@@ -889,17 +1126,18 @@ const router = new Router(mapError)
   .add("GET", "/api/models", async ({ url }) => {
     const a = accounts.get(url.searchParams.get("accountId") ?? "");
     if (!a) throw new HttpError(404, "no such account");
-    return json(await modelOptions(a));
+    const p = url.searchParams.get("provider");
+    return json(await modelOptions(a, p ? provider(p) : a.provider));
   })
   .add("POST", "/api/accounts", async ({ req }) => {
     const b = await readBody(req);
-    const out = await accounts.create(provider(b.provider), optionalString(b, "label"));
+    const out = await accounts.create(accountProvider(b.provider), optionalString(b, "label"));
     scheduleCold();
     return json(out, 201);
   })
   .add("POST", "/api/accounts/import", async ({ req }) => {
     const b = await readBody(req);
-    const a = await accounts.importHome(provider(b.provider), requireString(b, "home"));
+    const a = await accounts.importHome(accountProvider(b.provider), requireString(b, "home"));
     scheduleCold();
     return json(a, 201);
   })
@@ -964,7 +1202,9 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/calibration", ({ url }) => {
     const days = Math.min(60, Math.max(1, Number(url.searchParams.get("days") ?? 7) || 7));
-    return json(calibrate(days));
+    const homes = accounts.list();
+    const owner = owners(homes);
+    return json(calibrate(fleet.forecaster.report(homes.filter((a) => owner.get(a.id) === a.id), Date.now()), days));
   })
 
   // ---- settings, repos, worktrees, skills
@@ -1192,6 +1432,7 @@ export async function startServer(): Promise<void> {
       ws.close(1012, "restarting");
     }
     scheduler.stop();
+    waits.stop();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -1250,6 +1491,8 @@ export async function startServer(): Promise<void> {
     const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
     const verdict = checkRequest(req, PORT, { upgrade, hosts });
     if (!verdict.ok) return fail(verdict.reason, 403);
+    // The loopback listener, or the tailnet one reached at this machine's own address.
+    if (!hosts || srv.requestIP(req)?.address === hosts[0]) fromThisMachine.add(req);
 
     if (url.pathname === "/ws") {
       if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);
@@ -1277,6 +1520,9 @@ export async function startServer(): Promise<void> {
         ? undefined
         : fail("websocket upgrade failed", 500);
     }
+    // A search reads every transcript, minutes on a loaded machine, and sends
+    // nothing until it is done: the idle timeout would cut it.
+    if (url.pathname === "/api/grep") srv.timeout(req, 0);
     return router.handle(req);
   };
 
@@ -1293,7 +1539,8 @@ export async function startServer(): Promise<void> {
   }, STARTING_PUSH_MS);
 
   // Default accounts must exist before the first fleet tick, or every
-  // transcript found on it would be filed under no account.
+  // transcript found on it would be filed under no account. (omp has none:
+  // without an OpenCode Go account its sessions are not on the board.)
   await accounts.start();
   phase("accounts");
   fleet.start();
@@ -1306,6 +1553,12 @@ export async function startServer(): Promise<void> {
   await fleet.ready;
   phase("first pass");
   scheduler.start();
+  waits.start();
+  cards.start();
+  // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
+  // sessions and in your own terminals alike, and Go's usage is asked through
+  // it (accounts/usage.ts), so it is up from the start.
+  ensureBridge();
   await firstSlow;
   // Its PRs are the sessions', which the pass may have finished after it looked.
   slow.prs = openPrs(fleet.sessions());
@@ -1319,7 +1572,11 @@ export async function startServer(): Promise<void> {
   startNightlyReclaim(() => fleet.sessions());
 
   fleet.on("sessions", () => {
-    notifyBlocked(fleet.sessions(), (id) => fleet.blockedReason(id));
+    notifyBlocked(
+      () => fleet.sessions(),
+      (id) => fleet.blockedReason(id),
+      (id) => typedAt.get(id) ?? 0,
+    );
     scheduleHot();
     // Claims move with sessions, and claims are on the Accounts page.
     scheduleCold();

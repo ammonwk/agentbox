@@ -4,10 +4,20 @@
  * so the list, the voice agent and the tab title can never disagree. This only
  * sorts and buckets by it. */
 
-import type { Attention, AttentionKind, ProviderId, Session } from "../../../src/core/types";
+import { retrying } from "../../../src/core/attention";
+import type { Attention, AttentionKind, ProviderId, Session, SessionStatus } from "../../../src/core/types";
 import { baseName } from "./format";
 
 export type SessionRow = Session & { attention: Attention };
+
+/** A session's status as drawn: blocked or waiting on an error agentbox
+ *  retries by itself is `retrying`, drawn as working — red or amber there
+ *  read as yours to fix. */
+export type ShownStatus = SessionStatus | "retrying";
+
+export function shownStatus(s: Pick<Session, "status" | "autoResume">): ShownStatus {
+  return retrying(s) ? "retrying" : s.status;
+}
 
 /** The fallback order when two rows carry the same server rank. */
 export const KIND_ORDER: Record<AttentionKind, number> = {

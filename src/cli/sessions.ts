@@ -4,8 +4,10 @@
 
 import type { Api } from "../client";
 import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, type ChangeRow } from "../core/changes";
+import { accountProvider } from "../core/providers/account";
 import { agentAncestor, stillRunning } from "../core/providers/procs";
-import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage } from "../core/types";
+import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
+import { describe } from "../core/waits";
 
 type Row = AppState["sessions"][number];
 
@@ -86,7 +88,7 @@ function idleTest(spec: string): (idleMs: number) => boolean {
 }
 
 const STATUSES = ["running", "blocked", "waiting", "stopped", "closed"] as const;
-const PROVIDERS = ["claude", "codex", "devin", "omp"] as const;
+const PROVIDERS = ["claude", "codex", "devin", "omp", "opencode"] as const;
 
 function oneOf<T extends string>(flag: string, given: string[] | undefined, known: readonly T[]): T[] | undefined {
   if (!given) return undefined;
@@ -180,6 +182,7 @@ export async function show(api: Api, args: string[]): Promise<number> {
   const s0 = await state(api);
   const acct = new Map(s0.accounts.map((a) => [a.id, a.label]));
   const now = s0.serverTime;
+  const waits = await api<Wait[]>("GET", "/api/waits");
   for (const [n, id] of ids.entries()) {
     const x = sessions.find((s) => s.id === id)!;
     const ctx = x.contextUsed && x.contextLimit ? `${Math.round((100 * x.contextUsed) / x.contextLimit)}% of ${Math.round(x.contextLimit / 1000)}k` : "-";
@@ -188,15 +191,19 @@ export async function show(api: Api, args: string[]): Promise<number> {
       ["id", x.id],
       ["title", x.label ?? x.title],
       ["status", `${x.status} — ${x.attention.reason}`],
+      ["replaced by", x.successor],
       ["parent", x.parent],
       ["children", sessions.filter((c) => c.parent === x.id).map((c) => c.id).join(" ") || null],
       ["host", x.host + (x.tmux ? ` (${x.tmux})` : "") + (x.pid ? ` pid ${x.pid}` : "")],
       ["provider", `${x.provider}${x.model ? ` · ${x.model}` : ""}`],
       ["account", x.accountId ? acct.get(x.accountId) ?? x.accountId : null],
+      // Stopped there until moved (`agentbox move`) or the limit lifts.
+      ["limit", x.limitHit ? `${x.limitHit.detail}${x.limitHit.hopped ? " — agentbox has moved it once already" : ""}` : null],
       ["cwd", x.cwd],
       ["branch", x.branch],
       ["worktree", x.worktree],
       ["pr", pr ? `#${pr.number} ${pr.title} (${pr.url})` : null],
+      ["waiting on", waits.filter((w) => w.sessionId === id && !w.ended).map((w) => `${describe(w.spec)} [wait ${w.id}: ${w.seen ?? "not looked at yet"}]`).join(" ⏎ ") || null],
       ["context", ctx],
       ["started", `${clock(x.startedAt)} (${ageOf(now - x.startedAt)} ago)`],
       ["active", `${clock(x.lastActivityAt)} (${ageOf(now - x.lastActivityAt)} ago)`],
@@ -340,16 +347,28 @@ export async function watch(api: Api, args: string[]): Promise<number> {
   }
 }
 
-/** `agentbox send <id> <text…>` or `… | agentbox send <id> -` */
+/** `agentbox send [--wake] <id> <text…>` or `… | agentbox send <id> -`. From
+ *  an agent, the server refuses one that would wake a cold or stopped session
+ *  without `--wake`, or is one too many (src/core/sendguard.ts). */
 export async function send(api: Api, args: string[]): Promise<number> {
-  const [target, ...words] = args;
+  // Only as a flag of its own before the text: a message may hold the word.
+  const at = [0, 1, args.length - 1].find((i) => args[i] === "--wake");
+  const wake = at !== undefined;
+  const [target, ...words] = wake ? args.filter((_, i) => i !== at) : args;
   if (!target) throw new Error("send needs a session id and text");
   const { ids } = await resolveIds(api, [target]);
   const text = words.length === 1 && words[0] === "-" ? (await new Response(Bun.stdin.stream()).text()).trim() : words.join(" ");
   if (!text) throw new Error("nothing to send");
   // Agents are who use this; you type in the app or the terminal. Voice mode
   // is the exception: what it sends is you, spoken (AGENTBOX_SEND_AS=you).
-  await api("POST", `/api/sessions/${ids[0]}/send`, process.env.AGENTBOX_SEND_AS === "you" ? { text } : { text, from: "agent", fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+  if (process.env.AGENTBOX_SEND_AS === "you") {
+    await api("POST", `/api/sessions/${ids[0]}/send`, { text });
+    return 0;
+  }
+  const sent = await api<{ to: string } | null>("POST", `/api/sessions/${ids[0]}/send`, { text, from: "agent", wake, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+  // Said only once the session has taken it: no line, no send.
+  if (sent && sent.to !== ids[0]) console.log(`sent to ${sent.to}: it has taken over from ${ids[0]}, so send to it from now on`);
+  else console.log(`sent: ${ids[0]} took it`);
   return 0;
 }
 
@@ -372,6 +391,30 @@ export async function each(api: Api, verb: "close" | "reopen" | "stop" | "resume
     }
   }
   return failed ? 1 : 0;
+}
+
+/**
+ * `agentbox move <id> [--account NAME] [--force] [text…]`: continue a session
+ * on another account, with its conversation: the limit banner's button, for
+ * an agent. The account is the one named, else where the fleet's own move
+ * would send it. The refusals are the server's.
+ */
+export async function move(api: Api, args: string[]): Promise<number> {
+  const { flags, rest } = parseArgs(args, ["account"], ["force"]);
+  const [target, ...words] = rest;
+  if (!target) throw new Error("move needs a session id");
+  const { ids } = await resolveIds(api, [target]);
+  const s = await state(api);
+  const row = s.sessions.find((x) => x.id === ids[0]);
+  const mine = s.accounts.filter((a) => row && a.provider === accountProvider(row.provider));
+  const wanted = str(flags.get("account"));
+  const to = wanted ? mine.find((a) => a.id === wanted || a.label === wanted || a.email === wanted) : null;
+  if (wanted && !to) throw new Error(`no ${row ? accountProvider(row.provider) : ""} account "${wanted}" — have: ${mine.map((a) => a.label).join(", ") || "none"}`);
+  const by = process.env.AGENTBOX_SESSION;
+  const prompt = words.join(" ") || `[agentbox: you have been moved to another account${by ? ` by session ${by}` : ""}${row?.limitHit ? ", because the one you were on reached its usage limit" : ""}. Carry on where you left off.]`;
+  const moved = await api<Session>("POST", `/api/sessions/${ids[0]}/move`, { accountId: to?.id ?? "auto", prompt, must: true, force: flags.has("force") });
+  console.log(`${ids[0]}  moved to ${s.accounts.find((a) => a.id === moved.accountId)?.label ?? moved.accountId}`);
+  return 0;
 }
 
 export async function label(api: Api, args: string[]): Promise<number> {

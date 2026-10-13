@@ -19,6 +19,7 @@ import { deserialize, serialize } from "bun:jsc";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { agentboxHome } from "./paths";
+import type { ProviderAdapter, TranscriptReader, TranscriptRef } from "./providers/types";
 import type { ProviderId } from "./types";
 
 /** Per provider, the modules whose code decides what its saved states mean.
@@ -29,6 +30,7 @@ const READER_ROOTS: Record<ProviderId, string[]> = {
   codex: ["providers/jsonl-reader.ts", "providers/codex-transcript.ts"],
   devin: ["providers/devin.ts"],
   omp: ["providers/omp.ts"],
+  opencode: ["providers/opencode.ts"],
 };
 
 /** Saved states of transcripts nobody has read in this long are deleted. */
@@ -74,6 +76,14 @@ function codeStamp(roots: readonly string[]): string {
 }
 
 const fileFor = (path: string): string => join(cacheDir(), `${Bun.hash(path).toString(16)}.bin`);
+
+/** A reader of `ref`, carrying on from where its saved state left off when
+ *  this code saved one: whether it did is `restored`. */
+export function openReader(adapter: ProviderAdapter, ref: TranscriptRef): { reader: TranscriptReader; restored: boolean } {
+  const reader = adapter.reader(ref);
+  const saved = reader.loadState ? loadReaderState(ref.provider, ref.path) : null;
+  return { reader, restored: saved !== null && reader.loadState!(saved) };
+}
 
 /** A reader's saved state for `path`, if one was saved by this code. */
 export function loadReaderState(provider: ProviderId, path: string): unknown {

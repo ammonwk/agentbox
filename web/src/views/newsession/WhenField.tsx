@@ -18,6 +18,8 @@ export function WhenField({ value, onChange, inputRef }: { value: string; onChan
   else if ("error" in parsed) read = parsed.error;
   else if (parsed.rule.kind === "merge")
     read = `${describeRule(parsed.rule, now)}${parsed.rule.repo ? "" : " (of the repo it runs in)"}. Checked every minute; it waits in your sessions until then.`;
+  else if (parsed.rule.kind === "red")
+    read = `${describeRule(parsed.rule, now)}${parsed.rule.repo ? "" : " (in the repo it runs in)"}. Its runs are read every 2 minutes; a new session for each red streak, which keeps it until it is green. Manage it in Settings.`;
   else if (parsed.rule.kind === "once") read = `${describeRule(parsed.rule, now)}, ${until(parsed.rule.at, now)}. It waits in your sessions until then.`;
   else {
     const first = nextRun(parsed.rule, now);

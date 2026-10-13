@@ -58,6 +58,23 @@ export function pickOption(screen: string, target: RegExp): string[] | null {
   return [...Array<string>(Math.abs(delta)).fill(move), "Enter"];
 }
 
+/** A horizontal rule across the pane, as drawn above and below an input box. */
+export const RULE = /^─{20,}\s*$/;
+
+/**
+ * The part of a screen under its input box, or all of it when no box shows.
+ * A dialog takes the input box's place, so words above a box that read like
+ * a dialog are the conversation quoting one: a diff of the file that looks
+ * for them, an agent ending its turn on "Do you want to proceed?".
+ */
+export function underInput(screen: string, isInput: (lines: string[], i: number) => boolean): string {
+  const lines = screen.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (isInput(lines, i)) return lines.slice(i + 1).join("\n");
+  }
+  return screen;
+}
+
 /** Every pattern appears on screen. */
 export function shows(screen: string, ...patterns: RegExp[]): boolean {
   return patterns.every((p) => p.test(screen));

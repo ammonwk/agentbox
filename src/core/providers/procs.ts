@@ -81,6 +81,29 @@ export function openFilesOf(pid: number): string[] {
   }
 }
 
+/** Paths a process has open for writing, among those `keep` accepts. Each
+ *  fd's mode is read only once its path is kept: a process has dozens. */
+export function filesWrittenBy(pid: number, keep: (path: string) => boolean): string[] {
+  if (darwin.isDarwin) return darwin.openFiles(pid, true).filter(keep);
+  let fds: string[];
+  try {
+    fds = readdirSync(`/proc/${pid}/fd`);
+  } catch {
+    return [];
+  }
+  return fds.flatMap((fd) => {
+    try {
+      const path = readlinkSync(`/proc/${pid}/fd/${fd}`);
+      if (!keep(path)) return [];
+      const flags = /^flags:\s*([0-7]+)/m.exec(readFileSync(`/proc/${pid}/fdinfo/${fd}`, "utf8"))?.[1];
+      // The access mode is the low two bits; 0 is O_RDONLY.
+      return flags !== undefined && (parseInt(flags, 8) & 3) !== 0 ? [path] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 export interface ProcMatch {
   pid: number;
   ppid: number;
@@ -221,13 +244,16 @@ export interface ProcessRef {
   startedAt: number;
 }
 
-const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp"];
+const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 
 /** The nearest ancestor of this process that runs an agent CLI. */
 export function agentAncestor(): ProcessRef | null {
   for (let pid = process.ppid, hops = 0; pid > 1 && hops < 64; hops++) {
     const argv = argvOf(pid);
-    if (argv && AGENT_CLIS.some((name) => runsCli(argv, name))) {
+    // A standalone opencode runs its tools under a private `opencode serve`,
+    // its TUI's child: the session is the TUI above it.
+    const server = !!argv && runsCli(argv, "opencode") && argv.includes("serve");
+    if (argv && !server && AGENT_CLIS.some((name) => runsCli(argv, name))) {
       const startedAt = startedAtOf(pid);
       return startedAt === null ? null : { pid, startedAt };
     }

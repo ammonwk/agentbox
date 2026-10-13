@@ -3,7 +3,7 @@ import type { AccountView, Candidate, Placement } from "../../../../src/core/typ
 import { accountHue } from "../../bits";
 import { Icon, Spinner } from "../../components";
 import { fmtPts } from "../../lib/format";
-import { headlineWindows, usageTone } from "../../lib/usage";
+import { headlineWindows, shortForecastHow, usageTone } from "../../lib/usage";
 import { scrollActiveIntoView, useDismiss, useFloating } from "./popover";
 
 /**
@@ -21,7 +21,6 @@ export function AccountPicker({
   placement,
   placing,
   placeErr,
-  claimIdleMin,
 }: {
   /** This provider's accounts. */
   accounts: AccountView[];
@@ -32,7 +31,6 @@ export function AccountPicker({
   placement: Placement | null;
   placing: boolean;
   placeErr: string | null;
-  claimIdleMin: number;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -157,7 +155,7 @@ export function AccountPicker({
                 <p className="ns-acct-why">
                   {placement.why}
                   {/[.!?]$/.test(placement.why) ? " " : ". "}
-                  Claims <strong>{placement.claim}</strong> weekly points until used or idle {claimIdleMin} min.
+                  Claims <strong>{placement.claim}</strong> weekly points until used or its cache goes cold.
                 </p>
               ) : null}
             </div>
@@ -217,7 +215,7 @@ function AccountLine({ account: a, all, candidate: c }: { account: AccountView; 
         label="5h"
         used={c?.short ?? short?.usedPct ?? null}
         effective={c?.shortEffective ?? null}
-        forecast={c?.shortPace != null ? `by its reset at ${fmtPts(c.shortPace)}%/h and new claims` : undefined}
+        forecast={shortForecastHow(c?.shortPace)}
       />
       <MiniBar label="wk" used={c?.weekly ?? weekly?.usedPct ?? null} effective={c?.weeklyEffective ?? null} />
     </span>

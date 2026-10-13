@@ -11,13 +11,18 @@ import type {
   BalancerSettings,
   Btw,
   Candidate,
+  AccountProvider,
   ProviderId,
   Repo,
   RepoSetup,
   Schedule,
   TokenTotals,
   UsageWindow,
+  Wait,
+  WaitSpec,
 } from "./types";
+
+import type { ModelOutcome } from "./providers/types";
 
 let db: Database | null = null;
 let openedAt = "";
@@ -260,6 +265,127 @@ const MIGRATIONS: string[] = [
   // 15 — the Big flag is gone: a session's claim is its model's and effort's.
   `ALTER TABLE sessions DROP COLUMN big;
    ALTER TABLE assignments DROP COLUMN big;`,
+  // 16 — what each OpenCode Go key has spent, by minute, read from omp's and
+  // opencode's transcripts, and how far into each that reading had got.
+  // Dropped in 17.
+  `
+  CREATE TABLE go_spend (
+    account_id TEXT NOT NULL,
+    minute     INTEGER NOT NULL,
+    cost       REAL NOT NULL,
+    PRIMARY KEY (account_id, minute)
+  ) WITHOUT ROWID;
+  CREATE TABLE go_spend_cursors (
+    source  TEXT PRIMARY KEY,
+    pos     INTEGER NOT NULL,
+    seen_at INTEGER NOT NULL
+  ) WITHOUT ROWID;
+  `,
+  // 17 — Go does report usage (`…/go/v1/usage`, src/core/accounts/usage.ts),
+  // so the spend added up from transcripts is gone, with the samples of it.
+  `
+  DROP TABLE go_spend;
+  DROP TABLE go_spend_cursors;
+  DELETE FROM usage_samples WHERE source = 'transcripts';
+  `,
+  // 18 — an OpenCode Go account is a sign-in you add and forget: omp has no
+  // default account (it was the API key opencode holds). Its sessions go to
+  // the oldest account there is, or to none, and resume on the balancer's
+  // pick (`Fleet.accountFor`).
+  `
+  UPDATE sessions
+     SET account_id = (SELECT id FROM accounts WHERE provider = 'omp' AND is_default = 0 ORDER BY created_at, id LIMIT 1)
+   WHERE account_id IN (SELECT id FROM accounts WHERE provider = 'omp' AND is_default = 1);
+  DELETE FROM usage_samples WHERE account_id IN (SELECT id FROM accounts WHERE provider = 'omp' AND is_default = 1);
+  DELETE FROM accounts WHERE provider = 'omp' AND is_default = 1;
+  `,
+  // 19 — idempotent composer submissions, without a second transcript.
+  `
+  CREATE TABLE send_receipts (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    state TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    error TEXT
+  );
+  `,
+  // 20 — a recurring schedule's note command, and whether it keeps to the one
+  // session it started (src/core/scheduler.ts).
+  `
+  ALTER TABLE schedules ADD COLUMN note_cmd TEXT;
+  ALTER TABLE schedules ADD COLUMN same_session INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE schedules ADD COLUMN fresh_over INTEGER;
+  `,
+  // 21 — cards: what a session hands the user to decide or to know, and the
+  // answer on its way back (src/core/cards.ts).
+  `
+  CREATE TABLE cards (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    short        TEXT NOT NULL,
+    long         TEXT,
+    pr           TEXT,
+    recommend    TEXT,
+    default_text TEXT,
+    default_at   INTEGER,
+    key          TEXT UNIQUE,
+    session_id   TEXT,
+    about        TEXT,
+    state        TEXT NOT NULL DEFAULT 'open',
+    answer       TEXT,
+    answered_at  INTEGER,
+    delivered_at INTEGER,
+    tried_at     INTEGER,
+    later_at     INTEGER,
+    created_at   INTEGER NOT NULL,
+    closed_why   TEXT,
+    undo         TEXT
+  );
+  CREATE INDEX cards_state ON cards(state);
+  `,
+  // 22 — which session said it has which pull request (src/core/prclaims.ts).
+  `
+  CREATE TABLE pr_claims (
+    repo       TEXT NOT NULL,
+    number     INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    at         INTEGER NOT NULL,
+    PRIMARY KEY (repo, number)
+  );
+  `,
+  // 23 — the session that took over from this one (a schedule's same-session
+  // replacement, `Fleet.handOver`): an agent's message to it goes there. And
+  // the one a schedule replaced mid-turn, closed once that turn is over.
+  `
+  ALTER TABLE sessions ADD COLUMN successor TEXT;
+  ALTER TABLE schedules ADD COLUMN retiring TEXT;
+  `,
+  // 24 — when the fleet moved a session that stopped at its account's limit
+  // to another account (`Fleet.continueStalled`): it does that once.
+  `ALTER TABLE sessions ADD COLUMN hopped_at INTEGER;`,
+  // 25 — what a session is waiting on, and how each wait ended
+  // (src/core/waits.ts). `spec` and `memo` are JSON.
+  `
+  CREATE TABLE waits (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    TEXT NOT NULL,
+    spec          TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    deadline      INTEGER NOT NULL,
+    ended         TEXT,
+    outcome       TEXT,
+    ended_at      INTEGER,
+    told_at       INTEGER,
+    untold        TEXT,
+    checked_at    INTEGER,
+    seen          TEXT,
+    failing_since INTEGER,
+    memo          TEXT
+  );
+  CREATE INDEX waits_open ON waits(ended, told_at);
+  `,
 ];
 
 function migrate(d: Database) {
@@ -281,13 +407,13 @@ type AccountRow = {
 
 function rowToAccount(r: AccountRow): Account {
   return {
-    id: r.id, provider: r.provider as ProviderId, label: r.label, email: r.email,
+    id: r.id, provider: r.provider as AccountProvider, label: r.label, email: r.email,
     plan: r.plan, home: r.home, isDefault: !!r.is_default, enabled: !!r.enabled,
     createdAt: r.created_at,
   };
 }
 
-export function listAccounts(provider?: ProviderId): Account[] {
+export function listAccounts(provider?: AccountProvider): Account[] {
   const rows = provider
     ? getDb().query("SELECT * FROM accounts WHERE provider = ? ORDER BY is_default DESC, created_at").all(provider)
     : getDb().query("SELECT * FROM accounts ORDER BY provider, is_default DESC, created_at").all();
@@ -367,6 +493,10 @@ export interface SessionRecord {
   /** Why it is parked, when that is not idleness: its process was lost in a
    *  crash while it waited on you (src/core/recovery.ts). */
   parkedWhy?: string | null;
+  /** The session that took over from it (`Fleet.handOver`); null for none. */
+  successor?: string | null;
+  /** When the fleet moved it off an account at its limit; it does not again. */
+  hoppedAt?: number | null;
 }
 
 type SessionRow = {
@@ -376,7 +506,7 @@ type SessionRow = {
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
-  parent_by_hand: number | null;
+  parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -390,7 +520,7 @@ function parseJson(raw: string | null): unknown {
 
 function rowToRecord(r: SessionRow): SessionRecord {
   return {
-    id: r.id, provider: r.provider as ProviderId, agentSessionId: r.agent_session_id,
+    id: r.id, provider: r.provider as AccountProvider, agentSessionId: r.agent_session_id,
     accountId: r.account_id, cwd: r.cwd, worktree: r.worktree, label: r.label,
     claim: r.claim, origin: r.origin as SessionRecord["origin"], tmux: r.tmux,
     transcriptPath: r.transcript_path, startedAt: r.started_at,
@@ -404,6 +534,8 @@ function rowToRecord(r: SessionRow): SessionRecord {
     parkedAt: r.parked_at ?? null,
     parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
     parkedWhy: r.parked_why ?? null,
+    successor: r.successor ?? null,
+    hoppedAt: r.hopped_at ?? null,
   };
 }
 
@@ -431,6 +563,8 @@ const RECORD_COLUMNS = {
   parkedAt: "parked_at",
   parkedMates: "parked_mates",
   parkedWhy: "parked_why",
+  successor: "successor",
+  hoppedAt: "hopped_at",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;
@@ -521,11 +655,88 @@ export function listClosedRecords(): SessionRecord[] {
   return rows.map(rowToRecord);
 }
 
+// ------------------------------------------------------------------ waits
+
+type WaitRow = {
+  id: number; session_id: string; spec: string; created_at: number; deadline: number; ended: string | null;
+  outcome: string | null; ended_at: number | null; told_at: number | null; untold: string | null;
+  checked_at: number | null; seen: string | null; failing_since: number | null; memo: string | null;
+};
+
+function rowToWait(r: WaitRow): Wait {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    spec: parseJson(r.spec) as WaitSpec,
+    createdAt: r.created_at,
+    deadline: r.deadline,
+    ended: r.ended as Wait["ended"],
+    outcome: r.outcome,
+    endedAt: r.ended_at,
+    toldAt: r.told_at,
+    untold: r.untold,
+    checkedAt: r.checked_at,
+    seen: r.seen,
+    failingSince: r.failing_since,
+    memo: (r.memo ? parseJson(r.memo) : {}) as Wait["memo"],
+  };
+}
+
+const WAIT_COLUMNS = {
+  deadline: "deadline",
+  ended: "ended",
+  outcome: "outcome",
+  endedAt: "ended_at",
+  toldAt: "told_at",
+  untold: "untold",
+  checkedAt: "checked_at",
+  seen: "seen",
+  failingSince: "failing_since",
+  memo: "memo",
+} as const;
+
+export function insertWait(w: Pick<Wait, "sessionId" | "spec" | "createdAt" | "deadline">): Wait {
+  const { lastInsertRowid } = getDb().run("INSERT INTO waits (session_id, spec, created_at, deadline) VALUES (?,?,?,?)", [
+    w.sessionId, JSON.stringify(w.spec), w.createdAt, w.deadline,
+  ]);
+  return getWait(Number(lastInsertRowid))!;
+}
+
+export function getWait(id: number): Wait | null {
+  const row = getDb().query("SELECT * FROM waits WHERE id = ?").get(id) as WaitRow | null;
+  return row ? rowToWait(row) : null;
+}
+
+/** Those still going, and those that ended since `since` with their session not yet told. */
+export function listOpenWaits(since: number): Wait[] {
+  return (getDb().query("SELECT * FROM waits WHERE ended IS NULL OR (told_at IS NULL AND ended != 'cancelled' AND ended_at >= ?) ORDER BY id").all(since) as WaitRow[]).map(rowToWait);
+}
+
+/** Every wait made or ended since `since`, and all still going; one session's when named. */
+export function listWaits(since: number, sessionId?: string): Wait[] {
+  const rows = sessionId
+    ? getDb().query("SELECT * FROM waits WHERE session_id = ? AND (ended IS NULL OR told_at IS NULL OR ended_at >= ?) ORDER BY id").all(sessionId, since)
+    : getDb().query("SELECT * FROM waits WHERE ended IS NULL OR told_at IS NULL OR ended_at >= ? ORDER BY id").all(since);
+  return (rows as WaitRow[]).map(rowToWait);
+}
+
+export function updateWait(id: number, patch: Partial<Pick<Wait, keyof typeof WAIT_COLUMNS>>): void {
+  const sets: string[] = [];
+  const vals: (string | number | null)[] = [];
+  for (const key of Object.keys(patch) as (keyof typeof WAIT_COLUMNS)[]) {
+    const v = patch[key];
+    sets.push(`${WAIT_COLUMNS[key]} = ?`);
+    vals.push(v === undefined || v === null ? null : key === "memo" ? JSON.stringify(v) : (v as string | number));
+  }
+  if (sets.length) getDb().run(`UPDATE waits SET ${sets.join(", ")} WHERE id = ?`, [...vals, id]);
+}
+
 // -------------------------------------------------------------- schedules
 
 type ScheduleRow = {
   id: string; rule: string; spec: string; label: string | null; enabled: number; next_at: number | null;
   created_at: number; last_run_at: number | null; last_session_id: string | null; last_error: string | null;
+  note_cmd: string | null; same_session: number; fresh_over: number | null; retiring: string | null;
 };
 
 function rowToSchedule(r: ScheduleRow): Schedule {
@@ -540,6 +751,10 @@ function rowToSchedule(r: ScheduleRow): Schedule {
     lastRunAt: r.last_run_at,
     lastSessionId: r.last_session_id,
     lastError: r.last_error,
+    noteCmd: r.note_cmd,
+    sameSession: r.same_session === 1,
+    freshOver: r.fresh_over,
+    retiring: r.retiring ?? null,
   };
 }
 
@@ -553,6 +768,10 @@ const SCHEDULE_COLUMNS = {
   lastRunAt: "last_run_at",
   lastSessionId: "last_session_id",
   lastError: "last_error",
+  noteCmd: "note_cmd",
+  sameSession: "same_session",
+  freshOver: "fresh_over",
+  retiring: "retiring",
 } as const satisfies Record<Exclude<keyof Schedule, "id">, string>;
 
 type ScheduleKey = keyof typeof SCHEDULE_COLUMNS;
@@ -807,6 +1026,30 @@ export function sessionsOnAccounts(accountIds: string[], sinceMs: number): { id:
   return rows.map((r) => ({ id: r.id, agentSessionId: r.agent_session_id, label: r.label, cwd: r.cwd, model: r.model }));
 }
 
+/**
+ * Every token sample since `sinceMs` of the sessions that hold claims (one
+ * another session started is in its caller's), by session, oldest first, with
+ * what the forecast needs of each session.
+ */
+export function tokenSamplesSince(sinceMs: number): { sessionId: string; provider: string; model: string | null; placed: number; startedAt: number; at: number; costEquiv: number }[] {
+  return getDb()
+    .query(
+      `SELECT t.session_id AS sessionId, s.provider AS provider, COALESCE(json_extract(s.facts, '$.model'), s.model) AS model,
+              s.origin = 'agentbox' AS placed, s.started_at AS startedAt, t.at AS at, t.cost_equiv AS costEquiv
+         FROM token_samples t JOIN sessions s ON s.id = t.session_id
+        WHERE t.at >= ? AND s.account_id IS NOT NULL AND (s.parent IS NULL OR s.parent_by_hand = 1 OR s.origin = 'agentbox')
+        ORDER BY t.session_id, t.at`,
+    )
+    .all(sinceMs) as { sessionId: string; provider: string; model: string | null; placed: number; startedAt: number; at: number; costEquiv: number }[];
+}
+
+/** Weekly points attributed on `accountId` since `sinceMs`, per session. */
+export function attributionsSince(sinceMs: number, accountId: string): { sessionId: string; points: number }[] {
+  return getDb()
+    .query("SELECT session_id AS sessionId, SUM(points) AS points FROM attributions WHERE account_id = ? AND at >= ? GROUP BY session_id")
+    .all(accountId, sinceMs) as { sessionId: string; points: number }[];
+}
+
 /** A session's token samples after `sinceMs`, oldest first. */
 export function tokenSamplesAfter(sessionId: string, sinceMs: number): TokenSampleRow[] {
   const rows = getDb()
@@ -863,7 +1106,7 @@ export function assignmentsSince(sinceMs: number): AssignmentRow[] {
     mode: string; claim: number; candidates: string; settings: string; why: string;
   }[];
   return rows.map((r) => ({
-    id: r.id, sessionId: r.session_id, at: r.at, provider: r.provider as ProviderId,
+    id: r.id, sessionId: r.session_id, at: r.at, provider: r.provider as AccountProvider,
     accountId: r.account_id, mode: r.mode, claim: r.claim,
     candidates: (parseJson(r.candidates) as Candidate[]) ?? [],
     settings: parseJson(r.settings) as BalancerSettings, why: r.why,
@@ -882,6 +1125,16 @@ export function rateLimitHitsSince(sinceMs: number): { sessionId: string; accoun
     session_id: string; account_id: string | null; at: number; detail: string;
   }[];
   return rows.map((r) => ({ sessionId: r.session_id, accountId: r.account_id, at: r.at, detail: r.detail }));
+}
+
+/** A provider's sessions active since `sinceMs`: the model each was started
+ *  on, and what that model last told it (`TranscriptFacts.modelOutcome`, as
+ *  stored with its facts), null for one that has not heard yet. */
+export function modelOutcomesSince(provider: ProviderId, sinceMs: number): { accountId: string | null; model: string | null; startedAt: number; outcome: ModelOutcome | null }[] {
+  const rows = getDb()
+    .query("SELECT account_id, model, started_at, json_extract(facts, '$.modelOutcome') AS outcome FROM sessions WHERE provider = ? AND last_activity_at >= ?")
+    .all(provider, sinceMs) as { account_id: string | null; model: string | null; started_at: number; outcome: string | null }[];
+  return rows.map((r) => ({ accountId: r.account_id, model: r.model, startedAt: r.started_at, outcome: r.outcome ? (JSON.parse(r.outcome) as ModelOutcome) : null }));
 }
 
 // -------------------------------------------------------------------- btw
@@ -1062,10 +1315,11 @@ function remoteDefaultBranch(slug: string): string {
 // -------------------------------------------------------------- settings
 
 export const DEFAULT_BALANCER: BalancerSettings = {
-  claimNormal: 3,
+  claimNormal: 1.5,
   shortWindowInWeekly: 24,
   claimIdleMin: 60,
   resetHorizonMin: 60,
+  shortLoadPct: 50,
 };
 
 export const DEFAULT_SETTINGS: AgentSettings = {
@@ -1074,7 +1328,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   autoApprove: true,
   parkIdleMin: 60,
   reclaimNightly: false,
-  models: { claude: "", codex: "", devin: "", omp: "" },
+  models: { claude: "", codex: "", devin: "", omp: "", opencode: "" },
   balancer: DEFAULT_BALANCER,
 };
 

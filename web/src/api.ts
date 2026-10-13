@@ -25,6 +25,7 @@ import type {
   DepStatus,
   Health,
   HotState,
+  Card,
   PromptHistoryEntry,
   LoginFlow,
   MetricsState,
@@ -43,6 +44,7 @@ import type {
   TimelineEvent,
   TimelinePage,
   TurnList,
+  SendReceipt,
   WorktreeScan,
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
@@ -67,7 +69,7 @@ const loadMock = (): Promise<MockModule> => (mockModule ??= import("./mock"));
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   if (MOCK) {
     const m = await loadMock();
     // The mock is typed loosely at its one boundary; everything past this line is the contract's type.
@@ -81,7 +83,7 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
 
   let res: Response;
   try {
-    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
   } catch (err) {
     // A dead server is the common case for a local tool; say which call died.
     throw new Error(`${path}: cannot reach agentbox (${(err as Error).message})`);
@@ -192,6 +194,9 @@ export const api = {
   prompts: () => get<PromptHistoryEntry[]>("/api/prompts"),
   health: (refresh = false) => get<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
   voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
+  /** Whether web links can open behind the window in front, for this browser. */
+  desktop: () => get<{ backgroundTabs: boolean }>("/api/desktop"),
+  openUrl: (url: string) => post<null>("/api/open-url", { url }),
 
   // notifications (lib/push.ts)
   push: () => get<{ publicKey: string; devices: { endpoint: string; userAgent: string | null; createdAt: number }[] }>("/api/push"),
@@ -203,18 +208,32 @@ export const api = {
   placement: (input: { provider: ProviderId; model?: string }) =>
     post<Placement>("/api/placement", input),
   /** What `--model` can be on this account, newest release first. */
-  models: (accountId: string) => get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}`),
+  models: (accountId: string, provider?: ProviderId) =>
+    get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}${provider ? `&provider=${enc(provider)}` : ""}`),
   /** Start one later: `when` is plain words ("in 4 hours", "every weekday at 9am"). */
   createSchedule: (input: { when: string; spec: NewSessionInput; label?: string }) => post<Schedule>("/api/schedules", input),
   patchSchedule: (id: string, patch: { when?: string; prompt?: string; label?: string | null; enabled?: boolean; repoId?: string }) =>
     request<Schedule>("PATCH", `/api/schedules/${enc(id)}`, patch),
   deleteSchedule: (id: string) => request<null>("DELETE", `/api/schedules/${enc(id)}`),
   runSchedule: (id: string) => post<{ sessionId: string }>(`/api/schedules/${enc(id)}/run`),
+  // cards (src/core/cards.ts)
+  /** One card whole, with its long version. */
+  card: (id: number) => get<Card>(`/api/cards/${id}`),
+  /** Your answer; "" for one that only wanted seeing. */
+  answerCard: (id: number, text: string) => post<Card>(`/api/cards/${id}/answer`, { text }),
+  laterCard: (id: number) => post<Card>(`/api/cards/${id}/later`),
+  undoCard: (id: number) => post<Card>(`/api/cards/${id}/undo`),
   createSession: (input: NewSessionInput) =>
     post<{ session: Session; placement: Placement }>("/api/sessions", input),
   patchSession: (id: string, patch: { label?: string | null; parent?: string | null }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
+  submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string) =>
+    request<SendReceipt>("POST", `/api/sessions/${enc(id)}/submissions`, { sendId, kind, text }, AbortSignal.timeout(30_000)),
+  submission: (id: string, sendId: string) => request<SendReceipt | null>("GET", `/api/sessions/${enc(id)}/submissions/${enc(sendId)}`, undefined, AbortSignal.timeout(10_000)),
+  /** `background` leaves a browser tab behind the window in front (Ctrl-click). */
+  openFile: (id: string, path: string, background = false) =>
+    post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path, background }),
   keys: (id: string, keys: string[]) => post<unknown>(`/api/sessions/${enc(id)}/keys`, { keys }),
   /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
   answer: (id: string, question: string, answers: AskAnswer[]) => post<unknown>(`/api/sessions/${enc(id)}/answer`, { question, answers }),
@@ -584,11 +603,13 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               logins: s.logins,
               repos: s.repos,
               prs: s.prs,
+              prClaims: s.prClaims,
               skills: s.skills,
               settings: s.settings,
               providers: s.providers,
               warnings: s.warnings,
               schedules: s.schedules,
+              cards: s.cards,
               onboarding: s.onboarding,
             },
         );

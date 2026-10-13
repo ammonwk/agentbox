@@ -62,8 +62,9 @@ export interface LiveEntry {
    *  waiting for its caller to collect. */
   subagent: { name: string; answerWaiting: boolean } | null;
   lastActivityAt: number;
-  /** When the model last answered, where the provider can tell (see TranscriptFacts). */
-  lastTurnAt: number | null;
+  /** When its prompt cache goes cold (`Session.cacheWarmUntil`); absent
+   *  from a snapshot an older server wrote. */
+  cacheWarmUntil?: number | null;
   /** How a session in another terminal was started, so it resumes with the same flags. */
   launch: Launch | null;
 }

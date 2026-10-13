@@ -12,11 +12,13 @@ export type Route =
   /** One account's usage insights. */
   | { page: "accounts"; sub: "insights"; account: string }
   | { page: "skills" }
+  /** The cards sessions handed you: to decide, or to know. */
+  | { page: "review" }
   | { page: "voice" }
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "sessions" | "voice" | "accounts" | "skills" | "settings";
+export type NavId = "sessions" | "review" | "voice" | "accounts" | "skills" | "settings";
 
 export function navOf(route: Route): NavId {
   return route.page === "session" ? "sessions" : route.page;
@@ -44,6 +46,7 @@ export function parseHash(hash: string): Route {
   }
   if (head === "skills") return { page: "skills" };
   if (head === "voice") return { page: "voice" };
+  if (head === "review") return { page: "review" };
   if (head === "settings") return { page: "settings" };
   return { page: "sessions" };
 }

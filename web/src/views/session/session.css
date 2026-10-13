@@ -689,6 +689,10 @@
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   background: color-mix(in srgb, var(--danger) 8%, var(--panel));
 }
+.sx-attention-line.info {
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+  background: color-mix(in srgb, var(--info) 8%, var(--panel));
+}
 .sx-attention-line.warn > span {
   flex: 1;
 }
@@ -1613,6 +1617,13 @@ a.tl-sender:hover .tl-sender-name {
 }
 .sx-md pre code { background: none; border: none; padding: 0; }
 .sx-md code.sx-fileref { color: var(--muted); cursor: default; }
+.sx-md a.sx-filelink { color: var(--muted); text-decoration: underline dotted; }
+.sx-md a.sx-filelink:hover { color: var(--accent); }
+.sx-filelink > svg { display: inline; vertical-align: -2px; margin-right: 4px; opacity: .7; }
+.sx-md a.sx-filelink code { color: inherit; cursor: pointer; }
+.sx-md a.sx-desktoplink code { color: inherit; cursor: pointer; }
+.sx-filelink[aria-disabled="true"], .sx-desktoplink[aria-disabled="true"] { cursor: progress; }
+.sx-filelink-error { color: var(--danger); font-size: 12px; }
 .sx-md blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .sx-md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .sx-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; }
@@ -1727,6 +1738,11 @@ a.sx-imgpath:hover { color: var(--accent); }
   font-size: 12.5px;
   color: var(--danger);
 }
+.cmp-pending { display: grid; gap: 6px; }
+.cmp-pending-body { flex: 1; min-width: 0; }
+.cmp-pending-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; }
+.cmp-pending .cmp-note { flex-wrap: wrap; }
+.cmp-pending .cmp-note > .btn { margin-left: 0; }
 .cmp-note {
   display: flex;
   align-items: center;
@@ -1968,21 +1984,13 @@ a.sx-imgpath:hover { color: var(--accent); }
   .sx-panel { padding: 12px; }
   .cmp { padding: 8px 12px; }
   .sx-facts { flex-wrap: wrap; }
-  /* The session id beside the title: quiet until pointed at. */
-.copy-btn.sx-id {
-  min-height: 22px;
-  padding: 0 6px;
-  border-color: transparent;
-  background: none;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  flex: none;
-}
-.copy-btn.sx-id:hover {
-  border-color: var(--border-strong);
-}
-.resume-copy span { display: none; }
+  /* The provider's id is a uuid: its start is enough to know it by. */
+  .resume-copy span {
+    max-width: 9ch;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
   .sx-header-top { flex-wrap: wrap; }
   .cmp-row { flex-wrap: wrap; }
   .cmp textarea { flex-basis: 100%; }
@@ -2186,6 +2194,11 @@ a.sx-imgpath:hover { color: var(--accent); }
   color: var(--faint);
   font-size: 11.5px;
 }
+/* When the fleet carries it on by itself: shown on phones too. */
+.cmp-limit-auto {
+  color: var(--muted);
+  font-size: 11.5px;
+}
 /* The account picker is a row of its own under the banner's text. */
 .cmp-limit-pick {
   flex-basis: 100%;
@@ -2281,15 +2294,12 @@ a.sx-imgpath:hover { color: var(--accent); }
     min-width: 0;
     font-size: 16px;
   }
-  /* The id is a copy button with no room for its text. */
-  .copy-btn.sx-id {
-    min-width: 30px;
+  /* No hover to find the id by: it shows its border as a button. */
+  .sx-header-actions .copy-btn {
     min-height: 30px;
-    justify-content: center;
   }
-  .copy-btn.sx-id span,
-  .copy-btn.resume-copy {
-    display: none;
+  .sx-header-actions .copy-btn.sx-id {
+    border-color: var(--border);
   }
   .sx-header-actions {
     order: 5;

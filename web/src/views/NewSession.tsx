@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Repo, Schedule } from "../../../src/core/types";
 import { parseWhen } from "../../../src/core/schedule";
+import { accountProvider } from "../../../src/core/providers/account";
 import { api, type NewSessionInput } from "../api";
 import { PROVIDER_LABEL, PROVIDERS } from "../bits";
 import { AttachButton, useAttachments } from "../attachments";
@@ -127,9 +128,7 @@ export function NewSession({
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
 
-  const accounts = useMemo(() => state.accounts.filter((a) => a.provider === provider), [state.accounts, provider]);
-  const b = state.settings.balancer;
-
+  const accounts = useMemo(() => state.accounts.filter((a) => a.provider === accountProvider(provider)), [state.accounts, provider]);
   // A remembered pin to an account that is gone is not a pin.
   useEffect(() => {
     if (accountId !== "auto" && !accounts.some((a) => a.id === accountId)) setChoice({ accountId: "auto" });
@@ -162,13 +161,13 @@ export function NewSession({
     if (!target) return setCatalog([]);
     let cancelled = false;
     api
-      .models(target.id)
+      .models(target.id, provider)
       .then((m) => !cancelled && setCatalog(m))
       .catch(() => !cancelled && setCatalog([]));
     return () => {
       cancelled = true;
     };
-  }, [target?.id]);
+  }, [target?.id, provider]);
 
   const models = useMemo(
     () => rankModels(catalog, state.sessions, provider),
@@ -515,7 +514,6 @@ export function NewSession({
             placement={placement}
             placing={placing}
             placeErr={placeErr}
-            claimIdleMin={b.claimIdleMin}
           />
         </div>
 

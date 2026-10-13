@@ -2,7 +2,7 @@ import { createContext, useContext, useMemo } from "react";
 import type { SessionStatus } from "../../../../src/core/types";
 import { StatusDot } from "../../bits";
 import { Icon } from "../../components";
-import { titleOf, type SessionRow } from "../../lib/board";
+import { shownStatus, titleOf, type SessionRow } from "../../lib/board";
 import { hrefOf, type SessionTab } from "../../route";
 
 /**
@@ -55,7 +55,7 @@ export function FamilyStrip() {
       {parent ? (
         <a className="fam-chip fam-up" href={hrefOf({ page: "session", id: parent.id, tab })} title={`Started by ${titleOf(parent)}`}>
           <Icon.chevronUp size={12} />
-          <StatusDot status={parent.status} />
+          <StatusDot status={shownStatus(parent)} />
           <span>{titleOf(parent)}</span>
         </a>
       ) : null}
@@ -66,7 +66,7 @@ export function FamilyStrip() {
       ) : null}
       {kids.map((k) => (
         <a key={k.id} className="fam-chip" href={hrefOf({ page: "session", id: k.id, tab })} data-status={k.status}>
-          <StatusDot status={k.status} />
+          <StatusDot status={shownStatus(k)} />
           <span>{titleOf(k)}</span>
         </a>
       ))}

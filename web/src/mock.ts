@@ -17,6 +17,7 @@ import type {
   AgentSettings,
   AskAnswer,
   AppState,
+  SendReceipt,
   Attention,
   AttentionKind,
   Btw,
@@ -36,6 +37,7 @@ import type {
   ModelOption,
   Placement,
   ProcDetail,
+  AccountProvider,
   ProviderId,
   Repo,
   ServerMessage,
@@ -48,10 +50,13 @@ import type {
   UsageWindow,
   WorktreeScan,
   Schedule,
+  Card,
   ScheduleSpec,
 } from "../../src/core/types";
 import type { RepoPatch, TermChannel, TermHandlers } from "./api";
 import { nextRun, parseWhen } from "../../src/core/schedule";
+import { retrying } from "../../src/core/attention";
+import { accountProvider } from "../../src/core/providers/account";
 
 const M = 60_000;
 const H = 60 * M;
@@ -67,12 +72,13 @@ const settings: AgentSettings = {
   autoApprove: false,
   parkIdleMin: 60,
   reclaimNightly: false,
-  models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "" },
+  models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "" },
   balancer: {
-    claimNormal: 3,
+    claimNormal: 1.5,
     shortWindowInWeekly: 24,
     claimIdleMin: 60,
     resetHorizonMin: 60,
+    shortLoadPct: 50,
   },
 };
 
@@ -244,14 +250,38 @@ const schedules: Schedule[] = [
   {
     id: "s9x4", rule: { kind: "once", at: T0 + 3 * H }, label: null, enabled: true, nextAt: T0 + 3 * H, createdAt: T0 - 20 * M,
     spec: { provider: "claude", repoId: "r-agentbox", worktree: true, prompt: "Re-run the balancer calibration once tonight's usage samples are in, and open a PR if the suggested claims moved." },
-    lastRunAt: null, lastSessionId: null, lastError: null,
+    lastRunAt: null, lastSessionId: null, lastError: null, noteCmd: null, sameSession: false, freshOver: null, retiring: null,
   },
   {
     id: "d7w2", rule: { kind: "weekly", days: [1, 2, 3, 4, 5], minute: 9 * 60 }, label: "Morning PR sweep", enabled: true,
     nextAt: nextRun({ kind: "weekly", days: [1, 2, 3, 4, 5], minute: 9 * 60 }, T0), createdAt: T0 - 6 * 24 * H,
     spec: { provider: "claude", repoId: "r-agentbox", worktree: false, prompt: "Go through open PRs: rebase what is stale, answer review comments, and list what needs me." },
-    lastRunAt: T0 - 24 * H, lastSessionId: "k9d1", lastError: null,
+    lastRunAt: T0 - 24 * H, lastSessionId: "k9d1", lastError: null, noteCmd: null, sameSession: false, freshOver: null, retiring: null,
   },
+  {
+    id: "w3k8", rule: { kind: "every", minutes: 10, from: T0 - 5 * H }, label: "Fleet watch", enabled: true,
+    nextAt: nextRun({ kind: "every", minutes: 10, from: T0 - 5 * H }, T0), createdAt: T0 - 5 * H,
+    spec: { provider: "claude", cwd: `${HOME}/Documents/agentbox`, prompt: "You watch the fleet: handle what each note lists." },
+    lastRunAt: T0 - 22 * M, lastSessionId: "k9d1", lastError: null, noteCmd: "./scripts/whats-open.sh", sameSession: true, freshOver: null, retiring: null,
+  },
+];
+
+const card = (c: Pick<Card, "id" | "kind" | "title" | "short"> & Partial<Card>): Card => ({
+  hasLong: true, pr: null, recommend: null, default: null, defaultAt: null, key: null, sessionId: "k9d1", about: null, state: "open",
+  answer: null, answeredAt: null, deliveredAt: null, unread: false, laterAt: null, createdAt: T0 - 40 * M, closedWhy: null, ...c,
+});
+const cards: Card[] = [
+  card({
+    id: 3, kind: "decision", title: "Count multi-year agreements as one sale?",
+    short: "One customer counts only signed agreements as won. The open PR counts every multi-year row. Which should every org get?",
+    recommend: "Signed only: it matches what they audit against, and the PR is a one-line change either way.",
+    default: "leave the PR unmerged", defaultAt: T0 + 20 * H, pr: "https://github.com/you/agentbox/pull/212",
+  }),
+  card({ id: 2, kind: "merged", title: "Read codex usage from wham when nothing is running", short: "Usage for an idle codex account no longer reads as stale. risk: low — one file, read-only.", pr: "https://github.com/you/agentbox/pull/212", createdAt: T0 - 2 * H }),
+  card({ id: 4, kind: "decision", title: "Keep the nightly export on the old bucket?", short: "The new bucket is ready but two dashboards still read the old one. Move now and fix them, or wait a week?", recommend: "Wait a week: nothing is lost and both dashboards move on Monday.", createdAt: T0 - 9 * H }),
+  card({ id: 5, kind: "decision", title: "Raise the review timeout to 20 minutes?", short: "Three reviews this week were cut off at 10 minutes on large PRs.", createdAt: T0 - 1 * H }),
+  card({ id: 6, kind: "merged", title: "Show the account a session runs on in its header", short: "The header names the account beside the model. risk: low — display only.", pr: "https://github.com/you/agentbox/pull/215", createdAt: T0 - 6 * H }),
+  card({ id: 1, kind: "note", title: "Staging was red for 40 minutes", short: "A flaky migration test; the fix session reran it and it is green again.", hasLong: false, state: "answered", answer: "", answeredAt: T0 - 3 * H, createdAt: T0 - 4 * H }),
 ];
 
 const repos: Repo[] = [
@@ -299,11 +329,13 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     cold: false,
     limitHit: null,
     turnError: null,
+    autoResume: null,
     question: null,
     queued: [],
     origin: "agentbox",
     parent: null,
     parentByHand: false,
+    successor: null,
     subagent: null,
     pid: live ? 40000 + Math.floor(Math.random() * 20000) : null,
     tmux: p.host === "tmux" ? `ab-${p.id}` : null,
@@ -316,6 +348,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     background: false,
     ...p,
     lastPromptAt: p.lastPromptAt ?? p.lastActivityAt ?? T0 - 5 * M,
+    cacheWarmUntil: p.cacheWarmUntil ?? (p.lastActivityAt ?? T0 - 5 * M) + H,
   };
 }
 
@@ -416,6 +449,7 @@ const sessions: MockSession[] = [
   sess({
     id: "s6g3", provider: "devin", accountId: "dv-main", status: "waiting", host: "tmux",
     turnError: { at: T0 - 3 * M, kind: "output-cap", detail: "the reply hit the model's max output token limit" },
+    autoResume: { at: T0 + 2 * M, attempt: 1, of: 3, after: "error" },
     title: "Trace how the CH projector folds call flags", cwd: `${AB}/.worktrees/ch-flags`, repoRoot: `${AB}/.worktrees/ch-flags`,
     branch: "feat/ch-call-flags", worktree: `${AB}/.worktrees/ch-flags`, model: "glm-5-3-flash-max",
     lastMessage: "Let me look at how the CH projector materializes call flags and whether org context is available there.",
@@ -514,8 +548,8 @@ const REASON: Record<AttentionKind, (s: Session) => string> = {
 };
 
 function attentionOf(s: Session): Attention {
-  const kind: AttentionKind = s.status;
-  return { kind, rank: ATTN[kind], reason: REASON[kind](s) };
+  const kind: AttentionKind = retrying(s) ? "running" : s.status;
+  return { kind, rank: ATTN[kind], reason: REASON[s.status](s) };
 }
 
 // ------------------------------------------------------------- claims & balancer
@@ -526,7 +560,7 @@ function claimsFor(accountId: string): ClaimView[] {
     .filter((s) => s.accountId === accountId && (s.status === "running" || s.status === "waiting" || s.status === "blocked"))
     .map((s) => {
       const consumed = Math.min(s.claim * 1.3, (s.tokens.costEquiv / 10) * s.claim * 0.8);
-      const lapsed = T0 - s.lastActivityAt > settings.balancer.claimIdleMin * M;
+      const lapsed = T0 > s.cacheWarmUntil;
       const outstanding = lapsed ? 0 : Math.max(0, s.claim - consumed);
       return {
         sessionId: s.id,
@@ -534,6 +568,7 @@ function claimsFor(accountId: string): ClaimView[] {
         claim: s.claim,
         consumed: Math.round(consumed * 10) / 10,
         outstanding: Math.round(outstanding * 10) / 10,
+        basis: "claim" as const,
         lapsed,
         since: s.startedAt,
       };
@@ -594,6 +629,7 @@ function candidateFor(a: MockAccount, now: number): Candidate {
     shortEffective,
     shortResetsAt: shortW?.resetsAt ?? null,
     legRoom,
+    shortLoadTo: legRoom == null ? null : b.shortLoadPct,
     weeklyPerHour,
     outstanding,
     score: eligible ? score : score - 1000,
@@ -612,6 +648,7 @@ const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
     { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", releasedAt: "2026-07-09", efforts: ["low", "medium", "high", "xhigh", "max"] },
   ],
   omp: [{ id: "opencode-go/deepseek-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
+  opencode: [{ id: "opencode-go/deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
   devin: [
     { id: "swe", label: "SWE-2 (latest)", releasedAt: null },
     { id: "swe-2-max", label: "SWE-2 Max", releasedAt: null, note: "Free" },
@@ -624,7 +661,7 @@ const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
 
 function placementFor(provider: ProviderId, manual?: string): Placement {
   const now = Date.now();
-  const candidates = accounts.filter((a) => a.provider === provider).map((a) => candidateFor(a, now));
+  const candidates = accounts.filter((a) => a.provider === accountProvider(provider)).map((a) => candidateFor(a, now));
   const best = [...candidates].filter((c) => c.eligible).sort((a, b) => b.score - a.score)[0] ?? null;
   const claim = settings.balancer.claimNormal;
   if (manual && manual !== "auto") {
@@ -685,7 +722,7 @@ function cold(): ColdState {
       {
         number: 212, repo: "you/agentbox", title: "Read codex usage from wham when nothing is running", headRef: "feat/wham-usage",
         state: "OPEN", isDraft: true, url: "https://github.com/you/agentbox/pull/212", author: "you",
-        createdAt: new Date(T0 - 2 * H).toISOString(), updatedAt: new Date(T0 - 20 * M).toISOString(), sessionId: "a81c",
+        createdAt: new Date(T0 - 2 * H).toISOString(), updatedAt: new Date(T0 - 20 * M).toISOString(), sessionId: "a81c", owner: "a81c",
       },
     ],
     skills,
@@ -698,6 +735,8 @@ function cold(): ColdState {
     ],
     warnings: [],
     schedules: structuredClone(schedules),
+    cards: structuredClone(cards),
+    prClaims: [{ repo: "you/agentbox", number: 212, sessionId: "a81c", how: "branch", at: T0 - 2 * H }],
     onboarding: {
       identity: { name: "Dev", email: "dev@example.com", github: "dev", timezone: "UTC", context: "" },
       depsOk: true,
@@ -777,7 +816,6 @@ function metrics(): MetricsState {
       memKind: "pss",
       procs: busy ? 6 + (s.id.charCodeAt(1) % 5) : 3,
       history: h.slice(),
-      ...(s.id === "b8v7" ? { backgroundShells: 1 } : {}),
     };
   }
   return { at: Date.now(), system: sys, load };
@@ -786,6 +824,7 @@ function metrics(): MetricsState {
 // ------------------------------------------------------------- timelines
 
 const timelines = new Map<string, TimelineEvent[]>();
+const submissions = new Map<string, SendReceipt>();
 
 function makeTimeline(s: Session): TimelineEvent[] {
   const ev: TimelineEvent[] = [];
@@ -1132,6 +1171,20 @@ function calibration(days: number): CalibrationReport {
     hitAfterPlacement: 4,
     suggested: { shortWindowInWeekly: 21.4, claimNormal: 6 },
     current: structuredClone(settings.balancer) as BalancerSettings,
+    forecast: {
+      fittedAt: T0 - 3 * H,
+      recentEdges: [0.001, 0.2, 1, 4],
+      soFarEdges: [0.1, 1, 4, 16, 64],
+      providers: [
+        {
+          provider: "claude",
+          pointsPerCost: 0.035,
+          cells: [0.01, 0.2, 0.5, 0.9, 2.4].flatMap((base, recent) =>
+            [0.4, 0.6, 1, 1.4, 2, 3].map((scale, soFar) => ({ recent, soFar, stretches: 400 - 60 * recent, points: Math.round(base * scale * 100) / 100 })),
+          ),
+        },
+      ],
+    },
   };
 }
 
@@ -1141,6 +1194,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   const [, head, id, action] = p;
 
   if (method === "GET") {
+    if (head === "sessions" && action === "submissions") return submissions.get(p[4]!) ?? null;
     if (head === "state") return appState();
     if (head === "health") {
       const health: Health = {
@@ -1168,7 +1222,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
     if (head === "repos") return repos;
     if (head === "models") {
       const a = mustAccount(url.searchParams.get("accountId") ?? "");
-      return MOCK_MODELS[a.provider];
+      return MOCK_MODELS[(url.searchParams.get("provider") as ProviderId | null) ?? a.provider];
     }
     if (head === "skill") return { body: `---\nname: example\ndescription: A mock skill body.\n---\n\n# Example\n\nThis is what SKILL.md would contain.\n` };
     if (head === "sessions" && id === "closed") {
@@ -1195,6 +1249,17 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
     return placementFor(x.provider ?? "claude");
   }
 
+  if (head === "cards") {
+    const c = cards.find((z) => String(z.id) === id);
+    if (!c) throw new Error(`no card ${id}`);
+    if (method === "GET") return { ...c, long: c.hasLong ? `## ${c.title}\n\n${c.short}\n\n- What changes for customers\n- What was checked\n- What it risks` : null };
+    if (action === "answer") Object.assign(c, { state: "answered", answer: body<{ text: string }>(b).text ?? "", answeredAt: Date.now() });
+    else if (action === "later") Object.assign(c, { state: "later", laterAt: Date.now() });
+    else if (action === "undo") Object.assign(c, { state: "open", answer: null, answeredAt: null, laterAt: null });
+    pushCold();
+    return c;
+  }
+
   if (head === "schedules") {
     const x = body<{ when: string; spec: ScheduleSpec; label: string | null; prompt: string; enabled: boolean }>(b);
     const rule = (when: string) => {
@@ -1207,6 +1272,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       const sc: Schedule = {
         id: Math.random().toString(36).slice(2, 6), rule: r, spec: x.spec!, label: x.label ?? null, enabled: true,
         nextAt: nextRun(r, Date.now()), createdAt: Date.now(), lastRunAt: null, lastSessionId: null, lastError: null,
+        noteCmd: null, sameSession: false, freshOver: null, retiring: null,
       };
       schedules.push(sc);
       pushCold();
@@ -1251,6 +1317,16 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   }
 
   if (head === "sessions" && id) {
+    if (action === "submissions") {
+      const x = body<{ sendId: string; kind: "send" | "resume" | "btw"; text: string }>(b);
+      const sendId = x.sendId;
+      if (!sendId) throw new Error("mock: missing send ID");
+      if (submissions.has(sendId)) return submissions.get(sendId);
+      await handle("POST", `/api/sessions/${id}/${x.kind}`, x.kind === "btw" ? { question: x.text } : x.kind === "resume" ? { prompt: x.text } : { text: x.text });
+      const receipt: SendReceipt = { id: sendId, sessionId: id, state: "sent", at: Date.now(), error: null };
+      submissions.set(sendId, receipt);
+      return receipt;
+    }
     const s = mustSession(id);
     const x = body<{ label: string | null; text: string; keys: string[]; prompt: string; closed: boolean; question: string; answers: AskAnswer[] }>(b);
     switch (method === "PATCH" ? "patch" : action) {
@@ -1349,7 +1425,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
 
   if (head === "accounts") {
     if (!id) {
-      const x = body<{ provider: ProviderId; label: string }>(b);
+      const x = body<{ provider: AccountProvider; label: string }>(b);
       const provider = x.provider ?? "claude";
       const aid = `${provider.slice(0, 2)}-${Math.random().toString(36).slice(2, 6)}`;
       const acc: MockAccount = {
@@ -1370,7 +1446,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       return { account: acc, login };
     }
     if (id === "import") {
-      const x = body<{ provider: ProviderId; home: string }>(b);
+      const x = body<{ provider: AccountProvider; home: string }>(b);
       const aid = `im-${Math.random().toString(36).slice(2, 6)}`;
       const acc: MockAccount = {
         id: aid, provider: x.provider ?? "claude", label: (x.home ?? "imported").split("/").pop() || "imported",

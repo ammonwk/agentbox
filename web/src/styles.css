@@ -45,11 +45,13 @@
   --radius-sm: 7px;
 
   /* Providers: text badges in these. Claude's terracotta, Codex's ink-blue,
-   * Devin's teal, omp's violet — distinct from each other and from status. */
+   * Devin's teal, omp's violet, opencode's rose — distinct from each other
+   * and from status. */
   --p-claude: #b4532a;
   --p-codex: #3f51d6;
   --p-devin: #0f7f73;
   --p-omp: #8a3fd1;
+  --p-opencode: #b0306f;
 
   /* Account slots. Eight hues picked to stay apart from each other in both
    * themes; an account keeps its slot for life (bits.tsx accountHue). */
@@ -100,6 +102,7 @@
   --p-codex: #8c9bff;
   --p-devin: #3cc7b6;
   --p-omp: #c08cf5;
+  --p-opencode: #f07cb4;
 
   --acct-0: #60a5fa;
   --acct-1: #e879f9;
@@ -757,10 +760,12 @@ code {
   border-radius: 50%;
   background: currentColor;
 }
-.pill-running {
+.pill-running,
+.pill-retrying {
   color: var(--info);
 }
-.pill-running .pill-dot {
+.pill-running .pill-dot,
+.pill-retrying .pill-dot {
   animation: pulse 1.4s infinite;
 }
 .pill-waiting {
@@ -782,7 +787,8 @@ code {
   flex: none;
   background: var(--faint);
 }
-.st-dot.st-running {
+.st-dot.st-running,
+.st-dot.st-retrying {
   background: var(--info);
   animation: pulse-dot 1.4s infinite;
 }
@@ -805,7 +811,8 @@ code {
   fill: currentColor;
   overflow: visible;
 }
-.st-shape.st-running {
+.st-shape.st-running,
+.st-shape.st-retrying {
   color: var(--info);
   animation: pulse-shape 1.4s infinite;
 }
@@ -1625,6 +1632,7 @@ textarea,
 .prov-codex { --prov: var(--p-codex); }
 .prov-devin { --prov: var(--p-devin); }
 .prov-omp { --prov: var(--p-omp); }
+.prov-opencode { --prov: var(--p-opencode); }
 
 /* Account: a dot in the account's slot colour and its label. */
 .acct {
@@ -2307,12 +2315,13 @@ kbd {
   .nav-new {
     order: 3;
   }
-  /* Sessions, Voice, New, Accounts, Settings; Skills is a desk job. */
+  /* Sessions, Review, New, Voice, Accounts, Settings; Skills is a desk job. */
   .sidebar nav > :nth-child(1) { order: 1; }
   .sidebar nav > :nth-child(2) { order: 2; }
   .sidebar nav > :nth-child(3) { order: 4; }
-  .sidebar nav > :nth-child(4) { display: none; }
-  .sidebar nav > :nth-child(5) { order: 5; }
+  .sidebar nav > :nth-child(4) { order: 5; }
+  .sidebar nav > :nth-child(5) { display: none; }
+  .sidebar nav > :nth-child(6) { order: 6; }
   .nav-item .count,
   .sidebar:hover .nav-item .count {
     position: absolute;
@@ -2343,6 +2352,7 @@ kbd {
      worth more to the conversation. */
   .app[data-page="session"] .sysbar,
   .app[data-page="voice"] .sysbar,
+  .app[data-page="review"] .sysbar,
   :root[data-kb] .sysbar {
     display: none;
   }

@@ -4,22 +4,32 @@
 
 import { resolve } from "node:path";
 import type { Api } from "../client";
-import { describeRule, isRecurring, until } from "../core/schedule";
+import { describeRule, FRESH_OVER, isRecurring, until } from "../core/schedule";
 import type { AppState, ProviderId, Schedule } from "../core/types";
 import { parseArgs } from "./sessions";
 
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
 const str = (v: string | true | undefined): string | undefined => (typeof v === "string" ? v : undefined);
 
-/** `agentbox schedule <when> [--agent claude] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N] <prompt…|->` */
+/** `150k`, `150000`, `0.2m`: tokens. */
+function tokens(v: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*([km]?)$/i.exec(v.trim());
+  if (!m) throw new Error(`--fresh-over takes a context size in tokens, as in 150k: not "${v}"`);
+  return Math.round(Number(m[1]) * (m[2]!.toLowerCase() === "k" ? 1e3 : m[2] ? 1e6 : 1));
+}
+
+/** `agentbox schedule <when> [--agent claude] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N]
+ *  [--note-cmd CMD] [--same-session [--fresh-over 150k]] <prompt…|->` */
 export async function schedule(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["agent", "cwd", "account", "model", "effort", "name"], []);
+  const { flags, rest } = parseArgs(args, ["agent", "cwd", "account", "model", "effort", "name", "note-cmd", "fresh-over"], ["same-session"]);
   const [when, ...words] = rest;
   if (!when) throw new Error('schedule needs a time and a prompt: agentbox schedule "tomorrow at 9am" fix the flaky test');
   const agent = (str(flags.get("agent")) ?? "claude") as ProviderId;
   if (!PROVIDERS.includes(agent)) throw new Error(`--agent must be one of ${PROVIDERS.join(", ")}`);
   const prompt = words.length === 1 && words[0] === "-" ? (await new Response(Bun.stdin.stream()).text()).trim() : words.join(" ").trim();
-  if (!prompt) throw new Error("a scheduled session needs a prompt (the words after the time, or - to read it from stdin)");
+  const noteCmd = str(flags.get("note-cmd"));
+  if (!prompt && !noteCmd) throw new Error("a scheduled session needs a prompt (the words after the time, or - to read it from stdin)");
+  const freshOver = str(flags.get("fresh-over"));
 
   let accountId: string | null = null;
   const wanted = str(flags.get("account"));
@@ -33,10 +43,13 @@ export async function schedule(api: Api, args: string[]): Promise<number> {
   const sc = await api<Schedule>("POST", "/api/schedules", {
     when,
     label: str(flags.get("name")),
+    noteCmd,
+    sameSession: flags.has("same-session"),
+    freshOver: freshOver ? tokens(freshOver) : undefined,
     spec: {
       provider: agent,
       cwd: resolve(str(flags.get("cwd")) ?? process.cwd()),
-      prompt,
+      prompt: prompt || undefined,
       model: str(flags.get("model")),
       effort: str(flags.get("effort")),
       accountId,
@@ -76,8 +89,24 @@ export async function unschedule(api: Api, args: string[]): Promise<number> {
 /** `id  when (next)  what`: one line per schedule. */
 function line(sc: Schedule): string {
   const title = sc.label?.trim() || sc.spec.prompt?.split("\n")[0]?.slice(0, 70) || "";
-  const next = !sc.enabled ? "paused" : sc.nextAt ? until(sc.nextAt) : sc.rule.kind === "merge" ? "on merge" : "—";
+  const next = !sc.enabled ? "paused" : sc.nextAt ? until(sc.nextAt) : sc.rule.kind === "merge" ? "on merge" : sc.rule.kind === "red" ? "on red" : "—";
   const rule = isRecurring(sc.rule) ? `${describeRule(sc.rule)}, repeating` : describeRule(sc.rule);
-  const failed = sc.lastError ? `  [last start failed: ${sc.lastError}]` : "";
-  return `${sc.id}  ${next.padEnd(7)} ${rule} · ${sc.spec.provider} · ${title}${failed}`;
+  const failed = sc.lastError ? `  [last time: ${sc.lastError}]` : "";
+  return `${sc.id}  ${next.padEnd(7)} ${rule} · ${sc.spec.provider} · ${title}${kind(sc)}${failed}`;
+}
+
+/** What sets a note-command or one-session schedule apart, and when it last
+ *  had something to say: ` · same session 3ghbafhi (fresh over 150k) · note: cmd · last note 12m ago`. */
+function kind(sc: Schedule): string {
+  if (!sc.noteCmd && !sc.sameSession) return "";
+  const parts: string[] = [];
+  if (sc.sameSession) parts.push(`same session${sc.lastSessionId ? ` ${sc.lastSessionId}` : ""} (fresh over ${Math.round((sc.freshOver ?? FRESH_OVER) / 1000)}k)`);
+  if (sc.noteCmd) parts.push(`note: ${sc.noteCmd}`);
+  parts.push(sc.lastRunAt ? `last ${sc.noteCmd ? "note" : "said"} ${ago(sc.lastRunAt)} ago` : `no ${sc.noteCmd ? "note" : "run"} yet`);
+  return ` · ${parts.join(" · ")}`;
+}
+
+function ago(at: number): string {
+  const m = Math.max(0, Math.round((Date.now() - at) / 60_000));
+  return m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}` : `${Math.round(m / 1440)}d`;
 }

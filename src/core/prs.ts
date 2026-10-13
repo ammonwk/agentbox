@@ -87,9 +87,24 @@ export function openPrs(sessions: Session[]): PrInfo[] {
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
       sessionId: session?.id ?? null,
+      owner: null,
     };
   });
 }
+
+/** The open PRs that have a session on their branch, each with every such
+ *  session, for `prClaims` to pick the live one from. */
+export function branchHolders(sessions: Session[]): { repo: string; number: number; sessionId: string; at: number }[] {
+  const repos = [...tracked()].filter(([, registered]) => registered).map(([slug]) => slug);
+  return listOpenPrs(repos).flatMap((p) =>
+    sessions
+      .filter((s) => s.branch === p.headRef && s.repoRoot !== null && slugOf(s.repoRoot) === p.repo)
+      .map((s) => ({ repo: p.repo, number: p.number, sessionId: s.id, at: Date.parse(p.createdAt) || 0 })),
+  );
+}
+
+/** The GitHub repo (`owner/name`) of a checkout, or null. */
+export const repoSlugOf = (root: string): string | null => slugOf(root);
 
 /**
  * Every branch of a repo that has had a PR, and what became of it.

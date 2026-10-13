@@ -2,7 +2,6 @@ import { EventEmitter } from "node:events";
 import { SystemMeter, metricsAvailable } from "./system";
 import {
   LoadMeter,
-  backgroundShells,
   breakdown,
   readProcTable,
   sharedProcTable,
@@ -120,12 +119,6 @@ class Metrics {
           live.add(s.pid);
           const sample = this.meter.sample(table, s.pid);
           if (!sample) continue;
-          // Only for parked sessions: while a turn is in flight every shell is
-          // a foreground tool call, and counting those says nothing.
-          if (s.status !== "running") {
-            const n = await backgroundShells(table, s.pid).catch(() => 0);
-            if (n > 0) sample.backgroundShells = n;
-          }
           load[s.id] = sample;
         }
         this.meter.retain(live);
