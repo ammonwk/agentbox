@@ -35,7 +35,7 @@ export interface Check {
 export interface PrRead {
   state: "OPEN" | "MERGED" | "CLOSED";
   head: string;
-  base: { ref: string; sha: string };
+  base: string;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   checks: Check[];
 }
@@ -107,7 +107,7 @@ export const prKey = (s: Pick<PrSpec, "repo" | "number">): string => `${s.repo}#
  */
 export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<Map<string, PrRead | Error>> {
   const repos = [...new Set(prs.map((p) => p.repo))];
-  const fields = `state headRefOid baseRefName baseRefOid mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
+  const fields = `state headRefOid baseRefName mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
   const query = `{ ${repos
     .map((repo, i) => {
       const [owner, name] = repo.split("/");
@@ -123,7 +123,7 @@ export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<M
   repos.forEach((repo, i) => {
     for (const p of prs.filter((x) => x.repo === repo)) {
       const node = body.data![`r${i}`]?.[`p${p.number}`] as
-        | { state: PrRead["state"]; headRefOid: string; baseRefName: string; baseRefOid: string; mergeable: PrRead["mergeable"]; commits: { nodes: { commit: { oid: string; statusCheckRollup: { contexts: { totalCount: number; nodes: RawContext[] } } | null } }[] } }
+        | { state: PrRead["state"]; headRefOid: string; baseRefName: string; mergeable: PrRead["mergeable"]; commits: { nodes: { commit: { oid: string; statusCheckRollup: { contexts: { totalCount: number; nodes: RawContext[] } } | null } }[] } }
         | null
         | undefined;
       if (!node) {
@@ -142,7 +142,7 @@ export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<M
         out.set(prKey(p), new Error(`${prKey(p)} has ${contexts.totalCount} checks on its head, more than one look reads (${contexts.nodes.length})`));
         continue;
       }
-      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: { ref: node.baseRefName, sha: node.baseRefOid }, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check) });
+      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: node.baseRefName, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check) });
     }
   });
   return out;

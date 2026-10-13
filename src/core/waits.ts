@@ -197,11 +197,11 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
       return {
         end: {
           how: "stuck",
-          text: `${name} on ${short(pr.head)} conflicts with ${pr.base.ref} (${short(pr.base.sha)}). GitHub does not start pull_request workflows while a PR has merge conflicts; external checks can still report. Resolve the conflicts with the base branch and push the resolution, then arm a wait for the new head. An empty commit will not resolve the conflicts.`,
+          text: `${name} on ${short(pr.head)} conflicts with ${pr.base}. GitHub does not start pull_request workflows while a PR has merge conflicts; external checks can still report. Resolve the conflicts with the base branch and push the resolution, then arm a wait for the new head. An empty commit will not resolve the conflicts.`,
         },
       };
     }
-    if (pr.mergeable === "UNKNOWN") return { seen: `GitHub is still determining whether ${name} on ${short(pr.head)} merges with ${pr.base.ref}`, memo: base };
+    if (pr.mergeable === "UNKNOWN") return { seen: `GitHub is still determining whether ${name} on ${short(pr.head)} merges with ${pr.base}`, memo: base };
   }
   const owed = [...(spec.all ? running : scope.filter((c) => !c.done)).map((c) => c.name), ...absent.map((n) => `${n} (not reported yet)`)];
   const none = spec.all && pr.checks.length === 0;

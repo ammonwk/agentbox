@@ -29,7 +29,7 @@ describe("wait until", () => {
 
 describe("wait pr --merged", () => {
   const pr = (head: string | null) => parseSpec({ kind: "pr", repo: "o/r", number: 8439, merged: true, head }) as Extract<WaitSpec, { kind: "pr" }>;
-  const read = (state: "OPEN" | "MERGED" | "CLOSED", head: string): PrRead => ({ state, head, base: { ref: "staging", sha: "bbbbbbb" }, mergeable: "MERGEABLE", checks: [] });
+  const read = (state: "OPEN" | "MERGED" | "CLOSED", head: string): PrRead => ({ state, head, base: "staging", mergeable: "MERGEABLE", checks: [] });
   const armed = 0;
   const later = 10 * 60_000;
 
@@ -57,13 +57,13 @@ describe("wait pr when GitHub suppresses conflicting PR workflows", () => {
   const spec = (all = true, checks = ["Reviewed head"]) => parseSpec({ kind: "pr", repo: "o/r", number: 8839, head, all, checks }) as Extract<WaitSpec, { kind: "pr" }>;
   const greptile = { name: "Greptile Review", done: true, ok: true, how: "success" };
   const read = (mergeable: PrRead["mergeable"], checks: PrRead["checks"] = [greptile]): PrRead => ({
-    state: "OPEN", head, base: { ref: "staging", sha: "4c67bd3c2095a815cabf53e2ff7f9adc81f727a4" }, mergeable, checks,
+    state: "OPEN", head, base: "staging", mergeable, checks,
   });
 
   test("a missing review ends on the first look, even while an external check runs", () => {
     for (const checks of [[], [greptile], [{ ...greptile, done: false, ok: false, how: "pending" }]]) {
       const result = lookPr(spec(), {}, read("CONFLICTING", checks), 0, 1);
-      expect(result).toMatchObject({ end: { how: "stuck", text: expect.stringMatching(/conflicts with staging \(4c67bd3c20\).*Resolve the conflicts/) } });
+      expect(result).toMatchObject({ end: { how: "stuck", text: expect.stringMatching(/conflicts with staging.*Resolve the conflicts/) } });
     }
   });
 
