@@ -191,6 +191,18 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
       },
     };
   }
+  // A conflicting PR starts no pull_request workflows, even when an external check reports.
+  if (spec.all || absent.length) {
+    if (pr.mergeable === "CONFLICTING") {
+      return {
+        end: {
+          how: "stuck",
+          text: `${name} on ${short(pr.head)} conflicts with ${pr.base.ref} (${short(pr.base.sha)}). GitHub does not start pull_request workflows while a PR has merge conflicts; external checks can still report. Resolve the conflicts with the base branch and push the resolution, then arm a wait for the new head. An empty commit will not resolve the conflicts.`,
+        },
+      };
+    }
+    if (pr.mergeable === "UNKNOWN") return { seen: `GitHub is still determining whether ${name} on ${short(pr.head)} merges with ${pr.base.ref}`, memo: base };
+  }
   const owed = [...(spec.all ? running : scope.filter((c) => !c.done)).map((c) => c.name), ...absent.map((n) => `${n} (not reported yet)`)];
   const none = spec.all && pr.checks.length === 0;
   if (owed.length === 0 && !none) {
@@ -208,7 +220,7 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
         end: {
           how: "stuck",
           text: none
-            ? `${name}: no check has reported on ${short(pr.head)} in ${span(now - absentAt)}. No workflow started for this head: look at why (a draft, a paths filter, Actions down) rather than wait.`
+            ? `${name}: no check has reported on ${short(pr.head)} in ${span(now - absentAt)}. Check the workflow event filters and run history; an empty check list does not prove whether a workflow started.`
             : `${name}: ${list(absent)} has not reported on ${short(pr.head)}, and nothing has been running or queued there for ${span(now - absentAt)}. Nothing in sight will report it, so this wait ends here instead of waiting blind: look at the workflow that should report it, and arm again if it is in fact still coming.`,
         },
       };

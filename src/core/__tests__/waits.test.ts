@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { commandLine } from "../../cli/waits";
 import { lookPr, parseSpec } from "../waits";
-import { readUntil } from "../waitreads";
+import { readUntil, type PrRead } from "../waitreads";
 import type { WaitSpec } from "../types";
 
 const until = (argv: string[]) => readUntil({ kind: "until", cmd: commandLine(argv), cwd: tmpdir(), everyMs: 60_000 }, 1, "test");
@@ -29,7 +29,7 @@ describe("wait until", () => {
 
 describe("wait pr --merged", () => {
   const pr = (head: string | null) => parseSpec({ kind: "pr", repo: "o/r", number: 8439, merged: true, head }) as Extract<WaitSpec, { kind: "pr" }>;
-  const read = (state: "OPEN" | "MERGED" | "CLOSED", head: string) => ({ state, head, checks: [] });
+  const read = (state: "OPEN" | "MERGED" | "CLOSED", head: string): PrRead => ({ state, head, base: { ref: "staging", sha: "bbbbbbb" }, mergeable: "MERGEABLE", checks: [] });
   const armed = 0;
   const later = 10 * 60_000;
 
@@ -48,5 +48,45 @@ describe("wait pr --merged", () => {
     expect(lookPr(pr("fbe1d07"), { head: "fbe1d07aaaa" }, read("OPEN", "c0c803fcba1"), armed, later)).toMatchObject({ end: { how: "stuck", text: expect.stringContaining("head moved to c0c803fcba before it merged") } });
     expect(lookPr(pr(null), {}, read("OPEN", "c0c803fcba1"), armed, later)).toMatchObject({ seen: "open on c0c803fcba, not merged" });
     expect(lookPr(pr(null), {}, read("CLOSED", "c0c803fcba1"), armed, later)).toMatchObject({ end: { how: "stuck" } });
+  });
+});
+
+
+describe("wait pr when GitHub suppresses conflicting PR workflows", () => {
+  const head = "d67b6266b9c7d20770f81eb61479cbdfd2ae7ac6";
+  const spec = (all = true, checks = ["Reviewed head"]) => parseSpec({ kind: "pr", repo: "o/r", number: 8839, head, all, checks }) as Extract<WaitSpec, { kind: "pr" }>;
+  const greptile = { name: "Greptile Review", done: true, ok: true, how: "success" };
+  const read = (mergeable: PrRead["mergeable"], checks: PrRead["checks"] = [greptile]): PrRead => ({
+    state: "OPEN", head, base: { ref: "staging", sha: "4c67bd3c2095a815cabf53e2ff7f9adc81f727a4" }, mergeable, checks,
+  });
+
+  test("a missing review ends on the first look, even while an external check runs", () => {
+    for (const checks of [[], [greptile], [{ ...greptile, done: false, ok: false, how: "pending" }]]) {
+      const result = lookPr(spec(), {}, read("CONFLICTING", checks), 0, 1);
+      expect(result).toMatchObject({ end: { how: "stuck", text: expect.stringMatching(/conflicts with staging \(4c67bd3c20\).*Resolve the conflicts/) } });
+    }
+  });
+
+  test("an external check alone never makes a conflicting or unknown PR look validated", () => {
+    expect(lookPr(spec(true, []), { head, readyAt: 1 }, read("CONFLICTING"), 0, 90_000)).toMatchObject({ end: { how: "stuck" } });
+    const unknown = lookPr(spec(true, []), { head, readyAt: 1 }, read("UNKNOWN"), 0, 90_000);
+    expect(unknown).toMatchObject({ seen: expect.stringContaining("still determining"), memo: { head } });
+    expect("end" in unknown).toBe(false);
+    expect("memo" in unknown && unknown.memo?.readyAt).toBeUndefined();
+  });
+
+  test("a mergeable PR still waits for its review and reports real check failures", () => {
+    expect(lookPr(spec(), {}, read("MERGEABLE"), 0, 1)).toMatchObject({ seen: expect.stringContaining("Reviewed head (not reported yet)") });
+    expect(lookPr(spec(), {}, read("MERGEABLE", [{ name: "Build", done: true, ok: false, how: "failure" }]), 0, 1)).toMatchObject({ end: { how: "happened", text: expect.stringContaining("FAILED") } });
+  });
+
+  test("explicit existing checks can finish through conflicts; missing ones get the diagnosis", () => {
+    expect(lookPr(spec(false, ["Greptile Review"]), {}, read("CONFLICTING"), 0, 1)).toMatchObject({ end: { how: "happened", text: expect.stringContaining("1 passed") } });
+    expect(lookPr(spec(false), {}, read("CONFLICTING"), 0, 1)).toMatchObject({ end: { how: "stuck" } });
+    expect(lookPr({ ...spec(), merged: true, all: false, checks: [] }, {}, read("CONFLICTING"), 0, 1)).toMatchObject({ seen: expect.stringContaining("not merged") });
+  });
+
+  test("head movement takes precedence over a conflict on a different head", () => {
+    expect(lookPr(spec(), { head }, { ...read("CONFLICTING"), head: "bbbbbbbbbbbb" }, 0, 90_000)).toMatchObject({ end: { how: "stuck", text: expect.stringContaining("head moved") } });
   });
 });
