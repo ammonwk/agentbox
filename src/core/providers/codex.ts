@@ -29,16 +29,17 @@
 
 import { Database } from "bun:sqlite";
 import { deserialize, serialize } from "bun:jsc";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, readlinkSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { agentboxHome, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import type { Account } from "../types";
 import { codexFormat, codexLineage, type CodexLineage } from "./codex-transcript";
 import { JsonlTranscriptReader } from "./jsonl-reader";
-import { cwdOf, environOf, findProcesses, runsCli, startedAtOf, type ProcMatch } from "./procs";
-import { pickOption, plainScreen } from "./tui-screen";
-import { BRIEFING } from "./briefing";
+import { cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf, type ProcMatch } from "./procs";
+import { pickOption, plainScreen, underInput } from "./tui-screen";
+import { briefing } from "./briefing";
+import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
   LiveProcess,
@@ -312,19 +313,7 @@ function openThreads(pid: number, home: string): string[] {
   const locks = join(home, "thread-writer-locks") + "/";
   const sessions = join(home, "sessions") + "/";
   const out: string[] = [];
-  let fds: string[];
-  try {
-    fds = readdirSync(`/proc/${pid}/fd`);
-  } catch {
-    return out;
-  }
-  for (const fd of fds) {
-    let target: string;
-    try {
-      target = readlinkSync(`/proc/${pid}/fd/${fd}`);
-    } catch {
-      continue;
-    }
+  for (const target of openFilesOf(pid)) {
     if (target.startsWith(locks) && target.endsWith(".lock")) {
       const id = basename(target, ".lock");
       if (UUID.test(id)) out.push(id);
@@ -552,17 +541,25 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
 
 /** Of the threads a process is proven to hold, its own session: not a
  *  subagent it spawned, and the newest (after `/new`, the old thread may
- *  still be listed). Thread ids are v7 uuids, so they sort by creation. */
-function pickThread(ids: string[], home: string): string | null {
+ *  still be listed). Thread ids are v7 uuids, so they sort by creation.
+ *  A thread with a rollout goes first: `codex exec` (0.156) also holds the
+ *  writer lock of a side thread it never writes a rollout for, created just
+ *  after its own, and that id matches no session. */
+export function pickThread(
+  ids: string[],
+  home: string,
+  find: (id: string) => string | null = (id) => indexFor(home).find(id),
+  lineage: (path: string) => Pick<CodexLineage, "isSubagent"> | null = lineageOf,
+): string | null {
   if (!ids.length) return null;
-  const ix = indexFor(home);
-  const own = ids.filter((id) => {
-    const path = ix.find(id);
-    const l = path ? lineageOf(path) : null;
-    return !l?.isSubagent;
+  const paths = new Map(ids.map((id) => [id, find(id)]));
+  const own = [...paths.keys()].filter((id) => {
+    const path = paths.get(id);
+    return !(path && lineage(path)?.isSubagent);
   });
   if (!own.length) return null;
-  return own.sort().reverse()[0]!;
+  const written = own.filter((id) => paths.get(id));
+  return (written.length ? written : own).sort().reverse()[0]!;
 }
 
 export interface CwdCandidate {
@@ -678,8 +675,14 @@ export function codexAutoAnswer(raw: string): string[] | null {
   return null;
 }
 
+/** The composer: a `›` line with nothing against it, where a menu's pointer
+ *  (the same glyph) sits on a numbered option among its neighbours. */
+const composer = (lines: string[], i: number): boolean =>
+  /^›(\s|$)/.test(lines[i]!) && !/^›\s+\d+[.)]\s/.test(lines[i]!) && !lines[i - 1]?.trim() && !lines[i + 1]?.trim();
+
 export function codexBlockedOn(raw: string): string | null {
-  const s = plainScreen(raw);
+  // Every prompt below stands where the composer was.
+  const s = underInput(plainScreen(raw), composer);
   if (/Sign in with ChatGPT/.test(s) && /Sign in with Device Code|Provide your own API key|Welcome to Codex/.test(s)) return "login required";
   if (/Would you like to run the following command\?/.test(s)) return "approval: run command";
   if (/Would you like to make the following edits\?/.test(s)) return "approval: apply edits";
@@ -704,28 +707,62 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
 }
 
 /** A JSON string is a TOML basic string, which is what `-c` parses. */
-const TOLD = ["-c", `developer_instructions=${JSON.stringify(BRIEFING)}`];
+const told = (): string[] => ["-c", `developer_instructions=${JSON.stringify(briefing())}`];
 
 /** clap reads a leading `-` as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
 
+/** Flags adopt carries over (`carryFlags`): model, config, profile,
+ *  sandbox and approvals, directories — never a subcommand or the prompt. */
+const CARRIED: Record<string, Arity> = {
+  "-m": "one",
+  "--model": "one",
+  "-c": "one",
+  "--config": "one",
+  "-p": "one",
+  "--profile": "one",
+  "-s": "one",
+  "--sandbox": "one",
+  "-a": "one",
+  "--ask-for-approval": "one",
+  "--dangerously-bypass-approvals-and-sandbox": "none",
+  "--full-auto": "none",
+  "--add-dir": "one",
+  "--enable": "one",
+  "--disable": "one",
+  "--search": "none",
+  "--oss": "none",
+  "--local-provider": "one",
+  "--no-alt-screen": "none",
+  "--strict-config": "none",
+};
+
+/** `codex exec` and `codex review`: something is reading the output. */
+const isHeadless = (argv: string[]): boolean => ["exec", "e", "review"].includes(parseCodexArgs(codexArgs(argv)).sub ?? "");
+
+/**
+ * The flags a session starts with. A carried launch decides model and
+ * permissions (ResumeOptions.carry); what it does not set is ours.
+ */
+function sessionFlags(opts: { model?: string; effort?: string; autoApprove: boolean; carry?: string[] }): string[] {
+  const c = opts.carry;
+  const a: string[] = [...(c ?? [])];
+  const configs = (c ?? []).filter((x, i) => c![i - 1] === "-c" || c![i - 1] === "--config" || x.startsWith("--config="));
+  if (opts.model && !(c && setsFlag(c, "-m", "--model"))) a.push("--model", opts.model);
+  if (opts.effort && !configs.some((x) => /(^|=)model_reasoning_effort=/.test(x))) a.push("-c", `model_reasoning_effort="${opts.effort}"`);
+  if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox");
+  if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told());
+  return a;
+}
+
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
-  const argv = ["codex"];
-  if (opts.model) argv.push("--model", opts.model);
-  if (opts.effort) argv.push("-c", `model_reasoning_effort="${opts.effort}"`);
-  if (opts.autoApprove) argv.push("--dangerously-bypass-approvals-and-sandbox");
-  argv.push(...TOLD);
+  const argv = ["codex", ...sessionFlags(opts)];
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: null };
 }
 
 function resumeCommand(opts: ResumeOptions): Command {
-  const argv = ["codex", "resume"];
-  if (opts.model) argv.push("--model", opts.model);
-  if (opts.effort) argv.push("-c", `model_reasoning_effort="${opts.effort}"`);
-  if (opts.autoApprove) argv.push("--dangerously-bypass-approvals-and-sandbox");
-  argv.push(...TOLD);
-  argv.push(opts.agentSessionId);
+  const argv = ["codex", "resume", ...sessionFlags(opts), opts.agentSessionId];
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
 }
@@ -782,6 +819,8 @@ export const codexAdapter: ProviderAdapter = {
   reader: codexReader,
   spawnCommand,
   resumeCommand,
+  carryOver: (argv) => carryFlags(codexArgs(argv), CARRIED),
+  headless: isHeadless,
   autoAnswer: codexAutoAnswer,
   blockedOn: codexBlockedOn,
 };

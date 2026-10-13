@@ -9,6 +9,7 @@
 import { readFileSync, readlinkSync, readdirSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
+import * as darwin from "../darwin";
 import { argvOf, bootTimeMs, clockHz, parseStat, sharedProcTable, splitArgv, type ProcTable } from "../proc";
 import type { ProviderId } from "../types";
 
@@ -16,6 +17,7 @@ export { argvOf };
 
 /** The whole environment a process was started with. */
 export function environOf(pid: number): Map<string, string> | null {
+  if (darwin.isDarwin) return darwin.procArgs(pid)?.env ?? null;
   try {
     const raw = readFileSync(`/proc/${pid}/environ`, "utf8");
     const env = new Map<string, string>();
@@ -30,6 +32,7 @@ export function environOf(pid: number): Map<string, string> | null {
 }
 
 export function cwdOf(pid: number): string | null {
+  if (darwin.isDarwin) return darwin.cwdPath(pid);
   try {
     return readlinkSync(`/proc/${pid}/cwd`);
   } catch {
@@ -40,6 +43,7 @@ export function cwdOf(pid: number): string | null {
 /** When the process started, epoch ms. Stable for the life of the pid, so
  *  (pid, startedAt) identifies a process even after pid reuse. */
 export function startedAtOf(pid: number): number | null {
+  if (darwin.isDarwin) return darwin.procInfo(pid)?.startMs ?? null;
   try {
     const s = readFileSync(`/proc/${pid}/stat`, "utf8");
     const f = s.slice(s.lastIndexOf(")") + 2).split(" ");
@@ -63,6 +67,7 @@ export function isAlive(pid: number): boolean {
 
 /** Paths a process currently has open, resolved. */
 export function openFilesOf(pid: number): string[] {
+  if (darwin.isDarwin) return darwin.openFiles(pid);
   try {
     return readdirSync(`/proc/${pid}/fd`).flatMap((fd) => {
       try {
@@ -74,6 +79,29 @@ export function openFilesOf(pid: number): string[] {
   } catch {
     return [];
   }
+}
+
+/** Paths a process has open for writing, among those `keep` accepts. Each
+ *  fd's mode is read only once its path is kept: a process has dozens. */
+export function filesWrittenBy(pid: number, keep: (path: string) => boolean): string[] {
+  if (darwin.isDarwin) return darwin.openFiles(pid, true).filter(keep);
+  let fds: string[];
+  try {
+    fds = readdirSync(`/proc/${pid}/fd`);
+  } catch {
+    return [];
+  }
+  return fds.flatMap((fd) => {
+    try {
+      const path = readlinkSync(`/proc/${pid}/fd/${fd}`);
+      if (!keep(path)) return [];
+      const flags = /^flags:\s*([0-7]+)/m.exec(readFileSync(`/proc/${pid}/fdinfo/${fd}`, "utf8"))?.[1];
+      // The access mode is the low two bits; 0 is O_RDONLY.
+      return flags !== undefined && (parseInt(flags, 8) & 3) !== 0 ? [path] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 export interface ProcMatch {
@@ -136,10 +164,12 @@ async function ownProcesses(table: ProcTable): Promise<ProcMatch[]> {
       if (row.pid === process.pid) return;
       let k = known.get(row.pid);
       if (!k || k.startTicks !== row.startTicks || k.comm !== row.comm || now > k.until) {
-        const [argv, owner] = await Promise.all([
-          readFile(`/proc/${row.pid}/cmdline`, "utf8").then(splitArgv, () => null),
-          stat(`/proc/${row.pid}`).then((s) => s.uid, () => null),
-        ]);
+        const [argv, owner] = darwin.isDarwin
+          ? [argvOf(row.pid), darwin.procInfo(row.pid)?.uid ?? null]
+          : await Promise.all([
+              readFile(`/proc/${row.pid}/cmdline`, "utf8").then(splitArgv, () => null),
+              stat(`/proc/${row.pid}`).then((s) => s.uid, () => null),
+            ]);
         k = { startTicks: row.startTicks, comm: row.comm, until: now + KNOWN_MS * (0.5 + Math.random()), argv, uid: owner };
         known.set(row.pid, k);
       }
@@ -154,6 +184,16 @@ async function ownProcesses(table: ProcTable): Promise<ProcMatch[]> {
 function scanUncached(): ProcMatch[] {
   const uid = process.getuid?.();
   const out: ProcMatch[] = [];
+  if (darwin.isDarwin) {
+    for (const pid of darwin.listPids()) {
+      if (pid === process.pid) continue;
+      const p = darwin.procInfo(pid);
+      if (!p || (uid !== undefined && p.uid !== uid)) continue;
+      const argv = argvOf(pid);
+      if (argv) out.push({ pid, ppid: p.ppid, argv });
+    }
+    return out;
+  }
   let dirs: string[];
   try {
     dirs = readdirSync("/proc");
@@ -190,6 +230,7 @@ function scanUncached(): ProcMatch[] {
 export function runsCli(argv: string[], name: string): boolean {
   const a0 = basename(argv[0] ?? "");
   if (a0 === name || a0 === `${name}.exe`) return true;
+  if (name === "muse" && /^muse-bin-\d/.test(a0)) return true;
   if ((a0 === "node" || a0 === "bun" || a0.startsWith("node")) && argv[1]) {
     const a1 = argv[1];
     const b1 = basename(a1);
@@ -204,25 +245,47 @@ export interface ProcessRef {
   startedAt: number;
 }
 
-const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp"];
+const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 
 /** The nearest ancestor of this process that runs an agent CLI. */
 export function agentAncestor(): ProcessRef | null {
   for (let pid = process.ppid, hops = 0; pid > 1 && hops < 64; hops++) {
     const argv = argvOf(pid);
-    if (argv && AGENT_CLIS.some((name) => runsCli(argv, name))) {
+    // A standalone opencode runs its tools under a private `opencode serve`,
+    // its TUI's child: the session is the TUI above it.
+    const server = !!argv && runsCli(argv, "opencode") && argv.includes("serve");
+    if (argv && !server && AGENT_CLIS.some((name) => runsCli(argv, name))) {
       const startedAt = startedAtOf(pid);
       return startedAt === null ? null : { pid, startedAt };
     }
-    let stat: string;
-    try {
-      stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    } catch {
-      return null;
-    }
-    pid = parseStat(pid, stat)?.ppid ?? 0;
+    pid = ppidOf(pid) ?? 0;
   }
   return null;
+}
+
+/** The parent of a process; null when it is gone. */
+export function ppidOf(pid: number): number | null {
+  if (darwin.isDarwin) return darwin.procInfo(pid)?.ppid ?? null;
+  try {
+    return parseStat(pid, readFileSync(`/proc/${pid}/stat`, "utf8"))?.ppid ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The pids whose parent is `pid`. */
+export function childrenOf(pid: number): number[] {
+  if (darwin.isDarwin) return darwin.childPids(pid);
+  const out: number[] = [];
+  try {
+    for (const tid of readdirSync(`/proc/${pid}/task`)) {
+      const kids = readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
+      if (kids) out.push(...kids.split(/\s+/).map(Number));
+    }
+  } catch {
+    /* gone */
+  }
+  return out;
 }
 
 export function stillRunning(p: ProcessRef): boolean {

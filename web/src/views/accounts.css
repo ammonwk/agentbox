@@ -6,9 +6,6 @@
   gap: 22px;
   max-width: 1480px;
 }
-.acs-lede {
-  max-width: 820px;
-}
 
 .acs-sec {
   display: flex;
@@ -601,6 +598,13 @@
 }
 .cal-table .num {
   text-align: right;
+  white-space: nowrap;
+}
+.cal-scroll {
+  overflow-x: auto;
+}
+.cal-forecast th,
+.cal-forecast td {
   white-space: nowrap;
 }
 .cal-key {

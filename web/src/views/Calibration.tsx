@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AgentSettings, BalancerSettings, CalibrationReport, Percentiles } from "../../../src/core/types";
+import type { AgentSettings, BalancerSettings, CalibrationReport, ForecastReport, Percentiles, ProviderId } from "../../../src/core/types";
+import { PROVIDER_LABEL } from "../bits";
 import { api } from "../api";
 import { Button, Empty, Icon, Spinner } from "../components";
 import { fmtPts } from "../lib/format";
@@ -105,6 +106,8 @@ export function Calibration({ settings }: { settings: AgentSettings }) {
         </table>
       </section>
 
+      <ForecastCard forecast={report.forecast} />
+
       <section className="card cal-card">
         <h3>Balancer settings</h3>
         <table className="cal-table cal-settings">
@@ -167,6 +170,80 @@ export function Calibration({ settings }: { settings: AgentSettings }) {
         {apply.error ? <p className="error-line">{apply.error}</p> : null}
       </section>
     </div>
+  );
+}
+
+/** The buckets `edges` make, named in weekly points at `perCost`: "under 0.1",
+ *  "0.1–0.5", "2.2 or more". With `zero`, the first edge only separates
+ *  nothing from something, and the first bucket is named that. */
+function bucketNames(edges: number[], perCost: number, zero: string | null): string[] {
+  // One figure below a tenth of a point, where rounding to tenths would say 0.
+  const at = (i: number) => {
+    const v = edges[i]! * perCost;
+    return v < 0.095 ? String(Number(v.toPrecision(1))) : fmtPts(v);
+  };
+  return [...edges, null].map((_, i) => {
+    if (i === 0) return zero ?? `under ${at(0)}`;
+    if (i === edges.length) return `${at(i - 1)} or more`;
+    return zero && i === 1 ? `under ${at(1)}` : `${at(i - 1)}–${at(i)}`;
+  });
+}
+
+/**
+ * What a running session is expected to still use, by the two things it has
+ * shown: one table per provider, weekly points throughout.
+ */
+function ForecastCard({ forecast }: { forecast: ForecastReport }) {
+  const shown = forecast.providers.filter((p) => p.pointsPerCost != null);
+  return (
+    <section className="card cal-card">
+      <h3>What a running session is expected to still use</h3>
+      <p className="hint">
+        Weekly points a session goes on to use before it next falls quiet for an hour, averaged over every past stretch of work that
+        stood where it stands: by what it spent in the last ten minutes (rows) and so far this stretch (columns). This is what a
+        session holds against its account once it has spent anything; its model's claim only stands in until then.
+        {forecast.fittedAt ? <> Refitted daily, last {new Date(forecast.fittedAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}.</> : null}
+      </p>
+      {shown.length === 0 ? (
+        <p className="hint">Not enough history yet: sessions hold what is left of their claims until there is.</p>
+      ) : (
+        shown.map((p) => {
+          const rows = bucketNames(forecast.recentEdges, p.pointsPerCost!, "nothing");
+          const cols = bucketNames(forecast.soFarEdges, p.pointsPerCost!, null);
+          return (
+            <div className="cal-scroll" key={p.provider}>
+              <table className="cal-table cal-forecast">
+                <thead>
+                  <tr>
+                    <th>{PROVIDER_LABEL[p.provider as ProviderId] ?? p.provider} · last 10 min ↓ so far →</th>
+                    {cols.map((c) => (
+                      <th className="num" key={c}>
+                        {c}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, ri) => (
+                    <tr key={r}>
+                      <td className="cal-key">{r}</td>
+                      {cols.map((c, ci) => {
+                        const cell = p.cells.find((x) => x.recent === ri && x.soFar === ci);
+                        return (
+                          <td className="num" key={c} title={cell ? `${cell.stretches.toLocaleString()} stretches of work passed through here` : "Never seen"}>
+                            {cell?.points != null ? fmtPts(cell.points) : <span className="faint">—</span>}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })
+      )}
+    </section>
   );
 }
 

@@ -47,17 +47,6 @@
   width: 100%;
   margin: 0 auto;
 }
-.vc-hint {
-  margin: auto 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.55;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  text-align: center;
-  padding: 0 8px;
-}
 .vc-line {
   max-width: 88%;
   padding: 8px 12px;
@@ -198,8 +187,7 @@
   }
   /* Typing to it: the orb steps back so the log has room. */
   :root[data-kb] .vc-orb,
-  :root[data-kb] .vc-controls,
-  :root[data-kb] .vc-hint {
+  :root[data-kb] .vc-controls {
     display: none;
   }
   :root[data-kb] .vc-dock {

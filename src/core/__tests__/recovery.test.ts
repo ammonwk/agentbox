@@ -12,7 +12,7 @@ const entry = (host: LiveEntry["host"]): LiveEntry => ({
   parent: null,
   subagent: null,
   lastActivityAt: 0,
-  lastTurnAt: null,
+  cacheWarmUntil: null,
   launch: null,
 });
 

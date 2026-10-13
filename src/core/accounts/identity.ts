@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { Account, AccountAuth } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { authEnv, claudeJsonPath, credentialsPath } from "./homes";
+import { readGoLogin } from "./gocred";
 
 export interface Identity {
   email: string | null;
@@ -254,13 +255,27 @@ export async function identifyDevin(account: AccountRef, execFn: ExecFn = defaul
 export async function identify(account: AccountRef, opts: { exec?: ExecFn; now?: number } = {}): Promise<Identity> {
   const now = opts.now ?? Date.now();
   switch (account.provider) {
+    case "muse": {
+      const meta = rec(rec(rec(readJson(credentialsPath("muse", account.home)!))?.providers)?.meta);
+      const loggedIn = !!meta && (!!str(meta.api_key) || !!str(meta.access_token) || (account.isDefault && meta.storage === "keychain"));
+      return {
+        email: loggedIn ? str(meta?.user_email) : null,
+        plan: loggedIn && str(meta?.api_key) ? "api key" : null,
+        auth: { state: loggedIn ? "ok" : "missing", expiresAt: null, detail: loggedIn ? null : "not logged in" },
+      };
+    }
     case "claude": return identifyClaude(account, now);
     case "codex": return identifyCodex(account, now);
     case "devin": return identifyDevin(account, opts.exec);
-    case "omp":
-      // omp balances a pool of logins of its own; there is no one email or
-      // plan. Auth is inferred from whether `omp usage` answers (usage.ts).
-      return { email: null, plan: null, auth: { state: "unknown", expiresAt: null, detail: null } };
+    case "omp": {
+      // An OpenCode Go account: a Console sign-in, which says who it is. Its
+      // access token running out is not the login running out: the bridge
+      // refreshes it (accounts/gocred.ts).
+      const login = readGoLogin(account.home);
+      return login
+        ? { email: login.email || null, plan: login.orgName ? `OpenCode Go · ${login.orgName}` : "OpenCode Go", auth: { state: "ok", expiresAt: null, detail: null } }
+        : { email: null, plan: null, auth: { state: "missing", expiresAt: null, detail: "not signed in yet" } };
+    }
   }
 }
 

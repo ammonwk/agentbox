@@ -1,11 +1,13 @@
 /** The omp (oh-my-pi) adapter.
  *
- * omp balances its own credential pool across every provider account it is
- * logged into, so agentbox treats it as ONE implicit account whose home is
- * `~/.omp`. Everything here is read from omp's own files:
+ * omp keeps one data dir, `~/.omp`, whatever it is logged into; an account
+ * here is an OpenCode Go sign-in (accounts/gocred.ts) and changes only whose
+ * credential the bridge puts on a session's requests. So every account reads
+ * the one session store (`sharedStore`), and there is no default account.
+ * Everything here is read from omp's own files:
  *
- *   <home>/agent/sessions/<slug(cwd)>/<ISO>_<uuidv7>.jsonl   one session
- *   <home>/agent/sessions/<slug>/<ISO>_<uuidv7>/…            its subagents
+ *   ~/.omp/agent/sessions/<slug(cwd)>/<ISO>_<uuidv7>.jsonl   one session
+ *   ~/.omp/agent/sessions/<slug>/<ISO>_<uuidv7>/…            its subagents
  *       (`<Name>.jsonl`, `<Name>.md`, and `<Parent>/<Parent>.<Child>.jsonl`
  *       for nested ones, plus numbered tool-output logs we ignore)
  *
@@ -16,11 +18,15 @@
  * those processes are reported with no session until the file appears.
  */
 
-import { closeSync, openSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { userHome } from "../paths";
 import { cliVersion } from "./cli-version";
+import { mostNamed } from "../prrepo";
+import { carryFlags, setsFlag, type Arity } from "../launch";
+import { ompAskStep, readOmpAsk } from "./omp-ask";
+import { underInput } from "./tui-screen";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
 import { JsonlTail, type JsonlTailState } from "./jsonl";
 import {
@@ -36,8 +42,11 @@ import {
   type ToolOutcome,
 } from "./omp-transcript";
 import { ompRedirectVars } from "./omp-usage";
-import { argvOf, cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf } from "./procs";
-import { BRIEFING } from "./briefing";
+import { GO_ACCOUNT_BEARER } from "../accounts/gocred";
+import { ensureBridge } from "../../bridge/service";
+import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
+import { briefing } from "./briefing";
+import { getSessionRecord } from "../db";
 import type {
   Command,
   LiveProcess,
@@ -54,16 +63,14 @@ export { ompUsage, parseOmpUsage } from "./omp-usage";
 const TITLE_SLOT_BYTES = 256;
 const DEFAULT_PAGE = 50;
 
-/** omp's agent dir for an account. `PI_CODING_AGENT_DIR` in the server's own
- *  environment relocates the default one, exactly as it would for omp. */
-export function agentDirOf(account: Pick<Account, "home" | "isDefault">): string {
-  const override = process.env.PI_CODING_AGENT_DIR;
-  if (account.isDefault && override) return override;
-  return join(account.home, "agent");
+/** omp's agent dir, the same for every account. `PI_CODING_AGENT_DIR` in the
+ *  server's own environment relocates it, exactly as it would for omp. */
+export function agentDir(): string {
+  return process.env.PI_CODING_AGENT_DIR || join(userHome(), ".omp", "agent");
 }
 
-export function sessionsRootOf(account: Pick<Account, "home" | "isDefault">): string {
-  return join(agentDirOf(account), "sessions");
+export function sessionsRoot(): string {
+  return join(agentDir(), "sessions");
 }
 
 function canonical(p: string): string {
@@ -209,29 +216,39 @@ interface OmpProc {
 /**
  * Attribute live omp processes to sessions, most certain first, and never
  * give one session to two processes:
- *  1. an open fd on a top-level session file (omp keeps its writer open);
- *  2. `-r <id|path>` in argv;
- *  3. the newest session file in the cwd's slug dir created after the
+ *  1. a top-level session file it has open for writing: omp appends to its
+ *     own for the life of the session, and opens others' only to read them
+ *     (its recent-sessions list) — counting those would credit a starting
+ *     omp with a sibling's conversation;
+ *  2. the conversation of the agentbox session it was started as
+ *     (`AGENTBOX_SESSION` in its environment), once agentbox has matched that
+ *     session to its file: omp opens its file only some way into its first
+ *     turn, and until then siblings started beside it in one checkout read
+ *     alike to rule 4, which handed nine omp sessions started in four seconds
+ *     each other's ids, so a session's own `agentbox pr claim` was refused as
+ *     held by itself;
+ *  3. `-r <id|path>` in argv;
+ *  4. the newest session file in the cwd's slug dir created after the
  *     process started and not already claimed.
  */
 export function attributeOmp(
   procs: OmpProc[],
   root: string,
-  openFiles: (pid: number) => string[],
+  filesWritten: (pid: number, keep: (path: string) => boolean) => string[],
+  startedAs: (pid: number) => string | null = () => null,
 ): Map<number, string | null> {
   const out = new Map<number, string | null>();
   const claimed = new Set<string>();
   const rootPrefix = root.endsWith(sep) ? root : root + sep;
+  // Only `<root>/<slug>/<file>.jsonl`: subagent logs are one level deeper and
+  // belong to the same process's parent session.
+  const isSessionFile = (f: string) => f.startsWith(rootPrefix) && f.endsWith(".jsonl") && f.slice(rootPrefix.length).split(sep).length === 2;
 
-  // 1. Open files. Only `<root>/<slug>/<file>.jsonl`; subagent logs are one
-  //    level deeper and belong to the same process's parent session.
+  // 1. Files open for writing.
   for (const p of procs) {
     let best: { id: string; mtime: number } | null = null;
-    for (const f of openFiles(p.pid)) {
-      if (!f.startsWith(rootPrefix) || !f.endsWith(".jsonl")) continue;
-      const rest = f.slice(rootPrefix.length).split(sep);
-      if (rest.length !== 2) continue;
-      const id = sessionIdFromFileName(rest[1]!);
+    for (const f of filesWritten(p.pid, isSessionFile)) {
+      const id = sessionIdFromFileName(basename(f));
       if (!id || claimed.has(id)) continue;
       let mtime = 0;
       try {
@@ -247,7 +264,17 @@ export function attributeOmp(
     }
   }
 
-  // 2. The session named on the command line.
+  // 2. The session agentbox started it as.
+  for (const p of procs) {
+    if (out.has(p.pid)) continue;
+    const id = startedAs(p.pid);
+    if (id && !claimed.has(id)) {
+      out.set(p.pid, id);
+      claimed.add(id);
+    }
+  }
+
+  // 3. The session named on the command line.
   for (const p of procs) {
     if (out.has(p.pid)) continue;
     const arg = resumeArg(p.argv);
@@ -267,7 +294,7 @@ export function attributeOmp(
     }
   }
 
-  // 3. A file born after the process started, in its cwd.
+  // 4. A file born after the process started, in its cwd.
   for (const p of procs) {
     if (out.has(p.pid)) continue;
     const dir = slugDirFor(root, p.cwd);
@@ -446,9 +473,12 @@ class OmpReader implements TranscriptReader {
       lastMessage: s.lastMessage,
       model: s.model,
       gitBranch: null,
+      prRepo: mostNamed(s.prRepos),
       startedAt: s.header?.startedAt ?? startFromFileName(basename(this.ref.path)),
       lastActivityAt: s.lastActivityAt,
       turnOpen: s.turnOpen,
+      turnError: s.turnError,
+      modelOutcome: s.modelOutcome,
       contextUsed: s.contextUsed,
       contextLimit: null,
       tokens,
@@ -456,6 +486,8 @@ class OmpReader implements TranscriptReader {
       rateLimitHits: hits,
       isSubagent: this.parentId !== null || s.sessionInit,
       parentId: this.parentId,
+      wakes: [...s.wakes.values()],
+      pendingAsk: s.pendingAsk,
     };
   }
 
@@ -603,23 +635,129 @@ function withPrompt(argv: string[], prompt?: string): string[] {
   return prompt ? [...argv, "--", prompt] : argv;
 }
 
-function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoApprove: boolean }): string[] {
-  const a: string[] = [];
-  if (opts.model) a.push("--model", opts.model);
-  if (opts.effort) a.push(`--thinking=${opts.effort}`);
-  if (opts.autoApprove) a.push("--auto-approve");
-  a.push(`--append-system-prompt=${BRIEFING}`);
+/** Flags adopt carries over (`carryFlags`): model, permissions, prompt,
+ *  tools and directories — never the session, the profile, a key or a mode
+ *  that makes it a one-shot. */
+const CARRIED: Record<string, Arity> = {
+  "--model": "one",
+  "--smol": "one",
+  "--slow": "one",
+  "--plan": "one",
+  "--provider": "one",
+  "--models": "one",
+  "--thinking": "one",
+  "--service-tier": "one",
+  "--hide-thinking": "none",
+  "--system-prompt": "one",
+  "--append-system-prompt": "one",
+  "--allow-home": "none",
+  "--add-dir": "one",
+  "--config": "one",
+  "--tools": "one",
+  "--no-tools": "none",
+  "--no-lsp": "none",
+  "--no-pty": "none",
+  "--advisor": "none",
+  "--hook": "one",
+  "--extension": "one",
+  "-e": "one",
+  "--no-extensions": "none",
+  "--skills": "one",
+  "--no-skills": "none",
+  "--no-rules": "none",
+  "--no-title": "none",
+  "--auto-approve": "none",
+  "--approval-mode": "one",
+};
+
+/** `omp -p` and the machine-readable modes: something is reading the output. */
+function isHeadless(argv: string[]): boolean {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "-p" || a === "--print") return true;
+    const mode = a === "--mode" ? argv[i + 1] : a.startsWith("--mode=") ? a.slice("--mode=".length) : undefined;
+    if (mode !== undefined && mode !== "text") return true;
+  }
+  return false;
+}
+
+/**
+ * The flags a session starts with. A carried launch decides model and
+ * permissions (ResumeOptions.carry); what it does not set is ours.
+ */
+function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[] }): string[] {
+  const c = opts.carry;
+  const a: string[] = [...(c ?? [])];
+  if (opts.model && !(c && setsFlag(c, "--model"))) a.push("--model", opts.model);
+  if (opts.effort && !(c && setsFlag(c, "--thinking"))) a.push(`--thinking=${opts.effort}`);
+  if (!c && opts.autoApprove) a.push("--auto-approve");
+  if (!(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${briefing()}`);
   // omp silently moves a session started in ~ to a temp dir unless told not to.
-  if (canonical(opts.cwd) === canonical(homedir())) a.push("--allow-home");
+  if (canonical(opts.cwd) === canonical(homedir()) && !(c && setsFlag(c, "--allow-home"))) a.push("--allow-home");
   return a;
 }
 
-/** One implicit account. What must not leak in from the server's shell is
- *  anything that silently points omp at another data dir: an XDG_*_HOME with
- *  an `omp/` under it, a profile, or a session-dir override. */
-function ompAccountCommand(): Pick<Command, "env" | "unset"> {
-  return { env: {}, unset: ompRedirectVars() };
+/** omp's data dir is the same for every account; what differs is the
+ *  OpenCode Go sign-in. `~/.omp/agent/models.yml` points omp's Go blocks at
+ *  the bridge and sends `OPENCODE_GO_API_KEY` as the key: here that "key"
+ *  names the session's account, and the bridge puts the account's Console
+ *  sign-in on the request (accounts/gocred.ts). No session is started
+ *  without one, so none falls back to the API key models.yml reads for an
+ *  omp in your own terminal. What must not leak in from the server's shell
+ *  is anything that silently points omp at another data dir: an XDG_*_HOME
+ *  with an `omp/` under it, a profile, or a session-dir override. */
+function ompAccountCommand(account: Pick<Account, "id">): Pick<Command, "env" | "unset"> {
+  return { env: { OPENCODE_GO_API_KEY: `${GO_ACCOUNT_BEARER}${account.id}` }, unset: ompRedirectVars() };
 }
+
+/** The model omp's config gives a session started without one: `modelRoles.default`. */
+export function defaultModelIn(configYml: string): string | null {
+  try {
+    const m = (Bun.YAML.parse(configYml) as { modelRoles?: { default?: unknown } } | null)?.modelRoles?.default;
+    return typeof m === "string" && m ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+let defaultModelRead: { path: string; mtimeMs: number; model: string | null } | null = null;
+
+/** `defaultModelIn` of the file, read again only when it has changed. */
+function defaultModel(path: string): string | null {
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+  if (defaultModelRead?.path !== path || defaultModelRead.mtimeMs !== mtimeMs) {
+    let text = "";
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      // gone between the stat and the read: no default to name
+    }
+    defaultModelRead = { path, mtimeMs, model: defaultModelIn(text) };
+  }
+  return defaultModelRead.model;
+}
+
+/** The account a running omp was started on, from the "key" it was given. */
+function accountOfEnv(env: Map<string, string> | null, accounts: readonly Account[]): Account | undefined {
+  const key = env?.get("OPENCODE_GO_API_KEY");
+  if (!key?.startsWith(GO_ACCOUNT_BEARER)) return undefined;
+  return accounts.find((a) => a.id === key.slice(GO_ACCOUNT_BEARER.length));
+}
+
+/** A session's account env, with the bridge its Go requests go through up. */
+function ompLaunch(account: Pick<Account, "id">): Pick<Command, "env" | "unset"> {
+  ensureBridge();
+  return ompAccountCommand(account);
+}
+
+/** The editor: the foot of its box holds what is typed, between the corners,
+ *  where a dialog's box closes on an unbroken rule. */
+const editor = (lines: string[], i: number): boolean => /^╰─\s.*\s─╯\s*$/.test(lines[i]!);
 
 export const ompAdapter: ProviderAdapter = {
   id: "omp",
@@ -634,12 +772,17 @@ export const ompAdapter: ProviderAdapter = {
     return join(userHome(), ".omp");
   },
 
-  accountCommand: ompAccountCommand,
-  authEnv: ompAccountCommand,
+  accountCommand: (account) => ompAccountCommand(account),
+
+  defaultModel() {
+    return defaultModel(join(agentDir(), "config.yml"));
+  },
+  // Its sign-in is agentbox's own command (accounts/login.ts), not omp's.
+  authEnv: () => ({ env: {}, unset: ompRedirectVars() }),
 
   async listTranscripts(account, sinceMs) {
     const out: TranscriptRef[] = [];
-    for (const dir of slugDirs(sessionsRootOf(account))) {
+    for (const dir of slugDirs(sessionsRoot())) {
       for (const name of sessionFilesIn(dir)) {
         const ref = refFor(account, join(dir, name));
         if (ref && ref.mtimeMs >= sinceMs) out.push(ref);
@@ -649,10 +792,14 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   async liveProcesses(accounts) {
-    const account = accounts.find((a) => a.provider === "omp" && a.isDefault) ?? accounts.find((a) => a.provider === "omp");
+    // One started in your own terminal runs on whatever key its models.yml
+    // found, which is no account here; it is filed under the first.
+    const first = accounts.find((a) => a.provider === "omp");
     const matches = findProcesses(isOmpSessionArgv);
     const pids = new Set(matches.map((m) => m.pid));
     const procs: OmpProc[] = [];
+    const accountOf = new Map<number, string | null>();
+    const startedAs = new Map<number, string>();
     for (const m of matches) {
       // A child omp (a worker it spawned) is part of its parent's session.
       if (pids.has(m.ppid)) continue;
@@ -662,14 +809,16 @@ export const ompAdapter: ProviderAdapter = {
       const startedAt = startedAtOf(m.pid);
       if (cwd === null || startedAt === null) continue;
       procs.push({ pid: m.pid, ppid: m.ppid, argv: argvOf(m.pid) ?? m.argv, cwd, startedAt });
+      accountOf.set(m.pid, (accountOfEnv(env, accounts) ?? first)?.id ?? null);
+      const rec = env?.get("AGENTBOX_SESSION") ? getSessionRecord(env.get("AGENTBOX_SESSION")!) : null;
+      if (rec?.provider === "omp" && rec.agentSessionId) startedAs.set(m.pid, rec.agentSessionId);
     }
     if (procs.length === 0) return [];
-    const root = account ? sessionsRootOf(account) : join(userHome(), ".omp", "agent", "sessions");
-    const ids = attributeOmp(procs, root, openFilesOf);
+    const ids = attributeOmp(procs, sessionsRoot(), filesWrittenBy, (pid) => startedAs.get(pid) ?? null);
     return procs.map(
       (p): LiveProcess => ({
         pid: p.pid,
-        accountId: account?.id ?? null,
+        accountId: accountOf.get(p.pid) ?? null,
         agentSessionId: ids.get(p.pid) ?? null,
         cwd: p.cwd,
         startedAt: p.startedAt,
@@ -678,7 +827,7 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   async findTranscript(account, agentSessionId) {
-    const path = findSessionFile(sessionsRootOf(account), agentSessionId);
+    const path = findSessionFile(sessionsRoot(), agentSessionId);
     return path ? refFor(account, path) : null;
   },
 
@@ -686,10 +835,17 @@ export const ompAdapter: ProviderAdapter = {
     return new OmpReader(ref);
   },
 
+  subagentLogDir: (ref) => ref.path.slice(0, -".jsonl".length),
+
+  // Every OpenCode Go account runs on the one session store (only the
+  // sign-in differs), so a session is already wherever it is resumed.
+  sharedStore: true,
+  moveSession: ({ transcriptPath }) => transcriptPath,
+
   spawnCommand(opts: SpawnOptions) {
     return {
       argv: withPrompt(["omp", ...commonFlags(opts)], opts.prompt),
-      ...ompAccountCommand(),
+      ...ompLaunch(opts.account),
       agentSessionId: null,
     };
   },
@@ -697,19 +853,28 @@ export const ompAdapter: ProviderAdapter = {
   resumeCommand(opts: ResumeOptions): Command {
     // Resume by path when we can find it: `-r <id>` searches and, from a
     // different project, stops to ask whether to move the session.
-    const path = findSessionFile(sessionsRootOf(opts.account), opts.agentSessionId, opts.cwd);
+    const path = findSessionFile(sessionsRoot(), opts.agentSessionId, opts.cwd);
     return {
       argv: withPrompt(["omp", "-r", path ?? opts.agentSessionId, ...commonFlags(opts)], opts.prompt),
-      ...ompAccountCommand(),
+      ...ompLaunch(opts.account),
     };
   },
 
   blockedOn(screen) {
-    const tool = /Allow tool: ([\w:.-]+)/.exec(screen);
-    if (tool) return `permission: ${tool[1]}`;
-    if (/Approve and execute/.test(screen) && /Refine plan/.test(screen)) return "plan approval";
+    // A message under the welcome box, with the editor there to type /login in.
     if (/No models available/.test(screen)) return "login";
-    if (/belongs to a directory that no longer exists|Move session/i.test(screen)) return "move session";
+    // Every dialog below stands where the editor was.
+    const s = underInput(screen, editor);
+    const tool = /Allow tool: ([\w:.-]+)/.exec(s);
+    if (tool) return `permission: ${tool[1]}`;
+    if (readOmpAsk(s)) return "asking a question";
+    if (/Approve and execute/.test(s) && /Refine plan/.test(s)) return "plan approval";
+    if (/belongs to a directory that no longer exists|Move session/i.test(s)) return "move session";
     return null;
   },
+
+  answerStep: ompAskStep,
+  pasteEnd: " ",
+  carryOver: (argv) => carryFlags(argv, CARRIED),
+  headless: isHeadless,
 };

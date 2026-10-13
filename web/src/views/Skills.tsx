@@ -45,7 +45,7 @@ export function Skills({ skills }: { skills: SkillInfo[] }) {
   return (
     <div className="sk-wrap" data-panes={narrow ? "one" : "two"}>
       {showList && (
-        <div className="sk-list">
+        <div className="sk-list" data-nav-region="list" tabIndex={-1} aria-label="Skills">
           <div className="sk-list-head">
             <span className="sk-list-count">
               {skills.length} skill{skills.length === 1 ? "" : "s"}
@@ -86,6 +86,8 @@ export function Skills({ skills }: { skills: SkillInfo[] }) {
                   <li key={`${s.source}:${s.path}`}>
                     <button
                       className="sk-row"
+                      data-nav-item
+                      data-nav-id={`skill:${s.path}`}
                       aria-current={selected?.path === s.path}
                       onClick={() => {
                         setSelectedPath(s.path);
@@ -127,7 +129,7 @@ export function Skills({ skills }: { skills: SkillInfo[] }) {
           note={note}
         />
       ) : showDetail && (
-        <div className="sk-detail">
+        <div className="sk-detail" data-nav-region="detail" tabIndex={-1} aria-label="Skill details">
           <Empty title="Select a skill to read it.">
             The list holds every SKILL.md an agent can reach. Pick one to read
             its body, edit it, promote a repo-local skill to your global set, or
@@ -215,11 +217,11 @@ function SkillDetail({
   };
 
   return (
-    <div className="sk-detail">
+    <div className="sk-detail" data-nav-region="detail" tabIndex={-1} aria-label="Skill details">
       <div className="sk-header">
         <div className="sk-header-top">
           {onBack && (
-            <Button variant="ghost" icon={Icon.chevronLeft} aria-label="Back to list" onClick={onBack} />
+            <Button variant="ghost" icon={Icon.chevronLeft} aria-label="Back to list" data-nav-back onClick={onBack} />
           )}
           <h2>/{skill.name}</h2>
           <div className="sk-header-actions">
@@ -268,7 +270,7 @@ function SkillDetail({
         ) : null}
       </div>
 
-      <div className="sk-body">
+      <div className="sk-body" tabIndex={0} aria-label="Skill content">
         {body === null ? (
           <Empty title="Reading…" />
         ) : editing ? (

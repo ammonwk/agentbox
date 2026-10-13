@@ -31,7 +31,9 @@
 
 import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDarwin } from "./darwin";
 import { agentboxHome } from "./paths";
+import { bootTimeMs } from "./proc";
 import { startedAtOf } from "./providers/procs";
 import type { Launch } from "./launch";
 import type { ProviderId, SessionStatus } from "./types";
@@ -60,8 +62,9 @@ export interface LiveEntry {
    *  waiting for its caller to collect. */
   subagent: { name: string; answerWaiting: boolean } | null;
   lastActivityAt: number;
-  /** When the model last answered, where the provider can tell (see TranscriptFacts). */
-  lastTurnAt: number | null;
+  /** When its prompt cache goes cold (`Session.cacheWarmUntil`); absent
+   *  from a snapshot an older server wrote. */
+  cacheWarmUntil?: number | null;
   /** How a session in another terminal was started, so it resumes with the same flags. */
   launch: Launch | null;
 }
@@ -160,6 +163,7 @@ export function lastReport(): RecoveryReport | null {
 
 /** When the machine booted, epoch ms. */
 export function bootTime(now = Date.now()): number {
+  if (isDarwin) return bootTimeMs();
   try {
     return now - Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000;
   } catch {

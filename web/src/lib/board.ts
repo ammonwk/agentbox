@@ -4,10 +4,25 @@
  * so the list, the voice agent and the tab title can never disagree. This only
  * sorts and buckets by it. */
 
-import type { Attention, AttentionKind, ProviderId, Session } from "../../../src/core/types";
+import { retrying } from "../../../src/core/attention";
+import type { Attention, AttentionKind, ProviderId, Session, SessionStatus } from "../../../src/core/types";
 import { baseName } from "./format";
 
-export type SessionRow = Session & { attention: Attention };
+export type SessionRow = Session & {
+  attention: Attention;
+  /** Work it left running in the background, in words (`workflow "babysit-fleet"`).
+   *  Only a server that tracks it sends it; without it the status shows as usual. */
+  backgroundWork?: string | null;
+};
+
+/** A session's status as drawn: blocked or waiting on an error agentbox
+ *  retries by itself is `retrying`, drawn as working — red or amber there
+ *  read as yours to fix. */
+export type ShownStatus = SessionStatus | "retrying";
+
+export function shownStatus(s: Pick<Session, "status" | "autoResume">): ShownStatus {
+  return retrying(s) ? "retrying" : s.status;
+}
 
 /** The fallback order when two rows carry the same server rank. */
 export const KIND_ORDER: Record<AttentionKind, number> = {
@@ -39,9 +54,23 @@ export interface BoardFilter {
 
 export const EMPTY_FILTER: BoardFilter = { query: "" };
 
-/** Where a session lives, for the Repo sort and its dot's shape. */
+/** Where a session lives, for its dot's shape. */
 export function repoKey(s: Pick<Session, "repoRoot" | "cwd">): string {
   return s.repoRoot ?? s.cwd;
+}
+
+/** Folders that hold projects: the folder under one of these is the project. */
+const CODE_ROOTS = new Set(["dev", "developer", "code", "src", "projects", "repos", "git", "work", "workspace"]);
+
+/**
+ * The project a session works on, for the prefix on its name: the folder
+ * under a code folder (~/Dev/Plaibook/Plaibook-dev/… is "plaibook"), else
+ * the repo's own folder. The first two folders are the home, never a match.
+ */
+export function projectOf(s: Pick<Session, "repoRoot" | "cwd">): string {
+  const parts = repoKey(s).split("/").filter(Boolean);
+  const i = parts.findIndex((p, n) => n >= 2 && n < parts.length - 1 && CODE_ROOTS.has(p.toLowerCase()));
+  return (i === -1 ? baseName(repoKey(s)) : parts[i + 1]).toLowerCase();
 }
 
 export function filterSessions<T extends SessionRow>(rows: readonly T[], f: BoardFilter): T[] {
@@ -54,7 +83,7 @@ export function filterSessions<T extends SessionRow>(rows: readonly T[], f: Boar
 }
 
 export interface Section<T> {
-  /** Stable key: an attention kind, a repo path, or "all". */
+  /** Stable key: an attention kind, or "all". */
   key: string;
   /** Empty for the one unlabelled section of a flat sort. */
   label: string;
@@ -66,16 +95,38 @@ export interface Section<T> {
 /** How the session list is ordered.
  *  - mine: the last time you sent it something (your order, not the agents')
  *  - all: the last time anything happened in it
- *  - status: blocked, your turn, running, stopped
- *  - repo: grouped by repository or folder */
-export type SortKey = "mine" | "all" | "status" | "repo";
+ *  - status: blocked, your turn, running, stopped */
+export type SortKey = "mine" | "all" | "status";
 
 export const SORT_LABEL: Record<SortKey, string> = {
   mine: "Your activity",
   all: "All activity",
   status: "Status",
-  repo: "Repo",
 };
+
+/** The list's two tabs: sessions that did something lately, and the rest. */
+export type RailView = "active" | "inactive";
+
+/** How recent a session's last activity must be for the Active tab. */
+export const ACTIVE_MS = 3 * 60 * 60_000;
+
+/**
+ * The rows of each tab. A session is active while it runs or when it did
+ * something within ACTIVE_MS. A tree goes whole to Active when any session in
+ * it is active, so a lead and its teammates stay together.
+ */
+export function splitActive<T extends SessionRow>(rows: readonly T[], now: number): Record<RailView, T[]> {
+  const up = parentsOf(rows);
+  const rootOf = (id: string) => {
+    let r = id;
+    for (let p = up.get(r); p !== undefined; p = up.get(r)) r = p;
+    return r;
+  };
+  const live = new Set(rows.filter((s) => s.status === "running" || now - s.lastActivityAt < ACTIVE_MS).map((s) => rootOf(s.id)));
+  const out: Record<RailView, T[]> = { active: [], inactive: [] };
+  for (const s of rows) out[live.has(rootOf(s.id)) ? "active" : "inactive"].push(s);
+  return out;
+}
 
 /** The timestamp a sort orders by, and the one a row shows. */
 export function sortTime(s: Pick<Session, "lastPromptAt" | "lastActivityAt">, sort: SortKey): number {
@@ -150,11 +201,10 @@ function ordered<T extends SessionRow>(rows: readonly T[], sort: SortKey): T[] {
 }
 
 /**
- * The list in sections. Status sections always come in the same order and
- * repos alphabetically, so the list does not reshuffle under the cursor; the
- * activity sorts are one flat section. A session another one started sits
- * under it, in its section whatever its own status or repo, and only while
- * `open` says its parent is expanded.
+ * The list in sections. Status sections always come in the same order, so
+ * the list does not reshuffle under the cursor; the activity sorts are one
+ * flat section. A session another one started sits under it, in its section
+ * whatever its own status, and only while `open` says its parent is expanded.
  */
 export function sectionsOf<T extends SessionRow>(
   rows: readonly T[],
@@ -182,9 +232,6 @@ export function sectionsOf<T extends SessionRow>(
   let sections: Section<Nested<T>>[];
   if (sort === "status") {
     sections = (Object.keys(KIND_ORDER) as AttentionKind[]).map((kind) => build(kind, SECTION_LABEL[kind], (r) => r.attention.kind === kind, kind));
-  } else if (sort === "repo") {
-    const repos = [...new Set(roots.map(repoKey))].sort((a, b) => baseName(a).localeCompare(baseName(b)) || a.localeCompare(b));
-    sections = repos.map((repo) => build(repo, baseName(repo), (r) => repoKey(r) === repo));
   } else {
     sections = [build("all", "", () => true)];
   }

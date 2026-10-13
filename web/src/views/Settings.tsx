@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AgentSettings, AppState, BalancerSettings, NightlyReclaim, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
-import { describeAt, describeRule, isRecurring } from "../../../src/core/schedule";
+import { describeAt, describeRule, FRESH_OVER, isRecurring } from "../../../src/core/schedule";
 import { api, fmtBytes, healthRows, type Health, type RepoPatch, type SettingsPatch } from "../api";
 import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
 import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle } from "../components";
+import { ACCENT_PRESETS, chooseAccent, useAccent } from "../lib/accent";
 import { BALANCER_HELP } from "../lib/balancer";
 import { disablePush, enablePush, pushState, type PushState } from "../lib/push";
 import { hrefOf } from "../route";
@@ -61,11 +62,11 @@ function ToggleRow({
 function Schedules({ state }: { state: AppState }) {
   const recurring = state.schedules.filter((s) => isRecurring(s.rule));
   return (
-    <section className="card" id="schedules">
+    <section className="card" id="schedules" data-nav-item data-nav-id="settings:scheduled-sessions" tabIndex={0} aria-label="Scheduled sessions">
       <h3>Scheduled sessions</h3>
       <p className="hint">
         Sessions that start on their own, each time a new one. Add one from New session: open the ▾ beside Start, pick{" "}
-        <strong>Schedule…</strong>, and say something like “every weekday at 9am” or “every 2 hours”. One-time ones wait in the
+        <strong>Schedule…</strong>, and say something like “every weekday at 9am”, “every 2 hours” or “whenever CD on staging is red”. One-time ones wait in the
         session list instead.
       </p>
       {recurring.length === 0 ? (
@@ -133,12 +134,12 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
         </span>
       </div>
       <p className="sched-meta">
-        {sc.enabled && sc.nextAt ? <>Next {lowerFirst(describeAt(sc.nextAt))}</> : "Paused"}
+        {!sc.enabled ? "Paused" : sc.nextAt ? <>Next {lowerFirst(describeAt(sc.nextAt))}</> : sc.rule.kind === "red" ? <>Watching {sc.rule.repo}</> : "Paused"}
         {where ? <> · <span className="mono">{where}</span></> : null}
         {sc.lastRunAt ? (
           <>
             {" "}
-            · last ran <RelativeTime ts={sc.lastRunAt} />
+            · {sc.sameSession ? "last spoke" : "last ran"} <RelativeTime ts={sc.lastRunAt} />
             {sc.lastSessionId && !sc.lastError ? (
               <>
                 {" "}
@@ -148,9 +149,26 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
           </>
         ) : null}
       </p>
+      {sc.sameSession || sc.noteCmd ? (
+        <p className="sched-meta">
+          {sc.sameSession ? (
+            <>
+              Keeps to one session, and starts a new one once it holds over {Math.round((sc.freshOver ?? FRESH_OVER) / 1000)}k tokens
+            </>
+          ) : (
+            "Starts a session each time"
+          )}
+          {sc.noteCmd ? (
+            <>
+              {" "}
+              · only when <span className="mono">{sc.noteCmd}</span> prints something, which it is told first
+            </>
+          ) : null}
+        </p>
+      ) : null}
       {sc.lastError ? (
         <p className="error" role="alert">
-          Last time it did not start: {sc.lastError}
+          {(sc.rule.kind === "red" && sc.lastError.startsWith("could not read")) || sc.noteCmd || sc.sameSession ? "" : "Last time it did not start: "}{sc.lastError}
         </p>
       ) : null}
       {editing ? (
@@ -202,7 +220,7 @@ const lowerFirst = (s: string) => (/^(Today|Tomorrow)/.test(s) ? s.charAt(0).toL
 
 function General({ settings, save, saveStateOf }: SectionProps) {
   return (
-    <section className="card">
+    <section className="card" data-nav-item data-nav-id="settings:general" tabIndex={0} aria-label="General">
       <h3>General</h3>
 
       <Field label="Theme" hint="Also on the switch at the bottom of the sidebar.">
@@ -217,6 +235,10 @@ function General({ settings, save, saveStateOf }: SectionProps) {
         )}
       </Field>
       <SaveMark state={saveStateOf("theme")} />
+
+      <Field label="Accent colour" hint="Buttons, links and the open tab. This browser keeps it; other devices keep their own.">
+        {(id) => <AccentPicker id={id} />}
+      </Field>
 
       <Field label="Board history" hint="How many days a session with no activity stays on the board before it drops off. Open sessions agentbox started are kept regardless; closed ones stay findable under See closed while they are inside this window.">
         {(id) => (
@@ -252,6 +274,36 @@ function General({ settings, save, saveStateOf }: SectionProps) {
   );
 }
 
+/** A swatch for each preset, then a custom colour. The chosen one has a ring
+ *  in its own colour. Each swatch shows its value for the current theme. */
+function AccentPicker({ id }: { id: string }) {
+  const pick = useAccent();
+  const custom = pick.startsWith("#") ? pick : null;
+  const name = custom ?? ACCENT_PRESETS.find((p) => p.id === pick)?.label ?? "";
+  return (
+    <div className="accent-pick" id={id}>
+      <div className="accent-swatches" role="radiogroup" aria-label="Accent colour">
+        {ACCENT_PRESETS.map((p) => (
+          <label key={p.id} className="accent-swatch" title={p.label} style={{ "--sw-dark": p.dark, "--sw-light": p.light } as CSSProperties}>
+            <input type="radio" name="accent" className="sr-only" checked={pick === p.id} onChange={() => chooseAccent(p.id)} />
+            <span className="sr-only">{p.label}</span>
+          </label>
+        ))}
+      </div>
+      <label
+        className="accent-swatch accent-custom"
+        title="Custom colour"
+        data-on={custom ? "" : undefined}
+        // The values in use, which lib/accent.ts moves away from the panels until they read.
+        style={custom ? ({ "--sw-dark": "var(--pick-dark)", "--sw-light": "var(--pick-light)" } as CSSProperties) : undefined}
+      >
+        <input type="color" aria-label="Custom accent colour" value={custom ?? "#8b5cf6"} onChange={(e) => chooseAccent(e.target.value)} />
+      </label>
+      <span className="accent-name">{name}</span>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ models
 
 function Models({
@@ -261,7 +313,7 @@ function Models({
   installed,
 }: SectionProps & { installed: AppState["providers"] }) {
   return (
-    <section className="card">
+    <section className="card" data-nav-item data-nav-id="settings:default-models" tabIndex={0} aria-label="Default models">
       <h3>Default models</h3>
       <p className="hint">
         What a new session runs on when the dialog&apos;s Model box is left empty. Empty here means the provider&apos;s own default.
@@ -334,7 +386,7 @@ function Notifications() {
   };
 
   return (
-    <section className="card">
+    <section className="card" data-nav-item data-nav-id="settings:notifications" tabIndex={0} aria-label="Notifications">
       <h3>Notifications</h3>
       <p className="hint">
         A notification on this device when a session is blocked on you: a permission prompt, a question, an error it cannot get past. Each device is turned
@@ -377,7 +429,7 @@ const BALANCER_KEYS = Object.keys(BALANCER_HELP) as (keyof BalancerSettings)[];
 
 function Balancer({ settings, save, saveStateOf }: SectionProps) {
   return (
-    <section className="card">
+    <section className="card" data-nav-item data-nav-id="settings:balancer" tabIndex={0} aria-label="Balancer">
       <h3>Balancer</h3>
       <p className="hint">
         How new sessions are placed across accounts. Everything is in weekly percentage points. The{" "}
@@ -460,7 +512,7 @@ function Repositories({
   }
 
   return (
-    <section className="card">
+    <section className="card" data-nav-item data-nav-id="settings:repositories" tabIndex={0} aria-label="Repositories">
       <h3>Repositories</h3>
       <p className="hint">
         What sessions can be spawned against. Give a local absolute path, or an{" "}
@@ -723,7 +775,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
   }
 
   return (
-    <section className="card">
+    <section className="card" data-nav-item data-nav-id="settings:disk" tabIndex={0} aria-label="Disk">
       <h3>Disk</h3>
       <p className="hint">
         Every session keeps its worktree when it stops or is closed, because the checkout
@@ -924,7 +976,7 @@ function Diagnostics({ warnings, providers }: { warnings: string[]; providers: A
   const rows = health ? healthRows(health) : [];
 
   return (
-    <section className="card">
+    <section className="card" data-nav-item data-nav-id="settings:diagnostics" tabIndex={0} aria-label="Diagnostics">
       <h3>Diagnostics</h3>
       <p className="hint">
         The programs agentbox drives. Each is actually run, not just looked up, so one that is installed but unusable — <code>gh</code>{" "}

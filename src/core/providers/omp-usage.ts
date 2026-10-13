@@ -84,6 +84,7 @@ export function parseOmpUsage(json: unknown, accountId: string): AccountUsage {
         usedPct: Math.max(0, Math.min(100, frac * 100)),
         resetsAt: num(w.resetsAt),
         windowMs,
+        provider,
       };
       if (typeof l?.scope?.modelId === "string" && l.scope.modelId) win.scope = { model: l.scope.modelId };
       windows.push(win);

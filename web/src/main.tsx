@@ -2,10 +2,12 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
+import { startAccent } from "./lib/accent";
 import { isPhone } from "./lib/phone";
 import { startPush } from "./lib/push";
 import { reloadForMissingChunk } from "./lib/update";
 import { followLinks, listUnderSession } from "./route";
+import { openLinksBehind } from "./lib/backgroundlinks";
 
 // On a phone the app is lifted by the on-screen keyboard's height, so the
 // keyboard shrinks it rather than covering it (iOS never resizes the layout
@@ -64,6 +66,7 @@ if ("serviceWorker" in navigator && window.isSecureContext && location.port !== 
 }
 
 listUnderSession();
+startAccent();
 const root = document.getElementById("root")!;
 createRoot(root).render(
   <React.StrictMode>
@@ -71,3 +74,4 @@ createRoot(root).render(
   </React.StrictMode>
 );
 followLinks(root);
+openLinksBehind(root);

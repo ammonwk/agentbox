@@ -25,6 +25,7 @@ import type {
   DepStatus,
   Health,
   HotState,
+  Card,
   PromptHistoryEntry,
   LoginFlow,
   MetricsState,
@@ -43,14 +44,23 @@ import type {
   TimelineEvent,
   TimelinePage,
   TurnList,
+  SendReceipt,
   WorktreeScan,
+  McpCheck,
+  McpServerInput,
+  McpState,
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
+import type { CloudStatus, OutboundResult } from "../../src/core/cloud/bridge";
+import type { AgentIdentity, Directory, InstallationSettings, PublishedSkill } from "../../src/cloud/protocol";
+import type { InstallResult, SkillManifest } from "../../src/cloud/skillbundle";
 import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
+import type { AgentTimeline, SessionWork } from "../../src/core/work";
+export type { AgentTimeline, SessionWork, WorkAgent, WorkShell } from "../../src/core/work";
 export * from "./lib/format";
 
 // ------------------------------------------------------------------- mock
@@ -67,7 +77,7 @@ const loadMock = (): Promise<MockModule> => (mockModule ??= import("./mock"));
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   if (MOCK) {
     const m = await loadMock();
     // The mock is typed loosely at its one boundary; everything past this line is the contract's type.
@@ -81,7 +91,7 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
 
   let res: Response;
   try {
-    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
   } catch (err) {
     // A dead server is the common case for a local tool; say which call died.
     throw new Error(`${path}: cannot reach agentbox (${(err as Error).message})`);
@@ -192,6 +202,9 @@ export const api = {
   prompts: () => get<PromptHistoryEntry[]>("/api/prompts"),
   health: (refresh = false) => get<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
   voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
+  /** Whether web links can open behind the window in front, for this browser. */
+  desktop: () => get<{ backgroundTabs: boolean }>("/api/desktop"),
+  openUrl: (url: string) => post<null>("/api/open-url", { url }),
 
   // notifications (lib/push.ts)
   push: () => get<{ publicKey: string; devices: { endpoint: string; userAgent: string | null; createdAt: number }[] }>("/api/push"),
@@ -203,18 +216,32 @@ export const api = {
   placement: (input: { provider: ProviderId; model?: string }) =>
     post<Placement>("/api/placement", input),
   /** What `--model` can be on this account, newest release first. */
-  models: (accountId: string) => get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}`),
+  models: (accountId: string, provider?: ProviderId) =>
+    get<ModelOption[]>(`/api/models?accountId=${enc(accountId)}${provider ? `&provider=${enc(provider)}` : ""}`),
   /** Start one later: `when` is plain words ("in 4 hours", "every weekday at 9am"). */
   createSchedule: (input: { when: string; spec: NewSessionInput; label?: string }) => post<Schedule>("/api/schedules", input),
   patchSchedule: (id: string, patch: { when?: string; prompt?: string; label?: string | null; enabled?: boolean; repoId?: string }) =>
     request<Schedule>("PATCH", `/api/schedules/${enc(id)}`, patch),
   deleteSchedule: (id: string) => request<null>("DELETE", `/api/schedules/${enc(id)}`),
   runSchedule: (id: string) => post<{ sessionId: string }>(`/api/schedules/${enc(id)}/run`),
+  // cards (src/core/cards.ts)
+  /** One card whole, with its long version. */
+  card: (id: number) => get<Card>(`/api/cards/${id}`),
+  /** Your answer; "" for one that only wanted seeing. */
+  answerCard: (id: number, text: string) => post<Card>(`/api/cards/${id}/answer`, { text }),
+  laterCard: (id: number) => post<Card>(`/api/cards/${id}/later`),
+  undoCard: (id: number) => post<Card>(`/api/cards/${id}/undo`),
   createSession: (input: NewSessionInput) =>
     post<{ session: Session; placement: Placement }>("/api/sessions", input),
   patchSession: (id: string, patch: { label?: string | null; parent?: string | null }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
+  submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string) =>
+    request<SendReceipt>("POST", `/api/sessions/${enc(id)}/submissions`, { sendId, kind, text }, AbortSignal.timeout(30_000)),
+  submission: (id: string, sendId: string) => request<SendReceipt | null>("GET", `/api/sessions/${enc(id)}/submissions/${enc(sendId)}`, undefined, AbortSignal.timeout(10_000)),
+  /** `background` leaves a browser tab behind the window in front (Ctrl-click). */
+  openFile: (id: string, path: string, background = false) =>
+    post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path, background }),
   keys: (id: string, keys: string[]) => post<unknown>(`/api/sessions/${enc(id)}/keys`, { keys }),
   /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
   answer: (id: string, question: string, answers: AskAnswer[]) => post<unknown>(`/api/sessions/${enc(id)}/answer`, { question, answers }),
@@ -253,6 +280,10 @@ export const api = {
   diff: (id: string) => get<SessionDiff>(`/api/sessions/${enc(id)}/diff`),
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
   load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
+  work: (id: string) => get<SessionWork>(`/api/sessions/${enc(id)}/work`),
+  /** One of its in-process agents' transcript: the newest page, or what came after `since`. */
+  agentTimeline: (id: string, agentId: string, since: string | null) =>
+    get<AgentTimeline>(`/api/sessions/${enc(id)}/agents/${enc(agentId)}/timeline${since ? `?since=${encodeURIComponent(since)}` : ""}`),
 
   // accounts
   addAccount: (provider: ProviderId, label?: string) =>
@@ -288,10 +319,33 @@ export const api = {
     post<ReclaimResult>("/api/worktrees/reclaim", { paths, force }),
 
   // skills
+  // global MCP servers
+  mcp: () => get<McpState>("/api/mcp"),
+  addMcp: (s: McpServerInput) => post<McpState>("/api/mcp/servers", s),
+  updateMcp: (name: string, s: McpServerInput) => request<McpState>("PUT", `/api/mcp/servers/${enc(name)}`, s),
+  setMcpEnabled: (name: string, enabled: boolean) => post<McpState>(`/api/mcp/servers/${enc(name)}/enabled`, { enabled }),
+  removeMcp: (name: string) => request<McpState>("DELETE", `/api/mcp/servers/${enc(name)}`),
+  /** Starts the server and asks for its tools: only on your request. */
+  checkMcp: (name: string) => post<McpCheck>(`/api/mcp/servers/${enc(name)}/check`),
+  importMcp: (id: string, opts: { name?: string; promote?: boolean } = {}) => post<McpState>("/api/mcp/import", { id, ...opts }),
+
   skillBody: (path: string) => get<{ body: string }>(`/api/skill/body?path=${enc(path)}`),
   saveSkillBody: (path: string, body: string) => post<{ ok: boolean }>("/api/skill/body", { path, body }),
   promoteSkill: (name: string) => post<SkillResult>("/api/skill/promote", { name }),
   demoteSkill: (name: string) => post<SkillResult>("/api/skill/demote", { name }),
+
+  // this machine and the agentbox cloud (docs/cloud.md)
+  cloud: () => get<CloudStatus>("/api/cloud"),
+  cloudRegister: (secret: string) => post<CloudStatus>("/api/cloud/installation", { secret }),
+  cloudForget: (revoke: boolean) => request<CloudStatus>("DELETE", `/api/cloud/installation${revoke ? "?revoke=1" : ""}`),
+  cloudSettings: (patch: Partial<InstallationSettings>) => request<InstallationSettings>("PUT", "/api/cloud/settings", patch),
+  cloudSync: () => post<CloudStatus>("/api/cloud/sync"),
+  cloudDirectory: (fresh = false) => get<Directory>(`/api/cloud/directory${fresh ? "?fresh=1" : ""}`),
+  cloudShare: (sessionId: string, listed: boolean) => post<AgentIdentity>(`/api/cloud/agents/${enc(sessionId)}`, { listed }),
+  cloudSend: (body: { to: string; text: string; wake?: boolean; clientId?: string }) => post<OutboundResult>("/api/cloud/messages", body),
+  cloudInstallSkill: (name: string, rev: number, force: boolean) => post<InstallResult>(`/api/cloud/skills/${enc(name)}/install`, { rev, force }),
+  cloudInstalledSkills: () => get<{ dir: string; manifest: SkillManifest }[]>("/api/cloud/installed-skills"),
+  cloudPublishSkill: (name: string, summary?: string) => post<PublishedSkill>("/api/cloud/skills/publish", { name, summary }),
 };
 
 // --------------------------------------------------------------- the wire
@@ -584,11 +638,13 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               logins: s.logins,
               repos: s.repos,
               prs: s.prs,
+              prClaims: s.prClaims,
               skills: s.skills,
               settings: s.settings,
               providers: s.providers,
               warnings: s.warnings,
               schedules: s.schedules,
+              cards: s.cards,
               onboarding: s.onboarding,
             },
         );

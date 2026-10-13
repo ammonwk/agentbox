@@ -167,6 +167,13 @@ export function useAttachments({
     setAtts([]);
   }
 
+  /** Reattach a failed submission's already uploaded images, with numbers
+   *  chosen by the composer so they do not collide with its newer input. */
+  function restore(uploaded: readonly SavedAttachment[]) {
+    for (const a of uploaded) saved.current.set(a.n, { name: a.name, path: a.path });
+    setAtts((xs) => [...xs, ...uploaded.map((a): Attachment => ({ n: a.n, url: uploadUrl(a.name), state: "ready", error: null }))]);
+  }
+
   /** Backspace right after a token deletes the whole token, not its `]`. */
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
     if (e.key !== "Backspace" && e.key !== "Delete") return false;
@@ -213,6 +220,7 @@ export function useAttachments({
     retry,
     resolve,
     clear,
+    restore,
     onKeyDown,
     handlers,
     dropping,
@@ -233,11 +241,12 @@ export type Attachments = ReturnType<typeof useAttachments>;
  * and the drop highlight are on this, so the thumbnails read as part of the
  * box rather than something under it.
  */
-export function AttachFrame({ a, className, children }: { a: Attachments; className?: string; children: React.ReactNode }) {
+export function AttachFrame({ a, className, children, footer }: { a: Attachments; className?: string; children: React.ReactNode; footer?: React.ReactNode }) {
   return (
     <div className={`att-frame${className ? ` ${className}` : ""}`} data-drop={a.dropping || undefined} {...a.handlers}>
       {children}
       <AttachmentStrip a={a} />
+      {footer}
       {a.dropping ? <div className="att-dropzone">Drop to attach</div> : null}
     </div>
   );
@@ -255,7 +264,7 @@ export function AttachButton({ a, className }: { a: Attachments; className?: str
         aria-label="Attach images"
         onClick={() => input.current?.click()}
       >
-        <Icon.image size={15} />
+        <Icon.paperclip size={17} />
       </button>
       <input
         ref={input}

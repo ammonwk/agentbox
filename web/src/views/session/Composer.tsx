@@ -1,17 +1,19 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from "react";
 import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
-import { ago, api, fmtTokens } from "../../api";
-import { AttachButton, AttachFrame, useAttachments } from "../../attachments";
+import { ago, api, fmtRetryAt, fmtTokens, useNow } from "../../api";
+import { AttachButton, AttachFrame, expandImages, tokensIn, useAttachments } from "../../attachments";
 import { PROVIDER_LABEL } from "../../bits";
 import { Button, Icon } from "../../components";
 import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
-import { draftSent, loadDraft, onDraftSent, saveDraft } from "./drafts";
+import { shownStatus } from "../../lib/board";
+import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend } from "./drafts";
+import { PendingSends, deliverPending } from "./submissions";
 import "../newsession.css";
 import { useAction } from "./useAction";
-import { echoSent } from "./echo";
 import { useVoiceNote, voiceNotes } from "./voicenote";
+import { accountProvider } from "../../../../src/core/providers/account";
 
 /** What the composer can do for a session, and the sentence that says so. */
 export type ComposerMode =
@@ -45,17 +47,22 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * the box is replaced by the Adopt explanation. `/` completes the skills the
  * session can run, as in the new-session prompt.
  */
-export function Composer({ session, accounts, claimIdleMin, skills, textareaRef }: {
+export function Composer({ session, accounts, skills, textareaRef }: {
   session: Session;
   accounts: readonly AccountView[];
-  claimIdleMin: number;
   skills: readonly SkillInfo[];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   // The draft left here last time (the composer is keyed by session, so this
   // is read once per session). Sending clears it again.
   const draft = useMemo(() => loadDraft(session.id), [session.id]);
-  const [text, setText] = useState(draft?.text ?? "");
+  const [text, setTextState] = useState(draft?.text ?? "");
+  const revision = useRef(draft?.revision ?? newRevision());
+  const setText = useCallback((next: SetStateAction<string>) => {
+    revision.current = newRevision();
+    setTextState(next);
+  }, []);
+  const submitting = useRef(false);
   const { run, busy, error, clear } = useAction();
   /** A voice message is on its way to words. */
   const [hearing, setHearing] = useState(false);
@@ -97,40 +104,47 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
   // Remember the draft as it changes; sending empties the box, which deletes it.
   const savedImages = images.saved();
   const savedKey = JSON.stringify(savedImages);
+  const editingRevision = revision.current;
   useEffect(() => {
-    saveDraft(session.id, text, savedImages);
-  }, [session.id, text, savedKey]);
-  // A send that began in a composer since left (this one opened on its draft) has landed.
+    void saveDraft(session.id, text, savedImages, editingRevision);
+  }, [session.id, text, savedKey, editingRevision]);
+  // Taking a revision clears every tab holding that revision, before delivery.
+  // A newer edit has its own revision, even if its text is identical.
   useEffect(
     () =>
-      onDraftSent((id, sent) => {
-        if (id !== session.id || sent !== text) return;
-        setText("");
+      onDraftWork(() => {
+        if (!draftTaken(session.id, revision.current)) return;
+        revision.current = newRevision();
+        setTextState("");
         images.clear();
       }),
-    [session.id, text],
+    [session.id, images.clear],
   );
 
   async function submit() {
-    if (busy) return;
+    if (busy || submitting.current || images.uploading) return;
     if (mode.kind === "send" && !text.trim()) return;
     setSpoke(false);
-    const sent = text;
-    const ok = await run(async () => {
-      const body = (await images.resolve(text)).trim();
+    submitting.current = true;
+    // Snapshot uploaded paths before clearing attachments. Text typed while
+    // storage or delivery is in flight belongs to a different revision.
+    const sent = { text, images: images.saved(), at: Date.now(), revision: revision.current };
+    try { await run(async () => {
+      const paths = new Map(sent.images.map((i) => [i.n, i.path]));
+      const missing = [...tokensIn(text)].filter((n) => !paths.has(n));
+      if (missing.length) throw new Error(`image #${missing.join(", #")} did not upload — retry it or remove it`);
+      const body = expandImages(text, paths).trim();
       const side = mode.kind === "send" && session.provider === "claude" ? BTW.exec(body) : null;
-      if (side) await api.btw(session.id, side[1]!);
-      else if (mode.kind === "send") {
-        await api.send(session.id, body);
-        echoSent(session.id, body);
-      }
-      else if (mode.kind === "resume") await api.resume(session.id, body || undefined);
-    });
-    if (ok) {
-      setText("");
-      images.clear();
-      draftSent(session.id, sent);
-    }
+      const bodyHash = submissionHash(body);
+      const pending: PendingSend = {
+        id: newRevision(), sessionId: session.id, draft: sent,
+        kind: side ? "btw" : mode.kind === "resume" ? "resume" : "send",
+        body: side ? side[1]! : body, bodyHash, at: Date.now(), state: "pending", error: null,
+      };
+      // Taking the draft notifies any composer holding this revision. A
+      // composer left meanwhile needs no cleanup: storage already took it.
+      await deliverPending(pending);
+    }); } finally { submitting.current = false; }
   }
 
   /** Put a voice message into words, after what is already in the box, to be read over before Send. */
@@ -171,6 +185,19 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
 
   return (
     <div className="cmp" data-mode={mode.kind}>
+      <PendingSends sessionId={session.id} onRestore={async (p) => {
+        const previousRevision = revision.current;
+        const restoredRevision = newRevision();
+        let n = Math.max(0, ...images.atts.map((a) => a.n), ...tokensIn(text));
+        const numbers = new Map(p.draft.images.map((a) => [a.n, ++n]));
+        const restoredImages = p.draft.images.map((a) => ({ ...a, n: numbers.get(a.n)! }));
+        const recovered = p.draft.text.replace(/\[Image #(\d+)\]/g, (token, old: string) => numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
+        const restored = [text.trimEnd(), recovered].filter(Boolean).join("\n\n");
+        await restorePending(session.id, p.id, { text: restored, images: [...images.saved(), ...restoredImages], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
+        images.restore(restoredImages);
+        revision.current = restoredRevision;
+        setTextState(restored);
+      }} />
       {error ? (
         <div className="cmp-error" role="alert">
           <Icon.alert size={13} /> {spoke ? "Not heard" : mode.kind === "resume" ? "Could not resume" : btw ? "Not asked" : "Not sent"}: {error}
@@ -211,7 +238,8 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
         </div>
       ) : null}
 
-      {session.question && mode.kind === "send" ? null : session.status === "blocked" && mode.kind === "send" ? (
+      {/* An error screen agentbox retries is not a prompt for you: the session view says so. */}
+      {session.question && mode.kind === "send" ? null : session.status === "blocked" && mode.kind === "send" && shownStatus(session) !== "retrying" ? (
         <div className="cmp-keys" role="group" aria-label="Answer the prompt">
           <span className="cmp-keys-label">
             <Icon.alert size={13} /> The agent is showing a prompt — answer it in the terminal, or send a key:
@@ -230,14 +258,17 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
         </div>
       ) : null}
 
-      {session.limitHit ? <LimitBanner session={session} accounts={accounts} claimIdleMin={claimIdleMin} /> : null}
+      {session.limitHit ? <LimitBanner session={session} accounts={accounts} /> : null}
 
       {mode.kind === "send" || mode.kind === "resume" ? (
       <div className="cmp-row">
         <label className="sr-only" htmlFor={`cmp-${session.id}`}>
           {mode.kind === "resume" ? "Prompt to resume with" : "Message to the agent"}
         </label>
+        {/* One box: the paperclip, the text, then the keys and Send. Pasted
+            images go under the text, inside the box. */}
         <AttachFrame a={images} className="cmp-frame">
+        <AttachButton a={images} className="cmp-attach" />
         <textarea
           id={`cmp-${session.id}`}
           ref={ref}
@@ -267,83 +298,96 @@ export function Composer({ session, accounts, claimIdleMin, skills, textareaRef 
         />
         {skill.list}
         {voice.bar}
-        </AttachFrame>
-        <AttachButton a={images} className="cmp-attach" />
-        {mode.kind === "send" ? (
-          <>
+        <div className="cmp-tools">
+          {mode.kind === "send" ? (
+            <>
+              {/* Esc and Interrupt only while there is a turn or a prompt to stop. */}
+              {session.status === "running" || session.status === "blocked" ? (
+                <button
+                  type="button"
+                  className="cmp-tool cmp-esc"
+                  title="Press Escape in the session — cancels the current prompt or menu"
+                  aria-label="Press Escape in the session"
+                  disabled={busy}
+                  onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
+                >
+                  esc
+                </button>
+              ) : null}
+              {session.status === "running" ? (
+                <button
+                  type="button"
+                  className="cmp-tool cmp-stop"
+                  title="Interrupt the current turn (Esc)"
+                  aria-label="Interrupt the current turn"
+                  disabled={busy}
+                  onClick={() => void run(() => api.interrupt(session.id))}
+                >
+                  <Icon.stop size={14} />
+                </button>
+              ) : null}
+              <span className="cmp-go-wrap">
+                {voice.above}
+                <Button
+                  className="cmp-go"
+                  variant="ghost"
+                  icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.send}
+                  loading={busy}
+                  disabled={talks ? images.uploading : !text.trim() || images.uploading}
+                  title="Send (Enter)"
+                  aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
+                  data-ready={text.trim() ? true : undefined}
+                  data-rec={recording ? voice.phase : undefined}
+                  onMouseDown={keepKeyboard}
+                  {...(talks ? voice.button : {})}
+                  onClick={() => {
+                    if (voice.click()) return;
+                    if (talks && !text.trim()) voice.hint();
+                    else void submit();
+                  }}
+                />
+              </span>
+            </>
+          ) : (
             <span className="cmp-go-wrap">
               {voice.above}
               <Button
                 className="cmp-go"
-                variant="primary"
-                icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.arrowUp}
+                variant="ghost"
+                icon={voice.phase === "locked" ? Icon.check : voice.phase === "held" ? Icon.mic : text.trim() ? Icon.send : Icon.play}
                 loading={busy}
-                disabled={talks ? images.uploading : !text.trim() || images.uploading}
-                aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
+                aria-label={voice.phase === "locked" ? "Finish the recording" : text.trim() ? "Resume with prompt" : "Resume"}
+                data-ready
                 data-rec={recording ? voice.phase : undefined}
                 onMouseDown={keepKeyboard}
                 {...(talks ? voice.button : {})}
                 onClick={() => {
-                  if (voice.click()) return;
-                  if (talks && !text.trim()) voice.hint();
-                  else void submit();
+                  if (!voice.click()) void submit();
                 }}
               >
-                <span className="cmp-go-label">Send</span>
+                <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
               </Button>
             </span>
-            <div className="cmp-aux cmp-navigation">
-              <Button
-                className="cmp-aux"
-                title="Press Escape in the session — cancels the current prompt or menu"
+          )}
+        </div>
+        </AttachFrame>
+        {mode.kind === "send" ? (
+          // A phone has no Esc or arrow keys: these send them to the session.
+          <div className="cmp-aux cmp-navigation">
+            {(["Escape", "Up", "Down", "Enter"] as const).map((key) => (
+              <button
+                key={key}
+                type="button"
+                className="keycap cmp-phone-key"
+                title={`Press ${key} in the session`}
+                aria-label={`Press ${key} in the session`}
                 disabled={busy}
-                onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
+                onClick={() => void run(() => api.keys(session.id, [key]))}
               >
-                Esc
-              </Button>
-              {(["Up", "Down", "Enter"] as const).map((key) => (
-                <Button
-                  key={key}
-                  className="cmp-phone-key"
-                  title={`Press ${key} in the session`}
-                  aria-label={`Press ${key} in the session`}
-                  disabled={busy}
-                  onClick={() => void run(() => api.keys(session.id, [key]))}
-                >
-                  {key === "Up" ? "↑" : key === "Down" ? "↓" : "Enter"}
-                </Button>
-              ))}
-            </div>
-            <Button
-              className="cmp-aux"
-              variant="danger"
-              icon={Icon.stop}
-              title="Interrupt the current turn"
-              disabled={busy || session.status !== "running"}
-              onClick={() => void run(() => api.interrupt(session.id))}
-            >
-              Interrupt
-            </Button>
-          </>
-        ) : mode.kind === "resume" ? (
-          <span className="cmp-go-wrap">
-            {voice.above}
-            <Button
-              className="cmp-go"
-              variant="primary"
-              icon={voice.phase === "locked" ? Icon.check : voice.phase === "held" ? Icon.mic : text.trim() ? Icon.arrowUp : Icon.play}
-              loading={busy}
-              aria-label={voice.phase === "locked" ? "Finish the recording" : text.trim() ? "Resume with prompt" : "Resume"}
-              data-rec={recording ? voice.phase : undefined}
-              onMouseDown={keepKeyboard}
-              {...(talks ? voice.button : {})}
-              onClick={() => {
-                if (!voice.click()) void submit();
-              }}
-            >
-              <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
-            </Button>
-          </span>
+                {key === "Escape" ? "Esc" : key === "Up" ? "↑" : key === "Down" ? "↓" : "Enter"}
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
       ) : null}
@@ -373,16 +417,16 @@ const CONTINUE = "Usage limits have reset, continue";
 
 /** Providers whose adapter can move a transcript between account homes
  *  (`moveSession`); the others can only continue where they are. */
-const MOVABLE = new Set(["claude", "devin"]);
+const MOVABLE = new Set(["claude", "devin", "omp", "opencode"]);
 
 /**
- * The session stopped at its account's limit. Nothing moves it on its own —
- * a move is a cache miss you should choose — so this offers the one-click
- * version: continue on the account with the most room (the balancer's pick,
- * shown before you click), or on whichever account you pick instead, telling
- * the agent to carry on.
+ * The session stopped at its account's limit. The fleet moves it to another
+ * account once in its life (`Fleet.continueStalled`); this is what is left
+ * when it has had that move or there was nowhere to go: continue on the
+ * balancer's pick (shown before you click), or on whichever account you pick
+ * instead, telling the agent to carry on.
  */
-function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; accounts: readonly AccountView[]; claimIdleMin: number }) {
+function LimitBanner({ session, accounts }: { session: Session; accounts: readonly AccountView[] }) {
   const { run, busy, error, clear } = useAction();
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [placeErr, setPlaceErr] = useState<string | null>(null);
@@ -390,6 +434,7 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
   /** Phones show one line and the button; the why and the picker are behind this. */
   const [more, setMore] = useState(false);
   const hit = session.limitHit!;
+  const now = useNow(15_000);
   useEffect(() => {
     let cancelled = false;
     setChoice("auto");
@@ -410,7 +455,7 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
     };
   }, [session.id, hit.at]);
 
-  const mine = accounts.filter((a) => a.provider === session.provider);
+  const mine = accounts.filter((a) => a.provider === accountProvider(session.provider));
   const canMove = MOVABLE.has(session.provider) && mine.length > 1;
   const here = accounts.find((a) => a.id === session.accountId) ?? null;
   const auto = placement?.accountId && placement.mode !== "none" ? accounts.find((a) => a.id === placement.accountId) ?? null : null;
@@ -433,6 +478,15 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
           {short.charAt(0).toUpperCase() + short.slice(1)} · {ago(hit.at)}
         </strong>
         <span className="cmp-limit-detail">{hit.detail}</span>
+        {hit.hopped ? (
+          <span className="cmp-limit-auto">agentbox already moved it off one account at its limit, and does that once: from here a move is yours.</span>
+        ) : null}
+        {session.autoResume ? (
+          <span className="cmp-limit-auto">
+            agentbox tells it to carry on here {fmtRetryAt(session.autoResume.at, now)}, a minute after the window resets — or send it
+            something yourself.
+          </span>
+        ) : null}
         {error ? (
           <span className="cmp-limit-err">
             {error}{" "}
@@ -480,7 +534,6 @@ function LimitBanner({ session, accounts, claimIdleMin }: { session: Session; ac
             placement={placement}
             placing={!placement && !placeErr}
             placeErr={placeErr}
-            claimIdleMin={claimIdleMin}
           />
         </div>
       ) : null}

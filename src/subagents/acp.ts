@@ -6,6 +6,7 @@
  * stays alive between turns so a follow-up keeps its context.
  */
 
+import { acpServers } from "../core/mcp";
 import { isAbsolute } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import {
@@ -516,6 +517,7 @@ export class AcpRunner {
     });
     connectPromise.catch((err: unknown) => {
       if (!this.closed) {
+        this.proc?.kill();
         this.closed = true;
         rejectSid(new Error(messageOf(err)));
         this.events.onError(this.id, messageOf(err));
@@ -527,18 +529,19 @@ export class AcpRunner {
   }
 
   private async openSession(ctx: ClientContext, opts: LaunchOptions): Promise<string> {
-    await ctx.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-    const sid = opts.resumeSessionId ?? (await ctx.request("session/new", { cwd: opts.worktree, mcpServers: [] })).sessionId;
-    if (opts.resumeSessionId !== null) {
-      const params = { sessionId: sid, cwd: opts.worktree, mcpServers: [] };
-      try {
-        await ctx.request("session/resume", params);
-      } catch {
-        // devin and older omp builds only implement session/load, which
-        // replays the history as updates; `sessionId` is not set until this
-        // returns, so the replay is not mistaken for a new turn.
-        await ctx.request("session/load", params);
-      }
+    const init = await ctx.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+    const caps = init.agentCapabilities;
+    const mcpServers = acpServers(caps?.mcpCapabilities, opts.worktree, { ...process.env, ...this.backend.env(this.id) }) as never[];
+    let sid = opts.resumeSessionId;
+    if (sid === null) {
+      sid = (await ctx.request("session/new", { cwd: opts.worktree, mcpServers })).sessionId;
+    } else {
+      const params = { sessionId: sid, cwd: opts.worktree, mcpServers };
+      // Negotiate before sending a request. A failed response may follow a
+      // successful resume; replaying it as load (or new) is unsafe.
+      if (caps?.sessionCapabilities?.resume) await ctx.request("session/resume", params);
+      else if (caps?.loadSession) await ctx.request("session/load", params);
+      else throw new Error(`${this.backend.id} does not advertise session resume or load; update the agent to resume this conversation`);
     }
     const mode = this.backend.mode(opts.readOnly);
     if (mode !== null) await ctx.request("session/set_mode", { sessionId: sid, modeId: mode });

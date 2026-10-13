@@ -20,12 +20,13 @@
 
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { owners } from "./accounts/homes";
-import { place, type AccountState } from "./balancer";
-import { claimFor } from "./claim";
+import { elsewhere, place, type AccountState } from "./balancer";
+import { claimFor, listedClaim } from "./claim";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
+import { Forecaster } from "./forecast";
 import {
   dismissBtw,
   failUnfinishedBtw,
@@ -38,6 +39,8 @@ import {
   insertAssignment,
   insertBtw,
   insertRateLimitHit,
+  rateLimitHitsSince,
+  modelOutcomesSince,
   insertSessionRecord,
   insertTokenSample,
   listAccounts,
@@ -48,18 +51,21 @@ import {
   usageSamplesSince,
   type SessionRecord,
 } from "./db";
-import { createWorktree, worktreeForBranch } from "./git";
+import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
-import { attachArgv, tmuxName, type NewSession, type PaneInfo } from "./tmux";
+import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
+import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
 import {
+  LIMIT_DIALOG,
   transcriptFile,
   type LiveProcess,
+  type ModelOutcome,
   type ProviderAdapter,
   type TranscriptFacts,
   type TranscriptReader,
   type TranscriptRef,
 } from "./providers/types";
-import { argvOf, environOf, isAlive, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
+import { argvOf, childrenOf, environOf, isAlive, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
 import { clockHz, describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
 import {
   classifyShell,
@@ -71,12 +77,15 @@ import {
   normalCommand,
   shellHold,
   STALE_TURN_MS,
+  limitStop,
+  stoppedAtLimit,
   strandedNudge,
   strandedNudgeAfter,
   SUBAGENT_QUIET_MS,
-  subagentsLastWrite,
-  WakeScan,
+  lastWriteUnder,
+  wakeHold,
 } from "./park";
+import { cacheExpiring, cacheWarmUntil, KEEP_WARM_MAX, keepWarmNote, keepWarmPlan, type WarmSpell } from "./cache";
 import { read as readLive } from "../subagents/live";
 import { claimRecord, poolKey, poolState, type PoolAgent } from "../subagents/record";
 import { carryEnv, type Launch } from "./launch";
@@ -102,20 +111,24 @@ import {
   type Step,
 } from "./recovery";
 import { agentboxHome } from "./paths";
-import { loadReaderState, pruneReaderStates, saveReaderState } from "./readercache";
-import { weeklyWindow } from "./balancer";
-import { statedWaitMs } from "./retrywait";
+import { openReader, pruneReaderStates, saveReaderState } from "./readercache";
+import { UNFUNDED_HOLD_MS, unfundedSince, weeklyWindow } from "./balancer";
+import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusals";
+import { statedUntil, statedWaitMs } from "./retrywait";
+import { retryClock } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
+import { accountProvider } from "./providers";
+import { bridgedModel } from "../bridge/models";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
   Account,
   AccountUsage,
   AskAnswer,
   AskQuestion,
-  BalancerSettings,
   Btw,
+  Candidate,
   ClaimView,
   Placement,
   PromptHistoryEntry,
@@ -168,7 +181,7 @@ const MATCH_WINDOW_MS = 10 * 60_000;
 export interface Runtime {
   newSession(s: NewSession): number;
   listPanes(): PaneInfo[];
-  sendText(name: string, text: string): Promise<void>;
+  sendText(name: string, text: string, opts?: { pieces?: number }): Promise<void>;
   sendKeys(name: string, keys: string[]): void;
   capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
   captureMany(names: string[]): Map<string, string | null>;
@@ -316,19 +329,27 @@ export class Fleet extends EventEmitter {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking: Promise<void> | null = null;
   private attributor = new Attributor();
+  readonly forecaster = new Forecaster();
   private lastWeekly = new Map<string, string>();
   /** Providers whose sessions can wake on another account: the adapter can
    *  move a session, and there is another account to move it to. */
   private movable = new Set<ProviderId>();
   /** Limit hits already acted on (`continueStalled`): session → the hit's time. */
   private stallsSeen = new Map<string, number>();
-  /** Sessions nudged past an error screen (`nudgeErrored`): the spell's start
-   *  and how many nudges it has had. */
-  private nudges = new Map<string, { firstAt: number; tries: number }>();
+  /** A session is being moved off an account at its limit; one at a time, so
+   *  each move is placed knowing the one before it. */
+  private hopping = false;
+  /** Sessions nudged past an error (`nudgeErrored`): the spell's last nudge
+   *  and how many it has had. A spell ends an hour after its last nudge, or
+   *  when a turn ends cleanly. */
+  private nudges = new Map<string, { lastAt: number; tries: number }>();
   private nextNudgeAt = 0;
-  /** Stranded notifications already nudged (`nudgeStranded`): session → the
+  /** Stranded notifications already nudged (`keepWarm`): session → the
    *  newest one's time. */
   private strandedSeen = new Map<string, number>();
+  /** Keep-warm messages sent in the session's current wait (`keepWarm`): how
+   *  many, and when the last went. */
+  private warmPings = new Map<string, WarmSpell>();
   /** Error screens that name their own wait ("will reset in 55 minutes"):
    *  the error, as first seen, and when that wait is up. */
   private screenWaits = new Map<string, { key: string; until: number }>();
@@ -342,8 +363,6 @@ export class Fleet extends EventEmitter {
   private liveStatus = new Map<string, SessionStatus>();
   /** Idle sessions kept running, and why (see src/core/park.ts). */
   private parkHolds = new Map<string, string>();
-  /** By transcript path. */
-  private wakeScans = new Map<string, WakeScan>();
   /** Sessions found parkable at the last check (see `parkIdle`). */
   private parkClean = new Map<string, ParkCheck>();
   /** Parked processes that may outlive their tmux session (see reapParked). */
@@ -444,7 +463,7 @@ export class Fleet extends EventEmitter {
     const settings = getSettings();
     const since = now - settings.boardDays * DAY;
     const accounts = listAccounts();
-    const accountsOf = (p: ProviderId) => accounts.filter((a) => a.provider === p);
+    const accountsOf = (p: ProviderId) => accounts.filter((a) => a.provider === accountProvider(p));
     const started = performance.now();
     let lapAt = started;
     const laps: string[] = [];
@@ -494,7 +513,8 @@ export class Fleet extends EventEmitter {
     if (now - this.lastDiscovery >= DISCOVERY_MS) {
       this.lastDiscovery = now;
       for (const adapter of this.adapters.values()) {
-        for (const account of accountsOf(adapter.id)) {
+        // One account's listing is everyone's where they share a store.
+        for (const account of adapter.sharedStore ? accountsOf(adapter.id).slice(0, 1) : accountsOf(adapter.id)) {
           let refs: TranscriptRef[] = [];
           try {
             refs = await adapter.listTranscripts(account, since);
@@ -577,6 +597,9 @@ export class Fleet extends EventEmitter {
         const r = await this.load(t).refresh();
         const took = performance.now() - readAt;
         if (took > slowest.ms) slowest = { ms: took, path };
+        // omp and devin do not record the branch: read it off the checkout
+        // when the transcript moves, which switching branches always does.
+        if (!r.facts.gitBranch && r.facts.cwd) r.facts.gitBranch = r.changed || !t.facts ? branchOnDisk(r.facts.cwd) : t.facts.gitBranch;
         t.facts = r.facts;
         if (r.changed) this.unsaved.add(path);
         // A restored reader's first facts are new to this process, though
@@ -604,7 +627,7 @@ export class Fleet extends EventEmitter {
     // Every transcript gets a record; changed ones get their record refreshed.
     for (const [path, t] of this.tracked) {
       if (!t.facts || this.ignored.has(path)) continue;
-      const id = this.recordFor(t, settings.balancer, now);
+      const id = this.recordFor(t, now);
       if (changed.has(path)) {
         this.persistFacts(id, t, now);
         this.collectMetrics(id, t, now);
@@ -624,7 +647,7 @@ export class Fleet extends EventEmitter {
     if (this.caughtUp) {
       this.continueStalled(now);
       this.nudgeErrored(now);
-      this.nudgeStranded(now, settings.parkIdleMin);
+      this.keepWarm(now, settings.parkIdleMin);
     }
     lap("park");
     await this.refreshWork(now);
@@ -676,10 +699,17 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * A session that stopped at its account's 5-hour limit carries on where it
-   * is: a minute after the window resets it is told to go on. It never moves
-   * to another account by itself — a move throws away the prompt cache, so
-   * that is yours to choose (the limit banner). A weekly limit is left to you.
+   * A session that stopped at its account's limit is moved, once in its
+   * life, to another account that can take it, and told to carry on: the
+   * balancer deliberately runs an account to its last point, so the session
+   * that finds the end of it should not be the one that pays. Once, so that a
+   * runaway session cannot run through every account: the second limit it
+   * meets stops it for good, though every other session cut off with it
+   * still has its own move. A manual move (the limit banner) is always yours.
+   *
+   * One that has had its move, or has nowhere to go, carries on where it is
+   * when the limit was the 5-hour one: a minute after the window resets it is
+   * told to go on. A weekly limit is left to you.
    *
    * Once per hit, and only for a hit inside the window still running, so a
    * restart in the middle of a wait picks it back up (the deadline lives only
@@ -701,17 +731,60 @@ export class Fleet extends EventEmitter {
       const hit = v.limitHit;
       if (!hit || this.stallsSeen.get(v.id) === hit.at) continue;
       if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
-      const accountId = getSessionRecord(v.id)?.accountId;
-      if (!accountId) continue;
+      const rec = getSessionRecord(v.id);
+      const accountId = rec?.accountId;
+      if (!rec || !accountId) continue;
+      const next = rec.hoppedAt ? null : this.hopTarget(rec, v);
+      // Another is on its way over: this one is looked at again once it has landed.
+      if (next && this.hopping) continue;
       this.stallsSeen.set(v.id, hit.at);
-      const windows = this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? [];
-      const weekly = weeklyWindow(windows);
-      const short = windows.find((w) => w.kind === "short" && !w.scope);
-      if (weekly && weekly.usedPct >= 100 && (weekly.resetsAt === null || weekly.resetsAt > now)) continue;
-      if (!short?.resetsAt || short.resetsAt <= now || hit.at < short.resetsAt - short.windowMs) continue;
-      this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
-      console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
+      if (next) {
+        this.hop(rec, v, next, now);
+        continue;
+      }
+      this.waitOutReset(v, hit, accountId, now);
     }
+  }
+
+  /** Where a session stopped at its account's limit can go: the balancer's
+   *  first choice among the other accounts that can take a session. */
+  private hopTarget(rec: SessionRecord, v: Session): Candidate | null {
+    if (!this.movable.has(rec.provider) || !rec.agentSessionId) return null;
+    const own = this.ownerOf(rec.accountId ?? "");
+    return elsewhere(this.placement(rec.provider, v.model, null, rec.effort ?? null, false), own);
+  }
+
+  private hop(rec: SessionRecord, v: Session, to: Candidate, now: number): void {
+    this.hopping = true;
+    console.log(`agentbox: ${v.id} (${v.title}) stopped at its account's limit (${oneLine(v.limitHit!.detail, 80)}); moving it to ${to.label}, its one move`);
+    void this.moveAndContinue(v.id, {
+      accountId: to.accountId,
+      prompt: "[agentbox: the account you were running on reached its usage limit, so you have been moved to another. Carry on where you left off.]",
+    })
+      .then(() => updateSessionRecord(v.id, { hoppedAt: now }))
+      .catch((e) => {
+        console.error(`agentbox: moving ${v.id} off its account's limit failed:`, e);
+        const at = this.views.get(v.id);
+        if (at?.limitHit && rec.accountId) this.waitOutReset(at, at.limitHit, rec.accountId, this.now());
+      })
+      .finally(() => {
+        this.hopping = false;
+      });
+  }
+
+  /** Have a session stopped at a 5-hour limit told to carry on once it resets. */
+  private waitOutReset(v: Session, hit: NonNullable<Session["limitHit"]>, accountId: string, now: number): void {
+    // An account that fronts several providers (omp) has windows for each:
+    // the ones that matter are those of the provider that refused.
+    const windows = (this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? []).filter(
+      (w) => !w.scope && (!hit.provider || !w.provider || w.provider === hit.provider),
+    );
+    const short = windows.find((w) => w.kind === "short");
+    // A longer window that is spent outlasts the 5-hour reset.
+    if (windows.some((w) => w.kind !== "short" && w.usedPct >= 100 && (w.resetsAt === null || w.resetsAt > now))) return;
+    if (!short?.resetsAt || short.resetsAt <= now || hit.at < short.resetsAt - short.windowMs) return;
+    this.resumeAfterReset.set(v.id, { hitAt: hit.at, at: short.resetsAt + 60_000 });
+    console.log(`agentbox: ${v.id} (${v.title}) stopped at its 5-hour limit, which resets in ${Math.round((short.resetsAt - now) / 60_000)}m; waiting it out`);
   }
 
   /**
@@ -724,40 +797,26 @@ export class Fleet extends EventEmitter {
    * the fleet at a time — several sessions retaking one rate-limited account
    * in lockstep is what stuck them — a few per spell, then it is yours. An
    * error that names its own wait (`retryAfterMs`: a model at capacity, 10
-   * minutes) is left that long instead, and retried at that pace for as long
-   * as it keeps coming back: capacity returns by itself, the refused request
-   * cost nothing, and nothing you could do would bring it back sooner. A
-   * nudge types where the session is, however cold: only you move it.
+   * minutes) backs off up to it — 1, 2, 5 minutes, then that — and is retried
+   * for as long as it keeps coming back: capacity returns by itself, often
+   * within a minute or two, the refused request cost nothing, and nothing you
+   * could do would bring it back sooner. A nudge types where the session is,
+   * however cold: only you move it.
    */
   private nudgeErrored(now: number): void {
     if (now < this.nextNudgeAt) return;
     for (const v of this.views.values()) {
-      if (v.host !== "tmux" || this.busy.has(v.id)) continue;
-      // A transcript error persists, so only act while it is fresh — a
-      // restart does not retry what died hours before it was watching.
-      const wait = v.status === "waiting" ? v.turnError?.retryAfterMs : undefined;
-      const err = v.status === "waiting" && v.turnError && now - v.turnError.at <= STALL_FRESH_MS + (wait ?? 0) ? v.turnError : null;
-      const screen = v.status === "blocked" ? this.blocked.get(v.id) : undefined;
-      const onScreen = screen === "rate limit" || screen === "error";
-      // An error screen that names its reset is left until then, however
-      // long: every earlier retry is refused the same way. Quiet a while
-      // either way, so the screen a nudge has not yet redrawn is not nudged.
-      const until = onScreen ? this.screenWaitUntil(v) : null;
-      if (now < Math.max(until ?? 0, v.lastActivityAt + (wait ?? NUDGE_QUIET_MS))) continue;
-      const retryable = onScreen ? screen : err && err.kind !== "fatal" ? err.kind : null;
-      if (!retryable) continue;
-      const prev = this.nudges.get(v.id);
-      const spell = prev && now - prev.firstAt < NUDGE_SPELL_MS ? prev : { firstAt: now, tries: 0 };
-      const paced = !!err?.retryAfterMs || until !== null;
-      if (spell.tries >= NUDGE_MAX_TRIES && !paced) continue;
-      this.nudges.set(v.id, { firstAt: spell.firstAt, tries: spell.tries + 1 });
+      const plan = this.nudgePlan(v, now);
+      if (!plan || plan.sent || now < plan.at) continue;
+      this.nudges.set(v.id, { lastAt: now, tries: plan.attempt });
       this.nextNudgeAt = now + NUDGE_STAGGER_MS;
+      const err = plan.screen ? null : v.turnError!;
       const message =
         err?.kind === "output-cap"
           ? "[agentbox: your last reply was cut off by the output token limit. Continue where you left off.]"
           : "[agentbox: your turn stopped on an error; this message retries it. Carry on where you left off.]";
       console.log(
-        `agentbox: ${v.id} (${v.title}) ${screen ? (screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}${err!.retryAfterMs ? ` (${oneLine(err!.detail, 80)})` : ""}`}; nudging it on (${spell.tries + 1}${paced ? "" : `/${NUDGE_MAX_TRIES}`})`,
+        `agentbox: ${v.id} (${v.title}) ${plan.screen ? (plan.screen === "rate limit" ? "hit a rate limit" : "stopped on an error") : `its turn ended on ${err!.kind}${err!.retryAfterMs ? ` (${oneLine(err!.detail, 80)})` : ""}`}; nudging it on (${plan.attempt}${plan.of === null ? "" : `/${plan.of}`})`,
       );
       void this.sendInPlace(v.id, message).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
       return;
@@ -765,36 +824,125 @@ export class Fleet extends EventEmitter {
   }
 
   /**
+   * When `nudgeErrored` will nudge this session, and which try that is; null
+   * when it will not. Asked of every view each pass, so the board says when;
+   * a pass that finds the session's turn ended cleanly since its last nudge
+   * ends the spell there, so the next error starts the backoff over.
+   */
+  private nudgePlan(v: Session, now: number): { at: number; attempt: number; of: number | null; screen: string | null; sent?: true } | null {
+    let prev = this.nudges.get(v.id);
+    if (prev && v.status === "waiting" && !v.turnError && v.lastActivityAt > prev.lastAt) {
+      this.nudges.delete(v.id);
+      prev = undefined;
+    }
+    if (v.host !== "tmux") return null;
+    // The nudge just sent is the retry until the session takes it: the
+    // error stays on screen while it is typed (the session busy meanwhile),
+    // and the last try is no more yours than the first. Without this the
+    // board turned red, and pushed "Blocked", for those few seconds.
+    const sent = !!prev && now - prev.lastAt < NUDGE_TAKE_MS;
+    if (this.busy.has(v.id) && !sent) return null;
+    const tries = prev && now - prev.lastAt < NUDGE_SPELL_MS ? prev.tries : 0;
+    const cap = v.status === "waiting" ? v.turnError?.retryAfterMs : undefined;
+    const wait = cap ? Math.min(cap, PACED_BACKOFF_MS[tries] ?? cap) : undefined;
+    // A transcript error persists, so only act while it is fresh — a
+    // restart does not retry what died hours before it was watching.
+    const err = v.status === "waiting" && v.turnError && now - v.turnError.at <= STALL_FRESH_MS + (wait ?? 0) ? v.turnError : null;
+    const screen = v.status === "blocked" ? this.blocked.get(v.id) : undefined;
+    const onScreen = screen === "rate limit" || screen === "error";
+    if (!(onScreen || (err && err.kind !== "fatal"))) return null;
+    // An error screen that names its reset is left until then, however
+    // long: every earlier retry is refused the same way. Quiet a while
+    // either way, so the screen a nudge has not yet redrawn is not nudged.
+    const until = onScreen ? this.screenWaitUntil(v) : null;
+    const paced = !!wait || until !== null;
+    if (sent && (this.busy.has(v.id) || (tries >= NUDGE_MAX_TRIES && !paced))) return { at: prev!.lastAt, attempt: prev!.tries, of: paced ? null : NUDGE_MAX_TRIES, screen: onScreen ? screen! : null, sent };
+    if (tries >= NUDGE_MAX_TRIES && !paced) return null;
+    return {
+      at: Math.max(until ?? 0, v.lastActivityAt + (wait ?? NUDGE_QUIET_MS), this.nextNudgeAt),
+      attempt: tries + 1,
+      of: paced ? null : NUDGE_MAX_TRIES,
+      screen: onScreen ? screen! : null,
+    };
+  }
+
+  /** When the fleet will tell this session to go on by itself, if it will:
+   *  after its 5-hour reset (`continueStalled`), or past an error
+   *  (`nudgeErrored`). */
+  private autoResumeOf(v: Session, now: number): Session["autoResume"] {
+    const reset = this.resumeAfterReset.get(v.id);
+    if (reset && v.limitHit?.at === reset.hitAt && v.status === "waiting" && v.host === "tmux") return { at: reset.at, attempt: 1, of: 1, after: "reset" };
+    const plan = this.nudgePlan(v, now);
+    return plan && { at: plan.at, attempt: plan.attempt, of: plan.of, after: "error" };
+  }
+
+  /**
+   * Message a session, while its prompt cache is still warm, that is waiting
+   * on something: so the cache is still there when that something wakes it.
+   *
    * A session whose background task finished without waking it is told so.
    * Claude queues the notification and never delivers it when the command
    * was started by an in-process teammate that has since gone idle: the lead
    * sits "waiting on CI" for good, and is parked an hour later with nothing
    * holding it. Once the session has been quiet for `strandedNudgeAfter` —
-   * 55 minutes, while its cache is still warm and before it is parked — it
+   * 55 minutes, before it is parked — or its cache is about to go cold, it
    * gets one message naming what finished, and is not parked before it has
    * (`parkHold`). Once per notification — the nudge in the transcript clears
    * them, so a restart does not repeat it — and not while a teammate is
    * still writing.
+   *
+   * A session whose turn is over and that still has work going that will
+   * wake it — a background command, a monitor, a wakeup, subagents: what a
+   * crash would take (`work`) — is sent `keepWarmNote` `KEEP_WARM_LEAD_MS`
+   * before its cache goes cold. Reading the cached conversation back costs a
+   * tenth of an input token per token; the work waking it to a cold cache
+   * costs two, an hour's write. Only for caches that live an hour (a
+   * five-minute one would need a message every few minutes), and at most
+   * `KEEP_WARM_MAX` times in one wait.
+   *
+   * Neither to a session stopped at a usage limit (`stoppedAtLimit`): the
+   * message would only meet the limit again.
    */
-  private nudgeStranded(now: number, parkIdleMin: number): void {
+  private keepWarm(now: number, parkIdleMin: number): void {
     const after = strandedNudgeAfter(parkIdleMin);
     for (const v of this.views.values()) {
-      if (v.provider !== "claude" || v.host !== "tmux" || this.busy.has(v.id)) continue;
+      if (v.host !== "tmux" || this.busy.has(v.id)) continue;
       // "Running" too: Claude's status file says busy on a lead with teammates.
       if (v.status !== "waiting" && v.status !== "running") continue;
-      if (now - v.lastActivityAt < after) continue;
-      const facts = v.transcriptPath ? this.tracked.get(v.transcriptPath)?.facts : null;
+      const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
+      const facts = t?.facts;
+      if (!t || !facts || stoppedAtLimit(facts)) continue;
+
       const stranded = this.strandedOf(v);
       const newest = stranded.at(-1)?.at;
-      if (newest === undefined || this.strandedSeen.get(v.id) === newest) continue;
-      // A working teammate's notification waits in the lead's queue until the
-      // teammate's step yields, and is taken then.
-      const sub = subagentsLastWrite(v.transcriptPath!, facts!.agentSessionId);
-      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) continue;
-      this.strandedSeen.set(v.id, newest);
-      console.log(`agentbox: ${v.id} (${v.title}) was never woken by ${stranded.length} finished background task${stranded.length === 1 ? "" : "s"}; nudging it after ${minutes(now - v.lastActivityAt)} quiet`);
-      void this.sendInPlace(v.id, strandedNudge(stranded)).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
+      if (newest !== undefined && this.strandedSeen.get(v.id) !== newest && (cacheExpiring(now, v.cacheWarmUntil) || now - v.lastActivityAt >= after)) {
+        // A working teammate's notification waits in the lead's queue until
+        // the teammate's step yields, and is taken then.
+        if (this.subagentsWorking(t.ref, now)) continue;
+        this.strandedSeen.set(v.id, newest);
+        console.log(`agentbox: ${v.id} (${v.title}) was never woken by ${stranded.length} finished background task${stranded.length === 1 ? "" : "s"}; nudging it after ${minutes(now - v.lastActivityAt)} quiet`);
+        void this.sendInPlace(v.id, strandedNudge(stranded)).catch((e) => console.error(`agentbox: nudging ${v.id} failed:`, e));
+        continue;
+      }
+
+      // In the words crash recovery uses, which look back on it.
+      const work = this.work.get(v.id)?.replace(/ were working\b/, " are working");
+      // A parent left waiting on its background agents shows "running"; it
+      // waits for hours, and went cold every time before.
+      if (!work || (v.status !== "waiting" && !v.background) || facts.turnOpen) continue;
+      // The transcript survives restarts; the in-flight map covers a prompt
+      // typed but not yet read. Use whichever is newer, never a smaller count
+      // from before the server restarted in the middle of a wait.
+      const pending = this.warmPings.get(v.id);
+      const recorded = facts.keepWarm ?? undefined;
+      const prior = pending && pending.at > (recorded?.at ?? 0) && pending.at > (facts.lastWorkAt ?? 0) ? pending : recorded;
+      const spell = keepWarmPlan({ ...facts, now, warmUntil: v.cacheWarmUntil }, prior);
+      if (!spell) continue;
+      this.warmPings.set(v.id, spell);
+      console.log(`agentbox: keeping ${v.id} (${v.title}) warm (${spell.count}/${KEEP_WARM_MAX}) while ${work}`);
+      void this.sendInPlace(v.id, keepWarmNote(work)).catch((e) => console.error(`agentbox: keeping ${v.id} warm failed:`, e));
     }
+    for (const id of this.warmPings.keys()) if (!this.views.has(id)) this.warmPings.delete(id);
   }
 
   /** The notifications Claude never delivered to this session's running
@@ -816,9 +964,28 @@ export class Fleet extends EventEmitter {
    * early. A minute over, for the reset the message rounded down.
    */
   private screenWaitUntil(v: Session): number | null {
+    // A limit with a known end, however far off: nothing before it.
+    if (v.limitHit?.until) return v.limitHit.until + 60_000;
     const hitWait = v.limitHit ? statedWaitMs(v.limitHit.detail) : null;
     if (v.limitHit && hitWait !== null) return v.limitHit.at + hitWait + 60_000;
     return this.screenWaits.get(v.id)?.until ?? null;
+  }
+
+  /**
+   * When a limit a session stopped at lifts, or null when nothing says: the
+   * latest reset among its account's spent windows (those of the provider
+   * that refused, where the account fronts several), else the wait or the
+   * date the message itself names. Past moments are no answer.
+   */
+  private limitUntil(accountId: string | null, hit: { at: number; detail: string; provider?: string }, now: number): number | null {
+    const windows = accountId ? (this.deps.usage.usageOf(this.ownerOf(accountId))?.windows ?? []) : [];
+    const spent = windows
+      .filter((w) => !w.scope && (!hit.provider || !w.provider || hit.provider.startsWith(w.provider)) && w.usedPct >= 100 && w.resetsAt !== null && w.resetsAt > now)
+      .map((w) => w.resetsAt!);
+    if (spent.length) return Math.max(...spent);
+    const wait = statedWaitMs(hit.detail);
+    const named = wait !== null ? hit.at + wait : statedUntil(hit.detail);
+    return named !== null && named > now ? named : null;
   }
 
   /** Remember the wait an error screen names, from when it first showed: the
@@ -858,9 +1025,8 @@ export class Fleet extends EventEmitter {
    *  it, `readercache.ts`) if it was put away. */
   private load(t: Tracked): TranscriptReader {
     if (t.reader) return t.reader;
-    const reader = this.adapter(t.ref.provider).reader(t.ref);
-    const saved = reader.loadState ? loadReaderState(t.ref.provider, t.ref.path) : null;
-    t.restored = saved !== null && reader.loadState!(saved);
+    const { reader, restored } = openReader(this.adapter(t.ref.provider), t.ref);
+    t.restored = restored;
     t.reader = reader;
     return reader;
   }
@@ -877,7 +1043,6 @@ export class Fleet extends EventEmitter {
     t.reader = null;
     t.facts = null;
     t.restored = false;
-    this.wakeScans.delete(path);
   }
 
   /** Whether anything of the session runs: its process, or its pane. */
@@ -934,9 +1099,9 @@ export class Fleet extends EventEmitter {
       const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
       const proc = pane ? this.processUnder(pane.pid, rec.provider) : undefined;
       let agentId = proc?.agentSessionId ?? null;
-      // A starting omp holds its recent sessions' files open, so its process can
-      // name an older conversation; one we just spawned never began before us.
-      // Wait for it to name its own rather than guess among siblings started beside it.
+      // One we just spawned never began before us, so a process naming an older
+      // conversation is misread: wait for it to name its own rather than guess
+      // among siblings started beside it.
       if (agentId && this.transcriptStartedBefore(rec.provider, agentId, rec.createdAt - 10_000)) continue;
 
       if (!agentId) {
@@ -946,8 +1111,9 @@ export class Fleet extends EventEmitter {
           if (!f || f.isSubagent || t.ref.provider !== rec.provider || this.pool.has(poolKey(rec.provider, f.agentSessionId))) continue;
           // Devin records no account per session, so its adapter lists every
           // transcript under the default account; a session we started on
-          // another account still matches there.
-          if (t.ref.accountId !== rec.accountId && !defaults.has(t.ref.accountId)) continue;
+          // another account still matches there. As it does where every
+          // account reads one store, listed under whichever came first.
+          if (t.ref.accountId !== rec.accountId && !defaults.has(t.ref.accountId) && !this.adapter(rec.provider).sharedStore) continue;
           if (this.byAgentId.has(`${rec.provider}:${f.agentSessionId}`)) continue;
           if (findSessionRecord(rec.provider, f.agentSessionId)) continue;
           // Another process is writing it: a sibling started beside us, not ours.
@@ -980,6 +1146,11 @@ export class Fleet extends EventEmitter {
       const proc = this.processUnder(pane.pid, rec.provider);
       if (!proc?.agentSessionId || proc.agentSessionId === rec.agentSessionId) continue;
       let target = findSessionRecord(rec.provider, proc.agentSessionId);
+      // A conversation runs in one pane. A claim on one whose own pane is up
+      // is a misreading, and following it would leave that pane to no row,
+      // where nothing parks, reads or resumes it.
+      const held = target?.tmux ? this.panes.get(target.tmux) : undefined;
+      if (held && !held.dead) continue;
       if (!target) {
         const account = accounts.find((a) => a.id === rec.accountId);
         if (!account) continue;
@@ -1030,7 +1201,7 @@ export class Fleet extends EventEmitter {
     return undefined;
   }
 
-  private recordFor(t: Tracked, settings: BalancerSettings, now: number): string {
+  private recordFor(t: Tracked, now: number): string {
     const f = t.facts!;
     const key = `${t.ref.provider}:${f.agentSessionId}`;
     const cached = this.byAgentId.get(key);
@@ -1053,14 +1224,15 @@ export class Fleet extends EventEmitter {
       // A session started outside agentbox still uses its account, so it
       // claims like any other; it just was not placed. Its model is known
       // from its transcript, so the claim is the model's.
-      claim: claimFor({ model: f.model }, settings),
+      // It was not placed: what it claims is what any stretch of work does.
+      claim: this.claimOf(t.ref.provider, f.model, null, false),
       origin: "external",
       tmux: null,
       transcriptPath: t.ref.path,
       startedAt: started,
       lastActivityAt: f.lastActivityAt ?? t.ref.mtimeMs,
       archivedAt: null,
-      facts: compactFacts(f, t.ref.size),
+      facts: compactFacts(f, t.ref.size, t.ref.accountId),
       createdAt: now,
     });
     this.byAgentId.set(key, id);
@@ -1147,7 +1319,7 @@ export class Fleet extends EventEmitter {
     const f = t.facts!;
     const rec = getSessionRecord(id);
     if (!rec) return;
-    const patch: Partial<SessionRecord> = { facts: compactFacts(f, t.ref.size), transcriptPath: t.ref.path };
+    const patch: Partial<SessionRecord> = { facts: compactFacts(f, t.ref.size, rec.accountId, rec.facts), transcriptPath: t.ref.path };
     const last = f.lastActivityAt ?? t.ref.mtimeMs;
     // The transcript's newest turn is the record, so it also corrects a value
     // that was set too late; an mtime is only a guess and may only move it on.
@@ -1156,9 +1328,8 @@ export class Fleet extends EventEmitter {
     // A model switch (/model) changes what the session costs: its claim
     // follows. A wake's claim already counts what was consumed before it, so
     // only a real change rewrites it, never the same model re-read.
-    if (f.model && f.model !== (rec.facts as Partial<TranscriptFacts> | null)?.model) {
-      patch.claim = claimFor({ model: f.model, effort: rec.effort ?? null }, getSettings().balancer);
-    }
+    const was = (rec.facts as Partial<TranscriptFacts> | null)?.model;
+    if (f.model && f.model !== was) patch.claim = this.claimOf(rec.provider, f.model, rec.effort ?? null, !was);
     // A message from you to a closed session means you went back to it.
     // Its own activity does not: an agent still finishing, or one another
     // agent wrote to, stays where you put it.
@@ -1234,11 +1405,11 @@ export class Fleet extends EventEmitter {
   // -------------------------------------------------------------- parking
 
   /**
-   * Stop the process of every Claude session in our tmux that has sat idle
-   * for `idleMin` with nothing holding it up (src/core/park.ts says what
-   * holds). The session stays on the board as waiting, and a message or a
-   * resume brings it back — with the prompt cache cold after this long, a
-   * resume costs no more than keeping it would have.
+   * Stop the process of every session in our tmux that has sat idle
+   * for `idleMin`, whose prompt cache has gone cold, with nothing holding it
+   * up (src/core/park.ts says what holds). The session stays on the board as
+   * waiting, and a message or a resume brings it back — with the cache cold,
+   * a resume costs no more than keeping it would have.
    *
    * The unit is the tmux session: a lead's teammates run as panes in it and
    * go with it, so every pane must be idle too. Nothing is stopped before
@@ -1260,9 +1431,10 @@ export class Fleet extends EventEmitter {
     const idleMs = idleMin * 60_000;
     const candidates = [...this.views.values()].filter(
       (v) =>
-        v.provider === "claude" &&
         v.host === "tmux" &&
         v.tmux &&
+        // Still warm, its next message costs less with the process up.
+        now > v.cacheWarmUntil &&
         (this.liveStatus.get(v.id) === "waiting"
           ? now - v.lastActivityAt >= idleMs
           : this.liveStatus.get(v.id) === "running" && now - v.lastActivityAt >= Math.max(idleMs, STALE_TURN_MS)),
@@ -1354,12 +1526,11 @@ export class Fleet extends EventEmitter {
       if (parked) this.emit("sessions");
     }
     this.parkClean = clean;
-    for (const path of this.wakeScans.keys()) if (!this.tracked.has(path)) this.wakeScans.delete(path);
     this.parkHolds = holds;
   }
 
   /**
-   * A parked Claude that outlives its tmux session — it ignored the hangup,
+   * A parked agent that outlives its tmux session — it ignored the hangup,
    * or is slow to shut its MCP servers down — gets SIGTERM after 10s and
    * SIGKILL after two minutes: a process left behind is what parking is for.
    * The start time guards against a recycled pid.
@@ -1406,14 +1577,14 @@ export class Fleet extends EventEmitter {
     now: number,
     idleMs: number,
   ): Promise<string | ParkCheck> {
-    const quiet = now - v.lastActivityAt;
+    const quiet = now - (this.tracked.get(v.transcriptPath ?? "")?.facts?.lastWorkAt ?? v.lastActivityAt);
     if (panes.some((p) => p.clients > 0)) return "a terminal or browser is attached to it";
     const own = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
     if (!own?.facts) return "its transcript has not been read yet";
-    // Told first (`nudgeStranded`), parked only if it goes quiet again. One
+    // Told first (`keepWarm`), parked only if it goes quiet again. One
     // already nudged holds nothing: a nudge that never landed must not keep
     // the session up for good.
-    const stranded = this.strandedOf(v);
+    const stranded = stoppedAtLimit(own.facts) ? [] : this.strandedOf(v);
     if (stranded.length > 0 && this.strandedSeen.get(v.id) !== stranded.at(-1)!.at) {
       return `${stranded.length} finished background task${stranded.length === 1 ? "" : "s"} never woke it; it is told first`;
     }
@@ -1425,7 +1596,7 @@ export class Fleet extends EventEmitter {
       if (pane.dead) continue;
       const argv = argvOf(pane.pid);
       if (!argv) continue; // exited since the listing
-      if (!runsCli(argv, "claude")) return `a pane runs ${basename(argv[0] ?? "?")}, not claude`;
+      if (!runsCli(argv, v.provider)) return `a pane runs ${basename(argv[0] ?? "?")}, not ${v.provider}`;
       const started = startedAtOf(pane.pid);
       if (started !== null && now - started < idleMs) return `started ${minutes(now - started)} ago`;
       const flag = (f: string) => {
@@ -1455,15 +1626,10 @@ export class Fleet extends EventEmitter {
         if (f.turnOpen && now - at < STALE_TURN_MS) return `${name} is mid-turn`;
         if (now - at < idleMs) return `${name} was active ${minutes(now - at)} ago`;
       }
-      let scan = this.wakeScans.get(t.ref.path);
-      if (!scan) this.wakeScans.set(t.ref.path, (scan = new WakeScan(t.ref.path)));
-      // Timers set before these processes started died with the one before.
-      const since = Math.min(...agents.map((a) => a.started), now);
-      const wake = await scan.hold(now, since);
+      const wake = wakeHold(f.wakes, now, Math.min(...agents.map((a) => a.started), now));
       if (wake) return name === "it" ? wake : `${name}: ${wake}`;
-      for (const m of scan.monitors) monitors.add(m);
-      const sub = subagentsLastWrite(t.ref.path, f.agentSessionId);
-      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) return `${name === "it" ? "its" : `${name}'s`} subagents are working`;
+      for (const m of f.monitors ?? []) monitors.add(m);
+      if (this.subagentsWorking(t.ref, now)) return `${name === "it" ? "its" : `${name}'s`} subagents are working`;
     }
 
     // What runs under each agent.
@@ -1475,7 +1641,7 @@ export class Fleet extends EventEmitter {
       const owners = [`pid:${a.pid}`, ...(a.sessionId ? [a.sessionId] : []), ...family.map((m) => m.t.facts!.agentSessionId)];
       if (live.some((e) => owners.includes(e.owner))) return "MCP subagents are running";
       cpuTicks += subtreeCpuTicks(subtree(table, a.pid));
-      const found = shellWork(table, a.pid, monitors, quiet, true);
+      const found = shellWork(table, a.pid, v.provider, monitors, quiet, true);
       shells.push(...found.shells);
       if (found.hold) return found.hold;
     }
@@ -1497,12 +1663,15 @@ export class Fleet extends EventEmitter {
    * For every live session whose turn is over: the work it is still waiting
    * on, which a crash would kill — a background command, a monitor, a
    * wakeup, subagents. What decides, after a crash, between resuming it and
-   * leaving it for you (src/core/recovery.ts). Every `WORK_CHECK_MS`.
+   * leaving it for you (src/core/recovery.ts), and what keeps it warm
+   * (`keepWarm`). Every `WORK_CHECK_MS`. A Claude session whose background
+   * agents are working says "busy" with its turn over (`background`): it is
+   * waiting on them as much as one that says idle.
    */
   private async refreshWork(now: number): Promise<void> {
     if (now < this.nextWorkCheck) return;
     this.nextWorkCheck = now + WORK_CHECK_MS;
-    const idle = [...this.views.values()].filter((v) => (v.host === "tmux" || v.host === "external") && this.liveStatus.get(v.id) === "waiting");
+    const idle = [...this.views.values()].filter((v) => (v.host === "tmux" || v.host === "external") && (this.liveStatus.get(v.id) === "waiting" || v.background));
     if (idle.length === 0) {
       this.work.clear();
       return;
@@ -1514,13 +1683,26 @@ export class Fleet extends EventEmitter {
     for (const v of idle) {
       // Let the server answer between sessions.
       await Bun.sleep(0);
-      const why = await this.workOf(v, table, live, now).catch(() => null);
+      let why: string | null = null;
+      try {
+        why = this.workOf(v, table, live, now);
+      } catch {
+        /* its process went away mid-look */
+      }
       if (why) work.set(v.id, why);
     }
     this.work = work;
   }
 
-  private async workOf(v: Session, table: ProcTable, live: { owner: string }[], now: number): Promise<string | null> {
+  /** Have this transcript's in-process subagents written lately? They run
+   *  inside the session's process and leave no child to find. */
+  private subagentsWorking(ref: TranscriptRef, now: number): boolean {
+    const dir = this.adapter(ref.provider).subagentLogDir?.(ref);
+    const last = dir ? lastWriteUnder(dir) : null;
+    return last !== null && now - last < SUBAGENT_QUIET_MS;
+  }
+
+  private workOf(v: Session, table: ProcTable, live: { owner: string }[], now: number): string | null {
     const kids = [...this.views.values()].filter((c) => c.parent === v.id && c.host === "subagent" && c.status === "running");
     if (kids.length) return `its subagents were working (${kids.map((k) => k.subagent?.name ?? k.id).join(", ")})`;
     const pane = v.tmux ? this.panes.get(v.tmux) : undefined;
@@ -1533,16 +1715,13 @@ export class Fleet extends EventEmitter {
     if (live.some((e) => owners.includes(e.owner))) return "its subagents were working";
     const monitors = new Set<string>();
     const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
-    if (v.provider === "claude" && t?.facts) {
-      let scan = this.wakeScans.get(t.ref.path);
-      if (!scan) this.wakeScans.set(t.ref.path, (scan = new WakeScan(t.ref.path)));
-      const wake = await scan.hold(now, startedAtOf(pid) ?? now);
+    if (t?.facts) {
+      const wake = wakeHold(t.facts.wakes, now, startedAtOf(pid) ?? now);
       if (wake) return wake;
-      for (const m of scan.monitors) monitors.add(m);
-      const sub = subagentsLastWrite(t.ref.path, t.facts.agentSessionId);
-      if (sub !== null && now - sub < SUBAGENT_QUIET_MS) return "its in-process subagents were working";
+      for (const m of t.facts.monitors ?? []) monitors.add(m);
+      if (this.subagentsWorking(t.ref, now)) return "its in-process subagents were working";
     }
-    return shellWork(table, pid, monitors, now - v.lastActivityAt, false).hold;
+    return shellWork(table, pid, v.provider, monitors, now - (t?.facts?.lastWorkAt ?? v.lastActivityAt), false).hold;
   }
 
   /**
@@ -1563,7 +1742,6 @@ export class Fleet extends EventEmitter {
       const launch = v.host === "external" && v.pid ? this.launchOf(v, v.pid) : null;
       if (launch === undefined) continue;
       const status = this.liveStatus.get(v.id) ?? v.status;
-      const t = v.transcriptPath ? this.tracked.get(v.transcriptPath) : undefined;
       const entry: LiveEntry = {
         id: v.id,
         provider: v.provider,
@@ -1575,7 +1753,7 @@ export class Fleet extends EventEmitter {
         parent: v.parent,
         subagent: v.subagent ? { name: v.subagent.name, answerWaiting: v.subagent.answerWaiting } : null,
         lastActivityAt: v.lastActivityAt,
-        lastTurnAt: t?.facts?.lastTurnAt ?? null,
+        cacheWarmUntil: v.cacheWarmUntil,
         launch,
       };
       entries.push(entry);
@@ -1610,7 +1788,7 @@ export class Fleet extends EventEmitter {
     if (argv && adapter?.headless?.(argv)) launch = undefined;
     else if (argv && adapter) {
       const env = environOf(pid);
-      launch = { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} };
+      launch = cleanMcpLaunch(v.provider, { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} }, env ?? undefined);
     }
     this.launches.set(pid, launch);
     return launch;
@@ -1707,7 +1885,7 @@ export class Fleet extends EventEmitter {
     });
     // Resumes last, warmest cache first: a minute's wait can be the difference.
     const rank = { leave: 0, park: 1, revive: 2, resume: 3 } as const;
-    const warmth = (s: Step) => byId.get(s.id)!.lastTurnAt ?? byId.get(s.id)!.lastActivityAt;
+    const warmth = (s: Step) => byId.get(s.id)!.cacheWarmUntil ?? byId.get(s.id)!.lastActivityAt;
     steps.sort((a, b) => rank[a.action] - rank[b.action] || warmth(b) - warmth(a));
     const report: RecoveryReport = { at: now, cause, lastSeen, dryRun, steps, trouble: [] };
     if (dryRun) return report;
@@ -1875,6 +2053,7 @@ export class Fleet extends EventEmitter {
       if (key !== null && view) this.resting.set(rec.id, { rec, facts: t?.facts ?? null, key, view });
       else this.resting.delete(rec.id);
       if (!view) continue;
+      view.autoResume = this.autoResumeOf(view, now);
       seen.add(rec.id);
       // Running again, however it got there (a resume here, or `claude
       // --resume` in some terminal): no longer parked.
@@ -1911,7 +2090,7 @@ export class Fleet extends EventEmitter {
     if (rec.tmux && this.panes.has(rec.tmux)) return null;
     if (rec.agentSessionId && this.live.has(`${rec.provider}:${rec.agentSessionId}`)) return null;
     const f = t?.facts ?? (rec.facts as Partial<TranscriptFacts> | null);
-    const cold = this.movable.has(rec.provider) && now - (f?.lastTurnAt ?? f?.lastActivityAt ?? rec.lastActivityAt) > this.coldAfterMs;
+    const cold = this.movable.has(rec.provider) && now > cacheWarmUntil(f, rec.lastActivityAt, this.coldAfterMs);
     const parentRuns = !!rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none";
     return `${cold}|${parentRuns}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}`;
   }
@@ -1960,33 +2139,51 @@ export class Fleet extends EventEmitter {
       // panel is a dialog to Claude too, but a prompt to no one: while it
       // answers the side question the session is working, and with the
       // answer shown it is the idle prompt it was at, under the panel.
+      // A start-up dialog the fleet answers is not waiting on you either,
+      // whoever says it is up: the keys go in before anything reads it so.
+      const answering = this.autoAnswer(rec, pane, adapter, now);
       if (proc?.waitingOn) {
         const panel = pane && rec.provider === "claude" ? readBtwPanel(this.settledScreen(pane) ?? "") : null;
-        if (!panel) {
-          status = "blocked";
-          this.blocked.set(rec.id, proc.waitingOn);
-        } else {
+        if (panel) {
           status = panel.state === "asking" ? "running" : "waiting";
           this.blocked.delete(rec.id);
+        } else if (!answering) {
+          status = "blocked";
+          this.blocked.set(rec.id, proc.waitingOn);
         }
       }
       if (host === "tmux" && adapter?.blockedOn && pane) {
         const quietFor = now - (f?.lastActivityAt ?? 0);
         // A prompt waiting on you stalls the transcript, so only look at the
-        // screen when it has been quiet for a moment.
-        if (quietFor > 2_500 || status === "waiting") {
+        // screen when it has been quiet for a moment — or when it is said to
+        // be blocked already. By Claude, whose prompt may be one the fleet
+        // allows itself: left unread, it was yours for the 2.5s. Or by the
+        // last look, when a line written under a prompt that still stands
+        // would otherwise unblock it for a pass and announce it again.
+        if (quietFor > 2_500 || status !== "running" || this.blocked.has(rec.id)) {
           const screen = this.settledScreen(pane);
           const shown = screen ? adapter.blockedOn(screen) : null;
+          // The dialog a CLI puts up at its account's limit is a prompt to no
+          // one: the session is stopped at the limit (`limitHit`), and is
+          // moved, waited out or offered its banner as one that only printed
+          // the message is. Read as blocked, none of that looked at it.
+          const atLimit = shown === LIMIT_DIALOG;
           if (!shown) this.approved.delete(rec.id);
           // A session told to skip permissions is not waiting on you for one.
           const allowed = !!shown && !!screen && !!f?.skipsPermissions && this.approvePrompt(rec.id, pane.name, adapter, screen, shown, now);
-          const why = allowed ? null : shown;
+          const why = allowed || answering || atLimit ? null : shown;
           if (why) {
             status = "blocked";
             this.blocked.set(rec.id, why);
-          } else {
+          } else if (allowed) {
+            status = "running";
             this.blocked.delete(rec.id);
-            if (allowed) status = "running";
+          } else if (atLimit) {
+            status = "waiting";
+            this.blocked.delete(rec.id);
+          } else if (status !== "blocked") {
+            // (Blocked by Claude's word, with a screen that says no more: its reason stands.)
+            this.blocked.delete(rec.id);
           }
           if ((why === "rate limit" || why === "error") && screen) this.noteScreenWait(rec.id, screen, now);
           else this.screenWaits.delete(rec.id);
@@ -2000,7 +2197,6 @@ export class Fleet extends EventEmitter {
           }
         }
       }
-      this.autoAnswer(rec, pane, adapter, now);
       // Came back unable to act (`watchStarts`) and stopped trying: it needs you.
       const trouble = host === "tmux" ? this.trouble.get(rec.id) : undefined;
       if (trouble && status === "waiting") {
@@ -2025,18 +2221,16 @@ export class Fleet extends EventEmitter {
 
     const cwd = f?.cwd || rec.cwd;
     const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;
-    // The limit message is the session's last word: nothing after it, bar the
-    // odd bookkeeping line written in the same breath.
-    const hit = f?.rateLimitHits?.at(-1) ?? null;
-    const limitHit = hit && live !== "running" && hit.at >= lastActivityAt - 60_000 ? hit : null;
-    // The cache goes cold from the last model call, not the last line: a
-    // session watching background work writes notification lines for hours
-    // without calling the model once.
+    // The limit message is the last thing the model was asked that it did
+    // not answer (`limitStop`), whatever was queued behind it since.
+    const hit = f ? limitStop({ ...f, lastActivityAt }) : null;
+    const limitHit = hit && live !== "running" ? { ...hit, until: this.limitUntil(rec.accountId, hit, now), ...(rec.hoppedAt ? { hopped: true as const } : {}) } : null;
+    const warmUntil = cacheWarmUntil(f, lastActivityAt, this.coldAfterMs);
     const cold =
       this.movable.has(rec.provider) &&
       (live === "waiting" || live === "stopped") &&
       (host === "tmux" || host === "none") &&
-      now - (f?.lastTurnAt ?? lastActivityAt) > this.coldAfterMs;
+      now > warmUntil;
     return {
       id: rec.id,
       provider: rec.provider,
@@ -2061,6 +2255,7 @@ export class Fleet extends EventEmitter {
       tokens: f?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0 },
       claim: rec.claim,
       effort: rec.effort ?? null,
+      cacheWarmUntil: warmUntil,
       cold,
       limitHit,
       // The transcript's turn ended on the provider and nothing has followed
@@ -2070,6 +2265,7 @@ export class Fleet extends EventEmitter {
       // what died hours ago.
       turnError:
         f?.turnError && (live === "waiting" || live === "stopped") && f.turnError.at >= lastActivityAt - 60_000 ? f.turnError : null,
+      autoResume: null,
       // Only while the dialog is up: a call recorded but not yet answered is
       // also what a session interrupted mid-question leaves behind.
       question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,
@@ -2078,6 +2274,7 @@ export class Fleet extends EventEmitter {
       origin: rec.origin,
       parent: rec.parent ?? null,
       parentByHand: !!rec.parentByHand,
+      successor: rec.successor ?? null,
       subagent: agent
         ? { name: agent.name, answerWaiting: host === "subagent" && !!pooled?.answerWaiting }
         : null,
@@ -2130,30 +2327,40 @@ export class Fleet extends EventEmitter {
     else this.screens.set(pane.name, { key: screenKey(pane), at, pass: this.passes, screen });
   }
 
-  private autoAnswer(rec: SessionRecord, pane: PaneInfo | undefined, adapter: ProviderAdapter | undefined, now: number): void {
-    if (!pane || !adapter?.autoAnswer) return;
+  /**
+   * Answer the start-up dialog a session we started is showing (the
+   * adapter's `autoAnswer`). True while it is being handled: keys went in,
+   * or went in a moment ago and the screen has not caught up.
+   */
+  private autoAnswer(rec: SessionRecord, pane: PaneInfo | undefined, adapter: ProviderAdapter | undefined, now: number): boolean {
+    if (!pane || pane.dead || !adapter?.autoAnswer) return false;
     const started = this.startedAt.get(rec.id);
-    if (!started || now - started > AUTO_ANSWER_MS) return;
+    if (!started || now - started > AUTO_ANSWER_MS) return false;
     // With scrollback: a short pane (tmux sizes a window to its latest client)
     // scrolls a dialog's top — and any "pre-approves permissions" line — out
     // of view. Only the first minutes after a start get here, so the history
     // is this start-up's and nothing older.
     const screen = this.deps.runtime.capture(pane.name, { scrollback: 200 });
-    if (!screen) return;
+    if (!screen) return false;
     const keys = adapter.autoAnswer(screen, { bypassPermissions: getSettings().autoApprove });
-    if (!keys) return;
+    if (!keys) return false;
     // Claude's trust dialog ignores keys for a moment after it opens, so the
     // same screen again is worth another try — a few, spaced out, then stop:
-    // pressing keys forever into a dialog we misread is worse than leaving it.
+    // pressing keys forever into a dialog we misread is worse than leaving
+    // it, and from then it is yours.
     const sig = screen.trim().slice(-400);
     const prev = this.answered.get(rec.id);
-    if (prev && prev.sig === sig && (prev.tries >= 4 || now - prev.at < 1_500)) return;
+    if (prev && prev.sig === sig) {
+      if (prev.tries >= 4) return false;
+      if (now - prev.at < 1_500) return true;
+    }
     this.answered.set(rec.id, { sig, at: now, tries: prev && prev.sig === sig ? prev.tries + 1 : 1 });
     try {
       this.deps.runtime.sendKeys(pane.name, keys);
     } catch {
-      /* the pane went away between capture and keys */
+      return false; // the pane went away between capture and keys
     }
+    return true;
   }
 
   /**
@@ -2230,12 +2437,9 @@ export class Fleet extends EventEmitter {
 
   blockedReason(id: string): string | null {
     const why = this.blocked.get(id) ?? null;
-    const v = this.views.get(id);
-    // An error screen with a stated reset is the fleet's to retry: say when.
-    const until = v && (why === "rate limit" || why === "error") ? this.screenWaitUntil(v) : null;
-    if (until !== null && until > Date.now()) {
-      return `${why} — agentbox retries it at ${new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
-    }
+    // An error screen the fleet will retry: say when.
+    const at = why ? this.views.get(id)?.autoResume?.at : undefined;
+    if (at) return `${why} — agentbox retries it ${retryClock(at)}`;
     return why;
   }
 
@@ -2261,6 +2465,12 @@ export class Fleet extends EventEmitter {
     return this.readerOf(id).since(cursor);
   }
 
+  /** Where a session's transcript is, for a reader of someone else's (`grep.ts`). */
+  transcriptRef(id: string): TranscriptRef | null {
+    const path = getSessionRecord(id)?.transcriptPath;
+    return (path && this.tracked.get(path)?.ref) || null;
+  }
+
   hasTranscript(id: string): boolean {
     try {
       this.trackedOf(id);
@@ -2273,7 +2483,6 @@ export class Fleet extends EventEmitter {
   /** Claims per account, as the balancer and the Accounts page see them. */
   claims(): Map<string, ClaimView[]> {
     const now = this.now();
-    const settings = getSettings().balancer;
     const inputs: ClaimInput[] = [];
     for (const s of this.views.values()) {
       // A closed session with a process still alive can still spend.
@@ -2282,17 +2491,42 @@ export class Fleet extends EventEmitter {
       // placed it and its parent's claim already counts it. What it really
       // spends shows in the account's measured pace.
       if ((s.parent && !s.parentByHand && s.origin !== "agentbox") || s.subagent) continue;
+      const running = s.status === "running" || s.status === "blocked";
       inputs.push({
         sessionId: s.id,
         accountId: s.accountId,
         title: s.title,
         claim: s.claim,
-        lastActivityAt: s.lastActivityAt,
-        running: s.status === "running" || s.status === "blocked",
+        warmUntil: s.cacheWarmUntil,
+        running,
         since: Math.max(s.startedAt, this.wokeAt.get(s.id) ?? 0),
+        expected: this.forecaster.expected({ sessionId: s.id, provider: s.provider, accountId: s.accountId, startedAt: s.startedAt, open: running }, now),
       });
     }
-    return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), settings, now);
+    return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), now);
+  }
+
+  /** The accounts whose weekly points price a claim on `provider`. */
+  private pricedBy(provider: ProviderId): string[] {
+    return listAccounts(accountProvider(provider)).map((a) => this.ownerOf(a.id));
+  }
+
+  /**
+   * What a session on `model` claims when it starts (`first`) or wakes: what
+   * such stretches of work on its model have gone on to use here
+   * (`Forecaster.claim`); for a model that has not run enough to say, its
+   * listed claim — a model listed as heavy is not taken for an average one —
+   * else what the provider's sessions use, else `claimNormal`.
+   */
+  private claimOf(provider: ProviderId, model: string | null | undefined, effort: string | null, first: boolean): number {
+    const of = { provider, first, accountIds: this.pricedBy(provider) };
+    const now = this.now();
+    return (
+      this.forecaster.claim({ ...of, model: model ?? null }, now) ??
+      listedClaim({ model, effort }) ??
+      this.forecaster.claim(of, now) ??
+      claimFor({ model, effort }, getSettings().balancer)
+    );
   }
 
   /** The account a home belongs to (itself unless it is a twin). */
@@ -2305,13 +2539,21 @@ export class Fleet extends EventEmitter {
    * not a candidate, and its sessions' claims are already the owner's (a
    * session's `accountId` is its home's owner).
    */
-  accountStates(provider: ProviderId): AccountState[] {
+  accountStates(provider: ProviderId, model?: string | null): AccountState[] {
     const claims = this.claims();
-    const all = listAccounts(provider);
+    const all = listAccounts(accountProvider(provider));
     const owner = owners(all);
     const since = this.now() - 90 * 60_000;
-    return all
-      .filter((a) => owner.get(a.id) === a.id)
+    const hits = rateLimitHitsSince(this.now() - UNFUNDED_HOLD_MS);
+    const mine = all.filter((a) => owner.get(a.id) === a.id);
+    // What the sessions already on this model were last told, by account.
+    const refused = refusedRoutes(
+      model ? this.routeOutcomes(provider) : [],
+      model,
+      mine.map((a) => a.id),
+      this.now(),
+    );
+    return mine
       .map((a) => {
         const windows = this.deps.usage.usageOf(a.id)?.windows ?? [];
         const short = windows.find((w) => w.kind === "short" && !w.scope);
@@ -2326,18 +2568,42 @@ export class Fleet extends EventEmitter {
             : [],
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
+          unfunded: unfundedSince(hits.filter((h) => h.accountId === a.id), this.now()),
+          refused: refused.get(a.id) ?? null,
         };
       });
   }
 
-  placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null): Placement {
-    this.adapter(provider);
+  /** What each of this provider's sessions of the last day was last told by
+   *  its model, and the ones started that have not heard yet. */
+  private routeOutcomes(provider: ProviderId): RouteOutcome[] {
+    const fallback = this.adapter(provider).defaultModel?.() ?? null;
+    const out: RouteOutcome[] = [];
+    for (const r of modelOutcomesSince(provider, this.now() - REFUSAL_LOOKBACK_MS)) {
+      const o = r.outcome;
+      const model = o?.model ?? r.model ?? fallback;
+      const accountId = o?.accountId ?? r.accountId;
+      if (!model || !accountId) continue;
+      out.push({ model, okAt: o?.okAt ?? null, refusedAt: o?.refusedAt ?? null, detail: o?.detail ?? null, accountId: this.ownerOf(accountId), startedAt: r.startedAt });
+    }
+    return out;
+  }
+
+  placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true): Placement {
+    const adapter = this.adapter(provider);
+    const asked = model || getSettings().models[provider] || null;
     return place({
       provider,
-      model: model || getSettings().models[provider] || null,
+      model: asked,
       effort: effort ?? null,
+      claim: this.claimOf(provider, asked, effort ?? null, first),
+      // A model the devin bridge serves draws on its own provider, not on
+      // the devin account the session is signed in as.
+      unmetered: provider === "devin" && bridgedModel(asked) !== null,
       accountId: accountId && accountId !== "auto" ? accountId : null,
-      accounts: this.accountStates(provider),
+      // One started without a model runs on the CLI's own default: that is
+      // the route whose refusals count against it.
+      accounts: this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null),
       settings: getSettings().balancer,
       now: this.now(),
     });
@@ -2386,7 +2652,7 @@ export class Fleet extends EventEmitter {
 
     const model = req.model || settings.models[req.provider] || undefined;
     const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
-    const cmd = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
+    const cmd = withGlobalMcp(req.provider, account, adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove }), [], cwd);
     const now = this.now();
     const name = tmuxName(id);
     const parent = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
@@ -2484,11 +2750,11 @@ export class Fleet extends EventEmitter {
     return !!name && this.deps.runtime.listPanes().some((p) => p.name === name && !p.dead);
   }
 
-  resume(id: string, prompt?: string): Promise<Session> {
-    return this.serial(id, () => this.resumeNow(id, prompt));
+  resume(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
+    return this.serial(id, () => this.resumeNow(id, prompt, attempt));
   }
 
-  private async resumeNow(id: string, prompt?: string): Promise<Session> {
+  private async resumeNow(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
@@ -2502,10 +2768,11 @@ export class Fleet extends EventEmitter {
     // Parked by a crash rather than for idling: what it lost, before what you say.
     if (prompt && rec.parkedAt && rec.parkedWhy) prompt = `[agentbox: ${rec.parkedWhy}]\n\n${prompt}`;
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to resume");
-    const account = rec.accountId ? getAccount(rec.accountId) : null;
+    const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
     const cwd = this.resumeCwd(rec);
     if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
+    attempt?.();
     if (view.cold) {
       await this.wake(rec, view, account, cwd, this.wakeTarget(rec, view), prompt);
     } else {
@@ -2516,13 +2783,30 @@ export class Fleet extends EventEmitter {
   }
 
   /**
+   * The account a session resumes on: its own. Where every account reads one
+   * session store (omp, opencode) and its own was forgotten, the balancer's
+   * pick, which it is pinned to from here on; a forgotten account of any
+   * other provider took the session's transcript home with it.
+   */
+  private accountFor(rec: SessionRecord, view: Session): Account | null {
+    const own = rec.accountId ? getAccount(rec.accountId) : null;
+    if (own || !this.adapter(rec.provider).sharedStore) return own;
+    const pick = this.placement(rec.provider, view.model, null, rec.effort ?? null).accountId;
+    const account = pick ? getAccount(pick) : null;
+    if (!account) return null;
+    updateSessionRecord(rec.id, { accountId: account.id });
+    rec.accountId = account.id;
+    return account;
+  }
+
+  /**
    * Where a cold session should wake: the balancer's pick for a session like
    * it, when that is another account. Null means stay — the pick is where it
    * already is, or nothing can take it and a pinned session beats none.
    */
   private wakeTarget(rec: SessionRecord, view: Session, accountId?: string | null): { account: Account; placement: Placement } | null {
     if (!this.adapter(rec.provider).moveSession) return null;
-    const placement = this.placement(rec.provider, view.model, accountId, rec.effort ?? null);
+    const placement = this.placement(rec.provider, view.model, accountId, rec.effort ?? null, false);
     // Another home on the same login is the same account: moving there would
     // cost a cold start and change nothing about the limits.
     if (!placement.accountId || placement.mode === "none" || placement.accountId === this.ownerOf(rec.accountId ?? "")) return null;
@@ -2553,6 +2837,9 @@ export class Fleet extends EventEmitter {
       throw new FleetError(409, "its transcript is missing, so it cannot be moved to another account");
     }
     if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
+    // Validate both the target launch and fallback before stopping a live agent.
+    const prepared = this.resumeLaunch(rec, target?.account ?? from, cwd, prompt);
+    const fallback = target ? this.resumeLaunch(rec, from, cwd, prompt) : prepared;
     if (view.host === "tmux") await this.stopAndWait(rec, view);
 
     let account = from;
@@ -2569,7 +2856,7 @@ export class Fleet extends EventEmitter {
     const consumed = consumedBy([rec.id]).get(rec.id) ?? 0;
     // It claims afresh, and the claim is its model's: what it used before it
     // went cold was used, and the balancer should count what it is about to.
-    const fresh = claimFor({ model: view.model, effort: rec.effort ?? null }, settings.balancer);
+    const fresh = this.claimOf(rec.provider, view.model, rec.effort ?? null, false);
     const claim = Math.round((consumed + fresh) * 100) / 100;
     const patch: Partial<SessionRecord> = { claim };
     if (account.id !== from.id) {
@@ -2596,7 +2883,7 @@ export class Fleet extends EventEmitter {
       const ref = await adapter.findTranscript(account, rec.agentSessionId!).catch(() => null);
       if (ref) this.track(ref);
     }
-    this.startTmux({ ...rec, ...patch }, account, cwd, prompt);
+    this.startTmux({ ...rec, ...patch }, account, cwd, prompt, account.id === from.id ? fallback : prepared);
   }
 
   /** End the session's process in our tmux and wait until it is gone, so
@@ -2627,9 +2914,14 @@ export class Fleet extends EventEmitter {
    * Continue a session on another account: the "limits reset" button for a
    * session that stopped at its account's limit. `accountId` absent or
    * "auto" is the balancer's pick; the pick being where it already is just
-   * continues it there.
+   * continues it there. For a session stopped at its limit the pick is where
+   * the fleet's own move would send it (`hopTarget`).
+   *
+   * `must` is `agentbox move`: an agent asking for a move and nothing else,
+   * so one that would not change account is refused instead of typed into,
+   * and so is a warm session that is not at a limit (`force` moves it anyway).
    */
-  async moveAndContinue(id: string, opts: { accountId?: string | null; prompt?: string }): Promise<Session> {
+  async moveAndContinue(id: string, opts: { accountId?: string | null; prompt?: string; must?: boolean; force?: boolean }): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
@@ -2637,15 +2929,32 @@ export class Fleet extends EventEmitter {
     if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
     if (view.status === "running") throw new FleetError(409, "it is mid-turn; interrupt it first");
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
-    const from = rec.accountId ? getAccount(rec.accountId) : null;
+    const from = this.accountFor(rec, view);
     if (!from) throw new FleetError(409, "this session's account is no longer set up");
-    const accountId = opts.accountId && opts.accountId !== "auto" ? opts.accountId : null;
+    const named = opts.accountId && opts.accountId !== "auto" ? opts.accountId : null;
+    const accountId = named ?? (view.limitHit ? (this.hopTarget(rec, view)?.accountId ?? null) : null);
     const target = this.wakeTarget(rec, view, accountId);
     if (accountId && accountId !== this.ownerOf(from.id) && !target) {
       throw new FleetError(409, this.adapter(rec.provider).moveSession ? `no ${rec.provider} account ${accountId}` : `${this.adapter(rec.provider).label} sessions cannot change account`);
     }
+    if (opts.must) {
+      if (!this.adapter(rec.provider).moveSession) throw new FleetError(409, `${this.adapter(rec.provider).label} sessions cannot change account`);
+      if (!opts.force && !view.limitHit && !view.cold) {
+        throw new FleetError(409, `it is not stopped at a usage limit and its prompt cache is warm: a move re-sends its ${view.contextUsed ? `${Math.round(view.contextUsed / 1000)}k tokens of ` : ""}context uncached. --force moves it anyway`);
+      }
+      if (!target) {
+        throw new FleetError(
+          409,
+          named
+            ? `it is already on ${from.label}`
+            : view.limitHit
+              ? `no other ${rec.provider} account can take a session now, so it stays on ${from.label} (agentbox usage)`
+              : `the balancer would keep it on ${from.label}; name another with --account`,
+        );
+      }
+    }
     if (!target && view.host === "tmux" && view.tmux) {
-      if (opts.prompt) await this.deps.runtime.sendText(view.tmux, opts.prompt);
+      if (opts.prompt) await this.typeInto(rec.id, rec.provider, view.tmux, opts.prompt);
       return view;
     }
     const cwd = this.resumeCwd(rec);
@@ -2655,32 +2964,36 @@ export class Fleet extends EventEmitter {
     return this.get(id);
   }
 
-  private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string): void {
-    const settings = getSettings();
+  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string) {
     const adapter = this.adapter(rec.provider);
-    const typed = tooLongForArgv(prompt) ? prompt : undefined;
+    const launch = rec.launch ? cleanMcpLaunch(rec.provider, rec.launch, new Map([["CODEX_HOME", account.home]])) : undefined;
+    const typed = adapter.resumePromptInTerminal || tooLongForArgv(prompt) ? prompt : undefined;
     const opts = {
-      account,
-      agentSessionId: rec.agentSessionId!,
-      cwd,
+      account, agentSessionId: rec.agentSessionId!, cwd,
       prompt: typed ? undefined : prompt || undefined,
       ...(rec.effort ? { effort: rec.effort } : {}),
       ...(resumeModel(rec) ? { model: resumeModel(rec)! } : {}),
-      autoApprove: settings.autoApprove,
-      ...(rec.launch ? { carry: rec.launch.args } : {}),
+      autoApprove: getSettings().autoApprove,
+      ...(launch ? { carry: launch.args } : {}),
     };
+    const cmd = withGlobalMcp(rec.provider, account, adapter.resumeCommand(opts), opts.carry, cwd, launch?.env);
+    return { opts, cmd, typed, inherited: launch?.env };
+  }
+
+  private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string, prepared?: ReturnType<Fleet["resumeLaunch"]>): void {
+    const adapter = this.adapter(rec.provider);
+    const { opts, cmd, typed, inherited } = prepared ?? this.resumeLaunch(rec, account, cwd, prompt);
     try {
       adapter.prepareResume?.(opts);
     } catch (e) {
       // Resume anyway: the health watch catches a session that comes back unable to act.
       console.error(`agentbox: preparing ${rec.id}'s resume failed:`, e);
     }
-    const cmd = adapter.resumeCommand(opts);
     const name = tmuxName(rec.id);
     // A dead pane from the last run holds the name.
     this.killTmux(name);
     // The account's variables win over the launching shell's.
-    const env = { ...rec.launch?.env, ...cmd.env, ...sessionEnv(rec.id, rec.provider) };
+    const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider) };
     this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env, unset: cmd.unset });
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
@@ -2700,7 +3013,7 @@ export class Fleet extends EventEmitter {
     void this.serial(id, async () => {
       await this.untilReady(id);
       await this.untilSettled(id, pane);
-      await this.deps.runtime.sendText(pane, prompt);
+      await this.typeInto(id, this.get(id).provider, pane, prompt);
     }).catch((e) => console.error(`agentbox: typing ${id}'s prompt into it failed:`, e));
   }
 
@@ -2740,7 +3053,7 @@ export class Fleet extends EventEmitter {
     if (view.host === "subagent") throw this.callersAgent(view);
     if (view.host !== "external" || !view.pid) throw new FleetError(409, "only a session running in another terminal can be adopted");
     if (!rec.agentSessionId) throw new FleetError(409, "cannot tell which conversation that process is");
-    const account = rec.accountId ? getAccount(rec.accountId) : null;
+    const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is not set up in agentbox");
     const cwd = this.resumeCwd(rec);
     if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
@@ -2753,7 +3066,8 @@ export class Fleet extends EventEmitter {
     const argv = argvOf(pid) ?? [];
     if (adapter.headless?.(argv)) throw new FleetError(409, "a scripted one-shot run: something is waiting on its output, so it is left alone");
     const env = environOf(pid);
-    const launch: Launch = { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} };
+    const launch = cleanMcpLaunch(rec.provider, { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} }, env ?? undefined);
+    const prepared = this.resumeLaunch({ ...rec, launch }, account, cwd);
     try {
       process.kill(pid, "SIGTERM");
     } catch {
@@ -2769,17 +3083,18 @@ export class Fleet extends EventEmitter {
     // Let the CLI's own exit bookkeeping (session files, locks) settle.
     await Bun.sleep(500);
     updateSessionRecord(id, { launch });
-    this.startTmux({ ...rec, launch }, account, cwd);
+    this.startTmux({ ...rec, launch }, account, cwd, undefined, prepared);
     await this.tick();
     return this.get(id);
   }
 
   /** Type into the session. A cold one wakes where there is room, which may
    *  mean restarting it on another account with `text` as its prompt; a
-   *  parked one resumes with `text` as its prompt. */
-  send(id: string, text: string): Promise<void> {
+   *  parked one resumes with `text` as its prompt — and with `resume`, so
+   *  does one that was stopped or closed, which otherwise is an error. */
+  send(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
     return this.serial(id, async () => {
-      if (!(await this.wakeElsewhere(id, text))) await this.sendNow(id, text);
+      if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt, resume);
     });
   }
 
@@ -2789,9 +3104,15 @@ export class Fleet extends EventEmitter {
     return this.serial(id, () => this.sendNow(id, text));
   }
 
+  /** A schedule's note for the session it keeps to: typed where it is, as
+   *  the fleet's own nudges are, and a stopped one is resumed with it. */
+  note(id: string, text: string): Promise<void> {
+    return this.serial(id, () => this.sendNow(id, text, undefined, true));
+  }
+
   /** Wake a cold tmux session on the balancer's pick with `text` as its
    *  prompt, when that is another account; false when it stays put. */
-  private async wakeElsewhere(id: string, text: string): Promise<boolean> {
+  private async wakeElsewhere(id: string, text: string, attempt?: () => void): Promise<boolean> {
     const s = this.get(id);
     if (!s.cold || s.host !== "tmux") return false;
     const rec = getSessionRecord(id);
@@ -2805,12 +3126,25 @@ export class Fleet extends EventEmitter {
       return false; // cannot prove a resume: type into it where it is
     }
     if (!existsSync(cwd)) return false;
+    attempt?.();
     await this.wake(rec, s, from, cwd, target, text);
     await this.tick();
     return true;
   }
 
-  private async sendNow(id: string, text: string): Promise<void> {
+  /** Type a message into a session's pane, the way its TUI takes one as typed.
+   *  One its TUI did not take is a refusal the sender must hear, never a send. */
+  private async typeInto(id: string, provider: ProviderId, pane: string, text: string): Promise<void> {
+    try {
+      const adapter = this.adapter(provider);
+      await this.deps.runtime.sendText(pane, text + (adapter.pasteEnd ?? ""), { pieces: adapter.pasteInPieces });
+    } catch (e) {
+      if (!(e instanceof Unsubmitted)) throw e;
+      throw new FleetError(409, `not sent: ${e.message}. Do not send it again before reading \`agentbox screen ${id}\`: a draft left in its input box goes out with the next message that is submitted.`);
+    }
+  }
+
+  private async sendNow(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
     const s = this.get(id);
     if (s.host === "none") {
       const rec = getSessionRecord(id);
@@ -2819,11 +3153,13 @@ export class Fleet extends EventEmitter {
       if (rec?.tmux && this.paneAlive(rec.tmux)) {
         await this.untilReady(id);
         if (s.provider === "claude") await this.clearBtw(id, rec.tmux);
-        return this.deps.runtime.sendText(rec.tmux, text);
+        await this.clearLimitDialog(s.provider, rec.tmux);
+        attempt?.();
+        return this.typeInto(id, s.provider, rec.tmux, text);
       }
       // Parked by the fleet, not stopped by you: this is what wakes it.
-      if (rec?.parkedAt) {
-        await this.resumeNow(id, text);
+      if (rec?.parkedAt || resume) {
+        await this.resumeNow(id, text, attempt);
         return;
       }
       throw new FleetError(409, "not running — resume it first");
@@ -2834,7 +3170,9 @@ export class Fleet extends EventEmitter {
     }
     await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
-    await this.deps.runtime.sendText(s.tmux, text);
+    await this.clearLimitDialog(s.provider, s.tmux);
+    attempt?.();
+    await this.typeInto(id, s.provider, s.tmux, text);
     if (s.provider === "devin") await this.deliverDevinQueue(s.tmux);
   }
 
@@ -2964,13 +3302,14 @@ export class Fleet extends EventEmitter {
    * at once with the question recorded as asking; the answer, or why there is
    * none, follows as a `btw` event.
    */
-  askBtw(id: string, question: string): Btw {
+  askBtw(id: string, question: string, attempt?: () => void): Btw {
     const s = this.get(id);
     if (s.provider !== "claude") throw new FleetError(409, `/btw is Claude's; this is a ${s.provider} session`);
     if (s.host === "subagent") throw this.callersAgent(s);
     if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, s.host === "external" ? "running in another terminal — adopt it to ask here" : "not running — resume it first");
     if (s.status === "blocked") throw new FleetError(409, "it is showing a prompt; answer that first");
     const q = question.trim();
+    attempt?.();
     const row = insertBtw({ sessionId: id, question: q, source: "timeline", askedAt: this.now() });
     this.emit("btw", id);
     const asked = this.serial(id, async () => {
@@ -2978,7 +3317,7 @@ export class Fleet extends EventEmitter {
       if (!pane) throw new Error("it stopped before the question was asked");
       const rt = this.deps.runtime;
       await this.clearBtw(id, pane);
-      await rt.sendText(pane, `/btw ${q}`);
+      await this.typeInto(id, this.get(id).provider, pane, `/btw ${q}`);
       try {
         await awaitAnswer(rt, pane, q, 10_000);
         return await copyAnswer(rt, pane);
@@ -3059,16 +3398,32 @@ export class Fleet extends EventEmitter {
     await clearPanel(this.deps.runtime, pane);
   }
 
-  /** The screen once it has changed from `before` and held still a moment. */
+  /** Put away the dialog a CLI left up at its account's limit (`LIMIT_DIALOG`),
+   *  so that what is typed next reaches the input box: Esc is its "stop and
+   *  wait", and a message typed over it would pick one of its options. */
+  private async clearLimitDialog(provider: ProviderId, pane: string): Promise<void> {
+    const before = this.deps.runtime.capture(pane) ?? "";
+    if (this.adapter(provider).blockedOn?.(before) !== LIMIT_DIALOG) return;
+    this.deps.runtime.sendKeys(pane, ["Escape"]);
+    await this.settled(pane, before);
+  }
+
+  /** The screen once it has changed from `before` and held still a moment.
+   *  A spinner is not a change: omp's turns while its ask dialog is up, and
+   *  counting it returned the screen from before the keys had been taken. */
   private async settled(pane: string, before: string): Promise<string> {
-    let last = before;
+    const still = (s: string) => s.replace(/[\u2800-\u28ff]/g, "");
+    const from = still(before);
+    let last = from;
+    let screen = before;
     for (let t = 0; t < 2_000; t += 50) {
       await Bun.sleep(50);
-      const now = this.deps.runtime.capture(pane) ?? "";
-      if (now !== before && now === last) return now;
+      screen = this.deps.runtime.capture(pane) ?? "";
+      const now = still(screen);
+      if (now !== from && now === last) return screen;
       last = now;
     }
-    return last;
+    return screen;
   }
 
   async stopSession(id: string): Promise<void> {
@@ -3109,7 +3464,7 @@ export class Fleet extends EventEmitter {
    * before its children — its death takes its MCP servers, and the pool
    * agents they run, with it.
    */
-  async close(id: string, closed: boolean): Promise<void> {
+  async close(id: string, closed: boolean, alone = false): Promise<void> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     if (!closed) {
@@ -3119,7 +3474,9 @@ export class Fleet extends EventEmitter {
     }
     const target = this.get(id);
     if (target.host === "subagent") throw this.callersAgent(target);
-    const family = [id, ...this.openDescendants(id)];
+    // `alone`: its successor has taken over what it started (`handOver`), and
+    // whatever is left under it must not be stopped for its sake.
+    const family = alone ? [id] : [id, ...this.openDescendants(id)];
     for (const sid of family) {
       let s: Session;
       try {
@@ -3143,6 +3500,43 @@ export class Fleet extends EventEmitter {
     const at = this.now();
     for (const sid of family) updateSessionRecord(sid, { archivedAt: at, parkedAt: null, parkedMates: null, parkedWhy: null });
     await this.tick();
+  }
+
+  /** The open sessions `from` started itself, other than its subagents (which
+   *  its process runs and cannot be moved): what a successor takes over. */
+  startedBy(from: string): string[] {
+    return listSessionRecords(0)
+      .filter((r) => r.parent === from && !r.archivedAt && r.id !== from && this.views.get(r.id)?.host !== "subagent")
+      .map((r) => r.id);
+  }
+
+  /**
+   * Put what `from` started under `to`, the session that takes over from it:
+   * closing `from` then takes none of them with it. Theirs is a parent by
+   * hand from here on, a grouping rather than a run their parent made, so one
+   * that stops is not shown closed and the fleet does not link it again.
+   * And `to` is its successor: from here on an agent's message to `from` goes
+   * to `to` (`heir`), so nothing wakes a replaced session by its old id.
+   */
+  async handOver(from: string, to: string): Promise<string[]> {
+    if (!getSessionRecord(to)) throw new FleetError(404, `no session ${to}`);
+    if (getSessionRecord(from)?.successor !== to) updateSessionRecord(from, { successor: to });
+    const moved = this.startedBy(from).filter((id) => id !== to);
+    for (const id of moved) updateSessionRecord(id, { parent: to, parentByHand: true });
+    await this.tick();
+    return moved;
+  }
+
+  /** The session that has taken over from `id`, following each handover to
+   *  the last: `id` itself when none has. */
+  heir(id: string): string {
+    const seen = new Set([id]);
+    let at = id;
+    for (let next = getSessionRecord(at)?.successor; next && !seen.has(next); next = getSessionRecord(at)?.successor) {
+      seen.add(next);
+      at = next;
+    }
+    return at;
   }
 
   /** The sessions `id` started, at any depth, still open: what closing it takes with it. */
@@ -3205,10 +3599,16 @@ const NUDGE_QUIET_MS = 5 * 60_000;
 /** One nudge across the fleet this often: several sessions retaking one
  *  rate-limited account in lockstep is what stuck them. */
 const NUDGE_STAGGER_MS = 90_000;
+/** How long a nudge counts as the retry under way, while it is typed and
+ *  before the session's screen or transcript shows it took. */
+const NUDGE_TAKE_MS = 60_000;
 /** Nudges per spell before a stuck session is left for you. */
 const NUDGE_MAX_TRIES = 3;
 /** How long a spell lasts: after this quiet, the count starts over. */
 const NUDGE_SPELL_MS = 60 * 60_000;
+/** The waits before an error that names its own (`retryAfterMs`) is retried,
+ *  by try, each capped at that; past the end of this, that wait. */
+const PACED_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000];
 
 const BUSY_CORES_PER_AGENT = 0.1;
 
@@ -3294,30 +3694,22 @@ function sizeOf(path: string): number {
   }
 }
 
-function childrenOf(pid: number): number[] {
-  const out: number[] = [];
-  try {
-    for (const tid of readdirSync(`/proc/${pid}/task`)) {
-      const kids = readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
-      if (kids) out.push(...kids.split(/\s+/).map(Number));
-    }
-  } catch {
-    /* gone */
-  }
-  return out;
-}
-
 /**
  * The tool shells running under an agent's process, and the first that
  * holds it up (park.ts `shellHold`), if any. `services` says whether a dev
  * server counts: it holds a session up, but a crash that killed one is not a
  * reason to resume the session that started it.
  */
-function shellWork(table: ProcTable, pid: number, monitors: ReadonlySet<string>, quietMs: number, services: boolean): { shells: number[]; hold: string | null } {
+function shellWork(table: ProcTable, pid: number, provider: ProviderId, monitors: ReadonlySet<string>, quietMs: number, services: boolean): { shells: number[]; hold: string | null } {
   const shells: number[] = [];
-  for (const kid of table.children.get(pid) ?? []) {
+  // A CLI that starts itself again runs its shells under that copy: Codex's
+  // launcher is `node …/bin/codex`, and the binary it starts owns every tool
+  // shell. Looking only under the launcher saw no work in a Codex session,
+  // and parked one whose production job was an hour into its run.
+  const kids = (of: number): number[] => (table.children.get(of) ?? []).flatMap((kid) => (runsCli(argvOf(kid) ?? [], provider) ? [kid, ...kids(kid)] : [kid]));
+  for (const kid of kids(pid)) {
     const cmd = argvOf(kid)?.join(" ");
-    if (!cmd || !isToolShell(cmd)) continue; // an MCP server
+    if (!cmd || !isToolShell(cmd)) continue; // an MCP server, or the CLI's own copy
     shells.push(kid);
     const command = shellCommand(cmd);
     const label = describe({ ...table.byPid.get(kid)!, cmd });
@@ -3400,7 +3792,15 @@ function checkAnswers(questions: AskQuestion[], answers: AskAnswer[]): void {
  *  of the file they are of: the same size later means nothing new to read. */
 type StoredFacts = Partial<TranscriptFacts> & { transcriptSize?: number };
 
-function compactFacts(f: TranscriptFacts, transcriptSize: number): StoredFacts {
+/** The outcome as stored: on the account it was earned on, which is the one
+ *  already stored for the same last word, or else the session's now. */
+function outcomeOn(o: ModelOutcome | null | undefined, stored: ModelOutcome | null | undefined, accountId: string | null): ModelOutcome | null {
+  if (!o) return null;
+  const same = stored && stored.model === o.model && stored.okAt === o.okAt && stored.refusedAt === o.refusedAt && stored.accountId !== undefined;
+  return { ...o, accountId: same ? stored.accountId : accountId };
+}
+
+function compactFacts(f: TranscriptFacts, transcriptSize: number, accountId: string | null, stored?: unknown): StoredFacts {
   return {
     transcriptSize,
     cwd: f.cwd,
@@ -3414,13 +3814,17 @@ function compactFacts(f: TranscriptFacts, transcriptSize: number): StoredFacts {
     gitBranch: f.gitBranch,
     prRepo: f.prRepo ?? null,
     lastActivityAt: f.lastActivityAt,
+    lastWorkAt: f.lastWorkAt ?? null,
+    keepWarm: f.keepWarm ?? null,
     lastTurnAt: f.lastTurnAt ?? null,
+    cacheTtlMs: f.cacheTtlMs ?? null,
     turnOpen: f.turnOpen,
     contextUsed: f.contextUsed,
     contextLimit: f.contextLimit,
     tokens: f.tokens,
     rateLimitHits: f.rateLimitHits.slice(-1),
     turnError: f.turnError ?? null,
+    modelOutcome: outcomeOn(f.modelOutcome, (stored as StoredFacts | null | undefined)?.modelOutcome, accountId),
   };
 }
 
@@ -3455,45 +3859,22 @@ export function repoRootOf(cwd: string): string | null {
 /**
  * `git rev-parse --show-toplevel --git-common-dir`, read off the disk rather
  * than run: the first pass asked it of every session's cwd, a process each,
- * seconds of a restart. The nearest `.git` up from `dir` is the checkout's
- * top; a directory there is a main checkout, and a file (`gitdir: …`) a
- * linked worktree or submodule, whose git dir's `commondir` names the common
- * one. A common dir not named .git (bare repo, --separate-git-dir, a
- * submodule's) has no main checkout to point at; the top itself is the answer.
+ * seconds of a restart. A linked worktree or submodule's git dir names the
+ * common one in `commondir`; a common dir not named .git (bare repo,
+ * --separate-git-dir, a submodule's) has no main checkout to point at, and
+ * the top itself is the answer.
  */
 function gitRootOf(dir: string): string | null {
-  for (let top = resolve(dir); ; top = dirname(top)) {
-    const dotGit = join(top, ".git");
-    let st;
-    try {
-      st = statSync(dotGit);
-    } catch {
-      if (dirname(top) === top) return null;
-      continue;
-    }
-    // A directory without a HEAD is not a repository, and git looks on up.
-    if (st.isDirectory()) {
-      if (existsSync(join(dotGit, "HEAD"))) return top;
-      if (dirname(top) === top) return null;
-      continue;
-    }
-    try {
-      const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
-      if (!gitdir) return null;
-      const gd = resolve(top, gitdir);
-      // A worktree whose git dir was deleted: git calls it no repository.
-      if (!existsSync(join(gd, "HEAD"))) return null;
-      let common = gd;
-      try {
-        common = resolve(gd, readFileSync(join(gd, "commondir"), "utf8").trim());
-      } catch {
-        /* no commondir: the git dir is its own */
-      }
-      return basename(common) === ".git" ? dirname(common) : top;
-    } catch {
-      return top;
-    }
+  const c = checkoutAt(dir);
+  if (!c) return null;
+  if (c.gitDir === join(c.top, ".git")) return c.top;
+  let common = c.gitDir;
+  try {
+    common = resolve(c.gitDir, readFileSync(join(c.gitDir, "commondir"), "utf8").trim());
+  } catch {
+    /* no commondir: the git dir is its own */
   }
+  return basename(common) === ".git" ? dirname(common) : c.top;
 }
 
 function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -3511,13 +3892,4 @@ function expandHome(p: string): string {
   if (p === "~") return home;
   if (p.startsWith("~/")) return `${home}${p.slice(1)}`;
   return p;
-}
-
-function ppidOf(pid: number): number | null {
-  try {
-    const s = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return Number(s.slice(s.lastIndexOf(")") + 2).split(" ")[1]);
-  } catch {
-    return null;
-  }
 }

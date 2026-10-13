@@ -12,7 +12,8 @@
  *   readings the fleet parses from rollout `token_count` events. A recent
  *   rollout reading likewise pushes the endpoint back.
  * - devin: Connect-JSON `GetUserStatus`, every 10 min, best effort.
- * - omp: `omp usage --json`, every 5 min.
+ * - omp (OpenCode Go): Go's usage report, `GET …/go/v1/usage`, every 3 min,
+ *   through the bridge, which holds the credentials.
  *
  * agentbox never refreshes a token (docs/v2.md). An expired access token
  * means we do not call the endpoint at all — a request would 401 — and the
@@ -24,9 +25,11 @@
 import { EventEmitter } from "node:events";
 import { statSync } from "node:fs";
 import { getKv, insertUsageSample, lastUsageSample, setKv, type UsageSampleRow } from "../db";
-import type { Account, AccountUsage, ProviderId, UsageWindow, WindowKind } from "../types";
+import type { Account, AccountProvider, AccountUsage, ProviderId, UsageWindow, WindowKind } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
+import { bridgeUrl } from "../../bridge/models";
+import { hasGoCredential } from "./gocred";
 import { readClaudeCredentials, readClaudeJson, readCodexAuth, readDevinCredentials } from "./identity";
 
 const MIN = 60_000;
@@ -35,11 +38,12 @@ const FIVE_HOURS = 5 * HOUR;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 
-export const POLL_MS: Record<ProviderId, number> = {
+export const POLL_MS: Record<AccountProvider, number> = {
   claude: 3 * MIN,
   codex: 5 * MIN,
   devin: 10 * MIN,
-  omp: 5 * MIN,
+  omp: 3 * MIN,
+  muse: 10 * MIN,
 };
 
 const TICK_MS = 10_000;
@@ -453,56 +457,78 @@ export async function fetchDevinUsage(account: Pick<Account, "home">, deps: Usag
   return { kind: "ok", at: deps.now(), windows, notes, source: "endpoint" };
 }
 
-// --------------------------------------------------------------------- omp
+// ------------------------------------------------------------ OpenCode Go
 
-/** `omp usage --json` → one window per provider limit. */
-export function mapOmpUsage(json: unknown): { windows: UsageWindow[]; notes: string[] } {
+const GO_WINDOWS: readonly { key: string; id: string; label: string; kind: WindowKind; windowMs: number }[] = [
+  { key: "rolling", id: "rolling-5h", label: "5-hour", kind: "short", windowMs: FIVE_HOURS },
+  { key: "weekly", id: "weekly", label: "Weekly", kind: "weekly", windowMs: WEEK },
+  { key: "monthly", id: "monthly", label: "Monthly", kind: "monthly", windowMs: 30 * DAY },
+];
+
+/**
+ * Map Go's usage report to windows:
+ *
+ *   {usage: {rolling|weekly|monthly: {status: "ok" | "rate-limited", percent, resetsAt}}}
+ *
+ * `percent` is whole points of the plan's dollar limit, rounded down. The
+ * week ends Monday 00:00 UTC and the month on the day the subscription
+ * started; the 5-hour window ends five hours after its last call, and one
+ * with nothing in it is reported as ending five hours from now, which is no
+ * reset at all.
+ */
+export function mapGoUsage(body: unknown, now: number): UsageWindow[] {
+  const usage = rec(rec(body)?.usage) ?? {};
   const windows: UsageWindow[] = [];
-  const notes: string[] = [];
-  const reports = Array.isArray(rec(json)?.reports) ? (rec(json)!.reports as unknown[]) : [];
-  for (const r of reports) {
-    const report = rec(r);
-    const provider = typeof report?.provider === "string" ? report.provider : "omp";
-    for (const l of Array.isArray(report?.limits) ? (report!.limits as unknown[]) : []) {
-      const limit = rec(l);
-      const frac = toNum(rec(limit?.amount)?.usedFraction);
-      if (!limit || frac === null) continue;
-      const win = rec(limit.window);
-      const windowMs = toNum(win?.durationMs) ?? 0;
-      const winLabel = typeof win?.label === "string" ? win.label : typeof limit.label === "string" ? limit.label : String(limit.id);
-      windows.push({
-        id: `${provider}:${String(limit.id)}`,
-        kind: windowMs > 0 ? kindForDuration(windowMs) : "monthly",
-        label: `${provider} ${winLabel}`,
-        usedPct: clampPct(frac * 100),
-        resetsAt: toNum(win?.resetsAt),
-        windowMs,
-      });
-    }
+  for (const g of GO_WINDOWS) {
+    const u = rec(usage[g.key]);
+    const pct = u?.status === "rate-limited" ? 100 : toNum(u?.percent);
+    if (!u || pct === null) continue;
+    let resetsAt = isoMs(u.resetsAt);
+    if (g.key === "rolling" && pct === 0 && resetsAt !== null && resetsAt >= now + g.windowMs - MIN) resetsAt = null;
+    windows.push({ id: `opencode-go:${g.id}`, kind: g.kind, label: g.label, usedPct: clampPct(pct), resetsAt, windowMs: g.windowMs, provider: "opencode-go" });
   }
-  return { windows, notes };
+  return windows;
 }
 
-export async function fetchOmpUsage(deps: UsageDeps): Promise<Reading> {
-  const r = await deps.exec(["omp", "usage", "--json"], { timeoutMs: 20_000 });
-  if (r.timedOut) return { kind: "error", stale: "omp usage timed out" };
-  if (r.code !== 0) return { kind: "error", stale: `omp usage failed (exit ${r.code})` };
-  let json: unknown;
+/** Go's own count, asked through the bridge: it holds each account's
+ *  credential (`/go/<account>/v1/usage`, src/bridge/devin.ts) and is the one
+ *  thing that refreshes a Console sign-in, which asking here keeps alive. */
+async function fetchGoUsage(account: Account, deps: UsageDeps): Promise<Reading> {
+  if (!hasGoCredential(account)) return { kind: "skip", stale: "not signed in" };
+  const now = deps.now();
+  let res: Response;
   try {
-    json = JSON.parse(r.stdout);
-  } catch {
-    return { kind: "error", stale: "omp usage printed something that is not JSON" };
+    res = await deps.fetch(`${bridgeUrl()}/go/${account.id}/v1/usage`, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (err) {
+    return networkError(err, "the agentbox bridge");
   }
-  const { windows, notes } = mapOmpUsage(json);
-  return { kind: "ok", at: deps.now(), windows, notes, source: "cli" };
+  if (res.status === 401 || res.status === 403) {
+    await res.arrayBuffer().catch(() => undefined);
+    const stale = res.status === 403 ? "no OpenCode Go subscription in this workspace" : "sign-in refused — log the account in again";
+    return { kind: "error", stale, unauthorized: true };
+  }
+  if (!res.ok) return httpError(res, "OpenCode Go usage", now);
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return { kind: "error", stale: "OpenCode Go usage returned something that is not JSON" };
+  }
+  const windows = mapGoUsage(body, now);
+  if (windows.length === 0) return { kind: "error", stale: "OpenCode Go usage had no windows" };
+  return { kind: "ok", at: now, windows, notes: [], source: "endpoint" };
 }
 
 function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
   switch (account.provider) {
+    case "muse": return Promise.resolve({ kind: "skip", stale: "Muse Code does not expose subscription usage windows here" });
     case "claude": return fetchClaudeUsage(account, deps);
     case "codex": return fetchCodexUsage(account, deps);
     case "devin": return fetchDevinUsage(account, deps);
-    case "omp": return fetchOmpUsage(deps);
+    case "omp": return fetchGoUsage(account, deps);
   }
 }
 

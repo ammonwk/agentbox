@@ -12,11 +12,16 @@ export type Route =
   /** One account's usage insights. */
   | { page: "accounts"; sub: "insights"; account: string }
   | { page: "skills" }
+  /** The global MCP servers every agent is given. */
+  | { page: "mcps" }
+  /** The cards sessions handed you: to decide, or to know. */
+  | { page: "review" }
   | { page: "voice" }
+  | { page: "team" }
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "sessions" | "voice" | "accounts" | "skills" | "settings";
+export type NavId = "sessions" | "review" | "voice" | "accounts" | "skills" | "mcps" | "team" | "settings";
 
 export function navOf(route: Route): NavId {
   return route.page === "session" ? "sessions" : route.page;
@@ -43,8 +48,11 @@ export function parseHash(hash: string): Route {
     return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
   }
   if (head === "skills") return { page: "skills" };
+  if (head === "mcps") return { page: "mcps" };
   if (head === "voice") return { page: "voice" };
+  if (head === "review") return { page: "review" };
   if (head === "settings") return { page: "settings" };
+  if (head === "team") return { page: "team" };
   return { page: "sessions" };
 }
 

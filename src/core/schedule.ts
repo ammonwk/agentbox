@@ -17,13 +17,23 @@ export type ScheduleRule =
   | { kind: "every"; minutes: number; from: number }
   /** Once, when pull request `pr` merges: of `repo` (owner/name), or — while
    *  null, before the server has filled it in — of the repo it runs in. */
-  | { kind: "merge"; pr: number; repo: string | null; title?: string };
+  | { kind: "merge"; pr: number; repo: string | null; title?: string }
+  /** Each time GitHub Actions workflow `workflow` goes red on `branch`: a new
+   *  session for each red streak (src/core/scheduler.ts). `repo` and `branch`
+   *  are null, before the server has filled them in, for the repo it runs in
+   *  and that repo's default branch; `file` is the workflow's, once known. */
+  | { kind: "red"; workflow: string; branch: string | null; repo: string | null; file?: string };
 
 export type ParsedWhen = { rule: ScheduleRule } | { error: string };
 
 const MIN = 60_000;
 /** Shorter than this, a recurring session is a loop, not a schedule. */
 const MIN_EVERY = 5;
+
+/** Tokens of context past which a schedule that keeps to one session starts a
+ *  new one, unless it names its own (`Schedule.freshOver`): large enough to
+ *  hold hours of notes, small enough that waking it cold is not a monolith. */
+export const FRESH_OVER = 150_000;
 
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -34,7 +44,12 @@ const PARTS: Record<string, number> = { morning: 9 * 60, afternoon: 14 * 60, eve
 
 /** Starts a new session each time; the others start once, under their own id. */
 export function isRecurring(rule: ScheduleRule): boolean {
-  return rule.kind === "weekly" || rule.kind === "every";
+  return rule.kind === "weekly" || rule.kind === "every" || rule.kind === "red";
+}
+
+/** Starts when something happens rather than at a time: it has no `nextAt`. */
+export function onEvent(rule: ScheduleRule): boolean {
+  return rule.kind === "merge" || rule.kind === "red";
 }
 
 /** Read what was typed, as of `now`. */
@@ -53,6 +68,10 @@ export function parseWhen(input: string, now: number = Date.now()): ParsedWhen {
   // ---- when a PR merges
   const merge = mergeOf(t);
   if (merge) return { rule: merge };
+
+  // ---- whenever a workflow goes red (before "every", for "every time …")
+  const red = redOf(t);
+  if (red) return red;
 
   // ---- recurring
   const every = /^(?:every|each) (.+)$/.exec(t);
@@ -81,7 +100,8 @@ export function nextRun(rule: ScheduleRule, after: number): number | null {
     case "once":
       return rule.at > after ? rule.at : null;
     case "merge":
-      // Not a time: the scheduler watches the PR.
+    case "red":
+      // Not a time: the scheduler watches the PR, or the workflow's runs.
       return null;
     case "every": {
       const step = rule.minutes * MIN;
@@ -107,6 +127,8 @@ export function describeRule(rule: ScheduleRule, now: number = Date.now()): stri
       return describeAt(rule.at, now);
     case "merge":
       return `When ${rule.repo ? `${rule.repo}#` : "PR #"}${rule.pr} merges`;
+    case "red":
+      return `Whenever ${/\s/.test(rule.workflow) ? `"${rule.workflow}"` : rule.workflow} on ${rule.branch ?? "the default branch"} is red`;
     case "every":
       if (rule.minutes % (24 * 60) === 0) return rule.minutes === 24 * 60 ? "Every day" : `Every ${rule.minutes / (24 * 60)} days`;
       if (rule.minutes % 60 === 0) return rule.minutes === 60 ? "Every hour" : `Every ${rule.minutes / 60} hours`;
@@ -159,6 +181,43 @@ function mergeOf(t: string): ScheduleRule | null {
     new RegExp(String.raw`^(?:on|after) (?:the )?merge of ${ref}$`).exec(t);
   if (!m) return null;
   return { kind: "merge", pr: Number(m[2]), repo: m[1] ?? null };
+}
+
+/**
+ * "whenever CD on staging is red", "every time staging CD fails", "when CD
+ * goes red on staging", "whenever owner/repo's CD is red": a workflow by name
+ * or file, quoted when it has spaces, and a branch (else the default one).
+ */
+function redOf(t: string): ParsedWhen | null {
+  const m =
+    /^(?:whenever|when|each time|every time|any ?time|if) (.+?) (?:is red|goes red|turns red|is failing|fails|breaks|is broken)(?: (?:on|for|in) (?:the )?([\w.\/-]+?)(?: branch)?)?$/.exec(t);
+  if (!m) return null;
+  let subject = m[1]!.replace(/^the /, "");
+  let branch: string | null = m[2] ?? null;
+  let repo: string | null = null;
+  const owned = /^([\w.-]+\/[\w.-]+)(?:'s)? (.+)$/.exec(subject);
+  if (owned) {
+    repo = owned[1]!;
+    subject = owned[2]!;
+  }
+  const on = /^(.+?) (?:on|for|in) (?:the )?([\w.\/-]+?)(?: branch)?$/.exec(subject);
+  if (on) {
+    if (branch) return { error: `Say the branch once: “${t}” names two.` };
+    subject = on[1]!;
+    branch = on[2]!;
+  }
+  subject = subject.replace(/ (?:workflow|pipeline|runs?)$/, "");
+  const quoted = /^(?:([\w.\/-]+) )?"([^"]+)"$/.exec(subject);
+  const words = quoted ? null : subject.split(" ");
+  // "staging cd": a branch, then the workflow.
+  if (quoted?.[1] || words?.length === 2) {
+    if (branch) return { error: `Say the branch once: “${t}” names two.` };
+    branch = quoted ? quoted[1]! : words![0]!;
+  }
+  if (branch === "default") branch = null;
+  const workflow = quoted ? quoted[2]!.trim() : words![words!.length - 1]!;
+  if (!workflow || (words && words.length > 2)) return { error: `Could not tell which workflow “${subject}” is: quote a name with spaces, as in “whenever "cd watch" on staging is red”.` };
+  return { rule: { kind: "red", workflow, branch, repo } };
 }
 
 function recurring(t: string, now: number): ParsedWhen {

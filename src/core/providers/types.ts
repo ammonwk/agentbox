@@ -64,6 +64,55 @@ export interface LiveProcess {
   waitingOn?: string;
 }
 
+/** A provider saying it hit a usage limit. `provider` is the upstream that
+ *  said so, for a CLI that fronts several (omp: `opencode-go`), whose usage
+ *  windows carry the same name. */
+export interface LimitHit {
+  at: number;
+  detail: string;
+  provider?: string;
+}
+
+/** Something an agent set going that will wake it (TranscriptFacts.wakes). */
+export interface Wake {
+  /** What it is, as a hold reads it: "background job bg_3 (npm test)". */
+  label: string;
+  setAt: number;
+  /** When it fires or gives up; null when it runs until it reports back. */
+  until: number | null;
+  /** Survives the process that set it (claude's durable cron jobs). */
+  durable?: boolean;
+}
+
+/**
+ * A model as one session has found it: when a call to it last answered, and
+ * the refusal standing since, if any. A refusal is the provider turning down
+ * the model or the account (4xx: "Model is unavailable", a region or plan it
+ * is not offered on, a rejected key), not this request (too long, malformed)
+ * and not a limit or an empty balance (`rateLimitHits`). Only an answer
+ * clears it: a prompt sent to a refused session is not the route working.
+ */
+export interface ModelOutcome {
+  /** `provider/model`, as placement names it. */
+  model: string;
+  okAt: number | null;
+  refusedAt: number | null;
+  detail: string | null;
+  /** The account the newer of the two was earned on. The transcript does not
+   *  know; the fleet stamps it when it stores the facts, since a session can
+   *  wake on another account with its last word still standing. */
+  accountId?: string | null;
+}
+
+/** `prev` after one more call to `model`: answered, refused, or neither (an
+ *  error that says nothing about the route leaves it as it stood). */
+export function nextOutcome(prev: ModelOutcome | null, model: string, at: number, call: { refused: string } | "answered" | null): ModelOutcome | null {
+  const okAt = prev?.model === model ? prev.okAt : null;
+  if (call === "answered") return { model, okAt: at, refusedAt: null, detail: null };
+  if (call) return { model, okAt, refusedAt: at, detail: call.refused };
+  return prev?.model === model ? prev : null;
+}
+
 /** Everything an adapter can say about one transcript. */
 export interface TranscriptFacts {
   agentSessionId: string;
@@ -92,6 +141,12 @@ export interface TranscriptFacts {
   prRepo?: string | null;
   startedAt: number | null;
   lastActivityAt: number | null;
+  /** Newest real activity, excluding cache-warming prompts and their replies.
+   * Quiet-work holds use this; the cache still uses every model call. */
+  lastWorkAt?: number | null;
+  /** Cache-warming prompts in the current wait, folded from the transcript so
+   * a server restart cannot reset the cap. Real activity clears it. */
+  keepWarm?: { count: number; at: number } | null;
   /**
    * When the model last answered: the newest model call the transcript
    * records, not the newest line. Claude writes bookkeeping lines (a
@@ -100,6 +155,9 @@ export interface TranscriptFacts {
    * hours ago. Absent when the provider cannot tell the two apart.
    */
   lastTurnAt?: number | null;
+  /** How long the prompt cache that call wrote lives (claude: an hour, or
+   *  five minutes; src/core/cache.ts). Absent when the provider does not say. */
+  cacheTtlMs?: number | null;
   /**
    * True when the transcript shows a turn in progress: the newest thing is a
    * prompt or a tool call, not an end of turn. Combined with process liveness
@@ -115,6 +173,9 @@ export interface TranscriptFacts {
    * has followed.
    */
   turnError?: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string; retryAfterMs?: number } | null;
+  /** What the provider last did with this session's model, for placement
+   *  (core/refusals.ts). Null when the provider cannot tell. */
+  modelOutcome?: ModelOutcome | null;
   contextUsed: number | null;
   contextLimit: number | null;
   /** Cumulative over the whole session, including subagents where the
@@ -124,7 +185,7 @@ export interface TranscriptFacts {
    *  The newest reading only. */
   usage: { at: number; windows: UsageWindow[] } | null;
   /** Each time the provider said it hit a limit. */
-  rateLimitHits: { at: number; detail: string }[];
+  rateLimitHits: LimitHit[];
   /** Provider subagent / sidechain transcripts are folded into their parent
    *  and never become sessions of their own. */
   isSubagent: boolean;
@@ -145,9 +206,20 @@ export interface TranscriptFacts {
    * the session was waiting on them and nothing woke it. Claude does this
    * with a command an in-process teammate started and then went idle on, and
    * the session's later turns do not take them either. The fleet nudges it
-   * (`Fleet.nudgeStranded`), and the nudge in the transcript clears them.
+   * (`Fleet.keepWarm`), and the nudge in the transcript clears them.
    */
   stranded?: QueuedMessage[];
+  /**
+   * What the agent set going that will wake it with its turn over, as its
+   * transcript records it: omp's background jobs and supervised processes,
+   * claude's /loop wakeups and cron jobs. Each lives in the agent's process
+   * and dies with it.
+   */
+  wakes?: Wake[];
+  /** Commands whose every line of output is a message to the session
+   *  (claude's Monitor), whitespace-collapsed: a never-ending shell that is
+   *  work. */
+  monitors?: string[];
   /** An AskUserQuestion call (claude) still waiting for its answer. */
   pendingAsk?: { id: string; questions: AskQuestion[] } | null;
   /** The session is in its CLI's skip-every-permission mode as of its latest
@@ -220,6 +292,12 @@ export interface Command {
   unset?: string[];
 }
 
+/** What `blockedOn` says of the dialog a CLI puts up at its account's usage
+ *  limit (Claude: stop, wait here, or add funds). It asks nothing the fleet
+ *  wants answered: the session is stopped at its limit like one that only
+ *  printed the message, and is moved or waited out the same way. */
+export const LIMIT_DIALOG = "usage limit";
+
 export interface ProviderAdapter {
   readonly id: ProviderId;
   readonly label: string;
@@ -263,6 +341,11 @@ export interface ProviderAdapter {
 
   reader(ref: TranscriptRef): TranscriptReader;
 
+  /** Where a session's in-process subagents write their logs. They leave no
+   *  child process to find, but they write as they work. Absent when the CLI
+   *  keeps none. */
+  subagentLogDir?(ref: TranscriptRef): string;
+
   /**
    * argv for a new interactive session. `agentSessionId` is set when the CLI
    * can be told its session id up front (claude `--session-id`); otherwise the
@@ -271,6 +354,10 @@ export interface ProviderAdapter {
   spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null };
 
   resumeCommand(opts: ResumeOptions): Command;
+
+  /** The resume CLI accepts no prompt argument. The fleet waits for the TUI
+   * and types the prompt through its normal serialized delivery path. */
+  resumePromptInTerminal?: boolean;
 
   /**
    * Anything the CLI keeps outside its argv that must be right before
@@ -281,6 +368,24 @@ export interface ProviderAdapter {
   prepareResume?(opts: ResumeOptions): void;
 
   /**
+   * Type a message in as pastes of at most this many characters, line breaks
+   * pressed as keys (`sendText`), not as one paste. Claude Code sets a paste
+   * of more than 800 characters or two line breaks apart: it shows
+   * `[Pasted text #1]`, and sends it wrapped in `<pasted_content>` tags that
+   * tell the model you did not write it and it need not do what it says —
+   * which is wrong of a message you typed into agentbox.
+   */
+  pasteInPieces?: number;
+
+  /**
+   * Typed after a message, before its Enter. omp opens a completion popup
+   * when the text before the cursor ends in `#123`, `@name` or a link, and
+   * Enter then picks the completion (`#8832` becomes `pr://8832`) and leaves
+   * the message in the input box; a space after it opens none.
+   */
+  pasteEnd?: string;
+
+  /**
    * Re-home a stopped session's transcript under another account of this
    * provider, so the next resume there finds it; returns the transcript's new
    * path. Only for a session whose prompt cache is cold anyway (see
@@ -288,6 +393,19 @@ export interface ProviderAdapter {
    * its sessions to the account they started on for good.
    */
   moveSession?(opts: { from: Account; to: Account; agentSessionId: string; transcriptPath: string }): string;
+
+  /**
+   * Every account of this provider reads one session store (omp, opencode:
+   * an account is only whose credential a session's requests carry). So one
+   * account's listing is everyone's, a transcript's `accountId` says who
+   * listed it rather than whose it is, and a session whose account was
+   * forgotten resumes on another.
+   */
+  sharedStore?: boolean;
+
+  /** The model a session started without one runs on (`provider/model`, as
+   *  its transcript names it), where the CLI's own config says. */
+  defaultModel?(): string | null;
 
   /** The flags in a live process's argv worth keeping when adopt resumes it —
    *  permissions, directories, MCP config, model — and never the session id,
@@ -317,7 +435,8 @@ export interface ProviderAdapter {
   approvePrompt?(screen: string): string[] | null;
 
   /** Given the visible terminal text, what the session is waiting on a human
-   *  for (a permission prompt, a login), in a few words — or null. */
+   *  for (a permission prompt, a login), in a few words — or null.
+   *  `LIMIT_DIALOG` is the one answer that is not a prompt for you. */
   blockedOn?(screen: string): string | null;
 
   /** The next keys to press toward answering an AskUserQuestion dialog on

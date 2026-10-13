@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import type { AccountView, AppState, LoginFlow, ProviderId } from "../../../src/core/types";
 import { api, useNow } from "../api";
+import { accountProvider } from "../../../src/core/providers/account";
 import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
 import { Button, Confirm, Empty, Field, Icon, Modal, RelativeTime, Spinner, Toggle } from "../components";
 import { fmtCountdown, fmtPts, guessHome, tildify } from "../lib/format";
-import { outstandingOf, sortWindows } from "../lib/usage";
+import { outstandingOf, shortForecastHow, sortWindows } from "../lib/usage";
 import { hrefOf, type Route } from "../route";
 import { Calibration } from "./Calibration";
 import { Insights } from "./Insights";
@@ -37,20 +38,17 @@ function AccountList({ state }: { state: AppState }) {
     return [...byId.values()].filter((l) => !dismissed.has(l.id));
   }, [started, state.logins, dismissed]);
 
+  // opencode holds no accounts: its sessions run on omp's.
   const providers = PROVIDERS.filter(
-    (p) => state.providers.some((x) => x.id === p && x.installed) || state.accounts.some((a) => a.provider === p),
+    (p) =>
+      accountProvider(p) === p &&
+      (state.providers.some((x) => x.id === p && x.installed) || state.accounts.some((a) => a.provider === p)),
   );
 
   const dismiss = (id: string) => setDismissed((d) => new Set(d).add(id));
 
   return (
     <div className="acs">
-      <p className="hint acs-lede">
-        New sessions go to the account with the most room, counting what running sessions still <em>claim</em> — the hatched part of
-        each weekly bar. The tick on a bar marks how far through its window we are.{" "}
-        <a href={hrefOf({ page: "accounts", sub: "calibration" })}>Calibration</a> checks those claims against what sessions really use.
-      </p>
-
       {providers.map((p) => {
         const accounts = state.accounts.filter((a) => a.provider === p);
         // A login whose account is not listed: one just created (not in the
@@ -64,14 +62,19 @@ function AccountList({ state }: { state: AppState }) {
           <section key={p} className="acs-sec" aria-labelledby={`acs-${p}`}>
             <header className="acs-sec-head">
               <ProviderBadge provider={p} />
-              <h2 id={`acs-${p}`}>{PROVIDER_LABEL[p]}</h2>
+              <h2 id={`acs-${p}`}>{sectionTitle(p)}</h2>
               <span className="faint">
                 {accounts.length} account{accounts.length === 1 ? "" : "s"}
                 {info?.version ? ` · ${info.version}` : info && !info.installed ? " · CLI not installed" : ""}
               </span>
               <span className="acs-sec-actions">
                 {p === "omp" ? (
-                  <span className="hint">omp balances its own credential pool.</span>
+                  <>
+                    <span className="hint">One OpenCode sign-in per account; omp and opencode sessions share them.</span>
+                    <Button size="sm" icon={Icon.plus} disabled={!info?.installed} onClick={() => setAdding({ provider: p })}>
+                      Add account
+                    </Button>
+                  </>
                 ) : (
                   <>
                     <Button size="sm" variant="ghost" icon={Icon.folder} onClick={() => setImporting(p)}>
@@ -179,7 +182,7 @@ function AccountCard({
   };
 
   return (
-    <article className="ac card" data-enabled={a.enabled} style={{ ["--acct" as string]: `var(--acct-${hue})` }} aria-label={`${a.label} account`}>
+    <article data-nav-item data-nav-id={`account:${a.id}`} tabIndex={0} className="ac card" data-enabled={a.enabled} style={{ ["--acct" as string]: `var(--acct-${hue})` }} aria-label={`${a.label} account`}>
       <header className="ac-head">
         <span className="ac-swatch" aria-hidden="true" />
         {editing ? (
@@ -207,7 +210,7 @@ function AccountCard({
             </button>
           </h3>
         )}
-        {a.isDefault && a.provider !== "omp" ? (
+        {a.isDefault ? (
           <span className="src ac-default" title={`Your plain ${a.provider} CLI's own login. Logging the CLI in or out changes this card only.`}>
             CLI login
           </span>
@@ -281,7 +284,13 @@ function AccountCard({
           </p>
         ) : (
           windows.map((w) => (
-            <UsageBar key={w.id} window={w} now={now} outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0} />
+            <UsageBar
+              key={w.id}
+              window={w}
+              now={now}
+              outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0}
+              forecast={w.kind === "short" && !w.scope && c?.shortEffective != null ? { at: c.shortEffective, how: shortForecastHow(c.shortPace) } : null}
+            />
           ))
         )}
       </div>
@@ -331,9 +340,9 @@ function AccountCard({
             <thead>
               <tr>
                 <th>Session</th>
-                <th className="num" title="Weekly points claimed at placement">Claim</th>
+                <th className="num" title="Weekly points it claimed when it started or last woke: what sessions of its model have gone on to use">Claim</th>
                 <th className="num" title="Weekly points attributed to it so far">Used</th>
-                <th className="num" title="Still held against this account">Held</th>
+                <th className="num" title="Weekly points it is expected to still use here: forecast from what it spent in the last ten minutes and so far this stretch, or what is left of its claim until it has spent anything">Held</th>
               </tr>
             </thead>
             <tbody>
@@ -347,7 +356,12 @@ function AccountCard({
                   </td>
                   <td className="num">{fmtPts(cl.claim)}</td>
                   <td className="num">{fmtPts(cl.consumed)}</td>
-                  <td className="num">{fmtPts(cl.outstanding)}</td>
+                  <td
+                    className="num"
+                    title={cl.basis === "forecast" ? "Forecast from what it has been spending" : "What is left of its claim: nothing to forecast from yet"}
+                  >
+                    {fmtPts(cl.outstanding)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -362,6 +376,12 @@ function AccountCard({
             <span>
               Balancer: <strong>eligible</strong>
               {c.legRoom != null ? <> · 5-hour room {fmtPts(c.legRoom)}</> : null}
+              {c.shortLoadTo != null ? (
+                <span title="New sessions go to the account whose weekly resets soonest until its 5-hour window is forecast this full, then to the next to reset">
+                  {" "}
+                  · loads to {fmtPts(c.shortLoadTo)}%
+                </span>
+              ) : null}
               {c.shortPace != null ? (
                 <span title="How fast its 5-hour window has been filling over the last 45 minutes, in that window's percent an hour">
                   {" "}
@@ -390,7 +410,7 @@ function AccountCard({
       {login ? <LoginPanel login={login} onDismiss={() => onDismissLogin(login.id)} /> : null}
 
       <footer className="ac-foot">
-        <a className="btn btn-ghost btn-sm" href={hrefOf({ page: "accounts", sub: "insights", account: a.id })}>
+        <a className="btn btn-ghost btn-sm" data-nav-enter href={hrefOf({ page: "accounts", sub: "insights", account: a.id })}>
           <Icon.chart size={13} />
           Usage insights
         </a>
@@ -537,7 +557,9 @@ export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismis
           </li>
           {l.userCode ? (
             <li>
-              <span className="lg-step-label">Enter this one-time code on that page:</span>
+              <span className="lg-step-label">
+                {l.provider === "omp" ? "Check that the page shows this code (enter it if asked), then approve:" : "Enter this one-time code on that page:"}
+              </span>
               <span className="lg-code-row">
                 <code className="lg-code">{l.userCode}</code>
                 <CopyButton text={l.userCode} label="Copy code" />
@@ -586,6 +608,11 @@ export function LoginPanel({ login: l, onDismiss }: { login: LoginFlow; onDismis
   );
 }
 
+/** omp's accounts are OpenCode Go sign-ins, which opencode sessions use too. */
+function sectionTitle(p: ProviderId): string {
+  return p === "omp" ? "OpenCode Go · omp and opencode" : PROVIDER_LABEL[p];
+}
+
 // ---------------------------------------------------------------- dialogs
 
 function AddAccount({
@@ -604,8 +631,12 @@ function AddAccount({
   const { run, busy, error } = useAction();
   return (
     <Modal
-      title={`Add a ${PROVIDER_LABEL[provider]} account`}
-      hint="agentbox makes a fresh credential home for it and starts the CLI's own login. Nothing is copied from your other accounts."
+      title={`Add ${provider === "omp" ? "an OpenCode Go" : `a ${PROVIDER_LABEL[provider]}`} account`}
+      hint={
+        provider === "omp"
+          ? "agentbox makes a home for it and starts an OpenCode Console sign-in: a link and a code, as `opencode auth login opencode` gives. omp and opencode sessions placed on it then use that sign-in. Nothing is copied from your other accounts."
+          : "agentbox makes a fresh credential home for it and starts the CLI's own login. Nothing is copied from your other accounts."
+      }
       onClose={onClose}
     >
       <form
@@ -645,11 +676,11 @@ function AddAccount({
 function ImportHome({ provider, onClose }: { provider: ProviderId; onClose: () => void }) {
   const [home, setHome] = useState("");
   const { run, busy, error } = useAction();
-  const example = provider === "codex" ? "~/.codex-work" : provider === "devin" ? "~/.local/share/devin-work" : "~/.claude-work";
+  const example = provider === "muse" ? "~/.config" : provider === "codex" ? "~/.codex-work" : provider === "devin" ? "~/.local/share/devin-work" : "~/.claude-work";
   return (
     <Modal
       title={`Import a ${PROVIDER_LABEL[provider]} home`}
-      hint="Use a credential home that is already logged in — a CLAUDE_CONFIG_DIR or CODEX_HOME you set up by hand. agentbox reads it in place and never moves or copies the credentials."
+      hint={provider === "muse" ? "The XDG config root containing muse/auth.json. Dedicated homes use the file credential backend and keep sessions under <home>/data/muse. Credentials are read in place." : "Use a credential home that is already logged in — a CLAUDE_CONFIG_DIR or CODEX_HOME you set up by hand. agentbox reads it in place and never moves or copies the credentials."}
       onClose={onClose}
     >
       <form

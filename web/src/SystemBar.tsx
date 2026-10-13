@@ -27,6 +27,9 @@ import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
  * Every cell is conditional on its own field. On a kernel without PSI, a
  * desktop with no battery, or a chip whose sensors we cannot name, the cell is
  * absent rather than showing a zero we cannot support.
+ *
+ * With a session open, the bar starts with that session's facts — account,
+ * branch, model, context, tokens. SessionView puts them in `slotRef`.
  */
 
 function gb(n: number): string {
@@ -38,10 +41,13 @@ export function SystemBar({
   accounts,
   sessions,
   focusAccount,
+  slotRef,
 }: {
   accounts: readonly AccountView[];
   sessions: readonly Session[];
   focusAccount: string | null;
+  /** Gets the element the open session's facts go in. */
+  slotRef?: (el: HTMLElement | null) => void;
 }) {
   const { metrics, stale } = useMetrics();
   const [open, setOpen] = useState(false);
@@ -49,9 +55,11 @@ export function SystemBar({
   const sys = metrics?.system;
   const limits = recentAccounts(accounts, sessions, focusAccount);
 
-  // Nothing to say: not Linux, or the first sweep has not landed. An empty
-  // strip would be a permanent piece of furniture claiming a measurement.
-  if (!sys) return null;
+  const slot = <div className="sys-session" ref={slotRef} />;
+  // No machine figures: the first sweep has not landed, or this system gives
+  // none. An empty strip would be a permanent piece of furniture claiming a
+  // measurement, so only a session's facts show, and only while one is open.
+  if (!sys) return <div className="sysbar sysbar-bare">{slot}</div>;
 
   const memUsed = sys.memTotal - sys.memAvailable;
   const memFrac = sys.memTotal ? memUsed / sys.memTotal : 0;
@@ -78,6 +86,8 @@ export function SystemBar({
     // socket is down, and removing the bar would make a disconnect look like a
     // machine that stopped having a temperature. Dimmed and labelled instead.
     <div className="sysbar" data-open={open} data-stale={stale}>
+      <div className="sysbar-line">
+      {slot}
       <button
         className="sysbar-row"
         onClick={() => setOpen(!open)}
@@ -293,6 +303,7 @@ export function SystemBar({
           {open ? "▾" : "▴"}
         </span>
       </button>
+      </div>
 
       {open ? <SystemDetail sys={sys} limits={limits} now={now} /> : null}
     </div>
@@ -377,8 +388,7 @@ function whoOf(account: AccountView): string {
   return `${PROVIDER_LABEL[account.provider]} · ${name}${email}${account.plan ? ` · ${account.plan}` : ""}`;
 }
 
-/** 5-hour on top in blue, weekly under it in grey — the Accounts page's
- *  convention. The tooltip names them. */
+/** 5-hour on top in the accent, weekly under it in grey. The tooltip names them. */
 function LimitRow({ kind, w, now }: { kind: "5h" | "wk"; w: UsageWindow | null; now: number }) {
   const pct = w ? Math.round(usedNow(w, now)) : null;
   // A 5-hour window nobody has touched has no reset time: it starts on use.

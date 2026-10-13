@@ -16,9 +16,11 @@
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { Account, LoginFlow, ProviderId } from "../types";
+import type { Account, AccountProvider, LoginFlow } from "../types";
 import { childEnv } from "./exec";
-import { userHome } from "../paths";
+import { agentboxBin, userHome } from "../paths";
+import { join } from "node:path";
+import { GO_LOGIN_FILE } from "./gocred";
 import { AccountError, authEnv, credentialsPath } from "./homes";
 
 const OUTPUT_KEEP = 4096;
@@ -48,7 +50,15 @@ export interface LoginCommand {
  */
 export function loginCommand(account: Pick<Account, "provider" | "home" | "isDefault">): LoginCommand {
   if (account.provider === "omp") {
-    throw new AccountError(400, "omp logins are managed by omp itself — run `omp auth-broker login <provider>` in a terminal");
+    // The OpenCode Console's device sign-in, run by agentbox so the login is
+    // this account's own (accounts/godevice.ts): a link and a code, no paste.
+    return {
+      argv: [process.execPath, agentboxBin(), "go-login", account.home],
+      env: { NO_COLOR: "1" },
+      unset: [],
+      credentialFile: join(account.home, GO_LOGIN_FILE),
+      needsPaste: false,
+    };
   }
   const { env, unset } = authEnv(account);
   const common = {
@@ -57,6 +67,8 @@ export function loginCommand(account: Pick<Account, "provider" | "home" | "isDef
     credentialFile: credentialsPath(account.provider, account.home)!,
   };
   switch (account.provider) {
+    case "muse":
+      return { argv: ["muse", "login"], ...common, needsPaste: false };
     case "claude":
       return { argv: ["claude", "auth", "login", "--claudeai"], ...common, needsPaste: true };
     case "codex":
@@ -97,19 +109,22 @@ const URL_RE = /https?:\/\/[^\s"'<>\x1b]+/g;
  *           "2. Enter this one-time code (expires in 15 minutes)\n   ABCD-12345"
  *   devin:  "Visit <url> to sign in, then copy the token and paste it below."
  */
-export function parseLoginOutput(provider: ProviderId, text: string): { url: string | null; userCode: string | null } {
-  const anchors: Record<ProviderId, RegExp> = {
+export function parseLoginOutput(provider: AccountProvider, text: string): { url: string | null; userCode: string | null } {
+  const anchors: Record<AccountProvider, RegExp> = {
     claude: /visit:/i,
     codex: /open this link/i,
     devin: /visit\s/i,
-    omp: /https?:/,
+    omp: /open this link/i,
+    muse: /https?:\/\//i,
   };
   const m = anchors[provider].exec(text);
   const after = m ? text.slice(m.index) : text;
   const url = (after.match(URL_RE)?.[0] ?? text.match(URL_RE)?.[0] ?? null)?.replace(/[).,;]+$/, "") ?? null;
   let userCode: string | null = null;
-  if (provider === "codex") {
-    const i = text.search(/one-time code/i);
+  if (provider === "muse") {
+    userCode = /\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/.exec(text)?.[1] ?? null;
+  } else if (provider === "codex" || provider === "omp") {
+    const i = text.search(provider === "codex" ? /one-time code/i : /enter code/i);
     if (i >= 0) userCode = /\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/.exec(text.slice(i))?.[1] ?? null;
   }
   return { url, userCode };
@@ -298,7 +313,8 @@ export class LoginManager extends EventEmitter {
       const { url, userCode } = parseLoginOutput(run.flow.provider, visible);
       if (url) run.flow.url = url;
       if (userCode) run.flow.userCode = userCode;
-      const ready = run.flow.provider === "codex" ? !!(run.flow.url && run.flow.userCode) : !!run.flow.url;
+      const coded = run.flow.provider === "codex" || run.flow.provider === "omp";
+      const ready = coded ? !!(run.flow.url && run.flow.userCode) : !!run.flow.url;
       if (run.flow.state === "starting" && ready) run.flow.state = "awaiting-user";
     }
     this.emit("change", { ...run.flow });

@@ -14,7 +14,13 @@ export type { UserIdentity };
 
 // -------------------------------------------------------------- providers
 
-export type ProviderId = "claude" | "codex" | "devin" | "omp";
+export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode" | "muse";
+
+/** The providers that hold accounts. opencode holds none of its own: it runs
+ *  on OpenCode Go, which omp's accounts are sign-ins to and report usage
+ *  for, so its sessions sit on those accounts and share their balancer
+ *  (`accountProvider` in providers/index.ts). */
+export type AccountProvider = Exclude<ProviderId, "opencode">;
 
 // --------------------------------------------------------------- accounts
 
@@ -24,7 +30,7 @@ export type ProviderId = "claude" | "codex" | "devin" | "omp";
  */
 export interface Account {
   id: string;
-  provider: ProviderId;
+  provider: AccountProvider;
   /** What you called it. Defaults to the email. */
   label: string;
   email: string | null;
@@ -58,6 +64,8 @@ export interface UsageWindow {
   windowMs: number;
   /** A limit that applies only to one model. */
   scope?: { model: string };
+  /** The upstream it belongs to, where one account fronts several (omp). */
+  provider?: string;
 }
 
 export interface AccountUsage {
@@ -106,8 +114,12 @@ export interface ClaimView {
   claim: number;
   /** Weekly points attributed to this session so far. */
   consumed: number;
-  /** max(0, claim − consumed), or 0 once the claim has lapsed. */
+  /** What it is still expected to use here: forecast from what it has been
+   *  spending (forecast.ts), or `max(0, claim − consumed)` while there is
+   *  nothing to forecast from; 0 once the claim has lapsed. */
   outstanding: number;
+  /** Which of the two `outstanding` is. */
+  basis: "forecast" | "claim";
   lapsed: boolean;
   /** Since when it has been spending on this account: started, or woken
    *  there. A 5-hour pace measured before then has not seen it. */
@@ -125,6 +137,9 @@ export interface BalancerSettings {
   claimIdleMin: number;
   /** A short window this close to resetting is treated as partly fresh. */
   resetHorizonMin: number;
+  /** How full, in percent, a 5-hour window is loaded before new sessions go
+   *  to the next account to reset. */
+  shortLoadPct: number;
 }
 
 /** One account, as the balancer saw it when placing a session. */
@@ -134,6 +149,9 @@ export interface Candidate {
   eligible: boolean;
   /** Why not, in a sentence, when not eligible. */
   reason: string | null;
+  /** Not eligible because the provider is refusing the model here
+   *  (core/refusals.ts): no estimate, so overflow does not go there either. */
+  refused?: boolean;
   /** Weekly used, and with outstanding claims added. */
   weekly: number | null;
   weeklyEffective: number | null;
@@ -146,8 +164,12 @@ export interface Candidate {
   shortEffective: number | null;
   shortResetsAt: number | null;
   /** 0–100: short-window room left by `shortEffective`, raised by reset
-   *  proximity and capped by weekly headroom. */
+   *  proximity. */
   legRoom: number | null;
+  /** How full the balancer will load the 5-hour window: `shortLoadPct`, or
+   *  more when its weekly needs more to be used up before it resets. A
+   *  session has room here while the window stays under that. */
+  shortLoadTo: number | null;
   /** Weekly points left per hour until the weekly reset. */
   weeklyPerHour: number | null;
   /** 5-hour points an hour at the pace of the last readings; null when there
@@ -187,6 +209,23 @@ export interface CalibrationReport {
   hitAfterPlacement: number;
   suggested: Partial<BalancerSettings>;
   current: BalancerSettings;
+  forecast: ForecastReport;
+}
+
+/** The table sessions' outstanding claims are forecast from (forecast.ts). */
+export interface ForecastReport {
+  fittedAt: number;
+  /** Bucket edges, in cost-equivalent: spent in the last ten minutes, and so far this stretch. */
+  recentEdges: number[];
+  soFarEdges: number[];
+  providers: {
+    provider: string;
+    /** Weekly points per cost-equivalent on its median account; null when none has a price yet. */
+    pointsPerCost: number | null;
+    /** `recent` and `soFar` index the buckets the edges make. `points` is null
+     *  where too few stretches were seen, or the points have no price. */
+    cells: { recent: number; soFar: number; stretches: number; points: number | null }[];
+  }[];
 }
 
 export interface Percentiles {
@@ -406,8 +445,11 @@ export interface Session {
   claim: number;
   /** The reasoning effort it was started with; null for the CLI's default. */
   effort: string | null;
+  /** When its prompt cache goes cold: its newest model call plus the
+   *  lifetime that call wrote the cache with (src/core/cache.ts). */
+  cacheWarmUntil: number;
   /**
-   * Idle past `claimIdleMin`, so its prompt cache is cold and nothing is lost
+   * Past `cacheWarmUntil`, so its prompt cache is cold and nothing is lost
    * by moving it: it is no longer pinned to `accountId` (the account it last
    * ran on) and wakes — on resume or on a message — on whichever account has
    * the most room. Only for providers that can move a session between
@@ -416,7 +458,19 @@ export interface Session {
   cold: boolean;
   /** The provider's latest "you hit your limit", when that is the last thing
    *  the session did — it stopped there and is waiting to be continued. */
-  limitHit: { at: number; detail: string } | null;
+  limitHit: {
+    at: number;
+    detail: string;
+    provider?: string;
+    /** When the limit lifts, as far as is known: the reset of the account's
+     *  spent window, else the time the message names. Until then every
+     *  message is refused the same way, so nothing is sent (the fleet's own
+     *  nudges, and `agentbox send` from an agent). Null when nothing says. */
+    until?: number | null;
+    /** The fleet already moved it off an account at its limit once
+     *  (`Fleet.continueStalled`), so from here a move is yours. */
+    hopped?: true;
+  } | null;
   /**
    * The turn ended on the provider rather than finishing — cut off by the
    * output cap, a transient API error, or something a retry cannot fix —
@@ -424,12 +478,22 @@ export interface Session {
    *   output-cap — the reply was cut off mid-write; a message continues it
    *   transient  — a server/network failure; a retry has a real chance
    *   fatal      — a retry cannot fix it (context too long, model gone, login)
-   * `retryAfterMs`, when set, is how long the fleet leaves it before each
-   * retry (a model at capacity: 10 minutes), and it keeps retrying at that
-   * pace until the error clears. Null while the turn is open or a prompt has
-   * followed.
+   * `retryAfterMs`, when set, is the longest the fleet leaves it between
+   * retries (a model at capacity: 10 minutes; it backs off up to that, from a
+   * minute), and it keeps retrying until the error clears. Null while the
+   * turn is open or a prompt has followed.
    */
   turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string; retryAfterMs?: number } | null;
+  /**
+   * When the fleet will tell it to go on by itself — past an error, a rate
+   * limit or a 5-hour reset (`Fleet.autoResumeOf`) — and which try that is:
+   * `attempt` of `of`, `of` null when it keeps trying until it works. About:
+   * nudges go out one at a time across the fleet. Anything you send it first
+   * does the same and calls this off. Null when nothing will. `after` says
+   * what it goes on past: an error (a turn error or an error screen, which
+   * the board draws as working: retrying it is not your move) or a reset.
+   */
+  autoResume: { at: number; attempt: number; of: number | null; after: "error" | "reset" } | null;
   /** The AskUserQuestion dialog it is showing, while it shows one: answer it
    *  with `POST /api/sessions/:id/answer`. */
   question: { id: string; questions: AskQuestion[] } | null;
@@ -451,6 +515,9 @@ export interface Session {
    *  grouping of yours, not a run its parent made, so it is not closed when it
    *  stops and the fleet never links it again. */
   parentByHand: boolean;
+  /** The session that took over from this one (`Fleet.handOver`), when one
+   *  has: an agent's message to this one goes there instead. */
+  successor: string | null;
   /** Set when this is an agent a session started through the subagent MCP
    *  (its `parent`); `answerWaiting` while that session has not collected a
    *  finished turn. */
@@ -534,6 +601,15 @@ export type TimelineEvent = { id: string; at: number } & (
  * the running process's memory, never in the transcript, so agentbox keeps
  * them: asked from the Timeline, or seen asked in the terminal.
  */
+/** Delivery metadata only; the provider's transcript remains the record. */
+export interface SendReceipt {
+  id: string;
+  sessionId: string;
+  state: "pending" | "attempting" | "sent" | "failed" | "unconfirmed";
+  at: number;
+  error: string | null;
+}
+
 export interface Btw {
   id: number;
   sessionId: string;
@@ -622,7 +698,7 @@ export type LoginState = "starting" | "awaiting-user" | "verifying" | "done" | "
 
 export interface LoginFlow {
   id: string;
-  provider: ProviderId;
+  provider: AccountProvider;
   accountId: string;
   state: LoginState;
   /** Open this. */
@@ -721,6 +797,127 @@ export interface PrInfo {
   updatedAt: string;
   /** The agentbox session that produced it, when we can match the branch. */
   sessionId: string | null;
+  /** The live session that has it now (`AppState.prClaims`), or null: free. */
+  owner: string | null;
+}
+
+/** A pull request and the live session that has it (src/core/prclaims.ts). */
+export interface PrClaim {
+  repo: string;
+  number: number;
+  sessionId: string;
+  /** `said`: it claimed it (`agentbox pr claim`, `--claim` at its start).
+   *  `branch`: it is on the PR's branch and nobody claimed otherwise. */
+  how: "said" | "branch";
+  /** When it said so; for a branch, when the PR was opened. */
+  at: number;
+}
+
+// -------------------------------------------------------------------- MCPs
+
+/** How agentbox reaches a global MCP server: a command it starts, or a URL
+ *  (Streamable HTTP). */
+export type McpTransport = "stdio" | "http";
+
+/**
+ * A global MCP server as the page sees it (src/core/mcp.ts). Env and header
+ * values never leave the server: only their names do.
+ */
+export interface McpServerView {
+  name: string;
+  enabled: boolean;
+  transport: McpTransport;
+  command: string | null;
+  args: string[];
+  envKeys: string[];
+  url: string | null;
+  headerKeys: string[];
+  /** Where it was imported from, when it was. */
+  from: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** What is wrong with it that shows without starting it. */
+  problem: string | null;
+  /** For each agent, whether its sessions get it. */
+  reach: McpReach[];
+}
+
+export interface McpReach {
+  provider: ProviderId;
+  /** on: passed to it; own: it has its own server of this name with the same
+   *  definition; conflict: it has a different one, which it keeps; off: the
+   *  server is turned off; unsupported: agentbox does not pass servers to it;
+   *  error: the file agentbox writes for it could not be written. */
+  state: "on" | "own" | "conflict" | "off" | "unsupported" | "error";
+  detail: string;
+}
+
+/** An MCP server an agent's own config defines, found without starting it. */
+export interface McpFound {
+  id: string;
+  provider: ProviderId;
+  /** user: every session of that agent; project: one directory's sessions. */
+  scope: "user" | "project";
+  /** The files it is defined in (the same definition in each). */
+  sources: string[];
+  project: string | null;
+  name: string;
+  /** Null when agentbox cannot carry its shape (see `unsupported`). */
+  transport: McpTransport | null;
+  command: string | null;
+  args: string[];
+  envKeys: string[];
+  url: string | null;
+  headerKeys: string[];
+  unsupported: string | null;
+  /** The global server of that name: none, this definition, or another. */
+  global: "none" | "same" | "different";
+}
+
+export interface McpAgent {
+  provider: ProviderId;
+  installed: boolean;
+  /** Whether agentbox passes global servers to its sessions. */
+  supported: boolean;
+  /** A configuration problem that prevents launch. */
+  error?: string | null;
+  /** How, or why not, in words. */
+  how: string;
+}
+
+export interface McpState {
+  servers: McpServerView[];
+  found: McpFound[];
+  discoveryError?: string | null;
+  agents: McpAgent[];
+  /** When the global list last changed. */
+  changedAt: number | null;
+  /** Configuration snapshot handed to each running session, not a health check. */
+  sessions?: { id: string; title: string; provider: ProviderId; changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; known: boolean }[];
+  /** Sessions agentbox runs whose process started before that change: they
+   *  get it when they next start or resume. */
+  stale: { id: string; title: string; provider: ProviderId; since: number }[];
+}
+
+/** A global server as the page sends it. An env or header entry without a
+ *  `value` keeps the value already saved under that name. */
+export interface McpServerInput {
+  name: string;
+  enabled?: boolean;
+  transport: McpTransport;
+  command?: string;
+  args?: string[];
+  env?: { key: string; value?: string }[];
+  url?: string;
+  headers?: { key: string; value?: string }[];
+}
+
+/** What a check found when it started the server and asked for its tools. */
+export interface McpCheck {
+  ok: boolean;
+  tools: string[];
+  error: string | null;
+  ms: number;
 }
 
 export interface SkillInfo {
@@ -833,8 +1030,6 @@ export interface LoadSample {
   procs: number;
   /** Recent cpuPct samples, oldest first, for the sparkline. */
   history: number[];
-  /** Shell tool calls outliving a parked turn. Absent when there are none. */
-  backgroundShells?: number;
 }
 
 /** What a process in a session's subtree is doing there. */
@@ -978,6 +1173,51 @@ export interface GrepHit {
   line: string;
 }
 
+// ------------------------------------------------------------------ cards
+
+/** A decision the user owes, or something that happened: a pull request
+ *  merged, a note. */
+export type CardKind = "decision" | "merged" | "note";
+/** `later`: kept for later, still to be answered. `closed`: withdrawn by its asker. */
+export type CardState = "open" | "later" | "answered" | "closed";
+
+/** What a session handed the user (src/core/cards.ts). */
+export interface Card {
+  /** Counted from 1: "card 12" is how both sides name it. */
+  id: number;
+  kind: CardKind;
+  title: string;
+  /** Two or three sentences. */
+  short: string;
+  hasLong: boolean;
+  /** The long, extra clear version, Markdown; only on `GET /api/cards/:id`. */
+  long?: string | null;
+  /** The pull request it is about, a URL. */
+  pr: string | null;
+  /** What the asker would do. */
+  recommend: string | null;
+  /** What the asker does if `defaultAt` passes unanswered; agentbox only shows it. */
+  default: string | null;
+  defaultAt: number | null;
+  /** The asker's own name for it: adding the same key again adds nothing. */
+  key: string | null;
+  /** The session that asked, and gets the answer. */
+  sessionId: string | null;
+  /** The session it is about, when that is another. */
+  about: string | null;
+  state: CardState;
+  /** The user's words; "" when it was only seen. */
+  answer: string | null;
+  answeredAt: number | null;
+  /** When the answer was typed into the asker, or a session said it has it. */
+  deliveredAt: number | null;
+  /** Answered in words that no session has yet. */
+  unread: boolean;
+  laterAt: number | null;
+  createdAt: number;
+  closedWhy: string | null;
+}
+
 /** Changes on a slower clock; pushed only when it moves. */
 export interface ColdState {
   accounts: AccountView[];
@@ -992,6 +1232,12 @@ export interface ColdState {
   /** Set when something is missing, so the UI can say so instead of failing. */
   warnings: string[];
   schedules: Schedule[];
+  /** Every card still to be answered, then the newest answered and withdrawn
+   *  ones; without their long versions. */
+  cards: Card[];
+  /** Who has which pull request: every PR a live session holds. One not
+   *  listed is nobody's. */
+  prClaims: PrClaim[];
   /** Who agentbox works for and what is still unsetup, for the first-run card. */
   onboarding: Onboarding;
 }
@@ -1020,6 +1266,69 @@ export interface Onboarding {
 
 export interface AppState extends HotState, ColdState {}
 
+// ----------------------------------------------------------------- waits
+
+/** What a session waits on (src/core/waits.ts). */
+export type WaitSpec =
+  /** A pull request: its checks concluding on a head, or its merge. */
+  | {
+      kind: "pr";
+      repo: string;
+      number: number;
+      /** The head the checks are waited for on; null takes the one first read. */
+      head: string | null;
+      /** Every check on the head has concluded. */
+      all: boolean;
+      /** Checks that must be there and concluded. A name also takes the
+       *  checks that begin with it and a space: `API Tests (shard 1/3)`. */
+      checks: string[];
+      /** Only its merge (or its closing) ends the wait. */
+      merged: boolean;
+    }
+  /** A GitHub Actions run concluding. */
+  | { kind: "run"; repo: string; run: number }
+  /** A command started as a unit of its own, which a stopped session does not take with it. */
+  | { kind: "job"; unit: string; command: string; log: string; result: string }
+  /** Other sessions: the first whose turn ends, or that stops. */
+  | { kind: "session"; ids: string[] }
+  /** A command asked again and again: exit 0 is the event, 1 is not yet. */
+  | { kind: "until"; cmd: string; cwd: string; everyMs: number }
+  /** Nothing but its deadline. */
+  | { kind: "time" };
+
+/**
+ * How a wait ended. Every wait ends in one of these and its session is told
+ * which: what it waited for happened, can no longer happen by waiting (a head
+ * that moved, a check that never came with nothing left running), did not
+ * happen by the deadline, or could not be watched any longer.
+ */
+export type WaitEnd = "happened" | "stuck" | "timeout" | "broken" | "cancelled";
+
+export interface Wait {
+  id: number;
+  /** The session that is told how it ends. */
+  sessionId: string;
+  spec: WaitSpec;
+  createdAt: number;
+  deadline: number;
+  /** Null while it is still going. */
+  ended: WaitEnd | null;
+  /** What its session is told. */
+  outcome: string | null;
+  endedAt: number | null;
+  /** When its session took the message; null until it has. */
+  toldAt: number | null;
+  /** Why it has not been told yet. */
+  untold: string | null;
+  checkedAt: number | null;
+  /** What the last look found, in words. */
+  seen: string | null;
+  /** Since when every look has failed; null while they answer. */
+  failingSince: number | null;
+  /** What one look hands the next. */
+  memo: { head?: string; readyAt?: number; headWrongAt?: number; goneAt?: number; idle?: Record<string, number>; absentAt?: number; failures?: number; error?: string };
+}
+
 // ------------------------------------------------------------- schedules
 
 /** What a scheduled session starts with: the new-session request, as asked. */
@@ -1040,7 +1349,8 @@ export interface ScheduleSpec {
 /**
  * A session to start later (src/core/scheduler.ts). A one-time one is shown as
  * a session and starts under its own id, so a link to it keeps working; a
- * recurring one starts a new session each time.
+ * recurring one starts a new session each time, unless it keeps to one
+ * (`sameSession`).
  */
 export interface Schedule {
   id: string;
@@ -1052,10 +1362,33 @@ export interface Schedule {
   /** The next start; null when there is none coming. */
   nextAt: number | null;
   createdAt: number;
+  /** When it last started a session or, with `sameSession`, said something
+   *  to its own. A time its note command had nothing to say is not one. */
   lastRunAt: number | null;
   /** The session the last start made. */
   lastSessionId: string | null;
   lastError: string | null;
+  /**
+   * A shell command run in the schedule's directory each time it comes due
+   * (timed recurring ones only). What it prints is the note: said before the
+   * prompt, as a red rule's note is. When it prints nothing, nothing happens
+   * that time; when it fails, that is `lastError` and nothing starts.
+   */
+  noteCmd: string | null;
+  /**
+   * Each time it comes due it speaks to the session it started last instead
+   * of starting another: the note (or, with no note command, the prompt) is
+   * typed into it. A new one is started, and the old one closed, when that
+   * session is gone, closed, stopped at a limit, or holds more context than
+   * `freshOver`. While it is mid-turn or showing a prompt, that time is skipped.
+   */
+  sameSession: boolean;
+  /** Tokens of context past which a `sameSession` schedule starts afresh;
+   *  null for the default (`FRESH_OVER`, src/core/schedule.ts). */
+  freshOver: number | null;
+  /** The session it replaced while that one was mid-turn: handed over at
+   *  once, and closed once its turn is over. */
+  retiring: string | null;
 }
 
 // ----------------------------------------------------------------- health

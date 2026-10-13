@@ -251,16 +251,6 @@ export function Voice() {
       </header>
 
       <div className="vc-log" ref={scroll}>
-        {lines.length === 0 && !interim ? (
-          <div className="vc-hint">
-            <p>
-              Talk to it like a colleague on a call: ask what needs you, what a session said, answer one, or hand it something to do.
-              Ask it to tell you when something finishes and it will speak up when it does. Real work it starts as its own session, and
-              the answer comes back here.
-            </p>
-            <p>It only answers when you are talking to it, so you can leave it on while you do other things. Keep the screen on: a locked phone stops the mic.</p>
-          </div>
-        ) : null}
         {lines.map((l) => (
           <div key={l.id} className={`vc-line vc-${l.kind}`}>
             {l.text}

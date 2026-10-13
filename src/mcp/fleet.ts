@@ -18,6 +18,8 @@ import { z } from "zod";
 import { VERSION } from "../version";
 import { apiClient } from "../client";
 import type { AppState, Placement, Session, TimelineEvent, TimelinePage } from "../core/types";
+import { retryClock } from "../core/attention";
+import { accountProvider } from "../core/providers/account";
 
 const text = (body: string) => ({ content: [{ type: "text" as const, text: body }] });
 
@@ -54,7 +56,7 @@ export function brief(s: Session & { attention?: { reason: string } }, accountLa
         : s.turnError.kind === "transient"
           ? `stopped on an error (${clip(s.turnError.detail, 120)}) — send a message to retry`
           : `stopped on an error a retry cannot fix: ${clip(s.turnError.detail, 120)}`;
-    lines.push(`  ! ${why}`);
+    lines.push(`  ! ${why}${s.autoResume ? `; agentbox retries it ${retryClock(s.autoResume.at, now)}` : ""}`);
   }
   if (s.lastMessage) lines.push(`  said: ${clip(s.lastMessage, 220)}`);
   return lines.join("\n");
@@ -142,12 +144,15 @@ export async function runMcp(base: string): Promise<void> {
       description:
         "Sends `text` to a session running in agentbox, exactly as if typed at its prompt and submitted. " +
         "Works only for sessions agentbox runs (not ones in another terminal — adopt those first) and " +
-        "only sensibly when the session is waiting for input.",
-      inputSchema: { id: z.string(), text: z.string().min(1) },
+        "only sensibly when the session is waiting for input. Refused, with the reason, when the session " +
+        "is stopped or its prompt cache is cold (a message would make it re-read its whole context: read " +
+        "its transcript instead, or pass `wake: true` when waking it is the point — an answer it asked " +
+        "for, a blocker), and when you have sent it more than a few messages in the last hour.",
+      inputSchema: { id: z.string(), text: z.string().min(1), wake: z.boolean().optional() },
     },
-    async ({ id, text: body }) => {
-      await api("POST", `/api/sessions/${id}/send`, { text: body, from: "agent", fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
-      return text(`sent to ${id}`);
+    async ({ id, text: body, wake }) => {
+      const sent = await api<{ to: string } | null>("POST", `/api/sessions/${id}/send`, { text: body, from: "agent", wake: wake === true, fromSession: process.env.AGENTBOX_SESSION, callerPid: process.pid });
+      return text(sent && sent.to !== id ? `sent to ${sent.to}: it has taken over from ${id}, so send to it from now on` : `sent to ${id}`);
     },
   );
 
@@ -160,7 +165,7 @@ export async function runMcp(base: string): Promise<void> {
         "(or `account`, a label, if given). " +
         "Returns the new session's id and why it went to that account.",
       inputSchema: {
-        provider: z.enum(["claude", "codex", "devin", "omp"]),
+        provider: z.enum(["claude", "codex", "devin", "omp", "opencode", "muse"]),
         cwd: z.string().describe("Absolute path of the directory to work in"),
         prompt: z.string().min(1),
         account: z.string().optional().describe("Account label to force; omit to let the balancer choose"),
@@ -171,7 +176,7 @@ export async function runMcp(base: string): Promise<void> {
       let accountId: string | null = null;
       if (account) {
         const state = await api<AppState>("GET", "/api/state");
-        const match = state.accounts.find((a) => a.provider === provider && (a.label === account || a.id === account || a.email === account));
+        const match = state.accounts.find((a) => a.provider === accountProvider(provider) && (a.label === account || a.id === account || a.email === account));
         if (!match) throw new Error(`no ${provider} account "${account}"`);
         accountId = match.id;
       }

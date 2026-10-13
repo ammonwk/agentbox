@@ -10,17 +10,22 @@ import { needsYou, titleOf } from "./lib/board";
 import { go, hrefOf, navOf, onGo, parseHash, type NavId, type Route } from "./route";
 import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
 import { useUpdateReady } from "./lib/update";
+import { useKeyboardNavigation } from "./lib/keyboard";
 import { SystemBar } from "./SystemBar";
+import { SysbarSlot } from "./sysbarslot";
 import { SessionView } from "./views/session/SessionView";
 import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
 import { Skills } from "./views/Skills";
-import { OnboardingCard } from "./views/Onboarding";
+import { Mcps } from "./views/Mcps";
+import { InboxBell } from "./Inbox";
+import { Review } from "./views/Review";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
 // heaviest thing in the bundle.)
+const Team = lazy(() => import("./views/Team").then((m) => ({ default: m.Team })));
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
 const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice })));
 
@@ -59,26 +64,38 @@ function isTyping(e: KeyboardEvent): boolean {
 
 const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
+  { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
   { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
   { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
+  { id: "team", label: "Team", icon: Icon.link, to: { page: "team" } },
+  { id: "mcps", label: "MCPs", icon: Icon.plugs, to: { page: "mcps" } },
   { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
 ];
 
 const PAGE_TITLE: Record<NavId, string> = {
   sessions: "Sessions",
+  review: "Review",
   voice: "Voice",
   accounts: "Accounts",
   skills: "Skills",
+  mcps: "MCPs",
+  team: "Team",
   settings: "Settings",
 };
 
 export function App() {
+  useKeyboardNavigation();
   const { state } = useAppState();
   const [route, navigate] = useRoute();
+  useEffect(() => {
+    if (new URLSearchParams(location.search).has("cloud") && route.page !== "team") navigate({ page: "team" }, true);
+  }, []);
   const theme = useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
   const nav = navOf(route);
+  // The start of the system bar, where an open session puts its facts.
+  const [sysbarSlot, setSysbarSlot] = useState<HTMLElement | null>(null);
 
   const counts = useMemo(() => countsOf(state), [state]);
 
@@ -125,7 +142,7 @@ export function App() {
     };
   }, []);
 
-  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice";
+  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
@@ -137,7 +154,7 @@ export function App() {
       {/* The slot holds the icon rail's width in the layout; the sidebar
           itself widens over the page on hover, so nothing beside it reflows. */}
       <div className="sidebar-slot">
-        <aside className="sidebar">
+        <aside className="sidebar" data-nav-region="navigation" aria-label="Application navigation">
           <div className="brand">
             <BrandMark />
             <span className="nav-label">agentbox</span>
@@ -156,6 +173,7 @@ export function App() {
           <button
             type="button"
             className="nav-item nav-new"
+            data-nav-item
             title="New session (n)"
             onClick={(e) => {
               if (e.detail > 0) e.currentTarget.blur();
@@ -174,12 +192,14 @@ export function App() {
               return (
                 <a
                   key={id}
+                  data-nav-item
+                  aria-keyshortcuts="ArrowUp ArrowDown ArrowRight"
                   className={`nav-item ${active ? "active" : ""}`}
                   href={hrefOf(to)}
                   aria-current={active ? "page" : undefined}
                   title={label}
                 >
-                  <IconCmp />
+                  <IconCmp size={20} weight="duotone" />
                   <span className="nav-label">{label}</span>
                   {count > 0 ? (
                     <span className={`count${id === "accounts" ? " count-warn" : ""}`} title={countTitle(id, count)}>
@@ -192,12 +212,8 @@ export function App() {
           </nav>
 
           <div className="spacer" />
-          <div className="sidebar-keys nav-label" aria-hidden="true">
-            <span><kbd>/</kbd> search</span>
-            <span><kbd>j</kbd><kbd>k</kbd> move</span>
-            <span><kbd>Alt+W</kbd> close</span>
-          </div>
           <UpdateReady />
+          <InboxBell state={state} themeError={theme.error} />
           <ConnectionChip />
           <ThemeControl value={theme.pref} onChange={theme.set} />
         </aside>
@@ -230,20 +246,11 @@ export function App() {
           </header>
         )}
 
+        {/* The one banner left: the rest are in the inbox (Inbox.tsx). */}
         <StaleBanner />
-        {theme.error ? (
-          <Banner tone="warn" icon={Icon.alert}>
-            Theme not saved: {theme.error}
-          </Banner>
-        ) : null}
-        {state?.warnings.map((w) => (
-          <Banner key={w} tone="warn" icon={Icon.alert}>
-            {w}
-          </Banner>
-        ))}
-        {state ? <OnboardingCard ob={state.onboarding} sessions={state.sessions} /> : null}
 
-        <main className={`content ${(flush || route.page === "skills") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1}>
+        <SysbarSlot.Provider value={sysbarSlot}>
+        <main className={`content ${(flush || route.page === "skills" || route.page === "mcps") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
@@ -270,16 +277,23 @@ export function App() {
               <Suspense fallback={<Empty title="Loading…" />}>
                 <Voice />
               </Suspense>
+            ) : route.page === "review" ? (
+              <Review state={state} />
             ) : route.page === "skills" ? (
               <Skills skills={state.skills} />
+            ) : route.page === "team" ? (
+              <Suspense fallback={<Empty title="Loading…" />}><Team state={state} /></Suspense>
+            ) : route.page === "mcps" ? (
+              <Mcps />
             ) : (
               <Settings state={state} />
             )}
           </ErrorBoundary>
         </main>
+        </SysbarSlot.Provider>
 
         <ErrorBoundary label="The system bar">
-          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} />
+          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} slotRef={setSysbarSlot} />
         </ErrorBoundary>
       </div>
 
@@ -319,19 +333,24 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { sessions: 0, voice: 0, accounts: 0, skills: 0, settings: 0 };
+  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
     sessions: needsYou(state.sessions),
+    // Kept for later is still yours, but you have seen it: it does not nag.
+    review: state.cards.filter((c) => c.state === "open").length,
     voice: 0,
     accounts: Math.max(loginsOpen, authBad),
     skills: 0,
+    mcps: 0,
+    team: 0,
     settings: 0,
   };
 }
 
 function countTitle(id: NavId, n: number): string {
+  if (id === "review") return `${n} card${n === 1 ? "" : "s"} to review`;
   if (id === "accounts") return `${n} account${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} a login`;
   return `${n} session${n === 1 ? "" : "s"} waiting on you`;
 }
@@ -386,32 +405,16 @@ function ConnectionChip() {
   );
 }
 
-/** The app keeps rendering the last state it had; this says so out loud. */
+/**
+ * The app keeps rendering the last state it had; this says so out loud. Only
+ * a failed connection is a banner: then the whole page is out of date. A
+ * restart the server announced, and its first read of the transcripts, are
+ * expected and over in seconds, so they go in the inbox (Inbox.tsx).
+ */
 function StaleBanner() {
-  const { connected, downSince, retryAt, attempts, lastError, failing, restarting, starting, retryNow } = useConnection();
+  const { connected, downSince, retryAt, attempts, lastError, failing, restarting, retryNow } = useConnection();
   const secs = useCountdown(retryAt);
-  // Down on purpose: a restart the server announced, then its first read of
-  // the transcripts. Expected, and over in seconds, so no alarm.
-  if (connected && starting) {
-    return (
-      <Banner tone="warn" icon={Icon.clock}>
-        <span>
-          <strong>agentbox is starting.</strong> Reading transcripts
-          {starting.of > 0 ? ` (${starting.read} of ${starting.of})` : ""}; what you see is from before the restart until it is done.
-        </span>
-      </Banner>
-    );
-  }
-  if (!connected && restarting) {
-    return (
-      <Banner tone="warn" icon={Icon.refresh}>
-        <span>
-          <strong>agentbox is restarting…</strong> Reconnecting as soon as it is back; what you see is from before the restart.
-        </span>
-      </Banner>
-    );
-  }
-  if (connected || downSince === null || !failing) return null;
+  if (connected || restarting || downSince === null || !failing) return null;
   const downFor = Math.round((Date.now() - downSince) / 1000);
   return (
     <Banner tone="danger" icon={Icon.wifiOff}>
@@ -579,11 +582,6 @@ function ThemeControl({ value, onChange }: { value: AgentSettings["theme"]; onCh
 
 function BrandMark() {
   return (
-    <svg viewBox="0 0 32 32" width="20" height="20" aria-hidden="true">
-      <rect x="3" y="3" width="26" height="26" rx="6" fill="var(--accent)" opacity="0.15" />
-      <rect x="8" y="8" width="16" height="4" rx="1.5" fill="var(--accent)" />
-      <rect x="8" y="16" width="10" height="4" rx="1.5" fill="currentColor" opacity="0.85" />
-      <rect x="8" y="23" width="13" height="3" rx="1.5" fill="var(--faint)" />
-    </svg>
+    <img src="/icon.svg" width="20" height="20" alt="" />
   );
 }

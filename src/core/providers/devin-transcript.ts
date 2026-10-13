@@ -38,8 +38,10 @@
 import type { AskQuestion, TimelineEvent, TokenTotals } from "../types";
 import type { TranscriptFacts } from "./types";
 import { askQuestionsOf } from "./ask";
+import { countPrRepos, countSlugs, mostNamed, prReposIn } from "../prrepo";
 import { addUsage, emptyTotals } from "../pricing";
 import type { DevinPrompt, DevinSessionRow } from "./devin-db";
+import { bridgedModel } from "../../bridge/models";
 
 function clip(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
@@ -138,6 +140,8 @@ export interface AtifParse {
    *  continue. Null when the source cannot say (the export has no
    *  finish_reason). */
   turnError: { at: number; detail: string } | null;
+  /** The repo it names most as the home of PRs (src/core/prrepo.ts). */
+  prRepo: string | null;
 }
 
 export function parseAtif(doc: unknown): AtifParse {
@@ -152,7 +156,9 @@ export function parseAtif(doc: unknown): AtifParse {
     userPrompts: [],
     turnOpen: null,
     turnError: null,
+    prRepo: null,
   };
+  const repos = new Map<string, number>();
   const d = (doc ?? {}) as { steps?: unknown; agent?: { model_name?: unknown } };
   const steps = Array.isArray(d.steps) ? (d.steps as any[]) : [];
 
@@ -168,6 +174,7 @@ export function parseAtif(doc: unknown): AtifParse {
     if (s.source === "user") {
       const text = textOf(s.message);
       if (text.trim()) out.userPrompts.push(text.trim());
+      countPrRepos(repos, text);
       const ev: TimelineEvent = { id: `${base}.u`, at, kind: "user", text };
       const images = imagesIn(s.message);
       if (images > 0) (ev as { images?: number }).images = images;
@@ -199,6 +206,7 @@ export function parseAtif(doc: unknown): AtifParse {
       out.events.push({ id: `${base}.r`, at, kind: "thinking", text: s.reasoning_content });
     }
     const said = textOf(s.message);
+    countPrRepos(repos, said);
     if (said.trim()) {
       out.events.push({ id: `${base}.m`, at, kind: "assistant", text: said });
       const t = said.trim();
@@ -211,6 +219,7 @@ export function parseAtif(doc: unknown): AtifParse {
     const calls: any[] = Array.isArray(s.tool_calls) ? s.tool_calls : [];
     calls.forEach((c, i) => {
       if (!c || typeof c !== "object") return;
+      countPrRepos(repos, argsText(c.arguments));
       const output = typeof c.tool_call_id === "string" ? results.get(c.tool_call_id) : undefined;
       const ev: TimelineEvent = {
         id: `${base}.t${i}`,
@@ -237,7 +246,18 @@ export function parseAtif(doc: unknown): AtifParse {
       out.events.push(ev);
     });
   }
+  out.prRepo = mostNamed(repos);
   return out;
+}
+
+/** A tool call's arguments as text: a JSON string, or an object. */
+function argsText(args: unknown): string {
+  if (typeof args === "string") return args;
+  try {
+    return JSON.stringify(args ?? "");
+  } catch {
+    return "";
+  }
 }
 
 /** What is kept of one message-forest node: enough to walk the chain and fold
@@ -264,6 +284,8 @@ export interface DevinNode {
   /** Why the model stopped: "tool_calls", "stop", or "max_tokens" — its reply
    *  was cut off mid-write and it waits for a message to continue. */
   finishReason: string | null;
+  /** The repos its text and tool calls name as the home of PRs. */
+  prRepos: string[];
 }
 
 export interface DevinNodeInput {
@@ -320,6 +342,7 @@ export function devinNode(row: DevinNodeInput): DevinNode | null {
     answers: m.role === "tool" && typeof m.tool_call_id === "string" ? m.tool_call_id : null,
     wantsTools: m.role === "assistant" && (calls.length > 0 || md.finish_reason === "tool_calls"),
     finishReason: typeof md.finish_reason === "string" ? md.finish_reason : null,
+    prRepos: prReposIn([text, ...calls.map((c) => argsText(c?.arguments))].join("\n")),
   };
 }
 
@@ -392,8 +415,11 @@ export function chainFacts(chain: readonly ChainLink[]): AtifParse {
     userPrompts: [],
     turnOpen: null,
     turnError: null,
+    prRepo: null,
   };
+  const repos = new Map<string, number>();
   for (const { node: n } of chain) {
+    countSlugs(repos, n.prRepos);
     if (n.role !== "user" && n.role !== "assistant") continue;
     out.firstStepAt ??= n.at;
     out.lastStepAt = Math.max(out.lastStepAt ?? 0, n.at);
@@ -412,6 +438,7 @@ export function chainFacts(chain: readonly ChainLink[]): AtifParse {
   // assistant last spoke without asking for tools. A turn that ended on
   // "max_tokens" is over too — but its last word was cut off, and the CLI
   // itself asks for a message to continue.
+  out.prRepo = mostNamed(repos);
   const last = chain.at(-1)?.node ?? null;
   out.turnOpen = last !== null && (last.role !== "assistant" || last.wantsTools);
   out.turnError =
@@ -546,6 +573,7 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     (lastPromptAt !== null &&
       (atif?.lastStepAt != null ? lastPromptAt > atif.lastStepAt : activity === null || lastPromptAt >= activity));
   const times = [activity, lastPromptAt, atif?.lastStepAt ?? null].filter((x): x is number => x !== null);
+  const model = atif?.model ?? (row?.model || null);
   return {
     agentSessionId: i.id,
     cwd: row?.working_directory ?? null,
@@ -557,14 +585,16 @@ export function devinFacts(i: DevinFactsInput): TranscriptFacts {
     lastPrompt: (lastPrompt?.content ?? atif?.userPrompts[atif.userPrompts.length - 1])?.slice(0, PROMPT_CAP) ?? null,
     lastPromptAt,
     lastMessage: atif?.lastMessage ?? null,
-    model: atif?.model ?? (row?.model || null),
+    model,
     gitBranch: null,
+    prRepo: atif?.prRepo ?? null,
     startedAt: row ? row.created_at * 1000 : (atif?.firstStepAt ?? null),
     lastActivityAt: times.length > 0 ? Math.max(...times) : null,
     turnOpen,
     turnError: atif?.turnError ? { ...atif.turnError, kind: "output-cap" as const } : null,
     contextUsed: atif?.contextUsed ?? null,
-    contextLimit: null,
+    // devin does not record a model's window; the bridge's models are ours.
+    contextLimit: bridgedModel(model)?.contextTokens ?? null,
     tokens: atif ? { ...atif.tokens } : emptyTotals(),
     usage: null,
     rateLimitHits: i.rateLimitHits,

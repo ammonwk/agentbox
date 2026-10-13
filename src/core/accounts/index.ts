@@ -8,7 +8,7 @@
 
 import { EventEmitter } from "node:events";
 import { deleteAccount, getAccount, insertAccount, listAccounts, updateAccount } from "../db";
-import type { Account, AccountAuth, AccountUsage, LoginFlow, ProviderId, UsageWindow } from "../types";
+import type { Account, AccountAuth, AccountProvider, AccountUsage, LoginFlow, ProviderId, UsageWindow } from "../types";
 import type { ExecFn } from "./exec";
 import {
   AccountError,
@@ -118,8 +118,7 @@ export class AccountsService extends EventEmitter {
    * started in it. The account exists from this moment (auth "missing") so a
    * login you abandon can be resumed with `login(id)`.
    */
-  async create(provider: ProviderId, label?: string): Promise<{ account: Account; login: LoginFlow }> {
-    if (provider === "omp") throw new AccountError(400, "omp balances its own logins — add them with `omp auth-broker login` instead");
+  async create(provider: AccountProvider, label?: string): Promise<{ account: Account; login: LoginFlow }> {
     const id = newAccountId();
     const home = createAccountHome(provider, id);
     const account: Account = {
@@ -147,7 +146,7 @@ export class AccountsService extends EventEmitter {
     return { account, login };
   }
 
-  async importHome(provider: ProviderId, home: string): Promise<Account> {
+  async importHome(provider: AccountProvider, home: string): Promise<Account> {
     const { account } = await importHomeImpl(provider, home, {
       identifyEmail: async (a) => (await identify(a, { exec: this.opts.exec })).email,
     });
@@ -220,18 +219,11 @@ export class AccountsService extends EventEmitter {
 
   private withStatus(a: Account): AccountWithStatus {
     const usage = this.usage.get(a.id);
-    let auth = this.identities.peek(a.id)?.auth ?? UNKNOWN_AUTH;
-    if (a.provider === "omp") {
-      // omp has no credentials file we read; whether `omp usage` answers is
-      // the best signal there is.
-      auth =
-        usage.source === "cli" && !usage.stale
-          ? { state: "ok", expiresAt: null, detail: null }
-          : { state: "unknown", expiresAt: null, detail: usage.stale };
-    }
-    // Keep claude/codex auth current with the clock without waiting for the
-    // identity sweep: the cache expires after a minute and this re-reads.
-    if (a.provider === "claude" || a.provider === "codex") void this.maybeReidentify(a).catch(() => undefined);
+    const auth = this.identities.peek(a.id)?.auth ?? UNKNOWN_AUTH;
+    // Keep auth read from a file (claude, codex, an OpenCode Go account)
+    // current without waiting for the identity sweep: the cache expires after
+    // a minute and this re-reads.
+    if (a.provider !== "devin") void this.maybeReidentify(a).catch(() => undefined);
     return { ...a, auth, usage };
   }
 

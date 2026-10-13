@@ -2,7 +2,7 @@
  *  its connection comes back to the same one), the watches the voice agent
  *  started, and news from the board. */
 
-import { attentionOf } from "../core/attention";
+import { attentionOf, retrying } from "../core/attention";
 import { ChangeWatcher, changeLine } from "../core/changes";
 import type { Fleet } from "../core/fleet";
 import { listRepos } from "../core/db";
@@ -87,7 +87,7 @@ export class VoiceHub {
   private watch(): void {
     const rows = this.fleet
       .sessions()
-      .map((s) => ({ ...s, reason: attentionOf(s, this.fleet.blockedReason(s.id)).reason }));
+      .map((s) => ({ ...s, status: retrying(s) ? ("running" as const) : s.status, reason: attentionOf(s, this.fleet.blockedReason(s.id)).reason }));
     for (const c of this.changes.next(rows)) if (c.kind === "blocked" || c.kind === "waiting") this.news.push(changeLine(c));
     if (this.news.length && !this.newsTimer) {
       this.newsTimer = setTimeout(() => {

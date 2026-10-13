@@ -1,6 +1,6 @@
 # agentbox
 
-A fleet manager for coding-agent CLI sessions (claude, codex, devin, omp)
+A fleet manager for coding-agent CLI sessions (claude, codex, devin, omp, opencode)
 across multiple subscription accounts. **Read `docs/v2.md` first** — it is the
 design and the HTTP/WebSocket contract, and it says which piece owns what.
 
@@ -66,13 +66,15 @@ once: commit your own files by path, never `git add -A`.
   And Claude's /btw side questions: Claude keeps those only in the process's
   memory, so the `btw` table is their one record (`src/core/btw.ts`).
 - **A warm session never changes account.** Switching accounts invalidates
-  the provider's prompt cache, so while a session has been active within
-  `claimIdleMin` (60) resume and adopt use its pinned account. Once it is idle
-  past that the cache is cold anyway: it is shown unpinned, and a resume or a
+  the provider's prompt cache, so until its cache goes cold
+  (`Session.cacheWarmUntil`, `src/core/cache.ts` — the one clock for "is it
+  warm?"; nothing else should keep its own) resume and adopt use its pinned
+  account. After that it is shown unpinned, and a resume or a
   message wakes it on the balancer's pick (`Fleet.wake`, which moves — never
   copies — the transcript into that account's home; claude and devin only).
-  A session stopped at a limit is never moved on its own: the UI offers a
-  button. Transcripts are not shared between account homes, so a plain
+  The one exception: a session stopped at its account's limit is moved once
+  in its life to an account that can take it (`Fleet.continueStalled`);
+  after that the UI offers a button. Transcripts are not shared between account homes, so a plain
   `claude --resume` cannot cross accounts.
 - **Never kill before proving the resume.** Adopt checks the transcript exists
   and (claude) the resume cwd slugs to the transcript's directory, *then*
@@ -128,10 +130,19 @@ once: commit your own files by path, never `git add -A`.
   `src/subagents/`: a pool of `omp acp` / `devin acp` processes it owns
   (`backend.ts` says how each CLI is started), their records and live status
   lines. Independent of the server and the database.
+- `src/bridge/` — the devin bridge (`agentbox devin-bridge`, a process of
+  its own on :4480): runs a model devin does not sell in devin's harness, so
+  it gets devin's compaction. LongCat 2.5 Preview from OpenCode Go is the one
+  so far, rolled before 220k. A devin session on such a model has
+  `WINDSURF_API_SERVER_URL` pointed at it (the devin adapter does this) and
+  is placed as `unmetered`. It depends on a wire format read off the network:
+  **`docs/devin-bridge.md` is how it works and how to repair it after a devin
+  update**, starting with `agentbox devin-bridge check`. After changing
+  `src/bridge/`, `agentbox devin-bridge restart`.
 - `src/cli/index.ts` — `agentbox claude|codex|…`, `attach`, `usage`, `mcp`,
-  `subagent-mcp`, `doctor`; `src/cli/sessions.ts` — the Unix-shaped session
+  `subagent-mcp`, `devin-bridge`, `doctor`; `src/cli/sessions.ts` — the Unix-shaped session
   verbs (`ls`, `show`, `log`, `grep`, `screen`, `diff`, `send`, `watch`, `close`,
-  `stop`, `resume`, `adopt`, `label`): ids first on every line, `-` reads ids
+  `stop`, `resume`, `adopt`, `move`, `label`): ids first on every line, `-` reads ids
   from stdin.
 - `src/voice/` — hands-free mode (the Voice page, `/ws/voice`): Deepgram Flux
   hears, Claude (`claude-opus-5-5`, low effort, on the API key in
@@ -142,11 +153,24 @@ once: commit your own files by path, never `git add -A`.
   starts a detached session and watches it. It speaks up on its own from those
   lines and from board news (`src/core/changes.ts`, the same changes
   `agentbox watch` prints).
+- `src/core/mcp.ts`, `src/core/mcp-reach.ts` — the global MCP servers (the
+  MCPs page): agentbox's own list, and the layer each CLI is launched with
+  so that every agent gets it. Never edit a CLI's own config for it.
+  `docs/v2.md` "Global MCP servers" is how each CLI takes it.
 - `src/core/user.ts` — who agentbox works for, derived from the machine (git,
   gh, the passwd entry, the timezone) into `<agentbox home>/user.env` by
   `agentbox onboard`, and re-derived at boot when that file is missing. The
   repo never learns a name, an email or a login; personal skills live in
   `~/.claude/skills` or `~/.agents/skills`, outside any checkout.
+- `src/cloud/`, `src/core/cloud/`, `supabase/` — the optional shared cloud
+  (Supabase): people, workspaces, registered machines, plans, skills and
+  messages between machines. **`docs/cloud.md` is its contract.** Clients
+  hold the publishable key only, never a secret one; a machine acts with its
+  own scoped secret, never a person's session; a message from another
+  machine goes through `sendguard.ts` like any agent's and is typed at most
+  once. Without `cloud.env` none of it runs. Schema changes are new files
+  under `supabase/migrations/` (`supabase migration new`), with RLS and
+  explicit grants.
 - `src/core/cli-guide.ts` — the `agentbox` CLI guide for agents: `agentbox
   guide` prints it and `bun run docs:cli` writes it to `docs/cli.md`.
 - `src/core/pwa.ts` — the board's PWA launcher entry. Chrome writes its
@@ -161,5 +185,7 @@ Almost none, on purpose: this is a dev tool, and tests that pin behaviour
 slowed it down more than they caught. Check a change by running it (`bun run
 web:dev`, the live server) and keep `bun run typecheck` clean. Do not add tests
 by default. One has to guard a non-obvious rule whose breakage would be
-destructive or a security hole, and "useful" is not enough — the only one left
-is `src/server/__tests__/csrf.test.ts`.
+destructive or a security hole, and "useful" is not enough — such as
+`src/server/__tests__/csrf.test.ts`. The cloud's tenant isolation and
+message authorization are checked against a local Supabase stack with
+`bun run test:cloud` (docs/cloud.md); plain `bun test` skips those.

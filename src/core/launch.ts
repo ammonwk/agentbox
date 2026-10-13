@@ -32,3 +32,38 @@ export function carryEnv(theirs: ReadonlyMap<string, string>, ours: Readonly<Rec
   }
   return out;
 }
+
+/** How many values a carried flag takes: none, one, or every word up to the
+ *  next flag (as commander parses a variadic option). */
+export type Arity = "none" | "one" | "many";
+
+/**
+ * The flags of `argv` that `allowed` names, with their values, in order: an
+ * adapter's `carryOver`. An allowlist, not a denylist: a flag we do not know
+ * the arity of could swallow the prompt, and one we do not know the meaning
+ * of could be the session id. `--flag=value` keeps its value attached.
+ */
+export function carryFlags(argv: string[], allowed: Readonly<Record<string, Arity>>): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--") break;
+    const eq = a.indexOf("=");
+    const flag = a.startsWith("--") && eq > 0 ? a.slice(0, eq) : a;
+    const arity = allowed[flag];
+    if (!arity) continue;
+    out.push(a);
+    if (arity === "none" || eq > 0) continue;
+    if (arity === "one") {
+      if (argv[i + 1] !== undefined) out.push(argv[++i]!);
+      continue;
+    }
+    while (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith("-")) out.push(argv[++i]!);
+  }
+  return out;
+}
+
+/** Does `args` set any of `flags`, alone or as `--flag=value`? */
+export function setsFlag(args: readonly string[], ...flags: string[]): boolean {
+  return args.some((a) => flags.some((f) => a === f || a.startsWith(`${f}=`)));
+}
