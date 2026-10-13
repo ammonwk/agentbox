@@ -74,6 +74,8 @@ const PROVIDERS_EVERY_MS = 30 * 60_000;
 const DIRECTORY_FOR_MS = 60_000;
 /** How long `send` waits for the cloud before answering "queued here". */
 const SEND_WAIT_MS = 8_000;
+/** How long resolving an address waits for the cloud before the last directory. */
+const RESOLVE_WAIT_MS = 3_000;
 
 const skillRootDir = (s: InstallationSettings): string => join(userHome(), s.skillRoot === "agents" ? ".agents" : ".claude", "skills");
 
@@ -227,8 +229,9 @@ export class CloudBridge {
       }
       await this.#syncProviders(api, now);
       if (!this.#directory || now - this.#directory.at > HELLO_EVERY_MS * 2) await this.directory(true);
-      await this.#flush(api);
+      const unsent = await this.#flush(api);
       await this.#receive(api);
+      if (unsent) throw unsent;
       this.#state = "connected";
       this.#lastOkAt = Date.now();
       this.#lastError = null;
@@ -260,8 +263,20 @@ export class CloudBridge {
     this.#providers = { hash, at: now };
   }
 
-  async #flush(api: InstallationCloud): Promise<void> {
-    for (const row of this.store.due(Date.now())) await this.#push(api, row);
+  /** Each due message on its own: one that cannot go yet does not hold up
+   *  the others, nor what is waiting to be received. */
+  async #flush(api: InstallationCloud): Promise<CloudError | null> {
+    let first: CloudError | null = null;
+    for (const row of this.store.due(Date.now())) {
+      try {
+        await this.#push(api, row);
+      } catch (e) {
+        const err = e instanceof CloudError ? e : new CloudError((e as Error).message, 500);
+        if (err.status === 401) throw err;
+        first ??= err;
+      }
+    }
+    return first;
   }
 
   async #push(api: InstallationCloud, row: OutboxRow): Promise<void> {
@@ -277,7 +292,8 @@ export class CloudBridge {
       });
       this.store.accepted(row.client_id, r.message.id);
     } catch (e) {
-      if (e instanceof CloudError && !e.transient && e.status !== 401) this.store.refused(row.client_id, e.message);
+      // A rate refusal is the workspace's answer, not the network's: final.
+      if (e instanceof CloudError && (!e.transient || e.status === 429) && e.status !== 401) this.store.refused(row.client_id, e.message);
       else {
         this.store.retryLater(row.client_id, (e as Error).message, Date.now());
         throw e;
@@ -287,18 +303,18 @@ export class CloudBridge {
 
   async #receive(api: InstallationCloud): Promise<void> {
     // Answers that did not reach the cloud last time go first.
-    for (const row of this.store.unacked()) {
-      await api.ack(row.message_id, row.outcome!, row.reason).catch((e: unknown) => {
-        if (!(e instanceof CloudError && e.status === 409)) throw e;
-      });
+    // 409: the cloud already has an answer; 404: the message is gone (purged).
+    const settled = (e: unknown) => {
+      if (!(e instanceof CloudError && (e.status === 409 || e.status === 404))) throw e;
+    };
+    for (const row of this.store.unacked(this.#cred!.installationId)) {
+      await api.ack(row.message_id, row.outcome!, row.reason).catch(settled);
       this.store.acked(row.message_id);
     }
     const allowRemoteWake = readInstallationSettings().allowRemoteWake;
     for (const m of await api.fetch(20)) {
       const d = await deliverInbound(this.fleet, this.store, m, { allowRemoteWake }, Date.now());
-      await api.ack(m.id, d.outcome, d.reason).catch((e: unknown) => {
-        if (!(e instanceof CloudError && e.status === 409)) throw e;
-      });
+      await api.ack(m.id, d.outcome, d.reason).catch(settled);
       this.store.acked(m.id);
     }
   }
@@ -331,10 +347,20 @@ export class CloudBridge {
       throw new CloudError(`"${address}" is not an address: write <installation>/<session id>, as \`agentbox cloud dir\` lists them`, 400);
     }
     const find = (d: Directory | null | undefined) => d?.installations.find((i) => i.id === inst || i.name.toLowerCase() === inst.toLowerCase());
-    // What this machine already knows first, so a send does not wait on the
-    // network; the cloud still refuses a target that has since gone.
-    const known = this.#directory?.dir ?? this.store.get<Directory>(`directory:${this.#cred?.installationId}`);
-    const hit = find(known) ?? find(await this.directory(true));
+    // The cloud's answer when it comes soon: a name can move to a new
+    // installation. The last directory only when it does not, so a send
+    // while offline still queues.
+    let fresh: Directory | null = null;
+    try {
+      fresh = await Promise.race([this.#api!.directory(), Bun.sleep(RESOLVE_WAIT_MS).then(() => null)]);
+    } catch (e) {
+      if (!(e instanceof CloudError && e.transient)) throw e;
+    }
+    if (fresh) {
+      this.#directory = { at: Date.now(), dir: fresh };
+      this.store.put(`directory:${this.#cred!.installationId}`, fresh);
+    }
+    const hit = fresh ? find(fresh) : find(this.#directory?.dir ?? this.store.get<Directory>(`directory:${this.#cred?.installationId}`));
     if (!hit) throw new CloudError(`no installation "${inst}" in this workspace`, 404);
     return { id: hit.id, name: hit.name, session };
   }

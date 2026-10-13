@@ -16,7 +16,7 @@
 import type { InboundMessage } from "../../cloud/protocol";
 import type { Fleet } from "../fleet";
 import { sendReceipt, submitWithReceipt } from "../send-receipts";
-import { agentRefusal, countSend } from "../sendguard";
+import { agentRefusal, chatterRefusal, CHATTER_MAX, countSend } from "../sendguard";
 import { cloudSentMark } from "../sent";
 import type { CloudStore, InboxOutcome } from "./store";
 
@@ -29,6 +29,11 @@ export interface Delivered {
 
 /** Who sent it, for the chatter count: one count per remote agent. */
 export const remoteSender = (m: InboundMessage): string => `cloud:${m.sender_installation_id}:${m.sender_agent ?? "owner"}`;
+/** The machine it came from, which the cloud vouches for. A remote agent's
+ *  own id is only its machine's word, so the machine has a count of its own
+ *  too: a few agents' worth, however many ids it names. */
+const remoteMachine = (m: InboundMessage): string => `cloud:${m.sender_installation_id}`;
+export const MACHINE_CHATTER_MAX = CHATTER_MAX * 3;
 
 /** Where a reply goes: the sender's installation and session, as `agentbox
  *  cloud send` takes it. */
@@ -75,12 +80,12 @@ export async function deliverInbound(
     // Begun before a restart: the receipt says how far it got.
     const r = prior.session_id && prior.receipt_id ? sendReceipt(prior.session_id, prior.receipt_id) : null;
     const d = r ? receiptOutcome(r.state) : { outcome: "uncertain" as const, reason: "agentbox restarted while delivering it; it will not be typed again" };
-    store.decide(m.id, d.outcome, d.reason, now);
+    store.decide(m.id, m.target_installation_id, d.outcome, d.reason, now);
     return d;
   }
 
   const refuse = (reason: string): Delivered => {
-    store.decide(m.id, "refused", reason, now);
+    store.decide(m.id, m.target_installation_id, "refused", reason, now);
     return { outcome: "refused", reason };
   };
   if (!m.target_agent) return refuse("the message names no session to deliver to");
@@ -98,6 +103,8 @@ export async function deliverInbound(
   } catch (e) {
     return refuse((e as Error).message);
   }
+  const machine = check.refusal ? null : chatterRefusal(remoteMachine(m), check.to, now, MACHINE_CHATTER_MAX);
+  if (machine) check.refusal = machine.split(remoteMachine(m)).join(`${m.sender_installation_name} (every agent on it together)`);
   if (check.refusal) {
     const local = m.wake && !opts.allowRemoteWake ? " (this installation does not let messages from other machines wake its sessions)" : "";
     // Said to the remote sender: named as the cloud names it, not by the count's key.
@@ -106,11 +113,14 @@ export async function deliverInbound(
 
   const text = peerMessageText(m, check.to === check.meant ? null : check.meant);
   const receiptId = `cloud-${m.id}`;
-  store.begin(m.id, check.to, receiptId, now);
+  store.begin(m.id, m.target_installation_id, check.to, receiptId, now);
   const receipt = await submitWithReceipt(check.to, receiptId, "cloud", text, (attempt) => fleet.send(check.to, text, attempt, wake));
   const d = receiptOutcome(receipt.state);
   if (d.outcome === "failed" && receipt.error) d.reason = `not delivered: ${receipt.error}`;
-  if (d.outcome === "delivered") countSend(from, check.to, now);
-  store.decide(m.id, d.outcome, d.reason, now);
+  if (d.outcome === "delivered") {
+    countSend(from, check.to, now);
+    countSend(remoteMachine(m), check.to, now);
+  }
+  store.decide(m.id, m.target_installation_id, d.outcome, d.reason, now);
   return d;
 }

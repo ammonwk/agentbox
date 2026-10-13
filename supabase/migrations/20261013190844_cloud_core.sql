@@ -92,6 +92,15 @@ create table private.invite_tokens (
   token_hash bytea not null unique
 );
 
+-- Who left or was removed, and when: an invite made before that does not
+-- bring them back (a multi-use invite still holds uses after they joined).
+create table private.workspace_removals (
+  workspace_id uuid not null references public.workspaces (id) on delete cascade,
+  user_id uuid not null,
+  removed_at timestamptz not null default now(),
+  primary key (workspace_id, user_id)
+);
+
 -- A machine running agentbox, registered by its owner into one workspace.
 create table public.installations (
   id uuid primary key default gen_random_uuid(),
@@ -701,6 +710,12 @@ begin
   if inv.email is not null and inv.email <> mail then
     raise exception 'this invite is for another email address' using errcode = 'PT403';
   end if;
+  if exists (
+    select 1 from private.workspace_removals x
+    where x.workspace_id = inv.workspace_id and x.user_id = uid and x.removed_at >= inv.created_at
+  ) then
+    raise exception 'you left or were removed after this invite was made: ask for a new one' using errcode = 'PT403';
+  end if;
   update public.workspace_invites set uses = uses + 1 where id = inv.id;
   insert into public.workspace_members (workspace_id, user_id, role, invited_by) values (inv.workspace_id, uid, inv.role, inv.created_by);
   return jsonb_build_object('workspace_id', inv.workspace_id, 'role', inv.role, 'already', false);
@@ -718,6 +733,9 @@ declare
   my_role text;
   their_role text;
 begin
+  -- One change to a workspace's members at a time, so two owners removing
+  -- each other cannot both pass the last-owner check.
+  perform 1 from public.workspaces w where w.id = p_workspace for update;
   select m.role into my_role from public.workspace_members m where m.workspace_id = p_workspace and m.user_id = uid;
   select m.role into their_role from public.workspace_members m where m.workspace_id = p_workspace and m.user_id = p_user;
   if my_role is null or their_role is null then
@@ -732,6 +750,8 @@ begin
     raise exception 'a workspace keeps at least one owner: make someone else owner first' using errcode = 'PT409';
   end if;
   delete from public.workspace_members where workspace_id = p_workspace and user_id = p_user;
+  insert into private.workspace_removals (workspace_id, user_id) values (p_workspace, p_user)
+  on conflict (workspace_id, user_id) do update set removed_at = now();
   update public.installations set revoked_at = now(), revoked_by = uid
    where workspace_id = p_workspace and owner_user_id = p_user and revoked_at is null;
   delete from private.installation_secrets s using public.installations i
@@ -747,6 +767,7 @@ language plpgsql security definer set search_path = '' as $$
 declare
   uid uuid := private.human();
 begin
+  perform 1 from public.workspaces w where w.id = p_workspace for update;
   if not exists (select 1 from public.workspace_members m where m.workspace_id = p_workspace and m.user_id = uid and m.role = 'owner') then
     raise exception 'only an owner changes roles' using errcode = 'PT403';
   end if;
@@ -973,15 +994,17 @@ begin
   values (ws, lower(p_slug), trim(p_title), uid)
   on conflict (workspace_id, slug) do nothing;
   select * into p from public.plans where workspace_id = ws and slug = lower(p_slug) for update;
-  if p_base_rev is not null and p_base_rev <> p.latest_rev then
-    raise exception 'plan "%" is at revision %, not %: read it again and publish on top of it', p.slug, p.latest_rev, p_base_rev
-      using errcode = 'PT409';
-  end if;
   -- Publishing what is already the latest is not a new revision: a retry
   -- after a lost answer lands on the revision it made.
   select * into r from public.plan_revisions where plan_id = p.id and rev = p.latest_rev;
   if found and r.sha256 = sha and r.title = trim(p_title) then
     return jsonb_build_object('plan', to_jsonb(p), 'revision', to_jsonb(r) - 'body', 'unchanged', true);
+  end if;
+  -- A new revision names the one it was made from; none (or 0) means a new
+  -- plan. Someone else's newer revision is never replaced unseen.
+  if coalesce(p_base_rev, 0) <> p.latest_rev then
+    raise exception 'plan "%" is at revision %, not %: read it again and publish on top of it', p.slug, p.latest_rev, coalesce(p_base_rev, 0)
+      using errcode = 'PT409';
   end if;
   insert into public.plan_revisions (plan_id, workspace_id, rev, title, body, sha256, summary, created_by, created_by_installation)
   values (p.id, ws, p.latest_rev + 1, trim(p_title), p_body, sha, coalesce(p_summary, ''), uid, inst)
@@ -1067,12 +1090,13 @@ begin
   values (ws, p_name, coalesce(p_description, ''), uid)
   on conflict (workspace_id, name) do nothing;
   select * into s from public.skills where workspace_id = ws and name = p_name for update;
-  if p_base_rev is not null and p_base_rev <> s.latest_rev then
-    raise exception 'skill "%" is at revision %, not %', s.name, s.latest_rev, p_base_rev using errcode = 'PT409';
-  end if;
   select * into r from public.skill_revisions where skill_id = s.id and rev = s.latest_rev;
   if found and r.bundle_sha256 = bundle then
     return jsonb_build_object('skill', to_jsonb(s), 'revision', to_jsonb(r) - 'files', 'unchanged', true);
+  end if;
+  if coalesce(p_base_rev, 0) <> s.latest_rev then
+    raise exception 'skill "%" is at revision %, not %: install it, or publish on top of it with that revision', s.name, s.latest_rev, coalesce(p_base_rev, 0)
+      using errcode = 'PT409';
   end if;
   insert into public.skill_revisions (skill_id, workspace_id, rev, description, files, bundle_sha256, total_bytes, summary, created_by, created_by_installation)
   values (s.id, ws, s.latest_rev + 1, coalesce(p_description, ''), files, bundle, total, coalesce(p_summary, ''), uid, inst)
@@ -1252,7 +1276,8 @@ begin
     target_installation_id, target_agent, body, body_sha256, body_bytes, wake, body_expires_at, purge_at
   ) values (
     s.workspace_id, p_client_id, s.id, s.owner_user_id, p_sender_agent,
-    left(coalesce(nullif(who ->> 'display_name', ''), who ->> 'email') || ' on ' || s.name || coalesce('/' || p_sender_agent, ''), 200),
+    -- The verified email is always in it: a display name is the sender's to choose.
+    left(coalesce(nullif(who ->> 'display_name', '') || ' (' || (who ->> 'email') || ')', who ->> 'email') || ' on ' || s.name || coalesce('/' || p_sender_agent, ''), 200),
     t.id, p_target_agent, p_body, sha, octet_length(p_body), coalesce(p_wake, false),
     now() + make_interval(hours => (pol #>> '{messaging,body_retention_hours}')::int),
     now() + interval '30 days'
@@ -1283,6 +1308,7 @@ declare
   s public.installations;
   why text;
   acc jsonb := '[]'::jsonb;
+  pol jsonb := private.effective_policy(t.workspace_id);
 begin
   perform private.expire_messages();
   for m in
@@ -1297,13 +1323,18 @@ begin
     -- Permission is checked again at delivery: a grant revoked or a sender
     -- removed after the send stops the message here.
     select * into s from public.installations where id = m.sender_installation_id;
-    why := private.delivery_refusal(s, t);
+    why := coalesce(
+      private.delivery_refusal(s, t),
+      case when not (pol #>> '{messaging,enabled}')::boolean then 'this workspace''s policy turned messaging off' end
+    );
     if why is not null then
       update public.messages set state = 'refused', reason = 'not delivered: ' || why, body = null, finished_at = now(), lease_until = null
        where id = m.id;
       continue;
     end if;
-    update public.messages set state = 'leased', lease_until = now() + interval '2 minutes', leased_at = now(), attempts = attempts + 1
+    -- And the policy as it is now: a wake it no longer allows is dropped.
+    update public.messages set state = 'leased', lease_until = now() + interval '2 minutes', leased_at = now(), attempts = attempts + 1,
+           wake = wake and (pol #>> '{messaging,allow_wake}')::boolean
      where id = m.id returning * into m;
     acc := acc || jsonb_build_array(private.message_view(m) || jsonb_build_object(
       'body', m.body,
@@ -1465,6 +1496,7 @@ alter table public.skills enable row level security;
 alter table public.skill_revisions enable row level security;
 alter table private.invite_tokens enable row level security;
 alter table private.installation_secrets enable row level security;
+alter table private.workspace_removals enable row level security;
 
 create policy "own or co-member profile" on public.profiles for select to authenticated
   using (user_id = (select auth.uid()) or private.shares_workspace(user_id));

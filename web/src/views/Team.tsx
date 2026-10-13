@@ -679,8 +679,12 @@ function MachineTab({ human, me, ws, role, status, refresh }: { human: HumanClou
               e.preventDefault();
               void run(async () => {
                 const reg = await human.registerInstallation(ws, name.trim(), { platform: navigator.platform, scopes });
-                // Straight to the machine; this page keeps no copy.
-                await api.cloudRegister(reg.secret);
+                // Straight to the machine; this page keeps no copy. If the
+                // machine does not take it, no installation is left without it.
+                await api.cloudRegister(reg.secret).catch(async (e: unknown) => {
+                  await human.revokeInstallation(reg.installation.id).catch(() => undefined);
+                  throw e;
+                });
                 await refresh();
                 await installations.reload();
               });

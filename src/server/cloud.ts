@@ -21,6 +21,14 @@ export function cloudHttpError(e: unknown): HttpError | null {
   return null;
 }
 
+/** A revision a publish starts from: 0 (or none) for something new. */
+const base = (v: unknown): number | null => {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) throw new HttpError(400, "baseRev must be a revision number, or 0 for a new one");
+  return n;
+};
+
 const int = (v: unknown, label: string): number | undefined => {
   if (v === undefined || v === null || v === "") return undefined;
   const n = Number(v);
@@ -42,6 +50,8 @@ export function cloudRoutes(router: Router, bridge: CloudBridge, fleet: Pick<Fle
     .add("POST", "/api/cloud/installation", async ({ req }) => {
       const b = await readBody(req);
       yours(b.callerPid, "registering this machine");
+      // Asked first, before a person registers it in the cloud for nothing.
+      if (b.check === true) return json(null);
       return json(await bridge.register(requireString(b, "secret")));
     })
     .add("DELETE", "/api/cloud/installation", async ({ url }) => {
@@ -110,7 +120,7 @@ export function cloudRoutes(router: Router, bridge: CloudBridge, fleet: Pick<Fle
           slug: requireString(b, "slug"),
           title: requireString(b, "title"),
           body: requireString(b, "body"),
-          baseRev: b.baseRev === null ? null : int(b.baseRev, "baseRev"),
+          baseRev: base(b.baseRev),
           summary: optionalString(b, "summary"),
         }),
       );
@@ -135,6 +145,6 @@ export function cloudRoutes(router: Router, bridge: CloudBridge, fleet: Pick<Fle
       if (!name && !path) throw new HttpError(400, "name a local skill, or give its path");
       if (name && !SKILL_NAME_RE.test(name)) throw new HttpError(400, "not a skill name");
       yours(b.callerPid, "publishing a skill to the workspace");
-      return json(await bridge.publishSkill({ name, path, summary: optionalString(b, "summary"), baseRev: b.baseRev === null ? null : int(b.baseRev, "baseRev") }));
+      return json(await bridge.publishSkill({ name, path, summary: optionalString(b, "summary"), baseRev: b.baseRev === undefined ? undefined : base(b.baseRev) }));
     });
 }

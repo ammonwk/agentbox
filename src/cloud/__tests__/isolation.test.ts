@@ -130,6 +130,13 @@ describe.skipIf(!enabled)("cloud tenant isolation and message authorization", ()
     const revoked = await alice.api.createInvite(wsA);
     await alice.api.revokeInvite(revoked.invite.id);
     expect(await status(dave.api.acceptInvite(revoked.token))).toBe(403);
+    // An invite with uses left does not bring back someone removed after it was made.
+    const many = await alice.api.createInvite(wsA, { maxUses: 10 });
+    await dave.api.acceptInvite(many.token);
+    await alice.api.removeMember(wsA, dave.id);
+    expect(await status(dave.api.acceptInvite(many.token))).toBe(403);
+    expect((await dave.api.acceptInvite((await alice.api.createInvite(wsA)).token)).role).toBe("member");
+    await alice.api.removeMember(wsA, dave.id);
     await alice.api.removeMember(wsA, mallory.id);
   });
 
@@ -159,6 +166,11 @@ describe.skipIf(!enabled)("cloud tenant isolation and message authorization", ()
     expect(first.message.sender_user_id).toBe(alice.id);
     expect(first.message.sender_installation_id).toBe(a2Id);
     expect(first.message.sender_label).toContain(`alice-box-${run}/w1`);
+    // A display name cannot pass for someone else: the verified email is always there.
+    await alice.api.setDisplayName("bob@example.com");
+    const named = await a2.send({ clientId: `dup-${run}-2`, target: a1Id, targetAgent: "s1", body: "named" });
+    expect(named.message.sender_label).toStartWith(`bob@example.com (${alice.email}) on`);
+    await alice.api.setDisplayName("");
     // Bob is a member, but neither sent it nor owns its target.
     const { data } = await bob.api.sb.from("messages").select("id").eq("id", first.message.id);
     expect(data).toEqual([]);
@@ -185,6 +197,13 @@ describe.skipIf(!enabled)("cloud tenant isolation and message authorization", ()
     expect(await status(a2.send({ clientId: `pol-${run}-1`, target: a1Id, targetAgent: "s1", body: "x".repeat(400) }))).toBe(400);
     expect(await status(a2.send({ clientId: `pol-${run}-2`, target: a1Id, targetAgent: "s1", body: "wake up", wake: true }))).toBe(403);
     await alice.api.setPolicy(wsA, { messaging: { max_body_bytes: 16384 } });
+    // Turning messaging off also stops what was already queued.
+    const queued = await a2.send({ clientId: `pol-${run}-3`, target: a1Id, targetAgent: "s1", body: "queued before" });
+    await alice.api.setPolicy(wsA, { messaging: { enabled: false } });
+    expect((await a1.fetch(50)).some((m) => m.id === queued.message.id)).toBe(false);
+    expect((await a2.messages("out", { ids: [queued.message.id] }))[0]?.state).toBe("refused");
+    await alice.api.setPolicy(wsA, { messaging: { enabled: true } });
+    for (const m of await a1.fetch(50)) await a1.ack(m.id, "delivered", null);
   });
 
   test("scopes, accept_own and bundles are checked by the service", async () => {
@@ -205,6 +224,9 @@ describe.skipIf(!enabled)("cloud tenant isolation and message authorization", ()
     const r1 = await alice.api.publishPlan(wsA, { slug: "launch", title: "Launch", body: "v1" });
     const same = await alice.api.publishPlan(wsA, { slug: "launch", title: "Launch", body: "v1" });
     expect(same.unchanged).toBe(true);
+    // Without a base, a publish is of a new plan: it cannot replace this one.
+    expect(await status(bob.api.publishPlan(wsA, { slug: "launch", title: "Launch", body: "mine" }))).toBe(409);
+    expect(await status(bob.api.publishSkill(wsA, { name: "deploy", files: [{ path: "SKILL.md", content: "mine" }] }))).toBe(409);
     const r2 = await alice.api.publishPlan(wsA, { slug: "launch", title: "Launch", body: "v2", baseRev: r1.revision.rev });
     expect(r2.revision.rev).toBe(r1.revision.rev + 1);
     expect(await status(bob.api.publishPlan(wsA, { slug: "launch", title: "Launch", body: "v3", baseRev: r1.revision.rev }))).toBe(409);

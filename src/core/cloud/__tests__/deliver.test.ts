@@ -89,7 +89,7 @@ describe("delivering a remote message", () => {
   test("one whose typing began before a restart is uncertain, never retyped", async () => {
     const { fleet, typed } = fleetOf([session("s1")]);
     const m = message();
-    store.begin(m.id, "s1", `cloud-${m.id}`, now);
+    store.begin(m.id, m.target_installation_id, "s1", `cloud-${m.id}`, now);
     getDb().query("INSERT INTO send_receipts (id, session_id, fingerprint, state, at) VALUES (?, 's1', 'x', 'attempting', ?)").run(`cloud-${m.id}`, now);
     expect((await deliverInbound(fleet, store, m, { allowRemoteWake: false }, now)).outcome).toBe("uncertain");
     expect(typed.length).toBe(0);
@@ -105,6 +105,16 @@ describe("delivering a remote message", () => {
     expect(typed.at(-1)!.wake).toBe(true);
     for (let i = 0; i < 3; i++) expect((await deliverInbound(fleet, store, message({ target_agent: "s9", sender_agent: "chatty" }), { allowRemoteWake: false }, now)).outcome).toBe("delivered");
     expect((await deliverInbound(fleet, store, message({ target_agent: "s9", sender_agent: "chatty" }), { allowRemoteWake: false }, now)).outcome).toBe("refused");
+  });
+
+  test("a machine that names a new agent for each message is still counted", async () => {
+    const { fleet, typed } = fleetOf([session("s7")]);
+    const outcomes = [];
+    for (let i = 0; i < 12; i++) {
+      outcomes.push((await deliverInbound(fleet, store, message({ target_agent: "s7", sender_installation_id: "inst-m", sender_agent: `fake${i}` }), { allowRemoteWake: false }, now)).outcome);
+    }
+    expect(outcomes.filter((o) => o === "delivered").length).toBe(9);
+    expect(typed.length).toBe(9);
   });
 
   test("goes to the session that took over", async () => {

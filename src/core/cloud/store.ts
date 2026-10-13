@@ -37,6 +37,8 @@ export interface OutboxRow {
 export type InboxOutcome = "delivered" | "refused" | "failed" | "uncertain";
 export interface InboxRow {
   message_id: string;
+  /** The installation it was sent to: only that credential can answer for it. */
+  installation_id: string;
   session_id: string | null;
   receipt_id: string | null;
   outcome: InboxOutcome | null;
@@ -66,6 +68,7 @@ const MIGRATIONS = [
   CREATE INDEX outbox_pending ON outbox(state, next_try_at);
   CREATE TABLE inbox (
     message_id TEXT PRIMARY KEY,
+    installation_id TEXT NOT NULL,
     session_id TEXT,
     receipt_id TEXT,
     outcome TEXT,
@@ -73,7 +76,7 @@ const MIGRATIONS = [
     acked INTEGER NOT NULL DEFAULT 0,
     at INTEGER NOT NULL
   );
-  CREATE INDEX inbox_unacked ON inbox(acked) WHERE acked = 0;
+  CREATE INDEX inbox_unacked ON inbox(installation_id, acked) WHERE acked = 0;
   CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
 ];
@@ -161,30 +164,32 @@ export class CloudStore {
 
   /** The boundary before typing: once this is written, the message is never
    *  typed again, whatever happens next. */
-  begin(messageId: string, sessionId: string, receiptId: string, now: number): void {
+  begin(messageId: string, installationId: string, sessionId: string, receiptId: string, now: number): void {
     this.db.exec("PRAGMA synchronous = FULL");
     try {
-      this.db.query("INSERT INTO inbox (message_id, session_id, receipt_id, at) VALUES (?, ?, ?, ?)").run(messageId, sessionId, receiptId, now);
+      this.db
+        .query("INSERT INTO inbox (message_id, installation_id, session_id, receipt_id, at) VALUES (?, ?, ?, ?, ?)")
+        .run(messageId, installationId, sessionId, receiptId, now);
     } finally {
       this.db.exec("PRAGMA synchronous = NORMAL");
     }
   }
 
-  decide(messageId: string, outcome: InboxOutcome, reason: string | null, now: number): void {
+  decide(messageId: string, installationId: string, outcome: InboxOutcome, reason: string | null, now: number): void {
     this.db
       .query(
-        `INSERT INTO inbox (message_id, outcome, reason, at) VALUES (?, ?, ?, ?)
+        `INSERT INTO inbox (message_id, installation_id, outcome, reason, at) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (message_id) DO UPDATE SET outcome = excluded.outcome, reason = excluded.reason, at = excluded.at`,
       )
-      .run(messageId, outcome, reason, now);
+      .run(messageId, installationId, outcome, reason, now);
   }
 
   acked(messageId: string): void {
     this.db.query("UPDATE inbox SET acked = 1 WHERE message_id = ?").run(messageId);
   }
 
-  unacked(): InboxRow[] {
-    return this.db.query("SELECT * FROM inbox WHERE acked = 0 AND outcome IS NOT NULL LIMIT 100").all() as InboxRow[];
+  unacked(installationId: string): InboxRow[] {
+    return this.db.query("SELECT * FROM inbox WHERE installation_id = ? AND acked = 0 AND outcome IS NOT NULL LIMIT 100").all(installationId) as InboxRow[];
   }
 
   counts(): { outbox: Record<string, number>; inbox: Record<string, number> } {

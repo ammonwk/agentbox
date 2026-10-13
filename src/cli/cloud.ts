@@ -41,6 +41,7 @@ export const CLOUD_USAGE = `cloud (a shared workspace: identity, plans, skills, 
                         refused like agentbox send, and shown to its reader as untrusted peer content
   cloud messages [--in] [--json]   receipts: what this machine sent (or got) and what became of it
   cloud plan ls | show <slug> [--rev N] | publish <slug> <file|-> [--title T] [--base N] [--summary S]
+                        --base is the revision you started from; without it the plan must be new
   cloud skill ls | show <name>[@rev] | installed | install <name>[@rev] [--force]
                         | publish <name|dir> [--base N] [--summary S]
                         install pins a revision and keeps files you edited (--force backs them up and replaces)
@@ -111,6 +112,8 @@ async function status(api: Api): Promise<number> {
 
 async function login(api: Api, args: string[]): Promise<number> {
   const { flags } = parseArgs(args, ["email", "workspace", "create", "invite", "name"], ["publish"]);
+  // Registering is the person's to do: ask before anything is created.
+  await api("POST", "/api/cloud/installation", { check: true, callerPid: process.pid });
   const { config, error } = cloudConfig();
   if (!config) throw new Error(error ?? `no cloud is set up: put AGENTBOX_CLOUD_URL and AGENTBOX_CLOUD_PUBLISHABLE_KEY in ${cloudEnvPath()} (docs/cloud.md)`);
   const email = str(flags.get("email")) ?? prompt("email:")?.trim();
@@ -147,7 +150,14 @@ async function login(api: Api, args: string[]): Promise<number> {
     if (!INSTALLATION_NAME_RE.test(name)) throw new Error(`"${name}" cannot name a machine: letters, digits, . _ - (--name)`);
     const scopes: Scope[] = flags.has("publish") ? [...DEFAULT_SCOPES, "artifacts:publish"] : DEFAULT_SCOPES;
     const reg = await human.registerInstallation(workspaceId, name, { platform: process.platform, version: VERSION, scopes });
-    const s = await api<CloudStatus>("POST", "/api/cloud/installation", { secret: reg.secret, callerPid: process.pid });
+    let s: CloudStatus;
+    try {
+      s = await api<CloudStatus>("POST", "/api/cloud/installation", { secret: reg.secret, callerPid: process.pid });
+    } catch (e) {
+      // The machine did not take it: no installation is left without its secret.
+      await human.revokeInstallation(reg.installation.id).catch(() => undefined);
+      throw e;
+    }
     console.log(`registered ${s.installation?.name} in ${s.installation?.workspaceSlug} (${reg.installation.scopes.join(", ")}); ${s.state}`);
     return 0;
   } finally {

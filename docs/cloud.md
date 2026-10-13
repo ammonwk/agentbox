@@ -40,7 +40,8 @@ Seven kinds of identity, kept apart on purpose:
 - **Invite** (`workspace_invites`). An admin's offer of a role. Its token
   (`abinv_…`) is shown once and stored only as a SHA-256 hash. An invite
   expires, has a number of uses, can be revoked, and can be bound to one
-  email address.
+  email address. An invite made before someone left or was removed does not
+  bring that person back; a new invite does.
 - **Installation** (`installations`). One machine's agentbox, registered by
   its owner into one workspace. Its secret (`abins_…`) is shown once, goes to
   that machine, and is stored in the cloud only as a hash. It has scopes:
@@ -135,8 +136,10 @@ Reply with `agentbox cloud send mac-a/k3j2h1g0 <text>`.
 </peer-message>
 ```
 
-The label is the sender's profile and installation name, as the cloud
-records them. The sender cannot choose it per message. Control characters are
+The label is the sender's display name with the verified email
+(`Alice (alice@example.com)`) and the installation name, as the cloud records
+them. The sender cannot choose it per message, and a display name cannot
+stand in for another person's email. Control characters are
 removed from the label and the body, except line breaks and tabs in the body.
 Without this, an escape sequence could end tmux's bracketed paste early and
 type keys, and a carriage return could press Enter. A `</peer-message` in the
@@ -160,11 +163,13 @@ on another installation in the same workspace:
    client id, then hands it to the cloud (`inst_send`). The cloud records the
    sender's installation and owner from the credential, not from the request.
    It refuses the message when the policy, the size, the rate or the target's
-   permission says no. The refusal goes back to the sender at once.
+   permission says no. The refusal goes back to the sender at once (a rate
+   refusal too: it is final, not retried).
 2. The target's server leases what is waiting for it (`inst_fetch`, a lease
    of two minutes) on each pass, every 5 seconds by default. The cloud checks
-   permission again at this point: a grant revoked after the send stops the
-   message.
+   permission and the team policy again at this point: a grant revoked, a
+   member removed or messaging turned off after the send stops the message,
+   and a wake the policy no longer allows is dropped.
 3. The target types it into the session through the local send path
    (`src/core/cloud/deliver.ts`), then reports the outcome (`inst_ack`).
 
@@ -180,7 +185,10 @@ States: `queued`, `leased`, then one final state: `delivered`, `refused`
   the team policy allows it (`messaging.allow_wake`), and this machine allows
   it (`allowRemoteWake`).
 - A message is refused while the session is stopped at a usage limit.
-- The chatter limit counts each remote agent as one sender.
+- The chatter limit counts each remote agent as one sender (3 an hour to one
+  session). A remote agent's id is only its machine's word, so each machine
+  also has a count of its own: 9 an hour to one session, all its agents
+  together.
 
 **At most once, never exactly once.** tmux and the cloud cannot commit
 together. Before it types anything, the target writes the attempt to disk:
@@ -194,7 +202,8 @@ target and text returns the first message (`duplicate: true`). Used with
 different text, it is refused (409), locally and in the cloud.
 
 **Offline.** An unreachable cloud leaves the message in the outbox. The
-server keeps the last directory, so a known machine still resolves by name.
+server keeps the last directory: when the cloud does not answer within 3
+seconds, a known machine still resolves by name from it.
 It retries with backoff up to five minutes, and gives up after a day.
 `agentbox cloud send` answers `queued here` in about eight seconds, not when
 the network times out. Each request to the cloud times out after 20 seconds.
@@ -210,10 +219,11 @@ refuses it.
 ## Plans and skills
 
 **A plan** is a Markdown document with every revision kept (`plans`,
-`plan_revisions`, at most 256 KiB). To publish, you name the revision you
-started from (`baseRev`). If someone published since then, the publish is
-refused instead of replacing their work. Publishing the same text again is
-not a new revision.
+`plan_revisions`, at most 256 KiB). To publish a new revision, you name the
+revision you started from (`baseRev`). Without one (or with 0) the plan must
+be new. If someone published since then, the publish is refused (409)
+instead of replacing their work. Publishing the same text again is not a new
+revision. Skills follow the same rule.
 
 **A skill** is a whole skill directory as text files (`skills`,
 `skill_revisions`): at most 200 files and 512 KiB, relative paths only, no
@@ -237,7 +247,8 @@ next install:
 
 A machine publishes only with `artifacts:publish`, which is off unless its
 owner turns it on. A machine publishes a skill it installed on top of the
-revision it came from.
+revision it came from. A local skill that did not come from the cloud
+publishes only as a new skill.
 
 ## Set up
 
@@ -347,15 +358,15 @@ Errors: the database raises SQLSTATE `PT400`, `PT401`, `PT403`, `PT404`,
 | `create_invite` | `p_workspace, p_role, p_email?, p_ttl_hours, p_max_uses` | `{invite, token}` — admins; only an owner invites an admin |
 | `revoke_invite` | `p_invite` | `Invite` |
 | `accept_invite` | `p_token` | `{workspace_id, role, already}` |
-| `remove_member` | `p_workspace, p_user` | leave, or remove (admins remove members, owners anyone; one owner stays) |
+| `remove_member` | `p_workspace, p_user` | leave, or remove (admins remove members, owners anyone; one owner stays). Their installations here are revoked |
 | `set_member_role` | `p_workspace, p_user, p_role` | owners only |
 | `workspace_policy` / `set_workspace_policy` | `p_workspace[, p_policy]` | the policy with every default filled in; admins set it; unknown keys are refused |
 | `register_installation` | `p_workspace, p_name, p_platform, p_version, p_scopes` | `{installation, secret}` |
 | `update_installation` | `p_installation, p_name?, p_accept_own?, p_scopes?` | the owner's |
 | `revoke_installation` | `p_installation` | the owner or a workspace admin |
 | `grant_delivery` / `revoke_delivery` | `p_target, p_user? \| p_installation?` / `p_grant` | the target's owner grants; the grantee can give it up |
-| `publish_plan` | `p_workspace, p_slug, p_title, p_body, p_base_rev?, p_summary?` | `{plan, revision, unchanged}`; 409 on a stale base |
-| `publish_skill` | `p_workspace, p_name, p_files, p_description?, p_base_rev?, p_summary?` | `{skill, revision, unchanged}` |
+| `publish_plan` | `p_workspace, p_slug, p_title, p_body, p_base_rev?, p_summary?` | `{plan, revision, unchanged}`; 409 when the base is not the latest revision (no base: the plan must be new) |
+| `publish_skill` | `p_workspace, p_name, p_files, p_description?, p_base_rev?, p_summary?` | `{skill, revision, unchanged}`; the same base rule |
 
 ### RPCs for an installation
 
