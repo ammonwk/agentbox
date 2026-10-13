@@ -991,6 +991,35 @@ button.rail-state:hover {
   letter-spacing: 0;
   font-weight: 500;
 }
+/* An incoming one is folded to "agentbox" until it is opened. */
+.tl-sent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tl-sent-toggle:hover .tl-sent-label {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tl-sent-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.tl-sent-full {
+  margin-top: 4px;
+}
 .tl-sender {
   display: inline-flex;
   align-items: center;
