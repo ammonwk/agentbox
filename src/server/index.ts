@@ -57,6 +57,7 @@ import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
+import { authenticatedSession } from "../core/session-authority";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
 import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
@@ -773,9 +774,8 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/prs/transfer", async ({ req }) => {
     const b = await readBody(req);
-    // Unlike --for on claim, the actor must be proven from the caller's
-    // process. A destination cannot impersonate its predecessor by name.
-    const actor = typeof b.callerPid === "number" && b.callerPid > 1 ? fleet.callerOf(b.callerPid) : null;
+    // A process ID or --for is not authority to transfer somebody else's PR.
+    const actor = authenticatedSession(req);
     if (!actor) throw new HttpError(403, "run pr transfer inside the session that currently holds the PR");
     const expected = requireString(b, "expected");
     const to = requireString(b, "to");

@@ -66,6 +66,7 @@ import {
   type TranscriptRef,
 } from "./providers/types";
 import { argvOf, childrenOf, environOf, isAlive, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
+import { sessionCapability } from "./session-authority";
 import { clockHz, describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
 import {
   classifyShell,
@@ -3760,6 +3761,7 @@ function resumeModel(rec: SessionRecord): string | null {
  * `agentbox send` went there. Claude does not pass it on to its shells.
  */
 function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
+  sessionCapability(id);
   return { AGENTBOX_SESSION: id, ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}) };
 }
 

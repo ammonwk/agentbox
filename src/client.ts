@@ -6,6 +6,7 @@
  */
 
 import { DEFAULT_PORT } from "./core/paths";
+import { sessionHeaders } from "./core/session-authority";
 
 /** Where the server listens: loopback, on `$AGENTBOX_PORT` or the default. */
 export function serverBase(): string {
@@ -31,7 +32,7 @@ export function apiClient(base: string): Api {
     try {
       res = await fetch(`${base}${path}`, {
         method,
-        headers: { "content-type": "application/json", "x-agentbox": "1" },
+        headers: { "content-type": "application/json", "x-agentbox": "1", ...sessionHeaders() },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (e) {
