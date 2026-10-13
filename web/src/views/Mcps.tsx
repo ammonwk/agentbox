@@ -33,7 +33,10 @@ export function Mcps() {
   const narrow = useIsNarrow();
 
   const load = useCallback(() => {
-    api.mcp().then(setData, (e: Error) => setError(e.message));
+    api.mcp().then(setData, (e: Error) =>
+      // A server from before this page answers with the app's own HTML, or no route.
+      setError(/<!doctype|no route for/i.test(e.message) ? "The agentbox server that is running is older than this page. Restart it, then reload, to manage MCP servers." : e.message),
+    );
   }, []);
   useEffect(load, [load]);
 
