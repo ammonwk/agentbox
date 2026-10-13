@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,8 +7,8 @@ import { AccountsService } from "../accounts";
 import { GO_ACCOUNT_BEARER, goHomeForAccount, hasGoCredential, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { ensureDefaultAccounts } from "../accounts/homes";
 import { identify } from "../accounts/identity";
-import { MIGRATIONS, closeDb, getAccount, getDb, getSessionRecord, insertAccount, insertSessionRecord, listAccounts } from "../db";
-import { accountHomeFor } from "../paths";
+import { closeDb, getAccount, getSessionRecord, insertAccount, listAccounts, MIGRATIONS } from "../db";
+import { accountHomeFor, dbPath } from "../paths";
 import { ompAdapter } from "../providers/omp";
 import type { Account } from "../types";
 
@@ -71,22 +72,39 @@ describe("OpenCode Go accounts", () => {
   });
 
   test("the key account of before is removed, and its sessions go to an account that is left", () => {
-    insertAccount(account("key", { home: join(process.env.HOME!, ".omp"), isDefault: true, createdAt: 0 }));
-    insertAccount(account("go3", { createdAt: 3 }));
-    insertAccount(account("go4", { createdAt: 4 }));
-    insertSessionRecord({
-      id: "s1", provider: "opencode", agentSessionId: "ses_1", accountId: "key", cwd: "/w", worktree: null, label: null, claim: 1,
-      origin: "agentbox", tmux: null, transcriptPath: null, startedAt: 1, lastActivityAt: 1, archivedAt: null, facts: null, createdAt: 1,
-    });
-    // Exercise the destructive account migration itself on this fixture.
-    // Rewinding user_version on a current schema also replays unrelated
-    // CREATE TABLE / ALTER TABLE migrations, which is not a version-17 DB.
-    getDb().exec(MIGRATIONS[17]!);
+    const accounts = [
+      ...listAccounts(),
+      account("key", { home: join(process.env.HOME!, ".omp"), isDefault: true, createdAt: 0 }),
+      account("go3", { createdAt: 3 }),
+      account("go4", { createdAt: 4 }),
+    ];
+    const currentBox = process.env.AGENTBOX_HOME;
     closeDb();
-    expect(getAccount("key")).toBeNull();
-    expect(listAccounts("omp").map((a) => a.id)).toEqual(["go3", "go4"]);
-    expect(getSessionRecord("s1")!.accountId).toBe("go3");
-    // Other providers' default accounts are their CLIs' own logins, and stay.
-    expect(listAccounts().filter((a) => a.isDefault).map((a) => a.provider).sort()).toEqual(["claude", "codex", "devin", "muse"]);
+    process.env.AGENTBOX_HOME = join(dir, "legacy-box");
+    mkdirSync(process.env.AGENTBOX_HOME, { recursive: true });
+    try {
+      // Build the actual old schema. Rewinding a current database's version
+      // alone replays later CREATE TABLE / ALTER TABLE migrations twice.
+      const legacy = new Database(dbPath(), { create: true });
+      try {
+        for (const migration of MIGRATIONS.slice(0, 17)) legacy.exec(migration);
+        legacy.exec("PRAGMA user_version = 17");
+        for (const a of accounts) {
+          legacy.run("INSERT INTO accounts (id, provider, label, home, is_default, created_at) VALUES (?,?,?,?,?,?)",
+            [a.id, a.provider, a.label, a.home, Number(a.isDefault), a.createdAt]);
+        }
+        legacy.exec("INSERT INTO sessions (id, provider, agent_session_id, account_id, cwd, origin, started_at, last_activity_at, created_at) VALUES ('s1','opencode','ses_1','key','/w','agentbox',1,1,1)");
+      } finally {
+        legacy.close();
+      }
+      expect(getAccount("key")).toBeNull();
+      expect(listAccounts("omp").map((a) => a.id)).toEqual(["go3", "go4"]);
+      expect(getSessionRecord("s1")!.accountId).toBe("go3");
+      // Other providers' default accounts are their CLIs' own logins, and stay.
+      expect(listAccounts().filter((a) => a.isDefault).map((a) => a.provider).sort()).toEqual(["claude", "codex", "devin", "muse"]);
+    } finally {
+      closeDb();
+      process.env.AGENTBOX_HOME = currentBox;
+    }
   });
 });
