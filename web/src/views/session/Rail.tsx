@@ -625,11 +625,21 @@ function BookmarksMenu({ sessions, current, shapes }: { sessions: readonly Sessi
     () => sessions.filter((s) => s.bookmarkedAt !== null).sort((a, b) => b.bookmarkedAt! - a.bookmarkedAt!),
     [sessions],
   );
+  // ↑/↓ walk the bookmarks, as they do the list.
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const links = [...e.currentTarget.querySelectorAll<HTMLElement>("a[role=menuitem]")];
+    if (!links.length) return;
+    e.preventDefault();
+    const i = links.indexOf(document.activeElement as HTMLElement);
+    links[e.key === "ArrowDown" ? (i + 1) % links.length : (i <= 0 ? links.length : i) - 1].focus();
+  };
   return (
-    <div className="rail-sort" ref={wrap}>
+    <div className="rail-sort rail-bm-wrap" ref={wrap}>
       <button
         type="button"
         className="rail-sort-btn"
+        data-n={marks.length || undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Bookmarks (${marks.length})`}
@@ -640,17 +650,25 @@ function BookmarksMenu({ sessions, current, shapes }: { sessions: readonly Sessi
         {marks.length ? <span className="rail-bm-n">{marks.length}</span> : null}
       </button>
       {open ? (
-        <div className="rail-menu rail-bm" role="menu" aria-label="Bookmarked sessions">
-          <div className="rail-menu-label">Bookmarks</div>
+        <div className="rail-menu rail-bm" role="menu" aria-label="Bookmarked sessions" onKeyDown={onKey}>
+          <div className="rail-menu-label">
+            Bookmarks{marks.length ? <span className="rail-menu-n">{marks.length}</span> : null}
+          </div>
           {marks.length === 0 ? (
-            <p className="rail-bm-none">None yet. Bookmark a session from its header, or right-click it in the list.</p>
+            <p className="rail-bm-none">
+              None yet. Bookmark a session with <Icon.bookmark size={11} /> in its header, or right-click it in the list. Bookmarks stay here after the session is
+              closed.
+            </p>
           ) : (
             marks.map((s) => (
               <div key={s.id} className="rail-bm-row" data-status={s.status} aria-current={s.id === current ? "page" : undefined}>
                 <a role="menuitem" href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })} title={titleOf(s)} onClick={() => setOpen(false)}>
                   <StatusDot status={shownStatus(s)} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} />
                   <span className="rail-title">{titleOf(s)}</span>
-                  {s.status === "closed" ? <span className="rail-bm-closed">closed</span> : null}
+                  <span className="rail-when">
+                    {s.status === "closed" ? "closed " : null}
+                    <RelativeTime ts={s.status === "closed" && s.closedAt ? s.closedAt : s.lastActivityAt} short />
+                  </span>
                 </a>
                 <button type="button" className="rail-x" aria-label={`Remove the bookmark from ${titleOf(s)}`} title="Remove the bookmark" onClick={() => toggleBookmark(s)}>
                   <Icon.x size={12} />

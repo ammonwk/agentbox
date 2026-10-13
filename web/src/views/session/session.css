@@ -214,31 +214,37 @@
   letter-spacing: 0;
   font-size: 11.5px;
 }
-/* The bookmarks: a count on the button, and a menu of rows to open. */
+/* The bookmarks: a count beside the icon, and a menu of rows to open. */
+.rail-sort-btn[data-n] {
+  display: inline-flex;
+  gap: 3px;
+  width: auto;
+  padding: 0 7px;
+}
 .rail-bm-n {
-  position: absolute;
-  top: 2px;
-  right: 1px;
-  min-width: 13px;
-  padding: 0 3px;
-  border-radius: 999px;
-  background: var(--panel);
   color: var(--muted);
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 13px;
+  font-size: 11px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-/* As wide as the list's top bar, hung from it rather than from the button:
-   the button sits near the list's left edge, where a menu would run off it. */
-.rail-sort:has(> .rail-bm) {
+/* Hung from the list's top bar rather than from the button, which sits near
+   the list's left edge, where a menu would run off it: from the bar's left,
+   at least as wide as it, wider into the page beside it when the list is
+   narrow, and never past the window's edge. */
+.rail-bm-wrap {
   position: static;
 }
 .rail-bm {
   left: 8px;
-  right: 8px;
+  right: auto;
+  width: 360px;
+  min-width: calc(100% - 16px);
+  max-width: calc(100vw - 80px);
   max-height: min(420px, 70vh);
   overflow-y: auto;
+}
+.rail-bm .rail-menu-label {
+  display: flex;
 }
 .rail-bm-none {
   padding: 4px 8px 8px;
@@ -271,11 +277,6 @@
   color: var(--muted);
   font-weight: 450;
 }
-.rail-bm-closed {
-  flex: none;
-  font-size: 10.5px;
-  color: var(--faint);
-}
 .rail-menu .rail-bm-row .rail-x {
   display: inline-flex;
   flex: none;
@@ -289,13 +290,23 @@
   opacity: 0;
 }
 .rail-menu .rail-bm-row:hover .rail-x,
-.rail-menu .rail-bm-row .rail-x:focus-visible {
+.rail-menu .rail-bm-row:focus-within .rail-x {
   opacity: 1;
 }
 @media (hover: none) {
   .rail-menu .rail-bm-row .rail-x {
     opacity: 1;
   }
+}
+.rail-bm-row > a:focus-visible {
+  outline: none;
+}
+.rail-bm-row:has(> a:focus-visible) {
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.rail-bm-none svg {
+  vertical-align: -1px;
 }
 /* See closed: folded under the list, loads as it scrolls. */
 .rail-closed {
