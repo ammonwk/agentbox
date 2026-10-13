@@ -301,7 +301,7 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
       countPrRepos(s.prRepos, text);
       s.firstPrompt ??= text;
       s.lastPrompt = text;
-      if (when) s.lastPromptAt = when;
+      s.lastPromptAt = when || null;
       return;
     }
     case "developer":

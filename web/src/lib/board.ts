@@ -28,12 +28,7 @@ export const KIND_ORDER: Record<AttentionKind, number> = {
   closed: 4,
 };
 
-/**
- * blocked → waiting → running → stopped → closed; within each, the session
- * you last sent something to first. Your own messages, not the agent's
- * activity: an agent finishing a step, or another agent messaging it, does
- * not move a row, so the order is the one you made.
- */
+/** By attention, then latest prompt; assistant activity does not move a row. */
 export function sortByAttention<T extends SessionRow>(rows: readonly T[]): T[] {
   return [...rows].sort(
     (a, b) =>
@@ -74,14 +69,14 @@ export interface Section<T> {
 }
 
 /** How the session list is ordered.
- *  - mine: the last time you sent it something (your order, not the agents')
+ *  - mine: the last delivered prompt, from a person or an agent
  *  - all: the last time anything happened in it
  *  - status: blocked, your turn, running, stopped
  *  - repo: grouped by repository or folder */
 export type SortKey = "mine" | "all" | "status" | "repo";
 
 export const SORT_LABEL: Record<SortKey, string> = {
-  mine: "Your activity",
+  mine: "Last prompt",
   all: "All activity",
   status: "Status",
   repo: "Repo",
@@ -225,10 +220,10 @@ export function repoShapes(rows: readonly Pick<Session, "repoRoot" | "cwd" | "st
   return new Map(repos.map((repo, i) => [repo, SHAPES[i % SHAPES.length]!]));
 }
 
-/** The time's tooltip: when you last wrote, and when the agent last moved. */
+/** The time's tooltip: latest prompt and latest activity. */
 export function sentTip(s: Pick<Session, "lastPromptAt" | "lastActivityAt">): string {
   const at = (t: number) => new Date(t).toLocaleString();
-  return `You last sent it something ${at(s.lastPromptAt)}\nLast activity ${at(s.lastActivityAt)}`;
+  return `Last prompt ${at(s.lastPromptAt)}\nLast activity ${at(s.lastActivityAt)}`;
 }
 
 /** Next id for j/k, clamped at both ends. */

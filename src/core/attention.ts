@@ -53,8 +53,7 @@ export function retrying(s: Pick<Session, "status" | "autoResume">): boolean {
   return s.autoResume?.after === "error" && (s.status === "blocked" || s.status === "waiting");
 }
 
-/** Most urgent first; within a rank, the one you last sent something to
- *  first — not the one whose agent last moved, which reshuffles on its own. */
+/** Most urgent first; within a rank, the most recently prompted session. */
 export function byAttention<T extends Session & { attention: Attention }>(a: T, b: T): number {
   return a.attention.rank - b.attention.rank || b.lastPromptAt - a.lastPromptAt;
 }

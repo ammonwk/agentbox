@@ -474,8 +474,7 @@ export interface Session {
 
   firstPrompt: string | null;
   lastPrompt: string | null;
-  /** When you last sent it something (not another agent, not the CLI waking
-   *  itself); the start when you never have. What the board sorts by. */
+  /** Timestamp of lastPrompt, including agent messages; the start if unknown. */
   lastPromptAt: number;
   /** Tail of the last assistant text, for the list row. */
   lastMessage: string | null;
