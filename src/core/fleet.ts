@@ -2324,6 +2324,8 @@ export class Fleet extends EventEmitter {
       // activity: a session resumed and left alone is as idle as before.
       lastActivityAt,
       closedAt: rec.archivedAt,
+      pinOrder: rec.pinOrder ?? null,
+      bookmarkedAt: rec.bookmarkedAt ?? null,
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
@@ -3614,11 +3616,16 @@ export class Fleet extends EventEmitter {
     return out;
   }
 
-  async patch(id: string, p: { label?: string | null; parent?: string | null }): Promise<Session> {
+  async patch(
+    id: string,
+    p: { label?: string | null; parent?: string | null; pinOrder?: number | null; bookmarked?: boolean },
+  ): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const patch: Partial<SessionRecord> = {};
     if (p.label !== undefined) patch.label = p.label?.trim() || null;
+    if (p.pinOrder !== undefined) patch.pinOrder = p.pinOrder;
+    if (p.bookmarked !== undefined) patch.bookmarkedAt = p.bookmarked ? (rec.bookmarkedAt ?? this.now()) : null;
     if (p.parent !== undefined) {
       // Close walks a parent's sessions at any depth, so a cycle would never end.
       for (let up = p.parent; up; up = getSessionRecord(up)?.parent ?? null) {

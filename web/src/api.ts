@@ -227,7 +227,7 @@ export const api = {
   undoCard: (id: number) => post<Card>(`/api/cards/${id}/undo`),
   createSession: (input: NewSessionInput) =>
     post<{ session: Session; placement: Placement }>("/api/sessions", input),
-  patchSession: (id: string, patch: { label?: string | null; parent?: string | null }) =>
+  patchSession: (id: string, patch: { label?: string | null; parent?: string | null; pinOrder?: number | null; bookmarked?: boolean }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
   submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string) =>

@@ -15,6 +15,7 @@ import { Button, Confirm, Empty, Icon } from "../../components";
 import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, shownStatus, titleOf, type SessionRow } from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
+import { toggleBookmark, togglePin, usePinned } from "./pins";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
 import { isRecurring } from "../../../../src/core/schedule";
 import { go, hrefOf, SESSION_TABS, type SessionTab } from "../../route";
@@ -41,6 +42,8 @@ const Terminal = lazy(() => import("./Terminal"));
 // The timeline carries the markdown renderer, the second-heaviest dependency.
 const Timeline = lazy(() => import("./Timeline").then((m) => ({ default: m.Timeline })));
 
+const NONE: SessionRow[] = [];
+
 const TAB_LABEL: Record<SessionTab, string> = {
   terminal: "Terminal",
   timeline: "Timeline",
@@ -54,7 +57,7 @@ const TAB_LABEL: Record<SessionTab, string> = {
  * time: the list until you pick a session, then the session.
  */
 export function SessionView({
-  state,
+  state: given,
   id,
   tab,
   onTab,
@@ -68,10 +71,15 @@ export function SessionView({
   onOpen: (id: string) => void;
   onNew: () => void;
 }) {
+  // Pins and bookmarks just asked for, shown before the server's state has them.
+  const pinned = usePinned(given.sessions);
+  const state = useMemo(() => (pinned === given.sessions ? given : { ...given, sessions: [...pinned] }), [given, pinned]);
   // One closed too long ago to be in the state comes from the closed list's
   // fetches, or is looked up by id for a link straight to it.
   const [, found] = useState(0);
-  const session = id ? state.sessions.find((s) => s.id === id) ?? closedSessions.get(id) ?? null : null;
+  const old = id && !state.sessions.some((s) => s.id === id) ? closedSessions.get(id) : undefined;
+  const [oldShown] = usePinned(old ? [old] : NONE);
+  const session = id ? state.sessions.find((s) => s.id === id) ?? oldShown ?? null : null;
   // Not started yet: the same id, before there is a session under it.
   const sched = id && !session ? state.schedules.find((s) => s.id === id && !isRecurring(s.rule)) ?? null : null;
   const missing = !!id && !session && !sched;
@@ -106,10 +114,11 @@ export function SessionView({
   }, [state.sessions, session?.parent]);
 
   // Folded as the user left it, but never with the open session folded out of
-  // sight. Closed ones are not here: they have their own list at the bottom.
+  // sight. Closed ones are not here, they have their own list at the bottom,
+  // unless pinned: a pin holds its place closed or not.
   const sections = useMemo(() => {
     const rows = filterSessions(
-      state.sessions.filter((s) => s.status !== "closed" && !closing.has(s.id)),
+      state.sessions.filter((s) => s.pinOrder !== null || (s.status !== "closed" && !closing.has(s.id))),
       filter,
     );
     return sectionsOf(rows, (x) => open.has(x) || above.has(x), sort);
@@ -605,6 +614,26 @@ function Detail({
 
           <div className="sx-header-actions">
             {narrow ? null : resumeCopy}
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Icon.pin}
+              className="sx-mark"
+              aria-pressed={session.pinOrder !== null}
+              aria-label={session.pinOrder !== null ? "Unpin" : "Pin to the top of the list"}
+              title={session.pinOrder !== null ? "Unpin it from the top of the list" : "Pin it to the top of the list, open or closed; drag pinned sessions to reorder them"}
+              onClick={() => togglePin(session, state.sessions)}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Icon.bookmark}
+              className="sx-mark"
+              aria-pressed={session.bookmarkedAt !== null}
+              aria-label={session.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
+              title={session.bookmarkedAt !== null ? "Remove it from the bookmarks" : "Bookmark it: the bookmarks menu beside the list's sort finds it, open or closed"}
+              onClick={() => toggleBookmark(session)}
+            />
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt

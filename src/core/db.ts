@@ -395,6 +395,12 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (session_id, repo, number)
   );
   `,
+  // 27 — your pins and bookmarks on the session list: where a pinned session
+  // sits among the pinned (lower first), and when one was bookmarked.
+  `
+  ALTER TABLE sessions ADD COLUMN pin_order REAL;
+  ALTER TABLE sessions ADD COLUMN bookmarked_at INTEGER;
+  `,
 ];
 
 function migrate(d: Database) {
@@ -506,6 +512,11 @@ export interface SessionRecord {
   successor?: string | null;
   /** When the fleet moved it off an account at its limit; it does not again. */
   hoppedAt?: number | null;
+  /** Pinned to the top of the list, at this place among the pinned (lower
+   *  first); null when it is not pinned. */
+  pinOrder?: number | null;
+  /** When you bookmarked it; null when it is not bookmarked. */
+  bookmarkedAt?: number | null;
 }
 
 type SessionRow = {
@@ -516,6 +527,7 @@ type SessionRow = {
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
   parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
+  pin_order: number | null; bookmarked_at: number | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -545,6 +557,8 @@ function rowToRecord(r: SessionRow): SessionRecord {
     parkedWhy: r.parked_why ?? null,
     successor: r.successor ?? null,
     hoppedAt: r.hopped_at ?? null,
+    pinOrder: r.pin_order ?? null,
+    bookmarkedAt: r.bookmarked_at ?? null,
   };
 }
 
@@ -574,6 +588,8 @@ const RECORD_COLUMNS = {
   parkedWhy: "parked_why",
   successor: "successor",
   hoppedAt: "hopped_at",
+  pinOrder: "pin_order",
+  bookmarkedAt: "bookmarked_at",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;
@@ -648,11 +664,12 @@ export function findSessionRecord(provider: ProviderId, agentSessionId: string):
 }
 
 /** Sessions active since `sinceMs`, plus every session that is not closed
- *  and was started by agentbox (those stay until you close them).
+ *  and was started by agentbox (those stay until you close them), and every
+ *  one you pinned or bookmarked, closed or not.
  *  (`archived_at` is when it was closed: the old name for it.) */
 export function listSessionRecords(sinceMs = 0): SessionRecord[] {
   return [...cachedRecords().values()]
-    .filter((r) => r.lastActivityAt >= sinceMs || (r.origin === "agentbox" && r.archivedAt === null))
+    .filter((r) => r.lastActivityAt >= sinceMs || (r.origin === "agentbox" && r.archivedAt === null) || r.pinOrder != null || r.bookmarkedAt != null)
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 

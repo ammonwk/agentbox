@@ -30,6 +30,7 @@ import { api, useMetrics } from "../../api";
 import { go, hrefOf } from "../../route";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
+import { movePin, toggleBookmark, togglePin } from "./pins";
 import { ScheduledRow } from "./Scheduled";
 
 // ------------------------------------------------------------------- state
@@ -140,25 +141,44 @@ export function Rail({
   // the list, when it is under one now, takes it out to the top level. It
   // cannot go under itself or a session it started (a loop), and a subagent
   // stays with the session whose MCP runs it.
-  const [drag, setDrag] = useState<{ s: SessionRow; banned: ReadonlySet<string> } | null>(null);
+  //
+  // A pinned session dragged among the pinned is put in a new place there
+  // instead: before the row it is dropped on, or after it, by which half.
+  const [drag, setDrag] = useState<{ s: SessionRow; banned: ReadonlySet<string>; pin: boolean } | null>(null);
   const [over, setOver] = useState<string | null>(null);
+  const [pos, setPos] = useState<DropPos | null>(null);
   const endDrag = () => {
     setDrag(null);
     setOver(null);
+    setPos(null);
   };
   const move = (s: SessionRow, parent: string | null) => {
     endDrag();
     if (parent) list.setOpen(parent, true);
     api.patchSession(s.id, { parent }).catch((e: Error) => reportFailure(s.id, titleOf(s), "move", e.message));
   };
-  const toRoot = drag?.s.parent != null;
+  const toRoot = !drag?.pin && drag?.s.parent != null;
   const dropping: DropProps = {
-    start: (s) => setDrag({ s, banned: new Set([s.id, ...descendantsOf(s, state.sessions).map((c) => c.id)]) }),
+    start: (s, pin) => setDrag({ s, banned: new Set([s.id, ...descendantsOf(s, state.sessions).map((c) => c.id)]), pin }),
     end: endDrag,
-    can: (s) => !!drag && !drag.banned.has(s.id) && drag.s.parent !== s.id,
-    over: (id) => setOver(id),
-    drop: (s) => drag && move(drag.s, s.id),
+    can: (s, pin) =>
+      !!drag && (drag.pin ? pin && s.id !== drag.s.id : !drag.banned.has(s.id) && drag.s.parent !== s.id),
+    reordering: !!drag?.pin,
+    over: (id, p = null) => {
+      setOver(id);
+      setPos(p);
+    },
+    drop: (s, p) => {
+      if (!drag) return;
+      if (!drag.pin) return move(drag.s, s.id);
+      endDrag();
+      movePin(drag.s, s, p, state.sessions);
+    },
   };
+
+  // Right-click on a row: pin it, bookmark it.
+  const [menu, setMenu] = useState<{ id: string; fallback: SessionRow; x: number; y: number } | null>(null);
+  const onMenu = (s: SessionRow, x: number, y: number) => setMenu({ id: s.id, fallback: s, x, y });
 
   // The arrows walk the list as a tree: ↑/↓ from row to row (↓ from the
   // search box to the open one, ↑ from the top row back to it), → unfolds a
@@ -213,6 +233,7 @@ export function Rail({
           />
           <kbd aria-hidden="true">/</kbd>
         </label>
+        <BookmarksMenu sessions={state.sessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
       </div>
 
@@ -253,7 +274,8 @@ export function Rail({
         {sections.map((sec) => (
           <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
             {sec.label ? (
-              <div className="rail-label" title={sort === "repo" ? sec.key : undefined}>
+              <div className="rail-label" title={sec.key === "pinned" ? "Drag a pinned session to reorder them" : sort === "repo" ? sec.key : undefined}>
+                {sec.key === "pinned" ? <Icon.pin size={11} /> : null}
                 {sort === "repo" && shapes.has(sec.key) ? <ShapeMark shape={shapes.get(sec.key)!} /> : null}
                 {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length}</span>
               </div>
@@ -275,32 +297,59 @@ export function Rail({
                   list.setOpen(s.id, !(list.open.has(s.id) || forcedOpen.has(s.id)));
                 }}
                 onClose={onClose}
+                onMenu={onMenu}
                 dnd={dropping}
-                target={over === s.id}
+                pinned={sec.key === "pinned" && s.depth === 0}
+                target={over === s.id ? (drag?.pin ? pos : "under") : null}
               />
             ))}
           </div>
         ))}
-        <ClosedList query={filter.query} current={current} stamp={closedStamp} shapes={shapes} />
+        <ClosedList query={filter.query} current={current} stamp={closedStamp} shapes={shapes} onMenu={onMenu} />
       </div>
       {drag ? (
         <div className="rail-drophint" data-active={over === "root" || undefined} aria-hidden="true">
-          {toRoot ? "Drop on a session to put it under that one, or anywhere else for the top level" : "Drop on a session to put it under that one"}
+          {drag.pin
+            ? "Drop on a pinned session to put it before or after that one"
+            : toRoot
+              ? "Drop on a session to put it under that one, or anywhere else for the top level"
+              : "Drop on a session to put it under that one"}
         </div>
+      ) : null}
+      {menu ? (
+        <RowMenu
+          s={state.sessions.find((x) => x.id === menu.id) ?? menu.fallback}
+          sessions={state.sessions}
+          x={menu.x}
+          y={menu.y}
+          onDone={() => setMenu(null)}
+        />
       ) : null}
     </nav>
   );
 }
 
+type DropPos = "before" | "after";
+
 /** What a row needs to be dragged, and dropped on. */
 interface DropProps {
-  start: (s: SessionRow) => void;
+  /** `pin`: it is a pinned row, dragged to a new place among the pinned. */
+  start: (s: SessionRow, pin: boolean) => void;
   end: () => void;
-  /** Whether the row being dragged may go under `s`. */
-  can: (s: SessionRow) => boolean;
-  over: (id: string | null) => void;
-  drop: (s: SessionRow) => void;
+  /** Whether the row being dragged may go under `s`, or, reordering the
+   *  pinned, beside it; `pin` says `s` is a pinned row. */
+  can: (s: SessionRow, pin: boolean) => boolean;
+  /** The drag is one among the pinned: a drop goes before or after. */
+  reordering: boolean;
+  over: (id: string | null, pos?: DropPos | null) => void;
+  drop: (s: SessionRow, pos: DropPos) => void;
 }
+
+/** Which half of the row the pointer is over. */
+const halfOf = (e: { clientY: number; currentTarget: Element }): DropPos => {
+  const r = e.currentTarget.getBoundingClientRect();
+  return e.clientY < r.top + r.height / 2 ? "before" : "after";
+};
 
 function Row({
   s,
@@ -312,7 +361,9 @@ function Row({
   open,
   onToggle,
   onClose,
+  onMenu,
   dnd,
+  pinned,
   target,
 }: {
   s: Nested<SessionRow>;
@@ -324,12 +375,15 @@ function Row({
   open: boolean;
   onToggle: () => void;
   onClose: (s: SessionRow) => void;
+  onMenu: (s: SessionRow, x: number, y: number) => void;
   dnd: DropProps;
-  /** A dragged row is over this one, and may go under it. */
-  target: boolean;
+  /** A top-level row of the Pinned section: dragging it reorders the pinned. */
+  pinned: boolean;
+  /** A dragged row is over this one, and may go under it, or before or after it. */
+  target: "under" | DropPos | null;
 }) {
   const said = snippetOf(s);
-  const movable = s.host !== "subagent";
+  const movable = pinned || s.host !== "subagent";
   return (
     <a
       ref={refFn}
@@ -342,26 +396,30 @@ function Row({
       style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
       title={[titleOf(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
       draggable={movable}
-      data-drop={target || undefined}
+      data-drop={target ?? undefined}
       onDragStart={(e) => {
         if (!movable) return e.preventDefault();
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/x-agentbox-session", s.id);
-        dnd.start(s);
+        dnd.start(s, pinned);
       }}
       onDragEnd={dnd.end}
       onDragOver={(e) => {
         // A row is never the list's top-level target, even one it cannot go under.
         e.stopPropagation();
-        if (!dnd.can(s)) return dnd.over(null);
+        if (!dnd.can(s, pinned)) return dnd.over(null);
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        dnd.over(s.id);
+        dnd.over(s.id, dnd.reordering ? halfOf(e) : null);
       }}
       onDrop={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (dnd.can(s)) dnd.drop(s);
+        if (dnd.can(s, pinned)) dnd.drop(s, halfOf(e));
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(s, e.clientX, e.clientY);
       }}
     >
       <StatusDot status={shownStatus(s)} shape={shape} repo={baseName(repoKey(s))} copy={s.id} />
@@ -391,7 +449,7 @@ function Row({
         <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
       </span>
       <RowLoad id={s.id} />
-      {s.host === "subagent" ? null : <CloseX s={s} onClose={onClose} />}
+      {s.host === "subagent" || s.status === "closed" ? null : <CloseX s={s} onClose={onClose} />}
     </a>
   );
 }
@@ -520,6 +578,92 @@ function SortMenu({ list }: { list: ListState }) {
   );
 }
 
+/** A row's right-click menu: pin it, bookmark it. */
+function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: readonly SessionRow[]; x: number; y: number; onDone: () => void }) {
+  const wrap = useRef<HTMLDivElement>(null);
+  useDismiss(true, onDone, [wrap]);
+  // Kept on screen: a right-click near the foot or the edge opens it upward or leftward.
+  const [at, setAt] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const r = wrap.current?.getBoundingClientRect();
+    if (!r) return;
+    setAt({ left: Math.max(8, Math.min(x, window.innerWidth - r.width - 8)), top: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) });
+  }, [x, y]);
+  useEffect(() => {
+    wrap.current?.querySelector<HTMLElement>("button")?.focus();
+  }, []);
+  const pick = (act: () => void) => () => {
+    act();
+    onDone();
+  };
+  return (
+    <div ref={wrap} className="rail-menu rail-rowmenu" role="menu" aria-label={titleOf(s)} style={{ position: "fixed", ...at }}>
+      <div className="rail-menu-label">{titleOf(s)}</div>
+      <button type="button" role="menuitem" onClick={pick(() => togglePin(s, sessions))}>
+        <span className="rail-menu-check">
+          <Icon.pin size={12} />
+        </span>
+        {s.pinOrder !== null ? "Unpin" : "Pin to top"}
+      </button>
+      <button type="button" role="menuitem" onClick={pick(() => toggleBookmark(s))}>
+        <span className="rail-menu-check">
+          <Icon.bookmark size={12} />
+        </span>
+        {s.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
+      </button>
+    </div>
+  );
+}
+
+/** The bookmarks, beside the sort: open or closed, running or not, the most
+ *  recently bookmarked first, whatever the search says. */
+function BookmarksMenu({ sessions, current, shapes }: { sessions: readonly SessionRow[]; current: string | null; shapes: Map<string, Shape> }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  useDismiss(open, () => setOpen(false), [wrap]);
+  const marks = useMemo(
+    () => sessions.filter((s) => s.bookmarkedAt !== null).sort((a, b) => b.bookmarkedAt! - a.bookmarkedAt!),
+    [sessions],
+  );
+  return (
+    <div className="rail-sort" ref={wrap}>
+      <button
+        type="button"
+        className="rail-sort-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Bookmarks (${marks.length})`}
+        title={marks.length ? `Bookmarks (${marks.length})` : "Bookmarks"}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon.bookmark size={14} />
+        {marks.length ? <span className="rail-bm-n">{marks.length}</span> : null}
+      </button>
+      {open ? (
+        <div className="rail-menu rail-bm" role="menu" aria-label="Bookmarked sessions">
+          <div className="rail-menu-label">Bookmarks</div>
+          {marks.length === 0 ? (
+            <p className="rail-bm-none">None yet. Bookmark a session from its header, or right-click it in the list.</p>
+          ) : (
+            marks.map((s) => (
+              <div key={s.id} className="rail-bm-row" data-status={s.status} aria-current={s.id === current ? "page" : undefined}>
+                <a role="menuitem" href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })} title={titleOf(s)} onClick={() => setOpen(false)}>
+                  <StatusDot status={shownStatus(s)} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} />
+                  <span className="rail-title">{titleOf(s)}</span>
+                  {s.status === "closed" ? <span className="rail-bm-closed">closed</span> : null}
+                </a>
+                <button type="button" className="rail-x" aria-label={`Remove the bookmark from ${titleOf(s)}`} title="Remove the bookmark" onClick={() => toggleBookmark(s)}>
+                  <Icon.x size={12} />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ closed
 
 const PAGE = 30;
@@ -538,7 +682,19 @@ export const closedSessions = new Map<string, SessionRow>();
  * the server, so every session ever closed can be found and reopened, not
  * only those still inside the board's window.
  */
-function ClosedList({ query, current, stamp, shapes }: { query: string; current: string | null; stamp: number; shapes: Map<string, Shape> }) {
+function ClosedList({
+  query,
+  current,
+  stamp,
+  shapes,
+  onMenu,
+}: {
+  query: string;
+  current: string | null;
+  stamp: number;
+  shapes: Map<string, Shape>;
+  onMenu: (s: SessionRow, x: number, y: number) => void;
+}) {
   const [open, setOpenState] = useState(closedOpen);
   const shown = closedShown?.query === query ? closedShown : null;
   const [rows, setRows] = useState<SessionRow[]>(shown?.rows ?? []);
@@ -623,6 +779,10 @@ function ClosedList({ query, current, stamp, shapes }: { query: string; current:
               aria-current={s.id === current ? "page" : undefined}
               data-status={s.status}
               title={titleOf(s)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onMenu(s, e.clientX, e.clientY);
+              }}
             >
               <StatusDot status={shownStatus(s)} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} copy={s.id} />
               <span className="rail-text">

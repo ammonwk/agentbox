@@ -59,7 +59,7 @@ export function filterSessions<T extends SessionRow>(rows: readonly T[], f: Boar
 }
 
 export interface Section<T> {
-  /** Stable key: an attention kind, a repo path, or "all". */
+  /** Stable key: an attention kind, a repo path, "all", or "pinned". */
   key: string;
   /** Empty for the one unlabelled section of a flat sort. */
   label: string;
@@ -154,12 +154,28 @@ function ordered<T extends SessionRow>(rows: readonly T[], sort: SortKey): T[] {
   return [...rows].sort((a, b) => sortTime(b, sort) - sortTime(a, sort));
 }
 
+/** Pinned, in the order you dragged them into. */
+export function pinnedOf<T extends Pick<Session, "id" | "pinOrder">>(rows: readonly T[]): T[] {
+  return rows.filter((s) => s.pinOrder !== null).sort((a, b) => a.pinOrder! - b.pinOrder! || a.id.localeCompare(b.id));
+}
+
+/** The `pinOrder` that puts a session between two pinned ones, either of
+ *  them absent at an end of the list. */
+export function pinBetween(before: number | null, after: number | null): number {
+  if (before === null && after === null) return 1;
+  if (before === null) return after! - 1;
+  if (after === null) return before + 1;
+  return (before + after) / 2;
+}
+
 /**
- * The list in sections. Status sections always come in the same order and
- * repos alphabetically, so the list does not reshuffle under the cursor; the
- * activity sorts are one flat section. A session another one started sits
- * under it, in its section whatever its own status or repo, and only while
- * `open` says its parent is expanded.
+ * The list in sections. What you pinned comes first, in your order, whatever
+ * the sort; it is always a top-level row there, with what it started under it.
+ * Status sections always come in the same order and repos alphabetically, so
+ * the list does not reshuffle under the cursor; the activity sorts are one
+ * flat section. A session another one started sits under it, in its section
+ * whatever its own status or repo, and only while `open` says its parent is
+ * expanded.
  */
 export function sectionsOf<T extends SessionRow>(
   rows: readonly T[],
@@ -167,6 +183,7 @@ export function sectionsOf<T extends SessionRow>(
   sort: SortKey = "status",
 ): Section<Nested<T>>[] {
   const up = parentsOf(rows);
+  for (const s of rows) if (s.pinOrder !== null) up.delete(s.id);
   const kids = new Map<string, T[]>();
   const roots: T[] = [];
   for (const s of ordered(rows, sort)) {
@@ -184,16 +201,22 @@ export function sectionsOf<T extends SessionRow>(
     for (const r of roots) if (pick(r)) place(r, 0, out);
     return { key, label, kind, rows: out };
   };
+  const pinned: Nested<T>[] = [];
+  for (const r of pinnedOf(roots)) place(r, 0, pinned);
+  const unpinned = (r: T) => r.pinOrder === null;
   let sections: Section<Nested<T>>[];
   if (sort === "status") {
-    sections = (Object.keys(KIND_ORDER) as AttentionKind[]).map((kind) => build(kind, SECTION_LABEL[kind], (r) => r.attention.kind === kind, kind));
+    sections = (Object.keys(KIND_ORDER) as AttentionKind[]).map((kind) =>
+      build(kind, SECTION_LABEL[kind], (r) => unpinned(r) && r.attention.kind === kind, kind),
+    );
   } else if (sort === "repo") {
-    const repos = [...new Set(roots.map(repoKey))].sort((a, b) => baseName(a).localeCompare(baseName(b)) || a.localeCompare(b));
-    sections = repos.map((repo) => build(repo, baseName(repo), (r) => repoKey(r) === repo));
+    const repos = [...new Set(roots.filter(unpinned).map(repoKey))].sort((a, b) => baseName(a).localeCompare(baseName(b)) || a.localeCompare(b));
+    sections = repos.map((repo) => build(repo, baseName(repo), (r) => unpinned(r) && repoKey(r) === repo));
   } else {
-    sections = [build("all", "", () => true)];
+    // A flat list under the pinned still wants a label, or it reads as more pins.
+    sections = [build("all", pinned.length ? "Sessions" : "", unpinned)];
   }
-  return sections.filter((s) => s.rows.length > 0);
+  return [{ key: "pinned", label: "Pinned", rows: pinned }, ...sections].filter((s) => s.rows.length > 0);
 }
 
 /** The shapes a session's status dot takes, one per repo. */

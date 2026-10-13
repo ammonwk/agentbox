@@ -577,6 +577,12 @@ export interface Session {
   lastActivityAt: number;
   /** When you closed it; null while it is on the list. */
   closedAt: number | null;
+  /** Pinned to the top of the session list, at this place among the pinned
+   *  (lower first; `PATCH` with `pinOrder`). Null when it is not pinned. A
+   *  pinned or bookmarked session stays on the board when closed. */
+  pinOrder: number | null;
+  /** When you bookmarked it, for the list's bookmarks menu; null when it is not. */
+  bookmarkedAt: number | null;
   /**
    * When the fleet stopped its process for sitting idle. A parked session is
    * still shown as `waiting` — it is still your move — and the next message
@@ -1095,10 +1101,10 @@ export type SkillSource = "global" | "agents" | "codex" | "omp" | "project";
 
 // ------------------------------------------------------------ wire shapes
 
-/** The board. Over a socket it holds the open sessions only, whole on
- *  connect and then as they change (`hotDelta`); `GET /api/state` has the
- *  closed ones too, unless asked for `?open=1`. The See closed list pages
- *  them from `GET /api/sessions/closed`. */
+/** The board. Over a socket it holds the open sessions only, and the closed
+ *  ones you pinned or bookmarked, whole on connect and then as they change
+ *  (`hotDelta`); `GET /api/state` has the closed ones too, unless asked for
+ *  `?open=1`. The See closed list pages them from `GET /api/sessions/closed`. */
 export interface HotState {
   sessions: (Session & { attention: Attention })[];
   serverTime: number;

@@ -162,8 +162,9 @@ let voice: VoiceHub;
 
 // --------------------------------------------------------------- state
 
-/** The sessions on the board — with the closed ones too unless `open` —
- *  for `GET /api/state` and the sockets' frames. */
+/** The sessions on the board — with the closed ones too unless `open`, and
+ *  the closed ones you pinned or bookmarked either way, since the list keeps
+ *  those at hand — for `GET /api/state` and the sockets' frames. */
 function hotState(open = false): HotState {
   let closedStamp = 0;
   const sessions = fleet
@@ -171,7 +172,7 @@ function hotState(open = false): HotState {
     .filter((s) => {
       if (s.status !== "closed") return true;
       closedStamp += 1 + (s.closedAt ?? 0);
-      return !open;
+      return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
     .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }))
     .sort(byAttention);
@@ -745,7 +746,9 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const label = b.label === null ? null : typeof b.label === "string" ? b.label : undefined;
     const parent = b.parent === null ? null : typeof b.parent === "string" ? b.parent : undefined;
-    const s = await fleet.patch(params.id!, { label, parent });
+    const pinOrder = b.pinOrder === null ? null : typeof b.pinOrder === "number" && Number.isFinite(b.pinOrder) ? b.pinOrder : undefined;
+    const bookmarked = typeof b.bookmarked === "boolean" ? b.bookmarked : undefined;
+    const s = await fleet.patch(params.id!, { label, parent, pinOrder, bookmarked });
     scheduleHot();
     scheduleCold();
     return json(s);

@@ -91,6 +91,7 @@
 }
 /* Search and the sort menu, above everything that scrolls. */
 .rail-top {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -200,6 +201,102 @@
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+/* A row's right-click menu, where the pointer was. */
+.rail-rowmenu {
+  z-index: 60;
+  max-width: 280px;
+}
+.rail-rowmenu .rail-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11.5px;
+}
+/* The bookmarks: a count on the button, and a menu of rows to open. */
+.rail-bm-n {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+}
+/* As wide as the list's top bar, hung from it rather than from the button:
+   the button sits near the list's left edge, where a menu would run off it. */
+.rail-sort:has(> .rail-bm) {
+  position: static;
+}
+.rail-bm {
+  left: 8px;
+  right: 8px;
+  max-height: min(420px, 70vh);
+  overflow-y: auto;
+}
+.rail-bm-none {
+  padding: 4px 8px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rail-bm-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 4px;
+}
+.rail-bm-row:hover,
+.rail-bm-row[aria-current="page"] {
+  background: var(--hover);
+}
+.rail-bm-row > a {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 4px 0 8px;
+  color: var(--text);
+  text-decoration: none;
+}
+.rail-bm-row[data-status="closed"] .rail-title,
+.rail-bm-row[data-status="stopped"] .rail-title {
+  color: var(--muted);
+  font-weight: 450;
+}
+.rail-bm-closed {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.rail-menu .rail-bm-row .rail-x {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  margin: 0 4px 0 0;
+  padding: 0;
+  color: var(--muted);
+  opacity: 0;
+}
+.rail-menu .rail-bm-row:hover .rail-x,
+.rail-menu .rail-bm-row .rail-x:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .rail-menu .rail-bm-row .rail-x {
+    opacity: 1;
+  }
+}
 /* See closed: folded under the list, loads as it scrolls. */
 .rail-closed {
   margin-top: 8px;
@@ -263,6 +360,9 @@
 .rail-label span {
   font-weight: 500;
 }
+.rail-label > svg {
+  flex: none;
+}
 .rail-sec[data-kind="blocked"] .rail-label {
   color: var(--danger);
 }
@@ -320,9 +420,16 @@
 }
 /* Dragging a session: the row it would go under, or the whole list when it
  * would go to the top level, and a line at the foot saying which is which. */
-.rail-row[data-drop] {
+.rail-row[data-drop="under"] {
   background: color-mix(in srgb, var(--accent) 14%, var(--panel));
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* Reordering the pinned: a line where it would land. */
+.rail-row[data-drop="before"] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.rail-row[data-drop="after"] {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .rail-scroll[data-drop] {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
@@ -575,6 +682,13 @@
   gap: 6px;
   margin-left: auto;
   flex: none;
+}
+/* Pin and bookmark: outlined when off, filled in the accent when on. */
+.sx-mark[aria-pressed="true"] {
+  color: var(--accent);
+}
+.sx-mark[aria-pressed="true"] svg path {
+  fill: currentColor;
 }
 /* The session id beside the title: quiet until pointed at. */
 .copy-btn.sx-id {

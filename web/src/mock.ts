@@ -370,6 +370,8 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     startedAt: T0 - 2 * H,
     lastActivityAt: T0 - 5 * M,
     closedAt: null,
+    pinOrder: null,
+    bookmarkedAt: null,
     parkedAt: null,
     parkHold: null,
     background: false,
@@ -394,7 +396,7 @@ const sessions: MockSession[] = [
     startedAt: T0 - 48 * M, lastActivityAt: T0 - 8 * 1000,
   }),
   sess({
-    id: "3mq9", provider: "claude", accountId: "cl-work", status: "blocked", host: "tmux", claim: 20,
+    id: "3mq9", provider: "claude", accountId: "cl-work", status: "blocked", host: "tmux", claim: 20, pinOrder: 1, bookmarkedAt: T0 - 3 * H,
     title: "Migrate usage_samples to the v2 schema", cwd: `${AB}/.worktrees/usage-schema`, repoRoot: `${AB}/.worktrees/usage-schema`,
     branch: "feat/usage-samples-v2", worktree: `${AB}/.worktrees/usage-schema`, model: "claude-fable-5-1",
     firstPrompt: "Write the migration for usage_samples: add window id, kind and scope columns; backfill from the old rows.",
@@ -502,7 +504,7 @@ const sessions: MockSession[] = [
     startedAt: T0 - 70 * M, lastActivityAt: T0 - 66 * M,
   }),
   sess({
-    id: "m3n5", provider: "codex", accountId: "cx-alt", status: "stopped", host: "none",
+    id: "m3n5", provider: "codex", accountId: "cx-alt", status: "stopped", host: "none", bookmarkedAt: T0 - 2 * H,
     title: "Bump vite to 7.1 and fix the proxy config", cwd: `${SY}/.worktrees/vite7`, repoRoot: `${SY}/.worktrees/vite7`,
     branch: "chore/vite-7", worktree: `${SY}/.worktrees/vite7`, model: "gpt-5.4-codex",
     lastMessage: "Build passes on vite 7.1.9. The ws proxy needed `ws: true` on the /ws entry.",
@@ -527,7 +529,7 @@ const sessions: MockSession[] = [
     startedAt: T0 - 3 * D, lastActivityAt: T0 - 3 * D + 40 * M,
   }),
   sess({
-    id: "r5t4", provider: "claude", accountId: "cl-personal", status: "closed", host: "none",
+    id: "r5t4", provider: "claude", accountId: "cl-personal", status: "closed", host: "none", pinOrder: 2, bookmarkedAt: T0 - 1 * H,
     title: "Spike: xterm.js in React 19", cwd: `${HOME}/scratch/xterm-spike`, model: "claude-fable-5-1",
     lastMessage: "The addon-fit needs the container to have a real height before `fit()`; a ResizeObserver solves it.",
     tokens: { input: 8_000, output: 3_000, cacheRead: 40_000, cacheWrite: 9_000, costEquiv: 0.4 },
