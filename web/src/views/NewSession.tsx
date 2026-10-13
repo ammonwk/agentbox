@@ -34,6 +34,7 @@ import { WherePicker } from "./newsession/WherePicker";
 import { WhenField } from "./newsession/WhenField";
 import { Dropdown } from "./newsession/Dropdown";
 import { useDismiss, useFloating } from "./newsession/popover";
+import { noteStarted } from "./session/started";
 import "./newsession.css";
 
 /**
@@ -347,6 +348,7 @@ export function NewSession({
         return;
       }
       const r = await api.createSession(input);
+      noteStarted(r.session);
       if (where === "path") noteFolderChoice(path.trim());
       savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider });
       onCreated(r.session.id);

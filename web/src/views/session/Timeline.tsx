@@ -13,7 +13,7 @@ import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { MessageRail, useTurns } from "./MessageRail";
 import { takeJump } from "./jump";
 import { useFamily } from "./family";
-import { StatusDot } from "../../bits";
+import { PROVIDER_LABEL, StatusDot } from "../../bits";
 import { shownStatus, titleOf } from "../../lib/board";
 import { hrefOf } from "../../route";
 import { readSent, splitPastes } from "../../../../src/core/sent";
@@ -295,6 +295,17 @@ export function Timeline({ session }: { session: Session }) {
       <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
     );
 
+  // Just started, and the CLI has not written its first turn: what you asked
+  // and the agent coming up, not an empty page. One that stopped before
+  // writing anything gets the plain explanation below.
+  const up = session.status !== "stopped" && session.status !== "closed";
+  if (up && (ready ? events.length === 0 : Date.now() - session.startedAt < STARTING_MS)) {
+    return (
+      <Me.Provider value={me}>
+        <Starting session={session} />
+      </Me.Provider>
+    );
+  }
   if (!ready) {
     return (
       <div className="sx-panel">
@@ -547,6 +558,29 @@ function Bubble({ id, at, className, note, title, copy, children }: { id?: strin
         <CopyIcon text={copy} />
         {note ? <span>{note}</span> : null}
         <time dateTime={new Date(at).toISOString()}>{fmtHourMin(at)}</time>
+      </div>
+    </div>
+  );
+}
+
+/** How long after its start a session still reads as starting while its
+ *  transcript loads, rather than "Reading the transcript…". */
+const STARTING_MS = 60_000;
+
+/** A session between its start and its CLI's first written turn: the prompt
+ *  it was started with, sending, and the agent starting under it. */
+function Starting({ session }: { session: Session }) {
+  return (
+    <div className="sx-panel tl">
+      <div className="tl-stream">
+        {session.firstPrompt ? (
+          <Bubble at={session.startedAt} className="tl-echo" note="Sending…" copy={session.firstPrompt}>
+            <Markdown text={session.firstPrompt} />
+          </Bubble>
+        ) : null}
+        <div className="tl-starting" role="status">
+          <Spinner size={14} /> Starting {PROVIDER_LABEL[session.provider]}…
+        </div>
       </div>
     </div>
   );

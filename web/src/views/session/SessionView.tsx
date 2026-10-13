@@ -19,6 +19,7 @@ import {
 } from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
+import { justStarted } from "./started";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
 import { isRecurring } from "../../../../src/core/schedule";
 import { go, hrefOf, SESSION_TABS, type SessionTab } from "../../route";
@@ -77,7 +78,7 @@ export function SessionView({
   // One closed too long ago to be in the state comes from the closed list's
   // fetches, or is looked up by id for a link straight to it.
   const [, found] = useState(0);
-  const session = id ? state.sessions.find((s) => s.id === id) ?? closedSessions.get(id) ?? null : null;
+  const session = id ? state.sessions.find((s) => s.id === id) ?? closedSessions.get(id) ?? justStarted(id) : null;
   // Not started yet: the same id, before there is a session under it.
   const sched = id && !session ? state.schedules.find((s) => s.id === id && !isRecurring(s.rule)) ?? null : null;
   const missing = !!id && !session && !sched;

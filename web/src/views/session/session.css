@@ -3175,3 +3175,13 @@ a.wk-item:hover {
     height: 34px;
   }
 }
+/* A session started a moment ago, before its CLI writes its first turn. */
+.tl-starting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px 0;
+}
