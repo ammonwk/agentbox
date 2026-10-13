@@ -59,7 +59,7 @@ export function closeDb(): void {
  * v1's `agentbox.db` is a different file (`box.db` is v2's), so none of v1's
  * ad-hoc column patching carries over.
  */
-const MIGRATIONS: string[] = [
+export const MIGRATIONS: readonly string[] = [
   // 1 — the v2 schema.
   `
   CREATE TABLE settings (

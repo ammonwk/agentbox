@@ -6,7 +6,7 @@ import { AccountsService } from "../accounts";
 import { GO_ACCOUNT_BEARER, goHomeForAccount, hasGoCredential, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { ensureDefaultAccounts } from "../accounts/homes";
 import { identify } from "../accounts/identity";
-import { closeDb, getAccount, getDb, getSessionRecord, insertAccount, insertSessionRecord, listAccounts } from "../db";
+import { MIGRATIONS, closeDb, getAccount, getDb, getSessionRecord, insertAccount, insertSessionRecord, listAccounts } from "../db";
 import { accountHomeFor } from "../paths";
 import { ompAdapter } from "../providers/omp";
 import type { Account } from "../types";
@@ -78,7 +78,10 @@ describe("OpenCode Go accounts", () => {
       id: "s1", provider: "opencode", agentSessionId: "ses_1", accountId: "key", cwd: "/w", worktree: null, label: null, claim: 1,
       origin: "agentbox", tmux: null, transcriptPath: null, startedAt: 1, lastActivityAt: 1, archivedAt: null, facts: null, createdAt: 1,
     });
-    getDb().exec("PRAGMA user_version = 17");
+    // Exercise the destructive account migration itself on this fixture.
+    // Rewinding user_version on a current schema also replays unrelated
+    // CREATE TABLE / ALTER TABLE migrations, which is not a version-17 DB.
+    getDb().exec(MIGRATIONS[17]!);
     closeDb();
     expect(getAccount("key")).toBeNull();
     expect(listAccounts("omp").map((a) => a.id)).toEqual(["go3", "go4"]);
