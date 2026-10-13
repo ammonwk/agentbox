@@ -9,12 +9,20 @@ const HOW = { said: "claimed it", branch: "on its branch" } as const;
 
 export async function pr(api: Api, args: string[]): Promise<number> {
   const [verb, ...more] = args;
-  const { flags, rest } = parseArgs(more, ["for"], ["json"]);
+  const { flags, rest } = parseArgs(more, ["for", "expect", "to"], ["json"]);
   // The session is the one named, else the one this runs in, as `send` and
   // `card add` say it; the server walks up from the caller's process only
   // when neither reached here (Codex runs commands without the environment).
   const body = { pr: rest[0], session: str(flags.get("for")) ?? process.env.AGENTBOX_SESSION, callerPid: process.pid, cwd: process.cwd() };
   switch (verb) {
+    case "transfer": {
+      const expected = str(flags.get("expect"));
+      const to = str(flags.get("to"));
+      if (!rest[0] || !expected || !to) throw new Error("pr transfer <repo#n> --expect <current holder> --to <new holder>, run by the current holder");
+      const c = await api<PrClaim>("POST", "/api/prs/transfer", { ...body, expected, to });
+      console.log(flags.has("json") ? JSON.stringify(c) : `${c.repo}#${c.number} handed from ${expected} to ${c.sessionId}`);
+      return 0;
+    }
     case "claim": {
       if (!rest[0]) throw new Error("pr claim needs the pull request: its number, owner/repo#number, or its URL");
       const c = await api<PrClaim & { already?: boolean }>("POST", "/api/prs/claim", body);
@@ -50,6 +58,6 @@ export async function pr(api: Api, args: string[]): Promise<number> {
       return 0;
     }
     default:
-      throw new Error(`pr takes claim, release, who or claims: not "${verb}"`);
+      throw new Error(`pr takes claim, transfer, release, who or claims: not "${verb}"`);
   }
 }

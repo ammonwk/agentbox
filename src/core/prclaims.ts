@@ -80,6 +80,19 @@ export function claimPr(claims: readonly PrClaim[], sessions: readonly Session[]
   return { repo: held?.repo ?? repo, number, sessionId, how: "said", at: now };
 }
 
+/** An explicit handoff, including a hold inferred from a startup branch.
+ * The caller must be the expected holder. Read/check/write are synchronous
+ * in the server's single writer, so competing transfers cannot both win. */
+export function transferPr(claims: readonly PrClaim[], sessions: readonly Session[], repo: string, number: number, actor: string, expected: string, to: string, now: number): PrClaim {
+  const held = holderOf(claims, repo, number);
+  if (!held || held.sessionId !== expected) throw new Error(`ownership changed: expected ${expected}, found ${held?.sessionId ?? "nobody"}; read pr who again`);
+  if (actor !== expected) throw new Error(`only the current holder ${expected} may hand this PR over`);
+  if (to === expected) throw new Error("the destination already holds this PR");
+  if (!holds(sessions.find((s) => s.id === to))) throw new Error(`destination ${to} must be a live, independent session`);
+  getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held.repo, number, to, now]);
+  return { repo: held.repo, number, sessionId: to, how: "said", at: now };
+}
+
 /** What `sessionId` said it holds, let go: one PR, or all of them. */
 export function releasePr(sessionId: string, pr: { repo: string; number: number } | null): number {
   return pr

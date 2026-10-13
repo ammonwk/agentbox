@@ -49,7 +49,7 @@ import { CARD_KINDS, Cards } from "../core/cards";
 import type { CardKind, CardState, McpServerInput, McpState } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
-import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr } from "../core/prclaims";
+import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
 import { repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
@@ -769,6 +769,23 @@ const router = new Router(mapError)
     } catch (e) {
       if (e instanceof PrHeld) throw new HttpError(409, e.message);
       throw e;
+    }
+  })
+  .add("POST", "/api/prs/transfer", async ({ req }) => {
+    const b = await readBody(req);
+    // Unlike --for on claim, the actor must be proven from the caller's
+    // process. A destination cannot impersonate its predecessor by name.
+    const actor = typeof b.callerPid === "number" && b.callerPid > 1 ? fleet.callerOf(b.callerPid) : null;
+    if (!actor) throw new HttpError(403, "run pr transfer inside the session that currently holds the PR");
+    const expected = requireString(b, "expected");
+    const to = requireString(b, "to");
+    const pr = prNamed(b, actor);
+    try {
+      const claim = transferPr(prClaimsNow(), fleet.sessions(), pr.repo, pr.number, actor, expected, to, Date.now());
+      scheduleCold();
+      return json(claim);
+    } catch (e) {
+      throw new HttpError(409, (e as Error).message);
     }
   })
   .add("POST", "/api/prs/release", async ({ req }) => {

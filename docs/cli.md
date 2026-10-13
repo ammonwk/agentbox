@@ -133,6 +133,8 @@ why). Arming the same wait twice is one wait.
     agentbox pr who <n|owner/repo#n|url>   # the session that has this pull request, or "nobody" (exit 1)
     agentbox pr claim <n|…>         # it is yours: refused, naming the holder, if another live session has it
     agentbox pr release [<n|…>]     # let go of what you claimed (one, or all)
+  agentbox pr transfer <repo#n> --expect <holder> --to <successor>
+                              current holder hands off; stale ownership is refused
     agentbox pr claims              # every pull request a live session has
 
 ## Across machines (when this machine is in an agentbox cloud workspace)
