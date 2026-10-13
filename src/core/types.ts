@@ -1225,7 +1225,7 @@ export type WaitSpec =
       number: number;
       /** The head the checks are waited for on, or the merge of; null takes the one first read (for a merge, any head). */
       head: string | null;
-      /** Every check on the head has concluded. */
+      /** Every CI/review check on the head has concluded; Merge gate is excluded. */
       all: boolean;
       /** Checks that must be there and concluded. A name also takes the
        *  checks that begin with it and a space: `API Tests (shard 1/3)`. */

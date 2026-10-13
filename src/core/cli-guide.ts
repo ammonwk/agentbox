@@ -37,7 +37,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
 
     agentbox wait pr <n|owner/repo#n|url> [--require 'Reviewed head'] [--only 'Build,API Tests'] [--head <sha>]
                                     # a pull request's checks concluding on that head (the
-                                    # one it has now, unless named): every check. --require
+                                    # one it has now, unless named): every check except Merge gate. --require
                                     # names checks that must be among them, for one that
                                     # reports only when it has something to say (a review
                                     # that marks the head it read); --only waits for just

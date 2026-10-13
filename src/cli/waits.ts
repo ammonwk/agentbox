@@ -22,7 +22,7 @@ const USAGE = `wait takes what to wait for:
   agentbox wait pr <n|owner/repo#n|url> [--require 'Reviewed head'] [--only 'Build,API Tests'] [--head <sha>]
                         its checks concluding on a head: every check, with --require
                         those among them (each must report), or with --only just those
-                        (a name takes its shards too)
+                        (a name takes its shards too; Merge gate is excluded)
   agentbox wait pr <n> --merged [--head <sha>]
                         its merge; with --head, also its head moving off that commit
                         (a PR yours is stacked on)

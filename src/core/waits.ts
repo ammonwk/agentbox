@@ -72,6 +72,9 @@ type Ending = { how: Exclude<WaitEnd, "cancelled" | "timeout">; text: string };
 /** One look: how it ends the wait, or what it saw and hands the next look. */
 export type Look = { end: Ending } | { seen: string; memo?: Wait["memo"] };
 
+// Merge authorization belongs to the steward, not the owner waiting for CI/review.
+const isMergeGate = (name: string): boolean => name.trim().toLowerCase() === "merge gate";
+
 const short = (sha: string): string => sha.slice(0, 10);
 const sameCommit = (a: string, b: string): boolean => a.length > 0 && b.length > 0 && (a.startsWith(b) || b.startsWith(a));
 const list = (names: string[], max = 8): string => (names.length > max ? `${names.slice(0, max).join(", ")} and ${names.length - max} more` : names.join(", "));
@@ -126,6 +129,7 @@ export function parseSpec(raw: unknown): WaitSpec {
   switch (o.kind) {
     case "pr": {
       const checks = Array.isArray(o.checks) ? o.checks.filter((c): c is string => typeof c === "string" && !!c.trim()).map((c) => c.trim()) : [];
+      if (checks.some(isMergeGate)) throw new FleetError(400, "Merge gate is merge authorization, not a CI/review check; use --merged to wait for the merge");
       const head = typeof o.head === "string" && o.head.trim() ? o.head.trim().toLowerCase() : null;
       if (head && !/^[0-9a-f]{7,40}$/.test(head)) throw new FleetError(400, `--head takes a commit (7 to 40 hex), not "${head}"`);
       const merged = o.merged === true;
@@ -178,10 +182,13 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
   if (spec.merged) return { seen: `open on ${short(pr.head)}, not merged`, memo: spec.head ? { head: pr.head } : {} };
   const base = { head: pr.head };
 
-  const asked = spec.checks.map((n) => ({ n, found: pr.checks.filter((c) => named(c.name, n)) }));
-  const scope = spec.all ? pr.checks : [...new Set(asked.flatMap((a) => a.found))];
+  // Apply the policy here so already-armed waits and every diagnostic use the same scope.
+  if (spec.checks.some(isMergeGate)) return { end: { how: "stuck", text: "This wait explicitly requires merge authorization. Arm a CI/review wait, or use --merged for the merge." } };
+  const checks = pr.checks.filter((c) => !isMergeGate(c.name));
+  const asked = spec.checks.map((n) => ({ n, found: checks.filter((c) => named(c.name, n)) }));
+  const scope = spec.all ? checks : [...new Set(asked.flatMap((a) => a.found))];
   const failed = scope.filter((c) => c.done && !c.ok);
-  const running = pr.checks.filter((c) => !c.done);
+  const running = checks.filter((c) => !c.done);
   const absent = asked.filter((a) => a.found.length === 0).map((a) => a.n);
   const passed = scope.filter((c) => c.done && c.ok).length;
   if (failed.length) {
@@ -205,13 +212,13 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
     if (pr.mergeable === "UNKNOWN") return { seen: `GitHub is still determining whether ${name} on ${short(pr.head)} merges with ${pr.base}`, memo: base };
   }
   const owed = [...(spec.all ? running : scope.filter((c) => !c.done)).map((c) => c.name), ...absent.map((n) => `${n} (not reported yet)`)];
-  const none = spec.all && pr.checks.length === 0;
+  const none = spec.all && checks.length === 0;
   if (owed.length === 0 && !none) {
     if (spec.all && !(memo.readyAt && now - memo.readyAt >= READY_TWICE_MS)) {
       return { seen: `every check has concluded on ${short(pr.head)}; looking once more before saying so`, memo: { ...base, readyAt: memo.readyAt ?? now } };
     }
     const other = running.length ? ` Other checks still running: ${list(running.map((c) => c.name))}.` : "";
-    return { end: { how: "happened", text: `${name}: ${spec.all ? `all ${pr.checks.length} checks` : list(scope.map((c) => c.name))} concluded on ${short(pr.head)}, ${passed} passed and none failed.${other}` } };
+    return { end: { how: "happened", text: `${name}: ${spec.all ? `all ${checks.length} checks` : list(scope.map((c) => c.name))} concluded on ${short(pr.head)}, ${passed} passed and none failed.${other}` } };
   }
   // Nothing is running that could report what is missing.
   if ((absent.length || none) && running.length === 0) {

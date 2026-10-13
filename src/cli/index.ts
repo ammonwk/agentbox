@@ -417,7 +417,7 @@ timeout, each saying which; a parked session is resumed to hear it):
   wait pr <n|owner/repo#n|url> [--require 'Reviewed head'] [--only 'Build,API Tests'] [--head <sha>]
                         its checks concluding on that head (a failure ends it at once):
                         every check; --require names ones that must be among them;
-                        --only waits for just those
+                        --only waits for just those; Merge gate is excluded
   wait pr <n> --merged  its merge
   wait run <run id|url> [-R owner/repo]      a GitHub Actions run concluding
   wait job [--name N] -- <command…>          start a long command as a unit of its own, which
