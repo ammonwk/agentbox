@@ -249,7 +249,11 @@ interface FoldOptions {
 export function foldOmpRecord(s: OmpState, rec: any, index: number, opts: FoldOptions = { events: true }): void {
   if (!rec || typeof rec !== "object") return;
   const at = tsOf(rec.timestamp);
-  if (at !== null && rec.type !== "title") s.lastActivityAt = Math.max(s.lastActivityAt ?? 0, at);
+  // Parking/exiting the host is not conversation activity. Advancing this
+  // clock on session_exit would make the fleet discard an unresolved turn
+  // error as stale, turning an exhausted retry back into "your turn".
+  const sessionExit = rec.type === "custom" && rec.customType === "session_exit";
+  if (at !== null && rec.type !== "title" && !sessionExit) s.lastActivityAt = Math.max(s.lastActivityAt ?? 0, at);
 
   switch (rec.type) {
     case "session":
