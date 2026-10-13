@@ -34,7 +34,7 @@ import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
 
 const BASE = serverBase();
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 
 // ------------------------------------------------------------------ client
 
@@ -374,7 +374,7 @@ async function recover(args: string[]): Promise<number> {
 
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
-  claude|codex|devin|omp|opencode [--account NAME] [--model M] [--detach] [prompt…]
+  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--detach] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d)
   usage                 each account's limits and what running sessions claim
@@ -546,6 +546,7 @@ export async function main(argv: string[]): Promise<number | null> {
       case "devin":
       case "omp":
       case "opencode":
+      case "muse":
         return await startSession(cmd, argv.slice(1));
       case "ls":
       case "list":

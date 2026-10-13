@@ -67,6 +67,8 @@ export function loginCommand(account: Pick<Account, "provider" | "home" | "isDef
     credentialFile: credentialsPath(account.provider, account.home)!,
   };
   switch (account.provider) {
+    case "muse":
+      return { argv: ["muse", "login"], ...common, needsPaste: false };
     case "claude":
       return { argv: ["claude", "auth", "login", "--claudeai"], ...common, needsPaste: true };
     case "codex":
@@ -113,12 +115,15 @@ export function parseLoginOutput(provider: AccountProvider, text: string): { url
     codex: /open this link/i,
     devin: /visit\s/i,
     omp: /open this link/i,
+    muse: /https?:\/\//i,
   };
   const m = anchors[provider].exec(text);
   const after = m ? text.slice(m.index) : text;
   const url = (after.match(URL_RE)?.[0] ?? text.match(URL_RE)?.[0] ?? null)?.replace(/[).,;]+$/, "") ?? null;
   let userCode: string | null = null;
-  if (provider === "codex" || provider === "omp") {
+  if (provider === "muse") {
+    userCode = /\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/.exec(text)?.[1] ?? null;
+  } else if (provider === "codex" || provider === "omp") {
     const i = text.search(provider === "codex" ? /one-time code/i : /enter code/i);
     if (i >= 0) userCode = /\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/.exec(text.slice(i))?.[1] ?? null;
   }

@@ -40,6 +40,7 @@ import { devinAdapter } from "./providers/devin";
 import { BRIDGED } from "../bridge/models";
 import { agentDir } from "./providers/omp";
 import type { Account, ModelOption, ProviderId } from "./types";
+import { museModels } from "./providers/muse";
 
 /** Re-read a file only when its mtime moves; models.dev's cache is ~5 MB. */
 const fileCache = new Map<string, { mtimeMs: number; value: unknown }>();
@@ -381,6 +382,7 @@ async function devinModels(account: Account): Promise<ModelOption[]> {
 /** `provider` is the session's, when it is not the account's: an opencode
  *  session runs on omp's account but picks from opencode's models. */
 export async function modelOptions(account: Account, provider: ProviderId = account.provider): Promise<ModelOption[]> {
+  if (provider === "muse") return museModels(account);
   if (account.provider === "devin") return devinModels(account);
   const dev = await modelsDev();
   if (provider === "opencode") return opencodeModels(dev);

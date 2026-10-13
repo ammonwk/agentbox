@@ -100,7 +100,7 @@ const BUILD_POLL_MS = 2_000;
 const TIMELINE_PAGE = 200;
 /** Opening prompts the new-session box can recall. */
 const PROMPT_HISTORY = 1_000;
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 
 // ------------------------------------------------------------- the pieces
 

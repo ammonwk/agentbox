@@ -2963,7 +2963,7 @@ export class Fleet extends EventEmitter {
   private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string): void {
     const settings = getSettings();
     const adapter = this.adapter(rec.provider);
-    const typed = tooLongForArgv(prompt) ? prompt : undefined;
+    const typed = adapter.resumePromptInTerminal || tooLongForArgv(prompt) ? prompt : undefined;
     const opts = {
       account,
       agentSessionId: rec.agentSessionId!,

@@ -14,7 +14,7 @@ export type { UserIdentity };
 
 // -------------------------------------------------------------- providers
 
-export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode";
+export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode" | "muse";
 
 /** The providers that hold accounts. opencode holds none of its own: it runs
  *  on OpenCode Go, which omp's accounts are sign-ins to and report usage

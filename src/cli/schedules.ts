@@ -8,7 +8,7 @@ import { describeRule, FRESH_OVER, isRecurring, until } from "../core/schedule";
 import type { AppState, ProviderId, Schedule } from "../core/types";
 import { parseArgs } from "./sessions";
 
-const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
+const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 const str = (v: string | true | undefined): string | undefined => (typeof v === "string" ? v : undefined);
 
 /** `150k`, `150000`, `0.2m`: tokens. */

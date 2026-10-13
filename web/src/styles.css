@@ -52,6 +52,7 @@
   --p-devin: #0f7f73;
   --p-omp: #8a3fd1;
   --p-opencode: #b0306f;
+  --p-muse: #087f8c;
 
   /* Account slots. Eight hues picked to stay apart from each other in both
    * themes; an account keeps its slot for life (bits.tsx accountHue). */
@@ -103,6 +104,7 @@
   --p-devin: #3cc7b6;
   --p-omp: #c08cf5;
   --p-opencode: #f07cb4;
+  --p-muse: #63d3df;
 
   --acct-0: #60a5fa;
   --acct-1: #e879f9;
@@ -1810,6 +1812,7 @@ textarea,
 .prov-devin { --prov: var(--p-devin); }
 .prov-omp { --prov: var(--p-omp); }
 .prov-opencode { --prov: var(--p-opencode); }
+.prov-muse { --prov: var(--p-muse); }
 
 /* Account: a dot in the account's slot colour and its label. */
 .acct {

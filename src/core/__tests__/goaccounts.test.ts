@@ -38,7 +38,7 @@ function account(id: string, over: Partial<Account> = {}): Account {
 describe("OpenCode Go accounts", () => {
   test("omp gets no default account, however installed its CLI is", async () => {
     const added = await ensureDefaultAccounts(async () => ({ installed: true, version: "1" }));
-    expect(added.map((a) => a.provider).sort()).toEqual(["claude", "codex", "devin"]);
+    expect(added.map((a) => a.provider).sort()).toEqual(["claude", "codex", "devin", "muse"]);
     expect(listAccounts("omp")).toEqual([]);
   });
 
@@ -84,6 +84,6 @@ describe("OpenCode Go accounts", () => {
     expect(listAccounts("omp").map((a) => a.id)).toEqual(["go3", "go4"]);
     expect(getSessionRecord("s1")!.accountId).toBe("go3");
     // Other providers' default accounts are their CLIs' own logins, and stay.
-    expect(listAccounts().filter((a) => a.isDefault).map((a) => a.provider).sort()).toEqual(["claude", "codex", "devin"]);
+    expect(listAccounts().filter((a) => a.isDefault).map((a) => a.provider).sort()).toEqual(["claude", "codex", "devin", "muse"]);
   });
 });

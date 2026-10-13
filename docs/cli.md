@@ -99,7 +99,7 @@ why). Arming the same wait twice is one wait.
                                     # Refused when no other account can take it
     agentbox adopt <id>... --detach # move a session from another terminal into agentbox
     agentbox label <id> 'name'      # rename it on the board
-    agentbox claude|codex|omp|opencode|devin --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
+    agentbox claude|codex|omp|opencode|devin|muse --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
     agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.

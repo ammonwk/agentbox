@@ -676,11 +676,11 @@ function AddAccount({
 function ImportHome({ provider, onClose }: { provider: ProviderId; onClose: () => void }) {
   const [home, setHome] = useState("");
   const { run, busy, error } = useAction();
-  const example = provider === "codex" ? "~/.codex-work" : provider === "devin" ? "~/.local/share/devin-work" : "~/.claude-work";
+  const example = provider === "muse" ? "~/.config" : provider === "codex" ? "~/.codex-work" : provider === "devin" ? "~/.local/share/devin-work" : "~/.claude-work";
   return (
     <Modal
       title={`Import a ${PROVIDER_LABEL[provider]} home`}
-      hint="Use a credential home that is already logged in — a CLAUDE_CONFIG_DIR or CODEX_HOME you set up by hand. agentbox reads it in place and never moves or copies the credentials."
+      hint={provider === "muse" ? "The XDG config root containing muse/auth.json. Dedicated homes use the file credential backend and keep sessions under <home>/data/muse. Credentials are read in place." : "Use a credential home that is already logged in — a CLAUDE_CONFIG_DIR or CODEX_HOME you set up by hand. agentbox reads it in place and never moves or copies the credentials."}
       onClose={onClose}
     >
       <form

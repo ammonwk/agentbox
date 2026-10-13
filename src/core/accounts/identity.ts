@@ -255,6 +255,15 @@ export async function identifyDevin(account: AccountRef, execFn: ExecFn = defaul
 export async function identify(account: AccountRef, opts: { exec?: ExecFn; now?: number } = {}): Promise<Identity> {
   const now = opts.now ?? Date.now();
   switch (account.provider) {
+    case "muse": {
+      const meta = rec(rec(rec(readJson(credentialsPath("muse", account.home)!))?.providers)?.meta);
+      const loggedIn = !!meta && (!!str(meta.api_key) || !!str(meta.access_token) || (account.isDefault && meta.storage === "keychain"));
+      return {
+        email: loggedIn ? str(meta?.user_email) : null,
+        plan: loggedIn && str(meta?.api_key) ? "api key" : null,
+        auth: { state: loggedIn ? "ok" : "missing", expiresAt: null, detail: loggedIn ? null : "not logged in" },
+      };
+    }
     case "claude": return identifyClaude(account, now);
     case "codex": return identifyCodex(account, now);
     case "devin": return identifyDevin(account, opts.exec);

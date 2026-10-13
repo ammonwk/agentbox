@@ -88,7 +88,7 @@ function idleTest(spec: string): (idleMs: number) => boolean {
 }
 
 const STATUSES = ["running", "blocked", "waiting", "stopped", "closed"] as const;
-const PROVIDERS = ["claude", "codex", "devin", "omp", "opencode"] as const;
+const PROVIDERS = ["claude", "codex", "devin", "omp", "opencode", "muse"] as const;
 
 function oneOf<T extends string>(flag: string, given: string[] | undefined, known: readonly T[]): T[] | undefined {
   if (!given) return undefined;
