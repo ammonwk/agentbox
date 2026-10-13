@@ -8,7 +8,12 @@ import { retrying } from "../../../src/core/attention";
 import type { Attention, AttentionKind, ProviderId, Session, SessionStatus } from "../../../src/core/types";
 import { baseName } from "./format";
 
-export type SessionRow = Session & { attention: Attention };
+export type SessionRow = Session & {
+  attention: Attention;
+  /** Work it left running in the background, in words (`workflow "babysit-fleet"`).
+   *  Only a server that tracks it sends it; without it the status shows as usual. */
+  backgroundWork?: string | null;
+};
 
 /** A session's status as drawn: blocked or waiting on an error agentbox
  *  retries by itself is `retrying`, drawn as working — red or amber there

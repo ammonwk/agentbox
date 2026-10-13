@@ -585,6 +585,7 @@ const namedTitle = (s: SessionRow) => [projectOf(s), titleOf(s)].filter(Boolean)
 
 /** What it last said, what it is asking, or that its answer is waiting. */
 function snippetOf(s: SessionRow): string {
+  if (s.backgroundWork) return `Running ${s.backgroundWork}`;
   const said =
     s.status === "blocked" || (s.status === "waiting" && (s.subagent?.answerWaiting || s.turnError))
       ? s.attention.reason

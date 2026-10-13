@@ -136,11 +136,12 @@ const STATUS_TITLE: Record<ShownStatus, string> = {
   closed: "Stopped and off the list; still resumable",
 };
 
-export function StatusPill({ status }: { status: ShownStatus }) {
+/** `work` is what it left running in the background (SessionRow.backgroundWork). */
+export function StatusPill({ status, work }: { status: ShownStatus; work?: string | null }) {
   return (
-    <span className={`pill pill-${status}`} title={STATUS_TITLE[status]}>
+    <span className={`pill pill-${status}`} title={work ? `Running ${work}: its turn is over, and that work runs inside its process` : STATUS_TITLE[status]}>
       <span className="pill-dot" aria-hidden="true" />
-      {STATUS_LABEL[status]}
+      {work ? `Running ${work}` : STATUS_LABEL[status]}
     </span>
   );
 }
@@ -168,13 +169,13 @@ export function ShapeMark({ shape }: { shape: Shape }) {
  *  is the repo — a list sorted by time still says both at a glance. With
  *  `copy` (a session id) clicking it copies the id instead of following the
  *  row's link, a check says so for a moment. */
-export function StatusDot({ status, shape, repo, copy }: { status: ShownStatus; shape?: Shape; repo?: string; copy?: string }) {
+export function StatusDot({ status, shape, repo, copy, work }: { status: ShownStatus; shape?: Shape; repo?: string; copy?: string; work?: string | null }) {
   const [done, setDone] = useState(false);
   const t = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (t.current) clearTimeout(t.current);
   }, []);
-  const title = `${STATUS_LABEL[status]} — ${STATUS_TITLE[status]}${repo ? `\nIn ${repo}` : ""}${copy ? `\nClick to copy ${copy}` : ""}`;
+  const title = `${work ? `Running ${work}` : `${STATUS_LABEL[status]} — ${STATUS_TITLE[status]}`}${repo ? `\nIn ${repo}` : ""}${copy ? `\nClick to copy ${copy}` : ""}`;
   if (!copy) {
     if (!shape) return <span className={`st-dot st-${status}`} title={title} role="img" aria-label={STATUS_LABEL[status]} />;
     return (
