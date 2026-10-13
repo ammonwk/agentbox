@@ -50,6 +50,8 @@ import { Gauge } from "@phosphor-icons/react/dist/csr/Gauge";
 import { ChartBar } from "@phosphor-icons/react/dist/csr/ChartBar";
 import { Link } from "@phosphor-icons/react/dist/csr/Link";
 import { ArrowUUpLeft } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
+import { Plugs } from "@phosphor-icons/react/dist/csr/Plugs";
+import { PlugsConnected } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 
 export type IconProps = { size?: number; className?: string; weight?: IconWeight };
 export type IconComponent = (props: IconProps) => ReactElement;
@@ -117,4 +119,6 @@ export const Icon = {
   chart: icon(ChartBar),
   link: icon(Link),
   undo: icon(ArrowUUpLeft),
+  plugs: icon(Plugs),
+  plugsOn: icon(PlugsConnected),
 };

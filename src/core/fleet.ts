@@ -54,6 +54,7 @@ import {
 import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
+import { withGlobalMcp } from "./mcp-reach";
 import {
   LIMIT_DIALOG,
   transcriptFile,
@@ -2651,7 +2652,7 @@ export class Fleet extends EventEmitter {
 
     const model = req.model || settings.models[req.provider] || undefined;
     const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
-    const cmd = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
+    const cmd = withGlobalMcp(req.provider, account, adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove }));
     const now = this.now();
     const name = tmuxName(id);
     const parent = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
@@ -2980,7 +2981,7 @@ export class Fleet extends EventEmitter {
       // Resume anyway: the health watch catches a session that comes back unable to act.
       console.error(`agentbox: preparing ${rec.id}'s resume failed:`, e);
     }
-    const cmd = adapter.resumeCommand(opts);
+    const cmd = withGlobalMcp(rec.provider, account, adapter.resumeCommand(opts), opts.carry);
     const name = tmuxName(rec.id);
     // A dead pane from the last run holds the name.
     this.killTmux(name);

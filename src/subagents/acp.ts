@@ -6,6 +6,7 @@
  * stays alive between turns so a follow-up keeps its context.
  */
 
+import { acpServers } from "../core/mcp";
 import { isAbsolute } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import {
@@ -527,17 +528,29 @@ export class AcpRunner {
   }
 
   private async openSession(ctx: ClientContext, opts: LaunchOptions): Promise<string> {
-    await ctx.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-    const sid = opts.resumeSessionId ?? (await ctx.request("session/new", { cwd: opts.worktree, mcpServers: [] })).sessionId;
-    if (opts.resumeSessionId !== null) {
-      const params = { sessionId: sid, cwd: opts.worktree, mcpServers: [] };
+    const init = (await ctx.request("initialize", { protocolVersion: 1, clientCapabilities: {} })) as { agentCapabilities?: { mcpCapabilities?: { http?: boolean } } };
+    // The global MCP servers (src/core/mcp.ts). An agent that refuses them
+    // still opens its session, without them: a subagent must not fail for them.
+    const mcpServers = acpServers(init?.agentCapabilities?.mcpCapabilities) as never[];
+    const withMcp = async <T>(call: (servers: never[]) => Promise<T>): Promise<T> => {
+      if (mcpServers.length === 0) return call([]);
       try {
-        await ctx.request("session/resume", params);
+        return await call(mcpServers);
+      } catch (err) {
+        console.error(`agentbox: ${this.backend.id} refused the global MCP servers (${messageOf(err)}); opening without them`);
+        return call([]);
+      }
+    };
+    const sid = opts.resumeSessionId ?? (await withMcp((servers) => ctx.request("session/new", { cwd: opts.worktree, mcpServers: servers }))).sessionId;
+    if (opts.resumeSessionId !== null) {
+      const params = (servers: never[]) => ({ sessionId: sid, cwd: opts.worktree, mcpServers: servers });
+      try {
+        await withMcp((servers) => ctx.request("session/resume", params(servers)));
       } catch {
         // devin and older omp builds only implement session/load, which
         // replays the history as updates; `sessionId` is not set until this
         // returns, so the replay is not mistaken for a new turn.
-        await ctx.request("session/load", params);
+        await withMcp((servers) => ctx.request("session/load", params(servers)));
       }
     }
     const mode = this.backend.mode(opts.readOnly);

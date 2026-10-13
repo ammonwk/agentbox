@@ -11,6 +11,7 @@
  * bundle does not carry it.
  */
 
+import { mockMcp } from "./mockmcp";
 import type {
   AccountUsage,
   AccountView,
@@ -1260,6 +1261,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   const p = url.pathname.split("/").filter(Boolean).map(decodeURIComponent); // ["api", ...]
   const [, head, id, action] = p;
 
+  if (head === "mcp") return mockMcp(method, p.slice(2), b);
   if (method === "GET") {
     if (head === "sessions" && action === "submissions") return submissions.get(p[4]!) ?? null;
     if (head === "state") return appState();

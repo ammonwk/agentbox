@@ -32,6 +32,8 @@ import { grepInWorker } from "../core/grep";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { agentTimeline, sessionWork } from "../core/work";
+import { McpError, addServer, importServer, readRegistry, removeServer, setEnabled, updateServer } from "../core/mcp";
+import { checkServer, discover, foundDefinition, publicFound, reachAll, viewOf } from "../core/mcp-reach";
 import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
 import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushSubscriptions, pushToAll, removeSubscription } from "../core/push";
@@ -44,7 +46,8 @@ import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { parseSpec, Waits } from "../core/waits";
 import { CARD_KINDS, Cards } from "../core/cards";
-import type { CardKind, CardState } from "../core/types";
+import type { CardKind, CardState, McpServerInput, McpState } from "../core/types";
+import { startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
 import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr } from "../core/prclaims";
 import { repoFullNameOf } from "../core/git";
@@ -103,6 +106,26 @@ const PROMPT_HISTORY = 1_000;
 const PROVIDERS: ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 
 // ------------------------------------------------------------- the pieces
+
+/** The MCPs page: the list with how far each server reaches, what the
+ *  agents' own configs define, and who still runs the set before the change. */
+async function mcpState(): Promise<McpState> {
+  const r = readRegistry();
+  const { agents, reach } = await reachAll();
+  const passed = new Set(agents.filter((a) => a.supported && a.installed).map((a) => a.provider));
+  const stale = r.changedAt === null ? [] : fleet.sessions().flatMap((s) => {
+    if (s.host !== "tmux" || !s.pid || !passed.has(s.provider)) return [];
+    const since = startedAtOf(s.pid);
+    return since !== null && since < r.changedAt! ? [{ id: s.id, title: s.label || s.title || s.id, provider: s.provider, since }] : [];
+  });
+  return {
+    servers: r.servers.map((s) => viewOf(s, reach.get(s.name) ?? [])),
+    found: discover().map(publicFound),
+    agents,
+    changedAt: r.changedAt,
+    stale,
+  };
+}
 
 export const accounts = new AccountsService();
 export const fleet = new Fleet({
@@ -614,7 +637,7 @@ function closeTerminal(ws: Socket): void {
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
   if (e instanceof DesktopError) return new HttpError(e.status, e.message);
-  if (e instanceof FleetError || e instanceof AccountError) return new HttpError(e.status, e.message);
+  if (e instanceof FleetError || e instanceof AccountError || e instanceof McpError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }
 
@@ -1326,6 +1349,39 @@ const router = new Router(mapError)
     const ok = writeSkillBody(file, b.body);
     void refreshSlow();
     return json({ ok });
+  })
+  // Global MCP servers (src/core/mcp.ts): the list, what the agents' own
+  // configs define, and how far each server reaches.
+  .add("GET", "/api/mcp", async () => json(await mcpState()))
+  .add("POST", "/api/mcp/servers", async ({ req }) => {
+    addServer((await readBody(req)) as unknown as McpServerInput);
+    return json(await mcpState());
+  })
+  .add("PUT", "/api/mcp/servers/:name", async ({ req, params }) => {
+    updateServer(params.name!, (await readBody(req)) as unknown as McpServerInput);
+    return json(await mcpState());
+  })
+  .add("POST", "/api/mcp/servers/:name/enabled", async ({ req, params }) => {
+    setEnabled(params.name!, requireBoolean(await readBody(req), "enabled"));
+    return json(await mcpState());
+  })
+  .add("DELETE", "/api/mcp/servers/:name", async ({ params }) => {
+    removeServer(params.name!);
+    return json(await mcpState());
+  })
+  .add("POST", "/api/mcp/servers/:name/check", async ({ params }) => {
+    if (!readRegistry().servers.some((x) => x.name === params.name)) throw new HttpError(404, `no global server named ${params.name}`);
+    return json(await checkServer(params.name!));
+  })
+  .add("POST", "/api/mcp/import", async ({ req }) => {
+    const b = await readBody(req);
+    const def = foundDefinition(requireString(b, "id"));
+    if (!def) throw new HttpError(404, "that server is no longer in the agent's config, or agentbox cannot carry it");
+    // A project's server reaches only that project's sessions until you say otherwise.
+    if (def.scope === "project" && b.promote !== true) throw new HttpError(400, "this server belongs to one project; promote it to make it global");
+    const rename = optionalString(b, "name");
+    importServer({ ...def, name: rename?.trim() || def.name, transport: def.transport });
+    return json(await mcpState());
   })
   .add("POST", "/api/skill/promote", async ({ req }) => {
     const b = await readBody(req);

@@ -18,6 +18,7 @@ import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
 import { Skills } from "./views/Skills";
+import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
 
@@ -66,6 +67,7 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
   { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
   { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
+  { id: "mcps", label: "MCPs", icon: Icon.plugs, to: { page: "mcps" } },
   { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
 ];
 
@@ -75,6 +77,7 @@ const PAGE_TITLE: Record<NavId, string> = {
   voice: "Voice",
   accounts: "Accounts",
   skills: "Skills",
+  mcps: "MCPs",
   settings: "Settings",
 };
 
@@ -241,7 +244,7 @@ export function App() {
         <StaleBanner />
 
         <SysbarSlot.Provider value={sysbarSlot}>
-        <main className={`content ${(flush || route.page === "skills") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
+        <main className={`content ${(flush || route.page === "skills" || route.page === "mcps") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
@@ -272,6 +275,8 @@ export function App() {
               <Review state={state} />
             ) : route.page === "skills" ? (
               <Skills skills={state.skills} />
+            ) : route.page === "mcps" ? (
+              <Mcps />
             ) : (
               <Settings state={state} />
             )}
@@ -320,7 +325,7 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, settings: 0 };
+  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
@@ -330,6 +335,7 @@ function countsOf(state: AppState | null): Record<NavId, number> {
     voice: 0,
     accounts: Math.max(loginsOpen, authBad),
     skills: 0,
+    mcps: 0,
     settings: 0,
   };
 }
