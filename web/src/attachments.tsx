@@ -241,11 +241,12 @@ export type Attachments = ReturnType<typeof useAttachments>;
  * and the drop highlight are on this, so the thumbnails read as part of the
  * box rather than something under it.
  */
-export function AttachFrame({ a, className, children }: { a: Attachments; className?: string; children: React.ReactNode }) {
+export function AttachFrame({ a, className, children, footer }: { a: Attachments; className?: string; children: React.ReactNode; footer?: React.ReactNode }) {
   return (
     <div className={`att-frame${className ? ` ${className}` : ""}`} data-drop={a.dropping || undefined} {...a.handlers}>
       {children}
       <AttachmentStrip a={a} />
+      {footer}
       {a.dropping ? <div className="att-dropzone">Drop to attach</div> : null}
     </div>
   );
@@ -263,7 +264,7 @@ export function AttachButton({ a, className }: { a: Attachments; className?: str
         aria-label="Attach images"
         onClick={() => input.current?.click()}
       >
-        <Icon.image size={15} />
+        <Icon.paperclip size={17} />
       </button>
       <input
         ref={input}

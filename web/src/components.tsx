@@ -13,104 +13,14 @@ import {
   useSyncExternalStore,
   type ButtonHTMLAttributes,
   type ErrorInfo,
-  type ReactElement,
   type ReactNode,
   type Ref,
 } from "react";
 import { ago, clockNow, subscribeToClock } from "./api";
 import { isMissingChunk, reloadForMissingChunk } from "./lib/update";
 
-// ------------------------------------------------------------------ icons
-
-export type IconProps = { size?: number; className?: string };
-export type IconComponent = (props: IconProps) => ReactElement;
-
-const I =
-  (...d: string[]): IconComponent =>
-  ({ size = 16, className }: IconProps) => (
-    <svg
-      className={className}
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      {d.map((path, i) => (
-        <path key={i} d={path} />
-      ))}
-    </svg>
-  );
-
-/** Not annotated as `Record<string, ...>` on purpose: the exact key set means a
- *  typo at a callsite is a compile error rather than a silently missing glyph. */
-export const Icon = {
-  sessions: I("M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", "M3 9h18M9 9v12"),
-  settings: I("M4 7h8M16 7h4M4 17h4M12 17h8", "M14 4v6M8 14v6"),
-  /** A card on a stack. */
-  cards: I("M6 3h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M7 19.5h10M9.5 22h5"),
-
-  plus: I("M12 5v14M5 12h14"),
-  play: I("M7 4.5v15l12-7.5z"),
-  stop: I("M7 6h10v12H7z"),
-  bell: I("M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z", "M10 20.5a2 2 0 0 0 4 0"),
-  refresh: I("M20.5 12a8.5 8.5 0 1 1-2.5-6M20.5 3.5v6h-6"),
-  trash: I("M4 7h16M9 7V5h6v2", "M6 7l1 14h10l1-14M10 11v6M14 11v6"),
-  send: I("M4 12l16-8-6 16-2.5-6.5z"),
-  check: I("M5 13l4 4L19 7"),
-  x: I("M6 6l12 12M18 6L6 18"),
-  chevronRight: I("M9 5l7 7-7 7"),
-  chevronLeft: I("M15 5l-7 7 7 7"),
-  chevronDown: I("M5 9l7 7 7-7"),
-  chevronUp: I("M5 15l7-7 7 7"),
-  arrowDown: I("M12 4v15M6 13l6 6 6-6"),
-  arrowUp: I("M12 20V5M6 11l6-6 6 6"),
-  mic: I("M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z", "M5 11a7 7 0 0 0 14 0M12 18v3"),
-  lock: I("M6 11h12v10H6z", "M8 11V7a4 4 0 0 1 8 0v4"),
-  micOff: I("M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3", "M5 11a7 7 0 0 0 11.9 5M19 11a7 7 0 0 1-.5 2.6M12 18v3M3 3l18 18"),
-  external: I("M14 4h6v6", "M20 4L11 13M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"),
-
-  sun: I("M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z", "M12 1v2M12 21v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"),
-  moon: I("M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"),
-  monitor: I("M3 5h18v11H3z", "M9 20h6M12 16v4"),
-
-  alert: I("M12 8v5M12 16.5v.01", "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"),
-
-  branch: I("M6 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM6 9v11", "M18 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM18 9v2a4 4 0 0 1-4 4h-4"),
-  prs: I("M6 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM6 9v11", "M18 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 15V9l-4-4h-3M11 2l-3 3 3 3"),
-  folder: I("M3 6h6l2 2h10v11H3z"),
-  image: I("M4 5h16v14H4z", "M4 16l5-5 4 4 2-2 5 5", "M15.5 9.5a1 1 0 1 0 0-.01"),
-
-  edit: I("M4 20h4L20 8l-4-4L4 16z"),
-  terminal: I("M4 5h16v14H4z", "M8 10l2.5 2L8 14M13 15h4"),
-  search: I("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z", "M16.5 16.5L21 21"),
-  brain: I("M9 4a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8V17a3 3 0 0 0 4 2.8", "M15 4a3 3 0 0 1 3 3 3 3 0 0 1 1 5.8V17a3 3 0 0 1-4 2.8M12 4v16"),
-  move: I("M9 6l-4 4 4 4", "M5 10h9a5 5 0 0 1 5 5v4"),
-  sort: I("M4 7h16M7 12h10M10 17h4"),
-  clock: I("M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z", "M12 7v5l3 2"),
-  repeat: I("M17 2l4 4-4 4", "M3 11v-1a4 4 0 0 1 4-4h14", "M7 22l-4-4 4-4", "M21 13v1a4 4 0 0 1-4 4H3"),
-
-  user: I("M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M4 21a8 8 0 0 1 16 0"),
-  wifiOff: I("M2 2l20 20", "M5 12.5a11 11 0 0 1 4-2.4M15 10.1a11 11 0 0 1 4 2.4M8.5 16a6 6 0 0 1 7 0M12 20h.01"),
-
-  users: I("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M22 21a7 7 0 0 0-4.5-6.5"),
-  copy: I("M9 9h11v11H9z", "M5 15H4V4h11v1"),
-  key: I("M15 7a4 4 0 1 1-3.9 5H3v3h3v3h3v-3h2.1A4 4 0 0 1 15 7z"),
-  /** Arrows meeting: fold away. */
-  fold: I("M7 4l5 5 5-5", "M7 20l5-5 5 5"),
-  /** Arrows parting: unfold. */
-  unfold: I("M7 9l5-5 5 5", "M7 15l5 5 5-5"),
-  bolt: I("M13 2L4 14h7l-1 8 9-12h-7z"),
-  gauge: I("M12 14l4-4", "M3.5 18a9 9 0 1 1 17 0"),
-  chart: I("M4 20h16", "M7 16v-4M12 16V6M17 16v-7"),
-  link: I("M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1", "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"),
-  undo: I("M9 14L4 9l5-5", "M4 9h11a5 5 0 0 1 0 10h-3"),
-};
+import { Icon, type IconComponent } from "./icons";
+export { Icon, type IconComponent, type IconProps } from "./icons";
 
 // ----------------------------------------------------------------- button
 

@@ -120,6 +120,20 @@
   color-scheme: dark;
 }
 
+/* An accent chosen in Settings replaces the orange (lib/accent.ts sets the
+ * `--pick-*` values on <html>). Each theme has its own value, and the text
+ * colour that reads on it. */
+:root[data-accent] {
+  --accent: var(--pick-light);
+  --accent-hover: color-mix(in srgb, var(--pick-light) 80%, black);
+  --on-accent: var(--pick-light-on);
+}
+:root[data-accent][data-theme="dark"] {
+  --accent: var(--pick-dark);
+  --accent-hover: color-mix(in srgb, var(--pick-dark) 80%, white);
+  --on-accent: var(--pick-dark-on);
+}
+
 /* -------------------------------------------------------------------- base */
 
 * {
@@ -327,8 +341,10 @@ code {
    * through on its way to the session rail does not throw a panel open. */
   transition: width 0.14s ease, box-shadow 0.14s ease;
 }
+/* Open on hover, on keyboard focus, and while the inbox is open beside it. */
 .sidebar:hover,
-.sidebar:has(:focus-visible) {
+.sidebar:has(:focus-visible),
+.sidebar:has(.nav-bell[aria-expanded="true"]) {
   width: var(--sidebar-open-w);
   box-shadow: var(--shadow-lg);
   transition-delay: 0.12s;
@@ -341,7 +357,8 @@ code {
   transition: opacity 0.1s ease;
 }
 .sidebar:hover .nav-label,
-.sidebar:has(:focus-visible) .nav-label {
+.sidebar:has(:focus-visible) .nav-label,
+.sidebar:has(.nav-bell[aria-expanded="true"]) .nav-label {
   opacity: 1;
   transition: opacity 0.14s ease 0.16s;
 }
@@ -358,7 +375,7 @@ code {
   letter-spacing: -0.01em;
   flex: none;
 }
-.brand svg {
+.brand img {
   flex: none;
 }
 
@@ -449,7 +466,8 @@ code {
   box-shadow: 0 0 0 2px var(--panel);
 }
 .sidebar:hover .nav-item .count,
-.sidebar:has(:focus-visible) .nav-item .count {
+.sidebar:has(:focus-visible) .nav-item .count,
+.sidebar:has(.nav-bell[aria-expanded="true"]) .nav-item .count {
   position: static;
   margin-left: auto;
   padding: 0 7px;
@@ -495,7 +513,7 @@ code {
   flex: none;
 }
 /* Collapsed, only the current theme shows; the choice appears with the room. */
-.sidebar:not(:hover):not(:has(:focus-visible)) .theme-opt:not(.on) {
+.sidebar:not(:hover):not(:has(:focus-visible)):not(:has(.nav-bell[aria-expanded="true"])) .theme-opt:not(.on) {
   display: none;
 }
 .theme-opt {
@@ -570,46 +588,161 @@ code {
   color: var(--danger);
 }
 
-/* The first-run card: a banner whose body is a small list of next steps. */
-.ob .ob-body {
+/* The inbox (Inbox.tsx): the bell's panel, against the open rail's edge. Its
+ * left padding is a bridge: the pointer crosses from the rail to the panel
+ * without leaving either, so neither closes on the way. */
+.inbox-wrap {
+  flex: none;
+}
+.nav-bell[aria-expanded="true"] {
+  background: var(--active);
+  color: var(--text);
+}
+.inbox {
+  position: fixed;
+  left: var(--sidebar-open-w);
+  z-index: 60;
+  padding-left: 8px;
+  animation: inbox-in 0.12s ease-out;
+}
+@keyframes inbox-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.inbox-panel {
+  width: 360px;
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: var(--shadow-lg);
+}
+.inbox-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.inbox-n {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--active);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 17px;
+  letter-spacing: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.inbox-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+  padding: 18px 10px 22px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.inbox-empty svg {
+  color: var(--success);
+}
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* One notice: an icon, what it says, and its one action. */
+.inbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.inbox-row:hover {
+  background: var(--hover);
+}
+.inbox-icon {
+  flex: none;
+  margin-top: 2.5px;
+  color: var(--muted);
+}
+.inbox-row[data-tone="warn"] .inbox-icon {
+  color: var(--warning);
+}
+.inbox-text {
   flex: 1;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+.inbox-row .btn {
+  flex: none;
+  align-self: center;
+}
+/* The first-run checklist: a group with its own heading and dismiss. */
+.inbox-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-}
-.ob .ob-title {
-  color: var(--muted);
-}
-.ob .ob-items {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.ob .ob-items li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.ob .ob-error {
-  color: var(--danger);
-  font-size: 12.5px;
-}
-.ob .ob-note {
-  color: var(--muted);
-  font-size: 12.5px;
-}
-.ob .ob-external {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 6px;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 4px;
   border-top: 1px solid var(--border);
+}
+.inbox-list > .inbox-group:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.inbox-group .inbox-icon {
+  color: var(--accent);
+}
+.inbox-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px 0 10px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.inbox-dismiss {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.inbox-dismiss:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.inbox-sub,
+.inbox-note {
+  margin: 2px 10px 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
 }
 
 .content {
@@ -1101,6 +1234,49 @@ textarea,
   opacity: 0.55;
 }
 
+/* The open session's facts, then the machine. The facts give way first when
+ * the window is narrow: they shrink, and the machine figures keep their size. */
+.sysbar-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  container-type: inline-size;
+}
+/* A session's facts and every figure need about 1460px. With less, the
+ * subscriptions give way; the sheet the bar opens still lists them. */
+@container (max-width: 1460px) {
+  .sys-session:not(:empty) + .sysbar-row .sys-limits,
+  .sys-session:not(:empty) + .sysbar-row .sys-div:has(+ .sys-limits) {
+    display: none;
+  }
+}
+.sysbar-line > .sysbar-row {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 320px;
+}
+.sys-session {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 42px;
+  padding: 0 14px;
+  border-right: 1px solid var(--border);
+}
+.sys-session:empty,
+.sysbar-bare:has(> .sys-session:empty) {
+  display: none;
+}
+.sys-session .sx-facts {
+  margin: 0;
+  gap: 14px;
+}
+/* The sidebar names the project; the path is in the branch's tooltip. */
+.sys-session .fact-cwd {
+  display: none;
+}
+
 .sysbar-row {
   display: flex;
   align-items: center;
@@ -1194,9 +1370,10 @@ textarea,
   height: 24px;
   flex: none;
 }
+/* The bar's fills are the accent chosen in Settings; amber and red still say "hot". */
 .corebars i {
   width: 5px;
-  background: var(--success);
+  background: var(--accent);
   opacity: 0.62;
   display: block;
 }
@@ -1225,7 +1402,7 @@ textarea,
   width: auto;
 }
 .seg-used {
-  background: var(--success);
+  background: var(--accent);
   display: block;
 }
 .seg-cache {
@@ -1283,7 +1460,7 @@ textarea,
   background: color-mix(in srgb, var(--text) 45%, transparent);
 }
 .sys-limit-bar[data-kind="5h"] i {
-  background: color-mix(in srgb, var(--info) 75%, transparent);
+  background: color-mix(in srgb, var(--accent) 75%, transparent);
 }
 .sys-limit-bar[data-tone="warn"] i {
   background: var(--warning);
@@ -1465,7 +1642,7 @@ textarea,
 .corebar-h i {
   display: block;
   height: 100%;
-  background: var(--success);
+  background: var(--accent);
   opacity: 0.62;
 }
 .corebar-h i[data-hot="true"] {
@@ -1983,24 +2160,12 @@ kbd {
   background: var(--warning);
   color: var(--bg);
 }
-.sidebar-keys {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 4px 12px;
-  padding: 6px 10px 8px;
-  font-size: 11px;
-  color: var(--faint);
-}
-.sidebar-keys kbd {
-  margin-right: 2px;
-}
 .topbar {
   min-height: 52px;
   padding-top: 8px;
   padding-bottom: 8px;
 }
 @media (max-width: 900px) {
-  .sidebar-keys,
   .mock-tag {
     display: none;
   }
@@ -2251,7 +2416,8 @@ kbd {
   }
   .sidebar,
   .sidebar:hover,
-  .sidebar:has(:focus-visible) {
+  .sidebar:has(:focus-visible),
+  .sidebar:has(.nav-bell[aria-expanded="true"]) {
     position: static;
     width: 100%;
     flex-direction: row;
@@ -2272,7 +2438,7 @@ kbd {
   .sidebar .spacer,
   .sidebar .conn,
   .sidebar .theme-control,
-  .sidebar-keys,
+  .nav-fullscreen,
   .nav-new kbd {
     display: none;
   }
@@ -2315,15 +2481,37 @@ kbd {
   .nav-new {
     order: 3;
   }
-  /* Sessions, Review, New, Voice, Accounts, Settings; Skills is a desk job. */
+  /* Sessions, Review, New, Voice, Accounts, Settings, then the bell; Skills
+     is a desk job. */
   .sidebar nav > :nth-child(1) { order: 1; }
   .sidebar nav > :nth-child(2) { order: 2; }
   .sidebar nav > :nth-child(3) { order: 4; }
   .sidebar nav > :nth-child(4) { order: 5; }
   .sidebar nav > :nth-child(5) { display: none; }
   .sidebar nav > :nth-child(6) { order: 6; }
+  /* The bell is the bar's last tab, and its inbox a sheet above the bar. */
+  .inbox-wrap {
+    display: contents;
+  }
+  .nav-bell {
+    order: 7;
+  }
+  .nav-bell[aria-expanded="true"] {
+    background: none;
+    color: var(--accent);
+  }
+  .inbox {
+    left: 8px;
+    right: 8px;
+    padding-left: 0;
+  }
+  .inbox-panel {
+    width: auto;
+    max-height: 60dvh;
+  }
   .nav-item .count,
-  .sidebar:hover .nav-item .count {
+  .sidebar:hover .nav-item .count,
+  .sidebar:has(.nav-bell[aria-expanded="true"]) .nav-item .count {
     position: absolute;
     top: 3px;
     left: calc(50% + 5px);

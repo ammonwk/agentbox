@@ -31,6 +31,7 @@ import { diffOf } from "../core/diff";
 import { grepInWorker } from "../core/grep";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
+import { agentTimeline, sessionWork } from "../core/work";
 import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
 import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushSubscriptions, pushToAll, removeSubscription } from "../core/push";
@@ -1101,6 +1102,14 @@ const router = new Router(mapError)
     const s = fleet.get(params.id!);
     if (!s.pid) throw new HttpError(409, "session has no running process");
     return json(await procDetail(s.pid));
+  })
+  // What it waits on: shells, monitors and in-process agents (src/core/work.ts).
+  .add("GET", "/api/sessions/:id/work", async ({ params }) => json(await sessionWork(fleet.get(params.id!))))
+  // One of those agents' own transcript, for the view a click in the list opens.
+  .add("GET", "/api/sessions/:id/agents/:agentId/timeline", async ({ params, url }) => {
+    const t = await agentTimeline(fleet.get(params.id!), params.agentId!, url.searchParams.get("since"));
+    if (!t) throw new HttpError(404, "no such agent in this session");
+    return json(t);
   })
   .add("GET", "/api/sessions/:id/attach", ({ params }) => json({ argv: fleet.attachCommand(params.id!) }))
   .add("GET", "/api/sessions/:id/screen", ({ params }) => json({ text: fleet.screen(params.id!) }))

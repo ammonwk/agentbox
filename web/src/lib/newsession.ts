@@ -16,6 +16,8 @@ export interface NewSessionPrefs {
   provider?: ProviderId;
   where?: "repo" | "path";
   repoId?: string;
+  /** A manual Where choice holds while the saved draft is edited. */
+  wherePicked?: boolean;
   worktree?: boolean;
   path?: string;
   perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string; effort?: string }>>;
@@ -275,8 +277,18 @@ const CHOICES_KEY = "agentbox.repoChoices";
  *  it is written on every pick, while the prefs are rewritten on every
  *  keystroke, and one clobbering the other would lose choices. */
 export function loadRepoChoices(): Record<string, number> {
+  return loadChoices(CHOICES_KEY);
+}
+
+export function noteRepoChoice(id: string, at = Date.now()): void {
+  const choices = loadChoices(CHOICES_KEY);
+  choices[id] = at;
+  saveChoices(CHOICES_KEY, choices);
+}
+
+function loadChoices(key: string): Record<string, number> {
   try {
-    const v = JSON.parse(localStorage.getItem(CHOICES_KEY) ?? "{}") as unknown;
+    const v = JSON.parse(localStorage.getItem(key) ?? "{}") as unknown;
     if (!v || typeof v !== "object") return {};
     const out: Record<string, number> = {};
     for (const [id, at] of Object.entries(v)) if (typeof at === "number" && Number.isFinite(at)) out[id] = at;
@@ -286,11 +298,9 @@ export function loadRepoChoices(): Record<string, number> {
   }
 }
 
-export function noteRepoChoice(id: string, at = Date.now()): void {
-  const choices = loadRepoChoices();
-  choices[id] = at;
+function saveChoices(key: string, choices: Record<string, number>): void {
   try {
-    localStorage.setItem(CHOICES_KEY, JSON.stringify(choices));
+    localStorage.setItem(key, JSON.stringify(choices));
   } catch {
     // private mode or full: forgetting is fine
   }
@@ -306,6 +316,46 @@ export function reposByChoice(repos: readonly Repo[], choices: Record<string, nu
 }
 
 // ------------------------------------------------------------------ where
+
+export type PromptProject =
+  | { key: string; kind: "repo"; repo: Repo }
+  | { key: string; kind: "path"; path: string };
+
+/** Whole project names only: mentioning agentbox-cloud must not choose agentbox. */
+export function promptProjects(text: string, repos: readonly Repo[], folders: readonly string[]): PromptProject[] {
+  const targets: { project: PromptProject; names: string[] }[] = repos.map((repo) => ({
+    project: { key: `repo:${repo.id}`, kind: "repo", repo },
+    names: [repo.displayName, repo.ref, repo.fullName ?? "", repo.fullName?.split("/").pop() ?? "", ...projectFolderNames(repo.ref)],
+  }));
+  for (const path of new Set(folders)) {
+    if (repos.some((r) => r.ref === path)) continue;
+    targets.push({ project: { key: `path:${path}`, kind: "path", path }, names: [path, path.replace(/\/+$/, "").split("/").pop() ?? ""] });
+  }
+  const matches: { project: PromptProject; start: number; end: number; priority: number }[] = [];
+  for (const { project, names } of targets) {
+    for (const name of new Set(names.filter(Boolean))) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const pattern = new RegExp(`(?<![\\p{L}\\p{N}_-])${escaped}(?![\\p{L}\\p{N}_-])`, "giu");
+      const priority = project.kind === "repo"
+        ? [project.repo.displayName, project.repo.ref, project.repo.ref.split("/").pop()].includes(name) ? 2 : 1
+        : 0;
+      for (const m of text.matchAll(pattern)) matches.push({ project, start: m.index, end: m.index + m[0].length, priority });
+    }
+  }
+  // A full path or owner/repo is more specific than a name inside it.
+  const specific = matches.filter((m) => !matches.some((other) =>
+    other.start <= m.start && other.end >= m.end &&
+    (other.end - other.start > m.end - m.start || other.priority > m.priority),
+  ));
+  return [...new Map(specific.map((m) => [m.project.key, m.project])).values()];
+}
+
+function projectFolderNames(path: string): string[] {
+  const parts = path.replace(/\/+$/, "").split("/");
+  const name = parts.pop() ?? "";
+  const parent = parts.pop();
+  return parent && name.toLowerCase() === `${parent.toLowerCase()}-dev` ? [name, parent] : [name];
+}
 
 /** Repos with the most recently active session first; never-used ones keep
  *  their registration order at the end. */
@@ -323,13 +373,40 @@ export function reposByRecency(repos: readonly Repo[], sessions: readonly Pick<S
     .map((x) => x.r);
 }
 
-/** Folders past sessions ran in, most recent first — the Folder field's suggestions. */
-export function recentFolders(sessions: readonly Pick<Session, "cwd" | "lastActivityAt" | "worktree">[], limit = 12): string[] {
-  const last = new Map<string, number>();
+/**
+ * The Where menu's folders, most recent first: the ones picked in the dialog
+ * (`chosen`, path → when) and the ones past sessions ran in. The board drops
+ * closed sessions, so only the first remembers a folder whose sessions all
+ * ended. A registered repo's checkout is left out: the repo stands for it.
+ */
+export function recentFolders(
+  sessions: readonly Pick<Session, "cwd" | "lastActivityAt" | "worktree">[],
+  chosen: Record<string, number> = {},
+  repoRefs: readonly string[] = [],
+  limit = 12,
+): string[] {
+  const last = new Map<string, number>(Object.entries(chosen));
   for (const s of sessions) {
     // A worktree agentbox cut is not somewhere you would start a new session.
     if (!s.cwd || s.worktree) continue;
     last.set(s.cwd, Math.max(last.get(s.cwd) ?? 0, s.lastActivityAt));
   }
-  return [...last].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([p]) => p);
+  return [...last]
+    .filter(([p]) => !repoRefs.includes(p))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([p]) => p);
+}
+
+const FOLDERS_KEY = "agentbox.folderChoices";
+
+/** Folder → when the dialog last picked it; like the repo choices. */
+export function loadFolderChoices(): Record<string, number> {
+  return loadChoices(FOLDERS_KEY);
+}
+
+export function noteFolderChoice(path: string, at = Date.now()): void {
+  const choices = loadChoices(FOLDERS_KEY);
+  choices[path] = at;
+  saveChoices(FOLDERS_KEY, choices);
 }

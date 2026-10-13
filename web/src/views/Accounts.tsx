@@ -49,14 +49,6 @@ function AccountList({ state }: { state: AppState }) {
 
   return (
     <div className="acs">
-      <p className="hint acs-lede">
-        New sessions go to the account whose weekly resets soonest, until its 5-hour window is half spoken for, then to the next to
-        reset — so what expires first is used first. That counts what running sessions are still expected to use: the hatched
-        part of each weekly bar, and of a 5-hour bar where it is headed by its reset. The tick on a bar marks how far through its
-        window we are. <a href={hrefOf({ page: "accounts", sub: "calibration" })}>Calibration</a> shows what those expectations are
-        made of.
-      </p>
-
       {providers.map((p) => {
         const accounts = state.accounts.filter((a) => a.provider === p);
         // A login whose account is not listed: one just created (not in the
@@ -190,7 +182,7 @@ function AccountCard({
   };
 
   return (
-    <article className="ac card" data-enabled={a.enabled} style={{ ["--acct" as string]: `var(--acct-${hue})` }} aria-label={`${a.label} account`}>
+    <article data-nav-item data-nav-id={`account:${a.id}`} tabIndex={0} className="ac card" data-enabled={a.enabled} style={{ ["--acct" as string]: `var(--acct-${hue})` }} aria-label={`${a.label} account`}>
       <header className="ac-head">
         <span className="ac-swatch" aria-hidden="true" />
         {editing ? (
@@ -418,7 +410,7 @@ function AccountCard({
       {login ? <LoginPanel login={login} onDismiss={() => onDismissLogin(login.id)} /> : null}
 
       <footer className="ac-foot">
-        <a className="btn btn-ghost btn-sm" href={hrefOf({ page: "accounts", sub: "insights", account: a.id })}>
+        <a className="btn btn-ghost btn-sm" data-nav-enter href={hrefOf({ page: "accounts", sub: "insights", account: a.id })}>
           <Icon.chart size={13} />
           Usage insights
         </a>

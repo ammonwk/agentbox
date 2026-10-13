@@ -33,6 +33,8 @@ export function ScheduledRow({ sc, current, onCancel }: { sc: Schedule; current:
       className="rail-row rail-sched"
       href={hrefOf({ page: "session", id: sc.id, tab: "terminal" })}
       aria-current={current ? "page" : undefined}
+      data-nav-item
+      data-nav-id={`session:${sc.id}`}
       data-failed={failed || undefined}
       title={`${scheduleTitle(sc)}\n\n${failed ? `Did not start: ${sc.lastError}` : describeRule(sc.rule)}`}
       onMouseLeave={() => setArmed(false)}
@@ -93,7 +95,7 @@ export function ScheduledDetail({ sc, state, onCancel }: { sc: Schedule; state: 
     });
 
   return (
-    <div className="sv-main">
+    <div className="sv-main" data-nav-region="detail" tabIndex={-1} aria-label="Scheduled session">
       <header className="sx-header">
         <div className="sx-header-top">
           <ProviderBadge provider={sc.spec.provider} />
