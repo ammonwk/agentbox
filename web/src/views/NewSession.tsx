@@ -99,7 +99,17 @@ export function NewSession({
     };
   }, []);
   const [perProvider, setPerProvider] = useState(prefs.perProvider ?? {});
-  const model = perProvider[provider]?.model ?? "";
+  const [catalog, setCatalog] = useState<ModelOption[]>([]);
+  // A model remembered from an earlier visit that the account no longer lists
+  // (a plan without it, a retired id) runs as Default: the CLI would refuse
+  // every turn. One picked or typed in this visit goes through as asked.
+  const picked = perProvider[provider]?.model ?? "";
+  const stale =
+    picked !== "" &&
+    picked === prefs.perProvider?.[provider]?.model &&
+    catalog.length > 0 &&
+    !catalog.some((m) => m.id === picked);
+  const model = stale ? "" : picked;
   const accountId = perProvider[provider]?.accountId ?? "auto";
   const providerEfforts = state.providers.find((p) => p.id === provider)?.efforts ?? [];
   const setChoice = (patch: { model?: string; accountId?: string; effort?: string }) =>
@@ -108,7 +118,6 @@ export function NewSession({
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [placing, setPlacing] = useState(false);
   const [placeErr, setPlaceErr] = useState<string | null>(null);
-  const [catalog, setCatalog] = useState<ModelOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Start it now, or later: the ▾ beside Start switches. */
