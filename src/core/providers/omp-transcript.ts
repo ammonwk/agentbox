@@ -139,6 +139,20 @@ export function textOf(content: unknown): string {
   return parts.join("\n");
 }
 
+/**
+ * Whether an assistant message carries anything the turn can act on: a tool
+ * call, an image or non-blank text — omp's own test
+ * (`hasVisibleAssistantContent`, pi-ai `utils/empty-completion-retry.ts`).
+ * Thinking alone is not: the user sees nothing and nothing runs.
+ */
+function hasVisibleContent(content: unknown): boolean {
+  if (typeof content === "string") return /\S/.test(content);
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (b) => b?.type === "image" || b?.type === "toolCall" || (b?.type === "text" && typeof b.text === "string" && /\S/.test(b.text)),
+  );
+}
+
 function imagesIn(content: unknown): number {
   if (!Array.isArray(content)) return 0;
   return content.filter((b) => b && typeof b === "object" && (b as any).type === "image").length;
@@ -360,14 +374,23 @@ function foldMessage(s: OmpState, m: any, index: number, at: number | null, opts
           s.turnError = { at: when, kind: ompErrorKind(m), detail: oneLine(first, 300) };
           if (who.includes("/")) s.modelOutcome = nextOutcome(s.modelOutcome, who, when, refusesTheRoute(m) ? { refused: oneLine(first, 200) } : null);
         }
+      } else if (m.stopReason === "stop" && !hasVisibleContent(m.content)) {
+        // A clean stop with nothing in it — no text, no tool call, at most
+        // reasoning — is the provider dropping the reply, not the model
+        // finishing: omp retries only one that streamed nothing, and a
+        // reasoning-only one (opencode-go-responses/muse-spark, mid-task,
+        // after a tool result) ends its loop as if done. Not an answer for
+        // the route either.
+        s.turnError = { at: when, kind: "transient", detail: "the model ended its turn with no reply and no tool call (reasoning only)" };
       } else if (s.model && m.stopReason !== "aborted") {
         s.modelOutcome = nextOutcome(s.modelOutcome, s.model, when, "answered");
       }
       if (m.stopReason === "length") {
         s.turnError = { at: when, kind: "output-cap", detail: "the reply hit the model's output token limit" };
       }
-      // A tool call means the turn goes on; anything else ends it.
-      s.turnOpen = m.stopReason === "toolUse";
+      // A tool call means the turn goes on — omp runs the calls of a `stop`
+      // too (agent-loop `runnableStop`); anything else ends it.
+      s.turnOpen = m.stopReason === "toolUse" || (m.stopReason === "stop" && Array.isArray(m.content) && m.content.some((b: any) => b?.type === "toolCall"));
       return;
     }
   }
