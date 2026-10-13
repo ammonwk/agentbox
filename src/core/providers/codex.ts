@@ -29,14 +29,14 @@
 
 import { Database } from "bun:sqlite";
 import { deserialize, serialize } from "bun:jsc";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, readlinkSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { agentboxHome, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import type { Account } from "../types";
 import { codexFormat, codexLineage, type CodexLineage } from "./codex-transcript";
 import { JsonlTranscriptReader } from "./jsonl-reader";
-import { cwdOf, environOf, findProcesses, runsCli, startedAtOf, type ProcMatch } from "./procs";
+import { cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf, type ProcMatch } from "./procs";
 import { pickOption, plainScreen, underInput } from "./tui-screen";
 import { briefing } from "./briefing";
 import { carryFlags, setsFlag, type Arity } from "../launch";
@@ -313,19 +313,7 @@ function openThreads(pid: number, home: string): string[] {
   const locks = join(home, "thread-writer-locks") + "/";
   const sessions = join(home, "sessions") + "/";
   const out: string[] = [];
-  let fds: string[];
-  try {
-    fds = readdirSync(`/proc/${pid}/fd`);
-  } catch {
-    return out;
-  }
-  for (const fd of fds) {
-    let target: string;
-    try {
-      target = readlinkSync(`/proc/${pid}/fd/${fd}`);
-    } catch {
-      continue;
-    }
+  for (const target of openFilesOf(pid)) {
     if (target.startsWith(locks) && target.endsWith(".lock")) {
       const id = basename(target, ".lock");
       if (UUID.test(id)) out.push(id);
@@ -553,17 +541,25 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
 
 /** Of the threads a process is proven to hold, its own session: not a
  *  subagent it spawned, and the newest (after `/new`, the old thread may
- *  still be listed). Thread ids are v7 uuids, so they sort by creation. */
-function pickThread(ids: string[], home: string): string | null {
+ *  still be listed). Thread ids are v7 uuids, so they sort by creation.
+ *  A thread with a rollout goes first: `codex exec` (0.156) also holds the
+ *  writer lock of a side thread it never writes a rollout for, created just
+ *  after its own, and that id matches no session. */
+export function pickThread(
+  ids: string[],
+  home: string,
+  find: (id: string) => string | null = (id) => indexFor(home).find(id),
+  lineage: (path: string) => Pick<CodexLineage, "isSubagent"> | null = lineageOf,
+): string | null {
   if (!ids.length) return null;
-  const ix = indexFor(home);
-  const own = ids.filter((id) => {
-    const path = ix.find(id);
-    const l = path ? lineageOf(path) : null;
-    return !l?.isSubagent;
+  const paths = new Map(ids.map((id) => [id, find(id)]));
+  const own = [...paths.keys()].filter((id) => {
+    const path = paths.get(id);
+    return !(path && lineage(path)?.isSubagent);
   });
   if (!own.length) return null;
-  return own.sort().reverse()[0]!;
+  const written = own.filter((id) => paths.get(id));
+  return (written.length ? written : own).sort().reverse()[0]!;
 }
 
 export interface CwdCandidate {

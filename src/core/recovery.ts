@@ -31,7 +31,9 @@
 
 import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDarwin } from "./darwin";
 import { agentboxHome } from "./paths";
+import { bootTimeMs } from "./proc";
 import { startedAtOf } from "./providers/procs";
 import type { Launch } from "./launch";
 import type { ProviderId, SessionStatus } from "./types";
@@ -161,6 +163,7 @@ export function lastReport(): RecoveryReport | null {
 
 /** When the machine booted, epoch ms. */
 export function bootTime(now = Date.now()): number {
+  if (isDarwin) return bootTimeMs();
   try {
     return now - Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000;
   } catch {

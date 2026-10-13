@@ -20,7 +20,7 @@
 
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { owners } from "./accounts/homes";
 import { elsewhere, place, type AccountState } from "./balancer";
@@ -65,7 +65,7 @@ import {
   type TranscriptReader,
   type TranscriptRef,
 } from "./providers/types";
-import { argvOf, environOf, isAlive, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
+import { argvOf, childrenOf, environOf, isAlive, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
 import { clockHz, describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
 import {
   classifyShell,
@@ -3694,19 +3694,6 @@ function sizeOf(path: string): number {
   }
 }
 
-function childrenOf(pid: number): number[] {
-  const out: number[] = [];
-  try {
-    for (const tid of readdirSync(`/proc/${pid}/task`)) {
-      const kids = readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
-      if (kids) out.push(...kids.split(/\s+/).map(Number));
-    }
-  } catch {
-    /* gone */
-  }
-  return out;
-}
-
 /**
  * The tool shells running under an agent's process, and the first that
  * holds it up (park.ts `shellHold`), if any. `services` says whether a dev
@@ -3905,13 +3892,4 @@ function expandHome(p: string): string {
   if (p === "~") return home;
   if (p.startsWith("~/")) return `${home}${p.slice(1)}`;
   return p;
-}
-
-function ppidOf(pid: number): number | null {
-  try {
-    const s = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return Number(s.slice(s.lastIndexOf(")") + 2).split(" ")[1]);
-  } catch {
-    return null;
-  }
 }

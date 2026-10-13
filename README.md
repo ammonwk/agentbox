@@ -52,6 +52,9 @@ Codex, Devin and omp** — across every subscription you're logged into.
 
 Requires **bun**, **tmux**, **git**, and whichever of `claude`, `codex`,
 `devin`, `omp` you use. `gh` is optional (PR links).
+Runs on Linux and macOS. On macOS there is no systemd service: start the
+server yourself, and the machine panel has no pressure, temperature or
+throttle readings.
 
 ```bash
 bun install
@@ -87,6 +90,12 @@ login runs and agentbox shows you the URL and code. Existing credential homes
 (e.g. a second `CODEX_HOME`) can be imported by path. omp manages its own
 credential pool, so it has one account and you log in with
 `omp auth-broker login` directly.
+
+A team with more than one machine can connect them through an optional
+Supabase project: sign-in, workspaces, plans and skills with revisions, and
+messages between agents on different machines. Each machine keeps its own
+agents, transcripts and logins. See `docs/cloud.md`; the Team page and
+`agentbox cloud` are where it is used.
 
 For a conductor session:
 
