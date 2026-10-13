@@ -139,7 +139,9 @@ export function procArgs(pid: number): { argv: string[]; env: Map<string, string
   while (at < size) {
     const end = buf.indexOf(0, at);
     const stop = end < 0 || end > size ? size : end;
-    if (stop === at) break; // the environment ends at an empty string
+    // Empty argv entries are valid; only an empty string after argc entries
+    // ends the environment. Stopping earlier loses the account's variables.
+    if (stop === at && strings.length >= argc) break;
     strings.push(dec.decode(buf.subarray(at, stop)));
     at = stop + 1;
   }

@@ -3884,4 +3884,3 @@ function expandHome(p: string): string {
   if (p.startsWith("~/")) return `${home}${p.slice(1)}`;
   return p;
 }
-
