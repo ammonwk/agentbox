@@ -44,11 +44,11 @@ const found: McpFound[] = [
 
 const AGENTS: McpState["agents"] = [
   { provider: "claude", installed: true, supported: true, how: "Each session starts with --mcp-config and a file agentbox writes for its account" },
-  { provider: "codex", installed: true, supported: true, how: "Each session starts with -p agentbox, which adds agentbox.config.toml in the account's Codex home" },
-  { provider: "opencode", installed: true, supported: true, how: "Each session starts with OPENCODE_CONFIG set to a file agentbox writes" },
+  { provider: "codex", installed: true, supported: true, how: "Adds global MCP overrides while preserving the selected profile" },
+  { provider: "opencode", installed: true, supported: true, how: "Adds MCPs to the launch config, preserving explicit config and bridge settings" },
   { provider: "muse", installed: true, supported: true, how: "Each session starts with -c mcpServers.<name>; values go in the session's environment" },
-  { provider: "devin", installed: false, supported: false, how: "Not installed on this computer" },
-  { provider: "omp", installed: false, supported: false, how: "Not installed on this computer" },
+  { provider: "devin", installed: false, supported: true, how: "Not installed on this computer" },
+  { provider: "omp", installed: false, supported: true, how: "Not installed on this computer" },
 ];
 
 function reach(s: Saved): McpReach[] {
@@ -56,8 +56,8 @@ function reach(s: Saved): McpReach[] {
     const label: Record<ProviderId, string> = { claude: "Claude", codex: "Codex", opencode: "opencode", muse: "Muse Code", devin: "Devin", omp: "omp" };
     if (!supported) return { provider, state: "unsupported", detail: `agentbox does not pass global servers to ${label[provider]} sessions yet` };
     if (!installed) return { provider, state: "unsupported", detail: `${label[provider]} is not installed` };
-    if (!s.enabled) return { provider, state: "off", detail: "Turned off" };
-    if (provider === "claude" && s.name === "github") return { provider, state: "own", detail: "Claude already has this server in its own config" };
+    if (provider === "claude" && s.name === "github") return { provider, state: "own", detail: "Claude keeps its enabled native server, even when the global entry is off" };
+    if (!s.enabled) return { provider, state: "off", detail: "Global entry is off; native settings are unchanged" };
     if (provider === "codex" && s.name === "playwright") return { provider, state: "conflict", detail: "codex (default) has a different server named playwright, which Codex keeps there" };
     return { provider, state: "on", detail: provider === "opencode" ? "Passed to opencode sessions" : `Passed to 2 ${label[provider]} accounts` };
   });
@@ -70,6 +70,7 @@ function state(): McpState {
     found: found.map((f) => ({ ...f, global: f.global === "same" || !names.has(f.name) ? (names.has(f.name) ? "same" : "none") : "different" })),
     agents: AGENTS,
     changedAt,
+    sessions: [{ id: "a81c", title: "wham-usage · Add wham/usage fallback", provider: "codex", known: true, changedAt: T0 - 80 * 60_000, given: ["github"], kept: [] }],
     stale: changedAt ? [{ id: "a81c", title: "wham-usage · Add wham/usage fallback", provider: "codex", since: changedAt - 60_000 }] : [],
   };
 }

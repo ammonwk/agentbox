@@ -17,7 +17,7 @@ import "./mcps.css";
 type Selection = { kind: "server"; name: string } | { kind: "found"; id: string } | { kind: "new" } | null;
 
 const REACH_WORD: Record<McpReach["state"], string> = {
-  on: "Gets it",
+  on: "Configured",
   own: "Has its own",
   conflict: "Keeps its own",
   off: "Off",
@@ -120,6 +120,7 @@ export function Mcps() {
                 )}
 
                 <h3 className="mc-group">In your agents' own settings</h3>
+                {data.discoveryError && <p className="sk-note mc-error" role="alert">Could not finish reading native settings: {data.discoveryError}</p>}
                 {founds.length === 0 ? (
                   <p className="mc-hint">{q ? "None match." : "Nothing else found."}</p>
                 ) : (
@@ -132,7 +133,7 @@ export function Mcps() {
                             <span className={`mc-badge src-${f.provider}`}>{PROVIDER_LABEL[f.provider]}</span>
                           </span>
                           <span className="sk-row-desc">
-                            {f.scope === "project" ? `One project: ${f.project}` : "Every session of it"}
+                            {f.scope === "project" ? `One project: ${f.project}` : "User or profile settings"}
                             {f.unsupported ? " · cannot be made global" : f.global === "different" ? " · differs from the global one" : ""}
                           </span>
                         </button>
@@ -171,14 +172,14 @@ function Overview({ data }: { data: McpState }) {
         A global server is given to every session agentbox starts or resumes, on every account. Each agent keeps its own settings; when it already
         has a server of the same name, it keeps that one.
       </p>
-      <p className="faint">Sessions you start outside agentbox do not get them until agentbox adopts them.</p>
+      <p className="faint">This shows the defaults for new sessions. Project, profile and explicit settings can keep their own definitions. Sessions started outside agentbox get the global list when adopted. A configured server still needs to connect successfully inside the agent.</p>
       <table className="mc-agents">
           <tbody>
             {data.agents.map((a) => (
               <tr key={a.provider}>
                 <th scope="row">{PROVIDER_LABEL[a.provider]}</th>
                 <td>
-                  <span className={`mc-badge ${a.supported && a.installed ? "on" : ""}`}>{!a.installed ? "Not installed" : a.supported ? "Gets them" : "Not passed"}</span>
+                  <span className={`mc-badge ${a.error ? "error" : a.supported && a.installed ? "on" : ""}`}>{!a.installed ? "Not installed" : a.error ? "Problem" : a.supported ? "Supported" : "Not passed"}</span>
                 </td>
                 <td className="faint">{a.how}</td>
               </tr>
@@ -324,9 +325,17 @@ function ServerDetail({
             </ul>
           </div>
         ) : (
-          <p className="faint mc-saved">Every running session agentbox started already has this list.</p>
+          <p className="faint mc-saved">No running session is known to predate the last change. The launch snapshots below show what was passed; connection health is reported inside each agent.</p>
         )}
 
+        {!!data.sessions?.length && <>
+          <h3 className="mc-sub">Running sessions</h3>
+          <ul>{data.sessions.map((s) => {
+            const own = s.kept.find((k) => k.name === server.name);
+            const status = !s.known ? "Launch not recorded; next resume applies the list" : own ? `Keeps its own ${own.enabled ? "enabled" : "disabled"} definition` : s.given.includes(server.name) ? "Passed at launch" : "Not passed at launch";
+            return <li key={s.id}><a href={`#/s/${encodeURIComponent(s.id)}`}>{s.title}</a> — {status}{s.known && s.changedAt !== data.changedAt ? " · list changed since launch" : ""}</li>;
+          })}</ul>
+        </>}
         <h3 className="mc-sub">Check</h3>
         {busy === "check" ? (
           <p className="faint">

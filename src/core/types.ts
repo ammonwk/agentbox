@@ -879,6 +879,8 @@ export interface McpAgent {
   installed: boolean;
   /** Whether agentbox passes global servers to its sessions. */
   supported: boolean;
+  /** A configuration problem that prevents launch. */
+  error?: string | null;
   /** How, or why not, in words. */
   how: string;
 }
@@ -886,9 +888,12 @@ export interface McpAgent {
 export interface McpState {
   servers: McpServerView[];
   found: McpFound[];
+  discoveryError?: string | null;
   agents: McpAgent[];
   /** When the global list last changed. */
   changedAt: number | null;
+  /** Configuration snapshot handed to each running session, not a health check. */
+  sessions?: { id: string; title: string; provider: ProviderId; changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; known: boolean }[];
   /** Sessions agentbox runs whose process started before that change: they
    *  get it when they next start or resume. */
   stale: { id: string; title: string; provider: ProviderId; since: number }[];

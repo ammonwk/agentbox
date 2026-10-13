@@ -47,6 +47,7 @@ export function carryFlags(argv: string[], allowed: Readonly<Record<string, Arit
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
+    if (a === "--") break;
     const eq = a.indexOf("=");
     const flag = a.startsWith("--") && eq > 0 ? a.slice(0, eq) : a;
     const arity = allowed[flag];

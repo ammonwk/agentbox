@@ -47,7 +47,7 @@ import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { parseSpec, Waits } from "../core/waits";
 import { CARD_KINDS, Cards } from "../core/cards";
 import type { CardKind, CardState, McpServerInput, McpState } from "../core/types";
-import { startedAtOf } from "../core/providers/procs";
+import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
 import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr } from "../core/prclaims";
 import { repoFullNameOf } from "../core/git";
@@ -113,16 +113,31 @@ async function mcpState(): Promise<McpState> {
   const r = readRegistry();
   const { agents, reach } = await reachAll();
   const passed = new Set(agents.filter((a) => a.supported && a.installed).map((a) => a.provider));
+  const sessions = fleet.sessions().flatMap((s) => {
+    if (s.host !== "tmux" || !s.pid || !passed.has(s.provider)) return [];
+    const raw = environOf(s.pid)?.get("AGENTBOX_MCP_STATE");
+    let snapshot: { changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[] } | null = null;
+    try {
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && Array.isArray(parsed.given) && parsed.given.every((name: unknown) => typeof name === "string") && Array.isArray(parsed.kept) && parsed.kept.every((k: { name?: unknown; enabled?: unknown } | null) => k && typeof k.name === "string" && typeof k.enabled === "boolean")) snapshot = parsed;
+    } catch { /* an older launch has no usable snapshot */ }
+    return [{ id: s.id, title: s.label || s.title || s.id, provider: s.provider, changedAt: snapshot?.changedAt ?? null, given: snapshot?.given ?? [], kept: snapshot?.kept ?? [], known: snapshot !== null }];
+  });
   const stale = r.changedAt === null ? [] : fleet.sessions().flatMap((s) => {
     if (s.host !== "tmux" || !s.pid || !passed.has(s.provider)) return [];
     const since = startedAtOf(s.pid);
     return since !== null && since < r.changedAt! ? [{ id: s.id, title: s.label || s.title || s.id, provider: s.provider, since }] : [];
   });
+  let found: McpState["found"] = [];
+  let discoveryError: string | null = null;
+  try { found = discover().map(publicFound); } catch (e) { discoveryError = (e as Error).message; }
   return {
     servers: r.servers.map((s) => viewOf(s, reach.get(s.name) ?? [])),
-    found: discover().map(publicFound),
+    found,
+    discoveryError,
     agents,
     changedAt: r.changedAt,
+    sessions,
     stale,
   };
 }

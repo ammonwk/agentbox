@@ -1,38 +1,14 @@
-/**
- * How the global MCP servers (src/core/mcp.ts) reach each agent, and what
- * each agent's own config already defines.
- *
- * agentbox never edits a CLI's own config to do it. Each CLI takes a layer
- * on top of its config at launch, and agentbox writes that layer itself:
- *
- * - claude: `--mcp-config <agentbox>/mcp/claude-<account>.json`. Claude lets
- *   that file's server replace a user-scope server of the same name, silently,
- *   so a name the account already defines is left out of it.
- * - codex: `-p agentbox`, which layers `$CODEX_HOME/agentbox.config.toml` over
- *   `config.toml`. The file is agentbox's (its first line says so); one that
- *   is not is never touched.
- * - opencode: `OPENCODE_CONFIG=<agentbox>/mcp/opencode.json`, unless the
- *   server's own environment sets OPENCODE_CONFIG.
- * - muse: `-c mcpServers.<name>=<json>` per server. Muse takes an env or
- *   header value only as a whole `${VAR}`, so each value is passed in a
- *   variable of the session's environment, `AGENTBOX_MCP_<n>`.
- *
- * A server whose name the agent's own config already uses is not passed to
- * that agent: the agent keeps its own, and the page says so. Devin and omp
- * sessions get none (not proven here); their ACP subagents are offered the
- * list by the subagent pool (`acpServers`).
- *
- * The layers are written when a session starts or resumes and whenever the
- * list changes, so a running agent keeps the set it started with until its
- * next start.
+/** Global MCP launch layers and native config discovery.
+ * Layers belong to agentbox; original config, profiles and credentials stay
+ * where their CLI owns them. Setup failures abort launch instead of stripping tools.
  */
 
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync, mkdirSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
 import { listAccounts, listRepos } from "./db";
 import { claudeJsonPath, detectCli } from "./accounts/homes";
-import { setsFlag } from "./launch";
-import { enabledServers, ensureMcpDir, readRegistry, sameServer, writePrivate, type McpServer } from "./mcp";
+import { setsFlag, type Launch } from "./launch";
+import { enabledServers, mcpDir, mcpExecutable, mcpProxy, ensureMcpDir, readRegistry, sameServer, writePrivate, type McpServer } from "./mcp";
 import { userHome } from "./paths";
 import type { Command } from "./providers/types";
 import type { Account, McpAgent, McpCheck, McpFound, McpReach, McpServerView, McpTransport, ProviderId } from "./types";
@@ -43,9 +19,10 @@ interface Native {
   def: Pick<McpServer, "transport" | "command" | "args" | "env" | "url" | "headers"> | null;
   /** Why `def` is null: a shape agentbox does not carry. */
   unsupported: string | null;
+  enabled?: boolean;
 }
 
-const PASSED: readonly ProviderId[] = ["claude", "codex", "opencode", "muse"];
+const PASSED: readonly ProviderId[] = ["claude", "codex", "opencode", "muse", "devin", "omp"];
 const LABEL: Record<ProviderId, string> = { claude: "Claude", codex: "Codex", devin: "Devin", omp: "omp", opencode: "opencode", muse: "Muse Code" };
 const VARIABLE = /\$\{|\{(?:env|file):/;
 
@@ -54,8 +31,9 @@ const VARIABLE = /\$\{|\{(?:env|file):/;
 function readText(path: string): string | null {
   try {
     return readFileSync(path, "utf8");
-  } catch {
-    return null;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error(`Cannot read MCP configuration: ${path}`);
   }
 }
 
@@ -63,10 +41,11 @@ function readJson(path: string): Record<string, unknown> | null {
   const t = readText(path);
   if (t === null) return null;
   try {
-    const v = JSON.parse(path.endsWith(".jsonc") ? stripJsonComments(t) : t);
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    const v = JSON.parse(stripJsonComments(t));
+    if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error();
+    return v as Record<string, unknown>;
   } catch {
-    return null;
+    throw new Error(`Invalid MCP configuration: ${path}`);
   }
 }
 
@@ -87,15 +66,17 @@ function stripJsonComments(t: string): string {
       i = t.indexOf("*/", i + 2);
       if (i < 0) break;
       i++;
-    } else out += c;
+    } else if (c === "," && /^\s*[}\]]/.test(t.slice(i + 1))) continue;
+    else out += c;
   }
-  return out.replace(/,(\s*[}\]])/g, "$1");
+  return out.replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (match, closing) => closing ?? match);
 }
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const strs = (v: unknown): string[] | null => (Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : null);
 function strMap(v: unknown): Record<string, string> | null {
   if (v === undefined) return {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const o = obj(v);
   return Object.values(o).every((x) => typeof x === "string") ? (o as Record<string, string>) : null;
 }
@@ -110,15 +91,21 @@ function native(name: string, def: NonNullable<Native["def"]> | string): Native 
 
 /** Claude's and Muse's shape: `{command, args, env}` or `{type: "http", url, headers}`. */
 function fromJsonShape(name: string, v: unknown, httpType: boolean): Native {
+  const n = jsonShape(name, v, httpType);
+  return { ...n, enabled: obj(v).enabled !== false && obj(v).disabled !== true };
+}
+
+function jsonShape(name: string, v: unknown, httpType: boolean): Native {
   const o = obj(v);
-  const type = o.type;
+  const type = o.type ?? o.transport;
+  if (o.oauth || o.auth || o.oauthClientId || o.oauthClientSecret || o.oauthResource !== undefined) return native(name, "its OAuth sign-in stays with this agent");
   if (typeof o.command === "string" && (type === undefined || type === "stdio")) {
     const args = o.args === undefined ? [] : strs(o.args);
     const env = strMap(o.env);
     if (!args || !env) return native(name, "its arguments or environment are not plain text");
     return native(name, { transport: "stdio", command: o.command, args, env });
   }
-  if (typeof o.url === "string" && (httpType ? type === "http" || type === "streamable-http" : type === undefined)) {
+  if (typeof o.url === "string" && (httpType ? type === "http" || type === "streamable-http" : type === undefined || type === "http" || type === "streamable-http")) {
     const headers = strMap(o.headers);
     if (!headers) return native(name, "its headers are not plain text");
     return native(name, { transport: "http", url: o.url, headers });
@@ -138,9 +125,13 @@ function codexServers(path: string): Native[] {
   try {
     parsed = Bun.TOML.parse(t) as Record<string, unknown>;
   } catch {
-    return [];
+    throw new Error(`Invalid MCP configuration: ${path}`);
   }
-  return Object.entries(obj(parsed.mcp_servers)).map(([name, v]) => {
+  return codexMap(parsed.mcp_servers);
+}
+
+function codexMap(map: unknown): Native[] {
+  return Object.entries(obj(map)).map(([name, v]) => {
     const o = obj(v);
     if (typeof o.command === "string") {
       const args = o.args === undefined ? [] : strs(o.args);
@@ -156,7 +147,7 @@ function codexServers(path: string): Native[] {
       return native(name, { transport: "http", url: o.url, headers });
     }
     return native(name, "a kind of server agentbox does not carry");
-  });
+  }).map((n) => ({ ...n, enabled: obj(obj(map)[n.name]).enabled !== false }));
 }
 
 function opencodeServers(cfg: Record<string, unknown> | null): Native[] {
@@ -175,7 +166,7 @@ function opencodeServers(cfg: Record<string, unknown> | null): Native[] {
       return native(name, { transport: "http", url: o.url, headers });
     }
     return native(name, "a kind of server agentbox does not carry");
-  });
+  }).map((n) => ({ ...n, enabled: obj(obj(cfg?.mcp)[n.name]).enabled !== false }));
 }
 
 const xdgConfig = (): string => process.env.XDG_CONFIG_HOME || join(userHome(), ".config");
@@ -183,19 +174,112 @@ const opencodeConfigFiles = (): string[] => ["opencode.json", "opencode.jsonc", 
 const museSettings = (home: string): string => join(home, "muse", "settings.json");
 const codexConfig = (home: string): string => join(home, "config.toml");
 
-/** The servers an account's own config gives every session of it. */
-function ownServers(provider: ProviderId, account: Account | null): Native[] {
+interface Context { cwd: string; carry: string[]; env: Record<string, string | undefined> }
+const context = (): Context => ({ cwd: userHome(), carry: [], env: process.env });
+function values(args: string[], ...flags: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--") break;
+    if (flags.includes(a) && args[i + 1] !== undefined) out.push(args[++i]!);
+    else for (const flag of flags) if (a.startsWith(`${flag}=`)) out.push(a.slice(flag.length + 1));
+  }
+  return out;
+}
+function ancestors(cwd: string): string[] {
+  const dirs: string[] = [];
+  for (let d = resolve(cwd); ; d = dirname(d)) { dirs.unshift(d); if (dirname(d) === d) return dirs; }
+}
+const configRoot = (c: Context) => c.env.XDG_CONFIG_HOME || join(userHome(), ".config");
+function ompHome(c: Context): string {
+  const root = resolve(userHome(), c.env.PI_CONFIG_DIR || ".omp");
+  const profile = values(c.carry, "--profile").at(-1) ?? c.env.OMP_PROFILE ?? c.env.PI_PROFILE;
+  return profile ? join(root, "profiles", profile, "agent") : c.env.PI_CODING_AGENT_DIR || join(root, "agent");
+}
+function tomlConfig(path: string): Record<string, unknown> {
+  const t = readText(path);
+  if (t === null) return {};
+  try { return Bun.TOML.parse(t) as Record<string, unknown>; } catch { throw new Error(`Invalid MCP configuration: ${path}`); }
+}
+function explicitClaude(c: Context): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < c.carry.length; i++) {
+    const a = c.carry[i]!;
+    if (a === "--mcp-config") while (c.carry[i + 1] && !c.carry[i + 1]!.startsWith("-")) out.push(c.carry[++i]!);
+    else if (a.startsWith("--mcp-config=")) out.push(a.slice(13));
+  }
+  return out;
+}
+function jsonArgument(arg: string, c: Context): Record<string, unknown> {
+  if (arg.trim().startsWith("{")) {
+    try { return obj(JSON.parse(arg)); } catch { throw new Error("Invalid explicit MCP JSON"); }
+  }
+  const path = resolve(c.cwd, arg);
+  const cfg = readJson(path);
+  if (!cfg) throw new Error(`Missing explicit MCP config: ${path}`);
+  return cfg;
+}
+
+/** Native definitions in increasing precedence. Keeping even a disabled
+ * name prevents a global entry from bypassing the user's choice. */
+function ownServers(provider: ProviderId, account: Account | null, c = context()): Native[] {
+  const dirs = ancestors(c.cwd);
   switch (provider) {
-    case "claude":
-      return account ? claudeServers(readJson(claudeJsonPath(account))?.mcpServers) : [];
-    case "codex":
-      return account ? codexServers(codexConfig(account.home)) : [];
-    case "muse":
-      return account ? Object.entries(obj(readJson(museSettings(account.home))?.mcpServers)).map(([n, v]) => fromJsonShape(n, v, false)) : [];
-    case "opencode":
-      return opencodeConfigFiles().flatMap((f) => opencodeServers(readJson(f)));
-    default:
-      return [];
+    case "claude": {
+      const cfg = account ? readJson(claudeJsonPath(account)) : null;
+      const own = setsFlag(c.carry, "--strict-mcp-config") ? [] : [
+        ...claudeServers(cfg?.mcpServers),
+        ...dirs.flatMap((d) => claudeServers(readJson(join(d, ".mcp.json"))?.mcpServers)),
+        ...claudeServers(obj(obj(cfg?.projects)[c.cwd]).mcpServers),
+      ];
+      return [...own, ...explicitClaude(c).flatMap((v) => claudeServers(jsonArgument(v, c).mcpServers))];
+    }
+    case "codex": {
+      if (!account) return [];
+      const cfg = tomlConfig(codexConfig(account.home));
+      const selected = values(c.carry, "-p", "--profile").at(-1) ?? (typeof cfg.profile === "string" ? cfg.profile : undefined);
+      const own = [...codexMap(cfg.mcp_servers), ...dirs.flatMap((d) => codexServers(join(d, ".codex/config.toml")))];
+      if (selected) own.push(...codexMap(obj(obj(cfg.profiles)[selected]).mcp_servers), ...codexServers(join(account.home, `${selected}.config.toml`)));
+      for (const v of values(c.carry, "-c", "--config")) {
+        try { own.push(...codexMap(obj(Bun.TOML.parse(v)).mcp_servers)); } catch { /* CLI validates non-MCP overrides */ }
+      }
+      return own;
+    }
+    case "muse": {
+      const own = account ? Object.entries(obj(readJson(museSettings(account.home))?.mcpServers)).map(([n, v]) => fromJsonShape(n, v, false)) : [];
+      for (const v of values(c.carry, "-c", "--config")) {
+        const m = /^mcpServers\.([^.=]+)(?:\.[^=]+)?=(.*)$/.exec(v);
+        if (m) { try { own.push(fromJsonShape(m[1]!, JSON.parse(m[2]!), false)); } catch { own.push(native(m[1]!, "an explicit config override")); } }
+      }
+      return own;
+    }
+    case "opencode": {
+      const files = ["config.json", "opencode.json", "opencode.jsonc"].map((f) => join(configRoot(c), "opencode", f));
+      if (c.env.OPENCODE_CONFIG) files.push(resolve(c.cwd, c.env.OPENCODE_CONFIG));
+      for (const d of dirs) files.push(...["opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"].map((f) => join(d, f)));
+      if (c.env.OPENCODE_CONFIG_DIR) files.push(...["opencode.json", "opencode.jsonc"].map((f) => join(c.env.OPENCODE_CONFIG_DIR!, f)));
+      const own = files.flatMap((f) => opencodeServers(readJson(f)));
+      if (c.env.OPENCODE_CONFIG_CONTENT) own.push(...opencodeServers(jsonArgument(c.env.OPENCODE_CONFIG_CONTENT, c)));
+      return own;
+    }
+    case "devin": {
+      const files = [join(configRoot(c), "devin/config.json"), join(configRoot(c), "devin/mcp_config.json"),
+        ...["config.json", "mcp_config.json", "config.local.json", "mcp_config.local.json"].map((f) => join(c.cwd, ".devin", f))];
+      return files.flatMap((f) => Object.entries(obj(readJson(f)?.mcpServers)).map(([n, v]) => fromJsonShape(n, v, false)));
+    }
+    case "omp": {
+      // Native OMP entries take precedence over extension MCPs. Imported
+      // sources are also left alone where their names can be discovered.
+      const own = ["claude", "codex", "opencode"].flatMap((p) => ownServers(p as ProviderId,
+        p === "codex" ? { home: join(userHome(), ".codex") } as Account : p === "claude" ? { home: c.env.CLAUDE_CONFIG_DIR || join(userHome(), ".claude"), isDefault: !c.env.CLAUDE_CONFIG_DIR } as Account : account, { ...c, carry: [] }));
+      const files = [join(c.cwd, ".mcp.json"), join(c.cwd, "mcp.json"),
+        ...values(c.carry, "-e", "--extension").flatMap((d) => [join(resolve(c.cwd, d), ".mcp.json"), join(resolve(c.cwd, d), "mcp.json")]),
+        join(ompHome(c), ".mcp.json"), join(ompHome(c), "mcp.json"), join(c.cwd, ".omp/.mcp.json"), join(c.cwd, ".omp/mcp.json")];
+      own.push(...files.flatMap((f) => claudeServers(readJson(f)?.mcpServers)));
+      const denied = strs(readJson(join(ompHome(c), "mcp.json"))?.disabledServers) ?? [];
+      for (const name of denied) own.push({ ...native(name, "disabled in omp's own config"), enabled: false });
+      return own;
+    }
   }
 }
 
@@ -223,179 +307,234 @@ function claudeDef(s: McpServer): Record<string, unknown> {
   return s.transport === "stdio" ? { type: "stdio", command: s.command, args: s.args ?? [], env: s.env ?? {} } : { type: "http", url: s.url, headers: s.headers ?? {} };
 }
 
-const CODEX_PROFILE = "agentbox";
 const CODEX_MARK = "# Written by agentbox: its global MCP servers (the MCPs page). Changes here are replaced.";
 const toml = (v: string): string => JSON.stringify(v);
-const tomlTable = (m: Record<string, string>): string => `{ ${Object.entries(m).map(([k, v]) => `${toml(k)} = ${toml(v)}`).join(", ")} }`;
+const digest = (v: string) => new Bun.CryptoHasher("sha256").update(v).digest("hex");
 
-function codexLayer(servers: McpServer[]): string {
-  const parts = [CODEX_MARK, ""];
-  for (const s of servers) {
-    parts.push(`[mcp_servers.${toml(s.name)}]`);
-    if (s.transport === "stdio") {
-      parts.push(`command = ${toml(s.command!)}`, `args = [${(s.args ?? []).map(toml).join(", ")}]`);
-      if (Object.keys(s.env ?? {}).length) parts.push(`env = ${tomlTable(s.env!)}`);
-    } else {
-      parts.push(`url = ${toml(s.url!)}`);
-      if (Object.keys(s.headers ?? {}).length) parts.push(`http_headers = ${tomlTable(s.headers!)}`);
-    }
-    parts.push("");
-  }
-  return parts.join("\n");
+/** Content-addressed snapshots cannot change under a running session. */
+function snapshot(kind: string, body: unknown): string {
+  const text = `${JSON.stringify(body, null, 2)}\n`;
+  const file = join(ensureMcpDir(), `${kind}-${digest(text).slice(0, 24)}.json`);
+  writeIfChanged(file, text);
+  return file;
 }
-
-const codexLayerPath = (home: string): string => join(home, `${CODEX_PROFILE}.config.toml`);
-
-/** A layer file at that path that is not agentbox's: never touched. */
-function foreign(path: string): boolean {
-  const t = readText(path);
-  return t !== null && !t.startsWith(CODEX_MARK);
-}
-
 interface Layer {
   give: McpServer[];
-  kept: { server: McpServer; same: boolean }[];
-  /** The flags and variables that hand `give` to the CLI. */
+  kept: { server: McpServer; same: boolean; enabled?: boolean }[];
   args: string[];
   env: Record<string, string>;
   error: string | null;
 }
 
-/**
- * Write the layer an account's sessions start with, and say how to hand it
- * to the CLI. Written even when it gives nothing, so a server taken off the
- * list leaves the file too.
- */
-function layer(provider: ProviderId, account: Account | null, servers = enabledServers()): Layer {
-  const { give, kept } = split(ownServers(provider, account), servers);
-  const none: Layer = { give, kept, args: [], env: {}, error: null };
+/** Symlink the same config location, never credentials into another account.
+ * Only Devin's MCP file differs; XDG_DATA_HOME and its auth remain untouched. */
+function devinLayer(c: Context, give: McpServer[]): string {
+  const source = configRoot(c);
+  const native = obj(readJson(join(source, "devin/mcp_config.json"))?.mcpServers);
+  const mcpServers = { ...Object.fromEntries(give.map((s) => [s.name, s.transport === "stdio" ? { command: s.command, args: s.args ?? [], env: s.env ?? {} } : { transport: "http", url: s.url, headers: s.headers ?? {} }])), ...native };
+  const dir = join(ensureMcpDir(), `devin-${digest(JSON.stringify([source, mcpServers])).slice(0, 24)}`);
+  mkdirSync(join(dir, "devin"), { recursive: true, mode: 0o700 });
+  const linkOthers = (from: string, to: string, except: string) => {
+    if (!existsSync(from)) return;
+    for (const name of readdirSync(from)) {
+      if (name === except) continue;
+      const target = join(to, name);
+      try { lstatSync(target); } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        symlinkSync(join(from, name), target);
+      }
+    }
+  };
+  linkOthers(source, dir, "devin");
+  linkOthers(join(source, "devin"), join(dir, "devin"), "mcp_config.json");
+  writeIfChanged(join(dir, "devin/mcp_config.json"), JSON.stringify({ mcpServers }));
+  return dir;
+}
+
+function layer(provider: ProviderId, account: Account | null, servers = enabledServers(), c = context()): Layer {
+  if (!servers.length) return { give: [], kept: [], args: [], env: {}, error: null };
+  const own = ownServers(provider, account, c);
+  const { give: pending, kept } = split(own, servers);
+  const give = pending.filter((s) => s.enabled).map((s) => s.transport === "stdio" ? { ...s, command: mcpExecutable(s, c.cwd, c.env) } : s);
+  const byName = new Map(own.map((n) => [n.name, n]));
+  const none: Layer = { give, kept: kept.map((k) => ({ ...k, enabled: byName.get(k.server.name)?.enabled !== false })), args: [], env: {}, error: null };
+  if (!give.length) return none;
   switch (provider) {
     case "claude": {
-      if (!account) return none;
-      const file = join(ensureMcpDir(), `claude-${account.id}.json`);
-      writeIfChanged(file, `${JSON.stringify({ mcpServers: Object.fromEntries(give.map((s) => [s.name, claudeDef(s)])) }, null, 2)}\n`);
-      return { ...none, args: give.length ? ["--mcp-config", file] : [] };
+      const file = snapshot("claude", { mcpServers: Object.fromEntries(give.map((s) => [s.name, claudeDef(s)])) });
+      return { ...none, args: ["--mcp-config", file, ...explicitClaude(c)] };
     }
     case "codex": {
-      if (!account || !existsSync(account.home)) return none;
-      const file = codexLayerPath(account.home);
-      if (foreign(file)) return { ...none, error: `${file} is not agentbox's, so it is left alone` };
-      writeIfChanged(file, codexLayer(give));
-      return { ...none, args: give.length ? ["-p", CODEX_PROFILE] : [] };
+      const args: string[] = [];
+      for (const s of give) {
+        // CLI overrides preserve any selected profile. Keep secret values
+        // in a private proxy snapshot, never in the process's argument list.
+        const secret = Object.keys(s.env ?? {}).length > 0 || Object.keys(s.headers ?? {}).length > 0;
+        const def = secret ? { transport: "stdio", ...mcpProxy(s, c.cwd) } : s;
+        const fields = def.transport === "stdio" ? `command = ${toml(def.command!)}, args = [${(def.args ?? []).map(toml).join(", ")}]` : `url = ${toml(s.url!)}`;
+        args.push("-c", `mcp_servers.${toml(s.name)}={ ${fields} }`);
+      }
+      return { ...none, args };
     }
     case "opencode": {
-      if (process.env.OPENCODE_CONFIG) return { ...none, error: "agentbox's own environment sets OPENCODE_CONFIG, which it keeps" };
-      const file = join(ensureMcpDir(), "opencode.json");
-      const mcp = Object.fromEntries(
-        give.map((s) => [s.name, s.transport === "stdio" ? { type: "local", command: [s.command!, ...(s.args ?? [])], environment: s.env ?? {}, enabled: true } : { type: "remote", url: s.url, headers: s.headers ?? {}, enabled: true }]),
-      );
-      writeIfChanged(file, `${JSON.stringify({ $schema: "https://opencode.ai/config.json", mcp }, null, 2)}\n`);
-      return { ...none, env: give.length ? { OPENCODE_CONFIG: file } : {} };
+      const existing = c.env.OPENCODE_CONFIG_CONTENT ? jsonArgument(c.env.OPENCODE_CONFIG_CONTENT, c) : {};
+      const mcp = Object.fromEntries(give.map((s) => [s.name, s.transport === "stdio" ? { type: "local", command: [s.command!, ...(s.args ?? [])], environment: s.env ?? {}, enabled: true } : { type: "remote", url: s.url, headers: s.headers ?? {}, oauth: false, enabled: true }]));
+      return { ...none, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...existing, mcp: { ...mcp, ...obj(existing.mcp) } }) } };
     }
     case "muse": {
       const args: string[] = [];
       const env: Record<string, string> = {};
       let n = 0;
-      const vars = (m: Record<string, string> | undefined) =>
-        Object.fromEntries(
-          Object.entries(m ?? {}).map(([k, v]) => {
-            const name = `AGENTBOX_MCP_${++n}`;
-            env[name] = v;
-            return [k, `\${${name}}`];
-          }),
-        );
+      const vars = (m: Record<string, string> | undefined) => Object.fromEntries(Object.entries(m ?? {}).map(([k, v]) => {
+        const name = `AGENTBOX_MCP_${++n}`; env[name] = v; return [k, `\${${name}}`];
+      }));
       for (const s of give) {
         const def = s.transport === "stdio" ? { command: s.command, args: s.args ?? [], env: vars(s.env) } : { url: s.url, headers: vars(s.headers) };
         args.push("-c", `mcpServers.${s.name}=${JSON.stringify(def)}`);
       }
       return { ...none, args, env };
     }
-    default:
-      return none;
+    case "devin": return { ...none, env: { XDG_CONFIG_HOME: devinLayer(c, give) } };
+    case "omp": {
+      if (setsFlag(c.carry, "--trusted-extension")) throw new Error("omp --trusted-extension cannot be combined with the global MCP extension; use --extension for this session");
+      // OMP interprets bare env names and !commands in values. A private
+      // stdio proxy passes literal values, including empty strings, unchanged.
+      const file = snapshot("omp", { mcpServers: Object.fromEntries(give.map((s) => [s.name, { type: "stdio", ...mcpProxy(s, c.cwd) }])) });
+      const dir = file.slice(0, -5);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeIfChanged(join(dir, "mcp.json"), readFileSync(file, "utf8"));
+      writeIfChanged(join(dir, "package.json"), JSON.stringify({ name: "agentbox-global-mcp", version: "1.0.0", type: "module", main: "index.js" }));
+      writeIfChanged(join(dir, "index.js"), "export default function () {}\n");
+      return { ...none, args: ["--extension", dir] };
+    }
   }
 }
 
-/**
- * A session's command with the global servers added: right after the CLI's
- * name, where the flag that follows is always one of ours (so a variadic
- * `--mcp-config` cannot take the prompt). Never throws: a broken list or an
- * unwritable layer starts the session without them.
- */
-export function withGlobalMcp<C extends Command>(provider: ProviderId, account: Account, cmd: C, carry?: string[]): C {
-  if (!PASSED.includes(provider)) return cmd;
-  try {
-    const l = layer(provider, account);
-    if (l.error) console.error(`agentbox: global MCP servers not passed to ${provider}: ${l.error}`);
-    let args = l.args;
-    // A session adopted from another terminal keeps the profile it ran with.
-    if (provider === "codex" && carry && setsFlag(carry, "-p", "--profile")) args = [];
-    if (provider === "claude" && carry && args[1] && carry.includes(args[1])) args = [];
-    const at = provider === "opencode" ? cmd.argv.length : 1;
-    return { ...cmd, argv: [...cmd.argv.slice(0, at), ...args, ...cmd.argv.slice(at)], env: { ...cmd.env, ...l.env } };
-  } catch (e) {
-    console.error(`agentbox: global MCP servers not passed to a ${provider} session:`, e);
-    return cmd;
+interface ManagedLaunch { args: string[]; restoreArgs: string[]; env: Record<string, string | null> }
+/** Strip only the exact arguments previously injected by agentbox. Called
+ * before persisting adopt/recovery flags, while the process env is available. */
+export function cleanMcpLaunch(provider: ProviderId, launch: Launch, original?: ReadonlyMap<string, string>): Launch {
+  let args = [...launch.args];
+  const env = { ...launch.env };
+  const marker = original?.get("AGENTBOX_MCP_LAUNCH");
+  if (marker) {
+    let managed: ManagedLaunch;
+    try { managed = JSON.parse(marker); } catch { throw new Error("Cannot read this session's MCP launch metadata"); }
+    for (const hash of managed.args) {
+      for (let i = 0; i + 1 < args.length; i++) {
+        if (digest(JSON.stringify(args.slice(i, i + 2))) === hash) { args.splice(i, 2); break; }
+      }
+    }
+    // Claude's variadic flag is stored as one sequence hash.
+    for (let size = args.length; size > 2; size--) for (let i = 0; i + size <= args.length; i++) {
+      if (managed.args.includes(digest(JSON.stringify(args.slice(i, i + size))))) { args.splice(i, size); break; }
+    }
+    args.push(...managed.restoreArgs);
+    for (const [k, v] of Object.entries(managed.env)) { if (v === null) delete env[k]; else env[k] = v; }
   }
+  // Compatibility with launches made before metadata was introduced.
+  const codexHome = original?.get("CODEX_HOME") || process.env.CODEX_HOME || join(userHome(), ".codex");
+  const legacyCodex = !marker && readText(join(codexHome, "agentbox.config.toml"))?.startsWith(CODEX_MARK);
+  args = args.filter((a, i, all) => {
+    if (legacyCodex && provider === "codex" && (a === "-p" || a === "--profile") && all[i + 1] === "agentbox") return false;
+    if (legacyCodex && provider === "codex" && a === "agentbox" && ["-p", "--profile"].includes(all[i - 1] ?? "")) return false;
+    if (provider === "claude" && a === "--mcp-config" && all[i + 1]?.startsWith(`${mcpDir()}/claude-`) && (i + 2 === all.length || all[i + 2]!.startsWith("-"))) return false;
+    if (provider === "claude" && a.startsWith(`${mcpDir()}/claude-`)) return false;
+    if (provider === "muse" && ["-c", "--config"].includes(a) && /^mcpServers\..*AGENTBOX_MCP_/.test(all[i + 1] ?? "")) return false;
+    if (provider === "muse" && /^mcpServers\..*AGENTBOX_MCP_/.test(a)) return false;
+    return true;
+  });
+  if (env.OPENCODE_CONFIG === join(mcpDir(), "opencode.json")) delete env.OPENCODE_CONFIG;
+  for (const k of Object.keys(env)) if (k.startsWith("AGENTBOX_MCP_")) delete env[k];
+  return { args, env };
 }
 
-// ---------------------------------------------------------- what reaches
+/** No catch-and-continue: callers surface the setup error on the failed
+ * session action. Adopt preflights this before stopping the original process. */
+export function withGlobalMcp<C extends Command>(provider: ProviderId, account: Account, cmd: C, carry: string[] = [], cwd = userHome(), inherited: Record<string, string> = {}): C {
+  if (provider === "opencode" && inherited.OPENCODE_CONFIG_CONTENT) {
+    const c = { cwd, carry, env: process.env };
+    const native = jsonArgument(inherited.OPENCODE_CONFIG_CONTENT, c);
+    const generated = cmd.env.OPENCODE_CONFIG_CONTENT ? jsonArgument(cmd.env.OPENCODE_CONFIG_CONTENT, c) : {};
+    const merge = (a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> => {
+      const result = { ...a };
+      for (const [k, v] of Object.entries(b)) result[k] = v && typeof v === "object" && !Array.isArray(v) ? merge(obj(a[k]), obj(v)) : v;
+      return result;
+    };
+    const cfg = { ...generated, ...native, provider: merge(obj(native.provider), obj(generated.provider)), mcp: { ...obj(generated.mcp), ...obj(native.mcp) }, instructions: [...new Set([...(strs(native.instructions) ?? []), ...(strs(generated.instructions) ?? [])])] };
+    cmd = { ...cmd, env: { ...cmd.env, OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg) } };
+  }
+  const effective = { ...process.env, ...inherited, ...cmd.env };
+  for (const k of cmd.unset ?? []) delete effective[k];
+  const c: Context = { cwd, carry, env: effective };
+  if ((provider === "codex" || provider === "muse") && values(carry, "-c", "--config").some((v) => /^(?:mcp_servers|mcpServers)\s*=/.test(v))) {
+    throw new Error("Global MCP setup: an explicit whole-map MCP override would discard the global list; use per-server overrides to keep both");
+  }
+  const registry = readRegistry();
+  const l = layer(provider, account, registry.servers, c);
+  let argv = [...cmd.argv];
+  const restoreArgs: string[] = [];
+  if (provider === "claude" && l.args.length) {
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === "--") break;
+      if (argv[i] === "--mcp-config") {
+        let end = i + 1;
+        while (argv[end] && !argv[end]!.startsWith("-")) end++;
+        restoreArgs.push(...argv.splice(i, end - i)); i--;
+      } else if (argv[i]!.startsWith("--mcp-config=")) { restoreArgs.push(...argv.splice(i, 1)); i--; }
+    }
+  }
+  const injected = provider === "claude" && l.args.length ? [l.args] : Array.from({ length: l.args.length / 2 }, (_, i) => l.args.slice(i * 2, i * 2 + 2));
+  const managed: ManagedLaunch = { args: injected.map((a) => digest(JSON.stringify(a))), restoreArgs, env: {} };
+  for (const k of Object.keys(l.env)) managed.env[k] = inherited[k] ?? process.env[k] ?? null;
+  // Provider-supplied variables (OpenCode bridge settings) remain in cmd.env.
+  const env = { ...cmd.env, ...l.env, AGENTBOX_MCP_LAUNCH: JSON.stringify(managed), AGENTBOX_MCP_STATE: JSON.stringify({ changedAt: registry.changedAt, given: l.give.map((s) => s.name), kept: l.kept.map((k) => ({ name: k.server.name, same: k.same, enabled: k.enabled })) }) };
+  argv.splice(provider === "muse" && ["resume", "exec"].includes(argv[1] ?? "") ? 2 : 1, 0, ...l.args, ...(provider === "claude" && l.args.length && !argv[1]?.startsWith("-") ? ["--"] : []));
+  return { ...cmd, argv, env };
+}
 
-/** The accounts whose sessions an agent's layer is written for. */
 function targets(provider: ProviderId): (Account | null)[] {
-  if (provider === "opencode") return [null];
-  if (provider === "claude" || provider === "codex" || provider === "muse") return listAccounts(provider);
-  return [];
+  return provider === "opencode" || provider === "omp" || provider === "devin" ? [null] : listAccounts(provider);
 }
+const accountName = (a: Account | null): string => a ? a.label || a.email || a.id : "the agent's config";
 
-const accountName = (a: Account | null): string => (a ? a.label || a.email || a.id : "");
-
-/** For each server, how far it reaches; and every layer written now. */
+/** Defaults for future launches. Project, profile and explicit settings are
+ * resolved again in the session's own context; live snapshots are separate. */
 export async function reachAll(): Promise<{ agents: McpAgent[]; reach: Map<string, McpReach[]> }> {
   const servers = readRegistry().servers;
-  const enabled = servers.filter((s) => s.enabled);
   const reach = new Map<string, McpReach[]>(servers.map((s) => [s.name, []]));
   const agents: McpAgent[] = [];
-  for (const provider of ["claude", "codex", "opencode", "muse", "devin", "omp"] as ProviderId[]) {
+  for (const provider of PASSED) {
     const installed = (await detectCli(provider)).installed;
-    const supported = PASSED.includes(provider);
-    agents.push({ provider, installed, supported, how: howOf(provider, installed) });
-    const layers = supported && installed ? targets(provider).map((a) => ({ a, l: layer(provider, a, enabled) })) : [];
-    for (const s of servers) {
-      reach.get(s.name)!.push(reachOne(provider, s, installed, supported, layers));
-    }
+    const layers = targets(provider).map((a) => {
+      try { return { a, l: layer(provider, a, servers) }; }
+      catch (e) { return { a, l: { give: [], kept: [], args: [], env: {}, error: (e as Error).message } as Layer }; }
+    });
+    const error = layers.map((x) => x.l.error).filter(Boolean).join("; ") || null;
+    agents.push({ provider, installed, supported: true, how: error ?? howOf(provider, installed), error });
+    for (const s of servers) reach.get(s.name)!.push(reachOne(provider, s, installed, layers));
   }
   return { agents, reach };
 }
-
-function reachOne(provider: ProviderId, s: McpServer, installed: boolean, supported: boolean, layers: { a: Account | null; l: Layer }[]): McpReach {
-  const L = LABEL[provider];
-  if (!supported) return { provider, state: "unsupported", detail: `agentbox does not pass global servers to ${L} sessions yet` };
-  if (!installed) return { provider, state: "unsupported", detail: `${L} is not installed` };
-  if (!s.enabled) return { provider, state: "off", detail: "Turned off" };
-  if (layers.length === 0) return { provider, state: "unsupported", detail: `No ${L} accounts yet; new ones get it` };
+function reachOne(provider: ProviderId, s: McpServer, installed: boolean, layers: { a: Account | null; l: Layer }[]): McpReach {
+  if (!installed) return { provider, state: "unsupported", detail: `${LABEL[provider]} is not installed; the launch integration is available` };
+  if (!layers.length) return { provider, state: "unsupported", detail: "No accounts yet; new ones get the global list" };
   const errors = layers.filter((x) => x.l.error);
   if (errors.length) return { provider, state: "error", detail: errors.map((x) => x.l.error).join("; ") };
-  const differ = layers.filter((x) => x.l.kept.some((k) => k.server.name === s.name && !k.same));
-  const same = layers.filter((x) => x.l.kept.some((k) => k.server.name === s.name && k.same));
-  const where = (xs: typeof layers) => (provider === "opencode" ? `opencode's config` : xs.map((x) => accountName(x.a)).join(", "));
-  if (differ.length) {
-    return { provider, state: "conflict", detail: `${where(differ)} ${differ.length === 1 ? "has" : "have"} a different server named ${s.name}, which ${L} keeps there` };
-  }
-  if (same.length === layers.length) return { provider, state: "own", detail: `${L} already has this server in its own config` };
-  const n = layers.length - same.length;
-  return { provider, state: "on", detail: provider === "opencode" ? "Passed to opencode sessions" : `Passed to ${n} ${L} account${n === 1 ? "" : "s"}${same.length ? `; ${where(same)} already ${same.length === 1 ? "has" : "have"} it` : ""}` };
+  const own = layers.flatMap((x) => x.l.kept.filter((k) => k.server.name === s.name).map((k) => ({ ...k, account: accountName(x.a) })));
+  if (own.length) return { provider, state: own.every((k) => k.same && k.enabled) ? "own" : "conflict", detail: `${own.map((k) => `${k.account}: ${k.enabled ? (k.same ? "same native server remains enabled" : "different native server remains enabled") : "native server is disabled"}`).join("; ")}. ${s.enabled ? "Native settings take precedence." : "Turning off the global entry does not turn off native definitions."}` };
+  if (!s.enabled) return { provider, state: "off", detail: "Global entry is off; project or profile definitions can still provide this name" };
+  return { provider, state: "on", detail: "Configured for the next start or resume. Project, profile and explicit settings take precedence; connection is checked by the agent." };
 }
-
 function howOf(provider: ProviderId, installed: boolean): string {
-  if (!installed) return "Not installed on this computer";
+  if (!installed) return "Launch integration available; CLI not installed on this computer";
   switch (provider) {
-    case "claude": return "Each session starts with --mcp-config and a file agentbox writes for its account";
-    case "codex": return "Each session starts with -p agentbox, which adds agentbox.config.toml in the account's Codex home";
-    case "opencode": return "Each session starts with OPENCODE_CONFIG set to a file agentbox writes";
-    case "muse": return "Each session starts with -c mcpServers.<name>; values go in the session's environment";
-    case "devin": return "Not passed to Devin sessions. Devin subagents over ACP are offered the servers (not checked on this computer)";
-    case "omp": return "Not passed to omp sessions. omp subagents over ACP are offered the servers (not checked on this computer)";
-    default: return "";
+    case "claude": return "Adds --mcp-config alongside explicit MCP files";
+    case "codex": return "Adds MCP config overrides while keeping the selected profile";
+    case "opencode": return "Adds MCPs to the launch config, keeping existing files and bridge settings";
+    case "muse": return "Adds MCP config overrides; secrets go in the session environment";
+    case "devin": return "Uses a generated MCP config directory; existing settings and authentication stay in place";
+    case "omp": return "Adds an MCP extension alongside the active profile and native config";
   }
 }
 
@@ -435,7 +574,7 @@ export function discover(): FoundDef[] {
       envKeys: Object.keys(n.def?.env ?? {}),
       url: n.def?.url ?? null,
       headerKeys: Object.keys(n.def?.headers ?? {}),
-      unsupported: n.unsupported,
+      unsupported: n.enabled === false ? "disabled in the agent’s own settings; enable it there before importing" : n.unsupported,
       global: !g ? "none" : n.def && sameServer(n.def, g) ? "same" : "different",
       def: n.def,
     });
@@ -471,10 +610,41 @@ export function discover(): FoundDef[] {
     const f = codexConfig(home);
     if (once(f)) for (const n of codexServers(f)) add("codex", "user", f, null, n);
   }
+  for (const a of listAccounts("codex")) {
+    if (!existsSync(a.home)) continue;
+    for (const f of readdirSync(a.home).filter((f) => f.endsWith(".config.toml"))) {
+      const path = join(a.home, f);
+      if (readText(path)?.startsWith(CODEX_MARK) || !once(path)) continue;
+      for (const n of codexServers(path)) add("codex", "user", path, null, n);
+    }
+  }
+  for (const repo of listRepos()) {
+    if (repo.kind !== "local") continue;
+    const codex = join(repo.ref, ".codex/config.toml");
+    if (once(codex)) for (const n of codexServers(codex)) add("codex", "project", codex, repo.ref, n);
+    for (const rel of ["opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"]) {
+      const path = join(repo.ref, rel);
+      if (once(path)) for (const n of opencodeServers(readJson(path))) add("opencode", "project", path, repo.ref, n);
+    }
+  }
   for (const f of opencodeConfigFiles()) if (once(f)) for (const n of opencodeServers(readJson(f))) add("opencode", "user", f, null, n);
   for (const a of listAccounts("muse")) {
     const f = museSettings(a.home);
     if (once(f)) for (const [name, v] of Object.entries(obj(readJson(f)?.mcpServers))) add("muse", "user", f, null, fromJsonShape(name, v, false));
+  }
+  for (const provider of ["devin", "omp"] as const) {
+    const c = context();
+    const files = provider === "devin" ? [join(configRoot(c), "devin/config.json"), join(configRoot(c), "devin/mcp_config.json")] : [join(ompHome(c), ".mcp.json"), join(ompHome(c), "mcp.json")];
+    for (const f of files) if (once(f)) for (const [name, v] of Object.entries(obj(readJson(f)?.mcpServers))) add(provider, "user", f, null, fromJsonShape(name, v, false));
+    for (const repo of listRepos()) {
+      if (repo.kind !== "local") continue;
+      const files = provider === "devin" ? [".devin/config.json", ".devin/mcp_config.json", ".devin/config.local.json", ".devin/mcp_config.local.json"] : [".omp/.mcp.json", ".omp/mcp.json", ".mcp.json", "mcp.json"];
+      for (const rel of files) {
+        const f = join(repo.ref, rel);
+        if (!existsSync(f)) continue;
+        for (const [name, v] of Object.entries(obj(readJson(f)?.mcpServers))) add(provider, "project", f, repo.ref, fromJsonShape(name, v, false));
+      }
+    }
   }
   return [...out.values()];
 }
@@ -482,7 +652,7 @@ export function discover(): FoundDef[] {
 /** A found definition, with its values, to import. */
 export function foundDefinition(id: string): (Native["def"] & { name: string; from: string; scope: McpFound["scope"] }) | null {
   const f = discover().find((x) => x.id === id);
-  if (!f?.def) return null;
+  if (!f?.def || f.unsupported) return null;
   return { ...f.def, name: f.name, from: `${LABEL[f.provider]} (${f.sources[0]})`, scope: f.scope };
 }
 

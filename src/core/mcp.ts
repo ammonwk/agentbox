@@ -12,7 +12,7 @@
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { agentboxHome } from "./paths";
+import { agentboxHome, packageRoot, userHome } from "./paths";
 import type { McpServerInput, McpTransport } from "./types";
 
 export interface McpServer {
@@ -73,10 +73,12 @@ export function readRegistry(): Registry {
   let raw: string;
   try {
     raw = readFileSync(registryPath(), "utf8");
-  } catch {
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Cannot read the global MCP registry at ${registryPath()}`);
     return { version: 1, changedAt: null, servers: [] };
   }
-  const v = JSON.parse(raw) as Partial<Registry>;
+  let v: Partial<Registry>;
+  try { v = JSON.parse(raw); } catch { throw new Error(`Invalid JSON in ${registryPath()}`); }
   if (!v || !Array.isArray(v.servers)) throw new Error(`${registryPath()} is not a list of MCP servers`);
   return { version: 1, changedAt: typeof v.changedAt === "number" ? v.changedAt : null, servers: v.servers };
 }
@@ -86,15 +88,16 @@ function writeRegistry(r: Registry): void {
   writePrivate(registryPath(), `${JSON.stringify(r, null, 2)}\n`, true);
 }
 
-/** The servers turned on: what agents are given. An unreadable list gives
- *  none, so a broken file never stops a session from starting. */
+/** A broken registry must fail setup visibly, never silently remove tools. */
 export function enabledServers(): McpServer[] {
-  try {
-    return readRegistry().servers.filter((s) => s.enabled);
-  } catch (e) {
-    console.error(`agentbox: the global MCP list is unreadable: ${(e as Error).message}`);
-    return [];
-  }
+  return readRegistry().servers.filter((s) => s.enabled);
+}
+
+/** Resolve once with the launching environment, as required by ACP. */
+export function mcpExecutable(s: McpServer, cwd = userHome(), env: Record<string, string | undefined> = process.env): string {
+  const command = Bun.which(s.command ?? "", { cwd, PATH: s.env?.PATH ?? env.PATH });
+  if (!command) throw new Error(`MCP ${s.name}: command ${s.command} is not executable on the session PATH`);
+  return command;
 }
 
 // ------------------------------------------------------------- validation
@@ -236,17 +239,24 @@ export function sameServer(a: Pick<McpServer, "transport" | "command" | "args" |
 
 // --------------------------------------------------------------------- ACP
 
-/**
- * The servers an ACP agent's session is opened with (the subagent pool's
- * omp and devin): `session/new`'s `mcpServers`. Every ACP agent must take
- * stdio servers; a URL only when it says it can (`mcpCapabilities.http`).
- */
-export function acpServers(caps: { http?: boolean } | undefined): Record<string, unknown>[] {
-  return enabledServers().flatMap((s): Record<string, unknown>[] => {
+/** A literal configuration snapshot for clients whose native value syntax
+ * would reinterpret secrets, or whose ACP transport support lacks HTTP. */
+export function mcpProxy(s: McpServer, cwd = userHome()): { command: string; args: string[]; env: Record<string, string> } {
+  const text = JSON.stringify({ ...s, cwd });
+  const hash = new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 24);
+  const file = join(ensureMcpDir(), `proxy-${hash}.json`);
+  if (!existsSync(file)) writePrivate(file, text);
+  return { command: process.execPath, args: [join(packageRoot, "src/core/mcp-proxy.ts"), file], env: {} };
+}
+
+/** Every ACP agent supports stdio; use it for HTTP when needed. */
+export function acpServers(caps: { http?: boolean } | undefined, cwd = userHome(), env: Record<string, string | undefined> = process.env): Record<string, unknown>[] {
+  return enabledServers().map((s): Record<string, unknown> => {
     if (s.transport === "stdio") {
-      return [{ name: s.name, command: s.command, args: s.args ?? [], env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) }];
+      return { name: s.name, command: mcpExecutable(s, cwd, env), args: s.args ?? [], env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) };
     }
-    if (!caps?.http) return [];
-    return [{ type: "http", name: s.name, url: s.url, headers: Object.entries(s.headers ?? {}).map(([name, value]) => ({ name, value })) }];
+    if (caps?.http) return { type: "http", name: s.name, url: s.url, headers: Object.entries(s.headers ?? {}).map(([name, value]) => ({ name, value })) };
+    const proxy = mcpProxy(s, cwd);
+    return { name: s.name, command: proxy.command, args: proxy.args, env: [] };
   });
 }

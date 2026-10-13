@@ -517,6 +517,7 @@ export class AcpRunner {
     });
     connectPromise.catch((err: unknown) => {
       if (!this.closed) {
+        this.proc?.kill();
         this.closed = true;
         rejectSid(new Error(messageOf(err)));
         this.events.onError(this.id, messageOf(err));
@@ -528,30 +529,19 @@ export class AcpRunner {
   }
 
   private async openSession(ctx: ClientContext, opts: LaunchOptions): Promise<string> {
-    const init = (await ctx.request("initialize", { protocolVersion: 1, clientCapabilities: {} })) as { agentCapabilities?: { mcpCapabilities?: { http?: boolean } } };
-    // The global MCP servers (src/core/mcp.ts). An agent that refuses them
-    // still opens its session, without them: a subagent must not fail for them.
-    const mcpServers = acpServers(init?.agentCapabilities?.mcpCapabilities) as never[];
-    const withMcp = async <T>(call: (servers: never[]) => Promise<T>): Promise<T> => {
-      if (mcpServers.length === 0) return call([]);
-      try {
-        return await call(mcpServers);
-      } catch (err) {
-        console.error(`agentbox: ${this.backend.id} refused the global MCP servers (${messageOf(err)}); opening without them`);
-        return call([]);
-      }
-    };
-    const sid = opts.resumeSessionId ?? (await withMcp((servers) => ctx.request("session/new", { cwd: opts.worktree, mcpServers: servers }))).sessionId;
-    if (opts.resumeSessionId !== null) {
-      const params = (servers: never[]) => ({ sessionId: sid, cwd: opts.worktree, mcpServers: servers });
-      try {
-        await withMcp((servers) => ctx.request("session/resume", params(servers)));
-      } catch {
-        // devin and older omp builds only implement session/load, which
-        // replays the history as updates; `sessionId` is not set until this
-        // returns, so the replay is not mistaken for a new turn.
-        await withMcp((servers) => ctx.request("session/load", params(servers)));
-      }
+    const init = await ctx.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+    const caps = init.agentCapabilities;
+    const mcpServers = acpServers(caps?.mcpCapabilities, opts.worktree, { ...process.env, ...this.backend.env(this.id) }) as never[];
+    let sid = opts.resumeSessionId;
+    if (sid === null) {
+      sid = (await ctx.request("session/new", { cwd: opts.worktree, mcpServers })).sessionId;
+    } else {
+      const params = { sessionId: sid, cwd: opts.worktree, mcpServers };
+      // Negotiate before sending a request. A failed response may follow a
+      // successful resume; replaying it as load (or new) is unsafe.
+      if (caps?.sessionCapabilities?.resume) await ctx.request("session/resume", params);
+      else if (caps?.loadSession) await ctx.request("session/load", params);
+      else throw new Error(`${this.backend.id} does not advertise session resume or load; update the agent to resume this conversation`);
     }
     const mode = this.backend.mode(opts.readOnly);
     if (mode !== null) await ctx.request("session/set_mode", { sessionId: sid, modeId: mode });
