@@ -26,14 +26,40 @@ export interface NewSessionPrefs {
 }
 
 const PREFS_KEY = "agentbox.newSession";
+/** Your personal defaults from the agentbox cloud, kept here by the Team
+ *  page while you are signed in (lib/cloud.ts): what a browser that has not
+ *  picked anything yet starts with. */
+export const CLOUD_DEFAULTS_KEY = "agentbox.cloud.defaults";
 
 export function loadPrefs(): NewSessionPrefs {
   try {
     const v = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as unknown;
-    return v && typeof v === "object" ? (v as NewSessionPrefs) : {};
+    return withCloudDefaults(v && typeof v === "object" ? (v as NewSessionPrefs) : {});
   } catch {
     return {};
   }
+}
+
+function readCloudDefaults(): { provider?: string; models?: Record<string, string> } | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(CLOUD_DEFAULTS_KEY) ?? "null") as unknown;
+    return v && typeof v === "object" ? (v as { provider?: string; models?: Record<string, string> }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What was picked in this browser wins; the defaults fill what was not. A
+ *  model the account's catalog does not list still runs as Default. */
+function withCloudDefaults(local: NewSessionPrefs): NewSessionPrefs {
+  const d = readCloudDefaults();
+  if (!d) return local;
+  const perProvider = { ...local.perProvider };
+  for (const [p, model] of Object.entries(d.models ?? {})) {
+    const id = p as ProviderId;
+    if (typeof model === "string" && model && !perProvider[id]?.model) perProvider[id] = { ...perProvider[id], model };
+  }
+  return { ...local, provider: local.provider ?? (d.provider as ProviderId | undefined), perProvider };
 }
 
 export function savePrefs(p: NewSessionPrefs): void {

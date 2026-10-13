@@ -49,6 +49,9 @@ import type {
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
+import type { CloudStatus, OutboundResult } from "../../src/core/cloud/bridge";
+import type { AgentIdentity, Directory, InstallationSettings, PublishedSkill } from "../../src/cloud/protocol";
+import type { InstallResult, SkillManifest } from "../../src/cloud/skillbundle";
 import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
@@ -317,6 +320,19 @@ export const api = {
   saveSkillBody: (path: string, body: string) => post<{ ok: boolean }>("/api/skill/body", { path, body }),
   promoteSkill: (name: string) => post<SkillResult>("/api/skill/promote", { name }),
   demoteSkill: (name: string) => post<SkillResult>("/api/skill/demote", { name }),
+
+  // this machine and the agentbox cloud (docs/cloud.md)
+  cloud: () => get<CloudStatus>("/api/cloud"),
+  cloudRegister: (secret: string) => post<CloudStatus>("/api/cloud/installation", { secret }),
+  cloudForget: (revoke: boolean) => request<CloudStatus>("DELETE", `/api/cloud/installation${revoke ? "?revoke=1" : ""}`),
+  cloudSettings: (patch: Partial<InstallationSettings>) => request<InstallationSettings>("PUT", "/api/cloud/settings", patch),
+  cloudSync: () => post<CloudStatus>("/api/cloud/sync"),
+  cloudDirectory: (fresh = false) => get<Directory>(`/api/cloud/directory${fresh ? "?fresh=1" : ""}`),
+  cloudShare: (sessionId: string, listed: boolean) => post<AgentIdentity>(`/api/cloud/agents/${enc(sessionId)}`, { listed }),
+  cloudSend: (body: { to: string; text: string; wake?: boolean; clientId?: string }) => post<OutboundResult>("/api/cloud/messages", body),
+  cloudInstallSkill: (name: string, rev: number, force: boolean) => post<InstallResult>(`/api/cloud/skills/${enc(name)}/install`, { rev, force }),
+  cloudInstalledSkills: () => get<{ dir: string; manifest: SkillManifest }[]>("/api/cloud/installed-skills"),
+  cloudPublishSkill: (name: string, summary?: string) => post<PublishedSkill>("/api/cloud/skills/publish", { name, summary }),
 };
 
 // --------------------------------------------------------------- the wire

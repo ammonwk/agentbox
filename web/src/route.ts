@@ -15,10 +15,12 @@ export type Route =
   /** The cards sessions handed you: to decide, or to know. */
   | { page: "review" }
   | { page: "voice" }
+  /** You, your workspaces, this machine and what they share (agentbox cloud). */
+  | { page: "team" }
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "sessions" | "review" | "voice" | "accounts" | "skills" | "settings";
+export type NavId = "sessions" | "review" | "voice" | "accounts" | "skills" | "team" | "settings";
 
 export function navOf(route: Route): NavId {
   return route.page === "session" ? "sessions" : route.page;
@@ -48,6 +50,7 @@ export function parseHash(hash: string): Route {
   if (head === "voice") return { page: "voice" };
   if (head === "review") return { page: "review" };
   if (head === "settings") return { page: "settings" };
+  if (head === "team") return { page: "team" };
   return { page: "sessions" };
 }
 

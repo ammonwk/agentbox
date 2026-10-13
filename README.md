@@ -91,6 +91,12 @@ login runs and agentbox shows you the URL and code. Existing credential homes
 credential pool, so it has one account and you log in with
 `omp auth-broker login` directly.
 
+A team with more than one machine can connect them through an optional
+Supabase project: sign-in, workspaces, plans and skills with revisions, and
+messages between agents on different machines. Each machine keeps its own
+agents, transcripts and logins. See `docs/cloud.md`; the Team page and
+`agentbox cloud` are where it is used.
+
 For a conductor session:
 
 ```bash

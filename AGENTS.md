@@ -158,6 +158,15 @@ once: commit your own files by path, never `git add -A`.
   `agentbox onboard`, and re-derived at boot when that file is missing. The
   repo never learns a name, an email or a login; personal skills live in
   `~/.claude/skills` or `~/.agents/skills`, outside any checkout.
+- `src/cloud/`, `src/core/cloud/`, `supabase/` — the optional shared cloud
+  (Supabase): people, workspaces, registered machines, plans, skills and
+  messages between machines. **`docs/cloud.md` is its contract.** Clients
+  hold the publishable key only, never a secret one; a machine acts with its
+  own scoped secret, never a person's session; a message from another
+  machine goes through `sendguard.ts` like any agent's and is typed at most
+  once. Without `cloud.env` none of it runs. Schema changes are new files
+  under `supabase/migrations/` (`supabase migration new`), with RLS and
+  explicit grants.
 - `src/core/cli-guide.ts` — the `agentbox` CLI guide for agents: `agentbox
   guide` prints it and `bun run docs:cli` writes it to `docs/cli.md`.
 - `src/core/pwa.ts` — the board's PWA launcher entry. Chrome writes its
@@ -172,5 +181,7 @@ Almost none, on purpose: this is a dev tool, and tests that pin behaviour
 slowed it down more than they caught. Check a change by running it (`bun run
 web:dev`, the live server) and keep `bun run typecheck` clean. Do not add tests
 by default. One has to guard a non-obvious rule whose breakage would be
-destructive or a security hole, and "useful" is not enough — the only one left
-is `src/server/__tests__/csrf.test.ts`.
+destructive or a security hole, and "useful" is not enough — such as
+`src/server/__tests__/csrf.test.ts`. The cloud's tenant isolation and
+message authorization are checked against a local Supabase stack with
+`bun run test:cloud` (docs/cloud.md); plain `bun test` skips those.

@@ -72,6 +72,8 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
+import { CloudBridge } from "../core/cloud/bridge";
+import { cloudHttpError, cloudRoutes } from "./cloud";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -120,6 +122,8 @@ setMetricsSource(() => fleet.sessions());
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
+/** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
+export const cloud = new CloudBridge(fleet, VERSION);
 function cardId(raw: string): number {
   if (!/^\d{1,9}$/.test(raw)) throw new HttpError(400, "a card's id is a number");
   return Number(raw);
@@ -613,6 +617,8 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
+  const c = cloudHttpError(e);
+  if (c) return c;
   if (e instanceof DesktopError) return new HttpError(e.status, e.message);
   if (e instanceof FleetError || e instanceof AccountError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
@@ -1342,7 +1348,8 @@ const router = new Router(mapError)
     void refreshSlow();
     return json(r);
   })
-  .otherwise(({ req, url }) => {
+  ;
+cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
     if (found.kind === "notBuilt") return notBuiltPage();
@@ -1564,6 +1571,8 @@ export async function startServer(): Promise<void> {
   scheduler.start();
   waits.start();
   cards.start();
+  // Local first: with no cloud.env this reads nothing and sends nothing.
+  cloud.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
   // sessions and in your own terminals alike, and Go's usage is asked through
   // it (accounts/usage.ts), so it is up from the start.
