@@ -95,6 +95,10 @@ export class Scheduler {
   private redHeldUntil = new Map<string, number>();
   /** Schedules whose note command is running, or whose note is being said. */
   private coming = new Set<string>();
+  /** Agent intake/leases share this clock; they queue durable work instead
+   * of typing a note into a busy session and losing that intake tick. */
+  private services: (() => Promise<void>)[] = [];
+  onTick(service: () => Promise<void>): void { this.services.push(service); }
 
   constructor(
     private readonly fleet: Fleet,
@@ -207,6 +211,7 @@ export class Scheduler {
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
+    for (const service of this.services) void service().catch((e) => console.error("agentbox: scheduled service:", e));
     try {
       const now = this.now();
       for (const s of listSchedules()) {

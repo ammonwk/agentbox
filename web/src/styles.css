@@ -2480,24 +2480,30 @@ kbd {
     height: 3px;
     border-radius: 0 0 3px 3px;
   }
-  /* New sits in the middle of the bar, where the thumb rests. */
+  /* Keep every destination available on narrow screens. The rail scrolls
+     within itself; named entries keep Agents before Sessions as it grows. */
+  .sidebar { overflow-x: auto; }
+  .sidebar .nav-item, .sidebar .nav-new, .sidebar .nav-bell { flex: 0 0 56px; }
   .nav-new {
-    order: 3;
+    order: 4;
   }
-  /* Sessions, Review, New, Voice, Accounts, Settings, then the bell; Skills
-     is a desk job. */
-  .sidebar nav > :nth-child(1) { order: 1; }
-  .sidebar nav > :nth-child(2) { order: 2; }
-  .sidebar nav > :nth-child(3) { order: 4; }
-  .sidebar nav > :nth-child(4) { order: 5; }
-  .sidebar nav > :nth-child(5) { display: none; }
-  .sidebar nav > :nth-child(6) { order: 6; }
+  .nav-new .nav-label { display: none; }
+  .nav-new::after { content: "New"; }
+  .sidebar [data-nav-id="agents"] { order: 1; }
+  .sidebar [data-nav-id="sessions"] { order: 2; }
+  .sidebar [data-nav-id="review"] { order: 3; }
+  .sidebar [data-nav-id="voice"] { order: 5; }
+  .sidebar [data-nav-id="accounts"] { order: 6; }
+  .sidebar [data-nav-id="skills"] { order: 7; }
+  .sidebar [data-nav-id="team"] { order: 8; }
+  .sidebar [data-nav-id="mcps"] { order: 9; }
+  .sidebar [data-nav-id="settings"] { order: 10; }
   /* The bell is the bar's last tab, and its inbox a sheet above the bar. */
   .inbox-wrap {
     display: contents;
   }
   .nav-bell {
-    order: 7;
+    order: 11;
   }
   .nav-bell[aria-expanded="true"] {
     background: none;

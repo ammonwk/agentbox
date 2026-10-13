@@ -441,3 +441,22 @@ caller inside an agent session (`callerPid`).
 - **Plan diffs** between revisions are not shown.
 - No project is deployed, and no production migration is applied. Set up a
   hosted project as above.
+
+## Shared Agent instances
+
+[Agents](agents.md) extends this foundation with workspace-visible instances, work
+items, fenced runs, safe activity, verified contact preferences and concrete
+action decisions. Apply the additional `2026101321*` through `20261013233000`
+migrations before enabling execution. Agent operators need the independent
+`agents:execute` installation scope and an agent-specific executor grant; neither
+workspace membership nor existing delivery grants imply those rights. Human
+authoring and action approvals use the browser's human JWT directly. The server
+retains only its installation secret and local provider/App credentials.
+
+The `agent_*` RPCs require the authenticated human; `inst_agent_*` RPCs authenticate
+the installation secret and scope on every call. All shared tables use workspace
+RLS for reads and RPC-only writes. No new public terminal, transcript or credential
+API is introduced. GitHub outreach preferences require linking the human's own
+GitHub OAuth identity; an editable login or contribution-history match is not
+consent. Enable the GitHub OAuth provider and manual identity linking in your
+hosted Supabase project before opting in. Unlinked users remain contact-denied.

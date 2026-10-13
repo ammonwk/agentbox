@@ -6,6 +6,39 @@ export const CLI_GUIDE = `Everything goes through the \`agentbox\` CLI. It behav
 text out, the session id in the first column, and every verb that takes ids
 also reads them from stdin with \`-\`, so pipes and xargs work.
 
+## Shared Agents
+
+    agentbox agent status
+    agentbox agent read <run UUID> --repo owner/repo --number 123 --kind issue
+    agentbox wait until -- agentbox agent check <run UUID> --repo owner/repo --number 123 --condition checks
+    agentbox agent bind --file local-binding.json  # signed-in host owner token required
+    agentbox agent progress <run UUID> --stage in_progress --next 'Validate the fix'
+    agentbox agent action <run UUID> --request <UUID retained for retries> --file action.json
+    agentbox agent experts <agent UUID> --areas TypeScript --paths src/service.ts
+    agentbox agent finish <run UUID>
+    agentbox agent rotate <run UUID>              # signed-in host owner token required
+
+Author shared instances on the Agents page. A run has one accountable human and
+one fenced execution host. Only its associated session can report progress or
+propose actions. Use existing PR claims, Review cards and durable waits for
+follow-through. Work stages distinguish PR opened, merged, deployed and verified
+resolved; later stages need --evidence <url> --evidence-label <label>, and verified
+resolution needs --outcome <verification>. --decision <question> publishes a
+needs-human state. Finishing stops the run, not declares the work resolved.
+
+Managed GitHub actions keep App tokens inside the server and require current
+outreach opt-in, including mentions in PR bodies and review requests. Expertise
+is not consent. A proposed action is approved by its accountable human or an
+agent maintainer in the Agents page; a Review reply alone is not that approval.
+Never work around a declined contact through session messaging or another
+channel. No merge or deployment permission follows from creating an agent.
+Supported actions include open_pr/update_pr/ready_pr, comment/request_review, merge_pr and close_issue.
+Merge requires exact-head checks/reviews and GitHub rules without bypass. Pending
+merge requests are not merged; closure also needs the configured evidence and
+current issue-author consent. Deploy/rollback adapters are not provided. Managed
+HTTP routes use private session capabilities; process IDs are not credentials.
+See docs/agents.md for exact action JSON, host configuration and boundaries.
+
 ## Looking
 
     agentbox ls                     # one line each: id status idle host provider repo branch title

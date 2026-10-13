@@ -171,7 +171,7 @@ function unwrap<T>(schema: z.ZodType<T>, r: Raw): T {
   return parsed.data;
 }
 
-async function call<T>(sb: SupabaseClient, fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
+export async function cloudCall<T>(sb: SupabaseClient, fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
   let r: Raw;
   try {
     r = (await sb.rpc(fn, args)) as Raw;
@@ -220,7 +220,7 @@ export class HumanCloud {
   }
 
   me(): Promise<Me> {
-    return call(this.sb, "cloud_me", {}, Me);
+    return cloudCall(this.sb, "cloud_me", {}, Me);
   }
 
   async setDisplayName(name: string): Promise<void> {
@@ -258,7 +258,7 @@ export class HumanCloud {
   // ---- workspaces
 
   createWorkspace(name: string, slug: string): Promise<Workspace> {
-    return call(this.sb, "create_workspace", { p_name: name, p_slug: slug }, Workspace);
+    return cloudCall(this.sb, "create_workspace", { p_name: name, p_slug: slug }, Workspace);
   }
 
   async members(workspaceId: string): Promise<(Member & { person: Person })[]> {
@@ -276,7 +276,7 @@ export class HumanCloud {
   }
 
   createInvite(workspaceId: string, opts: { role?: "admin" | "member"; email?: string | null; ttlHours?: number; maxUses?: number } = {}) {
-    return call(
+    return cloudCall(
       this.sb,
       "create_invite",
       { p_workspace: workspaceId, p_role: opts.role ?? "member", p_email: opts.email || null, p_ttl_hours: opts.ttlHours ?? 72, p_max_uses: opts.maxUses ?? 1 },
@@ -285,27 +285,27 @@ export class HumanCloud {
   }
 
   revokeInvite(inviteId: string): Promise<Invite> {
-    return call(this.sb, "revoke_invite", { p_invite: inviteId }, Invite);
+    return cloudCall(this.sb, "revoke_invite", { p_invite: inviteId }, Invite);
   }
 
   acceptInvite(token: string) {
-    return call(this.sb, "accept_invite", { p_token: token.trim() }, AcceptedInvite);
+    return cloudCall(this.sb, "accept_invite", { p_token: token.trim() }, AcceptedInvite);
   }
 
   removeMember(workspaceId: string, userId: string): Promise<unknown> {
-    return call(this.sb, "remove_member", { p_workspace: workspaceId, p_user: userId }, z.unknown());
+    return cloudCall(this.sb, "remove_member", { p_workspace: workspaceId, p_user: userId }, z.unknown());
   }
 
   setRole(workspaceId: string, userId: string, role: "owner" | "admin" | "member"): Promise<unknown> {
-    return call(this.sb, "set_member_role", { p_workspace: workspaceId, p_user: userId, p_role: role }, z.unknown());
+    return cloudCall(this.sb, "set_member_role", { p_workspace: workspaceId, p_user: userId, p_role: role }, z.unknown());
   }
 
   policy(workspaceId: string): Promise<WorkspacePolicy> {
-    return call(this.sb, "workspace_policy", { p_workspace: workspaceId }, WorkspacePolicy);
+    return cloudCall(this.sb, "workspace_policy", { p_workspace: workspaceId }, WorkspacePolicy);
   }
 
   setPolicy(workspaceId: string, patch: WorkspacePolicyPatch): Promise<WorkspacePolicy> {
-    return call(this.sb, "set_workspace_policy", { p_workspace: workspaceId, p_policy: patch }, WorkspacePolicy);
+    return cloudCall(this.sb, "set_workspace_policy", { p_workspace: workspaceId, p_policy: patch }, WorkspacePolicy);
   }
 
   // ---- installations
@@ -316,7 +316,7 @@ export class HumanCloud {
 
   /** The secret in the answer is shown once: hand it to the machine. */
   registerInstallation(workspaceId: string, name: string, opts: { platform?: string; version?: string; scopes?: Scope[] } = {}) {
-    return call(
+    return cloudCall(
       this.sb,
       "register_installation",
       { p_workspace: workspaceId, p_name: name, p_platform: opts.platform ?? "", p_version: opts.version ?? "", p_scopes: opts.scopes ?? undefined },
@@ -325,7 +325,7 @@ export class HumanCloud {
   }
 
   updateInstallation(id: string, patch: { name?: string; acceptOwn?: boolean; scopes?: Scope[] }): Promise<Installation> {
-    return call(
+    return cloudCall(
       this.sb,
       "update_installation",
       { p_installation: id, p_name: patch.name ?? null, p_accept_own: patch.acceptOwn ?? null, p_scopes: patch.scopes ?? null },
@@ -334,7 +334,7 @@ export class HumanCloud {
   }
 
   revokeInstallation(id: string): Promise<Installation> {
-    return call(this.sb, "revoke_installation", { p_installation: id }, Installation);
+    return cloudCall(this.sb, "revoke_installation", { p_installation: id }, Installation);
   }
 
   providerConnections(installationId: string): Promise<ProviderConnection[]> {
@@ -353,11 +353,11 @@ export class HumanCloud {
   }
 
   grantDelivery(target: string, to: { user?: string; installation?: string }): Promise<DeliveryGrant> {
-    return call(this.sb, "grant_delivery", { p_target: target, p_user: to.user ?? null, p_installation: to.installation ?? null }, DeliveryGrant);
+    return cloudCall(this.sb, "grant_delivery", { p_target: target, p_user: to.user ?? null, p_installation: to.installation ?? null }, DeliveryGrant);
   }
 
   revokeDelivery(grantId: string): Promise<DeliveryGrant> {
-    return call(this.sb, "revoke_delivery", { p_grant: grantId }, DeliveryGrant);
+    return cloudCall(this.sb, "revoke_delivery", { p_grant: grantId }, DeliveryGrant);
   }
 
   /** Receipts the signed-in human may see: sent from their installations, or
@@ -386,7 +386,7 @@ export class HumanCloud {
   }
 
   publishPlan(workspaceId: string, p: { slug: string; title: string; body: string; baseRev?: number | null; summary?: string }) {
-    return call(
+    return cloudCall(
       this.sb,
       "publish_plan",
       { p_workspace: workspaceId, p_slug: p.slug, p_title: p.title, p_body: p.body, p_base_rev: p.baseRev ?? null, p_summary: p.summary ?? "" },
@@ -409,7 +409,7 @@ export class HumanCloud {
   }
 
   publishSkill(workspaceId: string, s: { name: string; files: SkillFileInput[]; description?: string; baseRev?: number | null; summary?: string }) {
-    return call(
+    return cloudCall(
       this.sb,
       "publish_skill",
       { p_workspace: workspaceId, p_name: s.name, p_files: s.files, p_description: s.description ?? "", p_base_rev: s.baseRev ?? null, p_summary: s.summary ?? "" },
@@ -438,7 +438,13 @@ export class InstallationCloud {
   }
 
   #call<T>(fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
-    return call(this.sb, fn, { p_secret: this.#secret, ...args }, schema);
+    return cloudCall(this.sb, fn, { p_secret: this.#secret, ...args }, schema);
+  }
+
+  /** Agent RPCs keep the credential private and retain the installation binding. */
+  agentCall<T>(fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
+    if (!/^inst_agents?_/.test(fn)) throw new CloudError("not an agent RPC", 400);
+    return this.#call(fn, args, schema);
   }
 
   hello(version: string, platform: string): Promise<Hello> {

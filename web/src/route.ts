@@ -6,6 +6,7 @@ export type SessionTab = "terminal" | "timeline" | "diff" | "load";
 export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "diff", "load"];
 
 export type Route =
+  | { page: "agents"; id?: string }
   | { page: "sessions" }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
@@ -21,7 +22,7 @@ export type Route =
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "sessions" | "review" | "voice" | "accounts" | "skills" | "mcps" | "team" | "settings";
+export type NavId = "agents" | "sessions" | "review" | "voice" | "accounts" | "skills" | "mcps" | "team" | "settings";
 
 export function navOf(route: Route): NavId {
   return route.page === "session" ? "sessions" : route.page;
@@ -39,6 +40,7 @@ function decode(p: string): string {
 export function parseHash(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
+  if (head === "agents") return { page: "agents", ...(a ? { id: a } : {}) };
   if (head === "s" && a) {
     const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
     return { page: "session", id: a, tab };
@@ -58,6 +60,7 @@ export function parseHash(hash: string): Route {
 
 export function hrefOf(route: Route): string {
   switch (route.page) {
+    case "agents": return `#/agents${route.id ? `/${encodeURIComponent(route.id)}` : ""}`;
     case "session":
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
     case "accounts":

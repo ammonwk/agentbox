@@ -80,6 +80,7 @@ const RESOLVE_WAIT_MS = 3_000;
 const skillRootDir = (s: InstallationSettings): string => join(userHome(), s.skillRoot === "agents" ? ".agents" : ".claude", "skills");
 
 export class CloudBridge {
+  outboundRefusal: (session: string | null) => string | null = () => null;
   #cfg: CloudConfig | null = null;
   #configError: string | null = null;
   #cred: Credential | null = null;
@@ -282,6 +283,8 @@ export class CloudBridge {
   async #push(api: InstallationCloud, row: OutboxRow): Promise<void> {
     if (row.body === null) return;
     try {
+      const refusal = this.outboundRefusal(row.sender_agent);
+      if (refusal) throw new CloudError(refusal, 403);
       const r = await api.send({
         clientId: row.client_id,
         target: row.target,
@@ -368,6 +371,8 @@ export class CloudBridge {
   /** Queue a message from this machine and try to hand it over now. A
    *  refusal comes back at once; an unreachable cloud leaves it queued. */
   async send(m: { to: string; text: string; senderAgent: string | null; wake: boolean; clientId?: string }): Promise<OutboundResult> {
+    const refusal = this.outboundRefusal(m.senderAgent);
+    if (refusal) throw new CloudError(refusal, 403);
     const api = this.api();
     const clientId = m.clientId ?? `ab_${randomBytes(12).toString("base64url")}`;
     if (!CLIENT_MSG_ID_RE.test(clientId)) throw new CloudError("a message id is 8 to 64 of A-Z a-z 0-9 _ -", 400);

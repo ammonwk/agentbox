@@ -54,6 +54,8 @@ function toCard(r: Row, withLong: boolean): Card {
 }
 
 export interface NewCard {
+  /** Surface in Review without initiating an unsolicited push notification. */
+  notify?: boolean;
   kind: CardKind;
   title: string;
   short: string;
@@ -157,7 +159,7 @@ export class Cards {
     );
     const card = this.get(Number(lastInsertRowid));
     this.changed();
-    if (card.kind === "decision") this.pushSoon(card);
+    if (card.kind === "decision" && c.notify !== false) this.pushSoon(card);
     return card;
   }
 

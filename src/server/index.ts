@@ -18,6 +18,7 @@
  */
 
 import { ensureBridge } from "../bridge/service";
+import { ZodError } from "zod";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
@@ -57,6 +58,7 @@ import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
+import { authenticatedSession } from "../core/session-authority";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
 import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
@@ -78,6 +80,8 @@ import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import { CloudBridge } from "../core/cloud/bridge";
 import { cloudHttpError, cloudRoutes } from "./cloud";
+import { AgentsRuntime } from "../core/agents/runtime";
+import { agentRoutes } from "./agents";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -181,6 +185,9 @@ export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
     for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
   });
 });
+export const agents = new AgentsRuntime(fleet, cloud, cards);
+cloud.outboundRefusal = id => agents.directContactRefusal(id);
+scheduler.onTick(() => agents.tick());
 const turnIndex = new TurnIndex(fleet, {
   load: (id) => loadTurnState(fleet.get(id).provider, id),
   save: (id, state) => saveTurnState(fleet.get(id).provider, id, state),
@@ -656,6 +663,7 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
+  if (e instanceof ZodError) return new HttpError(400, e.message);
   const c = cloudHttpError(e);
   if (c) return c;
   if (e instanceof DesktopError) return new HttpError(e.status, e.message);
@@ -773,9 +781,8 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/prs/transfer", async ({ req }) => {
     const b = await readBody(req);
-    // Unlike --for on claim, the actor must be proven from the caller's
-    // process. A destination cannot impersonate its predecessor by name.
-    const actor = typeof b.callerPid === "number" && b.callerPid > 1 ? fleet.callerOf(b.callerPid) : null;
+    // A process ID or --for is not authority to transfer somebody else's PR.
+    const actor = authenticatedSession(req);
     if (!actor) throw new HttpError(403, "run pr transfer inside the session that currently holds the PR");
     const expected = requireString(b, "expected");
     const to = requireString(b, "to");
@@ -813,9 +820,13 @@ const router = new Router(mapError)
     // when its environment has it; otherwise it is found above the caller's
     // process, as a spawn's parent is.
     const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
-    const fromSession =
+    const authenticated = authenticatedSession(req);
+    if (b.from === "agent" && !authenticated) throw new HttpError(403, "agent messages require the sending session's capability");
+    const fromSession = authenticated ??
       (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
       (b.from === "agent" && callerPid ? fleet.callerOf(callerPid) : null);
+    const contactRefusal = agents.directContactRefusal(fromSession);
+    if (contactRefusal) throw new HttpError(403, contactRefusal);
     // An agent's message is refused, before anything is typed or resumed, when
     // it would wake a cold or stopped session unasked or is one too many, and
     // one to a session another has taken over goes to that one
@@ -1076,6 +1087,7 @@ const router = new Router(mapError)
     const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
     return json(
       cards.add({
+        notify: !!authenticatedSession(req) && !agents.ownsSession(authenticatedSession(req)),
         kind,
         title: requireString(b, "title"),
         short: requireString(b, "short"),
@@ -1438,6 +1450,7 @@ const router = new Router(mapError)
     return json(r);
   })
   ;
+agentRoutes(router, agents);
 cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
@@ -1680,7 +1693,7 @@ export async function startServer(): Promise<void> {
 
   fleet.on("sessions", () => {
     notifyBlocked(
-      () => fleet.sessions(),
+      () => fleet.sessions().filter((s) => !agents.ownsSession(s.id)),
       (id) => fleet.blockedReason(id),
       (id) => typedAt.get(id) ?? 0,
     );

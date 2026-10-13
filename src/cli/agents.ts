@@ -1,0 +1,180 @@
+import { readFileSync } from "node:fs";
+import type { Api } from "../client";
+import { parseArgs } from "./sessions";
+
+export async function agent(api: Api, args: string[]): Promise<number> {
+  const [verb, ...more] = args;
+  const { flags, rest } = parseArgs(
+    more,
+    [
+      "file",
+      "stage",
+      "next",
+      "outcome",
+      "evidence",
+      "evidence-label",
+      "decision",
+      "request",
+      "paths",
+      "areas",
+      "repo",
+      "kind",
+      "number",
+      "condition",
+    ],
+    ["json"],
+  );
+  const str = (k: string) =>
+    typeof flags.get(k) === "string" ? (flags.get(k) as string) : "";
+  const id = rest[0],
+    callerPid = process.pid;
+  const file = () => {
+    if (!str("file")) throw new Error("give --file <json-file>");
+    return JSON.parse(readFileSync(str("file"), "utf8"));
+  };
+  let value: unknown;
+  switch (verb) {
+    case undefined:
+    case "status":
+      value = await api("GET", "/api/agents/runtime");
+      break;
+    case "bind":
+      value = await api("POST", "/api/agents/binding", {
+        callerPid,
+        humanToken: process.env.AGENTBOX_HUMAN_ACCESS_TOKEN,
+        binding: file(),
+      });
+      break;
+    case "sync":
+      value = await api("POST", "/api/agents/sync", {});
+      break;
+    case "check":
+    case "read":
+      if (!id || !str("repo") || !str("number"))
+        throw new Error(
+          "agent read <run UUID> --repo owner/repo --number N [--kind issue|pull|checks|reviews]",
+        );
+      value = await api(
+        "POST",
+        `/api/agents/runs/${encodeURIComponent(id)}/read`,
+        {
+          callerPid,
+          source: {
+            repo: str("repo"),
+            number: Number(str("number")),
+            kind:
+              verb === "check"
+                ? str("condition") === "merged"
+                  ? "pull"
+                  : "checks"
+                : str("kind") || "issue",
+          },
+        },
+      );
+      if (verb === "check") {
+        if (!["merged", "checks"].includes(str("condition")))
+          throw new Error("agent check requires --condition merged|checks");
+        const r = value as {
+          merged?: boolean;
+          mergeCommit?: string;
+          checks?: {
+            total_count: number;
+            check_runs: { status: string; conclusion: string }[];
+          };
+          status?: { total_count: number; statuses: { state: string }[] };
+        };
+        const ready =
+          str("condition") === "merged"
+            ? !!r.merged && !!r.mergeCommit
+            : !!r.checks &&
+              !!r.status &&
+              r.checks.total_count <= r.checks.check_runs.length &&
+              r.status.total_count <= r.status.statuses.length &&
+              r.checks.check_runs.every(
+                (c) =>
+                  c.status === "completed" &&
+                  ["success", "skipped", "neutral"].includes(c.conclusion),
+              ) &&
+              r.status.statuses.every((s) => s.state === "success");
+        console.log(
+          ready
+            ? `${str("condition")} confirmed by configured GitHub actor`
+            : `${str("condition")} not confirmed yet`,
+        );
+        return ready ? 0 : 1;
+      }
+      break;
+    case "progress":
+      if (!id || !str("stage"))
+        throw new Error(
+          "agent progress <run UUID> --stage <stage> --next <action> [--outcome <verification>] [--evidence <url> --evidence-label <label>] [--decision <question>]",
+        );
+      value = await api(
+        "POST",
+        `/api/agents/runs/${encodeURIComponent(id)}/progress`,
+        {
+          callerPid,
+          progress: {
+            stage: str("stage"),
+            next: str("next"),
+            outcome: str("outcome"),
+            evidence: str("evidence")
+              ? [
+                  {
+                    url: str("evidence"),
+                    label: str("evidence-label") || "Evidence",
+                  },
+                ]
+              : [],
+          },
+          decision: str("decision"),
+        },
+      );
+      break;
+    case "action":
+      if (!id || !str("request"))
+        throw new Error(
+          "agent action <run UUID> --request <UUID retained for retries> --file <action JSON>",
+        );
+      value = await api(
+        "POST",
+        `/api/agents/runs/${encodeURIComponent(id)}/actions`,
+        { callerPid, action: file(), request: str("request") },
+      );
+      break;
+    case "finish":
+    case "rotate":
+      if (!id) throw new Error(`agent ${verb} needs a run UUID`);
+      value = await api(
+        "POST",
+        `/api/agents/runs/${encodeURIComponent(id)}/${verb}`,
+        {
+          callerPid,
+          ...(verb === "rotate"
+            ? { humanToken: process.env.AGENTBOX_HUMAN_ACCESS_TOKEN }
+            : {}),
+        },
+      );
+      break;
+    case "experts":
+      if (!id)
+        throw new Error(
+          "agent experts <agent UUID> [--areas comma,list] [--paths comma,list]",
+        );
+      value = await api(
+        "POST",
+        `/api/agents/${encodeURIComponent(id)}/experts`,
+        {
+          areas: str("areas").split(",").filter(Boolean),
+          paths: str("paths").split(",").filter(Boolean),
+        },
+      );
+      break;
+    default:
+      throw new Error(
+        "agent takes status, bind, sync, read, progress, action, experts, finish or rotate; author shared agents in the Agents page",
+      );
+  }
+  console.log(JSON.stringify(value, null, 2));
+  return 0;
+}

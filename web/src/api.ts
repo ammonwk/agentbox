@@ -77,7 +77,7 @@ const loadMock = (): Promise<MockModule> => (mockModule ??= import("./mock"));
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   if (MOCK) {
     const m = await loadMock();
     // The mock is typed loosely at its one boundary; everything past this line is the contract's type.

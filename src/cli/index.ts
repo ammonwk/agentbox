@@ -29,6 +29,7 @@ import * as schedules from "./schedules";
 import * as waits from "./waits";
 import * as cards from "./cards";
 import * as prs from "./prs";
+import { agent } from "./agents";
 import { cloud, CLOUD_USAGE } from "./cloud";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
@@ -580,6 +581,9 @@ export async function main(argv: string[]): Promise<number | null> {
       case "prs":
         await ensureServer();
         return await prs.pr(api, argv.slice(1));
+      case "agent":
+        await ensureServer();
+        return await agent(api, argv.slice(1));
       case "schedule":
         await ensureServer();
         return await schedules.schedule(api, argv.slice(1));

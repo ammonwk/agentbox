@@ -26,6 +26,7 @@ import { Review } from "./views/Review";
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
 // heaviest thing in the bundle.)
 const Team = lazy(() => import("./views/Team").then((m) => ({ default: m.Team })));
+const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
 const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice })));
 
@@ -63,6 +64,7 @@ function isTyping(e: KeyboardEvent): boolean {
 // -------------------------------------------------------------------- app
 
 const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
+  { id: "agents", label: "Agents", icon: Icon.brain, to: { page: "agents" } },
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
   { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
@@ -74,6 +76,7 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
 ];
 
 const PAGE_TITLE: Record<NavId, string> = {
+  agents: "Agents",
   sessions: "Sessions",
   review: "Review",
   voice: "Voice",
@@ -102,7 +105,7 @@ export function App() {
   const contentRef = useRef<HTMLElement>(null);
   useEffect(() => {
     contentRef.current?.scrollTo(0, 0);
-  }, [route.page]);
+  }, [route.page, route.page === "agents" ? route.id : null]);
 
   // With the breadcrumb gone, the tab title is where the session's name lives.
   const here = route.page === "session" && state ? `${titleOfId(state, route.id)} — agentbox` : "agentbox";
@@ -193,6 +196,7 @@ export function App() {
                 <a
                   key={id}
                   data-nav-item
+                  data-nav-id={id}
                   aria-keyshortcuts="ArrowUp ArrowDown ArrowRight"
                   className={`nav-item ${active ? "active" : ""}`}
                   href={hrefOf(to)}
@@ -269,6 +273,8 @@ export function App() {
                 }
                 onNew={() => setNewOpen(true)}
               />
+            ) : route.page === "agents" ? (
+              <Suspense fallback={<Empty title="Loading…" />}><Agents state={state} id={route.id} /></Suspense>
             ) : route.page === "accounts" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
                 <Accounts state={state} route={route} />
@@ -333,10 +339,11 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0 };
+  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
+    agents: 0,
     sessions: needsYou(state.sessions),
     // Kept for later is still yours, but you have seen it: it does not nag.
     review: state.cards.filter((c) => c.state === "open").length,
