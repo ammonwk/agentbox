@@ -682,7 +682,7 @@ const router = new Router(mapError)
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
       });
-      if (claim) getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [claim.repo, claim.number, out.session.id, Date.now()]);
+      if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
       scheduleHot();
       scheduleCold();
       return json(out, 201);
@@ -732,7 +732,12 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const who = speaker(b);
     if (!who) throw new HttpError(400, "a session releases what it claimed: run this from inside one, or name it with --for <session id>");
-    const released = releasePr(who, b.pr !== undefined ? prNamed(b, who) : null);
+    const named = b.pr !== undefined ? prNamed(b, who) : null;
+    const branches = named ? [] : prClaimsNow().filter((c) => c.sessionId === who && c.how === "branch");
+    const released = getDb().transaction(() => {
+      for (const pr of branches) releasePr(who, pr);
+      return releasePr(who, named) + branches.length;
+    })();
     scheduleCold();
     return json({ released });
   })

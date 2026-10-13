@@ -31,6 +31,7 @@
  */
 
 import { getWait, insertWait, listOpenWaits, listWaits, updateWait } from "./db";
+import { assignedPrHolder, prReleased, prReleaseNotice } from "./prclaims";
 import { FleetError, type Fleet } from "./fleet";
 import { Held, logTail, prKey, readJob, readPrs, readRun, readUntil, type JobRead, type PrRead, type RunRead } from "./waitreads";
 import type { Session, Wait, WaitEnd, WaitSpec } from "./types";
@@ -311,6 +312,7 @@ export class Waits {
     if (s.host === "external" || s.host === "subagent") {
       throw new FleetError(409, `${sessionId} ${s.host === "subagent" ? "is a subagent" : "runs in a terminal of the user's own"}: agentbox cannot type into it, so it could never be told how the wait ended. A subagent hands the waiting to its parent session or to a session of its own (agentbox claude --detach).`);
     }
+    if (spec.kind === "pr" && prReleased(sessionId, spec)) throw new FleetError(409, prReleaseNotice(sessionId));
     const ms = timeoutMs ?? DEFAULT_TIMEOUT_MS[spec.kind];
     if (!Number.isFinite(ms) || ms < MIN_TIMEOUT_MS || ms > MAX_TIMEOUT_MS) throw new FleetError(400, `a wait's timeout is between ${span(MIN_TIMEOUT_MS)} and ${span(MAX_TIMEOUT_MS)}`);
     const going = listOpenWaits(0).filter((w) => w.sessionId === sessionId && !w.ended);
@@ -477,7 +479,13 @@ export class Waits {
    */
   private async tell(w: Wait): Promise<void> {
     const now = this.now();
+    w = getWait(w.id)!;
+    if (w.ended === "cancelled" || w.toldAt !== null) return;
     const s = this.sessionOf(w);
+    if (w.spec.kind === "pr" && prReleased(s?.id ?? w.sessionId, w.spec)) {
+      updateWait(w.id, { ended: "cancelled", endedAt: now, outcome: prReleaseNotice(s?.id ?? w.sessionId), untold: null });
+      return;
+    }
     const hold = !s
       ? "its session is gone"
       : s.closedAt
@@ -495,7 +503,11 @@ export class Waits {
     const drafted = this.draftLeft.get(w.id);
     if (drafted !== undefined && s.lastActivityAt <= drafted) return;
     try {
-      await this.fleet.note(s.id, message(w, now));
+      const holder = w.spec.kind === "pr" ? assignedPrHolder(w.spec) : null;
+      const notice = holder && holder !== s.id
+        ? `[agentbox: This PR is assigned to ${holder}, not you (${s.id}). This wait is observation only; it does not authorize edits, merges, pushes or use of the holder's worktree.]\n\n`
+        : "";
+      await this.fleet.note(s.id, notice + message(w, now));
       updateWait(w.id, { toldAt: this.now(), untold: null });
       this.tellAfter.delete(w.id);
       this.draftLeft.delete(w.id);

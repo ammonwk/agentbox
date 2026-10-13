@@ -386,6 +386,15 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX waits_open ON waits(ended, told_at);
   `,
+  // 26 — releasing a PR survives the session's next wake and branch discovery.
+  `
+  CREATE TABLE pr_releases (
+    session_id TEXT NOT NULL,
+    repo TEXT NOT NULL COLLATE NOCASE,
+    number INTEGER NOT NULL,
+    PRIMARY KEY (session_id, repo, number)
+  );
+  `,
 ];
 
 function migrate(d: Database) {

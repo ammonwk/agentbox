@@ -141,7 +141,7 @@ why). Arming the same wait twice is one wait.
     agentbox pr who <n|owner/repo#n|url>   # the session that has this pull request, or "nobody" (exit 1)
     agentbox pr claim <n|…>         # it is yours, and says so ("you hold", "you already hold"); refused,
                                     # naming "another session", if another live session has it
-    agentbox pr release [<n|…>]     # let go of what you claimed (one, or all)
+    agentbox pr release [<n|…>]     # release ownership and its PR waits (one, or all)
     agentbox pr claims              # every pull request a live session has
 
 ## Conventions

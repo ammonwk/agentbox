@@ -33,6 +33,32 @@ export function parsePrRef(text: string, repo: string | null): { repo: string; n
   return { repo, number: Number(bare[1]) };
 }
 
+type PrRef = { repo: string; number: number };
+
+export function releasedPrs(sessionId: string): PrRef[] {
+  return getDb().query("SELECT repo, number FROM pr_releases WHERE session_id = ? ORDER BY repo, number").all(sessionId) as PrRef[];
+}
+
+export function assignedPrHolder(pr: PrRef): string | null {
+  const row = getDb().query("SELECT session_id FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?").get(pr.repo, pr.number) as { session_id: string } | null;
+  return row?.session_id ?? null;
+}
+
+export function prReleased(sessionId: string, pr: PrRef): boolean {
+  return !!getDb().query("SELECT 1 FROM pr_releases WHERE session_id = ? AND repo = ? AND number = ?").get(sessionId, pr.repo, pr.number);
+}
+
+/** Read at delivery, not when a message is queued: ownership can move meanwhile. */
+export function prReleaseNotice(sessionId: string): string {
+  const refs = releasedPrs(sessionId);
+  if (!refs.length) return "";
+  const names = refs.map((p) => {
+    const holder = assignedPrHolder(p);
+    return `${p.repo}#${p.number}${holder ? ` (assigned to ${holder})` : " (released)"}`;
+  });
+  return `[agentbox: PR ownership changed. You no longer hold ${names.join(", ")}. Earlier prompts, waits, messages and schedules do not restore ownership. Do not edit, merge, push or use the successor's worktree for these PRs. Only a successful explicit agentbox pr claim can give one back to you.]`;
+}
+
 const holds = (s: Session | undefined): s is Session =>
   !!s && s.host !== "subagent" && (s.status === "running" || s.status === "waiting" || s.status === "blocked");
 
@@ -48,7 +74,7 @@ export function prClaims(sessions: readonly Session[], byBranch: readonly Omit<P
     .map((r) => ({ repo: r.repo, number: r.number, sessionId: r.session_id, how: "said" as const, at: r.at }));
   const said = new Set(out.map((c) => `${c.repo.toLowerCase()}#${c.number}`));
   for (const b of byBranch) {
-    if (!said.has(`${b.repo.toLowerCase()}#${b.number}`) && holds(byId.get(b.sessionId))) out.push({ ...b, how: "branch" });
+    if (!said.has(`${b.repo.toLowerCase()}#${b.number}`) && holds(byId.get(b.sessionId)) && !prReleased(b.sessionId, b)) out.push({ ...b, how: "branch" });
   }
   return out;
 }
@@ -95,18 +121,44 @@ export function claimPr(claims: readonly PrClaim[], sessions: readonly Session[]
   const held = holderOf(claims, repo, number);
   if (held && held.sessionId !== sessionId) throw new PrHeld(held, sessions.find((s) => s.id === held.sessionId), sessionId);
   if (held?.how === "said") return held;
-  getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held?.repo ?? repo, number, sessionId, now]);
+  const db = getDb();
+  db.transaction(() => {
+    const prior = db.query("SELECT * FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?").all(repo, number) as Row[];
+    for (const old of prior) if (old.session_id !== sessionId) releasePr(old.session_id, { repo: old.repo, number });
+    db.run("DELETE FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?", [repo, number]);
+    db.run("INSERT INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held?.repo ?? repo, number, sessionId, now]);
+    db.run("DELETE FROM pr_releases WHERE session_id = ? AND repo = ? AND number = ?", [sessionId, repo, number]);
+  })();
   return { repo: held?.repo ?? repo, number, sessionId, how: "said", at: now };
 }
 
-/** What `sessionId` said it holds, let go: one PR, or all of them. */
-export function releasePr(sessionId: string, pr: { repo: string; number: number } | null): number {
-  return pr
-    ? getDb().run("DELETE FROM pr_claims WHERE session_id = ? AND number = ? AND lower(repo) = lower(?)", [sessionId, pr.number, pr.repo]).changes
-    : getDb().run("DELETE FROM pr_claims WHERE session_id = ?", [sessionId]).changes;
+/** Cancel both armed waits and results still waiting to be delivered, atomically with release. */
+export function releasePr(sessionId: string, pr: PrRef | null): number {
+  const db = getDb();
+  return db.transaction(() => {
+    const refs = pr ? [pr] : db.query("SELECT repo, number FROM pr_claims WHERE session_id = ?").all(sessionId) as PrRef[];
+    let released = 0;
+    for (const ref of refs) {
+      db.run("INSERT OR IGNORE INTO pr_releases (session_id, repo, number) VALUES (?,?,?)", [sessionId, ref.repo, ref.number]);
+      db.run(`UPDATE waits SET ended = 'cancelled', ended_at = ?, outcome = ?, untold = NULL
+        WHERE session_id = ? AND told_at IS NULL AND json_extract(spec, '$.kind') = 'pr'
+        AND lower(json_extract(spec, '$.repo')) = lower(?) AND json_extract(spec, '$.number') = ?`,
+        [Date.now(), `PR ownership released: ${ref.repo}#${ref.number}; this session no longer holds it.`, sessionId, ref.repo, ref.number]);
+      released += db.run("DELETE FROM pr_claims WHERE session_id = ? AND number = ? AND lower(repo) = lower(?)", [sessionId, ref.number, ref.repo]).changes;
+    }
+    return released;
+  })();
 }
 
-/** A session that is being replaced hands what it claimed to its successor. */
+/** A schedule's replacement keeps its predecessor's obligations and exclusions. */
 export function movePrClaims(from: string, to: string): number {
-  return getDb().run("UPDATE pr_claims SET session_id = ? WHERE session_id = ?", [to, from]).changes;
+  const db = getDb();
+  return db.transaction(() => {
+    const moved = db.run("UPDATE pr_claims SET session_id = ? WHERE session_id = ?", [to, from]).changes;
+    db.run(`INSERT OR IGNORE INTO pr_releases (session_id, repo, number)
+      SELECT ?, r.repo, r.number FROM pr_releases r WHERE r.session_id = ?
+      AND NOT EXISTS (SELECT 1 FROM pr_claims c WHERE c.session_id = ? AND lower(c.repo) = lower(r.repo) AND c.number = r.number)`, [to, from, to]);
+    db.run("UPDATE waits SET session_id = ? WHERE session_id = ? AND told_at IS NULL AND ended IS NOT 'cancelled'", [to, from]);
+    return moved;
+  })();
 }

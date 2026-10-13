@@ -30,7 +30,7 @@ export async function pr(api: Api, args: string[]): Promise<number> {
     }
     case "release": {
       const { released } = await api<{ released: number }>("POST", "/api/prs/release", body);
-      console.log(released ? `released ${released}` : "nothing to release: this session claimed no such pull request (a PR it holds by being on its branch is not released, only left)");
+      console.log(released ? `released ${released}` : "no explicit claim removed; named PR waits and branch ownership are released");
       return 0;
     }
     case "who": {

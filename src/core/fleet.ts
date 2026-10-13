@@ -55,7 +55,7 @@ import {
 } from "./db";
 import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
-import { unfinishedClaims } from "./prclaims";
+import { prReleaseNotice, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import {
   LIMIT_DIALOG,
@@ -3000,6 +3000,8 @@ export class Fleet extends EventEmitter {
   }
 
   private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string): void {
+    const notice = prReleaseNotice(rec.id);
+    if (notice) prompt = `${notice}\n\n${prompt ?? ""}`;
     const settings = getSettings();
     const adapter = this.adapter(rec.provider);
     const typed = tooLongForArgv(prompt) ? prompt : undefined;
@@ -3167,6 +3169,8 @@ export class Fleet extends EventEmitter {
   private async typeInto(id: string, provider: ProviderId, pane: string, text: string): Promise<void> {
     try {
       const adapter = this.adapter(provider);
+      const notice = prReleaseNotice(id);
+      if (notice) text = `${notice}\n\n${text}`;
       await this.deps.runtime.sendText(pane, text + (adapter.pasteEnd ?? ""), { pieces: adapter.pasteInPieces });
     } catch (e) {
       if (!(e instanceof Unsubmitted)) throw e;
