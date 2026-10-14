@@ -48,7 +48,7 @@ test("a public issue names no local home path or uploaded file path",async()=>{
     const text="Avatar is wrong [Image #1: /Users/nate/.local/share/agentbox/uploads/a.png]\nSee /Users/nate/Desktop/Dev/agentbox/src/x.ts and /home/sam/repo and /opt/tools";
     await f.feedback.submit("vulcan",{request:crypto.randomUUID(),text,target:"main"});
     expect(body.body).not.toContain("/Users/");expect(body.body).not.toContain("/home/");expect(body.title).not.toContain("/Users/");
-    expect(body.body).toContain("[Image #1: kept on the reporter's machine, not uploaded]");
+    expect(body.body).toContain("[Image #1: a.png, kept on the reporter's machine, not uploaded]");
     expect(body.body).toContain("~/Desktop/Dev/agentbox/src/x.ts");expect(body.body).toContain("~/repo");expect(body.body).toContain("/opt/tools");
   } finally {f.db.close();}
 });

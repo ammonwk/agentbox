@@ -26,12 +26,16 @@ const github: GitHub = async (path, body) => {
 };
 const input = z.object({request:z.string().uuid(), text:z.string().trim().min(1).max(10000), target:z.string().max(200).nullable(), uiRevision:z.object({commit:z.string().regex(/^[0-9a-f]{40}$/),dirty:z.boolean()}).strict().nullable().optional()}).strict();
 const marker = (id: string) => `agentbox-help:${id}`;
-/** The issue is public. An image token names a file that stays on this Mac,
- * and any home path names the person's account, so neither is published. */
+/** The issue is public. An image token's path names the person's account, so
+ * only its file name is published: enough for triage on this Mac to find the
+ * image in the uploads folder, nothing about who sent it. */
 export function publicText(text: string, home = userHome()): string {
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const root = home.replace(/\/+$/, "");
-  text = text.replace(/\[Image #(\d+): [^\]\n]*\]/g, "[Image #$1: kept on the reporter's machine, not uploaded]");
+  text = text.replace(/\[Image #(\d+): ([^\]\n]*)\]/g, (_, n: string, path: string) => {
+    const name = path.split("/").pop()!;
+    return `[Image #${n}: ${/^[\w.-]{1,80}$/.test(name) ? `${name}, ` : ""}kept on the reporter's machine, not uploaded]`;
+  });
   if (root.length > 1) text = text.replace(new RegExp(`${esc(root)}(?![\\w.-])`, "g"), "~");
   return text
     .replace(/(?<![\w.~-])\/(?:Users|home)\/[^\s/'"`)\]]+/g, "~");
