@@ -286,7 +286,9 @@ export interface SpawnRequest {
    *  becomes the new session's parent. */
   callerPid?: number;
   /** The parent, named outright: for a detached orchestrator whose process
-   *  tree no longer reaches the session it works for. Wins over `callerPid`. */
+   *  tree no longer reaches the session it works for. Wins over `callerPid`,
+   *  and is a grouping like a dragged one (`parentByHand`): the orchestrator's
+   *  work, not a call in its run, so it is not shown closed when it stops. */
   parent?: string;
   /** Start under this id: a scheduled session keeps the one it was shown under. */
   id?: string;
@@ -2750,6 +2752,7 @@ export class Fleet extends EventEmitter {
       effort: effort ?? null,
       model: model ?? null,
       parent: parent ?? null,
+      parentByHand: !!req.parent,
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     // Carried on every resume, as an adopted session's own flags are.

@@ -126,7 +126,7 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
       continue;
     }
     const [, key, inline] = m;
-    const takesValue = key === "account" || key === "model" || key === "claim";
+    const takesValue = key === "account" || key === "model" || key === "claim" || key === "parent";
     if (inline !== undefined) flags.set(key!, inline);
     else if (takesValue && args[i + 1] !== undefined) flags.set(key!, args[++i]!);
     else flags.set(key!, true);
@@ -134,7 +134,7 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
   return { flags, rest };
 }
 
-/** `agentbox claude [--account X] [--model M] [--detach] [prompt…]` */
+/** `agentbox claude [--account X] [--model M] [--parent ID] [--detach] [prompt…]` */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
   const { flags, rest } = parseFlags(args);
   // Asking how is not asking to start one.
@@ -168,8 +168,10 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
       accountId,
       claim: typeof flags.get("claim") === "string" ? flags.get("claim") : undefined,
-      // Started from inside another session, it is that session's child.
+      // Started from inside another session, it is that session's child;
+      // `--parent` names it outright, for a program no session runs.
       callerPid: process.pid,
+      parent: typeof flags.get("parent") === "string" ? flags.get("parent") : undefined,
     });
   } catch (e) {
     const err = e as ApiError;
@@ -378,9 +380,10 @@ async function recover(args: string[]): Promise<number> {
 
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
-  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--detach] [prompt…]
+  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--parent ID] [--detach] [prompt…]
                         start a session here, on the account with the most room,
-                        and attach this terminal to it (detach: Ctrl-b d)
+                        and attach this terminal to it (detach: Ctrl-b d);
+                        --parent puts it under that session (default: the one this runs in)
   usage                 each account's limits and what running sessions claim
   attach <id>           attach this terminal to a session in agentbox
 
