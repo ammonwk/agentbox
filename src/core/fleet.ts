@@ -122,7 +122,7 @@ import { UNFUNDED_HOLD_MS, unfundedSince, weeklyWindow } from "./balancer";
 import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusals";
 import { statedUntil, statedWaitMs } from "./retrywait";
 import { retryClock } from "./attention";
-import { recordOpening } from "./senders";
+import { recordOpening, type Opener } from "./senders";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
 import { devinQueuedCount } from "./providers/devin";
@@ -298,9 +298,8 @@ export interface SpawnRequest {
   parent?: string;
   /** Start under this id: a scheduled session keeps the one it was shown under. */
   id?: string;
-  /** The session that wrote `prompt`, authenticated by its capability, and
-   *  its registered agent: recorded so the opening shows who sent it. */
-  opener?: { from: string; agent: string | null };
+  /** Who wrote `prompt` (`Opener`): recorded so the opening shows who sent it. */
+  opener?: Opener;
 }
 
 export class Fleet extends EventEmitter {
@@ -2794,7 +2793,7 @@ export class Fleet extends EventEmitter {
       parent: parent ?? null,
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
-    if (req.opener && req.prompt) recordOpening({ session: id, from: req.opener.from, agent: req.opener.agent, prompt: req.prompt }, now);
+    if (req.opener && req.prompt) recordOpening({ session: id, opener: req.opener, prompt: req.prompt }, now);
     if (req.readOnly) updateSessionRecord(id, { launch: { args: ["--sandbox", "read-only", "--ask-for-approval", "never"], env: {} } });
     insertAssignment({
       id: randomUUID(),

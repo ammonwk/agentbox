@@ -490,6 +490,7 @@ export class AgentsRuntime {
         cwd,
         worktree: !!(slug && b.repos[slug]),
         prompt,
+        opener: { via: "agentbox" },
       });
       local.run = await this.api().report(claimed, "running", {
         session: local.session,
@@ -950,6 +951,7 @@ export class AgentsRuntime {
       provider: b.provider,
       model: b.model || undefined,
       cwd: rec.cwd,
+      opener: { via: "agentbox" },
       prompt: `${this.prompt(a, work, local.run, local.promptRevision)}\nYou replace stopped session ${old}. Read its provider transcript through agentbox log if needed; inspect the existing diff and shared evidence before changing anything. Evidence: ${JSON.stringify(work.evidence)}${local.coordinator ? this.memoryPrompt(a, run.id, next) : ""}`,
     });
     await this.fleet.handOver(old, next);

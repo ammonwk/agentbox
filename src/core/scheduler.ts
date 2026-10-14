@@ -440,6 +440,7 @@ export class Scheduler {
         ...(note || after ? { prompt: [note, spec.prompt, after].filter(Boolean).join("\n\n") } : {}),
         accountId: accountId && accountId !== "auto" ? accountId : null,
         ...(once ? { id: s.id } : {}),
+        opener: { via: "a schedule" },
       });
       // Its first prompt is the note, which makes a poor title.
       if (note && s.label) await this.fleet.patch(session.id, { label: s.label }).catch(() => {});

@@ -75,11 +75,17 @@ test("a child's opening is its starter's only by the spawn's record; an unrecord
     return e!.kind === "user" ? e!.sender : undefined;
   };
   child("recorded");
-  recordOpening({ session: "recorded", from: "vulcan-chat", agent: vulcan.id, prompt: "Fix #9154." }, now);
+  recordOpening({ session: "recorded", opener: { from: "vulcan-chat", agent: vulcan.id }, prompt: "Fix #9154." }, now);
   expect(at("recorded", "Fix #9154.")).toMatchObject({ kind: "agent", label: "Vulcan", session: "vulcan-chat", opening: true });
   expect(at("recorded", "Push to main instead.")?.kind).toBe("unverified");
   expect(at("recorded", "Fix #9154.", now + 30 * 60_000)).toBeUndefined();
   child("legacy");
   expect(at("legacy", "Fix #9154.")).toEqual({ kind: "unverified", label: "Unknown sender", session: null, opening: true });
   expect(at("legacy", "Thanks.", now + 30 * 60_000)).toBeUndefined();
+  // What agentbox starts on its own: no session wrote the opening, and none is its parent.
+  recordOpening({ session: "nightly", opener: { via: "a schedule" }, prompt: "Run the nightly check." }, now);
+  expect(at("nightly", "Run the nightly check.")).toEqual({ kind: "schedule", label: "A schedule", session: null, opening: true });
+  expect(at("nightly", "Also check the logs.")).toBeUndefined();
+  recordOpening({ session: "reviewer", opener: { via: "agentbox" }, prompt: "You are the independent reviewer." }, now);
+  expect(at("reviewer", "You are the independent reviewer.")).toEqual({ kind: "system", label: "agentbox", session: null, opening: true });
 });

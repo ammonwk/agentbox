@@ -527,6 +527,8 @@ export class AgentWorks {
         provider: w.agent.provider,
         cwd: w.cwd,
         prompt: this.prompt(w),
+        // The agent's chat asked for this work; the writer shows it as the agent.
+        opener: { from: w.grant.requester, agent: w.agent.id },
       });
       updateSessionRecord(w.session, { worktree: w.cwd });
       w.state = "working";

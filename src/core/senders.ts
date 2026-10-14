@@ -47,6 +47,9 @@ function db(): Database {
       from_session TEXT, verified INTEGER NOT NULL, agent TEXT, at INTEGER NOT NULL, digest TEXT NOT NULL)`);
     d.exec(`CREATE TABLE IF NOT EXISTS opening_attributions (session TEXT PRIMARY KEY, from_session TEXT NOT NULL,
       agent TEXT, at INTEGER NOT NULL, digest TEXT NOT NULL)`);
+    // Added later: who wrote an opening that no session wrote.
+    if (!(d.query("PRAGMA table_info(opening_attributions)").all() as { name: string }[]).some((c) => c.name === "via"))
+      d.exec("ALTER TABLE opening_attributions ADD COLUMN via TEXT");
     ready.add(d);
   }
   return d;
@@ -62,13 +65,20 @@ export function recordSend(r: { to: string; from: string | null; verified: boole
   return id;
 }
 
-/** Record who wrote a new session's opening prompt, before the session starts:
- *  only a session authenticated by its capability. */
-export function recordOpening(r: { session: string; from: string; agent: string | null; prompt: string }, now = Date.now()): void {
-  db().run("INSERT OR REPLACE INTO opening_attributions(session,from_session,agent,at,digest) VALUES (?,?,?,?,?)", [r.session, r.from, r.agent, now, digest(r.prompt)]);
+/** Who wrote an opening: a session authenticated by its capability (and its
+ *  registered agent), or agentbox itself (`via`), for what it starts on its
+ *  own: a schedule's run, an agent's reviewers. */
+export type Opener = { from: string; agent: string | null } | { via: "agentbox" | "a schedule" };
+
+/** Record who wrote a new session's opening prompt, before the session starts. */
+export function recordOpening(r: { session: string; opener: Opener; prompt: string }, now = Date.now()): void {
+  const o = r.opener;
+  db().run("INSERT OR REPLACE INTO opening_attributions(session,from_session,agent,at,digest,via) VALUES (?,?,?,?,?,?)", [
+    r.session, "from" in o ? o.from : "", "from" in o ? o.agent : null, now, digest(r.prompt), "via" in o ? o.via : null,
+  ]);
 }
 
-type Opening = { from_session: string; agent: string | null; at: number; digest: string };
+type Opening = { from_session: string; agent: string | null; at: number; digest: string; via: "agentbox" | "a schedule" | null };
 
 type Row = { id: string; to_session: string; from_session: string | null; verified: number; agent: string | null; at: number; digest: string };
 
@@ -81,7 +91,7 @@ function sessionLabel(id: string): string {
 /** What is known of who opened `session`: its recorded opener, and its
  *  start when another session started it. Null when neither applies. */
 function openingOf(session: string): { row: Opening | null; rec: { startedAt: number } | null } | null {
-  const row = (db().query("SELECT from_session,agent,at,digest FROM opening_attributions WHERE session = ?").get(session) as Opening | null) ?? null;
+  const row = (db().query("SELECT from_session,agent,at,digest,via FROM opening_attributions WHERE session = ?").get(session) as Opening | null) ?? null;
   const r = getSessionRecord(session);
   const rec = r && (row || (r.parent && !r.parentByHand)) ? { startedAt: r.startedAt } : null;
   return row || rec ? { row, rec } : null;
@@ -105,7 +115,11 @@ export function attribute<T extends TimelineEvent>(session: string, events: T[],
       const { row, rec } = opener;
       if (row && row.digest === digest(sent.text) && e.at >= row.at - 5_000 && e.at - row.at <= OPENING_MS) {
         const agent = row.agent ? dir.agent(row.agent) : null;
-        sender = agent
+        sender = row.via === "a schedule"
+          ? { kind: "schedule", label: "A schedule", session: null, opening: true }
+          : row.via
+          ? { kind: "system", label: "agentbox", session: null, opening: true }
+          : agent
           ? { kind: "agent", label: agent.name, session: row.from_session, agent, opening: true }
           : { kind: "session", label: sessionLabel(row.from_session), session: row.from_session, opening: true };
       } else if (rec && e.at >= rec.startedAt - 5_000 && e.at - rec.startedAt <= OPENING_MS) {
