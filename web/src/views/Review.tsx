@@ -158,9 +158,7 @@ export function Review({ state }: { state: AppState }) {
     const onKey = (e: KeyboardEvent) => {
       if (answering || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      // Review's own keys: not from the sidebar or a pane outside it. A card
-      // that leaves takes the focus with it, to the page or the body.
-      if (!el || !(el === document.body || el.id === "content" || el.closest(".review"))) return;
+      if (!el?.closest(".review")) return;
       if (e.key.startsWith("Arrow") && !e.shiftKey) return;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
       const card = reading ?? (tab === "stack" ? shownTop : null);
