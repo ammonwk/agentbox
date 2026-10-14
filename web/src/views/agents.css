@@ -405,7 +405,7 @@
   padding: 28px 12px;
 }
 .agent-conversation-width {
-  max-width: 780px;
+  max-width: 920px;
   width: 100%;
   margin: 0 auto;
 }
@@ -415,31 +415,6 @@
 }
 .agent-composer {
   position: relative;
-}
-.agent-composer form {
-  display: flex;
-  gap: 12px;
-  align-items: flex-end;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 12px;
-  background: var(--surface);
-}
-.agent-composer textarea {
-  flex: 1;
-  resize: none;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  min-height: 56px;
-  max-height: 200px;
-}
-.agent-composer textarea:focus {
-  outline: none;
-  box-shadow: none;
-}
-.agent-composer form:focus-within {
-  outline: 1px solid var(--accent);
 }
 .agent-chat-empty {
   padding: 60px 0;

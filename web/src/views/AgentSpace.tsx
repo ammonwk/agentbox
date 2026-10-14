@@ -33,6 +33,7 @@ import { Button, Empty } from "../components";
 import { useLoad } from "../lib/cloud";
 import { AgentComposer } from "./session/Composer";
 import { AgentConversationEvents, type ChatEcho } from "./session/Timeline";
+import { followsAfterScroll, onChatSubmitted, followChatSize } from "./session/scroll";
 import { AgentAvatar, AgentPictureEditor, localAvatarUrl } from "./AgentAvatar";
 import { Markdown } from "./session/Markdown";
 import "./session/session.css";
@@ -404,10 +405,16 @@ function AgentSpace({
   useEffect(() => { generation.current++; }, [target, tab, transport]);
   const creations = useLoad(transport.creations, [transport]);
   const feed = useLoad(transport.proposals, [transport]),
-    bottom = useRef<HTMLDivElement>(null),
     scroller = useRef<HTMLDivElement>(null),
     pinned = useRef(true);
+  const [submitted, setSubmitted] = useState(0);
+  const scrolledSubmission = useRef(0);
   useEffect(() => {
+    const el = scroller.current;
+    if (el) return followChatSize(el, () => pinned.current);
+  }, [tab, target]);
+  useEffect(() => {
+    pinned.current = true;
     setEvents([]); setNext(null); setReady(false); setError(null);
     let live = true;
     const controller = new AbortController();
@@ -454,16 +461,23 @@ function AgentSpace({
     const t = setInterval(() => { void feed.reload(); void creations.reload(); }, 5000);
     return () => clearInterval(t);
   }, [feed.reload]);
-  useEffect(() => {
-    if (pinned.current) bottom.current?.scrollIntoView({ block: "end" });
-  }, [events.length, tab]);
+  useEffect(() => onChatSubmitted(`agent:${id}:${target}`, () => {
+    anchor.current = null;
+    setSubmitted((n) => n + 1);
+  }), [id, target]);
   // Older pages go above what is shown: keep the reader's place.
   const lastTop = useRef(0), anchor = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && anchor.current !== null) el.scrollTop = el.scrollHeight - anchor.current;
+    if (el) {
+      if (scrolledSubmission.current !== submitted) pinned.current = true;
+      if (pinned.current) el.scrollTop = el.scrollHeight;
+      else if (anchor.current !== null) el.scrollTop = el.scrollHeight - anchor.current;
+      scrolledSubmission.current = submitted;
+      lastTop.current = el.scrollTop;
+    }
     anchor.current = null;
-  }, [events]);
+  }, [events, echoes, tab, feed.data, creations.data, submitted]);
   const loadEarlier = () => {
     if (!next || reading) return;
     setReading(true);
@@ -472,7 +486,7 @@ function AgentSpace({
       .read(next)
       .then((page) => {
         if (mine !== generation.current) return;
-        if (el) anchor.current = el.scrollHeight - el.scrollTop;
+        if (el && !pinned.current) anchor.current = el.scrollHeight - el.scrollTop;
         setEvents((old) => {
           const m = new Map(old.map((e) => [e.id, e]));
           page.events.forEach((e) => m.set(e.id, e));
@@ -663,7 +677,7 @@ function AgentSpace({
             onScroll={() => {
               const el = scroller.current;
               if (!el) return;
-              pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+              pinned.current = followsAfterScroll(el, pinned.current, lastTop.current);
               // Scrolled up to the top: the next page loads by itself.
               if (el.scrollTop < 200 && el.scrollTop < lastTop.current) loadEarlier();
               lastTop.current = el.scrollTop;
@@ -688,7 +702,6 @@ function AgentSpace({
               <AgentConversationEvents
                 events={events}
                 me={me}
-                agent={{ name, avatar: <AgentAvatar role={identity.role} creator={identity.creator} src={identity.avatar} /> }}
                 echoes={echoes.filter((x) => (x.thread === target || (x.thread === "new" && target === ongoing)) && !events.some((e) => e.kind === "user" && e.at >= x.at - 60_000 && e.text.includes(x.text.trim())))}
               />
               {creations.data?.filter((d) => d.run === selected?.run).map((d) => <AgentCreationCard key={`${d.id}:${d.revision}:${d.created}`} draft={d} scope={options.find((a) => a.id === id)?.detail ?? "Current project"} edit={transport.editCreation} reload={creations.reload} />)}
@@ -698,7 +711,6 @@ function AgentSpace({
                   {error}
                 </p>
               )}
-              <div ref={bottom} />
             </div>
           </div>
           <div className="agent-conversation-width agent-compose-wrap">

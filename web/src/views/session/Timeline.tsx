@@ -8,7 +8,7 @@ import { field, type SendCall } from "../../lib/sendtool";
 import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
 import { Markdown } from "./Markdown";
 import { AskRow, QuestionCard } from "./Question";
-import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
+import { anchoredScrollTop, isAtTop, followsAfterScroll, shouldAutoScroll, onChatSubmitted, followChatSize } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { MessageRail, useTurns } from "./MessageRail";
 import { takeJump } from "./jump";
@@ -141,7 +141,7 @@ export function Timeline({ session }: { session: Session }) {
     if (!el || events.length === 0) return;
     const p = prev.current;
     const firstId = events[0].id;
-    if (!p.initial && p.firstId && firstId !== p.firstId && events.length > p.count) {
+    if (!pinned && !p.initial && p.firstId && firstId !== p.firstId && events.length > p.count) {
       // Older history landed above the reader: hold their place.
       el.scrollTop = anchoredScrollTop(p, el);
     } else if (shouldAutoScroll({ wasPinned: pinned, grew: events.length >= p.count, initial: p.initial })) {
@@ -154,6 +154,11 @@ export function Timeline({ session }: { session: Session }) {
   // one): show it from its top, which a card taller than the view would
   // otherwise have scrolled past.
   const question = session.question;
+  const hasEvents = events.length > 0;
+  useEffect(() => {
+    const el = boxRef.current;
+    if (el) return followChatSize(el, () => pinned && !question);
+  }, [ready, hasEvents, pinned, question]);
   useLayoutEffect(() => {
     const el = boxRef.current;
     const card = el?.querySelector<HTMLElement>(".ask-live");
@@ -252,6 +257,11 @@ export function Timeline({ session }: { session: Session }) {
     setPinned(true);
   };
 
+  useEffect(() => onChatSubmitted(session.id, () => {
+    setJump(null);
+    toLatest();
+  }), [session.id]);
+
   const step = (dir: -1 | 1) => {
     const box = boxRef.current;
     if (!box) return;
@@ -278,9 +288,9 @@ export function Timeline({ session }: { session: Session }) {
   const onScroll = () => {
     const el = boxRef.current;
     if (!el) return;
+    const nowPinned = followsAfterScroll(el, pinned, prev.current.scrollTop);
     prev.current.scrollTop = el.scrollTop;
     prev.current.scrollHeight = el.scrollHeight;
-    const nowPinned = isPinnedToBottom(el);
     if (nowPinned !== pinned) setPinned(nowPinned);
     // A screenful from the top, so the next page is in before you reach it.
     if (isAtTop(el, el.clientHeight) && !exhausted && !loadingOlder && !error) loadOlder();
@@ -1213,7 +1223,6 @@ function Field({ f }: { f: InputField }) {
  *  wrote a message passes none, so no one else's message wears your picture. */
 export type ChatSides = {
   me?: { name: string; github: string };
-  agent?: { name: string; avatar: React.ReactNode };
 };
 /** Sent from here and not yet in the transcript. */
 export type ChatEcho = { id: string; text: string; at: number; note: string };
@@ -1222,19 +1231,14 @@ export type ChatEcho = { id: string; text: string; at: number; note: string };
  *  summary (`ChatEvent` in src/cloud/agent-conversation.ts). */
 type Carried = { source?: string; carried?: { handoff: string; at: number; oldest: boolean } };
 
-export function AgentConversationEvents({ events, me, agent, echoes = [] }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[] } & ChatSides) {
+export function AgentConversationEvents({ events, me, echoes = [] }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[] } & ChatSides) {
   const shown = events.filter((e): e is Extract<TimelineEvent, { kind: "user" | "assistant" }> & Carried => e.kind === "user" || e.kind === "assistant");
   return (
     <Me.Provider value={me ?? NOBODY}>
       <div className="tl-stream">
         {shown.map((e, i) => {
           const prev = shown[i - 1];
-          const row =
-            e.kind === "assistant" && agent ? (
-              <AgentReply key={e.id} ev={e} agent={agent} first={prev?.kind !== "assistant" || prev.source !== e.source} />
-            ) : (
-              <EventRow key={e.id} ev={e} />
-            );
+          const row = <EventRow key={e.id} ev={e} />;
           // Where one conversation ends and the next begins, say which was carried how.
           const divider =
             prev?.source !== e.source ? (
@@ -1264,21 +1268,3 @@ export function AgentConversationEvents({ events, me, agent, echoes = [] }: { ev
   );
 }
 const NOBODY = { name: "", github: "" };
-
-/** An agent's reply: its picture and name, then the reply in a card on the
- *  left, weighted like your bubble on the right. A run of replies shows the
- *  picture and name once. */
-function AgentReply({ ev, agent, first }: { ev: Extract<TimelineEvent, { kind: "assistant" }>; agent: NonNullable<ChatSides["agent"]>; first: boolean }) {
-  return (
-    <div className={`tl-agent${first ? "" : " tl-agent-more"}`} data-ev={ev.id}>
-      <div className="tl-agent-face">{first ? agent.avatar : null}</div>
-      <div className="tl-agent-body">
-        {first && <div className="tl-agent-name">{agent.name}</div>}
-        <div className="tl-agent-card">
-          <AssistantRow ev={ev} />
-        </div>
-        <time className="tl-agent-time" dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>
-      </div>
-    </div>
-  );
-}

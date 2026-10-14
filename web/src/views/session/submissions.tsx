@@ -5,6 +5,7 @@ import { Button } from "../../components";
 import { dropPasteTags } from "../../../../src/core/sent";
 import { beginSend, draftSnapshot, forgetPending, onDraftWork, pendingSends, uniqueSubmission, updatePending, type PendingSend } from "./drafts";
 import { echoSent } from "./echo";
+import { chatSubmitted } from "./scroll";
 
 const active = new Set<string>();
 
@@ -12,6 +13,7 @@ export async function deliverPending(p: PendingSend): Promise<void> {
   active.add(p.id);
   try {
     await beginSend(p);
+    chatSubmitted(p.sessionId);
     try {
       const receipt = await api.submit(p.sessionId, p.id, p.kind, p.body);
       if (receipt.state === "sent") {

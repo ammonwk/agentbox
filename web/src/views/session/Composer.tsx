@@ -14,6 +14,8 @@ import "../newsession.css";
 import { useAction } from "./useAction";
 import { useVoiceNote, voiceNotes } from "./voicenote";
 import { accountProvider } from "../../../../src/core/providers/account";
+import { ComposerInput, ComposerSend } from "./ComposerInput";
+import { chatSubmitted } from "./scroll";
 
 /** What the composer can do for a session, and the sentence that says so. */
 export type ComposerMode =
@@ -92,14 +94,6 @@ export function Composer({ session, accounts, skills, textareaRef }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [interruptible, session.id, run]);
-
-  // Grow with the text up to a cap, then scroll.
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(200, el.scrollHeight + 2)}px`;
-  }, [text]);
 
   // Remember the draft as it changes; sending empties the box, which deletes it.
   const savedImages = images.saved();
@@ -269,10 +263,10 @@ export function Composer({ session, accounts, skills, textareaRef }: {
             images go under the text, inside the box. */}
         <AttachFrame a={images} className="cmp-frame">
         <AttachButton a={images} className="cmp-attach" />
-        <textarea
+        <ComposerInput
           id={`cmp-${session.id}`}
-          ref={ref}
-          rows={1}
+          textareaRef={ref}
+          onSend={() => void submit()}
           value={text}
           placeholder={placeholder}
           enterKeyHint="send"
@@ -283,11 +277,8 @@ export function Composer({ session, accounts, skills, textareaRef }: {
             skill.onEdit(e.target);
           }}
           onKeyDown={(e) => {
-            if (skill.onKeyDown(e) || images.onKeyDown(e)) return;
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void submit();
-            } else if (e.key === "Escape") {
+            if (skill.onKeyDown(e) || images.onKeyDown(e)) { e.preventDefault(); return; }
+            if (e.key === "Escape") {
               // Mid-turn Esc stops the turn, as it does in the terminal; at rest it leaves the box.
               if (interruptible) {
                 e.preventDefault();
@@ -328,7 +319,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
               ) : null}
               <span className="cmp-go-wrap">
                 {voice.above}
-                <Button
+                <ComposerSend
                   className="cmp-go"
                   variant="ghost"
                   icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.send}
@@ -351,11 +342,12 @@ export function Composer({ session, accounts, skills, textareaRef }: {
           ) : (
             <span className="cmp-go-wrap">
               {voice.above}
-              <Button
+              <ComposerSend
                 className="cmp-go"
                 variant="ghost"
                 icon={voice.phase === "locked" ? Icon.check : voice.phase === "held" ? Icon.mic : text.trim() ? Icon.send : Icon.play}
                 loading={busy}
+                title={text.trim() ? "Resume with prompt" : "Resume"}
                 aria-label={voice.phase === "locked" ? "Finish the recording" : text.trim() ? "Resume with prompt" : "Resume"}
                 data-ready
                 data-rec={recording ? voice.phase : undefined}
@@ -366,7 +358,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
                 }}
               >
                 <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
-              </Button>
+              </ComposerSend>
             </span>
           )}
         </div>
@@ -652,6 +644,7 @@ export function AgentComposer({
     };
     try {
       await beginSend(p);
+      chatSubmitted(key);
       context.current = undefined;
       revision.current = newRevision();
       setText("");
@@ -709,40 +702,32 @@ export function AgentComposer({
           {error}
         </p>
       )}
-      <form
+      <form className="cmp-row"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
       >
-        <textarea
-          ref={ref}
-          className="input"
-          aria-label={`Message ${name}`}
-          placeholder={`Message ${name}…`}
-          value={text}
-          rows={2}
-          disabled={disabled}
-          onChange={(e) => edit(e.target.value)}
-          onKeyDown={(e) => {
-            if (
-              e.key === "Enter" &&
-              !e.shiftKey &&
-              !e.nativeEvent.isComposing
-            ) {
-              e.preventDefault();
-              void submit();
-            }
-          }}
-        />
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={!text.trim() || disabled}
-          loading={busy}
-        >
-          Send
-        </Button>
+        <div className="att-frame cmp-frame">
+          <ComposerInput
+            textareaRef={ref}
+            onSend={() => void submit()}
+            aria-label={`Message ${name}`}
+            placeholder={`Message ${name}…`}
+            value={text}
+            disabled={disabled}
+            onChange={(e) => edit(e.target.value)}
+          />
+          <div className="cmp-tools">
+            <ComposerSend
+              type="submit"
+              aria-label="Send"
+              disabled={!text.trim() || disabled}
+              loading={busy}
+              data-ready={text.trim() ? true : undefined}
+            />
+          </div>
+        </div>
       </form>
     </div>
   );

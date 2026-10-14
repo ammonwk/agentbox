@@ -1381,80 +1381,6 @@ a.tl-sender:hover .tl-sender-name {
     padding-right: 2px;
   }
 }
-/* An agent's reply in its chat: its picture and name on the left, the reply
- * in a card as weighty as your bubble, so the two sides read apart. */
-.tl-agent {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin: 10px 0 4px;
-}
-.tl-agent-more {
-  margin-top: 2px;
-}
-.tl-agent-face {
-  flex: none;
-  width: 34px;
-}
-.tl-agent-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  max-width: min(86%, 760px);
-}
-.tl-agent-name {
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--muted);
-}
-.tl-agent-card {
-  min-width: 0;
-  padding: 9px 15px;
-  border: 1px solid var(--border);
-  border-radius: 6px 18px 18px 18px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-.tl-agent-card .tl-assistant {
-  padding: 0;
-}
-.tl-agent-card .sx-md > :first-child {
-  margin-top: 0;
-}
-.tl-agent-card .sx-md > :last-child {
-  margin-bottom: 0;
-}
-.tl-agent-card pre {
-  max-width: 100%;
-  overflow-x: auto;
-}
-.tl-agent-card img {
-  max-width: 100%;
-}
-.tl-agent-time {
-  font-size: 11px;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-@media (max-width: 640px) {
-  .tl-agent {
-    gap: 8px;
-  }
-  .tl-agent-face {
-    width: 26px;
-  }
-  .tl-agent-face .agent-avatar {
-    width: 26px !important;
-    height: 26px !important;
-  }
-  .tl-agent-body {
-    max-width: calc(100% - 34px);
-  }
-}
 /* Long content cut to its first lines; the rest on a click. */
 .tl-clamp-body.is-clamped {
   max-height: calc(var(--lines) * 1.55em + 0.4em);
@@ -3599,11 +3525,10 @@ a.wk-item:hover {
 /* Agent chat history carried only as a summary: both sides muted, the
  * pictures and links still readable; a divider says where each began. */
 .tl-carried .tl-bubble,
-.tl-carried .tl-agent-card {
+.tl-carried .tl-assistant {
   opacity: 0.62;
 }
-.tl-carried .tl-me-foot,
-.tl-carried .tl-agent-time {
+.tl-carried .tl-me-foot {
   opacity: 0.75;
 }
 .tl-carried-divider {
