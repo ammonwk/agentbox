@@ -23,7 +23,7 @@ export async function view(ctx: Ctx, tab: string | null): Promise<SuperagentView
 }
 
 function status(w: Work): { status: "ok" | "warn" | "bad" | "busy" | "idle"; stage: string } {
-  if (w.stoppedAt) return { status: "bad", stage: "stopped: authority gone" };
+  if (w.stoppedAt) return { status: "bad", stage: `stopped ${when(w.stoppedAt)}` };
   if (w.state === "quality_failed") return { status: "bad", stage: `quality failed${w.failure?.issue ? ", improvement issue filed" : ""}` };
   if (w.state === "starting") return { status: "busy", stage: "starting the writer" };
   if (w.state === "uncertain") return { status: "warn", stage: "start uncertain: retry start" };

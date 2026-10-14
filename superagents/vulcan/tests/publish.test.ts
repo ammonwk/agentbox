@@ -85,8 +85,8 @@ test("a publication pushes, requests, claims the PR for the writer and arms its 
   expect(w.gh.pulls[0]).toMatchObject({ title: "[Vulcan · Ada Lovelace] Fix the export", head: { ref: work.branch }, base: { ref: "main" } });
   expect(out.state).toBe("sent");
   expect(out.number).toBe(1);
-  expect(out.owner).toBe(work.session);
-  expect(w.box.claims.get(`${REPO}#1`)).toBe(work.session);
+  expect(out.owner).toBe(work.session!);
+  expect(w.box.claims.get(`${REPO}#1`)).toBe(work.session!);
   const full = w.box.waits.find((x) => x.id === out.wait)!;
   expect(full.spec).toMatchObject({ kind: "pr", repo: REPO, number: 1, head: HEAD1, all: true, checks: ["build"] });
   // Main has no feedback wait yet: the one armed became a plain check wait and was cancelled, and the family says so.

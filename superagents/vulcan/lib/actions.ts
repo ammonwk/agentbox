@@ -8,7 +8,6 @@ import { createGrant, enforceAuthority, revokeGrant, sessionsOf } from "./grants
 import { failure, milestone } from "./outcomes";
 import { followPublication, publish, reconcile } from "./publish";
 import { collect, retryReview, review } from "./reviews";
-import type { Work } from "./types";
 import { retryStart, startWork } from "./work";
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
@@ -26,9 +25,6 @@ function person(caller: Caller): void {
 
 /** Who a work action is for: the session calling, or the family's requester when a person acts from the page. */
 const operator = (ctx: Ctx, id: string, caller: Caller): string | null => caller.session ?? (caller.via === "app" ? ctx.store.work(id).grant.requester : null);
-
-/** A family as the API shows it: everything but the prompts, which live in the transcripts. */
-export const shown = (w: Work) => w;
 
 export async function action(ctx: Ctx, req: ActionRequest): Promise<ActionReply> {
   const { caller, values } = req;
@@ -59,11 +55,11 @@ export async function action(ctx: Ctx, req: ActionRequest): Promise<ActionReply>
       return { message: `Grant ${g.id} revoked${stopped.length ? `; stopped ${stopped.join(", ")}` : ""}.`, grant: g, stopped };
     }
     case "work-start":
-      return { work: shown(await startWork(ctx, caller.session, values)) };
+      return { work: await startWork(ctx, caller.session, values) };
     case "work-retry-start": {
       const { id } = needId(values);
       const w = await retryStart(ctx, id, operator(ctx, id, caller));
-      return { message: `Family ${id.slice(0, 8)} is ${w.state}${w.session ? `, writer ${w.session}` : ""}.`, work: shown(w) };
+      return { message: `Family ${id.slice(0, 8)} is ${w.state}${w.session ? `, writer ${w.session}` : ""}.`, work: w };
     }
     case "work-stop": {
       person(caller);
@@ -83,9 +79,9 @@ export async function action(ctx: Ctx, req: ActionRequest): Promise<ActionReply>
     }
     case "work":
     case "work-list":
-      return { works: ctx.store.works().map(shown) };
+      return { works: ctx.store.works() };
     case "work-get":
-      return { work: shown(ctx.store.work(needId(values).id)) };
+      return { work: ctx.store.work(needId(values).id) };
     case "review": {
       const { id, rest } = needId(values);
       return { round: await review(ctx, id, caller.session, rest) };

@@ -108,5 +108,5 @@ test("verdicts come from the reviewers' own transcripts and nowhere else, and ne
   expect(c.reviewers[0]!.verdict?.verdict).toBe("changes");
   // Only reviewer transcripts were ever asked for; the writer's was not read.
   expect(w.box.timelineReads).not.toContain(work.session);
-  expect(new Set(w.box.timelineReads)).toEqual(new Set(r.reviewers.map((x) => x.session)));
+  expect(new Set(w.box.timelineReads)).toEqual(new Set(r.reviewers.map((x) => x.session!)));
 });
