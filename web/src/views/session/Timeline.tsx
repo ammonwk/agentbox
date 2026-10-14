@@ -1,6 +1,7 @@
 import { chatTimestamps, recommendationReply, type ReplyRecommendation } from "./chatPresentation";
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
+import type { ChatPresence } from "../../../../src/cloud/agent-conversation";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
@@ -506,10 +507,10 @@ function useNow(active: boolean): number {
 }
 
 type ChatAgent = { name: string; role: string; creator: boolean; avatar: string | null };
-const EventRow = memo(function EventRow({ ev, dur, agent, showTime, recommendations = [] }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent; showTime?: boolean; recommendations?: readonly ReplyRecommendation[] }) {
+const EventRow = memo(function EventRow({ ev, dur, agent, showTime, recommendations = [], delivery }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent; showTime?: boolean; recommendations?: readonly ReplyRecommendation[]; delivery?: "Sent" | "Read" }) {
   switch (ev.kind) {
     case "user":
-      return <UserRow ev={ev} showTime={showTime} recommendations={recommendations} />;
+      return <UserRow ev={ev} showTime={showTime} recommendations={recommendations} delivery={delivery} />;
     case "assistant":
       return <AssistantRow ev={ev} agent={agent} showTime={showTime} />;
     case "thinking":
@@ -532,7 +533,7 @@ const EventRow = memo(function EventRow({ ev, dur, agent, showTime, recommendati
  * "agentbox", that opens on a click to who sent it (linked) and all of it.
  * Pastes are shown as pastes: Claude records one wrapped in `<pasted_content>`.
  */
-function UserRow({ ev, queued, showTime = true, recommendations = [] }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean; showTime?: boolean; recommendations?: readonly ReplyRecommendation[] }) {
+function UserRow({ ev, queued, showTime = true, recommendations = [], delivery }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean; showTime?: boolean; recommendations?: readonly ReplyRecommendation[]; delivery?: "Sent" | "Read" }) {
   const sent = useMemo(() => readSent(ev.text), [ev.text]);
   const reply = recommendationReply(sent.text, recommendations);
   const displayText = reply?.body ?? sent.text;
@@ -551,7 +552,8 @@ function UserRow({ ev, queued, showTime = true, recommendations = [] }: { ev: Ex
   if (!sent.agent) {
     const images = ev.images ? `${ev.images} image${ev.images === 1 ? "" : "s"}` : null;
     return (
-      <Bubble id={ev.id} at={ev.at} showTime={showTime} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : null].filter(Boolean).join(" · ")} copy={sent.text}>
+      <Bubble id={ev.id} at={ev.at} showTime={showTime} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : delivery ?? null].filter(Boolean).join(" · ")}
+        title={delivery === "Read" ? "The agent has started on this message" : delivery === "Sent" ? "Delivered; the agent has not started on it yet" : undefined} copy={sent.text}>
         {reply && <div className="tl-reply-preview" aria-label="Reply to recommendation">
           <span className="faint">Replied to</span>
           <strong>{reply.title}</strong>
@@ -1307,7 +1309,10 @@ export type ChatEcho = { id: string; text: string; at: number; note: string };
  *  summary (`ChatEvent` in src/cloud/agent-conversation.ts). */
 type Carried = { source?: string; carried?: { handoff: string; at: number; oldest: boolean } };
 
-export function AgentConversationEvents({ events, me, agent, echoes = [], recommendations = [] }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[]; recommendations?: readonly ReplyRecommendation[] } & ChatSides) {
+/** Agent chat, with what the transcript and session say now (`ChatPresence`):
+ *  Sent or Read under the person's newest message, and the agent typing
+ *  while a turn shown here is open. */
+export function AgentConversationEvents({ events, me, agent, echoes = [], recommendations = [], presence }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[]; recommendations?: readonly ReplyRecommendation[]; presence?: ChatPresence | null } & ChatSides) {
   const shown = events.filter((e): e is Extract<TimelineEvent, { kind: "user" | "assistant" }> & Carried => e.kind === "user" || e.kind === "assistant");
   const times = chatTimestamps([...shown, ...echoes]);
   return (
@@ -1315,7 +1320,8 @@ export function AgentConversationEvents({ events, me, agent, echoes = [], recomm
       <div className="tl-stream">
         {shown.map((e, i) => {
           const prev = shown[i - 1];
-          const row = <EventRow key={e.id} ev={e} agent={agent} showTime={times.has(e.id)} recommendations={recommendations} />;
+          const row = <EventRow key={e.id} ev={e} agent={agent} showTime={times.has(e.id)} recommendations={recommendations}
+            delivery={presence && e.id === presence.message ? (presence.read ? "Read" : "Sent") : undefined} />;
           // Where one conversation ends and the next begins, say which was carried how.
           const divider =
             prev?.source !== e.source ? (
@@ -1340,6 +1346,16 @@ export function AgentConversationEvents({ events, me, agent, echoes = [], recomm
             <Markdown text={e.text} />
           </Bubble>
         ))}
+        {presence?.working && (
+          <div className="tl-agent-reply tl-typing" role="status" aria-label={`${agent?.name ?? "The agent"} is working`}>
+            <div className="tl-agent-row">
+              {agent && <AgentAvatar role={agent.role} creator={agent.creator} src={agent.avatar} />}
+              <div className="tl-bubble tl-agent-bubble" title="Its turn is open: it is working">
+                <span className="tl-typing-dots" aria-hidden="true"><i /><i /><i /></span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Me.Provider>
   );

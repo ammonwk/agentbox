@@ -85,6 +85,12 @@ export type AgentThread = {
   canRestore?: boolean;
   active: boolean; writable: boolean; successor: string | null;
 };
+/** What the viewed conversation's transcript and session say now, on its
+ *  newest page only (`presenceOf`, src/core/agents/conversation.ts):
+ *  `message` is the newest message a person sent, `read` whether the agent
+ *  has written anything after it, `working` whether a turn shown in Chat is
+ *  open, and `queued` what it holds until its current step yields (claude). */
+export type ChatPresence = { message: string | null; read: boolean; working: boolean; queued: string[] };
 export type ConversationPage = {
   threads?: AgentThread[];
   counts?: { active: number; inactive: number };
@@ -94,6 +100,7 @@ export type ConversationPage = {
   next: ReadCursor | null;
   session: string | null;
   status: string;
+  presence?: ChatPresence;
   error?: string;
 };
 const encode = (b: ArrayBuffer | Uint8Array) =>

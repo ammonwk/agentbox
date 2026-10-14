@@ -1395,6 +1395,19 @@ a.tl-sender:hover .tl-sender-name {
 .tl-agent-bubble .tl-assistant { padding: 0; margin: 0; }
 .tl-agent-foot { display: flex; align-items: center; gap: 10px; padding: 5px 0 0 44px; color: var(--faint); font-size: 12px; }
 .tl-agent-reply:hover .tl-me-copy { opacity: 1; }
+/* The agent's turn is open: three dots where its reply will come. */
+.tl-typing .tl-agent-bubble { padding: 10px 14px; }
+.tl-typing-dots { display: inline-flex; gap: 4px; align-items: center; height: 14px; }
+.tl-typing-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: tl-typing 1.2s infinite ease-in-out; }
+.tl-typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.tl-typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes tl-typing {
+  0%, 60%, 100% { opacity: 0.3; transform: none; }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tl-typing-dots i { animation: none; opacity: 0.6; }
+}
 @media (max-width: 640px) {
   .agent-chat-scroll .tl-avatar { display: grid; }
   .agent-chat-scroll .tl-me-foot { padding-right: 44px; }

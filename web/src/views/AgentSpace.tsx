@@ -14,6 +14,7 @@ import {
   type ReadCursor,
   type AgentThread,
   type ChatEvent,
+  type ChatPresence,
 } from "../../../src/cloud/agent-conversation";
 import type { HumanAgents } from "../../../src/cloud/agent-client";
 import {
@@ -453,7 +454,8 @@ function AgentSpace({
       proposal: Proposal;
     } | null>(null),
     [busy, setBusy] = useState(false),
-    [echoes, setEchoes] = useState<(ChatEcho & { thread: string })[]>([]);
+    [echoes, setEchoes] = useState<(ChatEcho & { thread: string })[]>([]),
+    [presence, setPresence] = useState<ChatPresence | null>(null);
   const generation = useRef(0);
   useEffect(() => { generation.current++; }, [target, tab, transport]);
   const creations = useLoad(transport.creations, [transport]);
@@ -468,7 +470,7 @@ function AgentSpace({
   }, [tab, target]);
   useEffect(() => {
     pinned.current = true;
-    setEvents([]); setNext(null); setReady(false); setError(null);
+    setEvents([]); setNext(null); setReady(false); setError(null); setPresence(null);
     let live = true;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -489,6 +491,7 @@ function AgentSpace({
             return [...m.values()].sort((a, b) => a.at - b.at);
           });
           setNext((old) => old ?? page.next);
+          setPresence(page.presence ?? null);
           if (page.thread) setThreads((old) => old.some((t) => t.id === page.thread!.id) ? old.map((t) => t.id === page.thread!.id ? page.thread! : t) : [...old, page.thread!]);
           setError(page.error ?? null);
           setReady(true);
@@ -496,6 +499,7 @@ function AgentSpace({
       } catch (e) {
         if (live) {
           setError((e as Error).message);
+          setPresence(null);
           setReady(true);
         }
       } finally {
@@ -776,7 +780,10 @@ function AgentSpace({
                 events={events}
                 me={me}
                 agent={{ ...identity, name }}
-                echoes={echoes.filter((x) => (x.thread === target || (x.thread === "new" && target === ongoing)) && !events.some((e) => e.kind === "user" && e.at >= x.at - 60_000 && e.text.includes(x.text.trim())))}
+                presence={presence}
+                echoes={echoes.filter((x) => (x.thread === target || (x.thread === "new" && target === ongoing)) && !events.some((e) => e.kind === "user" && e.at >= x.at - 60_000 && e.text.includes(x.text.trim())))
+                  // Delivered mid-turn and held by the agent: its queue says so, not a guess.
+                  .map((x) => x.note === "Sent" && presence?.queued.some((q) => q.includes(x.text.trim())) ? { ...x, note: "Queued" } : x)}
               />
               {creations.data?.filter((d) => d.run === selected?.run).map((d) => <AgentCreationCard key={`${d.id}:${d.revision}:${d.created}`} draft={d} scope={options.find((a) => a.id === id)?.detail ?? "Current project"} edit={transport.editCreation} reload={creations.reload} />)}
               {open.filter((p) => p.run_id === selected?.run).slice(0, 4).map(card)}

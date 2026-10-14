@@ -13,6 +13,7 @@ import {
   sealPage,
   type ConversationPage,
   type AgentThread,
+  type ChatPresence,
 } from "../../cloud/agent-conversation";
 import { AGENT_TEMPLATES } from "../../cloud/agents";
 import { FleetError, newSessionId } from "../fleet";
@@ -27,6 +28,7 @@ import { attribute, type RegisteredAgent, type SenderDirectory } from "../sender
 import { moveCards } from "../cards";
 import { movePrClaims, unfinishedClaims } from "../prclaims";
 import { isKeepWarmNote } from "../cache";
+import { readSent } from "../sent";
 import { describe as describeWait } from "../waits";
 
 export type LocalAgent = {
@@ -105,6 +107,30 @@ export type Keeper = {
   update(change: (c: Checkpoint | undefined) => Checkpoint | undefined): void;
 };
 const SAFE_EVENT = new Set(["user", "assistant"]);
+/** A prompt Chat never shows: the fleet's handoff request, or a shared run's bootstrap. */
+const hiddenPrompt = (text: string) =>
+  text.includes(CHECKPOINT_MARK) || /^You are [^\n]+, a shared Agentbox agent\. Run [a-f0-9-]{36}; work /.test(text);
+/** Transcript records that only the agent writes while it takes in what it was sent. */
+const ACTING = new Set(["assistant", "thinking", "tool"]);
+/** Delivery and work facts of a conversation's newest page, in transcript
+ *  order (a message queued mid-turn is recorded where the agent took it, not
+ *  at its own timestamp). A person's newest message is read once the agent
+ *  has written anything after it; never by time or by an unrelated turn. */
+export function presenceOf(events: readonly TimelineEvent[], status: string, queued: readonly { text: string }[]): ChatPresence {
+  let message: string | null = null, read = false, turn: string | null = null;
+  for (const e of events) {
+    if (e.kind === "user") {
+      turn = e.text;
+      if (!hiddenPrompt(e.text) && !readSent(e.text).agent) { message = e.id; read = false; }
+    } else if (ACTING.has(e.kind)) read = true;
+  }
+  // A turn the fleet started for itself (a handoff request, a keep-warm) is not shown as work.
+  const working = status === "running" && !(turn !== null && (hiddenPrompt(turn) || isKeepWarmNote(turn)));
+  return {
+    message, read: message !== null && read, working,
+    queued: queued.filter((q) => !hiddenPrompt(q.text) && !readSent(q.text).agent).map((q) => safeText(q.text).slice(0, 10000)),
+  };
+}
 const safeText = (s: string) =>
   s
     .replace(
@@ -1175,17 +1201,7 @@ export class AgentConversations {
       const page = await this.runtime.fleet.timeline(id, cursor.before, 60);
       const events = page.events
         .filter((e) => SAFE_EVENT.has(e.kind))
-        .filter((e) => !(e.kind === "user" && "text" in e && String(e.text).includes(CHECKPOINT_MARK)))
-        .filter(
-          (e) =>
-            !(
-              e.kind === "user" &&
-              "text" in e &&
-              /^You are [^\n]+, a shared Agentbox agent\. Run [a-f0-9-]{36}; work /.test(
-                String(e.text),
-              )
-            ),
-        )
+        .filter((e) => !(e.kind === "user" && hiddenPrompt(e.text)))
         .map((e) => ({
           ...e,
           text: safeText(
@@ -1205,6 +1221,8 @@ export class AgentConversations {
         session: thread.id,
         thread,
         status: thread.status,
+        // The current conversation's newest page only: not its history, nor a summarized one.
+        ...(!source && !cursor.before ? { presence: presenceOf(page.events, thread.status, this.runtime.fleet.sessions().find((s) => s.id === id)?.queued ?? []) } : {}),
       };
     } catch (e) {
       // An earlier conversation that cannot be read is said, and retried; the current one is not affected.
