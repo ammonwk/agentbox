@@ -1050,6 +1050,7 @@ export class Fleet extends EventEmitter {
     if (
       rec?.transcriptPath === ref.path &&
       (rec.facts as StoredFacts | null)?.transcriptSize === ref.size &&
+      !staleFacts(rec.facts as StoredFacts) &&
       !this.live.has(`${ref.provider}:${ref.agentSessionId}`) &&
       !(rec.tmux && this.panes.has(rec.tmux))
     ) {
@@ -3934,6 +3935,12 @@ function checkAnswers(questions: AskQuestion[], answers: AskAnswer[]): void {
  *  no reader (see `Tracked`), not the whole fold. `transcriptSize` is how much
  *  of the file they are of: the same size later means nothing new to read. */
 type StoredFacts = Partial<TranscriptFacts> & { transcriptSize?: number };
+
+/** Facts stored by a fold that read the file wrong, read again once: a Codex
+ *  last message that is its memory citation rather than what it said. */
+function staleFacts(f: StoredFacts): boolean {
+  return /<\/oai-mem-citation>\s*$/.test(f.lastMessage ?? "");
+}
 
 /** The outcome as stored: on the account it was earned on, which is the one
  *  already stored for the same last word, or else the session's now. */
