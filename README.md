@@ -52,6 +52,9 @@ Codex, Devin and omp** — across every subscription you're logged into.
 
 Requires **bun**, **tmux**, **git**, and whichever of `claude`, `codex`,
 `devin`, `omp` you use. `gh` is optional (PR links).
+Runs on Linux and macOS. On macOS there is no systemd service: start the
+server yourself, and the machine panel has no pressure, temperature or
+throttle readings.
 
 ```bash
 bun install

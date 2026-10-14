@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
+import * as darwin from "./darwin";
 import type { LoadSample, ProcDetail, ProcRole } from "./types";
 
 /**
@@ -72,6 +73,7 @@ let bootMs: number | null = null;
 
 export function bootTimeMs(): number {
   if (bootMs !== null) return bootMs;
+  if (darwin.isDarwin) return (bootMs = darwin.bootTimeMs());
   bootMs = 0;
   try {
     const m = /^btime (\d+)/m.exec(readFileSync("/proc/stat", "utf8"));
@@ -84,6 +86,10 @@ export function bootTimeMs(): number {
 
 /** argv of a process, or null if it is gone, mid-exec, or not ours to read. */
 export function argvOf(pid: number): string[] | null {
+  if (darwin.isDarwin) {
+    const argv = darwin.procArgs(pid)?.argv;
+    return argv && argv.length > 0 ? argv : null;
+  }
   try {
     return splitArgv(readFileSync(`/proc/${pid}/cmdline`, "utf8"));
   } catch {
@@ -124,7 +130,29 @@ export interface ProcTable {
   children: Map<number, number[]>;
 }
 
+/**
+ * One process as a /proc/<pid>/stat row, from macOS's libproc. Ticks are
+ * USER_HZ ticks as on Linux, so every rate below reads the same. macOS keeps
+ * no cutime: a reaped child's CPU leaves with it, so a subtree's total counts
+ * only its live members.
+ */
+export function darwinRow(pid: number): ProcRow | null {
+  const p = darwin.procInfo(pid);
+  if (!p) return null;
+  const ticks = p.cpuNs === null ? 0 : (p.cpuNs / 1e9) * clockHz();
+  return {
+    pid,
+    ppid: p.ppid,
+    comm: p.comm,
+    cpuTicks: ticks,
+    ownTicks: ticks,
+    rssKb: p.rssBytes / 1024,
+    startTicks: ((p.startMs - bootTimeMs()) / 1000) * clockHz(),
+  };
+}
+
 export async function readProcTable(): Promise<ProcTable> {
+  if (darwin.isDarwin) return tableOf(darwin.listPids().map(darwinRow));
   const dirs = await readdir("/proc").catch(() => [] as string[]);
   const rows = await Promise.all(
     dirs.map(async (d) => {
@@ -138,7 +166,10 @@ export async function readProcTable(): Promise<ProcTable> {
       }
     }),
   );
+  return tableOf(rows);
+}
 
+function tableOf(rows: (ProcRow | null)[]): ProcTable {
   const byPid = new Map<number, ProcRow>();
   const children = new Map<number, number[]>();
   for (const r of rows) {

@@ -29,14 +29,14 @@
 
 import { Database } from "bun:sqlite";
 import { deserialize, serialize } from "bun:jsc";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, readlinkSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { agentboxHome, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import type { Account } from "../types";
 import { codexFormat, codexLineage, type CodexLineage } from "./codex-transcript";
 import { JsonlTranscriptReader } from "./jsonl-reader";
-import { cwdOf, environOf, findProcesses, runsCli, startedAtOf, type ProcMatch } from "./procs";
+import { cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf, type ProcMatch } from "./procs";
 import { pickOption, plainScreen, underInput } from "./tui-screen";
 import { briefing } from "./briefing";
 import { carryFlags, setsFlag, type Arity } from "../launch";
@@ -313,19 +313,7 @@ function openThreads(pid: number, home: string): string[] {
   const locks = join(home, "thread-writer-locks") + "/";
   const sessions = join(home, "sessions") + "/";
   const out: string[] = [];
-  let fds: string[];
-  try {
-    fds = readdirSync(`/proc/${pid}/fd`);
-  } catch {
-    return out;
-  }
-  for (const fd of fds) {
-    let target: string;
-    try {
-      target = readlinkSync(`/proc/${pid}/fd/${fd}`);
-    } catch {
-      continue;
-    }
+  for (const target of openFilesOf(pid)) {
     if (target.startsWith(locks) && target.endsWith(".lock")) {
       const id = basename(target, ".lock");
       if (UUID.test(id)) out.push(id);
