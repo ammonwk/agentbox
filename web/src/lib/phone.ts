@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import type { SessionTab } from "../route";
 
 /** Phone widths: the shell trades its rail for a tab bar along the bottom.
@@ -6,6 +7,17 @@ export const PHONE_PX = 640;
 
 export function isPhone(): boolean {
   return typeof window !== "undefined" && window.matchMedia(`(max-width: ${PHONE_PX}px)`).matches;
+}
+
+const subscribePhone = (onChange: () => void) => {
+  const mql = window.matchMedia(`(max-width: ${PHONE_PX}px)`);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+};
+
+/** isPhone(), and a render again when the window crosses the width. */
+export function useIsPhone(): boolean {
+  return useSyncExternalStore(subscribePhone, isPhone, () => false);
 }
 
 /**

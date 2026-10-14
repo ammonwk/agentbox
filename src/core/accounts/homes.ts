@@ -32,7 +32,7 @@ import { GO_LOGIN_FILE } from "./gocred";
 import type { Account, AccountProvider, ProviderId } from "../types";
 
 /** The providers that hold accounts; opencode runs on omp's (see AccountProvider). */
-export const PROVIDERS: AccountProvider[] = ["claude", "codex", "devin", "omp"];
+export const PROVIDERS: AccountProvider[] = ["claude", "codex", "devin", "omp", "muse"];
 
 /**
  * A request this module refuses, with the HTTP status that says why: 404 for
@@ -79,6 +79,7 @@ export function credentialsPath(provider: AccountProvider, home: string): string
     case "codex": return join(home, "auth.json");
     case "devin": return join(home, "devin", "credentials.toml");
     case "omp": return join(home, GO_LOGIN_FILE);
+    case "muse": return join(home, "muse", "auth.json");
   }
 }
 
@@ -239,7 +240,7 @@ function expandHome(p: string): string {
 /** What each provider shares from its default home. `statusline*` is a prefix
  *  match: people keep status-line scripts next to settings.json and reference
  *  them by path. */
-const SHARED: Record<Exclude<AccountProvider, "omp" | "devin">, { names: string[]; prefixes: string[] }> = {
+const SHARED: Record<Exclude<AccountProvider, "omp" | "devin" | "muse">, { names: string[]; prefixes: string[] }> = {
   claude: {
     names: ["settings.json", "CLAUDE.md", "skills", "agents", "commands", "plugins", "hooks", "output-styles", "keybindings.json"],
     prefixes: ["statusline"],
@@ -403,6 +404,10 @@ export function resyncShared(account: Pick<Account, "provider" | "home" | "isDef
   if (provider === "claude" || provider === "codex") {
     made.push(...linkShared(defaultHome(provider), home, SHARED[provider]));
     if (provider === "claude" && syncClaudeJson(home)) made.push(".claude.json");
+  } else if (provider === "muse") {
+    const cfgDir = join(home, "muse");
+    mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
+    made.push(...linkShared(join(defaultHome(provider), "muse"), cfgDir, { names: ["settings.json", "skills", "AGENTS.md"], prefixes: [] }));
   } else if (provider === "devin") {
     // devin logs in under XDG_DATA_HOME=<home> and XDG_CONFIG_HOME=<home>/config.
     // Its data dir must exist for the credentials to land; its config dir gets

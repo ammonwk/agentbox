@@ -14,7 +14,7 @@ export type { UserIdentity };
 
 // -------------------------------------------------------------- providers
 
-export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode";
+export type ProviderId = "claude" | "codex" | "devin" | "omp" | "opencode" | "muse";
 
 /** The providers that hold accounts. opencode holds none of its own: it runs
  *  on OpenCode Go, which omp's accounts are sign-ins to and report usage
@@ -872,6 +872,113 @@ export interface PrClaim {
   how: "said" | "branch";
   /** When it said so; for a branch, when the PR was opened. */
   at: number;
+}
+
+// -------------------------------------------------------------------- MCPs
+
+/** How agentbox reaches a global MCP server: a command it starts, or a URL
+ *  (Streamable HTTP). */
+export type McpTransport = "stdio" | "http";
+
+/**
+ * A global MCP server as the page sees it (src/core/mcp.ts). Env and header
+ * values never leave the server: only their names do.
+ */
+export interface McpServerView {
+  name: string;
+  enabled: boolean;
+  transport: McpTransport;
+  command: string | null;
+  args: string[];
+  envKeys: string[];
+  url: string | null;
+  headerKeys: string[];
+  /** Where it was imported from, when it was. */
+  from: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** What is wrong with it that shows without starting it. */
+  problem: string | null;
+  /** For each agent, whether its sessions get it. */
+  reach: McpReach[];
+}
+
+export interface McpReach {
+  provider: ProviderId;
+  /** on: passed to it; own: it has its own server of this name with the same
+   *  definition; conflict: it has a different one, which it keeps; off: the
+   *  server is turned off; unsupported: agentbox does not pass servers to it;
+   *  error: the file agentbox writes for it could not be written. */
+  state: "on" | "own" | "conflict" | "off" | "unsupported" | "error";
+  detail: string;
+}
+
+/** An MCP server an agent's own config defines, found without starting it. */
+export interface McpFound {
+  id: string;
+  provider: ProviderId;
+  /** user: every session of that agent; project: one directory's sessions. */
+  scope: "user" | "project";
+  /** The files it is defined in (the same definition in each). */
+  sources: string[];
+  project: string | null;
+  name: string;
+  /** Null when agentbox cannot carry its shape (see `unsupported`). */
+  transport: McpTransport | null;
+  command: string | null;
+  args: string[];
+  envKeys: string[];
+  url: string | null;
+  headerKeys: string[];
+  unsupported: string | null;
+  /** The global server of that name: none, this definition, or another. */
+  global: "none" | "same" | "different";
+}
+
+export interface McpAgent {
+  provider: ProviderId;
+  installed: boolean;
+  /** Whether agentbox passes global servers to its sessions. */
+  supported: boolean;
+  /** A configuration problem that prevents launch. */
+  error?: string | null;
+  /** How, or why not, in words. */
+  how: string;
+}
+
+export interface McpState {
+  servers: McpServerView[];
+  found: McpFound[];
+  discoveryError?: string | null;
+  agents: McpAgent[];
+  /** When the global list last changed. */
+  changedAt: number | null;
+  /** Configuration snapshot handed to each running session, not a health check. */
+  sessions?: { id: string; title: string; provider: ProviderId; changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; known: boolean }[];
+  /** Sessions agentbox runs whose process started before that change: they
+   *  get it when they next start or resume. */
+  stale: { id: string; title: string; provider: ProviderId; since: number }[];
+}
+
+/** A global server as the page sends it. An env or header entry without a
+ *  `value` keeps the value already saved under that name. */
+export interface McpServerInput {
+  name: string;
+  enabled?: boolean;
+  transport: McpTransport;
+  command?: string;
+  args?: string[];
+  env?: { key: string; value?: string }[];
+  url?: string;
+  headers?: { key: string; value?: string }[];
+}
+
+/** What a check found when it started the server and asked for its tools. */
+export interface McpCheck {
+  ok: boolean;
+  tools: string[];
+  error: string | null;
+  ms: number;
 }
 
 export interface SkillInfo {

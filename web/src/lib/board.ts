@@ -8,7 +8,12 @@ import { retrying } from "../../../src/core/attention";
 import type { Attention, AttentionKind, ProviderId, Session, SessionStatus } from "../../../src/core/types";
 import { baseName } from "./format";
 
-export type SessionRow = Session & { attention: Attention };
+export type SessionRow = Session & {
+  attention: Attention;
+  /** Work it left running in the background, in words (`workflow "babysit-fleet"`).
+   *  Only a server that tracks it sends it; without it the status shows as usual. */
+  backgroundWork?: string | null;
+};
 
 /** A session's status as drawn: blocked or waiting on an error agentbox
  *  retries by itself is `retrying`, drawn as working — red or amber there
@@ -49,6 +54,20 @@ export function repoKey(s: Pick<Session, "repoRoot" | "cwd">): string {
   return s.repoRoot ?? s.cwd;
 }
 
+/** Folders that hold projects: the folder under one of these is the project. */
+const CODE_ROOTS = new Set(["dev", "developer", "code", "src", "projects", "repos", "git", "work", "workspace"]);
+
+/**
+ * The project a session works on, for the prefix on its name: the folder
+ * under a code folder (~/Dev/Plaibook/Plaibook-dev/… is "plaibook"), else
+ * the repo's own folder. The first two folders are the home, never a match.
+ */
+export function projectOf(s: Pick<Session, "repoRoot" | "cwd">): string {
+  const parts = repoKey(s).split("/").filter(Boolean);
+  const i = parts.findIndex((p, n) => n >= 2 && n < parts.length - 1 && CODE_ROOTS.has(p.toLowerCase()));
+  return (i === -1 ? baseName(repoKey(s)) : parts[i + 1]).toLowerCase();
+}
+
 export function filterSessions<T extends SessionRow>(rows: readonly T[], f: BoardFilter): T[] {
   const q = f.query.trim().toLowerCase();
   return rows.filter((s) => {
@@ -81,6 +100,31 @@ export const SORT_LABEL: Record<SortKey, string> = {
   status: "Status",
   repo: "Repo",
 };
+
+/** The list's two tabs: sessions that did something lately, and the rest. */
+export type RailView = "active" | "inactive";
+
+/** How recent a session's last activity must be for the Active tab. */
+export const ACTIVE_MS = 3 * 60 * 60_000;
+
+/**
+ * The rows of each tab. A session is active while it runs, when it did
+ * something within ACTIVE_MS, or while it is pinned: a pin keeps its place at
+ * the top. A tree goes whole to Active when any session in it is active, so a
+ * lead and its teammates stay together.
+ */
+export function splitActive<T extends SessionRow>(rows: readonly T[], now: number): Record<RailView, T[]> {
+  const up = parentsOf(rows);
+  const rootOf = (id: string) => {
+    let r = id;
+    for (let p = up.get(r); p !== undefined; p = up.get(r)) r = p;
+    return r;
+  };
+  const live = new Set(rows.filter((s) => s.status === "running" || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS).map((s) => rootOf(s.id)));
+  const out: Record<RailView, T[]> = { active: [], inactive: [] };
+  for (const s of rows) out[live.has(rootOf(s.id)) ? "active" : "inactive"].push(s);
+  return out;
+}
 
 /** The timestamp a sort orders by, and the one a row shows. */
 export function sortTime(s: Pick<Session, "lastPromptAt" | "lastActivityAt">, sort: SortKey): number {

@@ -153,6 +153,10 @@ once: commit your own files by path, never `git add -A`.
   starts a detached session and watches it. It speaks up on its own from those
   lines and from board news (`src/core/changes.ts`, the same changes
   `agentbox watch` prints).
+- `src/core/mcp.ts`, `src/core/mcp-reach.ts` — the global MCP servers (the
+  MCPs page): agentbox's own list, and the layer each CLI is launched with
+  so that every agent gets it. Never edit a CLI's own config for it.
+  `docs/v2.md` "Global MCP servers" is how each CLI takes it.
 - `src/core/user.ts` — who agentbox works for, derived from the machine (git,
   gh, the passwd entry, the timezone) into `<agentbox home>/user.env` by
   `agentbox onboard`, and re-derived at boot when that file is missing. The

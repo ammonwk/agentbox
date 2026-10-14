@@ -68,8 +68,9 @@ export type TimelineRow =
   | { type: "idle"; id: string; events: IdleEvent[] }
   /** A side question (Claude's /btw): not in the transcript, placed by when it was asked. */
   | { type: "btw"; btw: Btw }
-  /** A finished turn's thinking and tool calls between two things said, folded to one line. */
-  | { type: "steps"; id: string; rows: Exclude<TimelineRow, { type: "steps" }>[] };
+  /** A turn's work — everything but its answer — folded to one line. `live`
+   *  while the agent still works on it; `from` and `to` bound the work. */
+  | { type: "trace"; id: string; rows: Exclude<TimelineRow, { type: "trace" }>[]; live: boolean; from: number; to: number };
 
 type IdleEvent = Extract<TimelineEvent, { kind: "meta" }> & { mate: NonNullable<Extract<TimelineEvent, { kind: "meta" }>["mate"]> };
 
@@ -100,42 +101,71 @@ export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
 }
 
 const rowAt = (r: TimelineRow): number =>
-  r.type === "steps" ? rowAt(r.rows[0]!) : r.type === "sent" ? r.event.at : r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
+  r.type === "trace" ? r.from : r.type === "sent" ? r.event.at : r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
 
-type Flat = Exclude<TimelineRow, { type: "steps" }>;
-/** Work, not words: what a finished turn can fold away. */
-const isWork = (r: TimelineRow): r is Flat =>
-  r.type === "tools" ? !r.events.some((e) => e.status === "running") : r.type === "event" && r.event.kind === "thinking";
+type Flat = Exclude<TimelineRow, { type: "trace" }>;
+
+/** When a row's work ended: a tool call's result, or the row itself. */
+const rowEnd = (r: Flat): number =>
+  r.type === "tools" ? Math.max(...r.events.map((e) => (typeof e.endedAt === "number" && e.endedAt > e.at ? e.endedAt : e.at))) : rowAt(r);
+
+/** The id each event in a row is found by in the page (`data-ev`). */
+export function rowEventIds(r: Flat): string[] {
+  return r.type === "tools" || r.type === "idle" ? r.events.map((e) => e.id) : r.type === "btw" ? [] : [r.event.id];
+}
+
+/** What stays in view: a message to the agent, its question to you, and your side questions. */
+const inView = (r: Flat): boolean => (r.type === "event" && r.event.kind === "user") || r.type === "ask" || r.type === "btw";
+
+/** A teammate's message with something in it wakes the agent: a turn of its own. */
+const wakes = (r: Flat): boolean => r.type === "event" && r.event.kind === "meta" && !!r.event.mate?.body;
 
 /**
- * Fold each run of work — thinking and tool calls — in a turn that is over
- * into one `steps` row. A turn is over once you (or anyone) wrote again after
- * it; the last turn stays as it is, so what is happening now is always in
- * full. A run of one thought or a single call is left alone: folding it saves
- * nothing.
+ * Each turn as you read it: the message to the agent, its work folded into
+ * one `trace` row, then the last thing it said, which is its answer. A turn
+ * runs from one message to the agent to the next. While `live`, the agent
+ * still works on the last turn: all of it is in the trace, and the answer
+ * comes out when the turn ends.
  */
-export function foldSteps(rows: TimelineRow[]): TimelineRow[] {
-  let lastUser = -1;
-  rows.forEach((r, i) => {
-    if (r.type === "event" && r.event.kind === "user") lastUser = i;
-  });
+export function traceTurns(rows: TimelineRow[], live: boolean): TimelineRow[] {
   const out: TimelineRow[] = [];
-  let run: Flat[] = [];
-  const flush = () => {
-    const calls = run.reduce((n, r) => n + (r.type === "tools" ? r.events.length : 1), 0);
-    if (calls >= 2) out.push({ type: "steps", id: `steps-${run[0]!.type === "tools" ? run[0]!.id : (run[0] as Extract<Flat, { type: "event" }>).event.id}`, rows: run });
-    else out.push(...run);
-    run = [];
-  };
-  rows.forEach((r, i) => {
-    if (i < lastUser && isWork(r)) {
-      run.push(r);
-      return;
+  let turn: Flat[] = [];
+  // The trace takes its id and start from what began the turn, so it keeps
+  // both while its rows land and when the turn ends.
+  let anchor = { id: "start", at: 0 };
+  const flush = (open: boolean) => {
+    let answer = -1;
+    if (!open) {
+      for (let i = turn.length - 1; i >= 0 && answer === -1; i--) {
+        const r = turn[i]!;
+        if (r.type === "event" && r.event.kind === "assistant") answer = i;
+      }
     }
-    if (run.length) flush();
-    out.push(r);
-  });
-  if (run.length) flush();
+    const work = turn.filter((_, i) => i !== answer);
+    // Only info lines ("Started on …", "Interrupted") are no work to fold.
+    if (!open && work.every((r) => r.type === "event" && r.event.kind === "meta" && !r.event.mate)) out.push(...work);
+    else {
+      const from = anchor.at || (work[0] ? rowAt(work[0]) : Date.now());
+      const to = answer !== -1 ? rowAt(turn[answer]!) : work.reduce((t, r) => Math.max(t, rowEnd(r)), from);
+      out.push({ type: "trace", id: `trace-${anchor.id}`, rows: work, live: open, from, to });
+    }
+    if (answer !== -1) out.push(turn[answer]!);
+    turn = [];
+  };
+  for (const r of rows as Flat[]) {
+    if (inView(r)) {
+      flush(false);
+      out.push(r);
+      anchor = { id: rowEventIds(r)[0] ?? `btw-${rowAt(r)}`, at: rowAt(r) };
+    } else if (wakes(r)) {
+      flush(false);
+      anchor = { id: rowEventIds(r)[0]!, at: rowAt(r) };
+      turn.push(r);
+    } else {
+      turn.push(r);
+    }
+  }
+  flush(live);
   return out;
 }
 

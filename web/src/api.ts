@@ -48,6 +48,9 @@ import type {
   TurnList,
   SendReceipt,
   WorktreeScan,
+  McpCheck,
+  McpServerInput,
+  McpState,
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
@@ -55,6 +58,8 @@ import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
+import type { AgentTimeline, SessionWork } from "../../src/core/work";
+export type { AgentTimeline, SessionWork, WorkAgent, WorkShell } from "../../src/core/work";
 export * from "./lib/format";
 
 // ------------------------------------------------------------------- mock
@@ -274,6 +279,10 @@ export const api = {
   diff: (id: string) => get<SessionDiff>(`/api/sessions/${enc(id)}/diff`),
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
   load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
+  work: (id: string) => get<SessionWork>(`/api/sessions/${enc(id)}/work`),
+  /** One of its in-process agents' transcript: the newest page, or what came after `since`. */
+  agentTimeline: (id: string, agentId: string, since: string | null) =>
+    get<AgentTimeline>(`/api/sessions/${enc(id)}/agents/${enc(agentId)}/timeline${since ? `?since=${encodeURIComponent(since)}` : ""}`),
 
   // accounts
   addAccount: (provider: ProviderId, label?: string) =>
@@ -312,6 +321,16 @@ export const api = {
     post<ReclaimResult>("/api/worktrees/reclaim", { paths, force }),
 
   // skills
+  // global MCP servers
+  mcp: () => get<McpState>("/api/mcp"),
+  addMcp: (s: McpServerInput) => post<McpState>("/api/mcp/servers", s),
+  updateMcp: (name: string, s: McpServerInput) => request<McpState>("PUT", `/api/mcp/servers/${enc(name)}`, s),
+  setMcpEnabled: (name: string, enabled: boolean) => post<McpState>(`/api/mcp/servers/${enc(name)}/enabled`, { enabled }),
+  removeMcp: (name: string) => request<McpState>("DELETE", `/api/mcp/servers/${enc(name)}`),
+  /** Starts the server and asks for its tools: only on your request. */
+  checkMcp: (name: string) => post<McpCheck>(`/api/mcp/servers/${enc(name)}/check`),
+  importMcp: (id: string, opts: { name?: string; promote?: boolean } = {}) => post<McpState>("/api/mcp/import", { id, ...opts }),
+
   skillBody: (path: string) => get<{ body: string }>(`/api/skill/body?path=${enc(path)}`),
   saveSkillBody: (path: string, body: string) => post<{ ok: boolean }>("/api/skill/body", { path, body }),
   promoteSkill: (name: string) => post<SkillResult>("/api/skill/promote", { name }),

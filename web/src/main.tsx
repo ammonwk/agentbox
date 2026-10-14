@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
+import { startAccent } from "./lib/accent";
 import { isPhone } from "./lib/phone";
 import { startPush } from "./lib/push";
 import { reloadForMissingChunk } from "./lib/update";
@@ -65,6 +66,7 @@ if ("serviceWorker" in navigator && window.isSecureContext && location.port !== 
 }
 
 listUnderSession();
+startAccent();
 const root = document.getElementById("root")!;
 createRoot(root).render(
   <React.StrictMode>

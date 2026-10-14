@@ -265,7 +265,10 @@ export function Composer({ session, accounts, skills, textareaRef }: {
         <label className="sr-only" htmlFor={`cmp-${session.id}`}>
           {mode.kind === "resume" ? "Prompt to resume with" : "Message to the agent"}
         </label>
+        {/* One box: the paperclip, the text, then the keys and Send. Pasted
+            images go under the text, inside the box. */}
         <AttachFrame a={images} className="cmp-frame">
+        <AttachButton a={images} className="cmp-attach" />
         <textarea
           id={`cmp-${session.id}`}
           ref={ref}
@@ -295,83 +298,96 @@ export function Composer({ session, accounts, skills, textareaRef }: {
         />
         {skill.list}
         {voice.bar}
-        </AttachFrame>
-        <AttachButton a={images} className="cmp-attach" />
-        {mode.kind === "send" ? (
-          <>
+        <div className="cmp-tools">
+          {mode.kind === "send" ? (
+            <>
+              {/* Esc and Interrupt only while there is a turn or a prompt to stop. */}
+              {session.status === "running" || session.status === "blocked" ? (
+                <button
+                  type="button"
+                  className="cmp-tool cmp-esc"
+                  title="Press Escape in the session — cancels the current prompt or menu"
+                  aria-label="Press Escape in the session"
+                  disabled={busy}
+                  onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
+                >
+                  esc
+                </button>
+              ) : null}
+              {session.status === "running" ? (
+                <button
+                  type="button"
+                  className="cmp-tool cmp-stop"
+                  title="Interrupt the current turn (Esc)"
+                  aria-label="Interrupt the current turn"
+                  disabled={busy}
+                  onClick={() => void run(() => api.interrupt(session.id))}
+                >
+                  <Icon.stop size={14} />
+                </button>
+              ) : null}
+              <span className="cmp-go-wrap">
+                {voice.above}
+                <Button
+                  className="cmp-go"
+                  variant="ghost"
+                  icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.send}
+                  loading={busy}
+                  disabled={talks ? images.uploading : !text.trim() || images.uploading}
+                  title="Send (Enter)"
+                  aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
+                  data-ready={text.trim() ? true : undefined}
+                  data-rec={recording ? voice.phase : undefined}
+                  onMouseDown={keepKeyboard}
+                  {...(talks ? voice.button : {})}
+                  onClick={() => {
+                    if (voice.click()) return;
+                    if (talks && !text.trim()) voice.hint();
+                    else void submit();
+                  }}
+                />
+              </span>
+            </>
+          ) : (
             <span className="cmp-go-wrap">
               {voice.above}
               <Button
                 className="cmp-go"
-                variant="primary"
-                icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.arrowUp}
+                variant="ghost"
+                icon={voice.phase === "locked" ? Icon.check : voice.phase === "held" ? Icon.mic : text.trim() ? Icon.send : Icon.play}
                 loading={busy}
-                disabled={talks ? images.uploading : !text.trim() || images.uploading}
-                aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
+                aria-label={voice.phase === "locked" ? "Finish the recording" : text.trim() ? "Resume with prompt" : "Resume"}
+                data-ready
                 data-rec={recording ? voice.phase : undefined}
                 onMouseDown={keepKeyboard}
                 {...(talks ? voice.button : {})}
                 onClick={() => {
-                  if (voice.click()) return;
-                  if (talks && !text.trim()) voice.hint();
-                  else void submit();
+                  if (!voice.click()) void submit();
                 }}
               >
-                <span className="cmp-go-label">Send</span>
+                <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
               </Button>
             </span>
-            <div className="cmp-aux cmp-navigation">
-              <Button
-                className="cmp-aux"
-                title="Press Escape in the session — cancels the current prompt or menu"
+          )}
+        </div>
+        </AttachFrame>
+        {mode.kind === "send" ? (
+          // A phone has no Esc or arrow keys: these send them to the session.
+          <div className="cmp-aux cmp-navigation">
+            {(["Escape", "Up", "Down", "Enter"] as const).map((key) => (
+              <button
+                key={key}
+                type="button"
+                className="keycap cmp-phone-key"
+                title={`Press ${key} in the session`}
+                aria-label={`Press ${key} in the session`}
                 disabled={busy}
-                onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
+                onClick={() => void run(() => api.keys(session.id, [key]))}
               >
-                Esc
-              </Button>
-              {(["Up", "Down", "Enter"] as const).map((key) => (
-                <Button
-                  key={key}
-                  className="cmp-phone-key"
-                  title={`Press ${key} in the session`}
-                  aria-label={`Press ${key} in the session`}
-                  disabled={busy}
-                  onClick={() => void run(() => api.keys(session.id, [key]))}
-                >
-                  {key === "Up" ? "↑" : key === "Down" ? "↓" : "Enter"}
-                </Button>
-              ))}
-            </div>
-            <Button
-              className="cmp-aux"
-              variant="danger"
-              icon={Icon.stop}
-              title="Interrupt the current turn"
-              disabled={busy || session.status !== "running"}
-              onClick={() => void run(() => api.interrupt(session.id))}
-            >
-              Interrupt
-            </Button>
-          </>
-        ) : mode.kind === "resume" ? (
-          <span className="cmp-go-wrap">
-            {voice.above}
-            <Button
-              className="cmp-go"
-              variant="primary"
-              icon={voice.phase === "locked" ? Icon.check : voice.phase === "held" ? Icon.mic : text.trim() ? Icon.arrowUp : Icon.play}
-              loading={busy}
-              aria-label={voice.phase === "locked" ? "Finish the recording" : text.trim() ? "Resume with prompt" : "Resume"}
-              data-rec={recording ? voice.phase : undefined}
-              onMouseDown={keepKeyboard}
-              {...(talks ? voice.button : {})}
-              onClick={() => {
-                if (!voice.click()) void submit();
-              }}
-            >
-              <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
-            </Button>
-          </span>
+                {key === "Escape" ? "Esc" : key === "Up" ? "↑" : key === "Down" ? "↓" : "Enter"}
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
       ) : null}

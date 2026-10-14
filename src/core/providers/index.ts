@@ -4,12 +4,13 @@ import type { ProviderId } from "../types";
 import { claudeAdapter } from "./claude";
 import { codexAdapter } from "./codex";
 import { devinAdapter } from "./devin";
+import { museAdapter } from "./muse";
 import { ompAdapter } from "./omp";
 import { opencodeAdapter } from "./opencode";
 import type { ProviderAdapter } from "./types";
 
 export function adapters(): ProviderAdapter[] {
-  return [claudeAdapter, codexAdapter, devinAdapter, ompAdapter, opencodeAdapter];
+  return [claudeAdapter, codexAdapter, devinAdapter, ompAdapter, opencodeAdapter, museAdapter];
 }
 
 const byId: Record<ProviderId, ProviderAdapter> = {
@@ -18,6 +19,7 @@ const byId: Record<ProviderId, ProviderAdapter> = {
   devin: devinAdapter,
   omp: ompAdapter,
   opencode: opencodeAdapter,
+  muse: museAdapter,
 };
 
 /** One provider's adapter — how the accounts module learns where a provider's

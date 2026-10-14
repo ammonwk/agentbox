@@ -1,30 +1,37 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
+import { AccountChip, ContextBar, PROVIDER_LABEL, UsageBar } from "../../bits";
+import { Button, Confirm, Empty, Icon, type IconComponent } from "../../components";
 import {
-  AccountChip,
-  ContextBar,
-  CopyButton,
-  HostBadge,
-  PROVIDER_LABEL,
-  ProviderBadge,
-  StatusPill,
-  UsageBar,
-} from "../../bits";
-import { Button, Confirm, Empty, Icon } from "../../components";
-import { descendantsOf, filterSessions, neighbourId, runningDescendants, runningSubagents, sectionsOf, shownStatus, titleOf, type SessionRow } from "../../lib/board";
+  descendantsOf,
+  filterSessions,
+  neighbourId,
+  parentsOf,
+  runningDescendants,
+  runningSubagents,
+  sectionsOf,
+  shownStatus,
+  splitActive,
+  titleOf,
+  type SessionRow,
+} from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
 import { toggleBookmark, togglePin, usePinned } from "./pins";
+import { justStarted } from "./started";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
 import { isRecurring } from "../../../../src/core/schedule";
 import { go, hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
+import { WorkStrip } from "./WorkStrip";
 import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
-import { isInstalledApp } from "../../lib/phone";
+import { isInstalledApp, useIsPhone } from "../../lib/phone";
+import { useSysbarSlot } from "../../sysbarslot";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
 import { ago, fmtRetryAt } from "../../lib/format";
@@ -43,6 +50,9 @@ const Terminal = lazy(() => import("./Terminal"));
 const Timeline = lazy(() => import("./Timeline").then((m) => ({ default: m.Timeline })));
 
 const NONE: SessionRow[] = [];
+/** Pin and bookmark drawn filled while on. */
+const PinOn: IconComponent = (p) => <Icon.pin {...p} weight="fill" />;
+const BookmarkOn: IconComponent = (p) => <Icon.bookmark {...p} weight="fill" />;
 
 const TAB_LABEL: Record<SessionTab, string> = {
   terminal: "Terminal",
@@ -79,7 +89,7 @@ export function SessionView({
   const [, found] = useState(0);
   const old = id && !state.sessions.some((s) => s.id === id) ? closedSessions.get(id) : undefined;
   const [oldShown] = usePinned(old ? [old] : NONE);
-  const session = id ? state.sessions.find((s) => s.id === id) ?? oldShown ?? null : null;
+  const session = id ? state.sessions.find((s) => s.id === id) ?? oldShown ?? justStarted(id) : null;
   // Not started yet: the same id, before there is a session under it.
   const sched = id && !session ? state.schedules.find((s) => s.id === id && !isRecurring(s.rule)) ?? null : null;
   const missing = !!id && !session && !sched;
@@ -102,27 +112,36 @@ export function SessionView({
   }, [missing, id]);
   const narrow = useIsNarrow();
   const list = useListState();
-  const { filter, sort, open, setOpen } = list;
+  const { filter, sort, view, open, setOpen, hovered, focused } = list;
+  // Moves a session to Inactive once its last activity is 3 hours old, with no new state frame.
+  const now = useNow(60_000);
   const closing = useClosing().pending;
 
-  // The open session's ancestors, held open so it is never folded out of sight.
+  // Keep the current, hovered and focused branches open while moving into their children.
   const above = useMemo(() => {
     const byId = new Map(state.sessions.map((s) => [s.id, s]));
     const set = new Set<string>();
-    for (let p = session?.parent; p && !set.has(p); p = byId.get(p)?.parent) set.add(p);
+    for (const start of [session?.id, hovered, focused]) {
+      for (let p = start; p && !set.has(p); p = byId.get(p)?.parent) set.add(p);
+    }
     return set;
-  }, [state.sessions, session?.parent]);
+  }, [state.sessions, session?.id, hovered, focused]);
 
   // Folded as the user left it, but never with the open session folded out of
-  // sight. Closed ones are not here, they have their own list at the bottom,
+  // sight. Closed ones are not here: they have their own list under Inactive,
   // unless pinned: a pin holds its place closed or not.
-  const sections = useMemo(() => {
+  const { sections, counts } = useMemo(() => {
     const rows = filterSessions(
       state.sessions.filter((s) => s.pinOrder !== null || (s.status !== "closed" && !closing.has(s.id))),
       filter,
     );
-    return sectionsOf(rows, (x) => open.has(x) || above.has(x), sort);
-  }, [state.sessions, above, filter, sort, open, closing]);
+    const tabs = splitActive(rows, now);
+    const roots = (r: SessionRow[]) => r.length - parentsOf(r).size;
+    return {
+      sections: sectionsOf(tabs[view], (x) => open.has(x) || above.has(x), sort),
+      counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
+    };
+  }, [state.sessions, above, filter, sort, view, now, open, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
@@ -211,35 +230,15 @@ export function SessionView({
         }
       }
     };
-    // j/k switch sessions and l/→ h fold, from anywhere that is not a text
-    // field or the terminal; 1–4 pick a tab, and Tab and Shift+Tab step
-    // through them, from the message box too (where Tab only moved focus on).
-    // In the terminal Tab is the agent's; Shift+Tab is taken above.
-    // ← goes over to the list (from the message box too, once the cursor is at
-    // its start), where the arrows walk the rows and Enter opens one.
+    // j/k switch sessions and l/h fold within this page, outside text fields
+    // and the terminal; 1–4 pick a tab. Tab reaches controls normally, except
+    // Shift+Tab in the terminal, which is reserved above. Pane navigation
+    // lives in the shared keyboard handler.
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || e.isComposing) return;
       const t = e.target as HTMLElement | null;
-      if (e.key === "ArrowLeft" && !e.shiftKey && id && !narrow && t && !t.closest(".rail, .xterm") && !document.querySelector(".modal-backdrop")) {
-        const box = t instanceof HTMLTextAreaElement && t.id.startsWith("cmp-") ? t : null;
-        const field = box || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable;
-        const row = document.querySelector<HTMLElement>('.rail .rail-row[aria-current="page"]') ?? document.querySelector<HTMLElement>(".rail .rail-row");
-        if (row && (!field || (box && box.selectionStart === 0 && box.selectionEnd === 0))) {
-          e.preventDefault();
-          row.focus();
-          return;
-        }
-      }
-      if (e.key === "Tab" && id && t && !t.closest(".xterm") && !e.isComposing && !document.querySelector(".modal-backdrop")) {
-        const box = t instanceof HTMLTextAreaElement && t.id.startsWith("cmp-");
-        if (box || !["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) {
-          e.preventDefault();
-          const i = SESSION_TABS.indexOf(tab);
-          onTab(SESSION_TABS[(i + (e.shiftKey ? -1 : 1) + SESSION_TABS.length) % SESSION_TABS.length]);
-          return;
-        }
-      }
-      if (t && (t.closest(".xterm") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+      if (!t?.closest(".sv")) return;
+      if (t.closest(".xterm") || t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) return;
       if (document.querySelector(".modal-backdrop")) return;
       const row = ordered.find((s) => s.id === id);
       if (e.key === "j" || e.key === "k") {
@@ -248,7 +247,7 @@ export function SessionView({
           e.preventDefault();
           onOpen(next);
         }
-      } else if ((e.key === "l" || e.key === "ArrowRight") && row?.kids && !open.has(row.id)) {
+      } else if (e.key === "l" && row?.kids && !open.has(row.id)) {
         e.preventDefault();
         setOpen(row.id, true);
       } else if (e.key === "h" && row) {
@@ -277,13 +276,13 @@ export function SessionView({
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
-      {showRail ? <Rail sections={sections} state={state} current={id} forcedOpen={above} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
+      {showRail ? <Rail sections={sections} counts={counts} state={state} current={id} forcedOpen={above} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
       {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
       ) : sched ? (
         <ScheduledDetail key={sched.id} sc={sched} state={state} onCancel={cancelSchedule} />
       ) : id ? (
-        <div className="sv-main">
+        <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main">
           <Empty title="No such session" action={<a className="btn" href={hrefOf({ page: "sessions" })}>Back to sessions</a>}>
             <p>
               Nothing on the board has the id <code>{id}</code>. It may have been older than the board&apos;s{" "}
@@ -292,7 +291,7 @@ export function SessionView({
           </Empty>
         </div>
       ) : (
-        <div className="sv-main sv-none">
+        <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main sv-none">
           {state.sessions.length === 0 && scheduled.length === 0 ? (
             <Empty
               title="No sessions yet"
@@ -544,8 +543,13 @@ function Detail({
     [state.skills, state.repos, session.provider, session.repoRoot, session.cwd],
   );
 
-  // The facts under the title; a phone runs them on from the actions, in the
-  // one row you swipe, rather than spending a row of its own on them.
+  // What it runs as and on, and what it has spent.
+  const sysbarSlot = useSysbarSlot();
+  const phone = useIsPhone();
+  // The bar is one line beside the machine's figures: there the context is a
+  // percentage, the cache reads are in the tooltip, and the account chip says
+  // the provider, so a Claude model is "opus-5-5".
+  const inBar = !!sysbarSlot && !phone;
   const facts = (
     <div className="sx-facts">
       <span className="fact">
@@ -558,24 +562,24 @@ function Detail({
         </span>
       </span>
       {session.branch ? (
-        <span className="fact mono">
+        <span className="fact mono" title={session.cwd}>
           <Icon.branch size={12} /> {session.branch}
         </span>
       ) : null}
       {session.model ? (
-        <span className="fact mono">
-          {session.model}
+        <span className="fact mono" title={session.model}>
+          {inBar ? session.model.replace(/^claude-/, "") : session.model}
           {session.effort ? <span className="muted"> · {session.effort}</span> : null}
         </span>
       ) : null}
       <span className="fact">
-        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
+        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide={!inBar} />
       </span>
       <span
         className="fact"
         title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
       >
-        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {fmtTokens(session.tokens.cacheRead)} cached ·{" "}
+        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {inBar ? null : <>{fmtTokens(session.tokens.cacheRead)} cached · </>}
         <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
       </span>
       {pr && (
@@ -587,14 +591,8 @@ function Detail({
     </div>
   );
 
-  // The session's id beside the title, and the provider's own id — what
-  // `claude -r` (or `codex resume`) takes — with the actions. A phone has no
-  // room by the title: both follow the buttons in the row you swipe, as text.
-  const idCopy = <CopyButton text={session.id} label={session.id} className="sx-id" />;
-  const resumeCopy = session.agentSessionId ? <CopyButton text={session.agentSessionId} label={session.agentSessionId} className="resume-copy" /> : null;
-
   return (
-    <div className="sv-main" onClick={(e) => {
+    <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main" onClick={(e) => {
       if (e.defaultPrevented || e.button !== 0 || e.detail > 1 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       const target = e.target as Element;
       if (target.closest('a, button, input, textarea, select, label, summary, audio, video, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="option"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"], [role="tab"], [role="dialog"], [tabindex]:not([tabindex="-1"]):not(.tl), .xterm')) return;
@@ -603,21 +601,58 @@ function Detail({
       if (window.getSelection()?.isCollapsed === false) return;
       composerRef.current?.focus({ preventScroll: true });
     }}>
+      {/* No title, ids or status: the list shows which session is open and
+          what it is doing. The facts, then the tabs with the actions. */}
       <header className="sx-header">
-        <div className="sx-header-top">
-          <ProviderBadge provider={session.provider} />
-          <TitleEdit session={session} />
-          {narrow ? null : idCopy}
-          <StatusPill status={shownStatus(session)} />
-          {/* tmux is the normal case; only say where it runs when it is not ours. */}
-          {session.host === "external" || session.host === "subagent" ? <HostBadge host={session.host} /> : null}
+        {/* On a computer the facts go in the system bar along the bottom. A
+            phone hides that bar in a session, so there they stay here. */}
+        {inBar && sysbarSlot ? createPortal(facts, sysbarSlot) : facts}
 
-          <div className="sx-header-actions">
-            {narrow ? null : resumeCopy}
+        {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
+        {(session.status === "blocked" && !session.question && shownStatus(session) !== "retrying") || error ? (
+          <div className="sx-attention-line bad" role={error ? "alert" : undefined}>
+            {error ? (
+              <>
+                That did not work: {error}{" "}
+                <button className="linkish" onClick={clear}>
+                  dismiss
+                </button>
+              </>
+            ) : (
+              <>
+                <Icon.alert size={13} /> {session.attention.reason}.{" "}
+                The Terminal tab shows the prompt.
+              </>
+            )}
+          </div>
+        ) : session.status === "blocked" && !session.question ? (
+          <div className="sx-attention-line info" role="status">
+            <Icon.refresh size={13} /> {session.attention.reason}. Nothing for you to do; the Terminal tab shows the error.
+          </div>
+        ) : session.status === "waiting" && session.turnError ? (
+          <TurnErrorLine session={session} />
+        ) : null}
+
+        <div className="sx-tabbar">
+          <div className="sx-tabs" role="tablist" aria-label="Session views">
+            {SESSION_TABS.map((t, i) => (
+              <button
+                key={t}
+                className="sx-tab"
+                role="tab"
+                aria-selected={tab === t}
+                title={`${TAB_LABEL[t]} (${i + 1})`}
+                onClick={() => onTab(t)}
+              >
+                {TAB_LABEL[t]}
+              </button>
+            ))}
+          </div>
+          <div className="sx-tabbar-actions">
             <Button
               size="sm"
               variant="ghost"
-              icon={Icon.pin}
+              icon={session.pinOrder !== null ? PinOn : Icon.pin}
               className="sx-mark"
               aria-pressed={session.pinOrder !== null}
               aria-label={session.pinOrder !== null ? "Unpin" : "Pin to the top of the list"}
@@ -627,7 +662,7 @@ function Detail({
             <Button
               size="sm"
               variant="ghost"
-              icon={Icon.bookmark}
+              icon={session.bookmarkedAt !== null ? BookmarkOn : Icon.bookmark}
               className="sx-mark"
               aria-pressed={session.bookmarkedAt !== null}
               aria-label={session.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
@@ -675,56 +710,7 @@ function Detail({
                 Close
               </Button>
             )}
-            {narrow ? (
-              <>
-                {idCopy}
-                {resumeCopy}
-                {facts}
-              </>
-            ) : null}
           </div>
-        </div>
-
-        {narrow ? null : facts}
-
-        {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
-        {(session.status === "blocked" && !session.question && shownStatus(session) !== "retrying") || error ? (
-          <div className="sx-attention-line bad" role={error ? "alert" : undefined}>
-            {error ? (
-              <>
-                That did not work: {error}{" "}
-                <button className="linkish" onClick={clear}>
-                  dismiss
-                </button>
-              </>
-            ) : (
-              <>
-                <Icon.alert size={13} /> {session.attention.reason}.{" "}
-                The Terminal tab shows the prompt.
-              </>
-            )}
-          </div>
-        ) : session.status === "blocked" && !session.question ? (
-          <div className="sx-attention-line info" role="status">
-            <Icon.refresh size={13} /> {session.attention.reason}. Nothing for you to do; the Terminal tab shows the error.
-          </div>
-        ) : session.status === "waiting" && session.turnError ? (
-          <TurnErrorLine session={session} />
-        ) : null}
-
-        <div className="sx-tabs" role="tablist" aria-label="Session views">
-          {SESSION_TABS.map((t, i) => (
-            <button
-              key={t}
-              className="sx-tab"
-              role="tab"
-              aria-selected={tab === t}
-              title={`${TAB_LABEL[t]} (${i + 1}; Tab and Shift+Tab step through)`}
-              onClick={() => onTab(t)}
-            >
-              {TAB_LABEL[t]}
-            </button>
-          ))}
         </div>
       </header>
 
@@ -772,15 +758,20 @@ function Detail({
       </PrBase.Provider>
       </FamilyContext.Provider>
 
-      {/* Keyed by session: each one keeps its own draft (see drafts.ts),
-          rather than one box carrying its text into the next session. */}
-      <Composer
-        key={session.id}
-        session={session}
-        accounts={state.accounts}
-        skills={skills}
-        textareaRef={composerRef}
-      />
+      {/* What it waits on: a tab on the composer, and a list that rises from
+          it while you point at the tab. The terminal shows that itself. */}
+      <div className="cmp-dock">
+        {tab === "terminal" ? null : <WorkStrip session={session} sessions={state.sessions} />}
+        {/* Keyed by session: each one keeps its own draft (see drafts.ts),
+            rather than one box carrying its text into the next session. */}
+        <Composer
+          key={session.id}
+          session={session}
+          accounts={state.accounts}
+          skills={skills}
+          textareaRef={composerRef}
+        />
+      </div>
 
       {confirmClose ? (
         <ConfirmClose
@@ -884,63 +875,6 @@ function TranscriptInstead({
         <Timeline session={session} />
       </Suspense>
     </div>
-  );
-}
-
-/** The title, click to rename. Clearing it falls back to the derived title. */
-function TitleEdit({ session }: { session: SessionRow }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const { run, busy } = useAction();
-  const title = titleOf(session);
-
-  if (!editing) {
-    return (
-      <h2 className="sx-title">
-        <button
-          className="sx-title-btn"
-          title="Rename"
-          onClick={() => {
-            setDraft(session.label ?? title);
-            setEditing(true);
-          }}
-        >
-          <span className="sx-title-text">{title}</span>
-          <Icon.edit size={13} className="sx-title-pen" />
-        </button>
-      </h2>
-    );
-  }
-
-  const commit = async () => {
-    const next = draft.trim();
-    if (next === (session.label ?? title)) {
-      setEditing(false);
-      return;
-    }
-    if (await run(() => api.patchSession(session.id, { label: next || null }))) setEditing(false);
-  };
-
-  return (
-    <input
-      className="sx-title-input"
-      aria-label="Session label"
-      autoFocus
-      value={draft}
-      disabled={busy}
-      placeholder={session.title || "Label"}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => void commit()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          void commit();
-        } else if (e.key === "Escape") {
-          e.stopPropagation();
-          setEditing(false);
-        }
-      }}
-    />
   );
 }
 

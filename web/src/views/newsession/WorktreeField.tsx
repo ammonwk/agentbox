@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
 import type { PrInfo } from "../../../../src/core/types";
-import { matchPrs } from "../../lib/newsession";
-import { scrollActiveIntoView, useDismiss, useFloating } from "./popover";
+import { Icon } from "../../components";
+import { matchPrs, parseWorktreeRef } from "../../lib/newsession";
+import { Dropdown, type MenuItem } from "./Dropdown";
 
 /**
- * "New worktree" as a checkbox; unchecked, a small box that says where else
- * to run: blank for the main checkout, `new` to go back, or a PR number,
- * completed from the repo's open PRs.
+ * Where in the repo it runs: a new worktree, the main checkout, an open PR's
+ * branch, or any branch typed into the search. `text` is what the old box
+ * held — blank for the main checkout, `#123` for a PR, else a branch — so
+ * parseWorktreeRef still reads it.
  */
 export function WorktreeField({
   on,
@@ -14,139 +15,93 @@ export function WorktreeField({
   text,
   onText,
   prs,
+  hint,
+  fromPrompt,
+  note,
 }: {
   on: boolean;
   onToggle: (on: boolean) => void;
   text: string;
   onText: (text: string) => void;
   prs: PrInfo[];
+  /** Where it will run, in a sentence: the pill's tooltip. */
+  hint?: string;
+  /** The prompt named the PR, so the choice was made for you. */
+  fromPrompt?: boolean;
+  note?: string;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
-  /** Set by unchecking, so the box that replaces the checkbox takes focus. */
-  const focusNext = useRef(false);
-  const style = useFloating(inputRef, open, 320, 420);
-  useDismiss(open, () => setOpen(false), [inputRef, listRef]);
+  const wt = parseWorktreeRef(text, prs);
+  const selected = on || wt.kind === "new" ? "new" : wt.kind === "main" ? "main" : wt.kind === "pr" ? `pr:${wt.number}` : `branch:${wt.branch}`;
+  const label =
+    on || wt.kind === "new"
+      ? "New worktree"
+      : wt.kind === "main"
+        ? "Main checkout"
+        : wt.kind === "pr"
+          ? `#${wt.number}${wt.pr ? ` ${wt.pr.title}` : ""}`
+          : wt.branch;
 
-  const q = text.trim().toLowerCase();
-  const showNew = !q || "new".startsWith(q);
-  const matches = matchPrs(prs, text);
-  // Row 0 is "new" when it matches; PRs follow.
-  const rows: (PrInfo | "new")[] = [...(showNew ? (["new"] as const) : []), ...matches];
-
-  useEffect(() => setActive(0), [text]);
-  useEffect(() => scrollActiveIntoView(listRef.current, active), [active]);
-  useEffect(() => {
-    if (!on && focusNext.current) {
-      focusNext.current = false;
-      inputRef.current?.focus();
-      setOpen(true);
+  function items(query: string): MenuItem[] {
+    const out: MenuItem[] = [];
+    if (!query) {
+      out.push(
+        { key: "new", children: <Row main="New worktree" sub="a fresh branch" /> },
+        { key: "main", children: <Row main="Main checkout" sub="the branch it has out" /> },
+      );
     }
-  }, [on]);
-
-  function pick(row: PrInfo | "new") {
-    setOpen(false);
-    if (row === "new") {
-      onText("");
-      onToggle(true);
-    } else {
-      onText(`#${row.number}`);
+    for (const p of matchPrs(prs, query)) {
+      out.push({
+        key: `pr:${p.number}`,
+        group: "Open PRs",
+        children: <Row main={`#${p.number} ${p.isDraft ? "(draft) " : ""}${p.title}`} sub={p.headRef} mono />,
+      });
     }
+    if (query) {
+      const q = parseWorktreeRef(query, prs);
+      if (q.kind === "pr" && !q.pr) out.push({ key: `pr:${q.number}`, children: <Row main={`PR #${q.number}`} sub="not open; fetch its head" /> });
+      else if (q.kind === "branch") out.push({ key: `branch:${q.branch}`, children: <Row main={`Branch ${q.branch}`} sub="its worktree, or a new one" /> });
+    }
+    return out;
   }
 
-  if (on) {
-    return (
-      <label className="ns-wt" title="A fresh branch off the default branch, so it cannot collide with anything else running there. Untick to run in the main checkout or on a PR's branch.">
-        <input
-          type="checkbox"
-          checked
-          onChange={() => {
-            focusNext.current = true;
-            onToggle(false);
-          }}
-        />
-        New worktree
-      </label>
-    );
+  function pick(key: string) {
+    if (key === "new") {
+      onText("");
+      onToggle(true);
+      return;
+    }
+    onToggle(false);
+    if (key === "main") onText("");
+    else if (key.startsWith("pr:")) onText(`#${key.slice(3)}`);
+    else onText(key.slice("branch:".length));
   }
 
   return (
-    <div className="ns-wtbox">
-      <input
-        ref={inputRef}
-        aria-label="Worktree: blank for the main checkout, new, or a PR number"
-        className="mono"
-        role="combobox"
-        aria-expanded={open && rows.length > 0}
-        aria-controls="ns-wt-list"
-        aria-autocomplete="list"
-        aria-activedescendant={open && rows.length ? `ns-wt-${active}` : undefined}
-        placeholder="main · new · PR #"
-        value={text}
-        spellCheck={false}
-        autoComplete="off"
-        onChange={(e) => {
-          onText(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onClick={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (!open || rows.length === 0) {
-            if (e.key === "ArrowDown") setOpen(true);
-            return;
-          }
-          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-            e.preventDefault();
-            const d = e.key === "ArrowDown" ? 1 : -1;
-            setActive((i) => (i + d + rows.length) % rows.length);
-          } else if ((e.key === "Enter" && !e.ctrlKey && !e.metaKey) || (e.key === "Tab" && q)) {
-            // Tab completes only once something is typed; on an empty box it
-            // moves on, leaving "main checkout".
-            e.preventDefault();
-            pick(rows[active]!);
-          } else if (e.key === "Tab") {
-            setOpen(false);
-          }
-        }}
-      />
-      {open && rows.length > 0 ? (
-        <div ref={listRef} id="ns-wt-list" role="listbox" aria-label="Worktree" className="ns-pop" style={style}>
-          {rows.map((r, i) => (
-            <div
-              key={r === "new" ? "new" : r.number}
-              id={`ns-wt-${i}`}
-              data-index={i}
-              role="option"
-              aria-selected={i === active}
-              data-active={i === active || undefined}
-              className="ns-wt-opt"
-              onMouseEnter={() => setActive(i)}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => pick(r)}
-            >
-              {r === "new" ? (
-                <>
-                  <span className="ns-wt-num mono">new</span>
-                  <span className="ns-wt-title">A fresh worktree and branch</span>
-                </>
-              ) : (
-                <>
-                  <span className="ns-wt-num mono">#{r.number}</span>
-                  <span className="ns-wt-title">
-                    {r.isDraft ? <span className="ns-tag">draft</span> : null}
-                    {r.title}
-                  </span>
-                  <span className="ns-wt-meta mono">{r.headRef}</span>
-                </>
-              )}
-            </div>
-          ))}
-          {!q ? <div className="ns-pop-foot faint">Leave blank to run in the main checkout.</div> : null}
-        </div>
-      ) : null}
-    </div>
+    <Dropdown
+      label="Worktree"
+      title={hint}
+      tone={fromPrompt ? "accent" : undefined}
+      width={340}
+      search="PR number or branch…"
+      selected={selected}
+      onPick={pick}
+      footer={note}
+      trigger={
+        <>
+          <Icon.branch size={13} />
+          <span className="ns-pill-text">{label}</span>
+        </>
+      }
+      items={items}
+    />
+  );
+}
+
+function Row({ main, sub, mono }: { main: string; sub: string; mono?: boolean }) {
+  return (
+    <>
+      <span className="ns-item-main">{main}</span>
+      <span className={`ns-item-sub${mono ? " mono" : ""}`}>{sub}</span>
+    </>
   );
 }

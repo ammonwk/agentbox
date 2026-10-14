@@ -86,34 +86,34 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding-bottom: 16px;
+  padding: 2px 0 16px;
   scrollbar-gutter: stable;
 }
-/* Search and the sort menu, above everything that scrolls. */
+/* Search and the sort menu, above everything that scrolls. The search box is
+ * the composer's: rounded, a lighter ground, a hairline border, no ring. */
 .rail-top {
   position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
   flex: none;
-  padding: 8px 8px 0;
+  padding: 10px 8px 0;
 }
 .rail-search {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex: 1;
   min-width: 0;
-  height: 30px;
-  padding: 0 6px 0 9px;
+  height: 34px;
+  padding: 0 7px 0 11px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
+  border-radius: 12px;
+  background: var(--raised);
   color: var(--faint);
 }
 .rail-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  border-color: var(--border-strong);
 }
 .rail-search input,
 .rail-search input:focus {
@@ -129,6 +129,7 @@
 }
 .rail-search kbd {
   flex: none;
+  opacity: 0.7;
 }
 .rail-sort {
   position: relative;
@@ -138,10 +139,10 @@
   position: relative;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   background: none;
   color: var(--faint);
   cursor: pointer;
@@ -151,16 +152,58 @@
   color: var(--text);
   background: var(--hover);
 }
+/* Active and Inactive: a two-way switch under the search. The chosen side is
+ * a raised chip on a sunken track; no accent, so the list keeps the colour. */
+.rail-views {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: 8px 8px 6px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.rail-view {
+  flex: 1;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  padding: 0 8px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.rail-view span {
+  margin-left: 2px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.rail-view:hover {
+  color: var(--text);
+}
+.rail-view:focus-visible {
+  outline-offset: -2px;
+}
+.rail-view[aria-selected="true"] {
+  color: var(--text);
+  background: var(--raised);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
+  font-weight: 600;
+}
 .rail-menu {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
   z-index: 20;
   min-width: 180px;
-  padding: 4px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--raised);
   box-shadow: var(--shadow-md);
 }
 .rail-menu-label {
@@ -176,10 +219,10 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  min-height: 28px;
+  min-height: 30px;
   padding: 0 8px 0 4px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 8px;
   background: none;
   color: var(--text);
   font-size: 12.5px;
@@ -308,28 +351,31 @@
 .rail-bm-none svg {
   vertical-align: -1px;
 }
-/* See closed: folded under the list, loads as it scrolls. */
+/* See closed: folded under the list, loads as it scrolls. A quiet line, the
+ * way a finished turn's trace is. */
 .rail-closed {
-  margin-top: 8px;
-  border-top: 1px solid var(--border);
+  margin-top: 10px;
 }
 .rail-closed-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  min-height: 34px;
-  padding: 0 12px;
+  width: calc(100% - 16px);
+  min-height: 32px;
+  margin: 0 8px;
+  padding: 0 9px;
   border: 0;
+  border-radius: 10px;
   background: none;
   color: var(--faint);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   text-align: left;
   cursor: pointer;
 }
 .rail-closed-toggle:hover {
   color: var(--text);
+  background: var(--hover);
 }
 .rail-closed .rail-title {
   color: var(--muted);
@@ -339,26 +385,27 @@
   height: 1px;
 }
 .rail-err {
-  margin: 8px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
+  margin: 8px 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--danger) 12%, var(--panel));
   color: var(--danger);
   font-size: 12px;
 }
 .rail-none {
-  padding: 16px 14px;
+  padding: 16px 17px;
   font-size: 12.5px;
   color: var(--muted);
 }
+/* A section's name, in line with the rows' text. */
 .rail-label {
   position: sticky;
   top: 0;
   z-index: 1;
   background: var(--panel);
-  padding: 10px 12px 4px;
+  padding: 12px 17px 5px;
   font-size: 10.5px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--faint);
@@ -381,27 +428,32 @@
   color: var(--warning);
 }
 /* One line per session: status, title, age. The account, provider (when it
- * is the usual one) and last message are a hover away, not on every row. */
+ * is the usual one) and last message are a hover away, not on every row.
+ * Each row is a rounded chip set in from the edges; the open one is tinted
+ * in the accent, as your messages are. */
 .rail-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 0 12px 0 12px;
-  border-left: 2px solid transparent;
+  gap: 9px;
+  min-height: 34px;
+  margin: 1px 8px;
+  padding: 0 9px;
+  border-radius: 10px;
   color: inherit;
   text-decoration: none;
+  transition: background 0.1s;
 }
 .rail-row:hover {
   background: var(--hover);
 }
 .rail-row:focus-visible {
   outline-offset: -2px;
-  border-radius: 0;
 }
 .rail-row[aria-current="page"] {
-  background: var(--active);
-  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+[data-theme="dark"] .rail-row[aria-current="page"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .rail-text {
   flex: 1;
@@ -411,7 +463,7 @@
 }
 .rail-title {
   flex: 1;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   min-width: 0;
   overflow: hidden;
@@ -421,13 +473,35 @@
 .rail-row[aria-current="page"] .rail-title {
   font-weight: 600;
 }
+/* The project before the name: the same line, quieter. */
+.rail-proj {
+  margin-right: 6px;
+  color: var(--faint);
+  font-weight: 450;
+}
 .rail-row[data-status="stopped"] .rail-title,
 .rail-row[data-status="closed"] .rail-title {
   color: var(--muted);
   font-weight: 450;
 }
+.rail-reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+  animation: rail-reveal 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+.rail-reveal > div {
+  min-height: 0;
+  overflow: hidden;
+}
+@keyframes rail-reveal {
+  from { grid-template-rows: 0fr; opacity: 0; transform: translateY(-5px); }
+  to { grid-template-rows: 1fr; opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-reveal { animation: none; }
+}
 .rail-row[data-depth] {
-  padding-left: calc(12px + var(--depth) * 14px);
+  padding-left: calc(9px + var(--depth) * 14px);
 }
 /* Dragging a session: the row it would go under, or the whole list when it
  * would go to the top level, and a line at the foot saying which is which. */
@@ -446,7 +520,7 @@
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .rail-drophint {
-  padding: 8px 12px;
+  padding: 9px 17px;
   border-top: 1px solid var(--border);
   font-size: 11.5px;
   color: var(--muted);
@@ -470,8 +544,15 @@
 .sv[data-rail="full"] .rail-row {
   align-items: flex-start;
   min-height: 60px;
-  padding-top: 10px;
-  padding-bottom: 10px;
+  margin: 2px 8px;
+  padding-top: 11px;
+  padding-bottom: 11px;
+  border-radius: 14px;
+}
+/* A scheduled session has no last message: one line, no gap under it. */
+.sv[data-rail="full"] .rail-row.rail-sched {
+  align-items: center;
+  min-height: 48px;
 }
 .sv[data-rail="full"] .rail-row > .rail-dot {
   margin-top: 1px;
@@ -512,7 +593,8 @@
   line-height: 1.4;
 }
 .sv[data-rail="full"] .rail-search {
-  height: 38px;
+  height: 40px;
+  border-radius: 14px;
 }
 .sv[data-rail="full"] .rail-search kbd {
   display: none;
@@ -522,11 +604,11 @@
   flex: none;
   align-items: center;
   gap: 1px;
-  height: 17px;
-  padding: 0 5px 0 2px;
-  border: 1px solid var(--border-strong);
+  height: 18px;
+  padding: 0 6px 0 3px;
+  border: 0;
   border-radius: 999px;
-  background: none;
+  background: var(--hover);
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 600;
@@ -536,31 +618,46 @@
 .rail-kids:hover,
 .rail-kids[aria-expanded="true"] {
   color: var(--text);
-  background: var(--hover);
+  background: var(--active);
 }
 .rail-when {
   flex: none;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 /* CPU over memory, for the session's whole process tree. The column keeps
-   its width when empty, so the times stay in line. */
+   its width when empty, so the times stay in line. Quiet by default: an idle
+   process shows nothing and a busy one its CPU; the pointer, or the open
+   row, shows both figures. A hot CPU always shows, in amber. */
 .rail-load {
   flex: none;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: flex-end;
-  width: 30px;
-  font-size: 9px;
+  width: 28px;
+  font-size: 9.5px;
   line-height: 11px;
-  color: var(--muted);
+  color: var(--faint);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.rail-load[data-idle] {
-  color: var(--faint);
+.rail-load > :last-child {
+  display: none;
+}
+.rail-load[data-idle] > :first-child {
+  visibility: hidden;
+}
+.rail-row:hover .rail-load > *,
+.rail-row[aria-current="page"] .rail-load > * {
+  display: block;
+  visibility: visible;
+}
+.rail-row:hover .rail-load,
+.rail-row[aria-current="page"] .rail-load {
+  color: var(--muted);
 }
 .rail-load[data-hot] > :first-child {
   color: var(--warning);
@@ -572,12 +669,12 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
-  height: 20px;
+  min-width: 22px;
+  height: 22px;
   margin: -2px -4px -2px 0;
   padding: 0 3px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 7px;
   background: none;
   color: var(--muted);
   font-size: 10.5px;
@@ -608,6 +705,53 @@
   padding: 0 3px;
   box-shadow: none;
 }
+/* What the session is doing, at the row's right end: a spinner in the accent
+   while it works, a clock when it is your turn, amber while it waits for your
+   approval, red when its turn failed. A click copies its id. */
+.rail-state {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: -3px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--faint);
+}
+button.rail-state {
+  cursor: copy;
+}
+button.rail-state:hover {
+  background: var(--active);
+}
+.rail-state[data-state="working"],
+.rail-state[data-state="background"] {
+  color: var(--accent);
+}
+.rail-state[data-state="waiting"] {
+  color: var(--muted);
+}
+.rail-state[data-state="approval"] {
+  color: var(--warning);
+}
+.rail-state[data-state="error"] {
+  color: var(--danger);
+}
+.rail-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: wk-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-pulse {
+    animation: none;
+  }
+}
 
 /* ------------------------------------------------------------------ header */
 
@@ -634,59 +778,6 @@
   border-radius: 0;
 }
 
-.sx-title {
-  font-size: 16px;
-  font-weight: 650;
-  margin: 0;
-  /* Never squeezed to nothing: a crowded header wraps its actions instead. */
-  min-width: 6em;
-  flex: 0 1 auto;
-  overflow: hidden;
-  /* On the h2, not the button inside it: a negative margin on the child made
-   * the h2's max-content 4px narrower than the button, so every title was
-   * truncated by one character with half the header empty. */
-  margin-left: -4px;
-}
-.sx-title-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  border: 0;
-  background: none;
-  padding: 1px 4px;
-  border-radius: 5px;
-  font: inherit;
-  color: inherit;
-  cursor: text;
-  text-align: left;
-  max-width: 100%;
-  white-space: nowrap;
-}
-.sx-title-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.sx-title-btn:hover {
-  background: var(--hover);
-}
-.sx-title-pen {
-  color: var(--faint);
-  opacity: 0;
-  flex: none;
-}
-.sx-title-btn:hover .sx-title-pen,
-.sx-title-btn:focus-visible .sx-title-pen {
-  opacity: 1;
-}
-.sx-header .sx-title-input {
-  flex: 1 1 320px;
-  font-size: 15px;
-  font-weight: 600;
-  min-height: 32px;
-  padding: 3px 8px;
-}
-
 .sx-header-actions {
   display: flex;
   align-items: center;
@@ -694,38 +785,15 @@
   margin-left: auto;
   flex: none;
 }
-/* Pin and bookmark: outlined when off, filled in the accent when on. */
+/* Pin and bookmark: outlined when off, filled (weight="fill") in the accent when on. */
 .sx-mark[aria-pressed="true"] {
   color: var(--accent);
 }
-.sx-mark[aria-pressed="true"] svg path {
-  fill: currentColor;
-}
-/* The session id beside the title: quiet until pointed at. */
-.copy-btn.sx-id {
-  min-height: 22px;
-  padding: 0 6px;
-  border-color: transparent;
-  background: none;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  flex: none;
-}
-.copy-btn.sx-id:hover {
-  border-color: var(--border-strong);
-}
-.resume-copy span {
-  font-family: var(--mono);
-  font-size: 11.5px;
-}
-
 .sx-facts {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 6px 16px;
-  margin-top: 7px;
   min-width: 0;
   overflow: hidden;
   font-size: 12px;
@@ -825,11 +893,25 @@
   flex: none;
 }
 
+/* The tabs, and the session's actions at the right end of the same row. */
+.sx-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
 .sx-tabs {
   display: flex;
   gap: 2px;
-  margin-top: 4px;
+  min-width: 0;
   margin-left: -12px;
+}
+.sx-tabbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex: none;
 }
 .sx-tab {
   border: 0;
@@ -958,6 +1040,9 @@
 .tl {
   padding-top: 8px;
 }
+.sx-panel.tl {
+  padding-bottom: 32px;
+}
 .tl-stream {
   display: flex;
   flex-direction: column;
@@ -988,7 +1073,8 @@
 .tl-queued {
   opacity: 0.6;
 }
-.tl-queued {
+/* Only a card has a border to dash; on a bubble this drew a 3px box. */
+.tl-user.tl-queued {
   border-style: dashed;
 }
 
@@ -1010,13 +1096,51 @@
 }
 /* Another agent's message: not you, so not your accent. */
 .tl-user.tl-sent {
-  border-left-color: var(--info);
+  border: 0;
+  border-radius: 0;
   background: none;
+  padding: 4px 2px;
+  color: var(--muted);
+  font-style: italic;
+}
+.tl-sent .sx-md,
+.tl-sent .sx-md a,
+.tl-sent .tl-sender {
+  color: inherit;
 }
 .tl-sent .tl-who {
   text-transform: none;
   letter-spacing: 0;
   font-weight: 500;
+}
+/* An incoming one is folded to "agentbox" until it is opened. */
+.tl-sent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tl-sent-toggle:hover .tl-sent-label {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tl-sent-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.tl-sent-full {
+  margin-top: 4px;
 }
 .tl-sender {
   display: inline-flex;
@@ -1050,11 +1174,6 @@ a.tl-sender:hover .tl-sender-name {
  * the way a sent message sits in a chat. */
 .tl-user.tl-out {
   margin-left: 12%;
-  border-left: 1px solid var(--border);
-  border-right: 3px solid var(--info);
-}
-.tl-out.is-failed {
-  border-right-color: var(--danger);
 }
 .tl-to {
   flex: none;
@@ -1085,29 +1204,117 @@ a.tl-sender:hover .tl-sender-name {
     margin-left: 8%;
   }
 }
-/* Folding finished turns' work: a quiet switch in the corner. */
-.tl-fold {
-  position: absolute;
-  top: 8px;
-  right: 34px;
-  z-index: 2;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
+/* Your message: a bubble on the right in the accent, your picture beside
+ * it, and a copy button and the time under it. */
+.tl-me {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  margin: 8px 0 4px;
+}
+.tl-me-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px;
+  width: 100%;
+}
+.tl-bubble {
+  min-width: 0;
+  max-width: min(78%, 680px);
+  padding: 9px 15px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+/* The dark theme's accents are light: deepened, they keep white text at 4.5:1. */
+[data-theme="dark"] .tl-bubble {
+  background: color-mix(in srgb, var(--accent) 58%, #0b0b0e);
+  color: #fff;
+}
+.tl-bubble .sx-md > :first-child {
+  margin-top: 0;
+}
+.tl-bubble .sx-md > :last-child {
+  margin-bottom: 0;
+}
+.tl-bubble a {
+  color: inherit;
+  text-decoration: underline;
+}
+.tl-bubble .tl-paste {
+  border-color: color-mix(in srgb, currentColor 25%, transparent);
+  background: color-mix(in srgb, #000 12%, transparent);
+}
+.tl-bubble .tl-clamp-label,
+.tl-bubble .tl-clamp-more {
+  color: inherit;
+  opacity: 0.75;
+}
+.tl-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.tl-me-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Under the bubble, not the picture. */
+  padding-right: 44px;
   color: var(--faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tl-me-copy {
   display: grid;
   place-items: center;
   width: 24px;
   height: 24px;
   padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--faint);
   cursor: pointer;
-  opacity: 0.75;
+  opacity: 0;
+  transition: opacity 0.12s;
 }
-.tl-fold:hover,
-.tl-fold[aria-pressed="true"] {
+.tl-me:hover .tl-me-copy,
+.tl-me-copy:focus-visible {
   opacity: 1;
-  color: var(--muted);
-  border-color: var(--border-strong);
+}
+.tl-me-copy:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+@media (hover: none) {
+  .tl-me-copy {
+    opacity: 1;
+  }
+}
+@media (max-width: 640px) {
+  .tl-bubble {
+    max-width: 82%;
+  }
+  .tl-avatar {
+    display: none;
+  }
+  .tl-me-foot {
+    padding-right: 2px;
+  }
 }
 /* Long content cut to its first lines; the rest on a click. */
 .tl-clamp-body.is-clamped {
@@ -1154,34 +1361,66 @@ a.tl-sender:hover .tl-sender-name {
   font-size: 11.5px;
   color: var(--faint);
 }
-/* A finished turn's work, folded to one line. */
-.tl-steps-head {
-  display: flex;
+/* A turn's work, folded to one quiet line above its answer. */
+.tl-trace-head {
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-  width: 100%;
+  max-width: 100%;
   border: 0;
   background: none;
-  color: var(--faint);
+  color: var(--muted);
   font: inherit;
-  font-size: 12px;
-  padding: 2px 0;
+  font-size: 13px;
+  padding: 3px 8px 3px 0;
   text-align: left;
   cursor: pointer;
 }
-.tl-steps-head:hover {
+.tl-trace-head:hover {
+  color: var(--text);
+}
+.tl-trace-label {
+  flex: none;
+  font-weight: 500;
+}
+.tl-trace-n,
+.tl-trace-now {
+  color: var(--faint);
+}
+.tl-trace-n {
+  flex: none;
+}
+.tl-trace-n::before,
+.tl-trace-now::before {
+  content: "·";
+  margin-right: 7px;
+  color: var(--faint);
+}
+.tl-trace-now {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-trace-now b {
+  font-weight: 500;
   color: var(--muted);
 }
-.tl-steps-err {
-  color: var(--danger);
+.tl-trace-chev {
+  flex: none;
+  color: var(--faint);
+  transition: transform 0.15s;
 }
-.tl-steps-body {
+.tl-trace.is-open .tl-trace-chev {
+  transform: rotate(90deg);
+}
+.tl-trace-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 6px;
-  padding-left: 10px;
-  border-left: 1px dashed var(--border-strong);
+  margin: 6px 0 4px 5px;
+  padding-left: 14px;
+  border-left: 2px solid var(--border);
 }
 .tl-who {
   display: flex;
@@ -1202,46 +1441,8 @@ a.tl-sender:hover .tl-sender-name {
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
-/* When a row landed, shown while you hover it. */
-.tl-stamp {
-  display: none;
-  flex: none;
-  font-size: 11px;
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.tl-assistant:hover .tl-stamp,
-.tl-meta:hover .tl-stamp,
-.tl-thinking-head:hover .tl-stamp,
-.tl-mate-head:hover .tl-stamp,
-.tl-mate-quiet:hover .tl-stamp {
-  display: inline;
-}
 .tl-assistant {
-  position: relative;
   padding: 2px 2px;
-}
-/* Prose has no header row to sit in: the stamp floats over the top right. */
-.tl-stamp-float {
-  position: absolute;
-  top: -3px;
-  right: 0;
-  background: var(--panel);
-  line-height: 15px;
-  padding: 0 3px;
-  border-radius: 4px;
-}
-.tl-meta {
-  position: relative;
-}
-.tl-meta .tl-stamp {
-  position: absolute;
-  right: 0;
-  top: 0;
 }
 /* How long a step took. */
 .tl-dur {
@@ -1814,35 +2015,206 @@ a.sx-imgpath:hover { color: var(--accent); }
 
 /* ---------------------------------------------------------------- composer */
 
+/* No band of its own: the box sits on the page, in the timeline's column. */
 .cmp {
-  border-top: 1px solid var(--border);
-  background: var(--panel);
-  padding: 9px 18px 8px;
+  background: var(--bg);
+  padding: 6px 18px 14px;
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+.cmp > * {
+  width: 100%;
+  max-width: 920px;
+  margin-inline: auto;
+}
+/* What the session waits on: a tab on the composer's top edge says how much,
+ * and the list rises from the tab while the pointer is on the tab or the
+ * list, or after a click on the tab. It lies over the end of the timeline;
+ * nothing moves. */
+.cmp-dock {
+  position: relative;
+}
+.wk {
+  position: absolute;
+  /* The tab's foot on the box's top edge, under the composer's 6px padding. */
+  bottom: calc(100% - 6px);
+  left: 0;
+  right: 0;
+  z-index: 6;
+  padding: 0 18px;
+  pointer-events: none;
+}
+.wk-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 920px;
+  margin-inline: auto;
+}
+.wk-col > * {
+  pointer-events: auto;
+}
+.wk-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  margin: 0 0 -1px 16px;
+  padding: 0 11px 0 9px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: var(--raised);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.wk-tab:hover,
+.wk-tab[aria-expanded="true"] {
+  color: var(--text);
+}
+/* The padding under the list is the way up from the tab: the pointer keeps
+ * it open across the gap. */
+.wk-pop {
+  width: min(460px, 100%);
+  padding-bottom: 8px;
+  opacity: 0;
+  transform: translateY(6px);
+  visibility: hidden;
+  transition: opacity 0.14s, transform 0.14s, visibility 0s 0.14s;
+}
+.wk-list {
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: var(--shadow-lg);
+}
+.wk[data-open] .wk-pop,
+.wk:focus-within .wk-pop {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition: opacity 0.14s, transform 0.14s, visibility 0s;
+}
+/* Only a pointer that hovers; a phone opens it with a tap on the tab. */
+@media (hover: hover) {
+  .wk:hover .wk-pop {
+    opacity: 1;
+    transform: none;
+    visibility: visible;
+    transition: opacity 0.14s, transform 0.14s, visibility 0s;
+  }
+}
+.wk-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+a.wk-item:hover {
+  background: var(--hover);
+}
+/* A workflow's agents, under it. */
+.wk-item.is-sub {
+  min-height: 26px;
+  padding-left: 30px;
+  font-size: 12px;
+}
+.wk-group + .wk-item,
+.wk-item + .wk-group,
+.wk-group + .wk-group {
+  margin-top: 2px;
+}
+.wk-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  color: var(--faint);
+}
+.wk-kind {
+  flex: none;
+  color: var(--faint);
+}
+.wk-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.wk-age {
+  flex: none;
+  margin-left: auto;
+  padding-left: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+/* Something at work: a soft pulse in the accent. */
+.wk-pulse {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: wk-pulse 1.6s ease-in-out infinite;
+}
+.wk-tick {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+@keyframes wk-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wk-pulse {
+    animation: none;
+  }
+  .wk-pop {
+    transition: none;
+  }
+}
+@media (max-width: 640px) {
+  .wk {
+    padding: 0 10px;
+  }
+  .wk-tab {
+    margin-left: 12px;
+  }
 }
 .cmp-row {
   display: flex;
   gap: 7px;
   align-items: flex-end;
 }
+/* The keys a phone does not have; a desktop has them on its keyboard. */
 .cmp-navigation {
-  display: flex;
-  flex: none;
-  gap: 7px;
-}
-.cmp-navigation .cmp-phone-key {
   display: none;
+  flex: none;
+  gap: 6px;
 }
 .cmp textarea {
-  flex: 1;
-  min-height: 36px;
+  min-height: 40px;
   max-height: 200px;
   resize: none;
   line-height: 1.45;
-  padding-top: 7px;
-  padding-bottom: 7px;
+  padding: 10px 6px;
+  font-size: 14px;
 }
 .cmp-hint {
   font-size: 11px;
@@ -2107,18 +2479,10 @@ a.sx-imgpath:hover { color: var(--accent); }
   .sx-tab { flex: none; }
   .sx-header { padding: 10px 12px 0; }
   .sx-panel { padding: 12px; }
-  .cmp { padding: 8px 12px; }
+  .cmp { padding: 6px 12px 12px; }
   .sx-facts { flex-wrap: wrap; }
-  /* The provider's id is a uuid: its start is enough to know it by. */
-  .resume-copy span {
-    max-width: 9ch;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
   .sx-header-top { flex-wrap: wrap; }
   .cmp-row { flex-wrap: wrap; }
-  .cmp textarea { flex-basis: 100%; }
 }
 
 /* The Terminal tab of a session with no terminal: its transcript, under a
@@ -2156,27 +2520,109 @@ a.sx-imgpath:hover { color: var(--accent); }
   flex: none;
 }
 
-/* The composer's box shares its frame with pasted images. */
-.cmp-frame {
+/* The composer's box shares its frame with pasted images (attachments.tsx):
+   the paperclip, the text and the keys in one row, the images under them.
+   A lighter ground and a hairline border, and no ring on focus. */
+.att-frame.cmp-frame {
   flex: 1;
   min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: end;
+  padding: 4px 6px;
+  border-color: var(--border);
+  border-radius: 16px;
+  background: var(--raised);
 }
-/* Its height is the auto-grow's to set; `flex: 1` in the frame's column
-   pinned it to one line, under the thumbnails. */
-.cmp-frame > textarea {
-  flex: none;
+.att-frame.cmp-frame:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: none;
 }
-.cmp-frame .att-strip {
-  padding: 0 8px 8px;
+.att-frame.cmp-frame[data-drop] {
+  border-color: var(--accent);
+}
+.cmp-frame > .cmp-attach { grid-column: 1; grid-row: 1; }
+.cmp-frame > textarea { grid-column: 2; grid-row: 1; }
+.cmp-frame > .cmp-tools { grid-column: 3; grid-row: 1; }
+.cmp-frame > .att-strip {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding: 2px 4px 6px;
+}
+/* A recording covers the paperclip and the text, not Send: Send ends it. */
+.cmp-frame > .cmp-rec {
+  grid-column: 1 / 3;
+  grid-row: 1;
 }
 .cmp-frame .att {
   width: 48px;
   height: 48px;
 }
-.cmp-attach {
-  width: 32px;
-  height: 36px;
-  flex: none;
+.cmp-attach.att-pick {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 3px;
+  border-radius: 10px;
+}
+.cmp-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 3px;
+}
+/* Esc and Interrupt: quiet, and there only while a turn runs. */
+.cmp-tool {
+  display: grid;
+  place-items: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.cmp-tool:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+.cmp-stop svg {
+  fill: currentColor;
+}
+.cmp-stop:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.cmp-tool:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Send: a quiet square, tinted with the accent when there is text to send. */
+.cmp-frame .btn.cmp-go {
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  margin-left: 2px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--hover);
+  color: var(--faint);
+}
+.cmp-frame .btn.cmp-go:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.cmp-frame .btn.cmp-go[data-ready] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.cmp-frame .btn.cmp-go[data-ready]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--accent);
 }
 
 /* A voice message (voicenote.tsx): held on Send, the box becomes the
@@ -2402,10 +2848,10 @@ a.sx-imgpath:hover { color: var(--accent); }
 
 /* ------------------------------------------------------------------- phone */
 
-/* The header shrinks to two lines — title and status, then the actions and
-   the facts after them in one row you can swipe — above the tabs, and the
-   composer to the box and a row of keys, so the conversation keeps most of
-   the screen. */
+/* The header shrinks to two lines — the facts in one row you can swipe, then
+   the tabs with the actions — and the composer to the box and a row of keys,
+   so the conversation keeps most of the screen. A scheduled session's header
+   is its title and status, then its actions. */
 @media (max-width: 640px) {
   .sx-header {
     padding: 6px 12px 0;
@@ -2413,18 +2859,6 @@ a.sx-imgpath:hover { color: var(--accent); }
   .sx-header-top {
     flex-wrap: wrap;
     gap: 6px 8px;
-  }
-  .sx-title {
-    flex: 1 1 0;
-    min-width: 0;
-    font-size: 16px;
-  }
-  /* No hover to find the id by: it shows its border as a button. */
-  .sx-header-actions .copy-btn {
-    min-height: 30px;
-  }
-  .sx-header-actions .copy-btn.sx-id {
-    border-color: var(--border);
   }
   .sx-header-actions {
     order: 5;
@@ -2443,52 +2877,57 @@ a.sx-imgpath:hover { color: var(--accent); }
   .sx-header-actions > * {
     flex: none;
   }
-  .sx-header-actions .sx-facts {
-    flex: none;
-    overflow: visible;
-    margin: 0 0 0 6px;
-    padding-left: 12px;
-    border-left: 1px solid var(--border);
+  .sx-facts {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
   .sx-facts .fact-cwd {
     display: none;
   }
-  .sx-tabs {
+  .sx-tabbar {
     margin-top: 2px;
+    gap: 4px;
   }
   .sx-tab {
     min-height: 36px;
-    padding: 6px 14px;
+    padding: 6px 12px;
+  }
+  /* Icons only, so all four tabs fit beside them. The label stays the
+     button's name for a screen reader. */
+  .sx-tabbar-actions {
+    gap: 2px;
+  }
+  .sx-tabbar-actions .btn {
+    min-width: var(--tap);
+    padding: 0;
+    gap: 0;
+    font-size: 0;
   }
 
   .cmp {
     gap: 6px;
-    padding: 6px 10px;
+    padding: 6px 10px 10px;
   }
-  /* The box, the attach button and Send on the first line; the keys and
-     Interrupt wrap to a slim second one. */
+  /* The box on the first line; the keys a phone lacks on a slim second one. */
   .cmp-row {
     flex-wrap: wrap;
     gap: 6px;
   }
   .cmp-row .cmp-frame {
-    flex: 1 1 calc(100% - 90px);
+    flex: 1 1 100%;
   }
   .cmp-navigation {
-    gap: 6px;
-  }
-  .cmp-row .cmp-aux .btn,
-  .cmp-row > .btn.cmp-aux {
-    min-height: 32px;
-    height: 32px;
-  }
-  .cmp-row > .btn.cmp-aux {
-    margin-left: auto;
+    display: flex;
   }
   .cmp-navigation .cmp-phone-key {
-    display: inline-flex;
     min-width: 40px;
+    min-height: 32px;
     padding: 0 10px;
+  }
+  /* The key row has Esc. */
+  .cmp-esc {
+    display: none;
   }
   .cmp-hint {
     display: -webkit-box;
@@ -2532,15 +2971,12 @@ a.sx-imgpath:hover { color: var(--accent); }
   :root[data-kb] .cmp textarea {
     max-height: calc(var(--vvh, 100dvh) * 0.3);
   }
-  /* Send is the arrow alone, round, as in every phone chat. */
-  .cmp-row .cmp-go {
-    flex: none;
-    width: 40px;
-    height: 40px;
-    min-height: 40px;
+  /* Send is the icon alone, a little larger for a thumb. */
+  .cmp-frame .btn.cmp-go {
+    width: 38px;
+    height: 38px;
+    min-height: 38px;
     padding: 0;
-    border-radius: 50%;
-    justify-content: center;
   }
   .cmp-row .cmp-go {
     touch-action: none;
@@ -2553,8 +2989,8 @@ a.sx-imgpath:hover { color: var(--accent); }
     display: none;
   }
   .cmp-row .cmp-go svg {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
   }
   .cmp-frame .att {
     width: 40px;
@@ -2904,8 +3340,9 @@ a.sx-imgpath:hover { color: var(--accent); }
   left: 0;
   right: 0;
   pointer-events: none;
-  border-left: 3px solid #f97316;
-  background: rgba(249, 115, 22, 0.2);
+  /* The terminal is always dark, so it takes the dark theme's accent. */
+  border-left: 3px solid var(--pick-dark, #f97316);
+  background: color-mix(in srgb, var(--pick-dark, #f97316) 20%, transparent);
   animation: term-flash 1.8s ease-out forwards;
 }
 @keyframes term-flash {
@@ -2952,4 +3389,14 @@ a.sx-imgpath:hover { color: var(--accent); }
   .mr-step {
     height: 34px;
   }
+}
+/* A session started a moment ago, before its CLI writes its first turn. */
+.tl-starting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px 0;
 }

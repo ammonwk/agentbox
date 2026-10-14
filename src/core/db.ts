@@ -1367,7 +1367,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   autoApprove: true,
   parkIdleMin: 60,
   reclaimNightly: false,
-  models: { claude: "", codex: "", devin: "", omp: "", opencode: "" },
+  models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "" },
   balancer: DEFAULT_BALANCER,
 };
 

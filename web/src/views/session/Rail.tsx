@@ -1,14 +1,15 @@
-/** The session list beside whatever session is open: search, a sort, and one
- *  row per session. It is the whole Sessions page's list; on a narrow screen
- *  with nothing open it is the page. */
+/** The session list beside whatever session is open: search, a sort, the
+ *  Active and Inactive tabs, and one row per session. It is the whole
+ *  Sessions page's list; on a narrow screen with nothing open it is the page. */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
 import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
-import { Icon, RelativeTime } from "../../components";
+import { Icon, RelativeTime, Spinner } from "../../components";
 import {
   descendantsOf,
   EMPTY_FILTER,
+  projectOf,
   repoKey,
   repoShapes,
   SORT_LABEL,
@@ -19,6 +20,7 @@ import {
   usualProvider,
   type BoardFilter,
   type Nested,
+  type RailView,
   type Section,
   type SessionRow,
   type Shape,
@@ -27,7 +29,7 @@ import {
 import { baseName, fmtBytes } from "../../lib/format";
 import { openingTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
-import { go, hrefOf } from "../../route";
+import { hrefOf } from "../../route";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
 import { movePin, toggleBookmark, togglePin } from "./pins";
@@ -37,6 +39,7 @@ import { ScheduledRow } from "./Scheduled";
 
 const SORT_KEY = "agentbox.sort";
 const SORTS: readonly SortKey[] = ["mine", "all", "status", "repo"];
+const VIEW_KEY = "agentbox.railView";
 
 function readSort(): SortKey {
   try {
@@ -47,12 +50,19 @@ function readSort(): SortKey {
   }
 }
 
+function readView(): RailView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "inactive" ? "inactive" : "active";
+  } catch {
+    return "active";
+  }
+}
+
 /** Survive a trip to Accounts and back: a list that forgets its search every
- *  time you look away is a list you stop searching. The sort is a preference,
- *  so it outlives the tab too. */
+ *  time you look away is a list you stop searching. The sort and the
+ *  Active/Inactive tab are preferences, so they outlive the browser tab too. */
 let rememberedFilter: BoardFilter = EMPTY_FILTER;
-/** Parents whose children are shown. Folded by default: a lead with nine
- *  teammates is one row until you open it. */
+/** Parents kept expanded after selection and hover move elsewhere. */
 let openParents: ReadonlySet<string> = new Set();
 /** How far down the list was scrolled. On a phone the list is not mounted
  *  while a session is open, and going back to it should find it where it was. */
@@ -61,7 +71,10 @@ let railTop = 0;
 export function useListState() {
   const [filter, setFilterState] = useState<BoardFilter>(rememberedFilter);
   const [sort, setSortState] = useState<SortKey>(readSort);
+  const [view, setViewState] = useState<RailView>(readView);
   const [open, setOpenState] = useState(openParents);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [focused, setFocused] = useState<string | null>(null);
   return {
     filter,
     setFilter: (f: BoardFilter) => {
@@ -77,6 +90,19 @@ export function useListState() {
       }
       setSortState(s);
     },
+    view,
+    setView: (v: RailView) => {
+      try {
+        localStorage.setItem(VIEW_KEY, v);
+      } catch {
+        /* private mode: this tab remembers it */
+      }
+      setViewState(v);
+    },
+    hovered,
+    setHovered,
+    focused,
+    setFocused,
     open,
     setOpen: (id: string, on: boolean) => {
       const next = new Set(openParents);
@@ -94,6 +120,7 @@ export type ListState = ReturnType<typeof useListState>;
 
 export function Rail({
   sections,
+  counts,
   state,
   current,
   forcedOpen,
@@ -103,10 +130,13 @@ export function Rail({
   scheduled,
   onCancelSchedule,
 }: {
+  /** The sections of the tab `list.view` names. */
   sections: Section<Nested<SessionRow>>[];
+  /** Top-level rows in each tab, after the search. */
+  counts: Record<RailView, number>;
   state: AppState;
   current: string | null;
-  /** Ancestors of the open session, held open so it is never folded away. */
+  /** Selected, hovered and focused sessions and their ancestors stay expanded. */
   forcedOpen: ReadonlySet<string>;
   list: ListState;
   onOpenFirst: () => void;
@@ -123,7 +153,7 @@ export function Rail({
     () => state.closedStamp ?? state.sessions.reduce((n, s) => (s.status === "closed" ? n + 1 + (s.closedAt ?? 0) : n), 0),
     [state.closedStamp, state.sessions],
   );
-  const { filter, setFilter, sort } = list;
+  const { filter, setFilter, sort, view } = list;
   const cur = useRef<HTMLAnchorElement>(null);
   // Before paint, and before the effect below brings the open session into view.
   const scroller = useRef<HTMLDivElement>(null);
@@ -180,11 +210,10 @@ export function Rail({
   const [menu, setMenu] = useState<{ id: string; fallback: SessionRow; x: number; y: number } | null>(null);
   const onMenu = (s: SessionRow, x: number, y: number) => setMenu({ id: s.id, fallback: s, x, y });
 
-  // The arrows walk the list as a tree: ↑/↓ from row to row (↓ from the
-  // search box to the open one, ↑ from the top row back to it), → unfolds a
-  // parent, ← folds it or goes to its parent. Enter opens a row, as any link.
+  // Tree expansion stays local. At the root ← reaches application navigation;
+  // → on an expanded parent or leaf opens the conversation.
   const onArrow = (e: KeyboardEvent<HTMLElement>) => {
-    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !e.key.startsWith("Arrow")) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.nativeEvent.isComposing || !e.key.startsWith("Arrow")) return;
     const t = e.target as HTMLElement;
     const nav = e.currentTarget;
     const all = [...nav.querySelectorAll<HTMLElement>(".rail-row")];
@@ -198,17 +227,17 @@ export function Rail({
       const unfolded = !!s && (list.open.has(s.id) || forcedOpen.has(s.id));
       if (e.key === "ArrowDown") all[i + 1]?.focus();
       else if (e.key === "ArrowUp") (all[i - 1] ?? search)?.focus();
-      else if (e.key === "ArrowRight") {
-        if (s?.kids && !unfolded) list.setOpen(s.id, true);
-      } else if (s?.kids && unfolded && !forcedOpen.has(s.id)) list.setOpen(s.id, false);
-      else if (s?.parent) nav.querySelector<HTMLElement>(`.rail-row[data-id="${CSS.escape(s.parent)}"]`)?.focus();
+      else if (e.key === "ArrowRight" && s?.kids && !unfolded) list.setOpen(s.id, true);
+      else if (e.key === "ArrowLeft" && s?.kids && unfolded && !forcedOpen.has(s.id)) list.setOpen(s.id, false);
+      else if (e.key === "ArrowLeft" && s?.parent) nav.querySelector<HTMLElement>(`.rail-row[data-id="${CSS.escape(s.parent)}"]`)?.focus();
+      else return;
     } else return;
     e.preventDefault();
     e.stopPropagation();
   };
 
   return (
-    <nav className="rail" aria-label="Sessions" onKeyDown={onArrow}>
+    <nav className="rail" data-nav-region="list" tabIndex={-1} aria-label="Sessions" onKeyDown={onArrow}>
       <div className="rail-top">
         <label className="rail-search">
           <Icon.search size={13} />
@@ -236,11 +265,38 @@ export function Rail({
         <BookmarksMenu sessions={state.sessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
       </div>
+      <div className="rail-views" role="tablist" aria-label="Which sessions">
+        {(["active", "inactive"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            className="rail-view"
+            aria-selected={view === v}
+            title={v === "active" ? "Running, or did something in the last 3 hours" : "Nothing in the last 3 hours"}
+            onClick={() => list.setView(v)}
+          >
+            {v === "active" ? "Active" : "Inactive"} <span>{counts[v]}</span>
+          </button>
+        ))}
+      </div>
 
       <div
         className="rail-scroll"
         ref={scroller}
         onScroll={(e) => (railTop = e.currentTarget.scrollTop)}
+        onMouseOver={(e) => {
+          const row = (e.target as HTMLElement).closest<HTMLElement>(".rail-row");
+          list.setHovered(row?.dataset.id ?? null);
+        }}
+        onMouseLeave={() => list.setHovered(null)}
+        onFocus={(e) => {
+          const row = (e.target as HTMLElement).closest<HTMLElement>(".rail-row");
+          list.setFocused(row?.dataset.id ?? null);
+        }}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) list.setFocused(null);
+        }}
         data-drop={over === "root" || undefined}
         onDragOver={(e) => {
           if (!drag || !toRoot) return;
@@ -258,7 +314,7 @@ export function Rail({
         }}
       >
         <CloseFailure />
-        {scheduled.length ? (
+        {view === "active" && scheduled.length ? (
           <div className="rail-sec" data-kind="scheduled">
             <div className="rail-label">
               Scheduled <span>{scheduled.length}</span>
@@ -268,8 +324,10 @@ export function Rail({
             ))}
           </div>
         ) : null}
-        {rows.length === 0 && scheduled.length === 0 ? (
-          <p className="rail-none">{filter.query ? "Nothing open matches." : state.sessions.length ? "Nothing open." : "No sessions yet."}</p>
+        {rows.length === 0 && (view === "inactive" || scheduled.length === 0) ? (
+          <p className="rail-none">
+            {filter.query ? `Nothing ${view} matches.` : state.sessions.length ? `Nothing ${view}.` : "No sessions yet."}
+          </p>
         ) : null}
         {sections.map((sec) => (
           <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
@@ -288,13 +346,10 @@ export function Rail({
                 refFn={s.id === current ? cur : undefined}
                 usual={usual}
                 sort={sort}
-                shape={shapes.get(repoKey(s))}
                 open={list.open.has(s.id) || forcedOpen.has(s.id)}
+                held={list.open.has(s.id)}
                 onToggle={() => {
-                  // A parent held open only because the open session is under it
-                  // cannot fold while that session stays open: deselect it first.
-                  if (forcedOpen.has(s.id)) go({ page: "sessions" });
-                  list.setOpen(s.id, !(list.open.has(s.id) || forcedOpen.has(s.id)));
+                  list.setOpen(s.id, !list.open.has(s.id));
                 }}
                 onClose={onClose}
                 onMenu={onMenu}
@@ -305,7 +360,7 @@ export function Rail({
             ))}
           </div>
         ))}
-        <ClosedList query={filter.query} current={current} stamp={closedStamp} shapes={shapes} onMenu={onMenu} />
+        {view === "inactive" ? <ClosedList query={filter.query} current={current} stamp={closedStamp} onMenu={onMenu} /> : null}
       </div>
       {drag ? (
         <div className="rail-drophint" data-active={over === "root" || undefined} aria-hidden="true">
@@ -357,8 +412,8 @@ function Row({
   refFn,
   usual,
   sort,
-  shape,
   open,
+  held,
   onToggle,
   onClose,
   onMenu,
@@ -371,8 +426,9 @@ function Row({
   refFn?: Ref<HTMLAnchorElement>;
   usual: ProviderId | null;
   sort: SortKey;
-  shape: Shape | undefined;
   open: boolean;
+  /** You expanded it, rather than its being open because a row under it is. */
+  held: boolean;
   onToggle: () => void;
   onClose: (s: SessionRow) => void;
   onMenu: (s: SessionRow, x: number, y: number) => void;
@@ -384,17 +440,19 @@ function Row({
 }) {
   const said = snippetOf(s);
   const movable = pinned || s.host !== "subagent";
-  return (
+  const row = (
     <a
       ref={refFn}
       className="rail-row"
       href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })}
       aria-current={current ? "page" : undefined}
       data-id={s.id}
+      data-nav-item
+      data-nav-id={`session:${s.id}`}
       data-status={s.status}
       data-depth={s.depth || undefined}
       style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
-      title={[titleOf(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
+      title={[namedTitle(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
       draggable={movable}
       data-drop={target ?? undefined}
       onDragStart={(e) => {
@@ -422,9 +480,8 @@ function Row({
         onMenu(s, e.clientX, e.clientY);
       }}
     >
-      <StatusDot status={shownStatus(s)} shape={shape} repo={baseName(repoKey(s))} copy={s.id} />
       <span className="rail-text">
-        <span className="rail-title">{titleOf(s)}</span>
+        <RowTitle s={s} />
         {said ? <span className={`rail-snippet${s.attention.kind === "blocked" ? " blocked" : ""}`}>{said}</span> : null}
       </span>
       {s.kids ? (
@@ -432,9 +489,9 @@ function Row({
           type="button"
           className="rail-kids"
           aria-expanded={open}
-          title={`${open ? "Hide" : "Show"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started (← →)`}
+          title={`${held ? "Stop keeping" : "Keep"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started expanded after leaving this session (← →)`}
           onClick={(e) => {
-            // Inside the row's link: fold, do not open.
+            // Keep expansion separate from opening the session.
             e.preventDefault();
             e.stopPropagation();
             onToggle();
@@ -450,8 +507,61 @@ function Row({
       </span>
       <RowLoad id={s.id} />
       {s.host === "subagent" || s.status === "closed" ? null : <CloseX s={s} onClose={onClose} />}
+      <RowState s={s} />
     </a>
   );
+  return s.depth ? <div className="rail-reveal"><div>{row}</div></div> : row;
+}
+
+/**
+ * What it is doing, as one icon at the row's right end: a spinner while it
+ * works, a pulse while it waits on work it left running, a clock when it is
+ * your turn, and an alert while it waits for your approval or your answer, or
+ * when its turn failed. Nothing once it is stopped. A click copies its id.
+ */
+function RowState({ s }: { s: SessionRow }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1400);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const st = stateOf(s);
+  // An empty column keeps the times in line.
+  if (!st) return <span className="rail-state" />;
+  return (
+    <button
+      type="button"
+      className="rail-state"
+      data-state={st.kind}
+      aria-label={`${st.label}. Copy ${s.id}`}
+      title={`${st.label}\nClick to copy ${s.id}`}
+      onClick={(e) => {
+        // Inside the row's link: copy, do not open.
+        e.preventDefault();
+        e.stopPropagation();
+        void navigator.clipboard.writeText(s.id).then(() => setCopied(true));
+      }}
+    >
+      {copied ? <Icon.check size={13} /> : st.icon}
+    </button>
+  );
+}
+
+function stateOf(s: SessionRow): { kind: string; label: string; icon: ReactNode } | null {
+  // An error agentbox retries by itself is work, not something for you to fix.
+  if (shownStatus(s) === "retrying") return { kind: "working", label: "Retrying: agentbox retries it by itself", icon: <Spinner size={12} /> };
+  if (s.status === "blocked") {
+    return { kind: "approval", label: s.question ? "Asking you a question" : "Waiting for your approval", icon: <Icon.alert size={13} /> };
+  }
+  if (s.status === "running") {
+    return s.background
+      ? { kind: "background", label: "Its turn is over; it waits on work it left running", icon: <span className="rail-pulse" /> }
+      : { kind: "working", label: "Working", icon: <Spinner size={12} /> };
+  }
+  if (s.status !== "waiting") return null;
+  if (s.turnError) return { kind: "error", label: `Its turn failed: ${s.turnError.detail}`, icon: <Icon.alert size={13} /> };
+  return { kind: "waiting", label: s.parkedAt ? "Your turn (parked: a message resumes it)" : "Your turn", icon: <Icon.clock size={13} /> };
 }
 
 /**
@@ -526,8 +636,22 @@ function CloseFailure() {
   );
 }
 
+/** The session's name, after the project it works on, in quieter type. */
+function RowTitle({ s }: { s: SessionRow }) {
+  const project = projectOf(s);
+  return (
+    <span className="rail-title">
+      {project ? <span className="rail-proj">{project}</span> : null}
+      {titleOf(s)}
+    </span>
+  );
+}
+
+const namedTitle = (s: SessionRow) => [projectOf(s), titleOf(s)].filter(Boolean).join(" · ");
+
 /** What it last said, what it is asking, or that its answer is waiting. */
 function snippetOf(s: SessionRow): string {
+  if (s.backgroundWork) return `Running ${s.backgroundWork}`;
   const said =
     s.status === "blocked" || (s.status === "waiting" && (s.subagent?.answerWaiting || s.turnError))
       ? s.attention.reason
@@ -704,13 +828,11 @@ function ClosedList({
   query,
   current,
   stamp,
-  shapes,
   onMenu,
 }: {
   query: string;
   current: string | null;
   stamp: number;
-  shapes: Map<string, Shape>;
   onMenu: (s: SessionRow, x: number, y: number) => void;
 }) {
   const [open, setOpenState] = useState(closedOpen);
@@ -793,18 +915,19 @@ function ClosedList({
             <a
               key={s.id}
               className="rail-row"
+              data-nav-item
+              data-nav-id={`session:${s.id}`}
               href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })}
               aria-current={s.id === current ? "page" : undefined}
               data-status={s.status}
-              title={titleOf(s)}
+              title={namedTitle(s)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 onMenu(s, e.clientX, e.clientY);
               }}
             >
-              <StatusDot status={shownStatus(s)} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} copy={s.id} />
               <span className="rail-text">
-                <span className="rail-title">{titleOf(s)}</span>
+                <RowTitle s={s} />
               </span>
               <span className="rail-when">
                 {s.closedAt ? <RelativeTime ts={s.closedAt} short title={`Closed ${new Date(s.closedAt).toLocaleString()}`} /> : null}

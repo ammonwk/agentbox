@@ -39,9 +39,9 @@ export function Insights({ state, accountId }: { state: AppState; accountId: str
   );
 
   return (
-    <div className="ins" style={{ ["--acct" as string]: `var(--acct-${hue})` }}>
+    <div data-nav-region="detail" tabIndex={-1} aria-label="Account insights" className="ins" style={{ ["--acct" as string]: `var(--acct-${hue})` }}>
       <header className="ins-head">
-        <a className="ins-back" href={hrefOf({ page: "accounts", sub: "accounts" })}>
+        <a data-nav-back className="ins-back" href={hrefOf({ page: "accounts", sub: "accounts" })}>
           <Icon.chevronLeft size={14} /> Accounts
         </a>
         <div className="ins-who">

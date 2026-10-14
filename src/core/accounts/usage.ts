@@ -44,6 +44,7 @@ export const POLL_MS: Record<AccountProvider, number> = {
   codex: 5 * MIN,
   devin: 10 * MIN,
   omp: 3 * MIN,
+  muse: 10 * MIN,
 };
 
 const TICK_MS = 10_000;
@@ -643,6 +644,7 @@ async function fetchGoUsage(account: Account, deps: UsageDeps): Promise<Reading>
 
 function fetchUsage(account: Account, deps: UsageDeps): Promise<Reading> {
   switch (account.provider) {
+    case "muse": return Promise.resolve({ kind: "skip", stale: "Muse Code does not expose subscription usage windows here" });
     case "claude": return fetchClaudeUsage(account, deps);
     case "codex": return fetchCodexUsage(account, deps);
     case "devin": return fetchDevinUsage(account, deps);

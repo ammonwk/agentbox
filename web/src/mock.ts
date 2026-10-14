@@ -11,6 +11,7 @@
  * bundle does not carry it.
  */
 
+import { mockMcp } from "./mockmcp";
 import type {
   AccountUsage,
   AccountView,
@@ -53,7 +54,7 @@ import type {
   Card,
   ScheduleSpec,
 } from "../../src/core/types";
-import type { RepoPatch, TermChannel, TermHandlers } from "./api";
+import type { AgentTimeline, RepoPatch, SessionWork, TermChannel, TermHandlers } from "./api";
 import { nextRun, parseWhen } from "../../src/core/schedule";
 import { retrying } from "../../src/core/attention";
 import { accountProvider } from "../../src/core/providers/account";
@@ -72,7 +73,7 @@ const settings: AgentSettings = {
   autoApprove: false,
   parkIdleMin: 60,
   reclaimNightly: false,
-  models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "" },
+  models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "" },
   balancer: {
     claimNormal: 1.5,
     shortWindowInWeekly: 24,
@@ -677,6 +678,7 @@ const MOCK_MODELS: Record<ProviderId, ModelOption[]> = {
     { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", releasedAt: "2026-07-09", efforts: ["low", "medium", "high", "xhigh", "max"] },
   ],
   omp: [{ id: "opencode-go/deepseek-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
+  muse: [{ id: "muse-spark-1.3", label: "Muse Spark 1.3", releasedAt: "2026-09-02" }],
   opencode: [{ id: "opencode-go/deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", releasedAt: "2026-09-10" }],
   devin: [
     { id: "swe", label: "SWE-2 (latest)", releasedAt: null },
@@ -918,6 +920,72 @@ function pageBefore(id: string, before: string | null, limit: number): TimelineP
   const end = before ? Math.max(0, tl.findIndex((e) => e.id === before)) : tl.length;
   const start = Math.max(0, end - limit);
   return { events: tl.slice(start, end), before: start > 0 ? tl[start].id : null, cursor: tl[tl.length - 1]?.id ?? "" };
+}
+
+// ------------------------------------------------------------- work
+
+/** What the balancer-ties session waits on: an agent it started, a workflow
+ *  running two, and its dev server. Every other session waits on nothing. */
+function workOf(id: string): SessionWork {
+  if (id !== "7fk2") return { shells: [], agents: [], workflows: [] };
+  return {
+    shells: [{ pid: 48_211, command: "bun run web:dev", label: "Vite dev server", since: T0 - 22 * M, monitor: false, kind: "service" }],
+    agents: [{ id: "a3f9c2e81b7d40a65", description: "Find every caller of place()", name: "Explore", background: false, since: T0 - 95_000 }],
+    workflows: [
+      {
+        runId: "wf_4c1d9e2a-7b3",
+        name: "review-balancer",
+        since: T0 - 6 * M,
+        agents: [
+          { id: "a81e0c4d93f2b7a15", label: "tie-band edge cases", phase: "Review" },
+          { id: "a2c7d1f0e9b84a336", label: "weekly-per-hour math", phase: "Review" },
+        ],
+      },
+    ],
+  };
+}
+
+/** When each agent's view first asked: its steps land from then, one every few seconds. */
+const agentSeen = new Map<string, number>();
+
+function agentTimelineOf(agentId: string, since: string | null): AgentTimeline {
+  const first = agentSeen.get(agentId) ?? Date.now();
+  agentSeen.set(agentId, first);
+  const all = agentSteps(agentId, first - 40_000);
+  const shown = Math.min(all.length, 5 + Math.floor((Date.now() - first) / 3000));
+  const done = shown === all.length;
+  // Until it is done, the newest step is still running.
+  const events = all.slice(0, shown).map((e, i) => (!done && i === shown - 1 && e.kind === "tool" ? { ...e, status: "running" as const, output: undefined } : e));
+  const from = since === null ? null : Number(since);
+  return {
+    // The step that was running when the page last asked comes again, finished.
+    events: from === null ? events : events.slice(Math.max(0, from - 1)),
+    cursor: String(shown),
+    reset: from === null,
+    more: false,
+    state: done ? "done" : "running",
+  };
+}
+
+function agentSteps(agentId: string, t0: number): TimelineEvent[] {
+  let t = t0;
+  let n = 0;
+  const at = (ms: number) => (t += ms);
+  const id = () => `${agentId}-s${++n}`;
+  return [
+    { id: id(), at: at(0), kind: "user", text: "Find every caller of `place()` under `src/`, and say which pass a model and which leave it to the balancer's default. Report file:line for each." },
+    { id: id(), at: at(2000), kind: "thinking", text: "I'll grep for the call sites first, then read each one to see what it passes." },
+    { id: id(), at: at(1500), kind: "tool", name: "Grep", summary: "place\\( in src/", input: '{\n  "pattern": "place\\\\(",\n  "path": "src/"\n}', output: "src/core/fleet.ts:2391:    const choice = place(cands, cfg);\nsrc/core/fleet.ts:2877:    return place(cands, { ...cfg, model });\nsrc/server/index.ts:412:  const p = place(candidates(), settings.balancer);", status: "ok" },
+    { id: id(), at: at(1800), kind: "tool", name: "Read", summary: "src/core/fleet.ts:2380-2400", input: '{\n  "file_path": "src/core/fleet.ts",\n  "offset": 2380,\n  "limit": 20\n}', output: "2391\t    const choice = place(cands, cfg);", status: "ok" },
+    { id: id(), at: at(2400), kind: "tool", name: "Read", summary: "src/core/fleet.ts:2870-2885", input: '{\n  "file_path": "src/core/fleet.ts",\n  "offset": 2870,\n  "limit": 15\n}', output: "2877\t    return place(cands, { ...cfg, model });", status: "ok" },
+    { id: id(), at: at(2000), kind: "assistant", text: "Two of the three calls are in `fleet.ts`; one passes the model. Checking the server's preview route next." },
+    { id: id(), at: at(2200), kind: "tool", name: "Read", summary: "src/server/index.ts:405-420", input: '{\n  "file_path": "src/server/index.ts",\n  "offset": 405,\n  "limit": 15\n}', output: "412\t  const p = place(candidates(), settings.balancer);", status: "ok" },
+    { id: id(), at: at(2600), kind: "tool", name: "Bash", summary: "bun test src/core/__tests__/balancer.test.ts", input: "bun test src/core/__tests__/balancer.test.ts", output: " 16 pass\n 0 fail", status: "ok" },
+    {
+      id: id(), at: at(3000), kind: "assistant",
+      text: "Three callers:\n\n| where | model |\n|---|---|\n| `src/core/fleet.ts:2391` | balancer default |\n| `src/core/fleet.ts:2877` | passes `model` |\n| `src/server/index.ts:412` | balancer default |\n\nThe preview route is the one to change: it never passes the model the dialog picked.",
+    },
+  ];
 }
 
 // ------------------------------------------------------------- the socket
@@ -1222,6 +1290,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   const p = url.pathname.split("/").filter(Boolean).map(decodeURIComponent); // ["api", ...]
   const [, head, id, action] = p;
 
+  if (head === "mcp") return mockMcp(method, p.slice(2), b);
   if (method === "GET") {
     if (head === "sessions" && action === "submissions") return submissions.get(p[4]!) ?? null;
     if (head === "state") return appState();
@@ -1268,6 +1337,11 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
     }
     if (head === "sessions" && action === "diff") return diff;
     if (head === "sessions" && action === "load") return procs;
+    if (head === "sessions" && action === "work") return workOf(id);
+    if (head === "sessions" && action === "agents" && p[5] === "timeline") {
+      await sleep(120);
+      return agentTimelineOf(p[4], url.searchParams.get("since"));
+    }
     throw new Error(`mock: no GET ${path}`);
   }
 

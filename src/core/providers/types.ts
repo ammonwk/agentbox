@@ -354,6 +354,10 @@ export interface ProviderAdapter {
 
   resumeCommand(opts: ResumeOptions): Command;
 
+  /** The resume CLI accepts no prompt argument. The fleet waits for the TUI
+   * and types the prompt through its normal serialized delivery path. */
+  resumePromptInTerminal?: boolean;
+
   /**
    * Anything the CLI keeps outside its argv that must be right before
    * `resumeCommand` runs. Devin resumes in the permission mode it saved for

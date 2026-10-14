@@ -3,12 +3,12 @@
  *
  * A stack, decisions you owe first and newest first, then what happened, then
  * what you kept for later. The card on top takes three gestures, each with a
- * button under it and a key:
- *   right (→) — answer it: a sheet with a text box. Empty, on a card that
+ * button under it and a Shift+arrow shortcut (plain arrows navigate):
+ *   right (Shift+→) — answer it: a sheet with a text box. Empty, on a card that
  *               only wanted seeing, means "seen".
- *   left  (←) — keep it for later: to the back of the stack and the Later list.
- *   up    (↑) — the long version, from which the others work.
- *   down  (↓) — approve: the asker's recommendation is your answer. On a card
+ *   left  (Shift+←) — keep it for later: to the back of the stack and the Later list.
+ *   up    (Shift+↑) — the long version, from which the others work.
+ *   down  (Shift+↓) — approve: the asker's recommendation is your answer. On a card
  *               that only wanted seeing, seen. A decision with no
  *               recommendation has nothing to approve, and springs back.
  * The last one can be taken back (u): an answer is held a few seconds before
@@ -155,9 +155,13 @@ export function Review({ state }: { state: AppState }) {
   // The keys, while no sheet has the keyboard.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (answering || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (answering || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      // Review's own keys: not from the sidebar or a pane outside it. A card
+      // that leaves takes the focus with it, to the page or the body.
+      if (!el || !(el === document.body || el.id === "content" || el.closest(".review"))) return;
+      if (e.key.startsWith("Arrow") && !e.shiftKey) return;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
       const card = reading ?? (tab === "stack" ? shownTop : null);
       if (e.key === "u") undo();
       else if (!card || card.state === "answered" || card.state === "closed") return;
@@ -288,12 +292,12 @@ function Actions({
   const does = downOf(card);
   return (
     <div className={`review-actions${long ? " review-actions-long" : ""}`}>
-      <button type="button" className="review-act review-act-later" onClick={() => onLater(card)} title="Keep it for later (←)" disabled={card.state === "later" && long}>
+      <button type="button" className="review-act review-act-later" onClick={() => onLater(card)} title="Keep it for later (Shift+←)" disabled={card.state === "later" && long}>
         <Icon.chevronLeft size={18} />
         <span>Later</span>
       </button>
       {onRead ? (
-        <button type="button" className="review-act review-act-more" onClick={() => onRead(card)} title="The long version (↑)">
+        <button type="button" className="review-act review-act-more" onClick={() => onRead(card)} title="The long version (Shift+↑)">
           <Icon.chevronUp size={18} />
           <span>More</span>
         </button>
@@ -303,12 +307,12 @@ function Actions({
         className="review-act review-act-approve"
         onClick={() => onApprove(card)}
         aria-disabled={does === null || undefined}
-        title={does === "approve" ? "Approve the recommendation (↓)" : does === "seen" ? "Seen, fine (↓)" : "It has no recommendation to approve"}
+        title={does === "approve" ? "Approve the recommendation (Shift+↓)" : does === "seen" ? "Seen, fine (Shift+↓)" : "It has no recommendation to approve"}
       >
         <Icon.check size={18} />
         <span>{does === "seen" ? "Seen" : "Approve"}</span>
       </button>
-      <button type="button" className="review-act review-act-answer" onClick={() => onAnswer(card)} title="Answer it (→)">
+      <button type="button" className="review-act review-act-answer" onClick={() => onAnswer(card)} title="Answer it (Shift+→)">
         <span>{card.kind === "decision" ? "Answer" : "Respond"}</span>
         <Icon.chevronRight size={18} />
       </button>
@@ -452,6 +456,16 @@ function SwipeCard({
       data-depth={depth}
       data-leaving={leaving ?? undefined}
       aria-hidden={top ? undefined : true}
+      data-nav-item={top ? "" : undefined}
+      data-nav-id={`card:${card.id}`}
+      tabIndex={top ? 0 : -1}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
+        if (e.key === "ArrowRight" || e.key === "Enter") {
+          e.preventDefault();
+          onUp();
+        }
+      }}
       onPointerDown={down}
       onPointerMove={move}
       onPointerUp={up}
@@ -506,6 +520,13 @@ function LongView({
   onApprove: (c: Card) => void;
   onAnswer: (c: Card) => void;
 }) {
+  const longRef = useRef<HTMLDivElement>(null);
+  const restoreTo = useRef(document.activeElement as HTMLElement | null);
+  useEffect(() => {
+    longRef.current?.focus();
+    const restore = restoreTo.current;
+    return () => { if (restore?.isConnected) restore.focus(); };
+  }, []);
   const [long, setLong] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
@@ -524,7 +545,22 @@ function LongView({
   }, [card.id, card.hasLong]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || document.querySelector(".modal-backdrop")) return;
+      if (document.querySelector(".modal-backdrop") || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
+      if (e.key === "Tab") {
+        const controls = [...(longRef.current?.querySelectorAll<HTMLElement>('a[href], button:not(:disabled), [tabindex="0"]') ?? [])].filter((el) => el.getClientRects().length);
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (e.shiftKey && (document.activeElement === first || document.activeElement === longRef.current)) {
+          e.preventDefault();
+          (last ?? longRef.current)?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          (first ?? longRef.current)?.focus();
+        }
+        return;
+      }
+      if (e.key !== "Escape" && (e.key !== "ArrowLeft" || e.shiftKey)) return;
+      e.preventDefault();
       e.stopPropagation();
       onClose();
     };
@@ -533,7 +569,7 @@ function LongView({
   }, [onClose]);
   const open = card.state === "open" || card.state === "later";
   return (
-    <div className="review-long" role="dialog" aria-modal="true" aria-label={card.title}>
+    <div className="review-long" tabIndex={-1} ref={longRef} role="dialog" aria-modal="true" aria-label={card.title}>
       <div className="review-long-head">
         <span className={`card-kind-chip card-kind-${card.kind}`}>{KIND[card.kind]}</span>
         <span className="spacer" />
@@ -625,7 +661,7 @@ function CardList({ cards, state, empty, onOpen }: { cards: Card[]; state: AppSt
     <ul className="review-list">
       {cards.map((c) => (
         <li key={c.id}>
-          <button type="button" className="review-row" onClick={() => onOpen(c)}>
+          <button type="button" className="review-row" data-nav-item data-nav-id={`card:${c.id}`} onKeyDown={(e) => { if (e.key === "ArrowRight" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); onOpen(c); } }} onClick={() => onOpen(c)}>
             <span className={`card-kind-chip card-kind-${c.kind}`}>{KIND[c.kind]}</span>
             <span className="review-row-text">
               <span className="review-row-title">{c.title}</span>

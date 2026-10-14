@@ -57,6 +57,7 @@ import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./g
 import { setUpWorktree } from "./setup";
 import { prReleaseNotice, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
+import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
 import {
   LIMIT_DIALOG,
   transcriptFile,
@@ -1818,7 +1819,7 @@ export class Fleet extends EventEmitter {
     if (argv && adapter?.headless?.(argv)) launch = undefined;
     else if (argv && adapter) {
       const env = environOf(pid);
-      launch = { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} };
+      launch = cleanMcpLaunch(v.provider, { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} }, env ?? undefined);
     }
     this.launches.set(pid, launch);
     return launch;
@@ -2692,7 +2693,7 @@ export class Fleet extends EventEmitter {
 
     const model = req.model || settings.models[req.provider] || undefined;
     const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
-    const cmd = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove });
+    const cmd = withGlobalMcp(req.provider, account, adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove }), [], cwd);
     const now = this.now();
     const name = tmuxName(id);
     const parent = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
@@ -2877,6 +2878,9 @@ export class Fleet extends EventEmitter {
       throw new FleetError(409, "its transcript is missing, so it cannot be moved to another account");
     }
     if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
+    // Validate both the target launch and fallback before stopping a live agent.
+    const prepared = this.resumeLaunch(rec, target?.account ?? from, cwd, prompt);
+    const fallback = target ? this.resumeLaunch(rec, from, cwd, prompt) : prepared;
     if (view.host === "tmux") await this.stopAndWait(rec, view);
 
     let account = from;
@@ -2920,7 +2924,7 @@ export class Fleet extends EventEmitter {
       const ref = await adapter.findTranscript(account, rec.agentSessionId!).catch(() => null);
       if (ref) this.track(ref);
     }
-    this.startTmux({ ...rec, ...patch }, account, cwd, prompt);
+    this.startTmux({ ...rec, ...patch }, account, cwd, prompt, account.id === from.id ? fallback : prepared);
   }
 
   /** End the session's process in our tmux and wait until it is gone, so
@@ -3001,34 +3005,38 @@ export class Fleet extends EventEmitter {
     return this.get(id);
   }
 
-  private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string): void {
+  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string) {
     const notice = prReleaseNotice(rec.id);
     if (notice) prompt = `${notice}\n\n${prompt ?? ""}`;
-    const settings = getSettings();
     const adapter = this.adapter(rec.provider);
-    const typed = tooLongForArgv(prompt) ? prompt : undefined;
+    const launch = rec.launch ? cleanMcpLaunch(rec.provider, rec.launch, new Map([["CODEX_HOME", account.home]])) : undefined;
+    const typed = adapter.resumePromptInTerminal || tooLongForArgv(prompt) ? prompt : undefined;
     const opts = {
-      account,
-      agentSessionId: rec.agentSessionId!,
-      cwd,
+      account, agentSessionId: rec.agentSessionId!, cwd,
       prompt: typed ? undefined : prompt || undefined,
       ...(rec.effort ? { effort: rec.effort } : {}),
       ...(resumeModel(rec) ? { model: resumeModel(rec)! } : {}),
-      autoApprove: settings.autoApprove,
-      ...(rec.launch ? { carry: rec.launch.args } : {}),
+      autoApprove: getSettings().autoApprove,
+      ...(launch ? { carry: launch.args } : {}),
     };
+    const cmd = withGlobalMcp(rec.provider, account, adapter.resumeCommand(opts), opts.carry, cwd, launch?.env);
+    return { opts, cmd, typed, inherited: launch?.env };
+  }
+
+  private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string, prepared?: ReturnType<Fleet["resumeLaunch"]>): void {
+    const adapter = this.adapter(rec.provider);
+    const { opts, cmd, typed, inherited } = prepared ?? this.resumeLaunch(rec, account, cwd, prompt);
     try {
       adapter.prepareResume?.(opts);
     } catch (e) {
       // Resume anyway: the health watch catches a session that comes back unable to act.
       console.error(`agentbox: preparing ${rec.id}'s resume failed:`, e);
     }
-    const cmd = adapter.resumeCommand(opts);
     const name = tmuxName(rec.id);
     // A dead pane from the last run holds the name.
     this.killTmux(name);
     // The account's variables win over the launching shell's.
-    const env = { ...rec.launch?.env, ...cmd.env, ...sessionEnv(rec.id, rec.provider) };
+    const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider) };
     this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env, unset: cmd.unset });
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
@@ -3101,7 +3109,8 @@ export class Fleet extends EventEmitter {
     const argv = argvOf(pid) ?? [];
     if (adapter.headless?.(argv)) throw new FleetError(409, "a scripted one-shot run: something is waiting on its output, so it is left alone");
     const env = environOf(pid);
-    const launch: Launch = { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} };
+    const launch = cleanMcpLaunch(rec.provider, { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} }, env ?? undefined);
+    const prepared = this.resumeLaunch({ ...rec, launch }, account, cwd);
     try {
       process.kill(pid, "SIGTERM");
     } catch {
@@ -3117,7 +3126,7 @@ export class Fleet extends EventEmitter {
     // Let the CLI's own exit bookkeeping (session files, locks) settle.
     await Bun.sleep(500);
     updateSessionRecord(id, { launch });
-    this.startTmux({ ...rec, launch }, account, cwd);
+    this.startTmux({ ...rec, launch }, account, cwd, undefined, prepared);
     await this.tick();
     return this.get(id);
   }

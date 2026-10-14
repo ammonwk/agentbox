@@ -230,6 +230,7 @@ function scanUncached(): ProcMatch[] {
 export function runsCli(argv: string[], name: string): boolean {
   const a0 = basename(argv[0] ?? "");
   if (a0 === name || a0 === `${name}.exe`) return true;
+  if (name === "muse" && /^muse-bin-\d/.test(a0)) return true;
   if ((a0 === "node" || a0 === "bun" || a0.startsWith("node")) && argv[1]) {
     const a1 = argv[1];
     const b1 = basename(a1);
@@ -244,7 +245,7 @@ export interface ProcessRef {
   startedAt: number;
 }
 
-const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode"];
+const AGENT_CLIS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 
 /** The nearest ancestor of this process that runs an agent CLI. */
 export function agentAncestor(): ProcessRef | null {
