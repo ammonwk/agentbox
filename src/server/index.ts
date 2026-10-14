@@ -186,7 +186,7 @@ export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
     for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
   });
 });
-export const agents = new AgentsRuntime(fleet, cloud, cards);
+export const agents = new AgentsRuntime(fleet, cloud, cards, undefined, waits);
 cloud.outboundRefusal = id => agents.directContactRefusal(id);
 scheduler.onTick(async () => { await agents.tick(); void agents.conversations.tick().catch((e) => { agents.lastError = (e as Error).message; }); });
 const turnIndex = new TurnIndex(fleet, {

@@ -387,3 +387,89 @@ These are navigation filters, not new access grants. Switching projects does not
 stop running work, rebind an agent, grant publication or change credentials. Shared
 Chat still checks current membership and host grants at dispatch; Feed approval and
 contact consent keep their existing boundaries. Standalone Sessions remain private.
+
+## Agent session browser and Jupiter
+
+Agents opens the last selected instance within the current project/workspace.
+The searchable selector replaces the template landing page. The left rail uses
+Sessions' Active/Inactive controls and real linked session rows; the right pane
+shows only the selected provider conversation. Activity means running or active
+within three hours; closed conversations are inactive. Retained predecessors are
+read-only. About and Feed remain agent-level views. Mobile Back returns to that
+agent's rail. Ordinary Sessions uses actual local agent/project metadata for its
+row attribution, so a private execution directory is not mistaken for a project.
+
+“Create agent…” opens **Jupiter**, whose internal creator capability permits
+creation proposals only. It is a real provider conversation. Jupiter calls
+`agentbox agent draft <local creator ID|shared run UUID> --request <stable UUID>
+--file <spec.json>` to publish a typed, persisted proposal. The inline form lets
+the human edit name, purpose, instructions, provider, limits and requested
+automation. Save uses a revision check; Create accepts that exact draft once and
+returns the new instance. Renaming an ordinary agent Jupiter grants no capability.
+A replaced creator session cannot authorize an unaccepted old proposal.
+
+Created instances inherit the creator's actual project/repository scope, with
+manual activation and no publisher credentials. Creation never starts a process.
+Requested automation is recorded as unconfigured; it does not create a schedule.
+Local instances use the existing provider accounts on their first explicit Send.
+Shared instances retain the authenticated creator as maintainer. Only a human
+who owns the existing authorized execution installation can reuse it during
+creation; otherwise About truthfully requires host setup. Provider logins remain
+on that host. Jupiter does not manage, monitor, or delete agents in this version.
+
+Read-through accepts an exact session ID only after verifying its recorded agent
+run/history association. The response includes at most 200 metadata rows; older
+rows are paginated. Transcript pagination stays within the selected session.
+Shared guidance pins the run's session and fence when queued, and checks them
+again at dispatch. It never follows a replacement writer. Drafts and pending
+receipts are keyed to the actual agent/session. Earlier agent-level drafts have
+an explicit recovery action; proposal guidance cannot move to another run.
+
+## Local issue families and guarded publication
+
+The installation operator can grant a coordinator one registered project, an
+accountable human, an explicitly authorized existing gh actor, a worktree root,
+required checks, an improvement-issue repository and an expiry (at most seven
+days). `POST /api/agents/work-grants` requires the private host operator capability;
+this is the trusted local operator boundary, not operating-system isolation.
+Provider sessions cannot manufacture it through editable caller metadata.
+
+`agentbox agent work-start --file family.json` validates canonical open issues,
+records all claims atomically, pins the agent configuration and base, then starts
+one Fleet writer in an isolated worktree. Family JSON contains a stable UUID,
+grant, project agent, base branch, separately reproduced issues/acceptance/evidence,
+and preparation covering the problem, consumers, edges, non-goals, design and
+validation. Work/history appears under that agent; navigation still opens its
+separate Main chat and never starts a writer.
+
+`work-review ID --file validation.json` starts three distinct read-only Codex
+reviewers of the same committed base/head: architecture, correctness and deslop.
+`work-collect ID` reads structured verdicts from their provider transcripts. The
+journal retains only verdicts and evidence references. One family has at most
+three cumulative rounds across all its issues and pre/postpublication changes.
+A retry without a candidate change uses the same reserved reviewer and round.
+`work-retry-start` and `work-retry-review` retry a proven unstarted reservation;
+a recorded or uncertain launch is never blindly repeated with a new identity.
+
+Only the current work writer can `work-publish ID --file publication.json` with
+its head, title and body. It requires three clean independent verdicts, the same
+base/head, a clean writer tree, unchanged grant and gh actor, and no unconsented
+mentions or automatic-closing directives in title/body/commits. Titles are
+`[Agent · Human] Concrete change`. Branch push and PR request have separate durable
+stages: `work-reconcile` can confirm a branch before resuming an unattempted PR
+request; ambiguous PR requests require positive remote reconciliation. Updates
+preserve the existing PR and never force-push. The persistent writer owns its PR
+and current-head check waits; repository standing rules supply human-review gates.
+Pausing the agent, revoking its grant or expiry prevents publication and stops its
+associated work processes during runtime reconciliation.
+
+After an unclean R3, `work-failure ID --file failure.json` records the process root
+cause and files a deduplicated improvement issue in the explicitly granted repo.
+An uncertain issue POST is reconciled before any retry. Improvement issues never
+count as solved trial issues. No fourth review or automatic merge is available.
+
+The current shared App action path refuses new publication and ready actions
+until a shared independent-review journal is attached; human action approval alone
+cannot bypass this gate. Shared Chat/Feed, intake, status and configured read tools
+remain available. Local guarded publication uses its explicitly granted human gh
+actor and never pretends that actor is a separately provisioned bot.

@@ -8,7 +8,7 @@ import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
-import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, type AgentDraftContext, beginSend, updatePending, forgetPending } from "./drafts";
+import { recoverAgentDraft, draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, type AgentDraftContext, beginSend, updatePending, forgetPending } from "./drafts";
 import { PendingSends, deliverPending } from "./submissions";
 import "../newsession.css";
 import { useAction } from "./useAction";
@@ -551,8 +551,12 @@ export function AgentComposer({
   disabled = false,
   guidance,
   onGuidanceApplied,
+  recoverFrom = [],
+  run,
 }: {
   id: string;
+  recoverFrom?: string[];
+  run?: string;
   name: string;
   send: (
     body: string,
@@ -571,6 +575,9 @@ export function AgentComposer({
   const [text, setText] = useState(initial?.text ?? ""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
+  const [recoveryStamp, setRecoveryStamp] = useState(0);
+  useEffect(() => onDraftWork(() => setRecoveryStamp((n) => n + 1)), []);
+  const recoverable = useMemo(() => recoverFrom.filter((from) => loadDraft(`agent:${from}`)), [recoverFrom.join(","), recoveryStamp]);
   const context = useRef(initial?.agentContext);
   const revision = useRef(initial?.revision ?? newRevision()),
     lastQueuedRevision = useRef(initial?.revision),
@@ -608,7 +615,7 @@ export function AgentComposer({
   const check = useCallback(
     async (p: PendingSend) => {
       const r = await receipt(p.id);
-      if (r?.state === "sent") await forgetPending(key, p.id);
+      if (r?.state === "sent") await forgetPending(p.sessionId, p.id);
       else
         await updatePending(p.id, {
           state:
@@ -670,6 +677,8 @@ export function AgentComposer({
   }
   return (
     <div className="cmp agent-composer">
+      {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { context.current = d.agentContext; revision.current = d.revision; setText(d.text); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
+      {recoverFrom.map((from) => <PendingSends key={from} sessionId={`agent:${from}`} reconcileSend={check} />)}
       <PendingSends
         sessionId={key}
         reconcileSend={check}

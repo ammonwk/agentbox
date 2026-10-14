@@ -92,6 +92,9 @@ export type AgentDefinition = z.infer<typeof AgentDefinition>;
 export const SharedAgent = z.object({
   id: uuid,
   workspace_id: uuid,
+  capability: z.enum(["creator"]).nullable().optional(),
+  creation_parent: uuid.nullable().optional(),
+  preferred_provider: z.enum(["codex", "claude", "muse"]).nullable().optional(),
   name: text(80),
   created_by: uuid,
   maintainers: z.array(uuid),

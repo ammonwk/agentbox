@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDb, getSchedule, insertSchedule, insertSessionRecord, type SessionRecord } from "../db";
+import { closeDb, insertAccount, getSessionRecord, getSchedule, insertSchedule, insertSessionRecord, type SessionRecord } from "../db";
 import { Fleet } from "../fleet";
 import { Scheduler } from "../scheduler";
 import { sendAsAgent } from "../sendguard";
@@ -130,4 +130,34 @@ describe("a schedule that keeps to one session", () => {
     expect(calls).toEqual(["handOver old→new", "handOver old→new", "close old"]);
     expect(getSchedule("st1")!.retiring).toBeNull();
   });
+});
+
+
+test("late pane discovery attaches only the proven new provider identity, preserving an alias", () => {
+  const now = NOW + 20 * 60_000;
+  insertAccount({id:"own-account",provider:"codex",label:"Fixture",email:null,plan:null,home:dir,isDefault:true,enabled:true,createdAt:NOW});
+  const pending = { ...record("late-spawn"), provider: "codex" as const, tmux: "ab-late-spawn", accountId: "own-account", cwd: "/tmp/own-writer" };
+  const discovered = { ...pending, id: "late-discovery", origin: "external" as const, tmux: null, agentSessionId: "provider-own", createdAt: NOW + 1000, transcriptPath: "/tmp/provider-own.jsonl" };
+  insertSessionRecord(pending); insertSessionRecord(discovered);
+  const proc = { pid: 345, provider: "codex", accountId: "other-account", agentSessionId: "provider-own", cwd: pending.cwd, startedAt: NOW + 1000 };
+  const fleet: any = Object.create(Fleet.prototype);
+  Object.assign(fleet, { panes: new Map([[pending.tmux, { pid: 345, dead: false }]]), livePids: new Map([[345, proc]]), tracked: new Map(), byAgentId: new Map() });
+  fleet.matchPendingSpawns(now);
+  expect(getSessionRecord(pending.id)!.agentSessionId).toBeNull();
+  proc.accountId = pending.accountId;
+  proc.cwd = "/tmp/another-writer";
+  fleet.matchPendingSpawns(now);
+  expect(getSessionRecord(pending.id)!.agentSessionId).toBeNull();
+  proc.cwd = pending.cwd;
+  proc.startedAt = NOW - 60_000;
+  fleet.matchPendingSpawns(now);
+  expect(getSessionRecord(pending.id)!.agentSessionId).toBeNull();
+  proc.startedAt = NOW + 1000;
+  fleet.matchPendingSpawns(now);
+  expect(getSessionRecord(pending.id)!.agentSessionId).toBe("provider-own");
+  expect(getSessionRecord(pending.id)!.transcriptPath).toBe(discovered.transcriptPath);
+  expect(getSessionRecord(discovered.id)!.successor).toBe(pending.id);
+  expect(getSessionRecord(discovered.id)!.archivedAt).toBe(now);
+  expect(getSessionRecord(discovered.id)!.agentSessionId).toBeNull();
+  expect(fleet.byAgentId.get("codex:provider-own")).toBe(pending.id);
 });

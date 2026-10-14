@@ -1,3 +1,4 @@
+import { AgentWorks } from "../src/core/agents/work";
 /** Disposable project navigation acceptance. Controlled conversations and Feed
  * are fixture evidence, never inserted into the user's fleet or provider homes. */
 import assert from "node:assert/strict";
@@ -33,7 +34,7 @@ const runtime: any = { store, fleet: {
   sessions: () => sessions, spawn: async () => { starts++; throw Error("Navigation must not activate agents"); }, stopSession: async () => { stops++; },
   timeline: async (id: string) => ({ events: [{ id: `${id}-reply`, kind: "assistant", text: `Controlled ${id} conversation`, at: Date.now() }], before: null }),
 }, cards: { add: () => {}, list: () => [], close: () => {} } };
-const conversations = new AgentConversations(runtime); runtime.conversations = conversations;
+const conversations = new AgentConversations(runtime); runtime.conversations = conversations; runtime.works = new AgentWorks(runtime);
 conversations.local();
 const agents = repos.map((r) => conversations.local(r.id).find((a) => a.name === "VULCAN" && a.repo === r.id)!);
 for (const [i, a] of agents.entries()) {
@@ -59,7 +60,7 @@ const origin = `http://127.0.0.1:${server.port}`;
 const out = process.env.AGENTBOX_SMOKE_OUTPUT ?? dir; mkdirSync(out, { recursive: true });
 async function openSwitcher() { await page.locator(page.viewportSize()!.width > 900 ? ".project-brand" : ".project-bar button").click(); }
 async function pick(name: string) { await openSwitcher(); await page.getByRole("button", { name: new RegExp(`^${name}`) }).click(); }
-async function agent() { await page.locator(".agent-directory-card").filter({ has: page.getByRole("heading", { name: "VULCAN", exact: true }) }).click(); await page.getByRole("textbox", { name: "Message VULCAN" }).waitFor(); }
+async function agent() { await page.getByRole("textbox", { name: "Message VULCAN" }).waitFor(); }
 try {
   await page.goto(`${origin}/#/agents`);
   await pick("Alpha"); await agent();
@@ -72,6 +73,7 @@ try {
   await page.getByRole("button", { name: /^Feed/ }).click(); await page.getByText("Beta recommendation", { exact: true }).waitFor();
   await page.goBack(); // project B directory
   await page.goBack(); // project A's Feed/chat detail
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
   await page.getByRole("textbox", { name: "Message VULCAN" }).waitFor(); assert.equal(await page.getByRole("textbox", { name: "Message VULCAN" }).inputValue(), "Alpha unsent guidance");
   await page.reload(); await page.getByText("Controlled chat-alpha conversation", { exact: true }).waitFor();
   assert.equal(await page.getByRole("textbox", { name: "Message VULCAN" }).inputValue(), "Alpha unsent guidance");
@@ -90,13 +92,13 @@ try {
   await page.keyboard.press("Escape"); await page.locator(".nav-new").click();
   assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem("agentbox.newSession.project.alpha")!))).repoId, "beta");
   await page.keyboard.press("Escape");
-  const second = await context.newPage(); await second.goto(`${origin}/#/agents/${agents[1]!.id}?project=beta`); await second.getByText("Controlled chat-beta conversation", { exact: true }).waitFor(); assert.ok(page.url().includes("project=alpha")); assert.equal(await second.getByRole("textbox", { name: "Message VULCAN" }).inputValue(), "Beta unsent guidance"); await second.close();
-  await page.goto(`${origin}/#/agents/${agents[0]!.id}?project=alpha`);
+  const second = await context.newPage(); await second.goto(`${origin}/#/agents/${agents[1]!.id}/chat/chat-beta?project=beta`); await second.getByText("Controlled chat-beta conversation", { exact: true }).waitFor(); assert.ok(page.url().includes("project=alpha")); assert.equal(await second.getByRole("textbox", { name: "Message VULCAN" }).inputValue(), "Beta unsent guidance"); await second.close();
+  await page.goto(`${origin}/#/agents/${agents[0]!.id}/chat/chat-alpha?project=alpha`);
   await page.getByRole("textbox", { name: "Message VULCAN" }).waitFor();
   const editingTab = await context.newPage();
-  await editingTab.goto(`${origin}/#/agents/${agents[0]!.id}?project=alpha`);
+  await editingTab.goto(`${origin}/#/agents/${agents[0]!.id}/chat/chat-alpha?project=alpha`);
   await editingTab.getByRole("textbox", { name: "Message VULCAN" }).fill("Newer draft from another tab");
-  await editingTab.waitForFunction((id: string) => JSON.parse(localStorage.getItem("agentbox.composerWork") ?? "{}")[`agent:${id}`]?.draft?.text === "Newer draft from another tab", agents[0]!.id);
+  await editingTab.waitForFunction((id: string) => JSON.parse(localStorage.getItem("agentbox.composerWork") ?? "{}")[`agent:${id}:chat-alpha`]?.draft?.text === "Newer draft from another tab", agents[0]!.id);
   await page.getByRole("textbox", { name: "Message VULCAN" }).fill("");
   await page.getByRole("button", { name: /^Feed/ }).click(); await page.getByRole("button", { name: "Chat", exact: true }).click();
   assert.equal(await page.getByRole("textbox", { name: "Message VULCAN" }).inputValue(), "Newer draft from another tab");
@@ -104,7 +106,7 @@ try {
   await page.getByRole("textbox", { name: "Message VULCAN" }).fill("");
   await page.getByRole("button", { name: /^Feed/ }).click(); await page.getByRole("button", { name: "Chat", exact: true }).click();
   assert.equal(await page.getByRole("textbox", { name: "Message VULCAN" }).inputValue(), "");
-  await page.goto(`${origin}/#/agents/${agents[1]!.id}?project=alpha`); await page.getByText("This agent belongs to another project", { exact: true }).waitFor(); await page.getByRole("button", { name: "Open in its project" }).click(); await page.getByText("Controlled chat-beta conversation", { exact: true }).waitFor();
+  await page.goto(`${origin}/#/agents/${agents[1]!.id}/chat/chat-beta?project=alpha`); await page.getByText("This agent belongs to another project", { exact: true }).waitFor(); await page.getByRole("button", { name: "Open in its project" }).click(); await page.getByText("Controlled chat-beta conversation", { exact: true }).waitFor();
   // A slow response from the abandoned Alpha page cannot replace Beta.
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => { release = resolve; });
@@ -115,7 +117,7 @@ try {
     await route.continue();
   });
   await pick("Alpha"); await arrival; await pick("Beta"); release(); await agent(); await page.getByText("Controlled chat-beta conversation", { exact: true }).waitFor(); assert.equal(await page.getByText("Controlled chat-alpha conversation", { exact: true }).count(), 0); await page.unroute("**/api/agents/local/project");
-  await page.locator(".project-brand").focus(); await page.keyboard.press("Enter"); await page.getByRole("textbox", { name: "Search projects" }).fill("Alpha"); await page.keyboard.press("Enter"); await page.locator(".agent-directory-card").first().waitFor(); assert.ok(page.url().includes("project=alpha"));
+  await page.locator(".project-brand").focus(); await page.keyboard.press("Enter"); await page.getByRole("textbox", { name: "Search projects" }).fill("Alpha"); await page.keyboard.press("Enter"); await page.getByRole("button", { name: "Select agent" }).waitFor(); assert.ok(page.url().includes("project=alpha"));
   await openSwitcher(); await page.screenshot({ path: join(out, "project-switcher-desktop.png") }); await page.keyboard.press("Escape");
   await agent(); await page.screenshot({ path: join(out, "project-chat-desktop.png") });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -128,7 +130,7 @@ try {
   assert.ok(raisedSend && raisedSystem && raisedSend.y + raisedSend.height <= raisedSystem.y, "keyboard-resized composer must remain visible");
   await page.evaluate(() => document.documentElement.style.removeProperty("--kbh"));
   await openSwitcher(); await page.screenshot({ path: join(out, "project-switcher-mobile.png") }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false); await page.keyboard.press("Escape");
-  available = repos.filter((r) => r.id !== "alpha"); for (const ws of sockets) ws.send(JSON.stringify({ type: "cold", state: state() })); await page.getByText("This project is no longer registered", { exact: true }).waitFor(); await page.getByRole("button", { name: "All projects", exact: true }).click(); await page.locator(".agent-directory-card").first().waitFor(); assert.ok(await page.getByText("General conversation", { exact: true }).count());
+  available = repos.filter((r) => r.id !== "alpha"); for (const ws of sockets) ws.send(JSON.stringify({ type: "cold", state: state() })); await page.getByText("This project is no longer registered", { exact: true }).waitFor(); await page.getByRole("button", { name: "All projects", exact: true }).click(); await page.getByRole("link", { name: "Back to agent sessions" }).click(); await page.getByRole("button", { name: "Select agent" }).waitFor(); await page.getByRole("button",{name:"Select agent"}).click(); assert.ok(await page.locator(".project-option").filter({hasText:"General"}).count());
   assert.equal(starts, 0); assert.equal(stops, 0); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ ok: true, output: out, twoProjects: true, linkedWorktrees: true, distinctChatFeedDrafts: true, delayedResponseDiscarded: true, archivedSessionsScoped: true, scopedSessionsReview: true, newSessionDefaultsDrafts: true, historyReloadDeepLinks: true, multiTab: true, explicitClearKeepsOtherTabDraft: true, keyboardMobile: true, removedProject: true, starts, stops, errors }));
 } catch (e) { console.error(JSON.stringify({ url: page.url(), body: (await page.locator("body").innerText()).slice(0, 7000), errors })); await page.screenshot({ path: join(out, "failure.png") }); throw e; } finally { await browser.close(); server.stop(true); store.db.close(); db.closeDb(); }

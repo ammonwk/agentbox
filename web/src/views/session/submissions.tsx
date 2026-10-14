@@ -68,7 +68,7 @@ async function reconcile(p: PendingSend): Promise<void> {
   });
 }
 
-export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }: { sessionId: string; onRestore: (p: PendingSend) => Promise<void>; reconcileSend?: (p: PendingSend) => Promise<void> }) {
+export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }: { sessionId: string; onRestore?: (p: PendingSend) => Promise<void>; reconcileSend?: (p: PendingSend) => Promise<void> }) {
   const snapshot = useSyncExternalStore(onDraftWork, draftSnapshot);
   const all = useMemo(() => pendingSends(sessionId), [sessionId, snapshot]);
   const ids = all.map((p) => p.id).join(",");
@@ -118,7 +118,7 @@ export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }
         {p.error ? <div>{p.error}</div> : null}
         {p.state === "unconfirmed" ? <div>Check the timeline or terminal before sending this again.</div> : null}
       </div>
-      {p.state === "failed" ? <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => onRestore(p))}>Restore draft</Button> : <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => reconcileSend(p))}>Check delivery</Button>}
+      {p.state === "failed" && onRestore ? <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => onRestore(p))}>Restore draft</Button> : <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => reconcileSend(p))}>Check delivery</Button>}
       <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => forgetPending(sessionId, p.id))}>Dismiss</Button>
     </div>)}
     {error ? <div className="cmp-error" role="alert">{error}</div> : null}

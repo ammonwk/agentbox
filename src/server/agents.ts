@@ -4,6 +4,7 @@ import { HttpError, json, readBody, type Router } from "./router";
 import { authenticatedSession } from "../core/session-authority";
 import { cloudConfig } from "../core/cloud/config";
 import { FleetError } from "../core/fleet";
+import { requireOperator } from "../core/agents/work";
 
 export function agentRoutes(router: Router, agents: AgentsRuntime) {
   const human = async (req: Request, b: Record<string, unknown>) => {
@@ -40,6 +41,35 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
       );
   };
   router
+    .add("POST", "/api/agents/work-grants", async ({req}) => {
+      requireOperator(req);
+      return json(await agents.works.authorize(await readBody(req)));
+    })
+    .add("DELETE", "/api/agents/work-grants/:id", async ({req,params}) => {
+      requireOperator(req); return json(await agents.works.revoke(params.id!));
+    })
+    .add("GET", "/api/agents/work", () => json(agents.works.list()))
+    .add("GET", "/api/agents/work/:id", ({params}) => json(agents.works.get(params.id!)))
+    .add("POST", "/api/agents/work", async ({req}) => json(await agents.works.start(authenticatedSession(req), await readBody(req))))
+    .add("POST", "/api/agents/work/:id/review", async ({req,params}) => json(await agents.works.review(params.id!,authenticatedSession(req),await readBody(req))))
+    .add("POST", "/api/agents/work/:id/collect", ({req,params}) => agents.works.collect(params.id!,authenticatedSession(req)).then(json))
+    .add("POST", "/api/agents/work/:id/publish", async ({req,params}) => json(await agents.works.publish(params.id!,authenticatedSession(req),await readBody(req))))
+    .add("POST", "/api/agents/work/:id/retry-review", async ({req,params}) => json(await agents.works.retryReview(params.id!,authenticatedSession(req),await readBody(req))))
+    .add("POST", "/api/agents/work/:id/retry-start", ({req,params}) => agents.works.retryStart(params.id!,authenticatedSession(req)).then(json))
+    .add("POST", "/api/agents/work/:id/reconcile", ({req,params}) => agents.works.reconcile(params.id!,authenticatedSession(req)).then(json))
+    .add("POST", "/api/agents/work/:id/failure", async ({req,params}) => json(await agents.works.failure(params.id!,authenticatedSession(req),await readBody(req))))
+    .add("POST", "/api/agents/:id/creation-drafts", async ({req, params}) => {
+      const b = await readBody(req);
+      return json(await agents.conversations.draft(params.id!, authenticatedSession(req), z.string().uuid().parse(b.request), b.spec));
+    })
+    .add("GET", "/api/agents/local/:id/creations", ({params}) => json(agents.conversations.creations(params.id!)))
+    .add("POST", "/api/agents/local/:id/creations/:draft", async ({req, params}) => {
+      // Local UI is the trusted loopback operator. Scoped provider callers can
+      // propose only; editable callerPid/name cannot manufacture human authority.
+      if (authenticatedSession(req)) throw new HttpError(403, "Only the human operator may accept or edit a creation draft");
+      const b = await readBody(req);
+      return json(agents.conversations.editCreation(params.id!, z.string().uuid().parse(params.draft), z.number().int().parse(b.revision), z.string().nullable().parse(b.repo), b.spec, z.boolean().parse(b.create)));
+    })
     .add("GET", "/api/agents/local", () => json(agents.conversations.local()))
     .add("POST", "/api/agents/local/project", async ({ req }) => {
       const b = await readBody(req);
@@ -62,6 +92,7 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
               .strict()
               .optional()
               .parse(b.context),
+            z.string().min(1).max(200).nullable().parse(b.target),
           ),
         );
       } catch (e) {

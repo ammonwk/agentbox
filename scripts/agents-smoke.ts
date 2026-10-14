@@ -163,7 +163,7 @@ const adapter = {
   liveProcesses: async () => [],
   findTranscript: async () => null,
   spawnCommand: (opts: any) => {
-    assert.match(opts.prompt, /VULCAN/);
+    assert.match(opts.prompt, /a shared Agentbox agent/);
     spawned++;
     return {
       argv: [
@@ -227,7 +227,7 @@ const w = await alice.agents.intake(a.id, {
     "sum(2, 3) should be 5. Add evidence that the original symptom is resolved.",
 });
 const r = await alice.agents.run(w, crypto.randomUUID());
-let browser: any;
+let browser: any, debugPage: any;
 try {
   await runtime.tick();
   assert.equal(spawned, 1, `no Fleet spawn: ${runtime.lastError}`);
@@ -643,10 +643,13 @@ try {
         session: alice.session,
       },
     );
-    const page = await context.newPage();
+    const page = await context.newPage(); debugPage = page;
     const errors: string[] = [];
+    let relayQueue = Promise.resolve();
+    context.on("page", (p:any) => p.on("response", (r:any) => { if (r.url().endsWith("/agent_read_request") && r.ok()) relayQueue = relayQueue.then(() => runtime.conversations.tick()); }));
+    page.on("response", (r:any) => { if (r.url().endsWith("/agent_read_request") && r.ok()) relayQueue = relayQueue.then(() => runtime.conversations.tick()); });
     page.on("pageerror", (e: any) => errors.push(e.stack || e.message));
-    await page.goto(`http://127.0.0.1:${server.port}/#/agents`);
+    await page.goto(`http://127.0.0.1:${server.port}/#/agents/manage`);
     try {
       await page
         .getByRole("heading", { name: "A shared view of the work" })
@@ -710,8 +713,8 @@ try {
       (q: any) => q.url().endsWith("/agent_read_request"),
       { timeout: 10000 },
     );
-    await page.goto(`http://127.0.0.1:${server.port}/#/agents/${a.id}`);
-    await page.getByRole("heading", { name: "VULCAN", exact: true }).waitFor();
+    await page.goto(`http://127.0.0.1:${server.port}/#/agents/${a.id}/chat/${live.session}`);
+    await page.getByRole("button", { name: "Select agent", exact: true }).waitFor();
     // Exercise the real shared Chat/Feed UI. Only refusal below is injected,
     // so recovery can be checked without an actual network outage.
     await firstRead;
@@ -746,7 +749,7 @@ try {
       /^Keep my existing draft\.\n\nRegarding/,
     );
     let refused: any;
-    await page.route("**/rest/v1/rpc/agent_guide", async (route: any) => {
+    await page.route("**/rest/v1/rpc/agent_session_guide", async (route: any) => {
       refused = route.request().postDataJSON();
       await route.fulfill({
         json: {
@@ -788,10 +791,10 @@ try {
       await composer.inputValue(),
       /^Newer typing\.\n\nKeep my existing draft/,
     );
-    await page.unroute("**/rest/v1/rpc/agent_guide");
+    await page.unroute("**/rest/v1/rpc/agent_session_guide");
     await page.unroute("**/rest/v1/rpc/agent_command_receipt");
     const guideResponse = page.waitForResponse((q: any) =>
-      q.url().endsWith("/agent_guide"),
+      q.url().endsWith("/agent_session_guide"),
     );
     await page.getByRole("button", { name: "Send", exact: true }).click();
     const guideReceipt = await (await guideResponse).json();
@@ -804,6 +807,7 @@ try {
     await page.getByRole("button", { name: /^Feed/ }).click();
     await page.screenshot({ path: join(output, "feed.png"), fullPage: true });
     await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.getByRole("button", { name: /^Feed/ }).click();
     await page.getByText("approved", { exact: true }).waitFor();
     await runtime.conversations.tick();
     assert.equal(
@@ -904,12 +908,24 @@ try {
     await page.getByText("Sign in to see your shared agents", { exact: true }).waitFor();
     assert.equal(await page.getByRole("textbox", { name: "Message VULCAN" }).count(), 0);
     assert.deepEqual(errors, []);
+  } catch (e) {
+    if (debugPage) { console.log("UI FAILURE", (await debugPage.locator("body").innerText()).slice(-8000)); await debugPage.screenshot({path:join(output,"failure.png")}); }
+    throw e;
   } finally {
     if (browser) await browser.close();
     server.stop(true);
   }
   // Actual Fleet stop, fenced replacement, and human takeover through cloud.
+  const staleMessage = crypto.randomUUID();
+  await sharedChat.guide(a.id, r.id, staleMessage, "Must never reach replacement", null, live.session);
+  await assert.rejects(() => sharedChat.guide(a.id, r.id, crypto.randomUUID(), "Foreign session", null, "unrelated-private"));
   await runtime.rotate(r.id);
+  await runtime.conversations.tick();
+  assert.equal((await sharedChat.receipt(staleMessage)).state, "refused");
+  await assert.rejects(() => runtime.conversations.page(a.id, {target:"unrelated-private"}));
+  const historical = await runtime.conversations.page(a.id, {target:live.session});
+  assert.equal(historical.thread?.writable, false);
+  assert.equal(historical.next, null);
   const rotated = runtime.store.runs().find((x: any) => x.run.id === r.id)!;
   assert.equal(spawned, 2);
   assert.equal(fleet.get(live.session).host, "none");
@@ -1024,6 +1040,34 @@ try {
   console.log(
     "Verified real coordinator and exclusive issue worker coexist with maxConcurrent=1; approved Feed follow-up delivered",
   );
+  // Jupiter's real shared proposal/authoring boundary and runnable custom agent.
+  const creatorReply = await alice.api.sb.rpc("agent_creator", { p_workspace:ws.id, p_repos:["fixture/repo"], p_host:reg.installation.id });
+  assert.equal(creatorReply.error,null); const jupiter=creatorReply.data;
+  const again = await alice.api.sb.rpc("agent_creator", { p_workspace:ws.id, p_repos:["fixture/repo"], p_host:reg.installation.id });
+  assert.equal(again.data.id,jupiter.id);
+  const notOwner=await bob.api.sb.rpc("agent_creator",{p_workspace:ws.id,p_repos:[],p_host:reg.installation.id}); assert.ok(notOwner.error);
+  const creatorStart = await alice.api.sb.rpc("agent_conversation_start",{p_agent:jupiter.id,p_request:crypto.randomUUID()}); assert.equal(creatorStart.error,null);
+  await runtime.tick();
+  const creatorRun=runtime.store.runs().find((x:any)=>x.run.id===creatorStart.data.id)!;
+  assert.equal(creatorRun.phase,"attached",runtime.lastError ?? "creator not started");
+  const spec={name:"Atlas shared",role:"Explain code",instructions:"Explain with diagrams and source references.",provider:"codex",limits:"Read only",automation:""};
+  await assert.rejects(()=>runtime.conversations.draft(r.id,rotated.session,crypto.randomUUID(),spec));
+  const draft=await runtime.conversations.draft(creatorRun.run.id,creatorRun.session,crypto.randomUUID(),spec);
+  const edit = (api:any, p:any) => api.sb.rpc("agent_creation_edit",{p_creator:jupiter.id,p_id:draft.id,p_revision:draft.revision,p_spec:spec,p_create:true,...p});
+  assert.ok((await edit(bob.api,{})).error);
+  assert.ok((await edit(alice.api,{p_creator:a.id})).error);
+  assert.ok((await edit(alice.api,{p_revision:0})).error);
+  const creation=await edit(alice.api,{}); assert.equal(creation.error,null);
+  assert.equal((await edit(alice.api,{})).data.created,creation.data.created);
+  const made=(await alice.agents.board(ws.id)).agents.find((x:any)=>x.id===creation.data.created)!;
+  assert.equal(made.capability,null); assert.equal(made.created_by,alice.id); assert.deepEqual(made.maintainers,[alice.id]); assert.equal(made.definition.activation.mode,"manual"); assert.equal(made.definition.github.kind,"human");
+  assert.deepEqual(made.definition.repos,["fixture/repo"]);
+  const first=await alice.api.sb.rpc("agent_conversation_start",{p_agent:made.id,p_request:crypto.randomUUID()}); assert.equal(first.error,null);
+  await runtime.tick(); assert.equal(runtime.store.runs().find((x:any)=>x.run.id===first.data.id)?.phase,"attached",runtime.lastError ?? "custom agent not runnable");
+  const staleDraft=await runtime.conversations.draft(creatorRun.run.id,creatorRun.session,crypto.randomUUID(),spec);
+  await runtime.rotate(creatorRun.run.id);
+  assert.ok((await alice.api.sb.rpc("agent_creation_edit",{p_creator:jupiter.id,p_id:staleDraft.id,p_revision:1,p_spec:spec,p_create:true})).error);
+  console.log("Verified shared Jupiter capability, human ownership/host grants, scope and revision checks, exactly-once creation, runnable custom instance and replaced-creator refusal");
   console.log(
     JSON.stringify({
       ok: true,

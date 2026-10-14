@@ -1,7 +1,8 @@
+import { CreationSpec, CreationDraft, JUPITER_ROLE, JUPITER_INSTRUCTIONS, creationTool } from "../../cloud/agent-creation";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { transcriptFile } from "../providers/types";
-import { agentboxHome } from "../paths";
+import { agentboxHome, agentboxCommand } from "../paths";
 import { z } from "zod";
 import type { AgentsRuntime } from "./runtime";
 import {
@@ -11,6 +12,7 @@ import {
   relayIdentity,
   sealPage,
   type ConversationPage,
+  type AgentThread,
 } from "../../cloud/agent-conversation";
 import { AGENT_TEMPLATES } from "../../cloud/agents";
 import { FleetError, newSessionId } from "../fleet";
@@ -30,7 +32,12 @@ export type LocalAgent = {
   sessionProjects?: Record<string, string | null>;
   session: string | null;
   previous: string[];
+  workSessions?: string[];
   enabled: boolean;
+  capability?: "creator";
+  createdBy?: string;
+  creation?: string;
+  automation?: string;
 };
 const SAFE_EVENT = new Set(["user", "assistant"]);
 const safeText = (s: string) =>
@@ -50,20 +57,21 @@ export class AgentConversations {
   private get db() {
     const db = this.runtime.store.db;
     db.exec(
-      "CREATE TABLE IF NOT EXISTS local_agents(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_proposals(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_submissions(id TEXT PRIMARY KEY,agent TEXT NOT NULL,session TEXT NOT NULL);",
+      "CREATE TABLE IF NOT EXISTS local_agents(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_proposals(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_submissions(id TEXT PRIMARY KEY,agent TEXT NOT NULL,session TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_creations(id TEXT PRIMARY KEY,creator TEXT NOT NULL,body TEXT NOT NULL);",
     );
     return db;
   }
   local(project?: string): LocalAgent[] {
     if (project && !getRepoById(project)) throw new FleetError(404, "Project is no longer registered");
     const db = this.db;
-    for (const t of AGENT_TEMPLATES) {
+    for (const t of [...AGENT_TEMPLATES, { id: "jupiter", name: "Jupiter", definition: { role: JUPITER_ROLE, instructions: JUPITER_INSTRUCTIONS } }]) {
       const id = `local-${t.name.toLowerCase()}${project ? `-project-${encodeURIComponent(project)}` : ""}`;
       db.run("INSERT OR IGNORE INTO local_agents(id,body) VALUES (?,?)", [
         id,
         JSON.stringify({
           id,
           name: t.name,
+          ...(t.id === "jupiter" ? { capability: "creator" } : {}),
           role: t.definition.role,
           instructions: t.definition.instructions,
           provider: "codex",
@@ -78,10 +86,56 @@ export class AgentConversations {
     }
     return (
       db.query("SELECT body FROM local_agents").all() as { body: string }[]
-    ).map((x) => JSON.parse(x.body));
+    ).map((x) => {
+      const a = JSON.parse(x.body) as LocalAgent;
+      return {...a, workSessions: this.runtime.works.list().filter(w=>w.agent.id===a.id).map(w=>w.session)};
+    });
+  }
+  creations(creator: string): CreationDraft[] {
+    return (this.db.query("SELECT body FROM local_creations WHERE creator=? ORDER BY rowid DESC LIMIT 100").all(creator) as {body: string}[]).map((r) => CreationDraft.parse(JSON.parse(r.body)));
+  }
+  async draft(target: string, caller: string | null, request: string, input: unknown) {
+    const spec = CreationSpec.parse(input), a = this.local().find((a) => a.id === target);
+    if (!a) {
+      const { run, a } = await this.runtime.current(target, caller);
+      if (a.capability !== "creator") throw new FleetError(403, "Only a creator can propose agents");
+      return this.runtime.api().installation.agentCall("inst_agent_creation_draft", { p_run: run.id, p_fence: run.fence, p_id: request, p_spec: spec }, CreationDraft);
+    }
+    if (a.capability !== "creator" || !a.enabled || !caller || caller !== a.session) throw new FleetError(403, "Only the current creator session can propose agents");
+    const draft: CreationDraft = { id: request, creator: a.id, run: caller, revision: 1, spec, created: null };
+    const old = this.db.query("SELECT body FROM local_creations WHERE id=?").get(request) as {body: string} | null;
+    if (old) {
+      const prior = CreationDraft.parse(JSON.parse(old.body));
+      if (prior.creator !== target || prior.run !== caller || JSON.stringify(prior.spec) !== JSON.stringify(spec)) throw new FleetError(409, "Draft ID already used or edited");
+      return prior;
+    }
+    this.db.run("INSERT INTO local_creations(id,creator,body) VALUES(?,?,?)", [request, target, JSON.stringify(draft)]);
+    return draft;
+  }
+  editCreation(creator: string, id: string, revision: number, repo: string | null, input: unknown, create: boolean) {
+    const spec = CreationSpec.parse(input);
+    return this.db.transaction(() => {
+      const a = this.local().find((a) => a.id === creator), draft = this.creations(creator).find((d) => d.id === id);
+      if (!a || a.capability !== "creator" || a.repo !== repo || !draft) throw new FleetError(403, "Draft does not belong to this creator/project");
+      if (draft.revision !== revision || JSON.stringify(draft.spec) !== JSON.stringify(spec) && create) throw new FleetError(409, "Draft changed; save edits and review the current version");
+      if (draft.created) { if (!create) throw new FleetError(409, "Already created"); return draft; }
+      if (!a.enabled || a.session !== draft.run) throw new FleetError(409, "Creator conversation replaced; request a new proposal");
+      if (repo && !getRepoById(repo)) throw new FleetError(409, "Project no longer registered");
+      if (create) {
+        const id = `local-custom-${draft.id}`;
+        const agent: LocalAgent = { id, name: spec.name, role: spec.role,
+          instructions: `${spec.instructions}\n\nLimits: ${spec.limits}`, provider: spec.provider,
+          repo, ...(repo ? { project: repo } : {}), session: null, previous: [], sessionProjects: {}, enabled: true,
+          createdBy: "local operator", creation: draft.id, automation: spec.automation };
+        this.db.run("INSERT INTO local_agents(id,body) VALUES(?,?)", [id, JSON.stringify(agent)]);
+        draft.created = id;
+      } else { draft.spec = spec; draft.revision++; }
+      this.db.run("UPDATE local_creations SET body=? WHERE id=?", [JSON.stringify(draft), id]);
+      return draft;
+    })();
   }
   owns(id: string) {
-    return this.local().some(
+    return !!this.runtime.works.forSession(id) || this.local().some(
       (a) => a.session === id || a.previous.includes(id),
     );
   }
@@ -153,6 +207,7 @@ export class AgentConversations {
       }
       Object.assign(a, p);
       this.put(a);
+      if (!a.enabled) await this.runtime.works.enforceAuthority();
       return a;
     } finally {
       this.busy.delete(id);
@@ -163,6 +218,7 @@ export class AgentConversations {
     request: string,
     body: string,
     context?: { proposal: string; run: string },
+    target?: string | null,
   ) {
     if (this.busy.has(id))
       throw new FleetError(409, "Another message is being delivered");
@@ -170,6 +226,22 @@ export class AgentConversations {
     try {
       const a = this.local().find((x) => x.id === id);
       if (!a || !a.enabled) throw new FleetError(409, "Agent is paused");
+      if (target && this.runtime.works.writable(id, target)) {
+        if (!body.trim() || body.length > 24000) throw new FleetError(400, "Write a message up to 24000 characters");
+        if (context) {
+          const p=this.localProposals(id).find(p=>p.id===context.proposal && p.run_id===target);
+          if (!p || context.run!==target) throw new FleetError(409,"Guidance belongs to another conversation");
+          body=`[Guidance on recommendation ${p.id}]\n${body}`;
+        }
+        this.db.run("INSERT OR IGNORE INTO local_submissions(id,agent,session) VALUES (?,?,?)", [request,id,target]);
+        const prior=this.db.query("SELECT agent,session FROM local_submissions WHERE id=?").get(request) as {agent:string;session:string};
+        if(prior.agent!==id || prior.session!==target) throw new FleetError(409,"Submission belongs to another conversation");
+        return this.runtime.works.guide(id,target,request,body);
+      }
+      if (target !== undefined && target !== a.session)
+        throw new FleetError(409, "Conversation changed. Open the current session before sending.");
+      if (target && (!getSessionRecord(target) || getSessionRecord(target)?.archivedAt))
+        throw new FleetError(409, "This conversation is closed and read-only");
       if (!body.trim() || body.length > 24000)
         throw new FleetError(400, "Write a message up to 24000 characters");
       if (context) {
@@ -186,7 +258,7 @@ export class AgentConversations {
       const prior = this.db
         .query("SELECT agent,session FROM local_submissions WHERE id=?")
         .get(request) as { agent: string; session: string } | null;
-      if (prior && prior.agent !== id)
+      if (prior && (prior.agent !== id || prior.session !== a.session))
         throw new FleetError(409, "Submission belongs to another agent");
       // Fleet records its identity before starting tmux. No record proves a
       // previous preflight never spawned; an uncertain existing session stays.
@@ -218,7 +290,7 @@ export class AgentConversations {
               repoId: a.repo ?? undefined,
               cwd,
               worktree: !!a.repo,
-              prompt: `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\n\n${a.previous.length ? `Previous conversation session: ${a.previous[0]}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`,
+              prompt: `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\n\n${a.previous.length ? `Previous conversation session: ${a.previous[0]}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`.replaceAll("agentbox agent", `${agentboxCommand()} agent`),
             });
           } else await this.runtime.fleet.send(sid, body, attempt, true);
         },
@@ -299,7 +371,7 @@ export class AgentConversations {
     const p = ProposalInput.parse(input);
     const a = this.local().find((x) => x.id === target);
     if (a) {
-      if (!session || a.session !== session)
+      if (!session || (a.session !== session && !this.runtime.works.writable(a.id,session)))
         throw new FleetError(
           403,
           "Only the current linked agent session can curate this Feed",
@@ -396,9 +468,9 @@ export class AgentConversations {
       if (p.state === decision) return p;
       if (p.state !== "open") throw new FleetError(409, "Already decided");
       const a = this.local().find((x) => x.id === agent);
-      if (!a?.session || !a.enabled)
+      if (!a?.enabled)
         throw new FleetError(409, "Agent unavailable");
-      if (decision === "approved" && p.run_id !== a.session)
+      if (decision === "approved" && p.run_id !== a.session && !this.runtime.works.writable(agent,p.run_id))
         throw new FleetError(
           409,
           "Recommendation belongs to an earlier conversation; ask the agent to review it in the current workspace",
@@ -419,6 +491,8 @@ export class AgentConversations {
           agent,
           p.delivery!.request,
           `Approved recommendation ${id}: ${p.next_step}. Only this next step is authorized; other actions and outreach keep their existing requirements.`,
+          { proposal: p.id, run: p.run_id },
+          p.run_id,
         );
         p.delivery = {
           request: p.delivery!.request,
@@ -452,33 +526,47 @@ export class AgentConversations {
       );
     return p;
   }
-  async page(agent: string, input: unknown): Promise<ConversationPage> {
-    const cursor = ReadCursor.parse(input);
+  /** Only the recorded agent links authorize a read; a Fleet ID or cwd does not. */
+  threads(agent: string): AgentThread[] {
     const local = this.local().find((x) => x.id === agent);
-    let ids: string[];
-    if (local)
-      ids = [local.session, ...local.previous].filter((x): x is string => !!x);
-    else {
-      const runs = this.runtime.store
-        .runs()
-        .filter((x) => x.run.agent_id === agent)
-        .sort((a, b) => b.run.created_at.localeCompare(a.run.created_at));
-      const seen = new Set<string>();
-      ids = [];
-      for (const r of runs) {
-        const rows = this.runtime.store.db
-          .query("SELECT id FROM sessions WHERE run=? ORDER BY rowid DESC")
-          .all(r.run.id) as { id: string }[];
-        for (const x of rows)
-          if (!seen.has(x.id)) {
-            seen.add(x.id);
-            ids.push(x.id);
-          }
+    const linked: { id: string; run: string; current: boolean; successor: string | null }[] = [];
+    if (local) {
+      for (const id of [local.session, ...local.previous].filter((x): x is string => !!x))
+        linked.push({ id, run: id, current: local.enabled && id === local.session, successor: id !== local.session ? local.session : null });
+    } else {
+      for (const r of this.runtime.store.runs().filter((x) => x.run.agent_id === agent)) {
+        const rows = this.runtime.store.db.query("SELECT id FROM sessions WHERE run=? ORDER BY rowid DESC").all(r.run.id) as { id: string }[];
+        for (const { id } of rows) linked.push({ id, run: r.run.id,
+          current: id === r.session && r.phase === "attached" && ["running", "waiting"].includes(r.run.state),
+          successor: id !== r.session ? r.session : null });
       }
     }
-    const id = ids[cursor.session];
-    if (!id) return { events: [], next: null, session: null, status: "idle" };
-    const session = this.runtime.fleet.sessions().find((s) => s.id === id);
+    for(const w of this.runtime.works.list().filter(w=>w.agent.id===agent)) {
+      linked.push({id:w.session,run:w.session,current:this.runtime.works.writable(agent,w.session),successor:null});
+    }
+    const live = new Map(this.runtime.fleet.sessions().map((s) => [s.id, s]));
+    return [...new Map(linked.map((x) => [x.id, x])).values()].map((x) => {
+      const s = live.get(x.id), record = getSessionRecord(x.id), facts = record?.facts as { title?: string } | null;
+      const status = record?.archivedAt ? "closed" : s?.status ?? "stopped";
+      const at = s?.lastActivityAt ?? record?.lastActivityAt ?? 0;
+      return { id: x.id, run: x.run, title: safeText(s?.label || s?.title || record?.label || facts?.title || "Conversation").slice(0, 200),
+        status, at, active: status !== "closed" && (status === "running" || Date.now() - at < 3 * 60 * 60_000),
+        writable: x.current && status !== "closed", successor: x.successor };
+    }).sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
+  }
+  async page(agent: string, input: unknown): Promise<ConversationPage> {
+    const cursor = ReadCursor.parse(input), threads = this.threads(agent);
+    const thread = cursor.target ? threads.find((t) => t.id === cursor.target) : threads[cursor.session];
+    if (cursor.target && !thread) throw new FleetError(403, "Session does not belong to this agent");
+    if (cursor.list) {
+      const offset = cursor.offset ?? 0;
+      return { events: [], next: null, session: null, status: "idle", threads: threads.slice(offset, offset + 200),
+        counts: { active: threads.filter((t) => t.active).length, inactive: threads.filter((t) => !t.active).length },
+        more: offset + 200 < threads.length ? offset + 200 : null };
+    }
+    if (!thread) return { events: [], next: null, session: null, status: "idle" };
+    const id = thread.id;
+    const rail = { threads: threads.slice(0, 200), counts: { active: threads.filter((t) => t.active).length, inactive: threads.filter((t) => !t.active).length }, more: threads.length > 200 ? 200 : null };
     try {
       const page = await this.runtime.fleet.timeline(id, cursor.before, 60);
       const events = page.events
@@ -503,27 +591,18 @@ export class AgentConversations {
           ).slice(0, 10000),
         })) as TimelineEvent[];
       return {
+        ...rail,
         events,
-        next: page.before
-          ? { session: cursor.session, before: page.before }
-          : ids[cursor.session + 1]
-            ? { session: cursor.session + 1, before: null }
-            : null,
+        next: page.before ? { session: 0, target: id, before: page.before } : null,
         session: id,
-        status: session?.status ?? "stopped",
+        thread,
+        status: thread.status,
       };
     } catch (e) {
-      return {
-        events: [],
-        next: ids[cursor.session + 1]
-          ? { session: cursor.session + 1, before: null }
-          : null,
-        session: id,
-        status: session?.status ?? "starting",
-        error: (e as Error).message,
-      };
+      return { ...rail, events: [], next: null, session: id, thread, status: thread.status, error: (e as Error).message };
     }
   }
+
   async tick() {
     if (this.ticking) return;
     this.ticking = true;
@@ -651,7 +730,7 @@ export class AgentConversations {
           { p_id: q.id, p_key: identity.key },
           z.unknown(),
         );
-        const page = await this.page(q.agent_id, q.cursor),
+        const page = await this.page(q.agent_id, q.cursor).catch((e): ConversationPage => ({ events: [], next: null, session: null, status: "unavailable", error: (e as Error).message })),
           sealed = await sealPage(identity.pair, q.client_key, q.id, page);
         const channel = api.sb.channel(`agent-read:${q.id}`, {
           config: { broadcast: { ack: true } },

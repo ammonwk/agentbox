@@ -562,3 +562,41 @@
     display: block;
   }
 }
+
+/* Agents shares Sessions' rail geometry and rows. Available shell height,
+   rather than viewport subtraction, keeps Send above system/mobile bars. */
+.content:has(.agent-browser) { padding: 0; display: flex; overflow: hidden; }
+.content > .agents-page:has(.agent-browser) { max-width: none; width: 100%; min-height: 0; flex: 1; padding: 0; gap: 0; }
+.agent-browser { flex: 1; min-height: 0; width: 100%; --rail-w: 300px; }
+.agent-browser .agent-space { overflow: hidden; }
+.agent-browser .agent-space-head { padding: 12px 18px; gap: 12px; }
+.agent-browser .agent-space-head h2 { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-browser .agent-space-head > div { min-width: 0; }
+.agent-browser .agent-chat-status { display: none; }
+.agent-browser .agent-about { padding: 18px; }
+.agent-picker { display: flex; align-items: center; justify-content: space-between; text-align: left; width: 100%; min-height: 45px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; font: inherit; cursor: pointer; }
+.agent-picker > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.agent-picker small { display: block; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+.agent-row-status { color: var(--muted); font-size: 12px; }
+.agent-rail-actions { display: flex; gap: 14px; padding: 14px 18px; border-top: 1px solid var(--border); font-size: 12px; }
+.agent-creation label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; }
+.agent-list-back { display: none; }
+.agent-browser .agent-compose-wrap { padding: 10px 14px; }
+@media(max-width: 900px) {
+  .sv.agent-browser[data-rail="on"] { grid-template-columns: minmax(0, 1fr); }
+  .agent-browser[data-detail="true"] > .rail { display: none; }
+  .agent-browser[data-detail="false"] > .sv-main { display: none; }
+  .agent-browser .agent-space-head > .agent-list-back { display: inline; font-size: 12px; }
+  .agent-browser .agent-space-head { gap: 8px; padding: 8px; }
+  .agent-browser .agent-chat-scroll { padding: 12px; }
+  .agent-browser .agent-space-head > div { flex-basis: 50%; }
+  .agent-browser .agent-space-head nav { margin-left: auto; }
+}
+
+.agent-mobile-picker { display: none; }
+.agent-main-row { flex-shrink: 0; }
+@media (max-width: 900px) {
+  .agent-mobile-picker { display: block; border: 0; background: var(--surface); color: inherit; text-align: left; padding: 10px 12px; font: inherit; font-weight: 600; }
+  .agent-browser .sv-main { display: flex; flex-direction: column; min-height: 0; }
+  .agent-browser .agent-space { flex: 1; min-height: 0; }
+}

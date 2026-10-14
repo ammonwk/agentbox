@@ -84,6 +84,12 @@ export function agentboxBin(): string {
   return join(packageRoot, "bin", "agentbox");
 }
 
+/** A prompt's executable must address the same installation that owns its run. */
+export function agentboxCommand(): string {
+  const quote = (s: string) => `'${s.replace(/'/g, `'"'"'`)}'`;
+  return `env AGENTBOX_HOME=${quote(agentboxHome())} AGENTBOX_PORT=${quote(process.env.AGENTBOX_PORT ?? String(DEFAULT_PORT))} ${quote(agentboxBin())}`;
+}
+
 /** The subagent MCP's scratch: one directory per spawned agent, holding the
  *  system prompt it is launched with and that agent's record (meta.json,
  *  state.json, transcript.jsonl). Nothing here is a fleet session. */

@@ -201,3 +201,19 @@ export async function restorePending(sessionId: string, id: string, draft: Draft
     write(all);
   });
 }
+
+/** Explicit human recovery of an old agent-level draft into a chosen thread.
+ * Moves under the existing cross-tab lock; never silently retargets a proposal. */
+export async function recoverAgentDraft(from: string, to: string, run: string | undefined): Promise<Draft | null> {
+  let result: Draft | null = null;
+  await mutate(() => {
+    const all = readAll(), source = all[from], draft = source?.draft;
+    if (!source || !draft) return;
+    if (draft.agentContext && draft.agentContext.run !== run) throw Error("This guidance belongs to another conversation; open that conversation to recover it.");
+    const target = all[to] ??= {};
+    result = { ...draft, text: [target.draft?.text.trimEnd(), draft.text].filter(Boolean).join("\n\n"), revision: newRevision() };
+    source.taken = [...(source.taken ?? []), draft.revision]; delete source.draft;
+    target.draft = result; write(all);
+  });
+  return result;
+}

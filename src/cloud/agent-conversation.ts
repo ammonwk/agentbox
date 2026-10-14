@@ -60,10 +60,21 @@ export const ReadCursor = z
   .object({
     session: z.number().int().min(0).max(10000).default(0),
     before: z.string().max(500).nullable().default(null),
+    target: z.string().min(1).max(200).optional(),
+    list: z.boolean().optional(),
+    offset: z.number().int().min(0).max(100000).optional(),
   })
   .strict();
 export type ReadCursor = z.infer<typeof ReadCursor>;
+export type AgentThread = {
+  id: string; run: string; title: string; status: string; at: number;
+  active: boolean; writable: boolean; successor: string | null;
+};
 export type ConversationPage = {
+  threads?: AgentThread[];
+  counts?: { active: number; inactive: number };
+  more?: number | null;
+  thread?: AgentThread;
   events: TimelineEvent[];
   next: ReadCursor | null;
   session: string | null;
@@ -174,16 +185,18 @@ export class AgentConversation {
     id: string,
     body: string,
     proposal: string | null = null,
+    session?: string | null,
   ) {
     return cloudCall(
       this.human.sb,
-      "agent_guide",
+      session === undefined ? "agent_guide" : "agent_session_guide",
       {
         p_agent: agent,
         p_run: run,
         p_id: id,
         p_body: body,
         p_proposal: proposal,
+        ...(session === undefined ? {} : { p_session: session }),
       },
       CommandReceipt,
     );
@@ -215,7 +228,7 @@ export class AgentConversation {
     const channel = sb.channel(`agent-read:${id}`, {
       config: { broadcast: { ack: true } },
     });
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined, ended = false, queued: Promise<unknown> | undefined, abort: (() => void) | undefined;
     try {
       return await new Promise<ConversationPage>((resolve, reject) => {
         const chunks = new Map<number, string>();
@@ -229,6 +242,8 @@ export class AgentConversation {
               "Execution host unavailable. Feed and shared status are still available.",
             ),
           );
+        abort = fail;
+        if (signal?.aborted) { fail(); return; }
         signal?.addEventListener("abort", fail, { once: true });
         timer = setTimeout(fail, 45000);
         channel
@@ -285,9 +300,10 @@ export class AgentConversation {
             }
           })
           .subscribe(async (status) => {
-            if (status === "SUBSCRIBED")
+            if (ended) return;
+            if (status === "SUBSCRIBED" && !queued)
               try {
-                await cloudCall(
+                queued = cloudCall(
                   sb,
                   "agent_read_request",
                   {
@@ -298,6 +314,7 @@ export class AgentConversation {
                   },
                   z.unknown(),
                 );
+                await queued;
               } catch (e) {
                 reject(e);
               }
@@ -306,8 +323,11 @@ export class AgentConversation {
           });
       });
     } finally {
+      ended = true;
+      if (abort) signal?.removeEventListener("abort", abort);
       clearTimeout(timer);
       await sb.removeChannel(channel);
+      await queued?.catch(() => undefined);
       await cloudCall(sb, "agent_read_done", { p_id: id }, z.unknown()).catch(
         () => undefined,
       );

@@ -28,6 +28,7 @@ import { claimFor, listedClaim } from "./claim";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import { Forecaster } from "./forecast";
 import {
+  attachDiscoveredSpawn,
   dismissBtw,
   failUnfinishedBtw,
   findSessionRecord,
@@ -251,6 +252,7 @@ interface Tracked {
 
 export interface SpawnRequest {
   provider: ProviderId;
+  readOnly?: boolean;
   cwd?: string;
   repoId?: string;
   worktree?: boolean;
@@ -1093,19 +1095,21 @@ export class Fleet extends EventEmitter {
   private matchPendingSpawns(now: number): void {
     const defaults = new Set(listAccounts().filter((a) => a.isDefault).map((a) => a.id));
     const pending = listSessionRecords(now - MATCH_WINDOW_MS).filter(
-      (r) => r.agentSessionId === null && r.origin === "agentbox" && now - r.createdAt < MATCH_WINDOW_MS,
+      (r) => r.agentSessionId === null && r.origin === "agentbox" && !r.archivedAt && !r.successor,
     );
     for (const rec of pending) {
       // Strongest evidence first: the process in our pane says which session it is.
       const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
-      const proc = pane ? this.processUnder(pane.pid, rec.provider) : undefined;
+      const proc = pane && !pane.dead ? this.processUnder(pane.pid, rec.provider) : undefined;
       let agentId = proc?.agentSessionId ?? null;
+      if (agentId && (!proc!.accountId || !samePath(proc!.cwd, rec.cwd) || proc!.accountId !== rec.accountId || proc!.startedAt < rec.createdAt - 10_000)) continue;
       // One we just spawned never began before us, so a process naming an older
       // conversation is misread: wait for it to name its own rather than guess
       // among siblings started beside it.
       if (agentId && this.transcriptStartedBefore(rec.provider, agentId, rec.createdAt - 10_000)) continue;
 
       if (!agentId) {
+        if (now - rec.createdAt >= MATCH_WINDOW_MS) continue;
         let best: Tracked | null = null;
         for (const t of this.tracked.values()) {
           const f = t.facts;
@@ -1126,8 +1130,11 @@ export class Fleet extends EventEmitter {
         }
         agentId = best?.facts?.agentSessionId ?? null;
       }
-      if (!agentId || findSessionRecord(rec.provider, agentId)) continue;
-      updateSessionRecord(rec.id, { agentSessionId: agentId });
+      if (!agentId) continue;
+      const discovered = findSessionRecord(rec.provider, agentId);
+      if (discovered) {
+        if (!proc?.agentSessionId || !samePath(discovered.cwd, rec.cwd) || !attachDiscoveredSpawn(rec.id, discovered.id, now)) continue;
+      } else updateSessionRecord(rec.id, { agentSessionId: agentId });
       this.byAgentId.set(`${rec.provider}:${agentId}`, rec.id);
     }
   }
@@ -2613,6 +2620,7 @@ export class Fleet extends EventEmitter {
   // --------------------------------------------------------------- actions
 
   async spawn(req: SpawnRequest): Promise<{ session: Session; placement: Placement }> {
+    if (req.readOnly && req.provider !== "codex") throw new FleetError(400, "read-only reviews currently require Codex");
     const adapter = this.adapter(req.provider);
     const settings = getSettings();
     if (req.effort && !adapter.efforts.includes(req.effort)) {
@@ -2653,7 +2661,8 @@ export class Fleet extends EventEmitter {
 
     const model = req.model || settings.models[req.provider] || undefined;
     const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
-    const cmd = withGlobalMcp(req.provider, account, adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove }), [], cwd);
+    const launch = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
+    const cmd = req.readOnly ? launch : withGlobalMcp(req.provider, account, launch, [], cwd);
     const now = this.now();
     const name = tmuxName(id);
     const parent = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
@@ -2680,6 +2689,7 @@ export class Fleet extends EventEmitter {
       parent: parent ?? null,
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
+    if (req.readOnly) updateSessionRecord(id, { launch: { args: ["--sandbox", "read-only", "--ask-for-approval", "never"], env: {} } });
     insertAssignment({
       id: randomUUID(),
       sessionId: id,
@@ -2977,7 +2987,8 @@ export class Fleet extends EventEmitter {
       autoApprove: getSettings().autoApprove,
       ...(launch ? { carry: launch.args } : {}),
     };
-    const cmd = withGlobalMcp(rec.provider, account, adapter.resumeCommand(opts), opts.carry, cwd, launch?.env);
+    const command = adapter.resumeCommand(opts);
+    const cmd = launch?.args.includes("read-only") ? command : withGlobalMcp(rec.provider, account, command, opts.carry, cwd, launch?.env);
     return { opts, cmd, typed, inherited: launch?.env };
   }
 
@@ -3762,7 +3773,7 @@ function resumeModel(rec: SessionRecord): string | null {
  */
 function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
   sessionCapability(id);
-  return { AGENTBOX_SESSION: id, ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}) };
+  return { AGENTBOX_SESSION: id, ...(process.env.AGENTBOX_HOME ? { AGENTBOX_HOME: process.env.AGENTBOX_HOME } : {}), ...(process.env.AGENTBOX_PORT ? { AGENTBOX_PORT: process.env.AGENTBOX_PORT } : {}), ...(process.env.AGENTBOX_TMUX_SOCKET ? { AGENTBOX_TMUX_SOCKET: process.env.AGENTBOX_TMUX_SOCKET } : {}), ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}) };
 }
 
 /** Short, URL-safe, unambiguous: no 0/o/1/l. */

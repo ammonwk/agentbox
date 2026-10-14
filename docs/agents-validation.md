@@ -91,3 +91,39 @@ corrected with revision-checked draft replacement; the two-tab browser check pro
 clearing stale text cannot erase a newer draft from another tab.
 
 ![Project switcher, controlled two-repository fixture](images/projects-switcher.png)
+
+## Session browser and Jupiter iteration
+
+The later live-app instruction authorizes preserved local-main integration. GitHub
+PR merges, auto-merge, deployment and trial issue closure remain prohibited.
+
+- `scripts/agent-browser-smoke.ts`: two agents' actual linked fixture histories,
+  exact counts/transcripts, predecessor read-only behavior, rejected foreign IDs,
+  exact-target drafts/clear/Feed, editable Jupiter card, idempotent creation across
+  reload, real runtime custom instructions and mobile rail/Send geometry.
+- Updated `scripts/projects-smoke.ts`: two-project navigation, private workspaces,
+  standalone Sessions/Review, archived pagination, New Session defaults/overrides,
+  multitab drafts, delayed responses, deep links and removed-project recovery.
+- Updated `scripts/agents-smoke.ts`: real local Supabase identities and existing
+  controlled Fleet/provider runtime; encrypted shared reads/guidance, stale-target
+  dispatch refusal, creator capability/revision/host-owner checks, one durable
+  custom instance and explicit first Chat, replaced-creator refusal. These are
+  controlled fixture results, not provisioned production bots.
+- Existing suite: 278 passing, 22 environment skips; typecheck and web build pass.
+  New tests guard foreign reads, obsolete writers and destructive draft acceptance.
+
+The real preview Jupiter authored an editable Janus creation card, its human
+acceptance persisted a custom instance, and an explicit first Chat received a
+real Codex reply. Provider transcripts remain the record. A managed-service locale
+issue in tmux pane discovery was found by this check and repaired: printable
+field separators work without a UTF-8 locale, and late discovery reconciles only
+with matching live pane, provider, account, cwd and start evidence. Existing IDs
+remain as closed successor aliases rather than being deleted.
+
+Local work-family validation includes disposable real git worktrees and bare
+remotes, controlled provider verdicts, atomic multi-issue claims, launch failures
+before session recording, reviewer retries, cumulative three-round refusal,
+current grants, exact-head/title gates and branch-push/base-churn recovery. The
+positive publication transport is controlled; it is not a real trial PR or proof
+of an external App setup. Independent architecture, correctness and maintainability
+reviews identified the startup, pause, pagination and main-chat corrections.

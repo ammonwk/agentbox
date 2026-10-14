@@ -6,7 +6,7 @@ export type SessionTab = "terminal" | "timeline" | "diff" | "load";
 export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "diff", "load"];
 
 export type Route =
-  | { page: "agents"; id?: string }
+  | { page: "agents"; id?: string; thread?: string; view?: "chat" | "about" | "feed" | "sessions" }
   | { page: "sessions" }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
@@ -40,7 +40,7 @@ function decode(p: string): string {
 export function parseHash(hash: string): Route {
   const parts = hash.split("?")[0]!.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
-  if (head === "agents") return { page: "agents", ...(a ? { id: a } : {}) };
+  if (head === "agents") return { page: "agents", ...(a ? { id: a } : {}), ...(b ? { view: ["about", "feed", "sessions"].includes(b) ? b as "about" | "feed" | "sessions" : "chat", ...(parts[3] ? { thread: parts[3] } : {}) } : {}) };
   if (head === "s" && a) {
     const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
     return { page: "session", id: a, tab };
@@ -60,7 +60,7 @@ export function parseHash(hash: string): Route {
 
 function routePath(route: Route): string {
   switch (route.page) {
-    case "agents": return `#/agents${route.id ? `/${encodeURIComponent(route.id)}` : ""}`;
+    case "agents": return `#/agents${route.id ? `/${encodeURIComponent(route.id)}` : ""}${route.view || route.thread ? `/${route.view ?? "chat"}${route.thread ? `/${encodeURIComponent(route.thread)}` : ""}` : ""}`;
     case "session":
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
     case "accounts":
@@ -108,7 +108,7 @@ export function restoreScope(): void {
 const NARROW = "(max-width: 900px)";
 
 /** The history entry's own state: whether the entry under it is the list. */
-type Entry = { overList?: boolean } | null;
+type Entry = { overList?: boolean; agentList?: string } | null;
 
 function overList(): boolean {
   return (history.state as Entry)?.overList === true;
@@ -136,13 +136,18 @@ export function go(to: Route, replace = false): void {
   const from = parseHash(location.hash);
   const over = overList();
   if (matchMedia(NARROW).matches) {
+    if (to.page === "agents" && from.page === "agents" && to.id === from.id) {
+      const beneath = (history.state as Entry)?.agentList === to.id;
+      if (!to.view && from.view && beneath) { history.back(); return; }
+      if (to.view && from.view) replace = true;
+    }
     if (to.page === "sessions" && from.page === "session" && over) {
       history.back();
       return;
     }
     if (to.page === "session" && from.page === "session") replace = true;
   }
-  const state: Entry = to.page === "session" && (from.page === "sessions" || (from.page === "session" && replace && over)) ? { overList: true } : null;
+  const state: Entry = to.page === "agents" && to.view && from.page === "agents" && from.id === to.id && (!from.view || (history.state as Entry)?.agentList === to.id) ? { agentList: to.id } : to.page === "session" && (from.page === "sessions" || (from.page === "session" && replace && over)) ? { overList: true } : null;
   if (replace) {
     history.replaceState(state, "", href);
     moved.forEach((fn) => fn());
@@ -155,6 +160,13 @@ export function go(to: Route, replace = false): void {
 /** On a narrow screen, put the list under a session the app was opened on (a
  *  link, a notification, a reload), so back from it is the list too. */
 export function listUnderSession(): void {
+  const agent = parseHash(location.hash);
+  if (matchMedia(NARROW).matches && agent.page === "agents" && agent.id && agent.view && (history.state as Entry)?.agentList !== agent.id) {
+    const href = hrefOf(agent);
+    history.replaceState(null, "", hrefOf({ page: "agents", id: agent.id, view: "sessions", thread: agent.thread }));
+    history.pushState({ agentList: agent.id }, "", href);
+    return;
+  }
   if (!matchMedia(NARROW).matches || parseHash(location.hash).page !== "session" || overList()) return;
   const href = hrefOf(parseHash(location.hash));
   history.replaceState(null, "", hrefOf({ page: "sessions" }));

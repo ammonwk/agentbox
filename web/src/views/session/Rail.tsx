@@ -27,7 +27,7 @@ import { fmtBytes } from "../../lib/format";
 import { openingTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
-import { useScope } from "../../lib/projects";
+import { useScope, useProjectData, sessionProject } from "../../lib/projects";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
 import { ScheduledRow } from "./Scheduled";
@@ -242,21 +242,7 @@ export function Rail({
         </label>
         <SortMenu list={list} />
       </div>
-      <div className="rail-views" role="tablist" aria-label="Which sessions">
-        {(["active", "inactive"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            className="rail-view"
-            aria-selected={view === v}
-            title={v === "active" ? "Running, or did something in the last 3 hours" : "Nothing in the last 3 hours"}
-            onClick={() => list.setView(v)}
-          >
-            {v === "active" ? "Active" : "Inactive"} <span>{counts[v]}</span>
-          </button>
-        ))}
-      </div>
+      <RailTabs view={view} counts={counts} onChange={list.setView} />
 
       <div
         className="rail-scroll"
@@ -574,7 +560,10 @@ function CloseFailure() {
 
 /** The session's name, after the project it works on, in quieter type. */
 function RowTitle({ s }: { s: SessionRow }) {
-  const project = projectOf(s);
+  const { repos, agents } = useProjectData();
+  const agent = agents.find((a) => a.session === s.id || (a.previous.includes(s.id) || a.workSessions?.includes(s.id)));
+  const registered = repos.find((r) => r.id === sessionProject(repos, agents, s));
+  const project = agent ? [registered?.displayName, agent.name].filter(Boolean).join(" · ") : registered?.displayName ?? projectOf(s);
   return (
     <span className="rail-title">
       {project ? <span className="rail-proj">{project}</span> : null}
@@ -760,4 +749,22 @@ function ClosedList({ query, current, stamp }: { query: string; current: string 
       ) : null}
     </div>
   );
+}
+
+export function RailTabs({ view, counts, onChange }: { view: RailView; counts: Record<RailView, number>; onChange: (view: RailView) => void }) {
+  return (      <div className="rail-views" role="tablist" aria-label="Which sessions">
+        {(["active", "inactive"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            className="rail-view"
+            aria-selected={view === v}
+            title={v === "active" ? "Running, or did something in the last 3 hours" : "Nothing in the last 3 hours"}
+            onClick={() => onChange(v)}
+          >
+            {v === "active" ? "Active" : "Inactive"} <span>{counts[v]}</span>
+          </button>
+        ))}
+      </div>);
 }

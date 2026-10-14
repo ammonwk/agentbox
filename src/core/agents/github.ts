@@ -133,7 +133,7 @@ interface Pull {
 }
 // Otherwise GitHub could close an issue during merge before the configured
 // resolution policy has been satisfied. Use plain links in prepared PRs.
-function refuseAutomaticClosure(body: string) {
+export function refuseAutomaticClosure(body: string) {
   if (
     /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s*:?\s+(?:[\w.-]+\/[\w.-]+)?#\d+|\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s*:?\s+https:\/\/github\.com\/[^\s]+\/issues\/\d+/i.test(
       body,

@@ -265,6 +265,8 @@ export interface SpawnOptions {
   /** One of the adapter's `efforts`; absent means the CLI's default. */
   effort?: string;
   autoApprove: boolean;
+  /** Supported by Codex for independent reviews; no tool approvals or writes. */
+  readOnly?: boolean;
 }
 
 export interface ResumeOptions {

@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useRef, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { HumanAgents } from "../../../src/cloud/agent-client";
 import {
   AGENT_TEMPLATES,
   AgentDefinition,
   WorkStage,
   type AgentBoard,
-  type SharedAgent,
+  SharedAgent,
   type WorkItem,
   type AgentAction,
 } from "../../../src/cloud/agents";
-import type { HumanCloud } from "../../../src/cloud/client";
+import { cloudCall, type HumanCloud } from "../../../src/cloud/client";
 import type { Installation, Member } from "../../../src/cloud/protocol";
 import type { CloudStatus } from "../../../src/core/cloud/bridge";
 import type { AgentsRuntime } from "../../../src/core/agents/runtime";
@@ -28,6 +28,7 @@ import {
 import { go, selectScope } from "../route";
 import { useScope } from "../lib/projects";
 import "./agents.css";
+import { rememberAgent, landingForAgent } from "./AgentBrowser";
 import { LocalAgentSpace, SharedAgentSpace } from "./AgentSpace";
 
 const when = (s?: string | null) =>
@@ -67,7 +68,7 @@ export function Agents({ state, id }: { state: AppState; id?: string }) {
   if (error) return <Empty title="Cloud connection unavailable">{error}</Empty>;
   if (!status) return <Empty title="Loading Agents…" />;
   if (!status.configured || id?.startsWith("local-"))
-    return <LocalAgentSpace state={state} id={id} />;
+    return <LocalAgentSpace state={state} id={id === "manage" ? undefined : id} />;
   return <Connected status={status} state={state} id={id} />;
 }
 function Connected({
@@ -93,7 +94,8 @@ function Connected({
           outreach preferences.
         </p>
         <Button onClick={() => go({ page: "team" })}>Sign in on Team</Button>
-      </Empty><LocalAgentSpace state={state} /></>
+        <a href="#/agents/local-jupiter">Open local agents on this machine</a>
+      </Empty></>
     );
   return (
     <Directory
@@ -173,6 +175,29 @@ function Directory({
   };
   const selected = data.data?.board.agents.find((a) => a.id === id);
   const inProject = (a: SharedAgent) => !scope.project || !!project && a.definition.repos.some((slug) => slug.toLowerCase() === (project.fullName ?? (project.kind === "github" ? project.ref : "")).toLowerCase());
+  const creating = useRef(false);
+  const creator = useCallback(async () => {
+    if (!data.data || creating.current) return;
+    creating.current = true;
+    try {
+      const repos = project ? [project.fullName ?? (project.kind === "github" ? project.ref : "")].filter(Boolean) : [];
+      if (project && !repos.length) throw Error("Shared agents need a GitHub-linked project. Choose a linked project or use its local Jupiter.");
+      const current = data.data.board.agents.find((a) => a.capability === "creator" && a.created_by === user && JSON.stringify(a.definition.repos) === JSON.stringify(repos));
+      const host = data.data.hosts.find((h) => h.id === status.installation?.id && h.owner_user_id === user && h.scopes.includes("agents:execute"));
+      const a = current ?? await cloudCall(human.sb, "agent_creator", { p_workspace: workspace, p_repos: repos, p_host: host?.id ?? null }, SharedAgent);
+      await data.reload(); go({ page: "agents", id: a.id, view: "chat", thread: "new" });
+    } catch (e) { setError((e as Error).message); } finally { creating.current = false; }
+  }, [data.data, project, user, workspace, status.installation?.id]);
+  useEffect(() => {
+    if (!id && data.data) {
+      const scoped = data.data.board.agents.filter(inProject);
+      const saved = scoped.find((a) => a.id === rememberAgent());
+      const used = scoped.find((a) => data.data!.board.runs.some((r) => r.agent_id === a.id));
+      const first = saved ?? used ?? scoped.find((a) => a.capability === "creator") ?? scoped.find((a) => a.name.toLowerCase() === "vulcan") ?? scoped[0];
+      if (first) go(landingForAgent(first.id), true);
+      else if (!error) void creator();
+    }
+  }, [id, data.data, error]);
   const person = (id: string | null) =>
     !id
       ? "Unassigned"
@@ -189,6 +214,8 @@ function Directory({
         <Button onClick={() => go({ page: "team" })}>Open Team</Button>
       </Empty>
     );
+  if (!id) return <Empty title={error ? "Could not open Jupiter" : "Opening agents…"}>{error}{error && <Button onClick={() => { setError(null); void creator(); }}>Retry</Button>}</Empty>;
+  if (id !== "manage" && !selected && data.data) return <Empty title="Agent not available in this workspace"><Button onClick={() => go({page: "agents"})}>Choose an agent</Button></Empty>;
   return (
     <div className="agents-page">
       {!selected && (
@@ -250,6 +277,9 @@ function Directory({
         <SharedAgentSpace
           key={selected.id}
           a={selected}
+          options={data.data.board.agents.filter(inProject).map((a) => ({ id: a.id, name: a.name, role: a.definition.role, creator: a.capability === "creator", detail: `${a.definition.repos.join(", ") || "General"} · ${a.team ? "Team" : person(a.created_by)} · ${a.enabled ? "Shared" : "Needs setup"}` }))}
+          onCreate={() => void creator()}
+          reload={data.reload}
           board={data.data.board}
           api={api}
           user={user}
@@ -356,7 +386,7 @@ function Directory({
             <DefinitionHistory a={selected} api={api} person={person} />
           </details>
         </SharedAgentSpace>
-      ) : id && data.data ? (
+      ) : id && id !== "manage" && data.data ? (
         <Empty title="Agent not found in this workspace">
           <Button onClick={() => go({ page: "agents" })}>Back to Agents</Button>
         </Empty>
@@ -465,7 +495,7 @@ function Directory({
           />
         </>
       )}
-      {!id && !editing && <details className="card agent-section"><summary>Local agents on this machine</summary><LocalAgentSpace state={state} /></details>}
+      <a href="#/agents/local-jupiter">Open local Jupiter</a>
       {data.data && (
         <details className="card agent-section">
           <summary>My expertise and contact preferences</summary>

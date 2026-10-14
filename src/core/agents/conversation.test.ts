@@ -1,3 +1,4 @@
+import { AgentWorks } from "./work";
 /** Decisions can authorize destructive work. These tests guard replay, races
  * and the proof required before replacing a possibly running conversation. */
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -52,6 +53,7 @@ beforeEach(() => {
       },
     },
   } as unknown as AgentsRuntime;
+  Object.assign(runtime, {works: new AgentWorks(runtime)});
   conversations = new AgentConversations(runtime);
   conversations.local();
 });
@@ -132,6 +134,7 @@ test("Feed approval wins its race once, preserves refusal, and never replays und
   resolve({ state: "refused", result: "Agent paused" });
   expect((await pending).delivery?.state).toBe("refused");
   expect(closed).toBe(0);
+  Object.assign(runtime, {works: new AgentWorks(runtime)});
   conversations = new AgentConversations(runtime);
   conversations.localSend = async () => {
     calls++;
@@ -157,6 +160,7 @@ test("a crash before decision delivery is visible as uncertain and cannot be rep
     JSON.stringify(p),
     p.id,
   ]);
+  Object.assign(runtime, {works: new AgentWorks(runtime)});
   conversations = new AgentConversations(runtime);
   conversations.localSend = async () => {
     throw Error("must not replay");
@@ -306,4 +310,52 @@ test("project identity cannot be rebound or consume another project's recommenda
   expect(conversations.local().find((x) => x.id === a.id)?.session).toBe(a.session);
   expect(spawns).toHaveLength(0);
   expect(stopped).toBe(0);
+});
+
+test("selected history cannot read a foreign session or resurrect a replaced writer", async () => {
+  const a = link("current"); a.previous = ["previous"];
+  store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(a), a.id]);
+  for (const id of ["current", "previous", "private"]) record(id, null);
+  sessions = [{id:"current",title:"Current",status:"running",lastActivityAt:Date.now()}, {id:"previous",title:"Previous",status:"stopped",lastActivityAt:1}, {id:"private",title:"Standalone private",status:"running",lastActivityAt:Date.now()}];
+  let reads = 0, sends = 0;
+  fleet.timeline = async (id: string) => { reads++; return { events:[{id,kind:"assistant",text:id,at:1}], before:null }; };
+  fleet.send = async () => { sends++; };
+  const list = await conversations.page(a.id, {list:true});
+  expect(list.counts).toEqual({active:1,inactive:1});
+  expect(list.threads?.map((t) => t.id)).toEqual(["current","previous"]);
+  expect((await conversations.page(a.id, {target:"previous"})).thread?.writable).toBe(false);
+  expect((await conversations.page(a.id, {target:"previous"})).next).toBeNull();
+  await expect(conversations.page(a.id,{target:"private"})).rejects.toThrow("does not belong");
+  await expect(conversations.page("local-salus",{target:"current"})).rejects.toThrow();
+  await expect(conversations.localSend(a.id,"old","Wrong",undefined,"previous")).rejects.toThrow("changed");
+  expect(reads).toBe(2); expect(sends).toBe(0); expect(spawns.length).toBe(0);
+});
+test("creator capability, project and revision bind an idempotent human creation", async () => {
+  insertRepo({id:"project",kind:"local",ref:home,displayName:"Project",fullName:null,defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
+  const creator = conversations.local("project").find((a) => a.capability === "creator" && a.repo === "project")!;
+  creator.session = "jupiter-session";
+  store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(creator),creator.id]);
+  const spec = { name:"Atlas",role:"Explain this repository",instructions:"Use diagrams and short examples.",provider:"codex" as const, limits:"Do not publish.",automation:"" };
+  await expect(conversations.draft("local-vulcan","linked",crypto.randomUUID(),spec)).rejects.toThrow("creator");
+  await expect(conversations.draft(creator.id,"foreign",crypto.randomUUID(),spec)).rejects.toThrow("creator");
+  const d = await conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec);
+  expect(() => conversations.editCreation(creator.id,d.id,1,null,spec,true)).toThrow("project");
+  expect(() => conversations.editCreation(creator.id,d.id,1,"project",{...spec,name:"Changed"},true)).toThrow("changed");
+  const edited = conversations.editCreation(creator.id,d.id,1,"project",{...spec,name:"Atlas edited"},false);
+  expect(() => conversations.editCreation(creator.id,d.id,1,"project",spec,true)).toThrow("changed");
+  const made = conversations.editCreation(creator.id,d.id,edited.revision,"project",edited.spec,true);
+  expect(conversations.editCreation(creator.id,d.id,edited.revision,"project",edited.spec,true).created).toBe(made.created);
+  const saved = new AgentConversations(runtime).local().filter((a) => a.creation === d.id);
+  expect(saved.length).toBe(1); expect(saved[0]?.capability).toBeUndefined(); expect(saved[0]?.repo).toBe("project"); expect(saved[0]?.instructions).toContain(spec.instructions);
+  expect(spawns.length).toBe(0);
+  await conversations.localSend(made.created!,crypto.randomUUID(),"Explain the architecture",undefined,null);
+  expect(spawns[0].prompt).toContain(spec.instructions); expect(spawns[0].repoId).toBe("project");
+});
+test("a creation proposal from a replaced creator is read-only", async () => {
+  const creator = conversations.local().find((a) => a.capability === "creator")!; creator.session = "old";
+  store.db.run("UPDATE local_agents SET body=? WHERE id=?",[JSON.stringify(creator),creator.id]);
+  const d = await conversations.draft(creator.id,"old",crypto.randomUUID(),{name:"New",role:"Help",instructions:"Help with code",provider:"codex"});
+  creator.previous = ["old"]; creator.session = "new";
+  store.db.run("UPDATE local_agents SET body=? WHERE id=?",[JSON.stringify(creator),creator.id]);
+  expect(() => conversations.editCreation(creator.id,d.id,d.revision,null,d.spec,true)).toThrow("replaced");
 });

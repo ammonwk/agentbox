@@ -34,6 +34,22 @@ export async function agent(api: Api, args: string[]): Promise<number> {
   };
   let value: unknown;
   switch (verb) {
+    case "work-start":
+      value = await api("POST", "/api/agents/work", file());
+      break;
+    case "work":
+      value = await api("GET", `/api/agents/work${id ? `/${encodeURIComponent(id)}` : ""}`);
+      break;
+    case "work-review":
+    case "work-collect":
+    case "work-publish":
+    case "work-failure":
+    case "work-retry-review":
+    case "work-reconcile":
+    case "work-retry-start":
+      if (!id) throw new Error(`${verb} requires a work family UUID`);
+      value = await api("POST", `/api/agents/work/${encodeURIComponent(id)}/${verb.slice(5)}`, ["work-collect", "work-reconcile", "work-retry-start"].includes(verb) ? {} : file());
+      break;
     case "intake":
       if (!id) throw new Error("agent intake <run UUID> --file <work.json>");
       value = await api(
@@ -41,6 +57,10 @@ export async function agent(api: Api, args: string[]): Promise<number> {
         `/api/agents/runs/${encodeURIComponent(id)}/intake`,
         { item: file() },
       );
+      break;
+    case "draft":
+      if (!id || !str("request")) throw new Error("agent draft <creator agent ID|run UUID> --request <stable UUID> --file <creation.json>");
+      value = await api("POST", `/api/agents/${encodeURIComponent(id)}/creation-drafts`, { request: str("request"), spec: file() });
       break;
     case "recommend":
       if (!id || !str("request"))

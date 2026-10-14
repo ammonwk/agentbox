@@ -11,6 +11,7 @@ import {
   type Proposal,
   type ConversationPage,
   type ReadCursor,
+  type AgentThread,
 } from "../../../src/cloud/agent-conversation";
 import type { HumanAgents } from "../../../src/cloud/agent-client";
 import {
@@ -19,6 +20,9 @@ import {
   type SharedAgent,
   type AgentAction,
 } from "../../../src/cloud/agents";
+import { z } from "zod";
+import { CreationDraft, type CreationSpec } from "../../../src/cloud/agent-creation";
+import { AgentCreationCard } from "./AgentCreationCard";
 import { cloudCall, CloudError } from "../../../src/cloud/client";
 import type { AppState, TimelineEvent } from "../../../src/core/types";
 import { request } from "../api";
@@ -28,14 +32,19 @@ import { AgentComposer } from "./session/Composer";
 import { AgentConversationEvents } from "./session/Timeline";
 import { Markdown } from "./session/Markdown";
 import "./session/session.css";
+import { AgentBrowser, agentRoute, rememberAgent, landingForAgent, type AgentOption } from "./AgentBrowser";
+import { go, hrefOf } from "../route";
 
 type Receipt = { state: string; result: string };
 type Transport = {
+  creations: () => Promise<CreationDraft[]>;
+  editCreation: (draft: CreationDraft, spec: CreationSpec, create: boolean) => Promise<CreationDraft>;
   read: (cursor: ReadCursor, signal?: AbortSignal) => Promise<ConversationPage>;
   send: (
     body: string,
     id: string,
-    proposal?: { proposal: string; run: string },
+    proposal: { proposal: string; run: string } | undefined,
+    target: AgentThread | null,
   ) => Promise<Receipt>;
   receipt: (id: string) => Promise<Receipt | null>;
   proposals: () => Promise<Proposal[]>;
@@ -52,6 +61,9 @@ export function SharedAgentSpace({
   user,
   actions,
   children,
+  options,
+  onCreate,
+  reload,
 }: {
   a: SharedAgent;
   board: AgentBoard;
@@ -59,8 +71,12 @@ export function SharedAgentSpace({
   user: string;
   actions: AgentAction[];
   children: ReactNode;
+  options: AgentOption[];
+  onCreate: () => void;
+  reload: () => Promise<unknown>;
 }) {
   const conversation = useMemo(() => new AgentConversation(api.human), [api]);
+  const runs = useRef(board.runs); runs.current = board.runs;
   const activeRuns = board.runs.filter(
     (r) =>
       r.agent_id === a.id &&
@@ -75,28 +91,18 @@ export function SharedAgentSpace({
   const transport = useMemo<Transport>(
     () => ({
       read: (cursor, signal) => conversation.read(a.id, cursor, signal),
+      creations: () => cloudCall(api.human.sb, "agent_creation_list", { p_creator: a.id }, z.array(CreationDraft)),
+      editCreation: async (draft, spec, create) => { const d = await cloudCall(api.human.sb, "agent_creation_edit", { p_creator: a.id, p_id: draft.id, p_revision: draft.revision, p_spec: spec, p_create: create }, CreationDraft); await reload(); return d; },
       proposals: () => conversation.proposals(a.id),
       decide: (p, choice, id) => conversation.decide(p.id, choice, id),
       receipt: (id) => conversation.receipt(id),
-      send: async (body, id, proposal) => {
+      send: async (body, id, proposal, target) => {
         try {
-          const r =
-            (proposal
-              ? board.runs.find((r) => r.id === proposal.run)
-              : responsible) ??
-            (await cloudCall(
-              api.human.sb,
-              "agent_conversation_start",
-              { p_agent: a.id, p_request: crypto.randomUUID() },
-              AgentRun,
-            ));
-          return await conversation.guide(
-            a.id,
-            r.id,
-            id,
-            body,
-            proposal?.proposal ?? null,
-          );
+          if (proposal && proposal.run !== target?.run) return { state: "refused", result: "Recommendation belongs to another conversation" };
+          const r = target ? runs.current.find((r) => r.id === target.run && r.agent_id === a.id) : await cloudCall(api.human.sb,
+            "agent_conversation_start", { p_agent: a.id, p_request: crypto.randomUUID() }, AgentRun);
+          if (!r || target && r.session_id !== target.id || !target && r.session_id) return { state: "refused", result: "Conversation changed; open the current session" };
+          return await conversation.guide(a.id, r.id, id, body, proposal?.proposal ?? null, target?.id ?? null);
         } catch (e) {
           if (
             e instanceof CloudError &&
@@ -107,7 +113,7 @@ export function SharedAgentSpace({
         }
       },
     }),
-    [conversation, a.id, responsible?.id, api],
+    [conversation, a.id, api],
   );
   const mayDecide = (p: Proposal) =>
     a.maintainers.includes(user) ||
@@ -117,6 +123,9 @@ export function SharedAgentSpace({
   return (
     <AgentSpace
       id={a.id}
+      options={options}
+      conversationSession={activeRuns.find((r) => board.work.some((w) => w.id === r.work_id && w.external_key === `conversation:${a.id}`))?.session_id ?? null}
+      onCreate={onCreate}
       name={a.name}
       status={
         !a.enabled
@@ -150,13 +159,23 @@ export function LocalAgentSpace({
     () => project ? request<LocalAgent[]>("POST", "/api/agents/local/project", { repo: project }) : request<LocalAgent[]>("GET", "/api/agents/local"),
     [project],
   );
+  const options = (agents.data ?? []).filter((a) => !project || a.repo === project).map((a): AgentOption => ({ id: a.id, name: a.name, role: a.role, creator: a.capability === "creator", detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.enabled ? "Local" : "Paused"}` }));
   const selected = agents.data?.find((a) => a.id === id);
   useEffect(() => {
-    if (selected && !scopeOf().has("project")) selectScope("project", selected.repo, { page: "agents", id: selected.id }, true);
+    if (!id && options.length) {
+      const saved = options.find((a) => a.id === rememberAgent());
+      const used = options.find((a) => agents.data?.find((x) => x.id === a.id)?.session);
+      go(landingForAgent((saved ?? used ?? options.find((a) => a.creator) ?? options[0])!.id), true);
+    }
+  }, [id, agents.data, project]);
+  useEffect(() => {
+    if (selected && !scopeOf().has("project")) selectScope("project", selected.repo, { ...agentRoute(), page: "agents", id: selected.id }, true);
   }, [selected?.id]);
   const transport = useMemo<Transport>(
     () => ({
       read: (cursor) => request("POST", `/api/agents/local/${id}/read`, cursor),
+      creations: () => request("GET", `/api/agents/local/${id}/creations`),
+      editCreation: async (draft, spec, create) => { const d = await request<CreationDraft>("POST", `/api/agents/local/${id}/creations/${draft.id}`, { revision: draft.revision, spec, create, repo: selected?.repo ?? null }); await agents.reload(); return d; },
       proposals: () => request("GET", `/api/agents/local/${id}/proposals`),
       decide: (p, decision, requestId) =>
         request("POST", `/api/agents/local/${id}/decide`, {
@@ -164,7 +183,7 @@ export function LocalAgentSpace({
           decision,
           request: requestId,
         }),
-      send: async (body, requestId, context) => {
+      send: async (body, requestId, context, target) => {
         const receipt = await request<Receipt>(
           "POST",
           `/api/agents/local/${id}/chat`,
@@ -172,6 +191,7 @@ export function LocalAgentSpace({
             body,
             request: requestId,
             context,
+            target: target?.id ?? null,
           },
         );
         await agents.reload();
@@ -180,51 +200,22 @@ export function LocalAgentSpace({
       receipt: (requestId) =>
         request("GET", `/api/agents/local/${id}/receipt/${requestId}`),
     }),
-    [id, agents.reload],
+    [id, selected?.repo, agents.reload],
   );
   if (agents.error)
     return <Empty title="Could not load local agents">{agents.error}</Empty>;
   if (!agents.data) return <Empty title="Loading agents…" />;
-  if (selected && project && selected.repo !== project) return <Empty title="This agent belongs to another project"><Button onClick={() => selectScope("project", selected.repo, { page: "agents", id: selected.id })}>Open in its project</Button></Empty>;
+  if (selected && project && selected.repo !== project) return <Empty title="This agent belongs to another project"><Button onClick={() => selectScope("project", selected.repo, { ...agentRoute(), page: "agents", id: selected.id })}>Open in its project</Button></Empty>;
   if (id && !selected) return <Empty title="Agent not found" />;
-  if (!selected)
-    return (
-      <div className="agents-page agent-local-directory">
-        <div>
-          <h2>Your agents</h2>
-          <p className="hint">
-            Start a conversation. Your provider keeps the history on this
-            machine.
-          </p>
-        </div>
-        <div className="agent-directory">
-          {agents.data.filter((a) => !project || a.repo === project).map((a) => (
-            <a
-              key={a.id}
-              href={`#/agents/${a.id}`}
-              className="card agent-directory-card"
-            >
-              <h3>{a.name}</h3>
-              <span className="hint">{state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General conversation")}</span>
-              <p>{a.role}</p>
-              <span className="hint">
-                {a.session ? "Continue conversation" : "Start chatting"} →
-              </span>
-            </a>
-          ))}
-        </div>
-        <p className="hint">
-          Local agents · <a href="#/team">Connect a workspace</a> to share
-          agents and run them on another host.
-        </p>
-      </div>
-    );
+  if (!selected) return <Empty title="Loading agents…" />;
   const session = state.sessions.find((s) => s.id === selected.session);
   return (
     <AgentSpace
       key={selected.id}
       id={selected.id}
+      options={options}
       name={selected.name}
+      conversationSession={selected.session}
       status={
         !selected.enabled
           ? "Paused"
@@ -240,6 +231,7 @@ export function LocalAgentSpace({
       about={
         <div className="agent-about">
           <h3>{selected.role}</h3>
+          <p className="hint">Manual chat · {selected.createdBy ?? "Local operator"}{selected.automation ? ` · Requested automation (not configured): ${selected.automation}` : ""}</p>
           <p>
             Local to this machine. This conversation uses your existing provider
             account. Shared workspace setup is optional.
@@ -318,6 +310,9 @@ function AgentSpace({
   mayDecide,
   about,
   actions = [],
+  conversationSession,
+  options,
+  onCreate,
 }: {
   id: string;
   name: string;
@@ -327,9 +322,29 @@ function AgentSpace({
   mayDecide: (p: Proposal) => boolean;
   about: ReactNode;
   actions?: AgentAction[];
+  conversationSession?: string | null;
+  options: AgentOption[];
+  onCreate?: () => void;
 }) {
-  const [tab, setTab] = useState<"chat" | "about" | "feed">("chat"),
-    [events, setEvents] = useState<TimelineEvent[]>([]),
+  const route = agentRoute(), tab = route.view === "sessions" ? "chat" : route.view ?? "chat", target = route.thread ?? "new";
+  useEffect(() => { if (!route.view) go(landingForAgent(id), true); }, [id, route.view]);
+  const setTab = (view: "chat" | "about" | "feed") => go({ page: "agents", id, view, thread: target });
+  const [threads, setThreads] = useState<AgentThread[]>([]), [counts, setCounts] = useState({ active: 0, inactive: 0 }), [more, setMore] = useState<number | null>(null), [railError, setRailError] = useState<string | null>(null);
+  const selected = threads.find((t) => t.id === target);
+  const ongoing = conversationSession;
+  const loadedThreads = useRef(0);
+  const readList = useCallback(async (offset = 0) => {
+    const page = await transport.read({ session: 0, before: null, list: true, offset });
+    if (page.error) throw Error(page.error);
+    setThreads((old) => offset ? [...new Map([...old, ...(page.threads ?? [])].map((t) => [t.id,t])).values()] : page.threads ?? []);
+    loadedThreads.current = offset + (page.threads?.length ?? 0);
+    if (page.counts) setCounts(page.counts);
+    setMore(page.more ?? null); setRailError(null);
+  }, [transport]);
+  useEffect(() => {
+    if (target === "new" && ongoing) go({ page: "agents", id, view: "chat", thread: ongoing }, true);
+  }, [target, ongoing]);
+  const [events, setEvents] = useState<TimelineEvent[]>([]),
     [next, setNext] = useState<ReadCursor | null>(null),
     [error, setError] = useState<string | null>(null),
     [reading, setReading] = useState(false),
@@ -340,27 +355,37 @@ function AgentSpace({
       proposal: Proposal;
     } | null>(null),
     [busy, setBusy] = useState(false);
+  const generation = useRef(0);
+  useEffect(() => { generation.current++; }, [target, tab, transport]);
+  const creations = useLoad(transport.creations, [transport]);
   const feed = useLoad(transport.proposals, [transport]),
     bottom = useRef<HTMLDivElement>(null),
     scroller = useRef<HTMLDivElement>(null),
     pinned = useRef(true);
   useEffect(() => {
+    setEvents([]); setNext(null); setReady(false); setError(null);
     let live = true;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       try {
         const page = await transport.read(
-          { session: 0, before: null },
+          { session: 0, before: null, ...(tab === "chat" && target && target !== "new" ? {target} : {list: true}) },
           controller.signal,
         );
         if (live) {
+          if (page.threads) setThreads((old) => [...new Map([...old, ...page.threads!].map((t) => [t.id, t])).values()]);
+          if (page.counts) setCounts(page.counts);
+          loadedThreads.current = Math.max(loadedThreads.current, page.threads?.length ?? 0);
+          if (page.counts) setMore(page.counts.active + page.counts.inactive > loadedThreads.current ? loadedThreads.current : null);
+          setRailError(page.error && page.session === null ? page.error : null);
           setEvents((old) => {
             const m = new Map(old.map((e) => [e.id, e]));
             page.events.forEach((e) => m.set(e.id, e));
             return [...m.values()].sort((a, b) => a.at - b.at);
           });
           setNext((old) => old ?? page.next);
+          if (page.thread) setThreads((old) => old.some((t) => t.id === page.thread!.id) ? old.map((t) => t.id === page.thread!.id ? page.thread! : t) : [...old, page.thread!]);
           setError(page.error ?? null);
           setReady(true);
         }
@@ -373,15 +398,15 @@ function AgentSpace({
         if (live) timer = setTimeout(() => void refresh(), 5000);
       }
     };
-    if (tab === "chat") void refresh();
+    void refresh();
     return () => {
       live = false;
       controller.abort();
       clearTimeout(timer);
     };
-  }, [id, transport, tab]);
+  }, [id, transport, tab, target]);
   useEffect(() => {
-    const t = setInterval(() => void feed.reload(), 5000);
+    const t = setInterval(() => { void feed.reload(); void creations.reload(); }, 5000);
     return () => clearInterval(t);
   }, [feed.reload]);
   useEffect(() => {
@@ -393,11 +418,12 @@ function AgentSpace({
       requestId: string,
       context?: { proposal: string; run: string },
     ) => {
-      const r = await transport.send(body, requestId, context);
+      const r = await transport.send(body, requestId, context, selected ?? null);
+      void readList().catch((e) => setRailError(e.message));
       setGuidance(null);
       return r;
     },
-    [transport, guidance],
+    [transport, selected, readList],
   );
   const receipt = useCallback(
     (requestId: string) => transport.receipt(requestId),
@@ -410,6 +436,8 @@ function AgentSpace({
     try {
       await transport.decide(p, choice, crypto.randomUUID());
       await feed.reload();
+      const responsible = threads.find((t) => t.run === p.run_id && t.writable);
+      if (choice === "approved" && responsible) go({ page: "agents", id, view: "chat", thread: responsible.id });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -475,12 +503,14 @@ function AgentSpace({
             )}
             <Button
               onClick={() => {
+                const responsible = threads.find((t) => t.run === p.run_id && t.writable);
+                if (!responsible) { setError("This recommendation’s conversation is no longer writable. Open its history or ask the current agent to review it."); return; }
                 setGuidance({
                   id: crypto.randomUUID(),
                   proposal: p,
                   text: `Regarding “${p.title}” (${p.id}): `,
                 });
-                setTab("chat");
+                go({ page: "agents", id, view: "chat", thread: responsible.id });
               }}
             >
               Give guidance
@@ -500,13 +530,15 @@ function AgentSpace({
     );
   }
   return (
+    <AgentBrowser id={id} options={options} onCreate={onCreate} ongoing={ongoing} threads={threads} counts={counts} more={more !== null} loadMore={() => { void readList(more ?? 0).catch((e) => setRailError(e.message)); }} error={railError}>
     <div className={`agent-space agent-space-${tab}`}>
+
       <header className="agent-space-head">
-        <a href="#/agents" className="hint" aria-label="Back to agents">
-          ← Agents
+        <a href={hrefOf({ page: "agents", id, view: "sessions", thread: target })} className="hint agent-list-back" aria-label="Back to agent sessions">
+          ← Sessions
         </a>
         <div>
-          <h2>{name}</h2>
+          <h2>{selected?.title ?? name}</h2>
           <span className="agent-chat-status">{status}</span>
         </div>
         <nav aria-label="Agent views">
@@ -560,9 +592,11 @@ function AgentSpace({
                   loading={reading}
                   onClick={() => {
                     setReading(true);
+                    const mine = generation.current;
                     void transport
                       .read(next)
                       .then((page) => {
+                        if (mine !== generation.current) return;
                         setEvents((old) => {
                           const m = new Map(old.map((e) => [e.id, e]));
                           page.events.forEach((e) => m.set(e.id, e));
@@ -570,8 +604,8 @@ function AgentSpace({
                         });
                         setNext(page.next);
                       })
-                      .catch((e) => setError(e.message))
-                      .finally(() => setReading(false));
+                      .catch((e) => { if (mine === generation.current) setError(e.message); })
+                      .finally(() => { if (mine === generation.current) setReading(false); });
                   }}
                 >
                   Earlier messages
@@ -588,7 +622,8 @@ function AgentSpace({
                 </div>
               )}
               <AgentConversationEvents events={events} />
-              {open.slice(0, 4).map(card)}
+              {creations.data?.filter((d) => d.run === selected?.run).map((d) => <AgentCreationCard key={`${d.id}:${d.revision}:${d.created}`} draft={d} scope={options.find((a) => a.id === id)?.detail ?? "Current project"} edit={transport.editCreation} reload={creations.reload} />)}
+              {open.filter((p) => p.run_id === selected?.run).slice(0, 4).map(card)}
               {error && (
                 <p className="agent-chat-notice" role="status">
                   {error}
@@ -598,16 +633,18 @@ function AgentSpace({
             </div>
           </div>
           <div className="agent-conversation-width agent-compose-wrap">
-            <AgentComposer
-              key={id}
-              id={id}
+            {target === "new" || selected?.writable ? <AgentComposer
+              key={`${id}:${target}`}
+              id={`${id}:${target}`}
+              run={selected?.run}
+              recoverFrom={[id, ...(target !== "new" ? [`${id}:new`] : [])]}
               name={name}
               send={send}
               receipt={receipt}
-              disabled={disabled}
+              disabled={disabled || !!railError}
               onGuidanceApplied={() => setGuidance(null)}
               guidance={
-                guidance
+                guidance && guidance.proposal.run_id === selected?.run
                   ? {
                       ...guidance,
                       context: {
@@ -617,10 +654,11 @@ function AgentSpace({
                     }
                   : null
               }
-            />
+            /> : <p className="agent-chat-notice">Read-only conversation. {selected?.successor && <a href={hrefOf({ page: "agents", id, view: "chat", thread: selected.successor })}>Open current session</a>}</p>}
           </div>
         </>
       )}
     </div>
+    </AgentBrowser>
   );
 }
