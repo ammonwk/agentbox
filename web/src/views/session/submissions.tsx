@@ -1,5 +1,5 @@
 /** Temporary pending input, not conversation history. No automatic resend. */
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { api } from "../../api";
 import { Button } from "../../components";
 import { dropPasteTags } from "../../../../src/core/sent";
@@ -9,11 +9,18 @@ import { chatSubmitted } from "./scroll";
 
 const active = new Set<string>();
 
-export async function deliverPending(p: PendingSend): Promise<void> {
+/** Both chat transports stay active from taking the draft through delivery. */
+export async function submitPending(p: PendingSend, deliver: () => Promise<void>): Promise<void> {
   active.add(p.id);
   try {
     await beginSend(p);
     chatSubmitted(p.sessionId);
+    await deliver();
+  } finally { active.delete(p.id); }
+}
+
+export async function deliverPending(p: PendingSend): Promise<void> {
+  await submitPending(p, async () => {
     try {
       const receipt = await api.submit(p.sessionId, p.id, p.kind, p.body);
       if (receipt.state === "sent") {
@@ -25,7 +32,7 @@ export async function deliverPending(p: PendingSend): Promise<void> {
       // the message. It stays out of the draft until delivery is resolved.
       await updatePending(p.id, { state: "unconfirmed", error: e instanceof Error ? e.message : String(e) });
     }
-  } finally { active.delete(p.id); }
+  });
 }
 
 /** A send that lands quickly never shows its note: it would only flash. */
@@ -41,7 +48,6 @@ export function submissionLanded(p: PendingSend, users: readonly { text: string;
 }
 
 async function reconcile(p: PendingSend): Promise<void> {
-  if (active.has(p.id) || p.state === "failed") return;
   const receipt = await api.submission(p.sessionId, p.id);
   if (receipt?.state === "sent") { await forgetPending(p.sessionId, p.id); return; }
   if (receipt?.state === "failed") {
@@ -71,6 +77,12 @@ async function reconcile(p: PendingSend): Promise<void> {
 }
 
 export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }: { sessionId: string; onRestore?: (p: PendingSend) => Promise<void>; reconcileSend?: (p: PendingSend) => Promise<void> }) {
+  const checkSend = useCallback(async (p: PendingSend) => {
+    // A missing receipt says nothing while this page's request is in flight.
+    // Apply the same guard to automatic and explicit checks in either chat.
+    if (active.has(p.id) || p.state === "failed") return;
+    await reconcileSend(p);
+  }, [reconcileSend]);
   const snapshot = useSyncExternalStore(onDraftWork, draftSnapshot);
   const all = useMemo(() => pendingSends(sessionId), [sessionId, snapshot]);
   const ids = all.map((p) => p.id).join(",");
@@ -93,7 +105,7 @@ export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }
       busy = true;
       try {
         for (const p of pendingSends(sessionId)) {
-          try { await reconcileSend(p); }
+          try { await checkSend(p); }
           catch (e) {
             if (!active.has(p.id)) await updatePending(p.id, { state: "unconfirmed", error: e instanceof Error ? e.message : String(e) });
           }
@@ -105,7 +117,7 @@ export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }
     void check();
     const timer = setInterval(() => void check(), 5000);
     return () => clearInterval(timer);
-  }, [sessionId, ids, reconcileSend]);
+  }, [sessionId, ids, checkSend]);
   if (!pending.length) return null;
   async function act(fn: () => Promise<void>) {
     setChecking(true); setError(null);
@@ -120,7 +132,7 @@ export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }
         {p.error ? <div>{p.error}</div> : null}
         {p.state === "unconfirmed" ? <div>Check the timeline or terminal before sending this again.</div> : null}
       </div>
-      {p.state === "failed" && onRestore ? <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => onRestore(p))}>Restore draft</Button> : <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => reconcileSend(p))}>Check delivery</Button>}
+      {p.state === "failed" && onRestore ? <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => onRestore(p))}>Restore draft</Button> : <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => checkSend(p))}>Check delivery</Button>}
       <Button size="sm" variant="ghost" loading={checking} onClick={() => void act(() => forgetPending(sessionId, p.id))}>Dismiss</Button>
     </div>)}
     {error ? <div className="cmp-error" role="alert">{error}</div> : null}
