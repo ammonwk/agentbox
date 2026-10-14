@@ -33,10 +33,27 @@ const PREFS_KEY = "agentbox.newSession";
  *  picked anything yet starts with. */
 export const CLOUD_DEFAULTS_KEY = "agentbox.cloud.defaults";
 
-export function loadPrefs(): NewSessionPrefs {
+/** Each project's dialog remembers on its own, under its own key, so a draft
+ *  for one is not what another opens on; All projects is the key as it was,
+ *  so what was there stays there. */
+const prefsKey = (project: string | null) => (project ? `${PREFS_KEY}.project.${project}` : PREFS_KEY);
+
+/** A project's dialog starts in that project's repo, with the provider and
+ *  per-provider choices All projects has, until a Where is picked by hand or
+ *  a draft is left. */
+export function loadPrefs(project: string | null = null): NewSessionPrefs {
   try {
-    const v = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as unknown;
-    return withCloudDefaults(v && typeof v === "object" ? (v as NewSessionPrefs) : {});
+    const raw = localStorage.getItem(prefsKey(project));
+    if (project && !raw) {
+      const global = loadPrefs();
+      return withCloudDefaults({ provider: global.provider, perProvider: global.perProvider, where: "repo", repoId: project });
+    }
+    const v = JSON.parse(raw ?? "{}") as unknown;
+    const prefs = v && typeof v === "object" ? (v as NewSessionPrefs) : {};
+    if (project && !prefs.wherePicked && !prefs.draft?.trim() && !prefs.draftImages?.length) {
+      return withCloudDefaults({ ...prefs, where: "repo", repoId: project });
+    }
+    return withCloudDefaults(prefs);
   } catch {
     return {};
   }
@@ -64,9 +81,9 @@ function withCloudDefaults(local: NewSessionPrefs): NewSessionPrefs {
   return { ...local, provider: local.provider ?? (d.provider as ProviderId | undefined), perProvider };
 }
 
-export function savePrefs(p: NewSessionPrefs): void {
+export function savePrefs(p: NewSessionPrefs, project: string | null = null): void {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+    localStorage.setItem(prefsKey(project), JSON.stringify(p));
   } catch {
     // private mode or full: forgetting is fine
   }
@@ -150,7 +167,12 @@ const SKILL_SOURCES: Record<ProviderId, readonly SkillSource[] | null> = {
 /** The registered repo a session runs in (a worktree's `repoRoot` is its main checkout). */
 export function repoOfSession(repos: readonly Repo[], s: Pick<Session, "repoRoot" | "cwd">): Repo | null {
   const root = s.repoRoot ?? s.cwd;
-  return repos.find((r) => root === r.ref || root.startsWith(`${r.ref}/`)) ?? null;
+  // A nested registered repository wins over its parent. Worktrees use the
+  // server-resolved common checkout, never a display name or branch guess.
+  return [...repos].sort((a, b) => (b.checkoutRoot ?? b.ref).length - (a.checkoutRoot ?? a.ref).length).find((r) => {
+    const path = r.checkoutRoot ?? r.ref;
+    return root === path || (!s.repoRoot && path.startsWith("/") && root.startsWith(`${path}/`));
+  }) ?? null;
 }
 
 /** The skills a session of `provider` in `repo` could run, first root wins. */

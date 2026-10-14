@@ -34,6 +34,8 @@ import { isInstalledApp, useIsPhone } from "../../lib/phone";
 import { useSysbarSlot } from "../../sysbarslot";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
+import { sessionProject, useProjectData, useScope } from "../../lib/projects";
+import { selectScope } from "../../route";
 import { ago, fmtRetryAt } from "../../lib/format";
 import { outstandingOf, sortWindows } from "../../lib/usage";
 import { useDismiss, useFloating } from "../newsession/popover";
@@ -68,6 +70,7 @@ const TAB_LABEL: Record<SessionTab, string> = {
  */
 export function SessionView({
   state: given,
+  visible: scoped = given,
   id,
   tab,
   onTab,
@@ -75,6 +78,10 @@ export function SessionView({
   onNew,
 }: {
   state: AppState;
+  /** The board as the selected project sees it (lib/projects.tsx): what the
+   *  list shows. `state` stays whole, so closing a session still warns of
+   *  the running sessions it started in other projects. */
+  visible?: AppState;
   id: string | null;
   tab: SessionTab;
   onTab: (t: SessionTab) => void;
@@ -84,6 +91,8 @@ export function SessionView({
   // Pins and bookmarks just asked for, shown before the server's state has them.
   const pinned = usePinned(given.sessions);
   const state = useMemo(() => (pinned === given.sessions ? given : { ...given, sessions: [...pinned] }), [given, pinned]);
+  const visiblePinned = usePinned(scoped.sessions);
+  const visible = useMemo(() => (visiblePinned === scoped.sessions ? scoped : { ...scoped, sessions: [...visiblePinned] }), [scoped, visiblePinned]);
   // One closed too long ago to be in the state comes from the closed list's
   // fetches, or is looked up by id for a link straight to it.
   const [, found] = useState(0);
@@ -112,6 +121,8 @@ export function SessionView({
   }, [missing, id]);
   const narrow = useIsNarrow();
   const list = useListState();
+  const scope = useScope();
+  const { repos } = useProjectData();
   const { filter, sort, view, kids, quiet, reveal, toggleKids } = list;
   // Moves a session to Inactive once its last activity is 3 hours old, with no new state frame.
   const now = useNow(60_000);
@@ -135,7 +146,7 @@ export function SessionView({
   // unless pinned: a pin holds its place closed or not.
   const { sections, counts } = useMemo(() => {
     const rows = filterSessions(
-      state.sessions.filter((s) => s.pinOrder !== null || (s.status !== "closed" && !closing.has(s.id))),
+      visible.sessions.filter((s) => s.pinOrder !== null || (s.status !== "closed" && !closing.has(s.id))),
       filter,
     );
     const tabs = splitActive(rows, now);
@@ -148,15 +159,15 @@ export function SessionView({
       ),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
     };
-  }, [state.sessions, keep, filter, sort, view, now, kids, quiet, closing]);
+  }, [visible.sessions, keep, filter, sort, view, now, kids, quiet, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
-    return state.schedules
+    return visible.schedules
       .filter((s) => !isRecurring(s.rule) && !closing.has(s.id))
       .filter((s) => !q || `${s.label ?? ""} ${s.spec.prompt ?? ""} ${s.id}`.toLowerCase().includes(q))
       .sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity));
-  }, [state.schedules, filter.query, closing]);
+  }, [visible.schedules, filter.query, closing]);
   const cancelSchedule = (sc: Schedule) => {
     hideWhile(sc.id, scheduleTitle(sc), "cancel", api.deleteSchedule(sc.id));
     if (sc.id !== id) return;
@@ -182,11 +193,11 @@ export function SessionView({
     else go({ page: "sessions" });
   };
 
-  // Alt+Shift+T: the most recently closed session, from all of history —
-  // reopen it and open it. Pressed again it reopens the one before, since
-  // the one just reopened is closed no more.
+  // Alt+Shift+T: the most recently closed session, from all of history (the
+  // selected project's) — reopen it and open it. Pressed again it reopens the
+  // one before, since the one just reopened is closed no more.
   const reopenLast = () => {
-    api.closed("", 0, 1).then((page) => {
+    api.closed("", 0, 1, scope.project).then((page) => {
       const s = page.sessions[0];
       if (!s) return;
       forget(s.id);
@@ -280,10 +291,19 @@ export function SessionView({
   const [railW, setRailW] = useRailWidth();
   const showRail = !narrow || !id;
   const showMain = !narrow || !!id;
+  // One found outside the state (the closed list, a link) may be another project's.
+  if (session && scope.project && sessionProject(repos, session) !== scope.project) {
+    return (
+      <Empty
+        title="This session belongs to another project"
+        action={<Button onClick={() => selectScope("project", sessionProject(repos, session), { page: "session", id: session.id, tab })}>Open in its project</Button>}
+      />
+    );
+  }
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
-      {showRail ? <Rail sections={sections} counts={counts} state={state} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
+      {showRail ? <Rail sections={sections} counts={counts} state={state} visibleSessions={visible.sessions} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
       {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
       ) : sched ? (
@@ -299,7 +319,7 @@ export function SessionView({
         </div>
       ) : (
         <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main sv-none">
-          {state.sessions.length === 0 && scheduled.length === 0 ? (
+          {visible.sessions.length === 0 && scheduled.length === 0 ? (
             <Empty
               title="No sessions yet"
               action={
