@@ -221,8 +221,8 @@ export async function readUntil(spec: UntilSpec, wait: number, session: string, 
   // macOS/Linux. Killing only the shell leaves a blocked child holding pipes
   // open; GNU timeout is not installed on a stock Mac. The shorter internal
   // deadline is for exercising cleanup without a two-minute validation delay.
-  const { out, tail, err, code, signal, timedOut } = await new Promise<{
-    out: string; tail: string; err: string; code: number | null; signal: string | null; timedOut: boolean;
+  const { out, tail, err, stderrError, code, signal, timedOut } = await new Promise<{
+    out: string; tail: string; err: string; stderrError: boolean; code: number | null; signal: string | null; timedOut: boolean;
   }>((resolve, reject) => {
     const p = spawn("nice", ["-n", "19", "sh", "-c", spec.cmd], {
       cwd: spec.cwd,
@@ -230,7 +230,7 @@ export async function readUntil(spec: UntilSpec, wait: number, session: string, 
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, AGENTBOX_WAIT: String(wait), AGENTBOX_SESSION: session },
     });
-    let out = "", tail = "", err = "", timedOut = false;
+    let out = "", tail = "", err = "", stderrError = false, timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       if (p.pid) {
@@ -246,17 +246,17 @@ export async function readUntil(spec: UntilSpec, wait: number, session: string, 
       out += chunk.slice(0, Math.max(0, UNTIL_MAX + 1 - out.length));
       tail = (tail + chunk).slice(-200);
     });
-    p.stderr.setEncoding("utf8").on("data", (chunk: string) => { err = (err + chunk).slice(-300); });
+    p.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderrError ||= /\S/.test(chunk); err = (err + chunk).slice(-300); });
     p.once("error", e => { clearTimeout(timer); reject(e); });
     p.once("close", (code, signal) => {
       clearTimeout(timer);
-      resolve({ out, tail, err, code, signal, timedOut });
+      resolve({ out, tail, err, stderrError, code, signal, timedOut });
     });
   });
   if (timedOut) throw new Error(`the command did not finish in ${timeoutMs / 1000}s`);
   const said = out.trim();
   if (code === 0) return { yes: true, said: said.length > UNTIL_MAX ? `${said.slice(0, UNTIL_MAX)}\n(cut here, at ${UNTIL_MAX} characters)` : said };
-  const error = err.trim().split("\n").pop()!;
+  const error = err.trim().split("\n").pop()! || (stderrError ? "stderr contained an error (diagnostic exceeded retained output)" : "");
   if (code === 1 && !error) return { yes: false, said: tail.trim().split("\n").pop()! };
   throw new Error(`the command ${signal ? `was killed by ${signal}` : `exited ${code}`}${error ? `: ${error}` : ""} (0 means it happened, 1 with nothing on stderr not yet)`);
 }

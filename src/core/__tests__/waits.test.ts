@@ -24,6 +24,7 @@ describe("wait until", () => {
     const script = `s=$(sh -c 'echo "HTTP 502: Bad Gateway" >&2; exit 1') ; [ "$s" = MERGED ]`;
     await expect(until(["bash", "-c", script])).rejects.toThrow("HTTP 502: Bad Gateway");
     await expect(until(["bash", "-c", "exit 3"])).rejects.toThrow("exited 3");
+    await expect(until(["bash", "-c", "printf 'failure%400s' '' >&2; exit 1"])).rejects.toThrow("exited 1");
   });
 });
 
