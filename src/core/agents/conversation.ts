@@ -410,6 +410,8 @@ export class AgentConversations {
      *  (`Fleet.endTurnFor`). Never for an approval or any machine prompt,
      *  nor for guidance on a recommendation. */
     interrupt = false,
+    /** The session that wrote `body`, recorded on a conversation it starts. */
+    opener?: { from: string; agent: string | null },
   ) {
     if (context) interrupt = false;
     if (this.busy.has(id) || this.rolling.has(id))
@@ -493,6 +495,7 @@ export class AgentConversations {
               cwd,
               worktree: !!a.repo,
               prompt: this.opening(a, body, a.previous[0] ? { old: a.previous[0] } : null),
+              ...(opener ? { opener } : {}),
             });
           } else await this.runtime.fleet.send(sid, body, attempt, true, interrupt);
         },
@@ -531,8 +534,8 @@ export class AgentConversations {
     if (!others.length) return "";
     const lines = others.map((x) => `- ${x.name}: ${x.role}. ${x.session ? `Its chat is session ${x.session}.` : "It has no chat yet."}`);
     return [`Other agents active in this project, as of this conversation's start:`, ...lines,
-      `Ask one with agentbox send <its chat session> <message>; a message to a replaced chat reaches the chat that took over. Coordinate with them; do not duplicate their work.`]
-      .map((l) => safeText(l).slice(0, 300)).join("\n");
+      `Ask one with agentbox agent send <name> <message>; agentbox agent ls shows each agent's chat now. Coordinate with them; do not duplicate their work.`]
+      .map((l) => safeText(l).slice(0, 300)).join("\n").replaceAll("agentbox agent", `${agentboxCommand()} agent`);
   }
   /** The registered local agent a session is (or was) part of, by its
    *  durable records: the main chat and every conversation it replaced, and

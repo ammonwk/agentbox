@@ -188,6 +188,9 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
       // The person's composer interrupts a running turn; a request carrying
       // a session capability is a session's, and is only typed in.
       const person = !req.headers.has("x-agentbox-session") && !req.headers.has("x-agentbox-session-token");
+      // A session that starts another agent's chat (agentbox agent send) is
+      // its opening's sender, as for any session it starts.
+      const from = authenticatedSession(req);
       try {
         return json(
           await agents.conversations.localSend(
@@ -201,6 +204,7 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
               .parse(b.context),
             z.string().min(1).max(200).nullable().parse(b.target),
             person,
+            from ? { from, agent: agents.conversations.registeredAgent(from)?.id ?? null } : undefined,
           ),
         );
       } catch (e) {

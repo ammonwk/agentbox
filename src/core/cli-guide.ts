@@ -34,6 +34,8 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox agent memory <ID> show <record ID>
     agentbox agent memory <ID> note --request <stable UUID> --file decision.json # {decision,why,refs:[{label,ref}]}
     agentbox agent memory <ID> handoff --request <checkpoint UUID> --file handoff.json
+    agentbox agent ls [--project P]   # each agent: on or paused, project, its chat session now
+    agentbox agent send <agent> [--project P] <text…|->   # into another agent's chat, by name; starts one if it has none
     agentbox agent memory <ID> prefer --key <key> --text <text>   # or --file <text file>; local agents; forget --key <key>
 
 Chat, About and Feed share one agent identity. Recommendations are immutable
