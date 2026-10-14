@@ -273,7 +273,7 @@ export function lookJob(spec: Extract<WaitSpec, { kind: "job" }>, memo: Wait["me
   if (job.running) return { seen: "running" };
   const goneAt = memo.goneAt ?? now;
   if (now - goneAt < GONE_AFTER_MS) return { seen: "its unit is not running and has left no result yet", memo: { goneAt } };
-  return { end: { how: "broken", text: `The job's unit (${spec.unit}) is gone and left no result: the machine or your systemd restarted under it, or it was stopped by hand. It did not finish. ${log}` } };
+  return { end: { how: "broken", text: `The job's unit (${spec.unit}) is gone and left no result: the machine or its service manager restarted under it, or it was stopped by hand. Completion is unknown; do not rerun it without checking its effects. ${log}` } };
 }
 
 const IDLE: Session["status"][] = ["waiting", "blocked", "stopped", "closed"];
