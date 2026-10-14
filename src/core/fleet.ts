@@ -2818,7 +2818,12 @@ export class Fleet extends EventEmitter {
     const view = this.get(id);
     if (view.host === "subagent") throw this.callersAgent(view);
     if (view.host !== "none" || this.paneAlive(rec.tmux)) throw new FleetError(409, `session is already running (${view.host === "none" ? "tmux" : view.host})`);
-    const replaced = this.conversations?.replacedBy(id);
+    let replaced: string | null = null;
+    try {
+      replaced = this.conversations?.replacedBy(id) ?? null;
+    } catch (e) {
+      console.error(`agentbox: conversation hook for ${id}:`, e);
+    }
     if (replaced) throw new FleetError(409, `this agent conversation continues in ${replaced}; message that session instead (\`agentbox log ${id}\` still reads this one)`);
     // Its teammates were stopped with it and do not come back; say so, or it
     // will message them and wait for answers that never come.
@@ -3157,7 +3162,7 @@ export class Fleet extends EventEmitter {
    *  does one that was stopped or closed, which otherwise is an error. */
   send(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
     return this.serial(id, async () => {
-      if (await this.conversations?.deliver(id, text, attempt)) return;
+      if (await this.handedOn(id, text, attempt)) return;
       if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt, resume);
     });
   }
@@ -3175,11 +3180,24 @@ export class Fleet extends EventEmitter {
     replacedBy(id: string): string | null;
   } | null = null;
 
+  /** Whether the conversations hook delivered it. Its refusals (a FleetError)
+   *  stand; any other failure of the hook must not stop ordinary messages. */
+  private async handedOn(id: string, text: string, attempt?: () => void): Promise<boolean> {
+    try {
+      return (await this.conversations?.deliver(id, text, attempt)) ?? false;
+    } catch (e) {
+      if (e instanceof FleetError) throw e;
+      console.error(`agentbox: conversation hook for ${id}:`, e);
+      return false;
+    }
+  }
+
   /** Why stopping this session's process now would lose something, or null:
    *  the same checks as parking, for one session, without waiting for idle. */
   async stopHold(id: string): Promise<string | null> {
     const v = this.views.get(id);
-    if (!v || v.host === "none") return null;
+    // The board can lag a resume by a pass: its pane is the truth.
+    if (v?.host === "none" || !v) return this.paneAlive(getSessionRecord(id)?.tmux) ? "it is starting again" : null;
     if (v.host !== "tmux" || !v.tmux) return "it runs outside agentbox's tmux";
     const table = await sharedProcTable().catch(() => null);
     if (!table) return "the process table could not be read";
@@ -3198,7 +3216,7 @@ export class Fleet extends EventEmitter {
    *  the fleet's own nudges are, and a stopped one is resumed with it. */
   note(id: string, text: string): Promise<void> {
     return this.serial(id, async () => {
-      if (!(await this.conversations?.deliver(id, text))) await this.sendNow(id, text, undefined, true);
+      if (!(await this.handedOn(id, text))) await this.sendNow(id, text, undefined, true);
     });
   }
 

@@ -525,6 +525,7 @@ export class AgentConversations {
     const rec = getSessionRecord(old), fallback = join(agentboxHome(), "agents", "local", a.id);
     mkdirSync(fallback, { recursive: true, mode: 0o700 });
     attempt?.();
+    let failure: string | null = null;
     try {
       await fleet.spawn({
         id: to,
@@ -534,12 +535,55 @@ export class AgentConversations {
         prompt: this.opening(a, text, { old, memory: boot.text, work }),
       });
     } catch (e) {
-      // No record: Fleet never started it. A recorded one is reconciled by the tick.
-      if (!getSessionRecord(to)) this.revert(agent, `the fresh conversation could not start: ${(e as Error).message}`);
-      throw e;
+      failure = (e as Error).message;
+    }
+    // Proven only once its transcript exists: the CLI took the first prompt.
+    if (!failure && !(await this.proveStarted(to))) failure = "it never wrote its transcript";
+    if (failure) {
+      if (await this.undoSuccessor(agent, to, `the fresh conversation could not start: ${failure}`)) return false;
+      // Its process could not be proven gone: neither conversation gets the message twice.
+      throw new FleetError(409, `the fresh conversation ${to} could not be proven started or stopped; check it before sending again`);
     }
     await this.completeRollover(agent);
     console.log(`agentbox: ${agent} continues ${old} in ${to} from handoff ${handoff} (${why})`);
+    return true;
+  }
+  /** The CLI has written the successor's transcript: it has the first prompt. */
+  private started(id: string) {
+    const rec = getSessionRecord(id);
+    return !!rec?.transcriptPath && existsSync(transcriptFile(rec.transcriptPath));
+  }
+  /** How long a successor has to write its transcript. */
+  proofMs = 90_000;
+  private async proveStarted(id: string) {
+    const fleet = this.runtime.fleet, from = Date.now(), grace = this.proofMs / 9;
+    for (;;) {
+      await fleet.tick();
+      if (this.started(id)) return true;
+      const v = fleet.sessions().find((s) => s.id === id), waited = Date.now() - from;
+      // Never got a pane, or its process exited before writing anything.
+      if (waited > grace && (getSessionRecord(id)?.tmux === null || (v && v.host === "none" && !v.pid))) return false;
+      if (waited >= this.proofMs) return false;
+      await Bun.sleep(Math.min(1_000, grace / 4));
+    }
+  }
+  /** Stop a successor that never proved itself and make the replaced
+   *  conversation current again; false when its process will not stop. */
+  private async undoSuccessor(agent: string, to: string, error: string) {
+    const fleet = this.runtime.fleet;
+    if (getSessionRecord(to)) {
+      const v = fleet.sessions().find((s) => s.id === to);
+      if (v && (v.host !== "none" || v.pid)) await fleet.stopSession(to).catch(() => undefined);
+      await fleet.tick();
+      const after = fleet.sessions().find((s) => s.id === to);
+      if (after && (after.host !== "none" || after.pid)) return false;
+      // It wrote its transcript after all: it is the successor.
+      if (this.started(to)) {
+        await this.completeRollover(agent);
+        return false;
+      }
+    }
+    this.revert(agent, error);
     return true;
   }
   private async completeRollover(agent: string) {
@@ -580,7 +624,7 @@ export class AgentConversations {
   /** Finish or undo a replacement a restart interrupted, and ask idle
    *  conversations for their handoff while they are still warm. */
   private async remember() {
-    const now = Date.now(), fleet = this.runtime.fleet, keepers: Keeper[] = [];
+    const now = Date.now(), keepers: Keeper[] = [];
     for (const a of this.stored()) {
       if (this.busy.has(a.id) || this.rolling.has(a.id)) continue;
       const r = a.rollover;
@@ -589,8 +633,8 @@ export class AgentConversations {
           if (r.phase === "stopping") {
             this.unstop(r.from);
             this.patch(a.id, (x) => void delete x.rollover);
-          } else if (getSessionRecord(r.to)?.agentSessionId || (fleet.sessions().find((s) => s.id === r.to)?.host ?? "none") !== "none") await this.completeRollover(a.id);
-          else if (now - r.at > (getSessionRecord(r.to) ? 5 * 60_000 : 60_000)) this.revert(a.id, "the fresh conversation never started");
+          } else if (this.started(r.to)) await this.completeRollover(a.id);
+          else if (now - r.at > (getSessionRecord(r.to) ? 5 * 60_000 : 60_000)) await this.undoSuccessor(a.id, r.to, "the fresh conversation never started");
         } catch (e) {
           console.error(`agentbox: ${a.id}: finishing its conversation rollover:`, e);
         }

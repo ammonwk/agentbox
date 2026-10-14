@@ -2,7 +2,7 @@
  * breakage loses or duplicates a message, runs two writers, or lets one
  * agent read another's memory. */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentStore } from "./store";
@@ -17,8 +17,10 @@ let fleet: any, runtime: AgentsRuntime;
 const NOW = Date.now();
 const handoff = { intent: "Ship the memory feature", decisions: [{ decision: "Use the warm cache clock", why: "one clock" }], refs: [{ label: "PR", ref: "https://github.com/o/r/pull/1" }] };
 
-function record(id: string) {
-  insertSessionRecord({ id, provider: "codex", agentSessionId: id, accountId: null, cwd: home, worktree: null, label: null, claim: 0, origin: "agentbox", tmux: null, transcriptPath: null, startedAt: NOW, lastActivityAt: NOW, archivedAt: null, facts: null, createdAt: NOW } as any);
+function record(id: string, transcript = false) {
+  const transcriptPath = transcript ? join(home, `${id}.jsonl`) : null;
+  if (transcriptPath) writeFileSync(transcriptPath, "{}\n");
+  insertSessionRecord({ id, provider: "codex", agentSessionId: id, accountId: null, cwd: home, worktree: null, label: null, claim: 0, origin: "agentbox", tmux: `ab-${id}`, transcriptPath, startedAt: NOW, lastActivityAt: NOW, archivedAt: null, facts: null, createdAt: NOW } as any);
 }
 function view(id: string, over: Record<string, unknown> = {}) {
   views.set(id, { id, status: "waiting", host: "tmux", pid: 1, queued: [], question: null, limitHit: null, contextUsed: 10, contextLimit: 100, cacheWarmUntil: NOW + 30 * 60_000, lastActivityAt: NOW - 20 * 60_000, ...over });
@@ -57,7 +59,7 @@ beforeEach(() => {
     stopSession: async (id: string) => view(id, { ...views.get(id), host: "none", pid: null }),
     spawn: async (opts: any) => {
       spawns.push(opts);
-      record(opts.id);
+      record(opts.id, true);
       view(opts.id, { lastActivityAt: Date.now(), cacheWarmUntil: Date.now() + 60 * 60_000 });
     },
     send: async (id: string, text: string, attempt?: () => void) => {
@@ -77,6 +79,7 @@ beforeEach(() => {
   runtime = { store, fleet, cards: { add: () => {}, list: () => [], close: () => {} }, coordinators: () => [] } as unknown as AgentsRuntime;
   Object.assign(runtime, { works: new AgentWorks(runtime) });
   conversations = new AgentConversations(runtime);
+  conversations.proofMs = 900;
   conversations.local();
   record("old");
   view("old");
@@ -148,13 +151,13 @@ test("a warm conversation within its context budget is never replaced, even with
   expect(spawns).toHaveLength(0);
 });
 
-test("a successor that never started leaves the old conversation current and resumable", async () => {
+test("a successor that never started leaves the old conversation current, and it gets the message", async () => {
   await checkpointed("old");
   view("old", { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
   fleet.spawn = async () => {
     throw new Error("no account can take it");
   };
-  await expect(fleet.send("old", "Hello")).rejects.toThrow("no account");
+  await fleet.send("old", "Hello");
   const a = agent();
   expect(a.session).toBe("old");
   expect(a.rollover).toBeUndefined();
@@ -162,10 +165,32 @@ test("a successor that never started leaves the old conversation current and res
   expect(a.checkpoint?.state).toBe("failed");
   expect(getSessionRecord("old")?.parkedAt).toBeTruthy();
   expect(handed).toHaveLength(0);
+  expect(typed.at(-1)).toEqual({ id: "old", text: "Hello" });
+});
+
+test("a successor whose CLI exits before writing its transcript is stopped and undone", async () => {
+  await checkpointed("old");
+  view("old", { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
+  let stopped = "";
+  fleet.spawn = async (opts: any) => {
+    spawns.push(opts);
+    record(opts.id);
+    view(opts.id, { host: "tmux", pid: 7 });
+  };
+  const stop = fleet.stopSession;
+  fleet.stopSession = async (id: string) => {
+    stopped = id;
+    return stop(id);
+  };
+  await fleet.send("old", "Hello");
+  expect(stopped).toBe(spawns[0].id);
+  expect(agent().session).toBe("old");
+  expect(handed).toHaveLength(0);
+  expect(typed.filter((t) => t.text === "Hello")).toEqual([{ id: "old", text: "Hello" }]);
 });
 
 test("restart reconciliation finishes a started successor and undoes one that never recorded", async () => {
-  record("next");
+  record("next", true);
   link("next", { previous: ["old"], rollover: { from: "old", to: "next", handoff: "h", why: "cold", at: NOW, phase: "spawning" } });
   expect(conversations.replacedBy("old")).toBe("next");
   await expect(conversations.deliver("old", "during")).rejects.toThrow("being continued");

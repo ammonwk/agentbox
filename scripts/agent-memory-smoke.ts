@@ -75,6 +75,9 @@ const runtime: any = {
     spawn: async (opts: any) => {
       spawned.push(opts);
       session(opts.id, { lastActivityAt: Date.now(), cacheWarmUntil: Date.now() + 60 * 60_000, title: "Vulcan chat (continued)" });
+      // The CLI took its first prompt: its transcript exists.
+      await Bun.write(join(dir, `${opts.id}.jsonl`), "{}\n");
+      db.updateSessionRecord(opts.id, { transcriptPath: join(dir, `${opts.id}.jsonl`) });
       say(opts.id, "user", opts.prompt);
       say(opts.id, "assistant", "Picking up from the saved handoff: the memory branch is ready for review, and **one** question is still open.");
     },
@@ -291,7 +294,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await shot("memory-chat-mobile.png");
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ verified: "picture fallback/refusal/upload/reload/replace/remove/failed-load, reply and human avatars, sending bubble, one idle checkpoint, cold rollover with handoff and preference, picture after rollover, mobile", output: out, avatarDir: existsSync(join(process.env.AGENTBOX_HOME!, "agents", "avatars")) }));
+  console.log(JSON.stringify({ verified: "picture fallback/refusal/upload/reload/replace/remove/failed-load, reply and human avatars, sending bubble, one idle checkpoint, cold rollover with handoff and preference, picture after rollover, bounded faded history with anchored scroll and an excluded archive, send while reading history, mobile", output: out, avatarDir: existsSync(join(process.env.AGENTBOX_HOME!, "agents", "avatars")) }));
 } catch (e) {
   await shot("memory-failure.png").catch(() => undefined);
   console.error(errors, (await page.locator("body").innerText().catch(() => "")).slice(-1500), JSON.stringify(conversations.memoryView(vulcan.id, null)).slice(0, 600));
