@@ -124,12 +124,14 @@ async function mcpState(): Promise<McpState> {
   const sessions = fleet.sessions().flatMap((s) => {
     if (s.host !== "tmux" || !s.pid || !passed.has(s.provider)) return [];
     const raw = environOf(s.pid)?.get("AGENTBOX_MCP_STATE");
-    let snapshot: { changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[] } | null = null;
+    let snapshot: { changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; skipped?: { name: string; why: string }[]; error?: string | null } | null = null;
     try {
       const parsed = raw ? JSON.parse(raw) : null;
       if (parsed && Array.isArray(parsed.given) && parsed.given.every((name: unknown) => typeof name === "string") && Array.isArray(parsed.kept) && parsed.kept.every((k: { name?: unknown; enabled?: unknown } | null) => k && typeof k.name === "string" && typeof k.enabled === "boolean")) snapshot = parsed;
     } catch { /* an older launch has no usable snapshot */ }
-    return [{ id: s.id, title: s.label || s.title || s.id, provider: s.provider, changedAt: snapshot?.changedAt ?? null, given: snapshot?.given ?? [], kept: snapshot?.kept ?? [], known: snapshot !== null }];
+    const skipped = Array.isArray(snapshot?.skipped) ? snapshot.skipped.filter((k) => k && typeof k.name === "string" && typeof k.why === "string") : [];
+    const error = typeof snapshot?.error === "string" ? snapshot.error : null;
+    return [{ id: s.id, title: s.label || s.title || s.id, provider: s.provider, changedAt: snapshot?.changedAt ?? null, given: snapshot?.given ?? [], kept: snapshot?.kept ?? [], known: snapshot !== null, skipped, error }];
   });
   const stale = r.changedAt === null ? [] : fleet.sessions().flatMap((s) => {
     if (s.host !== "tmux" || !s.pid || !passed.has(s.provider)) return [];
@@ -214,8 +216,9 @@ let voice: VoiceHub;
 
 // --------------------------------------------------------------- state
 
-/** The sessions on the board — with the closed ones too unless `open` —
- *  for `GET /api/state` and the sockets' frames. */
+/** The sessions on the board — with the closed ones too unless `open`, and
+ *  the closed ones you pinned or bookmarked either way, since the list keeps
+ *  those at hand — for `GET /api/state` and the sockets' frames. */
 function hotState(open = false): HotState {
   let closedStamp = 0;
   const sessions = fleet
@@ -223,7 +226,7 @@ function hotState(open = false): HotState {
     .filter((s) => {
       if (s.status !== "closed") return true;
       closedStamp += 1 + (s.closedAt ?? 0);
-      return !open;
+      return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
     .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }))
     .sort(byAttention);
@@ -737,7 +740,7 @@ const router = new Router(mapError)
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
       });
-      if (claim) getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [claim.repo, claim.number, out.session.id, Date.now()]);
+      if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
       scheduleHot();
       scheduleCold();
       return json(out, 201);
@@ -756,6 +759,9 @@ const router = new Router(mapError)
   })
 
   // ---- who has which pull request
+  // The session a command runs in, for the CLI to tell "you" from another:
+  // AGENTBOX_SESSION when it reached the command, else the walk up from it.
+  .add("POST", "/api/whoami", async ({ req }) => json({ id: speaker(await readBody(req)) }))
   .add("GET", "/api/prs/claims", () => json(prClaimsNow()))
   .add("POST", "/api/prs/who", async ({ req }) => {
     const b = await readBody(req);
@@ -800,7 +806,12 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const who = speaker(b);
     if (!who) throw new HttpError(400, "a session releases what it claimed: run this from inside one, or name it with --for <session id>");
-    const released = releasePr(who, b.pr !== undefined ? prNamed(b, who) : null);
+    const named = b.pr !== undefined ? prNamed(b, who) : null;
+    const branches = named ? [] : prClaimsNow().filter((c) => c.sessionId === who && c.how === "branch");
+    const released = getDb().transaction(() => {
+      for (const pr of branches) releasePr(who, pr);
+      return releasePr(who, named) + branches.length;
+    })();
     scheduleCold();
     return json({ released });
   })
@@ -808,7 +819,9 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const label = b.label === null ? null : typeof b.label === "string" ? b.label : undefined;
     const parent = b.parent === null ? null : typeof b.parent === "string" ? b.parent : undefined;
-    const s = await fleet.patch(params.id!, { label, parent });
+    const pinOrder = b.pinOrder === null ? null : typeof b.pinOrder === "number" && Number.isFinite(b.pinOrder) ? b.pinOrder : undefined;
+    const bookmarked = typeof b.bookmarked === "boolean" ? b.bookmarked : undefined;
+    const s = await fleet.patch(params.id!, { label, parent, pinOrder, bookmarked });
     scheduleHot();
     scheduleCold();
     return json(s);
@@ -999,9 +1012,9 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions/:id/close", async ({ req, params }) => {
     const b = await readBody(req);
-    await fleet.close(params.id!, requireBoolean(b, "closed"));
+    const out = await fleet.close(params.id!, requireBoolean(b, "closed"));
     scheduleHot();
-    return json(null);
+    return json(out);
   })
   // ----- scheduled sessions (src/core/scheduler.ts)
   .add("POST", "/api/schedules", async ({ req }) => {
@@ -1251,6 +1264,12 @@ const router = new Router(mapError)
     const u = await accounts.refreshUsage(params.id!);
     scheduleCold();
     return json(u);
+  })
+  .add("POST", "/api/accounts/:id/reset", async ({ req, params }) => {
+    const b = await readBody(req);
+    const out = await accounts.consumeReset(params.id!, optionalString(b, "creditId") ?? null);
+    scheduleCold();
+    return json(out);
   })
   .add("POST", "/api/logins/:id/paste", async ({ req, params }) => {
     const b = await readBody(req);

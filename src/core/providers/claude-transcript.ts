@@ -18,7 +18,7 @@ import { askQuestionsOf } from "./ask";
 import { PrRepoFold } from "../prrepo";
 import { loadFields, saveFields } from "./foldstate";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
-import { isAgentSent, type TranscriptFacts, type TranscriptRef, type Wake } from "./types";
+import type { TranscriptFacts, TranscriptRef, Wake } from "./types";
 import { dropPasteTags, isFleetNote } from "../sent";
 import { isStrandedNudge } from "../park";
 import { claudeCacheTtl, isKeepWarmNote, type WarmSpell } from "../cache";
@@ -470,7 +470,7 @@ export class ClaudeFold {
   private lastPrompt: string | null = null;
   private lastPromptAt: number | null = null;
   /** A slash command not yet answered; see `user`. */
-  private command: string | null = null;
+  private command: { text: string; at: number | null } | null = null;
   private lastMessage: string | null = null;
   private model: string | null = null;
   private gitBranch: string | null = null;
@@ -492,6 +492,8 @@ export class ClaudeFold {
   private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
   /** The newest `permission-mode` record's (or prompt's) mode. */
   private permissionMode: string | null = null;
+  /** The newest record's `entrypoint`: `sdk-cli` for `claude -p`. */
+  private entrypoint: string | null = null;
   private contextUsed: number | null = null;
   private observedMax = 0;
   private autoCompactPre = 0;
@@ -544,6 +546,7 @@ export class ClaudeFold {
     this.tokens.add(r);
     if (at !== null && (r.type === "user" || r.type === "assistant")) this.timers(r, at);
 
+    if (!side && typeof r.entrypoint === "string") this.entrypoint = r.entrypoint;
     if (!side && typeof r.permissionMode === "string" && (r.type === "permission-mode" || r.type === "user")) this.permissionMode = r.permissionMode;
 
     switch (r.type) {
@@ -577,15 +580,10 @@ export class ClaudeFold {
         const a = r.attachment;
         if (a?.type === "queued_command" && a.commandMode === "prompt" && !side) {
           const p = promptOf(a.prompt);
-          if (p?.text) this.prompt(p.text);
+          const when = at ?? (typeof a.timestamp === "string" ? Date.parse(a.timestamp) : NaN);
+          if (p?.text) this.prompt(p.text, Number.isFinite(when) ? when : null);
           this.unqueue(typeof a.prompt === "string" ? a.prompt : p?.text);
           this.turnOpen = true;
-          // Yours unless it says otherwise — and it is when you last sent it
-          // something, which the board sorts by. A session you keep talking to
-          // mid-turn sank below ones you had not touched in hours.
-          const kind = a.origin?.kind;
-          const when = at ?? (typeof a.timestamp === "string" ? Date.parse(a.timestamp) : NaN);
-          if ((kind === undefined || kind === "human") && !isAgentSent(String(a.prompt ?? "")) && Number.isFinite(when)) this.lastPromptAt = when;
         }
         return;
       }
@@ -719,7 +717,7 @@ export class ClaudeFold {
     return out;
   }
 
-  private prompt(text: string): void {
+  private prompt(text: string, at: number | null): void {
     // A paste is recorded wrapped in `<pasted_content>`; a title is its words.
     const t = dropPasteTags(text).trim().slice(0, PROMPT_CAP);
     if (!t) return;
@@ -729,6 +727,7 @@ export class ClaudeFold {
     if (isFleetNote(t)) return;
     this.firstPrompt ??= t;
     this.lastPrompt = t;
+    this.lastPromptAt = at;
   }
 
   /**
@@ -791,10 +790,6 @@ export class ClaudeFold {
       if (this.dequeued > 0 && typeof content === "string") this.unqueue(content);
       return;
     }
-    // Claude says who a message is from: `human`, or `peer` (another agent),
-    // `task-notification`, `auto-continuation`. Older versions say nothing,
-    // and then it was typed.
-    const kind0 = r.origin?.kind;
     if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_result")) {
       if (this.pendingAsk && content.some((b: any) => b?.type === "tool_result" && b.tool_use_id === this.pendingAsk!.id)) this.pendingAsk = null;
       // A tool finished; the model is about to continue.
@@ -804,7 +799,6 @@ export class ClaudeFold {
     }
     const first = typeof content === "string" ? content : Array.isArray(content) ? (content.find((b: any) => b?.type === "text")?.text ?? "") : "";
     const kind = classifyUserText(first);
-    const mine = (kind0 === undefined || kind0 === "human") && !isAgentSent(first);
     if (kind === "interrupted") {
       this.turnOpen = false;
       this.turnError = null;
@@ -822,17 +816,16 @@ export class ClaudeFold {
       // the only thing that says what it is about. Whether it starts a turn
       // (a skill) or only prints something (`/model`) shows in what follows,
       // so it becomes a prompt when the model answers it.
-      this.command = commandLine(first);
-      if (mine && at !== null) this.lastPromptAt = at;
+      const text = commandLine(first);
+      this.command = text ? { text, at } : null;
       return;
     }
     if (kind === "output") this.command = null;
     const p = promptOf(content);
     if (p) {
-      if (p.text) this.prompt(p.text);
+      if (p.text) this.prompt(p.text, at);
       this.unqueue(typeof content === "string" ? content : p.text);
       this.prRepo.add(p.text);
-      if (mine && at !== null) this.lastPromptAt = at;
       this.turnOpen = true;
       this.turnError = null;
     }
@@ -859,7 +852,7 @@ export class ClaudeFold {
     this.turnError = null;
     if (m.model === SYNTHETIC) return;
     if (this.command) {
-      this.prompt(this.command);
+      this.prompt(this.command.text, this.command.at);
       this.command = null;
     }
     if (m.model) this.model = m.model;
@@ -964,6 +957,7 @@ export class ClaudeFold {
       teamsLed: [...this.teamsLed],
       pendingAsk: this.pendingAsk,
       skipsPermissions: this.permissionMode === "bypassPermissions",
+      headless: this.entrypoint === "sdk-cli",
       wakes: this.wakes(),
       monitors: [...this.monitors],
     };

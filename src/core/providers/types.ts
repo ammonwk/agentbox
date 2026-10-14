@@ -128,8 +128,7 @@ export interface TranscriptFacts {
   title: string | null;
   firstPrompt: string | null;
   lastPrompt: string | null;
-  /** When you last sent it something: a prompt or a slash command typed by a
-   *  person, not a message from another agent or the CLI waking itself. */
+  /** Timestamp of lastPrompt, including agent messages; null when unknown. */
   lastPromptAt: number | null;
   /** Tail of the latest assistant text, at most ~300 chars. */
   lastMessage: string | null;
@@ -225,6 +224,9 @@ export interface TranscriptFacts {
   /** The session is in its CLI's skip-every-permission mode as of its latest
    *  record (claude: `bypassPermissions`, which shift+tab can leave). */
   skipsPermissions?: boolean;
+  /** A scripted one-shot run (claude `-p`): its caller reads the answer, so
+   *  once its process ends it is history, not something to come back to. */
+  headless?: boolean;
 }
 
 /** An incremental reader over one transcript. Holds its own offsets. */
@@ -292,6 +294,10 @@ export interface Command {
   /** Variables to remove from the inherited environment (e.g. a stray
    *  CLAUDE_CONFIG_DIR from the shell that started the server). */
   unset?: string[];
+  /** Names in `env` whose values are secrets (global MCP env and header
+   *  values): they reach the process through a private launch script, never
+   *  on a command line (`NewSession.secretEnv`). */
+  secret?: string[];
 }
 
 /** What `blockedOn` says of the dialog a CLI puts up at its account's usage

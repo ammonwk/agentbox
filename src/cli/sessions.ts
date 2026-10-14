@@ -6,7 +6,7 @@ import type { Api } from "../client";
 import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, type ChangeRow } from "../core/changes";
 import { accountProvider } from "../core/providers/account";
 import { agentAncestor, stillRunning } from "../core/providers/procs";
-import type { AppState, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
+import type { AppState, Closed, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
 import { describe } from "../core/waits";
 
 type Row = AppState["sessions"][number];
@@ -43,6 +43,18 @@ export function parseArgs(args: string[], valued: string[], bare: string[] = [])
 }
 
 const str = (v: string | true | undefined): string | undefined => (typeof v === "string" ? v : undefined);
+
+/** The session this command runs in, or null from a terminal of your own:
+ *  what "you" means in what the CLI prints. A session reads its own id like
+ *  anyone else's, so every line that names the caller says so in words;
+ *  j2g254q4 read "#8154 is j2g254q4's" as another session's claim and left
+ *  four pull requests it held with nobody on them. */
+export async function me(api: Api): Promise<string | null> {
+  return process.env.AGENTBOX_SESSION || (await api<{ id: string | null }>("POST", "/api/whoami", { callerPid: process.pid })).id;
+}
+
+/** An id, and "(you)" after it when it is the caller's. */
+export const idYou = (id: string, you: string | null): string => (id === you ? `${id} (you)` : id);
 
 async function state(api: Api): Promise<AppState> {
   return api<AppState>("GET", "/api/state");
@@ -158,8 +170,9 @@ export async function ls(api: Api, args: string[]): Promise<number> {
     .filter((x) => !provider || provider.includes(x.provider))
     .sort((a, b) => a.attention.rank - b.attention.rank || b.lastActivityAt - a.lastActivityAt);
   const tree = nested(sorted);
+  const you = flags.has("q") ? null : await me(api);
   if (flags.has("json")) {
-    console.log(JSON.stringify(tree.map((t) => t.row), null, 2));
+    console.log(JSON.stringify(tree.map((t) => (t.row.id === you ? { ...t.row, you: true } : t.row)), null, 2));
     return 0;
   }
   for (const { row: x, depth } of tree) {
@@ -170,7 +183,7 @@ export async function ls(api: Api, args: string[]): Promise<number> {
     const host = x.host === "tmux" ? "box" : x.host === "external" ? "ext" : x.host === "subagent" ? "sub" : "-";
     const where = `${repoName(x)}${x.branch ? `@${x.branch}` : ""}`;
     console.log(
-      [x.id, x.status.padEnd(8), ageOf(now - x.lastActivityAt).padStart(4), host.padEnd(3), x.provider.padEnd(6), where.slice(0, 40).padEnd(40), (depth ? `${"  ".repeat(depth - 1)}└ ` : "") + (x.label ?? x.title).replace(/\s+/g, " ").slice(0, 90)].join("  "),
+      [idYou(x.id, you), x.status.padEnd(8), ageOf(now - x.lastActivityAt).padStart(4), host.padEnd(3), x.provider.padEnd(6), where.slice(0, 40).padEnd(40), (depth ? `${"  ".repeat(depth - 1)}└ ` : "") + (x.label ?? x.title).replace(/\s+/g, " ").slice(0, 90)].join("  "),
     );
   }
   return 0;
@@ -183,12 +196,13 @@ export async function show(api: Api, args: string[]): Promise<number> {
   const acct = new Map(s0.accounts.map((a) => [a.id, a.label]));
   const now = s0.serverTime;
   const waits = await api<Wait[]>("GET", "/api/waits");
+  const you = await me(api);
   for (const [n, id] of ids.entries()) {
     const x = sessions.find((s) => s.id === id)!;
     const ctx = x.contextUsed && x.contextLimit ? `${Math.round((100 * x.contextUsed) / x.contextLimit)}% of ${Math.round(x.contextLimit / 1000)}k` : "-";
     const pr = s0.prs.find((p) => p.sessionId === x.id);
     const lines: [string, string | null][] = [
-      ["id", x.id],
+      ["id", id === you ? `${id} (you: the session this command runs in)` : x.id],
       ["title", x.label ?? x.title],
       ["status", `${x.status} — ${x.attention.reason}`],
       ["replaced by", x.successor],
@@ -203,6 +217,7 @@ export async function show(api: Api, args: string[]): Promise<number> {
       ["branch", x.branch],
       ["worktree", x.worktree],
       ["pr", pr ? `#${pr.number} ${pr.title} (${pr.url})` : null],
+      ["holds", s0.prClaims.filter((c) => c.sessionId === x.id).map((c) => `${c.repo}#${c.number} (${c.how === "said" ? "claimed" : "its branch"})`).join(" ") || null],
       ["waiting on", waits.filter((w) => w.sessionId === id && !w.ended).map((w) => `${describe(w.spec)} [wait ${w.id}: ${w.seen ?? "not looked at yet"}]`).join(" ⏎ ") || null],
       ["context", ctx],
       ["started", `${clock(x.startedAt)} (${ageOf(now - x.startedAt)} ago)`],
@@ -382,9 +397,13 @@ export async function each(api: Api, verb: "close" | "reopen" | "stop" | "resume
   let failed = 0;
   for (const id of ids) {
     try {
-      if (verb === "close" || verb === "reopen") await api("POST", `/api/sessions/${id}/close`, { closed: verb === "close" });
-      else await api("POST", `/api/sessions/${id}/${verb}`, {});
-      console.log(`${id}  ${DONE[verb]}`);
+      if (verb === "close" || verb === "reopen") {
+        const out = (await api("POST", `/api/sessions/${id}/close`, { closed: verb === "close" })) as Closed | null;
+        console.log(`${id}  ${DONE[verb]}${out?.said ?? ""}`);
+      } else {
+        await api("POST", `/api/sessions/${id}/${verb}`, {});
+        console.log(`${id}  ${DONE[verb]}`);
+      }
     } catch (e) {
       failed++;
       console.error(`${id}  ${verb} failed: ${(e as Error).message}`);

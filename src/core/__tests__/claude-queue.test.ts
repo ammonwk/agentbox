@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeReader } from "../providers/claude";
-import { limitStop, stoppedAtLimit, strandedNudge, strandedNudgeAfter } from "../park";
+import { limitStop, strandedNudge, strandedNudgeAfter } from "../park";
 
 const dir = mkdtempSync(join(tmpdir(), "agentbox-claude-queue-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -97,11 +97,11 @@ describe("the nudge for stranded notifications", () => {
 
   test("is not sent to a session whose last try hit a usage limit", () => {
     // Stopped at the limit, with a notification queued after it.
-    expect(stoppedAtLimit({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: 1_000 })).toBe(true);
-    expect(stoppedAtLimit({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: null })).toBe(true);
+    expect(limitStop({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: 1_000 })).not.toBeNull();
+    expect(limitStop({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: null })).not.toBeNull();
     // Continued since: a model call answered after the hit.
-    expect(stoppedAtLimit({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: 3_000 })).toBe(false);
-    expect(stoppedAtLimit({ rateLimitHits: [], lastTurnAt: 3_000 })).toBe(false);
+    expect(limitStop({ rateLimitHits: [{ at: 2_000 }], lastTurnAt: 3_000 })).toBeNull();
+    expect(limitStop({ rateLimitHits: [], lastTurnAt: 3_000 })).toBeNull();
   });
 
   // 2026-10-11: d8sujmmi met its weekly limit on a monitor event while it

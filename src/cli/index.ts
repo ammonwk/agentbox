@@ -211,7 +211,9 @@ async function usage(): Promise<number> {
     const claimed = Math.round(a.claims.reduce((n, c) => n + c.outstanding, 0));
     const n = a.claims.filter((c) => c.outstanding > 0).length;
     const claims = claimed ? `  +${claimed}% weekly claimed by ${n} session${n === 1 ? "" : "s"}` : "";
-    console.log(`${a.provider.padEnd(6)} ${a.label.slice(0, 28).padEnd(28)} ${windows || "no reading"}${claims}${a.usage.stale ? `  [${a.usage.stale}]` : ""}`);
+    const have = a.usage.resets?.availableCount ?? 0;
+    const resets = have > 0 ? `  ${have} usage reset${have === 1 ? "" : "s"} available` : "";
+    console.log(`${a.provider.padEnd(6)} ${a.label.slice(0, 28).padEnd(28)} ${windows || "no reading"}${claims}${resets}${a.usage.stale ? `  [${a.usage.stale}]` : ""}`);
   }
   return 0;
 }
@@ -417,7 +419,7 @@ timeout, each saying which; a parked session is resumed to hear it):
   wait pr <n|owner/repo#n|url> [--require 'Reviewed head'] [--only 'Build,API Tests'] [--head <sha>]
                         its checks concluding on that head (a failure ends it at once):
                         every check; --require names ones that must be among them;
-                        --only waits for just those
+                        --only waits for just those; Merge gate is excluded
   wait pr <n> --merged  its merge
   wait run <run id|url> [-R owner/repo]      a GitHub Actions run concluding
   wait job [--name N] -- <command…>          start a long command as a unit of its own, which
@@ -431,9 +433,9 @@ timeout, each saying which; a parked session is resumed to hear it):
 ${CLOUD_USAGE}
 
 pull requests (who has one: no two sessions work the same PR):
-  pr claim <n|owner/repo#n|url> [--for ID]   this session has it; refused, naming the holder, if a live session does
+  pr claim <n|owner/repo#n|url> [--for ID]   this session has it, and it says "you hold"; refused, naming the other session, if another live one does
   pr release [<n|…>]                 let go of what this session claimed (one, or all)
-  pr who <n|…> [--json]              the session that has it, or "nobody" (exit 1)
+  pr who <n|…> [--json]              the session that has it ("(you)" after your own id), or "nobody" (exit 1)
   pr claims [--json]                 every PR a live session has
   claude|codex|… --claim <n|…> …     start a session that has the PR from its first moment, or does not start
 

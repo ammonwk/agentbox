@@ -33,12 +33,7 @@ export const KIND_ORDER: Record<AttentionKind, number> = {
   closed: 4,
 };
 
-/**
- * blocked → waiting → running → stopped → closed; within each, the session
- * you last sent something to first. Your own messages, not the agent's
- * activity: an agent finishing a step, or another agent messaging it, does
- * not move a row, so the order is the one you made.
- */
+/** By attention, then latest prompt; assistant activity does not move a row. */
 export function sortByAttention<T extends SessionRow>(rows: readonly T[]): T[] {
   return [...rows].sort(
     (a, b) =>
@@ -54,7 +49,7 @@ export interface BoardFilter {
 
 export const EMPTY_FILTER: BoardFilter = { query: "" };
 
-/** Where a session lives, for its dot's shape. */
+/** Where a session lives, for the Repo sort and its dot's shape. */
 export function repoKey(s: Pick<Session, "repoRoot" | "cwd">): string {
   return s.repoRoot ?? s.cwd;
 }
@@ -83,7 +78,7 @@ export function filterSessions<T extends SessionRow>(rows: readonly T[], f: Boar
 }
 
 export interface Section<T> {
-  /** Stable key: an attention kind, or "all". */
+  /** Stable key: an attention kind, a repo path, "all", or "pinned". */
   key: string;
   /** Empty for the one unlabelled section of a flat sort. */
   label: string;
@@ -93,15 +88,17 @@ export interface Section<T> {
 }
 
 /** How the session list is ordered.
- *  - mine: the last time you sent it something (your order, not the agents')
+ *  - mine: the last delivered prompt, from a person or an agent
  *  - all: the last time anything happened in it
- *  - status: blocked, your turn, running, stopped */
-export type SortKey = "mine" | "all" | "status";
+ *  - status: blocked, your turn, running, stopped
+ *  - repo: grouped by repository or folder */
+export type SortKey = "mine" | "all" | "status" | "repo";
 
 export const SORT_LABEL: Record<SortKey, string> = {
-  mine: "Your activity",
+  mine: "Last prompt",
   all: "All activity",
   status: "Status",
+  repo: "Repo",
 };
 
 /** The list's two tabs: sessions that did something lately, and the rest. */
@@ -111,9 +108,11 @@ export type RailView = "active" | "inactive";
 export const ACTIVE_MS = 3 * 60 * 60_000;
 
 /**
- * The rows of each tab. A session is active while it runs or when it did
- * something within ACTIVE_MS. A tree goes whole to Active when any session in
- * it is active, so a lead and its teammates stay together.
+ * The rows of each tab. A session is active while it runs, when it did
+ * something within ACTIVE_MS, while it needs you (blocked on an approval or a
+ * question, or its turn failed) however long ago that was, and while it is
+ * pinned: a pin keeps its place at the top. A tree goes whole to Active when any session in it is active, so a
+ * lead and its teammates stay together.
  */
 export function splitActive<T extends SessionRow>(rows: readonly T[], now: number): Record<RailView, T[]> {
   const up = parentsOf(rows);
@@ -122,7 +121,7 @@ export function splitActive<T extends SessionRow>(rows: readonly T[], now: numbe
     for (let p = up.get(r); p !== undefined; p = up.get(r)) r = p;
     return r;
   };
-  const live = new Set(rows.filter((s) => s.status === "running" || now - s.lastActivityAt < ACTIVE_MS).map((s) => rootOf(s.id)));
+  const live = new Set(rows.filter((s) => s.status === "running" || s.status === "blocked" || !!s.turnError || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS).map((s) => rootOf(s.id)));
   const out: Record<RailView, T[]> = { active: [], inactive: [] };
   for (const s of rows) out[live.has(rootOf(s.id)) ? "active" : "inactive"].push(s);
   return out;
@@ -200,11 +199,28 @@ function ordered<T extends SessionRow>(rows: readonly T[], sort: SortKey): T[] {
   return [...rows].sort((a, b) => sortTime(b, sort) - sortTime(a, sort));
 }
 
+/** Pinned, in the order you dragged them into. */
+export function pinnedOf<T extends Pick<Session, "id" | "pinOrder">>(rows: readonly T[]): T[] {
+  return rows.filter((s) => s.pinOrder !== null).sort((a, b) => a.pinOrder! - b.pinOrder! || a.id.localeCompare(b.id));
+}
+
+/** The `pinOrder` that puts a session between two pinned ones, either of
+ *  them absent at an end of the list. */
+export function pinBetween(before: number | null, after: number | null): number {
+  if (before === null && after === null) return 1;
+  if (before === null) return after! - 1;
+  if (after === null) return before + 1;
+  return (before + after) / 2;
+}
+
 /**
- * The list in sections. Status sections always come in the same order, so
+ * The list in sections. What you pinned comes first, in your order, whatever
+ * the sort; it is always a top-level row there, with what it started under it.
+ * Status sections always come in the same order and repos alphabetically, so
  * the list does not reshuffle under the cursor; the activity sorts are one
  * flat section. A session another one started sits under it, in its section
- * whatever its own status, and only while `open` says its parent is expanded.
+ * whatever its own status or repo, and only while `open` says its parent is
+ * expanded.
  */
 export function sectionsOf<T extends SessionRow>(
   rows: readonly T[],
@@ -212,6 +228,7 @@ export function sectionsOf<T extends SessionRow>(
   sort: SortKey = "status",
 ): Section<Nested<T>>[] {
   const up = parentsOf(rows);
+  for (const s of rows) if (s.pinOrder !== null) up.delete(s.id);
   const kids = new Map<string, T[]>();
   const roots: T[] = [];
   for (const s of ordered(rows, sort)) {
@@ -229,13 +246,22 @@ export function sectionsOf<T extends SessionRow>(
     for (const r of roots) if (pick(r)) place(r, 0, out);
     return { key, label, kind, rows: out };
   };
+  const pinned: Nested<T>[] = [];
+  for (const r of pinnedOf(roots)) place(r, 0, pinned);
+  const unpinned = (r: T) => r.pinOrder === null;
   let sections: Section<Nested<T>>[];
   if (sort === "status") {
-    sections = (Object.keys(KIND_ORDER) as AttentionKind[]).map((kind) => build(kind, SECTION_LABEL[kind], (r) => r.attention.kind === kind, kind));
+    sections = (Object.keys(KIND_ORDER) as AttentionKind[]).map((kind) =>
+      build(kind, SECTION_LABEL[kind], (r) => unpinned(r) && r.attention.kind === kind, kind),
+    );
+  } else if (sort === "repo") {
+    const repos = [...new Set(roots.filter(unpinned).map(repoKey))].sort((a, b) => baseName(a).localeCompare(baseName(b)) || a.localeCompare(b));
+    sections = repos.map((repo) => build(repo, baseName(repo), (r) => unpinned(r) && repoKey(r) === repo));
   } else {
-    sections = [build("all", "", () => true)];
+    // A flat list under the pinned still wants a label, or it reads as more pins.
+    sections = [build("all", pinned.length ? "Sessions" : "", unpinned)];
   }
-  return sections.filter((s) => s.rows.length > 0);
+  return [{ key: "pinned", label: "Pinned", rows: pinned }, ...sections].filter((s) => s.rows.length > 0);
 }
 
 /** The shapes a session's status dot takes, one per repo. */
@@ -262,10 +288,10 @@ export function repoShapes(rows: readonly Pick<Session, "repoRoot" | "cwd" | "st
   return new Map(repos.map((repo, i) => [repo, SHAPES[i % SHAPES.length]!]));
 }
 
-/** The time's tooltip: when you last wrote, and when the agent last moved. */
+/** The time's tooltip: latest prompt and latest activity. */
 export function sentTip(s: Pick<Session, "lastPromptAt" | "lastActivityAt">): string {
   const at = (t: number) => new Date(t).toLocaleString();
-  return `You last sent it something ${at(s.lastPromptAt)}\nLast activity ${at(s.lastActivityAt)}`;
+  return `Last prompt ${at(s.lastPromptAt)}\nLast activity ${at(s.lastActivityAt)}`;
 }
 
 /** Next id for j/k, clamped at both ends. */

@@ -52,6 +52,8 @@ import { Link } from "@phosphor-icons/react/dist/csr/Link";
 import { ArrowUUpLeft } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 import { Plugs } from "@phosphor-icons/react/dist/csr/Plugs";
 import { PlugsConnected } from "@phosphor-icons/react/dist/csr/PlugsConnected";
+import { PushPin } from "@phosphor-icons/react/dist/csr/PushPin";
+import { BookmarkSimple } from "@phosphor-icons/react/dist/csr/BookmarkSimple";
 
 export type IconProps = { size?: number; className?: string; weight?: IconWeight };
 export type IconComponent = (props: IconProps) => ReactElement;
@@ -121,4 +123,6 @@ export const Icon = {
   undo: icon(ArrowUUpLeft),
   plugs: icon(Plugs),
   plugsOn: icon(PlugsConnected),
+  pin: icon(PushPin),
+  bookmark: icon(BookmarkSimple),
 };

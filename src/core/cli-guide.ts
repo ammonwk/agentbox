@@ -85,14 +85,17 @@ See docs/agents.md for exact action JSON, host configuration and boundaries.
 
     agentbox wait pr <n|owner/repo#n|url> [--require 'Reviewed head'] [--only 'Build,API Tests'] [--head <sha>]
                                     # a pull request's checks concluding on that head (the
-                                    # one it has now, unless named): every check. --require
+                                    # one it has now, unless named): every check except Merge gate. --require
                                     # names checks that must be among them, for one that
                                     # reports only when it has something to say (a review
                                     # that marks the head it read); --only waits for just
                                     # those named (a name takes its shards too: "API Tests
                                     # (shard 1/3)"). A check that fails ends it at once and
                                     # is named
-    agentbox wait pr <n> --merged   # its merge
+    agentbox wait pr <n> --merged [--head <sha>]
+                                    # its merge (or its closing); with --head, also its
+                                    # head moving off that commit: the wait for a PR
+                                    # yours is stacked on. Use this, not an until over gh
     agentbox wait run <id|url> [-R owner/repo]   # a GitHub Actions run concluding
     agentbox wait job [--name N] -- <command…>   # start a long command as a systemd unit of
                                     # its own, in this directory and environment, and be
@@ -104,9 +107,14 @@ See docs/agents.md for exact action JSON, host configuration and boundaries.
     agentbox wait until [--every 2m] -- <command>
                                     # run in this directory every --every (two minutes at
                                     # most each time, in the server's environment): exit 0
-                                    # is the event and what it prints is said; exit 1 is
-                                    # not yet; any other exit, five times running, is a
-                                    # wait that cannot watch
+                                    # is the event and what it prints is said; exit 1
+                                    # with nothing on stderr is not yet; any other exit,
+                                    # or an exit 1 with an error on stderr, is a look that
+                                    # failed, and five running end the wait as one that
+                                    # cannot watch. One argument is a shell command line;
+                                    # several are an argv (\`-- bash -c '<script>'\`).
+                                    # Let a read that fails fail: \`|| exit 2\`, not
+                                    # \`2>/dev/null\` then a test that reads as not yet
     agentbox wait time 45m          # nothing but the time
     agentbox waits [--mine | --session <id>] [--all] [--json]
                                     # what is waited on and what the last look found;
@@ -179,10 +187,11 @@ why). Arming the same wait twice is one wait.
     agentbox card ack <id>          # you have read an answer that was waiting (--unread)
     agentbox card close <id> <why>  # withdraw it: the question went away
     agentbox pr who <n|owner/repo#n|url>   # the session that has this pull request, or "nobody" (exit 1)
-    agentbox pr claim <n|…>         # it is yours: refused, naming the holder, if another live session has it
-    agentbox pr release [<n|…>]     # let go of what you claimed (one, or all)
-  agentbox pr transfer <repo#n> --expect <holder> --to <successor>
-                              current holder hands off; stale ownership is refused
+    agentbox pr claim <n|…>         # it is yours, and says so ("you hold", "you already hold"); refused,
+                                    # naming "another session", if another live session has it
+    agentbox pr release [<n|…>]     # release ownership and its PR waits (one, or all)
+    agentbox pr transfer <repo#n> --expect <holder> --to <successor>
+                                    # current holder hands off; stale ownership is refused
     agentbox pr claims              # every pull request a live session has
 
 ## Across machines (when this machine is in an agentbox cloud workspace)
@@ -209,7 +218,9 @@ cover it.
   do not work it as well. To start a session on a PR, start it with
   \`--claim <n>\` (\`agentbox claude --detach --claim 8653 '…'\`): it has the
   PR from its first moment, or is not started. Reading or reviewing a PR
-  needs no claim. A claim lapses when its session stops or closes.
+  needs no claim. A claim lapses when its session stops or closes. Your own
+  id is \`$AGENTBOX_SESSION\`; wherever ls, show, pr who and pr claims name
+  you, the id has "(you)" after it.
 
 - Statuses: running (mid-turn), blocked (a prompt needs answering), waiting
   (turn over, the user's move), stopped (no process, resumable), closed (stopped and
@@ -266,7 +277,9 @@ cover it.
   with its title indented \`└\`, and \`show\` names its parent and children.
   Every verb acts on exactly the ids it is given, except close: closing a
   parent closes the sessions it started, at any depth, with it (running ones
-  are stopped, and the app asks first when any are). Stopping a parent
+  are stopped, and the app asks first when any are), but leaves open, and
+  names, any that has a wait armed or has claimed an open PR, with what that
+  one started. Stopping a parent
   leaves its children alone, so list them (\`ls | grep\`, or \`ls --json | jq\`
   on \`.parent\`) to act on them too. The exception is subagents (host
   \`sub\`): the parent runs them, so stopping or closing it stops every one

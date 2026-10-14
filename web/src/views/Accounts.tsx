@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { AccountView, AppState, LoginFlow, ProviderId } from "../../../src/core/types";
+import type { AccountView, AppState, LoginFlow, ProviderId, ResetConsumeResult } from "../../../src/core/types";
 import { api, useNow } from "../api";
 import { accountProvider } from "../../../src/core/providers/account";
 import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
@@ -295,6 +295,8 @@ function AccountCard({
         )}
       </div>
 
+      {a.provider === "codex" ? <ResetCreditsPanel account={a} /> : null}
+
       <div className="ac-usage-foot">
         {a.usage.stale ? (
           <span className="ac-stale" title="The numbers above are the last good reading">
@@ -479,6 +481,121 @@ function AccountCard({
       ) : null}
     </article>
   );
+}
+
+/**
+ * Codex hands out a few usage-limit resets, each spendable once: the CLI's
+ * `/usage` menu shows how many and spends one. Here the count is part of the
+ * account's usage, and you can spend one — the account is re-read straight
+ * away, so sessions stopped at its limit are told to carry on.
+ */
+function ResetCreditsPanel({ account: a }: { account: AccountView }) {
+  const resets = a.usage.resets ?? null;
+  const { run, busy, error } = useAction();
+  const [open, setOpen] = useState(false);
+  const [chosen, setChosen] = useState<string>("");
+  const [done, setDone] = useState<string | null>(null);
+  const now = useNow(60_000);
+
+  if (!resets || resets.availableCount <= 0) return null;
+  const list = resets.credits.filter((c) => c.status === "available");
+  /** The provider's own "not needed right now" — it does not stop you
+   *  spending one, only says none of your windows is flagged as at its limit. */
+  const needed = resets.applicableCount !== 0;
+  const earliest = list.reduce<number | null>(
+    (m, c) => (c.expiresAt != null && (m == null || c.expiresAt < m) ? c.expiresAt : m),
+    null,
+  );
+
+  const spend = () =>
+    void run(async () => {
+      const r = await api.useResetCredit(a.id, chosen || undefined);
+      setDone(resetOutcomeText(r));
+      setOpen(false);
+    });
+
+  return (
+    <div className="ac-resets">
+      <Icon.bolt size={14} />
+      <span className="ac-resets-text">
+        <strong>
+          {resets.availableCount} usage reset{resets.availableCount === 1 ? "" : "s"} available
+        </strong>
+        <span className="ac-resets-sub">
+          {needed
+            ? earliest != null
+              ? `Spend one to clear its limits now · expires in ${fmtCountdown(earliest - now)}`
+              : "Spend one to clear its limits now"
+            : "Codex says nothing needs resetting right now, but you can still spend one."}
+        </span>
+      </span>
+      <Button
+        size="sm"
+        disabled={busy}
+        title="Spend one reset on this account"
+        onClick={() => {
+          setChosen("");
+          setDone(null);
+          setOpen(true);
+        }}
+      >
+        Use reset
+      </Button>
+      {done ? <p className="ac-resets-done">{done}</p> : null}
+      {error ? <p className="error-line">{error}</p> : null}
+
+      {open ? (
+        <Modal
+          title={`Use a usage reset on ${a.label}?`}
+          hint="A reset clears this account's spent rate-limit windows so the sessions stopped at its limit can carry on. It spends one credit and cannot be undone."
+          onClose={() => setOpen(false)}
+        >
+          <div className="reset-choices">
+            <label className="reset-choice">
+              <input type="radio" name="reset-credit" checked={chosen === ""} onChange={() => setChosen("")} />
+              <span>
+                <strong>Let Codex choose</strong>
+                <span className="reset-desc">Uses the credit that applies to a window that is spent right now.</span>
+              </span>
+            </label>
+            {list.map((c) => (
+              <label key={c.id} className="reset-choice">
+                <input type="radio" name="reset-credit" checked={chosen === c.id} onChange={() => setChosen(c.id)} />
+                <span>
+                  <strong>{c.title ?? "Usage reset"}</strong>
+                  {c.expiresAt != null ? <span className="faint"> · expires in {fmtCountdown(c.expiresAt - now)}</span> : null}
+                  {c.description ? <span className="reset-desc">{c.description}</span> : null}
+                </span>
+              </label>
+            ))}
+            {list.length === 0 ? <p className="hint">The credit that applies will be used.</p> : null}
+          </div>
+          <div className="modal-actions">
+            <Button onClick={() => setOpen(false)}>Cancel</Button>
+            <Button variant="primary" icon={Icon.bolt} loading={busy} onClick={spend}>
+              Use reset
+            </Button>
+          </div>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+/** What the provider's answer reads as, in the panel. */
+function resetOutcomeText(r: ResetConsumeResult): string {
+  switch (r.outcome) {
+    case "reset":
+      return r.windowsReset > 1 ? `Usage reset — ${r.windowsReset} windows cleared.` : "Usage reset.";
+    case "nothing-to-reset":
+      return "Nothing is spent on this account right now; no reset was used.";
+    case "no-credit":
+      return "No reset credit was available; nothing was used.";
+    case "already-redeemed":
+      return "That reset had already been used.";
+    default:
+      return "The provider returned an answer agentbox does not recognise.";
+  }
 }
 
 function AuthBadge({ account: a, now }: { account: AccountView; now: number }) {

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
 import { AccountChip, ContextBar, PROVIDER_LABEL, UsageBar } from "../../bits";
-import { Button, Confirm, Empty, Icon } from "../../components";
+import { Button, Confirm, Empty, Icon, type IconComponent } from "../../components";
 import {
   descendantsOf,
   filterSessions,
@@ -19,6 +19,7 @@ import {
 } from "../../lib/board";
 import { closedSessions, Rail, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
+import { toggleBookmark, togglePin, usePinned } from "./pins";
 import { justStarted } from "./started";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
 import { isRecurring } from "../../../../src/core/schedule";
@@ -50,6 +51,11 @@ const Terminal = lazy(() => import("./Terminal"));
 // The timeline carries the markdown renderer, the second-heaviest dependency.
 const Timeline = lazy(() => import("./Timeline").then((m) => ({ default: m.Timeline })));
 
+const NONE: SessionRow[] = [];
+/** Pin and bookmark drawn filled while on. */
+const PinOn: IconComponent = (p) => <Icon.pin {...p} weight="fill" />;
+const BookmarkOn: IconComponent = (p) => <Icon.bookmark {...p} weight="fill" />;
+
 const TAB_LABEL: Record<SessionTab, string> = {
   terminal: "Terminal",
   timeline: "Timeline",
@@ -63,8 +69,8 @@ const TAB_LABEL: Record<SessionTab, string> = {
  * time: the list until you pick a session, then the session.
  */
 export function SessionView({
-  state,
-  visible = state,
+  state: given,
+  visible: scoped = given,
   id,
   tab,
   onTab,
@@ -80,10 +86,17 @@ export function SessionView({
   onOpen: (id: string) => void;
   onNew: () => void;
 }) {
+  // Pins and bookmarks just asked for, shown before the server's state has them.
+  const pinned = usePinned(given.sessions);
+  const state = useMemo(() => (pinned === given.sessions ? given : { ...given, sessions: [...pinned] }), [given, pinned]);
+  const visiblePinned = usePinned(scoped.sessions);
+  const visible = useMemo(() => (visiblePinned === scoped.sessions ? scoped : { ...scoped, sessions: [...visiblePinned] }), [scoped, visiblePinned]);
   // One closed too long ago to be in the state comes from the closed list's
   // fetches, or is looked up by id for a link straight to it.
   const [, found] = useState(0);
-  const session = id ? state.sessions.find((s) => s.id === id) ?? closedSessions.get(id) ?? justStarted(id) : null;
+  const old = id && !state.sessions.some((s) => s.id === id) ? closedSessions.get(id) : undefined;
+  const [oldShown] = usePinned(old ? [old] : NONE);
+  const session = id ? state.sessions.find((s) => s.id === id) ?? oldShown ?? justStarted(id) : null;
   // Not started yet: the same id, before there is a session under it.
   const sched = id && !session ? state.schedules.find((s) => s.id === id && !isRecurring(s.rule)) ?? null : null;
   const missing = !!id && !session && !sched;
@@ -124,10 +137,11 @@ export function SessionView({
   }, [state.sessions, session?.id, hovered, focused]);
 
   // Folded as the user left it, but never with the open session folded out of
-  // sight. Closed ones are not here: they have their own list under Inactive.
+  // sight. Closed ones are not here: they have their own list under Inactive,
+  // unless pinned: a pin holds its place closed or not.
   const { sections, counts } = useMemo(() => {
     const rows = filterSessions(
-      visible.sessions.filter((s) => s.status !== "closed" && !closing.has(s.id)),
+      visible.sessions.filter((s) => s.pinOrder !== null || (s.status !== "closed" && !closing.has(s.id))),
       filter,
     );
     const tabs = splitActive(rows, now);
@@ -587,6 +601,32 @@ function Detail({
     </div>
   );
 
+  // Pin and bookmark: in the tabs' row on a computer, beside the name on a phone.
+  const marks = (
+    <>
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={session.pinOrder !== null ? PinOn : Icon.pin}
+        className="sx-mark"
+        aria-pressed={session.pinOrder !== null}
+        aria-label={session.pinOrder !== null ? "Unpin" : "Pin to the top of the list"}
+        title={session.pinOrder !== null ? "Unpin it from the top of the list" : "Pin it to the top of the list, open or closed; drag pinned sessions to reorder them"}
+        onClick={() => togglePin(session, state.sessions)}
+      />
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={session.bookmarkedAt !== null ? BookmarkOn : Icon.bookmark}
+        className="sx-mark"
+        aria-pressed={session.bookmarkedAt !== null}
+        aria-label={session.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
+        title={session.bookmarkedAt !== null ? "Remove it from the bookmarks" : "Bookmark it: the bookmarks menu beside the list's sort finds it, open or closed"}
+        onClick={() => toggleBookmark(session)}
+      />
+    </>
+  );
+
   return (
     <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main" onClick={(e) => {
       if (e.defaultPrevented || e.button !== 0 || e.detail > 1 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
@@ -600,6 +640,14 @@ function Detail({
       {/* No title, ids or status: the list shows which session is open and
           what it is doing. The facts, then the tabs with the actions. */}
       <header className="sx-header">
+        {/* A phone shows no list beside the session: name it, and rename it, here.
+            On a computer the list's right-click menu renames. */}
+        {narrow ? (
+          <div className="sx-title-row">
+            <TitleEdit session={session} />
+            {marks}
+          </div>
+        ) : null}
         {/* On a computer the facts go in the system bar along the bottom. A
             phone hides that bar in a session, so there they stay here. */}
         {inBar && sysbarSlot ? createPortal(facts, sysbarSlot) : facts}
@@ -645,6 +693,7 @@ function Detail({
             ))}
           </div>
           <div className="sx-tabbar-actions">
+            {narrow ? null : marks}
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt
@@ -851,6 +900,63 @@ function TranscriptInstead({
         <Timeline session={session} />
       </Suspense>
     </div>
+  );
+}
+
+/** The title, click to rename. Clearing it falls back to the derived title. */
+function TitleEdit({ session }: { session: SessionRow }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const { run, busy } = useAction();
+  const title = titleOf(session);
+
+  if (!editing) {
+    return (
+      <h2 className="sx-title">
+        <button
+          className="sx-title-btn"
+          title="Rename"
+          onClick={() => {
+            setDraft(session.label ?? title);
+            setEditing(true);
+          }}
+        >
+          <span className="sx-title-text">{title}</span>
+          <Icon.edit size={13} className="sx-title-pen" />
+        </button>
+      </h2>
+    );
+  }
+
+  const commit = async () => {
+    const next = draft.trim();
+    if (next === (session.label ?? title)) {
+      setEditing(false);
+      return;
+    }
+    if (await run(() => api.patchSession(session.id, { label: next || null }))) setEditing(false);
+  };
+
+  return (
+    <input
+      className="sx-title-input"
+      aria-label="Session label"
+      autoFocus
+      value={draft}
+      disabled={busy}
+      placeholder={session.title || "Label"}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => void commit()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          void commit();
+        } else if (e.key === "Escape") {
+          e.stopPropagation();
+          setEditing(false);
+        }
+      }}
+    />
   );
 }
 

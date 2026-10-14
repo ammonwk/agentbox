@@ -11,6 +11,8 @@
  * because the agentbox id in them is not.
  */
 
+import { chmodSync, readdirSync, statSync } from "node:fs";
+
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome, tmuxSocket } from "./paths";
@@ -62,6 +64,10 @@ export interface NewSession {
   argv: string[];
   env?: Record<string, string>;
   unset?: string[];
+  /** Variables holding secrets. They are exported by the private launcher
+   *  script (`writeLauncher`) rather than put on the command line tmux runs,
+   *  which /proc/<pid>/cmdline and tmux's pane_start_command would show. */
+  secretEnv?: Record<string, string>;
   cols?: number;
   rows?: number;
 }
@@ -97,6 +103,8 @@ export function newSession(s: NewSession): number {
   const launcher = cmd.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0) > MAX_INLINE ? writeLauncher(s.name, cmd) : null;
   if (launcher) cmd = ["sh", launcher];
   const args: string[] = ["start-server"];
+  const secrets = Object.keys(s.secretEnv ?? {}).length ? writeLauncher(`${s.name}-env`, cmd, s.secretEnv) : null;
+  if (secrets) cmd = ["sh", secrets];
   for (const g of GLOBALS) args.push(";", ...g);
   args.push(
     ";",
@@ -107,6 +115,7 @@ export function newSession(s: NewSession): number {
   );
   const r = tmux(["list-sessions"]).code === 0 ? tmux(args) : startServer(args);
   if (r.code !== 0 && launcher) rmSync(launcher, { force: true });
+  if (r.code !== 0 && secrets) rmSync(secrets, { force: true });
   if (r.code !== 0) throw new Error(`tmux could not start the session: ${r.stderr.trim() || r.stdout.trim()}`);
   const pid = Number(r.stdout.trim().split("\n").pop());
   if (!Number.isFinite(pid) || pid <= 0) throw new Error(`tmux started the session but reported no pid: ${r.stdout}`);
@@ -121,15 +130,30 @@ export function newSession(s: NewSession): number {
 const MAX_INLINE = 8192;
 
 /** A script that deletes itself and execs `cmd`, so the pane's pid is still
- *  the agent's. Private: the prompt is in it until the agent starts. */
-function writeLauncher(name: string, cmd: string[]): string {
+ *  the agent's. Private (0600 in a 0700 directory): the prompt and `secret`
+ *  are in it until the agent starts. One whose pane never ran it is deleted
+ *  by the next launch. */
+function writeLauncher(name: string, cmd: string[], secret: Record<string, string> = {}): string {
   const dir = join(agentboxHome(), "launch");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  for (const f of readdirSync(dir)) {
+    try {
+      if (Date.now() - statSync(join(dir, f)).mtimeMs > LAUNCHER_TTL_MS) rmSync(join(dir, f), { force: true });
+    } catch {
+      /* gone meanwhile */
+    }
+  }
   const path = join(dir, `${name}.sh`);
   const quote = (a: string) => `'${a.replaceAll("'", `'\\''`)}'`;
-  writeFileSync(path, `rm -f -- "$0"\nexec ${cmd.map(quote).join(" ")}\n`, { mode: 0o600 });
+  const exports = Object.entries(secret).map(([k, v]) => `export ${k}=${quote(v)}\n`).join("");
+  rmSync(path, { force: true });
+  writeFileSync(path, `rm -f -- "$0"\n${exports}exec ${cmd.map(quote).join(" ")}\n`, { mode: 0o600 });
   return path;
 }
+
+/** A launcher older than this was never run: its pane did not start. */
+const LAUNCHER_TTL_MS = 60_000;
 
 /**
  * Run the invocation that starts our tmux server in a systemd scope of its

@@ -20,6 +20,7 @@ import type {
   CalibrationReport,
   UsageInsights,
   ClientMessage,
+  Closed,
   ColdState,
   DepState,
   DepStatus,
@@ -33,6 +34,7 @@ import type {
   Placement,
   ProcDetail,
   ProviderId,
+  ResetConsumeResult,
   NightlyReclaim,
   ReclaimResult,
   Repo,
@@ -233,7 +235,7 @@ export const api = {
   undoCard: (id: number) => post<Card>(`/api/cards/${id}/undo`),
   createSession: (input: NewSessionInput) =>
     post<{ session: Session; placement: Placement }>("/api/sessions", input),
-  patchSession: (id: string, patch: { label?: string | null; parent?: string | null }) =>
+  patchSession: (id: string, patch: { label?: string | null; parent?: string | null; pinOrder?: number | null; bookmarked?: boolean }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
   submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string) =>
@@ -259,7 +261,7 @@ export const api = {
   transcribe,
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
   /** Close stops it and takes it off the list; `false` reopens it (still stopped). */
-  close: (id: string, closed: boolean) => post<unknown>(`/api/sessions/${enc(id)}/close`, { closed }),
+  close: (id: string, closed: boolean) => post<Closed>(`/api/sessions/${enc(id)}/close`, { closed }),
   /** A page of closed sessions, the most recently closed first, from all of history. */
   closed: (q: string, offset: number, limit = 30, project: string | null = null) =>
     get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit), ...(project ? { project } : {}) })}`),
@@ -294,6 +296,9 @@ export const api = {
   forgetAccount: (id: string) => request<unknown>("DELETE", `/api/accounts/${enc(id)}`),
   login: (id: string) => post<LoginFlow>(`/api/accounts/${enc(id)}/login`),
   refreshUsage: (id: string) => post<AccountUsage>(`/api/accounts/${enc(id)}/usage`),
+  /** Spend one of a codex account's usage-limit resets; `creditId` picks one. */
+  useResetCredit: (id: string, creditId?: string) =>
+    post<ResetConsumeResult>(`/api/accounts/${enc(id)}/reset`, creditId ? { creditId } : {}),
   loginPaste: (id: string, text: string) => post<LoginFlow>(`/api/logins/${enc(id)}/paste`, { text }),
   loginCancel: (id: string) => post<unknown>(`/api/logins/${enc(id)}/cancel`),
   calibration: (days = 7) => get<CalibrationReport>(`/api/calibration?days=${days}`),

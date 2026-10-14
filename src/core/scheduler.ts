@@ -36,7 +36,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { moveCards } from "./cards";
-import { movePrClaims } from "./prclaims";
+import { movePrClaims, prReleaseNotice } from "./prclaims";
 import { deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
 import { FleetError, newSessionId, type Fleet } from "./fleet";
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
@@ -386,7 +386,8 @@ export class Scheduler {
     const follows = s.sameSession && s.lastSessionId
       ? `[agentbox: you take over from ${s.lastSessionId}, the session this schedule spoke to until now (${over ?? "it is gone"}). What it did is in \`agentbox log ${s.lastSessionId} | tail -60\`; it will not be spoken to again.${theirs.length ? ` The sessions it started are still at their work and are now listed under you: ${theirs.join(" ")}.` : ""}]`
       : undefined;
-    const sid = await this.fire(s, now, early, note, follows);
+    const ownership = s.sameSession && s.lastSessionId ? prReleaseNotice(s.lastSessionId) : "";
+    const sid = await this.fire(s, now, early, note, [ownership, follows].filter(Boolean).join("\n\n") || undefined);
     if (!sid) return { quiet: this.get(s.id).lastError ?? "it did not start" };
     if (closing) await this.retire(s.id, last.id, sid);
     return { sessionId: sid };

@@ -68,6 +68,46 @@ export interface UsageWindow {
   provider?: string;
 }
 
+/** One Codex usage-limit reset you can spend: the CLI's `/usage` menu's "Full
+ *  reset". Spending one clears the account's spent windows so sessions stopped
+ *  at the limit can carry on. */
+export interface ResetCredit {
+  id: string;
+  /** "codex_rate_limits" today; kept as a string for whatever comes next. */
+  resetType: string;
+  status: "available" | "redeeming" | "redeemed" | "unknown";
+  /** Epoch ms the provider granted it. */
+  grantedAt: number | null;
+  /** Epoch ms it stops being usable; null means it does not expire. */
+  expiresAt: number | null;
+  /** The provider's own words for it: "Full reset". */
+  title: string | null;
+  description: string | null;
+}
+
+/** Codex usage-limit resets you have left. Codex only. */
+export interface ResetCredits {
+  /** How many are left to spend, spent or not. */
+  availableCount: number;
+  /** Of those, how many the provider says apply to a window that is at its
+   *  limit right now. It is advice, not a gate: a credit can be spent when
+   *  this is zero (observed: `applicable_available_count: 0`, consume still
+   *  cleared the window), so the UI offers the button on `availableCount`. */
+  applicableCount: number | null;
+  /** The credits themselves, newest first, when the details endpoint answered.
+   *  Empty when only the count is known. */
+  credits: ResetCredit[];
+}
+
+/** What spending a reset did, as the provider worded it. */
+export type ResetOutcome = "reset" | "nothing-to-reset" | "no-credit" | "already-redeemed" | "unknown";
+
+export interface ResetConsumeResult {
+  outcome: ResetOutcome;
+  /** How many windows the provider says it cleared. */
+  windowsReset: number;
+}
+
 export interface AccountUsage {
   accountId: string;
   /** When these numbers were true, not when we last tried. */
@@ -78,6 +118,9 @@ export interface AccountUsage {
   source: "endpoint" | "cache" | "rollout" | "cli" | "none";
   /** Anything else worth a line: extra-usage state, credits, a locked reason. */
   notes: string[];
+  /** Codex: usage-limit resets left to spend (docs/v2.md, Usage). Absent for
+   *  every other provider, and on readings that never carried one. */
+  resets?: ResetCredits | null;
 }
 
 /** Credential health as far as we can tell without refreshing anything. */
@@ -431,8 +474,7 @@ export interface Session {
 
   firstPrompt: string | null;
   lastPrompt: string | null;
-  /** When you last sent it something (not another agent, not the CLI waking
-   *  itself); the start when you never have. What the board sorts by. */
+  /** Timestamp of lastPrompt, including agent messages; the start if unknown. */
   lastPromptAt: number;
   /** Tail of the last assistant text, for the list row. */
   lastMessage: string | null;
@@ -457,13 +499,15 @@ export interface Session {
    */
   cold: boolean;
   /** The provider's latest "you hit your limit", when that is the last thing
-   *  the session did — it stopped there and is waiting to be continued. */
+   *  the session did — it stopped there and is waiting to be continued — and
+   *  its account's usage does not say that limit is gone (`Fleet.limitEnd`). */
   limitHit: {
     at: number;
     detail: string;
     provider?: string;
     /** When the limit lifts, as far as is known: the reset of the account's
-     *  spent window, else the time the message names. Until then every
+     *  spent window, or the time the message names where no window of the
+     *  account ever accounted for the hit. Until then every
      *  message is refused the same way, so nothing is sent (the fleet's own
      *  nudges, and `agentbox send` from an agent). Null when nothing says. */
     until?: number | null;
@@ -486,7 +530,8 @@ export interface Session {
   turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string; retryAfterMs?: number } | null;
   /**
    * When the fleet will tell it to go on by itself — past an error, a rate
-   * limit or a 5-hour reset (`Fleet.autoResumeOf`) — and which try that is:
+   * limit or the reset of a spent window due within five hours of the hit
+   * (`Fleet.autoResumeOf`) — and which try that is:
    * `attempt` of `of`, `of` null when it keeps trying until it works. About:
    * nudges go out one at a time across the fleet. Anything you send it first
    * does the same and calls this off. Null when nothing will. `after` says
@@ -532,6 +577,12 @@ export interface Session {
   lastActivityAt: number;
   /** When you closed it; null while it is on the list. */
   closedAt: number | null;
+  /** Pinned to the top of the session list, at this place among the pinned
+   *  (lower first; `PATCH` with `pinOrder`). Null when it is not pinned. A
+   *  pinned or bookmarked session stays on the board when closed. */
+  pinOrder: number | null;
+  /** When you bookmarked it, for the list's bookmarks menu; null when it is not. */
+  bookmarkedAt: number | null;
   /**
    * When the fleet stopped its process for sitting idle. A parked session is
    * still shown as `waiting` — it is still your move — and the next message
@@ -804,6 +855,16 @@ export interface PrInfo {
 }
 
 /** A pull request and the live session that has it (src/core/prclaims.ts). */
+/** What a close did: the sessions it closed, those it started that it left
+ *  open for the work they hold, and what the one asked for gave up. */
+export interface Closed {
+  closed: string[];
+  kept: { id: string; holds: string[] }[];
+  dropped: string[];
+  /** The above in words, to follow "closed <id>"; empty when it took nothing else. */
+  said: string;
+}
+
 export interface PrClaim {
   repo: string;
   number: number;
@@ -849,7 +910,8 @@ export interface McpReach {
   /** on: passed to it; own: it has its own server of this name with the same
    *  definition; conflict: it has a different one, which it keeps; off: the
    *  server is turned off; unsupported: agentbox does not pass servers to it;
-   *  error: the file agentbox writes for it could not be written. */
+   *  error: sessions start without it (its command is not on the PATH, or the
+   *  agent's own config cannot be read), and `detail` says why. */
   state: "on" | "own" | "conflict" | "off" | "unsupported" | "error";
   detail: string;
 }
@@ -881,7 +943,8 @@ export interface McpAgent {
   installed: boolean;
   /** Whether agentbox passes global servers to its sessions. */
   supported: boolean;
-  /** A configuration problem that prevents launch. */
+  /** A configuration problem that keeps the global servers out of its
+   *  launches (they still start, without them). */
   error?: string | null;
   /** How, or why not, in words. */
   how: string;
@@ -895,7 +958,11 @@ export interface McpState {
   /** When the global list last changed. */
   changedAt: number | null;
   /** Configuration snapshot handed to each running session, not a health check. */
-  sessions?: { id: string; title: string; provider: ProviderId; changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; known: boolean }[];
+  sessions?: { id: string; title: string; provider: ProviderId; changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; known: boolean;
+    /** Servers left out of its launch, and why. */
+    skipped?: { name: string; why: string }[];
+    /** Why it was launched without the global layer at all. */
+    error?: string | null }[];
   /** Sessions agentbox runs whose process started before that change: they
    *  get it when they next start or resume. */
   stale: { id: string; title: string; provider: ProviderId; since: number }[];
@@ -1149,10 +1216,10 @@ export type SkillSource = "global" | "agents" | "codex" | "omp" | "project";
 
 // ------------------------------------------------------------ wire shapes
 
-/** The board. Over a socket it holds the open sessions only, whole on
- *  connect and then as they change (`hotDelta`); `GET /api/state` has the
- *  closed ones too, unless asked for `?open=1`. The See closed list pages
- *  them from `GET /api/sessions/closed`. */
+/** The board. Over a socket it holds the open sessions only, and the closed
+ *  ones you pinned or bookmarked, whole on connect and then as they change
+ *  (`hotDelta`); `GET /api/state` has the closed ones too, unless asked for
+ *  `?open=1`. The See closed list pages them from `GET /api/sessions/closed`. */
 export interface HotState {
   sessions: (Session & { attention: Attention })[];
   serverTime: number;
@@ -1277,14 +1344,14 @@ export type WaitSpec =
       kind: "pr";
       repo: string;
       number: number;
-      /** The head the checks are waited for on; null takes the one first read. */
+      /** The head the checks are waited for on, or the merge of; null takes the one first read (for a merge, any head). */
       head: string | null;
-      /** Every check on the head has concluded. */
+      /** Every CI/review check on the head has concluded; Merge gate is excluded. */
       all: boolean;
       /** Checks that must be there and concluded. A name also takes the
        *  checks that begin with it and a space: `API Tests (shard 1/3)`. */
       checks: string[];
-      /** Only its merge (or its closing) ends the wait. */
+      /** Only its merge, its closing, or a head named being replaced ends the wait. */
       merged: boolean;
     }
   /** A GitHub Actions run concluding. */

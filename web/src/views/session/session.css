@@ -92,6 +92,7 @@
 /* Search and the sort menu, above everything that scrolls. The search box is
  * the composer's: rounded, a lighter ground, a hairline border, no ring. */
 .rail-top {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -243,6 +244,123 @@
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+/* A row's right-click menu, where the pointer was. */
+.rail-rowmenu {
+  z-index: 60;
+  max-width: 280px;
+}
+.rail-rename {
+  width: 240px;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+.rail-rowmenu .rail-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11.5px;
+}
+/* The bookmarks: a count beside the icon, and a menu of rows to open. */
+.rail-sort-btn[data-n] {
+  display: inline-flex;
+  gap: 3px;
+  width: auto;
+  padding: 0 7px;
+}
+.rail-bm-n {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* Hung from the list's top bar rather than from the button, which sits near
+   the list's left edge, where a menu would run off it: from the bar's left,
+   at least as wide as it, wider into the page beside it when the list is
+   narrow, and never past the window's edge. */
+.rail-bm-wrap {
+  position: static;
+}
+.rail-bm {
+  left: 8px;
+  right: auto;
+  width: 360px;
+  min-width: calc(100% - 16px);
+  max-width: calc(100vw - 80px);
+  max-height: min(420px, 70vh);
+  overflow-y: auto;
+}
+.rail-bm .rail-menu-label {
+  display: flex;
+}
+.rail-bm-none {
+  padding: 4px 8px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rail-bm-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 4px;
+}
+.rail-bm-row:hover,
+.rail-bm-row[aria-current="page"] {
+  background: var(--hover);
+}
+.rail-bm-row > a {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 4px 0 8px;
+  color: var(--text);
+  text-decoration: none;
+}
+.rail-bm-row[data-status="closed"] .rail-title,
+.rail-bm-row[data-status="stopped"] .rail-title {
+  color: var(--muted);
+  font-weight: 450;
+}
+.rail-menu .rail-bm-row .rail-x {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  margin: 0 4px 0 0;
+  padding: 0;
+  color: var(--muted);
+  opacity: 0;
+}
+.rail-menu .rail-bm-row:hover .rail-x,
+.rail-menu .rail-bm-row:focus-within .rail-x {
+  opacity: 1;
+}
+@media (hover: none) {
+  .rail-menu .rail-bm-row .rail-x {
+    opacity: 1;
+  }
+}
+.rail-bm-row > a:focus-visible {
+  outline: none;
+}
+.rail-bm-row:has(> a:focus-visible) {
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.rail-bm-none svg {
+  vertical-align: -1px;
+}
 /* See closed: folded under the list, loads as it scrolls. A quiet line, the
  * way a finished turn's trace is. */
 .rail-closed {
@@ -309,6 +427,9 @@
 }
 .rail-label span {
   font-weight: 500;
+}
+.rail-label > svg {
+  flex: none;
 }
 .rail-sec[data-kind="blocked"] .rail-label {
   color: var(--danger);
@@ -394,9 +515,16 @@
 }
 /* Dragging a session: the row it would go under, or the whole list when it
  * would go to the top level, and a line at the foot saying which is which. */
-.rail-row[data-drop] {
+.rail-row[data-drop="under"] {
   background: color-mix(in srgb, var(--accent) 14%, var(--panel));
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* Reordering the pinned: a line where it would land. */
+.rail-row[data-drop="before"] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.rail-row[data-drop="after"] {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .rail-scroll[data-drop] {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
@@ -666,6 +794,10 @@ button.rail-state:hover {
   gap: 6px;
   margin-left: auto;
   flex: none;
+}
+/* Pin and bookmark: outlined when off, filled (weight="fill") in the accent when on. */
+.sx-mark[aria-pressed="true"] {
+  color: var(--accent);
 }
 .sx-facts {
   display: flex;
@@ -3277,4 +3409,55 @@ a.wk-item:hover {
   color: var(--muted);
   font-size: 13px;
   padding: 24px 0;
+}
+
+/* A phone's session header names the session, the list being out of sight;
+   a click renames it. Pin and bookmark sit beside it. */
+.sx-title-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.sx-title-row .sx-title {
+  flex: 1 1 auto;
+}
+.sx-title {
+  margin: 0;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.sx-title-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+.sx-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-title-pen {
+  flex: none;
+  color: var(--faint);
+}
+.sx-title-input {
+  width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
 }
