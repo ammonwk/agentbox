@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { transcriptFile } from "../providers/types";
 import { agentboxHome, agentboxCommand } from "../paths";
 import { z } from "zod";
+import type { Database } from "bun:sqlite";
 import type { AgentsRuntime } from "./runtime";
 import {
   ProposalInput,
@@ -147,9 +148,44 @@ const safeText = (s: string) =>
       /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,
       "[private key removed]",
     );
-const localId = (name: string, project?: string) => `local-${name.toLowerCase()}${project ? `-project-${encodeURIComponent(project)}` : ""}`;
+/** An agent's name as it appears in its instances' IDs; one name, one agent. */
+const nameKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const localId = (name: string, project?: string) => `local-${nameKey(name)}${project ? `-project-${encodeURIComponent(project)}` : ""}`;
 const isJupiter = (a: LocalAgent) => a.id === localId("Jupiter", a.project);
-const JUPITER = { id: "jupiter", name: "Jupiter", definition: { role: JUPITER_ROLE, instructions: JUPITER_INSTRUCTIONS } };
+/** What every project's instance of an agent starts from: a template, or an
+ *  agent created from Jupiter's card (`local_definitions`, keyed by `nameKey`). */
+type Definition = Pick<LocalAgent, "name" | "role" | "instructions" | "pinned" | "capability" | "createdBy" | "creation" | "automation">;
+const TEMPLATES: Definition[] = AGENT_TEMPLATES.map((t) => ({ name: t.name, role: t.definition.role, instructions: t.definition.instructions }));
+const JUPITER: Definition = { name: "Jupiter", capability: "creator", role: JUPITER_ROLE, instructions: JUPITER_INSTRUCTIONS };
+const RESERVED = new Set([...TEMPLATES, JUPITER].map((d) => nameKey(d.name)));
+/** Agents created before definitions were stored had one `local-custom-<draft>`
+ *  row in the creator's project, and (7d74a58) a `-project-<id>` row in each
+ *  other project. Each becomes a definition and its rows take template-style
+ *  IDs; every reference to a row is renamed with it. A clashing name stays as it was. */
+const adopted = new WeakSet<Database>();
+function adoptCreated(db: Database) {
+  if (adopted.has(db)) return;
+  adopted.add(db);
+  db.transaction(() => {
+    const rows = (db.query("SELECT body FROM local_agents WHERE id LIKE 'local-custom-%' ORDER BY rowid").all() as { body: string }[]).map((r) => JSON.parse(r.body) as LocalAgent);
+    const tables = new Set((db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((t) => t.name));
+    for (const d of rows.filter((a) => a.creation && a.id === `local-custom-${a.creation}`)) {
+      const key = nameKey(d.name);
+      if (!key || RESERVED.has(key) || db.query("SELECT 1 FROM local_definitions WHERE id=?").get(key)) continue;
+      const { name, role, instructions, pinned, createdBy, creation, automation } = d;
+      db.run("INSERT INTO local_definitions(id,body) VALUES(?,?)", [key, JSON.stringify({ name, role, instructions, pinned, createdBy, creation, automation })]);
+      for (const a of rows.filter((a) => a.creation === d.creation)) {
+        const from = a.id, to = localId(d.name, a.project);
+        if (db.query("SELECT 1 FROM local_agents WHERE id=?").get(to)) continue;
+        db.run("UPDATE local_agents SET id=?, body=? WHERE id=?", [to, JSON.stringify({ ...a, id: to }), from]);
+        for (const [t, col] of [["local_submissions", "agent"], ["agent_memory", "scope"], ["agent_feedback", "agent"]] as const)
+          if (tables.has(t)) db.run(`UPDATE ${t} SET ${col}=? WHERE ${col}=?`, [to, from]);
+        for (const t of ["local_proposals", "local_creations", "agent_work", "agent_work_grant", "memory_checkpoints"])
+          if (tables.has(t)) db.run(`UPDATE ${t} SET body=replace(body,?,?) WHERE instr(body,?)`, [`"${from}"`, `"${to}"`, `"${from}"`]);
+      }
+    }
+  })();
+}
 /** Agentbox itself: the checkout this server runs from (a linked worktree
  *  resolves to its main checkout), or a clone of the repository `/help`
  *  files issues in. Derived from the machine, never from a stored path or ID. */
@@ -187,24 +223,33 @@ export class AgentConversations {
   private get db() {
     const db = this.runtime.store.db;
     db.exec(
-      "CREATE TABLE IF NOT EXISTS local_agents(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_proposals(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_submissions(id TEXT PRIMARY KEY,agent TEXT NOT NULL,session TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_creations(id TEXT PRIMARY KEY,creator TEXT NOT NULL,body TEXT NOT NULL);",
+      "CREATE TABLE IF NOT EXISTS local_agents(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_proposals(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_submissions(id TEXT PRIMARY KEY,agent TEXT NOT NULL,session TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_creations(id TEXT PRIMARY KEY,creator TEXT NOT NULL,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_definitions(id TEXT PRIMARY KEY,body TEXT NOT NULL);",
     );
+    adoptCreated(db);
     return db;
+  }
+  private definitions(): Definition[] {
+    return (this.db.query("SELECT body FROM local_definitions ORDER BY rowid").all() as { body: string }[]).map((r) => JSON.parse(r.body) as Definition);
+  }
+  /** One name, one agent: a created agent may not share its instances' IDs. */
+  private nameFree(name: string) {
+    const key = nameKey(name);
+    if (!key) throw new FleetError(400, "Give the agent a name with a letter or a number");
+    const other = [...TEMPLATES, JUPITER, ...this.definitions()].find((d) => nameKey(d.name) === key);
+    if (other) throw new FleetError(409, `An agent named ${other.name} already exists; choose another name`);
   }
   local(project?: string): LocalAgent[] {
     if (project && !getRepoById(project)) throw new FleetError(404, "Project is no longer registered");
     const db = this.db;
-    for (const t of [...AGENT_TEMPLATES, ...(jupiterIn(project) ? [JUPITER] : [])]) {
+    // Each project gets its own instance of every agent: own ID, conversation and switch.
+    for (const t of [...TEMPLATES, ...this.definitions(), ...(jupiterIn(project) ? [JUPITER] : [])]) {
       const id = localId(t.name, project);
       db.run("INSERT OR IGNORE INTO local_agents(id,body) VALUES (?,?)", [
         id,
         JSON.stringify({
           id,
-          name: t.name,
-          ...(t.id === "jupiter" ? { capability: "creator" } : {}),
-          role: t.definition.role,
-          instructions: t.definition.instructions,
-          provider: "codex",
+          ...t,
+          provider: t.pinned ?? (t.creation ? AUTO_PROVIDERS[0] : "codex"),
           repo: project ?? null,
           ...(project ? { project } : {}),
           sessionProjects: {},
@@ -214,21 +259,7 @@ export class AgentConversations {
         }),
       ]);
     }
-    const rows = (db.query("SELECT body FROM local_agents").all() as { body: string }[]).map((x) => JSON.parse(x.body) as LocalAgent);
-    // A created agent is a definition like a template's: each project gets its
-    // own instance, conversation and switch. The first instance keeps its history.
-    if (project)
-      for (const d of rows.filter((a) => a.creation && a.id === `local-custom-${a.creation}`)) {
-        if (rows.some((a) => a.creation === d.creation && a.repo === project)) continue;
-        const id = `local-custom-${d.creation}-project-${encodeURIComponent(project)}`;
-        const agent: LocalAgent = { id, name: d.name, role: d.role, instructions: d.instructions,
-          provider: d.pinned ?? AUTO_PROVIDERS[0]!, ...(d.pinned ? { pinned: d.pinned } : {}),
-          repo: project, project, session: null, previous: [], sessionProjects: {}, enabled: true,
-          ...(d.createdBy ? { createdBy: d.createdBy } : {}), creation: d.creation, ...(d.automation ? { automation: d.automation } : {}) };
-        db.run("INSERT OR IGNORE INTO local_agents(id,body) VALUES(?,?)", [id, JSON.stringify(agent)]);
-        rows.push(agent);
-      }
-    return rows
+    return (db.query("SELECT body FROM local_agents").all() as { body: string }[]).map((x) => JSON.parse(x.body) as LocalAgent)
       // A Jupiter made elsewhere before this rule stays only while it holds a conversation.
       .filter((a) => !isJupiter(a) || a.session || a.previous.length || a.rollover || jupiterIn(a.repo))
       .map((a) => ({...a, ...(isJupiter(a) && !jupiterIn(a.repo) ? { unavailable: "Jupiter is available in the Agentbox project. This conversation is kept as history." } : {}), workSessions: this.runtime.works.list().filter(w=>w.agent.id===a.id).map(w=>w.session)}));
@@ -245,6 +276,7 @@ export class AgentConversations {
       return this.runtime.api().installation.agentCall("inst_agent_creation_draft", { p_run: run.id, p_fence: run.fence, p_id: request, p_spec: spec }, CreationDraft);
     }
     if (a.unavailable || a.capability !== "creator" || !a.enabled || !caller || caller !== a.session) throw new FleetError(403, "Only the current creator session can propose agents");
+    if (!this.db.query("SELECT 1 FROM local_creations WHERE id=?").get(request)) this.nameFree(spec.name);
     const draft: CreationDraft = { id: request, creator: a.id, run: caller, revision: 1, spec, created: null };
     const old = this.db.query("SELECT body FROM local_creations WHERE id=?").get(request) as {body: string} | null;
     if (old) {
@@ -264,15 +296,16 @@ export class AgentConversations {
       if (draft.created) { if (!create) throw new FleetError(409, "Already created"); return draft; }
       if (!a.enabled || a.session !== draft.run) throw new FleetError(409, "Creator conversation replaced; request a new proposal");
       if (repo && !getRepoById(repo)) throw new FleetError(409, "Project no longer registered");
+      this.nameFree(spec.name);
       if (create) {
-        const id = `local-custom-${draft.id}`;
-        const agent: LocalAgent = { id, name: spec.name, role: spec.role,
+        // A definition like a template's: every project gets its own instance.
+        const def: Definition = { name: spec.name, role: spec.role,
           instructions: `${spec.instructions}\n\nLimits: ${spec.limits}`,
-          provider: spec.provider === "auto" ? AUTO_PROVIDERS[0]! : spec.provider, ...(spec.provider === "auto" ? {} : { pinned: spec.provider }),
-          repo, ...(repo ? { project: repo } : {}), session: null, previous: [], sessionProjects: {}, enabled: true,
+          ...(spec.provider === "auto" ? {} : { pinned: spec.provider }),
           createdBy: "local operator", creation: draft.id, automation: spec.automation };
-        this.db.run("INSERT INTO local_agents(id,body) VALUES(?,?)", [id, JSON.stringify(agent)]);
-        draft.created = id;
+        this.db.run("INSERT INTO local_definitions(id,body) VALUES(?,?)", [nameKey(spec.name), JSON.stringify(def)]);
+        this.local(repo ?? undefined);
+        draft.created = localId(spec.name, repo ?? undefined);
       } else { draft.spec = spec; draft.revision++; }
       this.db.run("UPDATE local_creations SET body=? WHERE id=?", [JSON.stringify(draft), id]);
       return draft;

@@ -352,7 +352,7 @@ test("creator capability, project and revision bind an idempotent human creation
   expect(() => conversations.editCreation(creator.id,d.id,1,"project",spec,true)).toThrow("changed");
   const made = conversations.editCreation(creator.id,d.id,edited.revision,"project",edited.spec,true);
   expect(conversations.editCreation(creator.id,d.id,edited.revision,"project",edited.spec,true).created).toBe(made.created);
-  const saved = new AgentConversations(runtime).local().filter((a) => a.creation === d.id);
+  const saved = new AgentConversations(runtime).local().filter((a) => a.creation === d.id && a.repo === "project");
   expect(saved.length).toBe(1); expect(saved[0]?.capability).toBeUndefined(); expect(saved[0]?.repo).toBe("project"); expect(saved[0]?.instructions).toContain(spec.instructions);
   expect(spawns.length).toBe(0);
   await conversations.localSend(made.created!,crypto.randomUUID(),"Explain the architecture",undefined,null);
@@ -367,15 +367,16 @@ test("a created agent is listed and usable in every project, with its own conver
   const spec = { name:"Terminus",role:"Close stale work",instructions:"Find finished sessions.",provider:"auto" as const,limits:"Ask first.",automation:"daily sweep" };
   const d = await conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec);
   const first = conversations.editCreation(creator.id,d.id,d.revision,"agentbox",d.spec,true).created!;
+  expect(first).toBe("local-terminus-project-agentbox");
   await conversations.localSend(first,crypto.randomUUID(),"Start in agentbox",undefined,null);
   const home1 = conversations.local("agentbox").find((a) => a.id === first)!;
   const there = conversations.local("other").filter((a) => a.creation === d.id && a.repo === "other");
   expect(there).toHaveLength(1);
   const copy = there[0]!;
-  expect(copy.id).not.toBe(first);
+  expect(copy.id).toBe("local-terminus-project-other");
   expect([copy.name, copy.role, copy.instructions, copy.automation, copy.pinned]).toEqual([home1.name, home1.role, home1.instructions, home1.automation, home1.pinned]);
   expect([copy.session, copy.enabled]).toEqual([null, true]);
-  expect(new AgentConversations(runtime).local("other").filter((a) => a.creation === d.id)).toHaveLength(2);
+  expect(new AgentConversations(runtime).local("other").filter((a) => a.creation === d.id && a.repo).map((a) => a.id).sort()).toEqual([first, copy.id]);
   await conversations.localSend(copy.id,crypto.randomUUID(),"Start in other",undefined,null);
   expect(spawns.map((s) => s.repoId)).toEqual(["agentbox","other"]);
   expect(spawns[0].id).not.toBe(spawns[1].id);
@@ -384,6 +385,46 @@ test("a created agent is listed and usable in every project, with its own conver
   await expect(conversations.localSend(copy.id,crypto.randomUUID(),"Paused here",undefined,undefined)).rejects.toThrow("paused");
   expect(conversations.local().find((a) => a.id === first)!.enabled).toBe(true);
   expect(conversations.local("agentbox").filter((a) => a.creation === d.id && a.repo === "agentbox").map((a) => a.id)).toEqual([first]);
+});
+test("a created agent's name cannot clash with a built-in or another agent", async () => {
+  insertRepo({id:"agentbox",kind:"local",ref:home,displayName:"agentbox",fullName:"ammonwk/agentbox",defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
+  const creator = conversations.local("agentbox").find((a) => a.capability === "creator")!;
+  creator.session = "jupiter-session";
+  store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(creator),creator.id]);
+  const spec = (name: string) => ({ name, role:"Help", instructions:"Help with code", provider:"codex" as const, limits:"Ask first.", automation:"" });
+  await expect(conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec("vulcan"))).rejects.toThrow("An agent named VULCAN already exists");
+  await expect(conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec("Jupiter"))).rejects.toThrow("already exists");
+  await expect(conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec("!!!"))).rejects.toThrow("letter or a number");
+  const d = await conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec("Terminus"));
+  const twin = await conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec("Terminus"));
+  conversations.editCreation(creator.id,d.id,d.revision,"agentbox",d.spec,true);
+  expect(() => conversations.editCreation(creator.id,twin.id,twin.revision,"agentbox",twin.spec,true)).toThrow("An agent named Terminus already exists");
+  await expect(conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec("TERMINUS"))).rejects.toThrow("already exists");
+  expect(conversations.local("agentbox").filter((a) => a.name.toLowerCase() === "terminus" && a.repo === "agentbox")).toHaveLength(1);
+});
+test("agents created before definitions were stored become per-project instances with their history", () => {
+  for (const id of ["agentbox","other","third"]) insertRepo({id,kind:"local",ref:join(home,id),displayName:id,fullName:`fixture/${id}`,defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
+  const legacy = new AgentStore(join(home, "legacy.db"));
+  legacy.db.exec("CREATE TABLE local_agents(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE local_submissions(id TEXT PRIMARY KEY,agent TEXT NOT NULL,session TEXT NOT NULL); CREATE TABLE local_creations(id TEXT PRIMARY KEY,creator TEXT NOT NULL,body TEXT NOT NULL);");
+  const row = (id: string, name: string, creation: string, project: string, session: string | null) =>
+    legacy.db.run("INSERT INTO local_agents(id,body) VALUES(?,?)", [id, JSON.stringify({ id, name, role:"Judge PRs", instructions:"Judge.", provider:"claude", pinned:"claude", repo:project, project, session, previous:[], sessionProjects: session ? {[session]:project} : {}, enabled:false, createdBy:"local operator", creation, automation:"" })]);
+  row("local-custom-D1","Terminus","D1","agentbox","s1");
+  row("local-custom-D1-project-other","Terminus","D1","other",null);
+  row("local-custom-D2","Vulcan","D2","agentbox",null);
+  legacy.db.run("INSERT INTO local_submissions VALUES('m1','local-custom-D1','s1')");
+  legacy.db.run("INSERT INTO local_creations VALUES('D1','local-jupiter-project-agentbox',?)", [JSON.stringify({ id:"D1", created:"local-custom-D1" })]);
+  const moved = new AgentConversations({ ...runtime, store: legacy } as AgentsRuntime);
+  const all = moved.local("third");
+  const terminus = all.filter((a) => a.name === "Terminus").map((a) => [a.id, a.session, a.enabled, a.pinned]);
+  expect(terminus.sort()).toEqual([
+    ["local-terminus-project-agentbox", "s1", false, "claude"],
+    ["local-terminus-project-other", null, false, "claude"],
+    ["local-terminus-project-third", null, true, "claude"],
+  ]);
+  expect(all.some((a) => a.id === "local-custom-D2")).toBe(true);
+  expect(legacy.db.query("SELECT agent FROM local_submissions").get()).toEqual({ agent: "local-terminus-project-agentbox" });
+  expect(JSON.parse((legacy.db.query("SELECT body FROM local_creations").get() as { body: string }).body).created).toBe("local-terminus-project-agentbox");
+  legacy.db.close();
 });
 test("a creation proposal from a replaced creator is read-only", async () => {
   insertRepo({id:"agentbox",kind:"local",ref:home,displayName:"agentbox",fullName:"ammonwk/agentbox",defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
