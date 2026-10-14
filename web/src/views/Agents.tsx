@@ -30,7 +30,7 @@ import { firstActive, landingForAgent, agentActivity, type AgentOption } from ".
 import { chooseWhere, chosenWhere, hostConnected, isAgentboxRepo, localTwin, pendingMoves, rememberTwins } from "../lib/moveagents";
 import { WhereToggle } from "./AgentWhere";
 import type { LocalAgent } from "../../../src/core/agents/conversation";
-import { LocalAgentSpace, SharedAgentSpace } from "./AgentSpace";
+import { LocalAgentSpace, SharedAgentSpace, localAgentOption } from "./AgentSpace";
 
 const when = (s?: string | null) =>
   s
@@ -210,13 +210,19 @@ function Directory({
   }, [data.data, project, user, workspace, status.installation?.id]);
   const hiddenJupiter = selected?.capability === "creator" && !jupiterHere;
   useEffect(() => {
-    if ((!id || hiddenJupiter) && data.data) {
-      const first = firstActive(data.data.board.agents.filter(inProject).map(optionOf));
+    if ((!id || hiddenJupiter) && data.data && (locals.data || locals.error)) {
+      // Each agent as it opens: its copy on this machine where that is the
+      // one shown (the twin effect above), so the choice matches the sidebar.
+      const first = firstActive(data.data.board.agents.filter(inProject).map((a) => {
+        const twin = localTwin(a, locals.data ?? [], state.repos);
+        const local = twin && (chosenWhere(a.id) ?? (hostConnected(a, data.data!.hosts) ? "hosted" : "local")) === "local";
+        return local ? localAgentOption(twin, state) : optionOf(a);
+      }));
       if (first) go(landingForAgent(first.id), true);
       else if (!jupiterHere) go({ page: "agents", id: "manage" }, true);
       else if (!error) void creator();
     }
-  }, [id, data.data, error, hiddenJupiter]);
+  }, [id, data.data, locals.data, locals.error, error, hiddenJupiter]);
   const person = (id: string | null) =>
     !id
       ? "Unassigned"

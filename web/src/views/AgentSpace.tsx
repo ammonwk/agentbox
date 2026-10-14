@@ -165,6 +165,14 @@ import { useScope } from "../lib/projects";
 import { chooseWhere, sharedTwinOf } from "../lib/moveagents";
 import { WhereToggle } from "./AgentWhere";
 import { selectScope, scopeOf } from "../route";
+/** A local agent as the sidebar shows it; the shared directory's landing reads it too. */
+export function localAgentOption(a: LocalAgent, state: AppState): AgentOption {
+  const linked = new Set([a.session, ...a.previous, ...(a.workSessions ?? [])]);
+  return { id: a.id, name: a.name, role: a.role, creator: a.capability === "creator" && !a.unavailable, avatar: localAvatarUrl(a),
+    activity: agentActivity(a.enabled && !a.unavailable, state.sessions.filter((s) => linked.has(s.id) || s.agentOwner === a.id).map(shownStatus)),
+    detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.unavailable ? "History" : a.enabled ? "Local" : "Paused"}` };
+}
+
 export function LocalAgentSpace({
   state,
   id,
@@ -182,12 +190,7 @@ export function LocalAgentSpace({
     return () => clearInterval(timer);
   }, [agents.reload]);
   // A Jupiter kept as history outside the Agentbox project is not listed.
-  const options = (agents.data ?? []).filter((a) => (!project || a.repo === project) && !(a.capability === "creator" && a.unavailable)).map((a): AgentOption => {
-    const linked = new Set([a.session, ...a.previous, ...(a.workSessions ?? [])]);
-    return { id: a.id, name: a.name, role: a.role, creator: a.capability === "creator" && !a.unavailable, avatar: localAvatarUrl(a),
-      activity: agentActivity(a.enabled && !a.unavailable, state.sessions.filter((s) => linked.has(s.id) || s.agentOwner === a.id).map(shownStatus)),
-      detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.unavailable ? "History" : a.enabled ? "Local" : "Paused"}` };
-  });
+  const options = (agents.data ?? []).filter((a) => (!project || a.repo === project) && !(a.capability === "creator" && a.unavailable)).map((a) => localAgentOption(a, state));
   const selected = agents.data?.find((a) => a.id === id);
   const sharedId = selected ? sharedTwinOf(selected.id) : undefined;
   useEffect(() => {
