@@ -121,6 +121,9 @@ export function App() {
   }, [selectedSession?.id, localAgents.data]);
   const wrongSession = scope.project && selectedSession && sessionProject(state!.repos, agents, selectedSession) !== scope.project;
   const projectTabs = useProjectTabs(state, agents, scope.project);
+  // For the key handler below, which is added once.
+  const tabOrder = useRef<{ ids: string[]; selected: string | null }>({ ids: [], selected: null });
+  tabOrder.current = { ids: projectTabs.tabs.map((t) => t.id), selected: scope.project };
   useEffect(() => {
     if (!state || scope.project || !projectTabs.tabs.length || route.page === "session") return;
     // Resolve old local-agent links before choosing a default project.
@@ -149,7 +152,16 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
       if (document.querySelector(".modal-backdrop")) return;
-      if (e.key === "n") {
+      if (e.key === "Tab" && e.shiftKey) {
+        // Shift+Tab steps to the next project tab, and from the last to the
+        // first. Not in a text field or the terminal (isTyping), where it is
+        // the field's or the agent's own (Claude Code's mode switch), and not
+        // in a dialog; elsewhere it no longer moves focus back.
+        const { ids, selected } = tabOrder.current;
+        if (ids.length < 2) return;
+        e.preventDefault();
+        selectScope("project", ids[(ids.indexOf(selected ?? "") + 1) % ids.length]!);
+      } else if (e.key === "n") {
         e.preventDefault();
         setNewOpen(true);
       } else if (e.key === "/") {
