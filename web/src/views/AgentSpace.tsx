@@ -46,7 +46,6 @@ import { go, hrefOf } from "../route";
 type Receipt = { state: string; result: string; issue?: string };
 const providerName = { codex: "Codex", claude: "Claude", muse: "Muse" } as const;
 type Transport = {
-  attachments?: boolean;
   help?: (text: string, request: string, target: string | null) => Promise<Receipt>;
   sessionAction?: (thread: AgentThread, action: "close" | "restore") => Promise<{state: string; result: string}>;
   creations: () => Promise<CreationDraft[]>;
@@ -195,7 +194,6 @@ export function LocalAgentSpace({
   }, [selected?.id]);
   const transport = useMemo<Transport>(
     () => ({
-      attachments: true,
       read: (cursor) => request("POST", `/api/agents/local/${id}/read`, cursor),
       help: (text, requestId, target) => request("POST", `/api/agents/local/${id}/help`, {text, request:requestId, target, uiRevision:UI_REVISION}),
       creations: () => request("GET", `/api/agents/local/${id}/creations`),
@@ -245,6 +243,7 @@ export function LocalAgentSpace({
       key={selected.id}
       footer={(!route.view || route.view === "chat" || route.view === "sessions") && viewed ? <SessionFacts session={viewed} state={state} /> : null}
       id={selected.id}
+      attachments
       identity={{ role: selected.role, creator: selected.capability === "creator", avatar: localAvatarUrl(selected) }}
       me={state.onboarding.identity ? { name: state.onboarding.identity.name ?? "", github: state.onboarding.identity.github ?? "" } : undefined}
       options={options}
@@ -367,6 +366,7 @@ export function LocalAgentSpace({
 function AgentSpace({
   footer,
   id,
+  attachments = false,
   identity,
   me,
   name,
@@ -382,6 +382,8 @@ function AgentSpace({
 }: {
   id: string;
   footer?: ReactNode;
+  /** Images in the composer: a local agent reads them from this machine. */
+  attachments?: boolean;
   /** The agent's picture and the role its default icon comes from. */
   identity: { role: string; creator: boolean; avatar: string | null };
   /** The viewer, for their own messages; shared chats pass none. */
@@ -794,8 +796,8 @@ function AgentSpace({
               id={`${id}:${target}`}
               run={selected?.run}
               recoverFrom={[id, ...(target !== "new" ? [`${id}:new`] : [])]}
+              attachments={attachments}
               name={name}
-              attachments={transport.attachments}
               send={send}
               receipt={receipt}
               disabled={disabled || !!railError}

@@ -69,7 +69,7 @@ describe("a session another has taken over", () => {
     const fleet = fakeFleet([session("old", { host: "none", status: "closed" }), session("new")], { old: "new" });
     const out = await sendAsAgent(fleet, "old", "#8663 is green and clean", { from: "w1", wake: true }, NOW);
     expect(out).toEqual({ to: "new" });
-    expect(fleet.sent).toEqual([{ to: "new", text: "[via agentbox send from w1] [sent to old, which you took over from] #8663 is green and clean", wake: true }]);
+    expect(fleet.sent).toEqual([{ to: "new", text: expect.stringMatching(/^\[via agentbox send from w1 #[0-9a-f]{12}\] \[sent to old, which you took over from\] #8663 is green and clean$/), wake: true }]);
   });
 
   test("refused as its heir would be, saying so", async () => {
@@ -82,7 +82,7 @@ describe("a session another has taken over", () => {
   test("a session nobody took over is sent to as before", async () => {
     const fleet = fakeFleet([session("solo")], {});
     expect(await sendAsAgent(fleet, "solo", "hi", { from: "w3", wake: false }, NOW)).toEqual({ to: "solo" });
-    expect(fleet.sent[0]!.text).toBe("[via agentbox send from w3] hi");
+    expect(fleet.sent[0]!.text).toMatch(/^\[via agentbox send from w3 #[0-9a-f]{12}\] hi$/);
   });
 });
 

@@ -313,9 +313,10 @@ cover it.
   PR that is ready, a verdict, a finished batch item) is written first where
   it will be looked for (a PR comment, a ledger such as `steward.py report`),
   and then sent; the reader that never gets the nudge still finds the result.
-- A sent message arrives marked `[via agentbox send from <id>]` with the
-  sender's session id, so don't sign it yourself; reply to the id in that
-  mark.
+- A sent message arrives marked `[via agentbox send from <id> #<record>]`
+  with the sender's session id, so don't sign it yourself; reply to the id in
+  that mark. The record is agentbox's proof of who sent it: the timeline
+  names the sending agent only when it matches, never from the mark alone.
 - A session another one started (a teammate, a `codex exec` run from a
   Bash tool, an agent of its subagent MCP) is listed right after its parent
   with its title indented `└`, and `show` names its parent and children.

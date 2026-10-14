@@ -82,6 +82,7 @@ beforeEach(() => {
   Object.assign(runtime, { works: new AgentWorks(runtime) });
   conversations = new AgentConversations(runtime);
   conversations.proofMs = 900;
+  conversations.installed = async () => true;
   conversations.local();
   record("old");
   view("old");
@@ -266,21 +267,39 @@ test("with no provider available, or an exhausted explicit override, the old con
   expect(spawns).toHaveLength(0);
 });
 
-test("a cold conversation whose provider can take nothing starts fresh, told to read the old transcript", async () => {
+test("a cold conversation without a fresh handoff stays put even when its provider can take nothing", async () => {
   link("old", { provider: "codex" });
   conversations.saveNote("local-vulcan", "old", crypto.randomUUID(), { decision: "Keep going" });
   placements = { claude: "auto", codex: "none" };
   view("old", { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
   await fleet.send("old", "Hello after the limit");
+  expect(spawns).toHaveLength(0);
+  expect(agent().session).toBe("old");
+  expect(typed.at(-1)).toEqual({ id: "old", text: "Hello after the limit" });
+});
+
+test("a provider whose CLI is not installed is never chosen, whatever its placement says", async () => {
+  link("old", { provider: "codex" });
+  await checkpointed("old");
+  placements = { claude: "auto", codex: "auto" };
+  conversations.installed = async (p) => p !== "codex";
+  view("old", { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
+  await fleet.send("old", "Which one?");
   expect(spawns[0].provider).toBe("claude");
-  expect(spawns[0].prompt).toContain("agentbox log old | tail -80");
-  expect(spawns[0].prompt.endsWith("User: Hello after the limit")).toBe(true);
-  expect(handed).toEqual([["old", agent().session!]]);
+  expect(spawns[0].accountId).toBe("claude-1");
+  expect(agent().selection).toMatchObject({ provider: "claude", accountId: "claude-1" });
+  expect(agent().selection?.why).toMatch(/Codex: its CLI is not installed/);
+  // None installed: nothing is stopped, the old conversation keeps the next message.
+  view(agent().session!, { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
+  conversations.installed = async () => false;
+  const before = spawns.length;
+  await fleet.send(agent().session!, "Still there?");
+  expect(spawns).toHaveLength(before);
 });
 
 test("a restart during a recorded provider switch finishes on the chosen provider", async () => {
   record("next", true);
-  link("next", { provider: "codex", previous: ["old"], rollover: { from: "old", to: "next", handoff: null, why: "cold", at: NOW, phase: "spawning", provider: "claude", selection: { provider: "claude", policy: "auto", why: "Claude has room.", at: NOW } } });
+  link("next", { provider: "codex", previous: ["old"], rollover: { from: "old", to: "next", handoff: "h", why: "cold", at: NOW, phase: "spawning", provider: "claude", selection: { provider: "claude", accountId: "claude-1", model: null, policy: "auto", why: "Claude has room.", at: NOW } } });
   await (conversations as any).remember();
   expect(agent().provider).toBe("claude");
   expect(agent().selection?.why).toBe("Claude has room.");

@@ -3576,3 +3576,44 @@ a.wk-item:hover {
 .tl-reply-preview strong { display: block; font-weight: 600; }
 .tl-reply-preview blockquote { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; max-height: 4.5em; overflow: hidden; }
 .tl-assistant-time { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+/* Who sent a message that came in through the user role. */
+.tl-sender-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tl-sender-badge .tl-sent-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-sender-face {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--sunken);
+  color: var(--muted);
+}
+.tl-sender-kind-agent .tl-sent-label {
+  color: var(--text);
+  font-weight: 600;
+}
+.tl-sender-kind-unverified .tl-sent-label {
+  font-style: italic;
+}
+
+/* An agent's picture, or its own icon on a tinted disc: in Agents and in
+ * Sessions, where a message an agent sent carries it. */
+.agent-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--accent) 14%, var(--sunken));
+  color: var(--accent);
+}

@@ -192,8 +192,11 @@ export async function forgetPending(sessionId: string, id: string): Promise<void
 export function appendDraft(current: Draft | null, recovered: Draft): { draft: Draft; addedImages: SavedAttachment[] } {
   if (current?.agentContext && recovered.agentContext && (current.agentContext.proposal !== recovered.agentContext.proposal || current.agentContext.run !== recovered.agentContext.run))
     throw Error("Finish or clear the current recommendation reply before restoring another one.");
-  let number = Math.max(0,...(current?.images ?? []).map(image=>image.n),...[...(current?.text ?? "").matchAll(/\[Image #(\d+)\]/g)].map(match=>Number(match[1])));
-  const numbers = new Map(recovered.images.map(image=>[image.n,++number]));
+  const numbersIn = (text: string) => [...text.matchAll(/\[Image #(\d+)\]/g)].map((match) => Number(match[1]));
+  let number = Math.max(0, ...(current?.images ?? []).map((image) => image.n), ...numbersIn(current?.text ?? ""));
+  // An unfinished upload must not take an unrelated image already attached
+  // to the current draft. Renumber every token, including unsaved images.
+  const numbers = new Map([...new Set([...numbersIn(recovered.text), ...recovered.images.map((image) => image.n)])].map((old) => [old, ++number]));
   const addedImages = recovered.images.map(image=>({...image,n:numbers.get(image.n)!}));
   const text = recovered.text.replace(/\[Image #(\d+)\]/g,(token,old:string)=>numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
   return {addedImages,draft:{text:[current?.text.trimEnd(),text].filter(Boolean).join("\n\n"),images:[...(current?.images ?? []),...addedImages],agentContext:current?.agentContext ?? recovered.agentContext,revision:newRevision(),at:Date.now()}};

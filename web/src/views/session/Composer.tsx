@@ -531,7 +531,6 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
  * Transport can be a local Fleet send or an authenticated shared command. */
 export function AgentComposer({
   id,
-  attachments = false,
   name,
   send,
   receipt,
@@ -540,11 +539,14 @@ export function AgentComposer({
   onGuidanceApplied,
   recoverFrom = [],
   run,
+  attachments = false,
 }: {
   id: string;
-  attachments?: boolean;
   recoverFrom?: string[];
   run?: string;
+  /** Images, uploaded to this machine and named by path: only for an agent
+   *  that runs here. A shared agent's host could not read the path. */
+  attachments?: boolean;
   name: string;
   send: (
     body: string,
@@ -575,15 +577,15 @@ export function AgentComposer({
     if (!s.trim()) context.current = undefined;
     setText(s);
   };
-  const images = useAttachments({text,setText:edit,textareaRef:ref,initial:initial?.images});
-  const savedImages = images.saved(), savedImagesKey = JSON.stringify(savedImages);
+  const images = useAttachments({ text, setText: edit, textareaRef: ref, initial: attachments ? initial?.images : [] });
+  const savedImages = images.saved(), savedKey = JSON.stringify(savedImages);
   useEffect(() => {
     // An explicit clear replaces our previous saved revision, never a newer
     // draft written by another tab. The storage lock orders queued saves.
     const previous = lastQueuedRevision.current;
     lastQueuedRevision.current = revision.current;
     void saveDraft(key, text, savedImages, revision.current, context.current, previous);
-  }, [key, text, savedImagesKey]);
+  }, [key, text, savedKey]);
   useEffect(() => {
     if (guidance) {
       context.current = guidance.context;
@@ -623,10 +625,14 @@ export function AgentComposer({
   );
   async function submit() {
     if (!text.trim() || busy || disabled || images.uploading) return;
-    const uploaded = images.saved(), paths = new Map(uploaded.map(image=>[image.n,image.path]));
-    const missing = [...tokensIn(text)].filter(n=>!paths.has(n));
-    if(missing.length){setError(`Image #${missing.join(", #")} did not upload — retry it or remove it`);return;}
-    const body = expandImages(text,paths);
+    // Uploaded images go as their paths on this machine, as in Sessions.
+    const shots = images.saved(), paths = new Map(shots.map((i) => [i.n, i.path]));
+    const missing = attachments ? [...tokensIn(text)].filter((n) => !paths.has(n)) : [];
+    if (missing.length) {
+      setError(`image #${missing.join(", #")} did not upload — retry it or remove it`);
+      return;
+    }
+    const body = attachments && shots.length ? expandImages(text, paths).trim() : text;
     setBusy(true);
     setError(null);
     const p: PendingSend = {
@@ -634,7 +640,7 @@ export function AgentComposer({
       sessionId: key,
       draft: {
         text,
-        images: uploaded,
+        images: shots,
         at: Date.now(),
         revision: revision.current,
         agentContext: context.current,
@@ -674,9 +680,34 @@ export function AgentComposer({
       setBusy(false);
     }
   }
+  // The paperclip, the text and Send in one low box (Sessions' composer).
+  const box = (
+    <>
+        {attachments && <AttachButton a={images} className="cmp-attach" />}
+        <ComposerInput
+          textareaRef={ref}
+          onSend={() => void submit()}
+          aria-label={`Message ${name}`}
+          placeholder={`Message ${name}`}
+          value={text}
+          disabled={disabled}
+          onKeyDown={(event) => { if (attachments) images.onKeyDown(event); }}
+          onChange={(e) => edit(e.target.value)}
+        />
+        <div className="cmp-tools">
+          <ComposerSend
+            type="submit"
+            aria-label="Send"
+            disabled={!text.trim() || disabled || images.uploading}
+            loading={busy}
+            data-ready={text.trim() ? true : undefined}
+          />
+        </div>
+    </>
+  );
   return (
-    <div className="cmp agent-composer">
-      {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { images.clear(); images.restore(d.images); context.current = d.agentContext; revision.current = d.revision; setText(d.text); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
+    <div className="cmp agent-composer" data-attachments={attachments || undefined} data-multi={text.includes("\n") || text.length > 90 || undefined}>
+      {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { context.current = d.agentContext; revision.current = d.revision; setText(d.text); images.clear(); images.restore(d.images); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
       {recoverFrom.map((from) => <PendingSends key={from} sessionId={`agent:${from}`} reconcileSend={check} />)}
       <PendingSends
         sessionId={key}
@@ -702,28 +733,7 @@ export function AgentComposer({
           void submit();
         }}
       >
-        <AttachFrame a={images} className="cmp-frame" enabled={attachments}>
-          {attachments && <AttachButton a={images} className="cmp-attach" />}
-          <ComposerInput
-            textareaRef={ref}
-            onSend={() => void submit()}
-            aria-label={`Message ${name}`}
-            placeholder={`Message ${name}…`}
-            value={text}
-            disabled={disabled}
-            onKeyDown={event=>{if(attachments)images.onKeyDown(event);}}
-            onChange={(e) => edit(e.target.value)}
-          />
-          <div className="cmp-tools">
-            <ComposerSend
-              type="submit"
-              aria-label="Send"
-              disabled={!text.trim() || disabled || images.uploading}
-              loading={busy}
-              data-ready={text.trim() ? true : undefined}
-            />
-          </div>
-        </AttachFrame>
+        {attachments ? <AttachFrame a={images} className="cmp-frame">{box}</AttachFrame> : <div className="att-frame cmp-frame">{box}</div>}
       </form>
     </div>
   );

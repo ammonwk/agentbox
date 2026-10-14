@@ -58,6 +58,7 @@ beforeEach(() => {
   Object.assign(runtime, {works: new AgentWorks(runtime)});
   conversations = new AgentConversations(runtime);
   Object.assign(runtime, {conversations, sessionOwnership: AgentsRuntime.prototype.sessionOwnership.bind(runtime)});
+  conversations.installed = async () => true;
   conversations.local();
 });
 afterEach(() => {
@@ -139,6 +140,7 @@ test("Feed approval wins its race once, preserves refusal, and never replays und
   expect(closed).toBe(0);
   Object.assign(runtime, {works: new AgentWorks(runtime)});
   conversations = new AgentConversations(runtime);
+  conversations.installed = async () => true;
   conversations.localSend = async () => {
     calls++;
     throw Error("must not replay");
@@ -165,6 +167,7 @@ test("a crash before decision delivery is visible as uncertain and cannot be rep
   ]);
   Object.assign(runtime, {works: new AgentWorks(runtime)});
   conversations = new AgentConversations(runtime);
+  conversations.installed = async () => true;
   conversations.localSend = async () => {
     throw Error("must not replay");
   };
