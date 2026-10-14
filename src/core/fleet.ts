@@ -2252,6 +2252,9 @@ export class Fleet extends EventEmitter {
     else if (rec.parent && !rec.parentByHand && host === "none" && !this.holding.has(rec.id) && !(this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none")) {
       status = "closed";
     }
+    // So is a scripted one-shot (`claude -p`) once it ends: what ran it took
+    // its answer, and nothing on the board is waiting for it.
+    else if (f?.headless && host === "none" && !this.holding.has(rec.id)) status = "closed";
 
     const cwd = f?.cwd || rec.cwd;
     const lastActivityAt = f?.lastActivityAt ?? rec.lastActivityAt;
@@ -3908,6 +3911,7 @@ function compactFacts(f: TranscriptFacts, transcriptSize: number, accountId: str
     tokens: f.tokens,
     rateLimitHits: f.rateLimitHits.slice(-1),
     turnError: f.turnError ?? null,
+    headless: f.headless || undefined,
     modelOutcome: outcomeOn(f.modelOutcome, (stored as StoredFacts | null | undefined)?.modelOutcome, accountId),
   };
 }

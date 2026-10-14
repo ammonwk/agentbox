@@ -492,6 +492,8 @@ export class ClaudeFold {
   private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
   /** The newest `permission-mode` record's (or prompt's) mode. */
   private permissionMode: string | null = null;
+  /** The newest record's `entrypoint`: `sdk-cli` for `claude -p`. */
+  private entrypoint: string | null = null;
   private contextUsed: number | null = null;
   private observedMax = 0;
   private autoCompactPre = 0;
@@ -544,6 +546,7 @@ export class ClaudeFold {
     this.tokens.add(r);
     if (at !== null && (r.type === "user" || r.type === "assistant")) this.timers(r, at);
 
+    if (!side && typeof r.entrypoint === "string") this.entrypoint = r.entrypoint;
     if (!side && typeof r.permissionMode === "string" && (r.type === "permission-mode" || r.type === "user")) this.permissionMode = r.permissionMode;
 
     switch (r.type) {
@@ -954,6 +957,7 @@ export class ClaudeFold {
       teamsLed: [...this.teamsLed],
       pendingAsk: this.pendingAsk,
       skipsPermissions: this.permissionMode === "bypassPermissions",
+      headless: this.entrypoint === "sdk-cli",
       wakes: this.wakes(),
       monitors: [...this.monitors],
     };

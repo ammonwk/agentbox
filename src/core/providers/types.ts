@@ -224,6 +224,9 @@ export interface TranscriptFacts {
   /** The session is in its CLI's skip-every-permission mode as of its latest
    *  record (claude: `bypassPermissions`, which shift+tab can leave). */
   skipsPermissions?: boolean;
+  /** A scripted one-shot run (claude `-p`): its caller reads the answer, so
+   *  once its process ends it is history, not something to come back to. */
+  headless?: boolean;
 }
 
 /** An incremental reader over one transcript. Holds its own offsets. */
