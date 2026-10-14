@@ -3,8 +3,8 @@
 // quitting this app stops no agent. When the server is down, the app starts
 // it the way `ensureServer` (src/cli/index.ts) does where no systemd is.
 
-const { app, BrowserWindow, Menu, Tray, globalShortcut, nativeImage, session, shell } = require("electron");
-const { execFileSync, spawn } = require("node:child_process");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, session, shell } = require("electron");
+const { execFile, execFileSync, spawn } = require("node:child_process");
 const { existsSync, mkdirSync, openSync } = require("node:fs");
 const { homedir } = require("node:os");
 const { join, resolve } = require("node:path");
@@ -29,6 +29,15 @@ function loginEnv() {
     return { ...process.env, PATH: path };
   } catch {
     return { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ""}` };
+  }
+}
+
+/** A URL on the board itself. */
+function ours(url) {
+  try {
+    return new URL(url).origin === ORIGIN;
+  } catch {
+    return false;
   }
 }
 
@@ -74,15 +83,15 @@ function createWindow() {
     title: "agentbox",
     icon: ICON,
     backgroundColor: "#111111",
-    webPreferences: { contextIsolation: true, sandbox: true, spellcheck: true },
+    webPreferences: { contextIsolation: true, sandbox: true, spellcheck: true, preload: join(__dirname, "preload.cjs") },
   });
   // Links to anywhere but the board open in the browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url.startsWith(ORIGIN)) void shell.openExternal(url);
+    if (!ours(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (e, url) => {
-    if (url.startsWith(ORIGIN)) return;
+    if (ours(url)) return;
     e.preventDefault();
     void shell.openExternal(url);
   });
@@ -102,11 +111,21 @@ if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", show);
 app.setName("agentbox");
 
+/** `gh auth token`, or null when gh is missing or logged out. */
+function githubToken() {
+  return new Promise((done) => {
+    execFile("gh", ["auth", "token", "--hostname", "github.com"], { env: loginEnv(), timeout: 10_000 }, (err, out) => done(err ? null : out.trim() || null));
+  });
+}
+
+// Only the board's own page gets it, not a page it navigated or linked to.
+ipcMain.handle("github-token", (e) => (ours(e.senderFrame?.url ?? "") ? githubToken() : null));
+
 app.whenReady().then(async () => {
   if (process.platform === "darwin" && app.dock) app.dock.setIcon(ICON);
   // The microphone for Voice and notifications; nothing else asks here.
   session.defaultSession.setPermissionRequestHandler((wc, permission, done) => {
-    done(wc.getURL().startsWith(ORIGIN) && ["media", "notifications", "clipboard-read", "clipboard-sanitized-write"].includes(permission));
+    done(ours(wc.getURL()) && ["media", "notifications", "clipboard-read", "clipboard-sanitized-write"].includes(permission));
   });
 
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 18, height: 18 }));

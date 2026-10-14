@@ -92,6 +92,19 @@ for the project. `agentbox cloud login` keeps the session in memory only, for
 the time it takes to register the machine, and then signs out. A machine
 never holds a human's token.
 
+In the desktop app (`desktop/`), the GitHub CLI's login is a sign-in too. The
+first time a human signs in there with their email, the app sends `gh auth
+token` to the `github-session` Edge Function (`supabase/functions/`), which
+writes that GitHub user's id into the human's `app_metadata`. From then on,
+the app on any machine where `gh` is logged in as that GitHub user gets a
+session from the same function, with no email. GitHub confirms each token
+belongs to the GitHub CLI's OAuth app, so a token given to another app, or a
+personal access token, signs in nobody. The token goes from `gh` through the
+app's window to the cloud, never through the local server. The trade: whoever
+can run `gh` as you, an agent included, can sign in as you. Deploy it with
+`supabase functions deploy github-session --no-verify-jwt`; the function,
+not agentbox, holds the project's secret key.
+
 **Installations.** A machine acts with its own secret, through the `inst_*`
 RPCs. Each call checks, in `private.inst`:
 
