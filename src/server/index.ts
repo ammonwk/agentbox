@@ -116,12 +116,14 @@ async function mcpState(): Promise<McpState> {
   const sessions = fleet.sessions().flatMap((s) => {
     if (s.host !== "tmux" || !s.pid || !passed.has(s.provider)) return [];
     const raw = environOf(s.pid)?.get("AGENTBOX_MCP_STATE");
-    let snapshot: { changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[] } | null = null;
+    let snapshot: { changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; skipped?: { name: string; why: string }[]; error?: string | null } | null = null;
     try {
       const parsed = raw ? JSON.parse(raw) : null;
       if (parsed && Array.isArray(parsed.given) && parsed.given.every((name: unknown) => typeof name === "string") && Array.isArray(parsed.kept) && parsed.kept.every((k: { name?: unknown; enabled?: unknown } | null) => k && typeof k.name === "string" && typeof k.enabled === "boolean")) snapshot = parsed;
     } catch { /* an older launch has no usable snapshot */ }
-    return [{ id: s.id, title: s.label || s.title || s.id, provider: s.provider, changedAt: snapshot?.changedAt ?? null, given: snapshot?.given ?? [], kept: snapshot?.kept ?? [], known: snapshot !== null }];
+    const skipped = Array.isArray(snapshot?.skipped) ? snapshot.skipped.filter((k) => k && typeof k.name === "string" && typeof k.why === "string") : [];
+    const error = typeof snapshot?.error === "string" ? snapshot.error : null;
+    return [{ id: s.id, title: s.label || s.title || s.id, provider: s.provider, changedAt: snapshot?.changedAt ?? null, given: snapshot?.given ?? [], kept: snapshot?.kept ?? [], known: snapshot !== null, skipped, error }];
   });
   const stale = r.changedAt === null ? [] : fleet.sessions().flatMap((s) => {
     if (s.host !== "tmux" || !s.pid || !passed.has(s.provider)) return [];

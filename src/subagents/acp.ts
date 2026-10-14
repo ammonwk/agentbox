@@ -531,17 +531,41 @@ export class AcpRunner {
   private async openSession(ctx: ClientContext, opts: LaunchOptions): Promise<string> {
     const init = await ctx.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
     const caps = init.agentCapabilities;
-    const mcpServers = acpServers(caps?.mcpCapabilities, opts.worktree, { ...process.env, ...this.backend.env(this.id) }) as never[];
+    // The global MCP servers never cost the subagent its session: without
+    // them if they cannot be listed, or if the agent refuses them.
+    let mcpServers: never[] = [];
+    try {
+      mcpServers = acpServers(caps?.mcpCapabilities, opts.worktree, { ...process.env, ...this.backend.env(this.id) }) as never[];
+    } catch (err) {
+      console.error(`agentbox: ${this.backend.id} subagent ${this.id} opens without the global MCP servers: ${messageOf(err)}`);
+    }
+    const withMcp = async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+      try {
+        return (await ctx.request(method as never, { ...params, mcpServers } as never)) as T;
+      } catch (err) {
+        if (!mcpServers.length || methodMissing(err)) throw err;
+        console.error(`agentbox: ${this.backend.id} refused ${method} with the global MCP servers (${messageOf(err)}); retrying without them`);
+        return (await ctx.request(method as never, { ...params, mcpServers: [] } as never)) as T;
+      }
+    };
     let sid = opts.resumeSessionId;
     if (sid === null) {
-      sid = (await ctx.request("session/new", { cwd: opts.worktree, mcpServers })).sessionId;
+      sid = (await withMcp<{ sessionId: string }>("session/new", { cwd: opts.worktree })).sessionId;
     } else {
-      const params = { sessionId: sid, cwd: opts.worktree, mcpServers };
-      // Negotiate before sending a request. A failed response may follow a
-      // successful resume; replaying it as load (or new) is unsafe.
-      if (caps?.sessionCapabilities?.resume) await ctx.request("session/resume", params);
-      else if (caps?.loadSession) await ctx.request("session/load", params);
-      else throw new Error(`${this.backend.id} does not advertise session resume or load; update the agent to resume this conversation`);
+      const params = { sessionId: sid, cwd: opts.worktree };
+      // What it advertises first. devin and older omp builds only implement
+      // session/load, which replays the history as updates; `sessionId` is
+      // not set until this returns, so the replay is not mistaken for a new
+      // turn. Only an unsupported method falls through to the next.
+      const methods = caps?.sessionCapabilities?.resume || !caps?.loadSession ? ["session/resume", "session/load"] : ["session/load"];
+      for (const [i, method] of methods.entries()) {
+        try {
+          await withMcp(method, params);
+          break;
+        } catch (err) {
+          if (i === methods.length - 1 || !unsupported(err)) throw err;
+        }
+      }
     }
     const mode = this.backend.mode(opts.readOnly);
     if (mode !== null) await ctx.request("session/set_mode", { sessionId: sid, modeId: mode });
@@ -674,6 +698,16 @@ export class AcpRunner {
       this.events.onError(this.id, `kill failed: ${messageOf(err)}`);
     }
   }
+}
+
+/** The agent does not implement the method (JSON-RPC "method not found"). */
+function methodMissing(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === -32601 || /method not found|unknown method/i.test(messageOf(err));
+}
+
+/** That, or the agent saying in words it cannot do it. */
+function unsupported(err: unknown): boolean {
+  return methodMissing(err) || /not (?:supported|implemented)|unsupported/i.test(messageOf(err));
 }
 
 export function messageOf(err: unknown): string {

@@ -10,9 +10,10 @@
  * MCP, a process of its own, reads the same list (`acpServers`).
  */
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome, packageRoot, userHome } from "./paths";
+import { environOf, findProcesses } from "./providers/procs";
 import type { McpServerInput, McpTransport } from "./types";
 
 export interface McpServer {
@@ -58,15 +59,25 @@ export function ensureMcpDir(): string {
 
 /**
  * Write via rename, so a CLI starting meanwhile reads the old file or the new
- * one, never half; 0600 from the first byte. The file it replaces is kept as
- * `<name>.bak` when `backup` says so.
+ * one, never half; 0600 from the first byte. No backup is kept: a copy of the
+ * old list would keep a rotated token on disk.
  */
-export function writePrivate(path: string, text: string, backup = false): void {
+export function writePrivate(path: string, text: string): void {
   const tmp = `${path}.agentbox-${process.pid}.tmp`;
   writeFileSync(tmp, text, { mode: 0o600 });
   chmodSync(tmp, 0o600);
-  if (backup && existsSync(path)) copyFileSync(path, `${path}.bak`);
   renameSync(tmp, path);
+}
+
+/** Mark a snapshot as just used, so `pruneMcpFiles` leaves it to the launch
+ *  about to read it even when its content was written long ago. */
+export function touch(path: string): void {
+  try {
+    const now = new Date();
+    utimesSync(path, now, now);
+  } catch {
+    /* gone: the caller writes it again */
+  }
 }
 
 export function readRegistry(): Registry {
@@ -85,10 +96,9 @@ export function readRegistry(): Registry {
 
 function writeRegistry(r: Registry): void {
   ensureMcpDir();
-  writePrivate(registryPath(), `${JSON.stringify(r, null, 2)}\n`, true);
+  writePrivate(registryPath(), `${JSON.stringify(r, null, 2)}\n`);
 }
 
-/** A broken registry must fail setup visibly, never silently remove tools. */
 export function enabledServers(): McpServer[] {
   return readRegistry().servers.filter((s) => s.enabled);
 }
@@ -179,6 +189,71 @@ function pairs(
 
 function changed(servers: McpServer[], now: number): void {
   writeRegistry({ version: 1, changedAt: now, servers });
+  try {
+    pruneMcpFiles(now);
+  } catch (e) {
+    console.error("agentbox: pruning old MCP snapshots failed:", e);
+  }
+}
+
+/** Launch snapshots (`claude-…`, `omp-…`, `proxy-…`, `devin-…`), named by a
+ *  hash of what they hold, values included. */
+const SNAPSHOT = /^(?:claude|omp|proxy|devin)-[0-9a-f]{24}(?:\.json)?$/;
+/** A snapshot used this recently may be for a launch that has not started yet. */
+const PRUNE_GRACE_MS = 10 * 60_000;
+
+/**
+ * Delete the snapshots nothing runs from, so a token taken off the list does
+ * not stay on disk in them. A snapshot is kept while any process of ours
+ * names it in its argv or environment (a CLI, or the proxy it started), with
+ * whatever that one names in turn, and while it was used in the last
+ * `PRUNE_GRACE_MS`. Without a process table to read, nothing is deleted.
+ * The current list's snapshots are written again by the next launch.
+ */
+export function pruneMcpFiles(now = Date.now()): void {
+  const dir = mcpDir();
+  rmSync(`${registryPath()}.bak`, { force: true });
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((n) => SNAPSHOT.test(n));
+  } catch {
+    return;
+  }
+  if (!names.length) return;
+  const procs = findProcesses(() => true);
+  if (!procs.length) return;
+  const ref = new RegExp(`${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([A-Za-z0-9._-]+)`, "g");
+  const keep = new Set<string>();
+  const pending: string[] = [];
+  const scan = (text: string) => {
+    for (const m of text.matchAll(ref)) {
+      const name = m[1]!;
+      if (!keep.has(name)) { keep.add(name); pending.push(name); }
+    }
+  };
+  for (const p of procs) {
+    scan(p.argv.join("\0"));
+    const env = environOf(p.pid);
+    if (env) for (const v of env.values()) if (v.includes(dir)) scan(v);
+  }
+  // A kept snapshot's own files name the proxies it starts.
+  while (pending.length) {
+    const name = pending.pop()!;
+    if (!name.endsWith(".json")) keep.add(`${name}.json`);
+    for (const f of name.endsWith(".json") ? [name] : [`${name}.json`, `${name}/mcp.json`, `${name}/devin/mcp_config.json`]) {
+      try { scan(readFileSync(join(dir, f), "utf8")); } catch { /* not this kind */ }
+    }
+  }
+  for (const name of names) {
+    if (keep.has(name)) continue;
+    const path = join(dir, name);
+    try {
+      if (now - statSync(path).mtimeMs < PRUNE_GRACE_MS) continue;
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      /* gone already */
+    }
+  }
 }
 
 export function addServer(body: McpServerInput, now = Date.now()): McpServer {
@@ -246,17 +321,25 @@ export function mcpProxy(s: McpServer, cwd = userHome()): { command: string; arg
   const hash = new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 24);
   const file = join(ensureMcpDir(), `proxy-${hash}.json`);
   if (!existsSync(file)) writePrivate(file, text);
+  else touch(file);
   return { command: process.execPath, args: [join(packageRoot, "src/core/mcp-proxy.ts"), file], env: {} };
 }
 
-/** Every ACP agent supports stdio; use it for HTTP when needed. */
+/** Every ACP agent supports stdio; use it for HTTP when needed. A server
+ *  that cannot be given (its command is not on the PATH) is left out and
+ *  logged: the session opens with the rest. */
 export function acpServers(caps: { http?: boolean } | undefined, cwd = userHome(), env: Record<string, string | undefined> = process.env): Record<string, unknown>[] {
-  return enabledServers().map((s): Record<string, unknown> => {
-    if (s.transport === "stdio") {
-      return { name: s.name, command: mcpExecutable(s, cwd, env), args: s.args ?? [], env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) };
+  return enabledServers().flatMap((s): Record<string, unknown>[] => {
+    try {
+      if (s.transport === "stdio") {
+        return [{ name: s.name, command: mcpExecutable(s, cwd, env), args: s.args ?? [], env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) }];
+      }
+      if (caps?.http) return [{ type: "http", name: s.name, url: s.url, headers: Object.entries(s.headers ?? {}).map(([name, value]) => ({ name, value })) }];
+      const proxy = mcpProxy(s, cwd);
+      return [{ name: s.name, command: proxy.command, args: proxy.args, env: [] }];
+    } catch (e) {
+      console.error(`agentbox: global MCP server ${s.name} is left out of this session: ${(e as Error).message}`);
+      return [];
     }
-    if (caps?.http) return { type: "http", name: s.name, url: s.url, headers: Object.entries(s.headers ?? {}).map(([name, value]) => ({ name, value })) };
-    const proxy = mcpProxy(s, cwd);
-    return { name: s.name, command: proxy.command, args: proxy.args, env: [] };
   });
 }

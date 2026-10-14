@@ -2048,8 +2048,11 @@ export class Fleet extends EventEmitter {
       const view = this.get(id);
       if (!rec || !account || view.host !== "tmux") return;
       const recovery = this.watches.get(id)?.recovery ?? null;
+      // Build the resume before stopping it, so a launch that cannot be built leaves it running.
+      const cwd = this.resumeCwd(rec);
+      const prepared = this.resumeLaunch(rec, account, cwd, REFUSED_NOTE);
       await this.stopAndWait(rec, view);
-      this.startTmux(rec, account, this.resumeCwd(rec), REFUSED_NOTE);
+      this.startTmux(rec, account, cwd, REFUSED_NOTE, prepared);
       this.watches.set(id, { since: this.now(), flagged: false, repaired: true, recovery });
       console.log(`agentbox: ${id}: stopped it, set its permission mode, and resumed it`);
     }).catch((e) => console.error(`agentbox: repairing ${id} failed:`, e));
@@ -2734,7 +2737,7 @@ export class Fleet extends EventEmitter {
     });
 
     try {
-      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env: { ...cmd.env, ...sessionEnv(id, req.provider) }, unset: cmd.unset });
+      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider) }, cmd.secret), unset: cmd.unset });
     } catch (e) {
       updateSessionRecord(id, { tmux: null });
       throw new FleetError(500, (e as Error).message);
@@ -3037,7 +3040,7 @@ export class Fleet extends EventEmitter {
     this.killTmux(name);
     // The account's variables win over the launching shell's.
     const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider) };
-    this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, env, unset: cmd.unset });
+    this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, ...splitSecret(env, cmd.secret), unset: cmd.unset });
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
@@ -3841,6 +3844,16 @@ function resumeModel(rec: SessionRecord): string | null {
  */
 function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
   return { AGENTBOX_SESSION: id, ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}) };
+}
+
+/** The variables a launch marks secret (`Command.secret`) apart from the
+ *  rest, so they go through tmux's private launcher, never its command line. */
+function splitSecret(all: Record<string, string>, secret: string[] | undefined): { env: Record<string, string>; secretEnv?: Record<string, string> } {
+  if (!secret?.length) return { env: all };
+  const env = { ...all };
+  const secretEnv: Record<string, string> = {};
+  for (const k of secret) if (k in env) { secretEnv[k] = env[k]!; delete env[k]; }
+  return { env, secretEnv };
 }
 
 /** Short, URL-safe, unambiguous: no 0/o/1/l. */

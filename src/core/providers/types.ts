@@ -289,6 +289,10 @@ export interface Command {
   /** Variables to remove from the inherited environment (e.g. a stray
    *  CLAUDE_CONFIG_DIR from the shell that started the server). */
   unset?: string[];
+  /** Names in `env` whose values are secrets (global MCP env and header
+   *  values): they reach the process through a private launch script, never
+   *  on a command line (`NewSession.secretEnv`). */
+  secret?: string[];
 }
 
 /** What `blockedOn` says of the dialog a CLI puts up at its account's usage

@@ -1,6 +1,9 @@
 /** Global MCP launch layers and native config discovery.
  * Layers belong to agentbox; original config, profiles and credentials stay
- * where their CLI owns them. Setup failures abort launch instead of stripping tools.
+ * where their CLI owns them. The layer never stops an agent from starting: a
+ * server that cannot be given is left out, a layer that cannot be built is
+ * left off, and either is logged and recorded in the session's
+ * AGENTBOX_MCP_STATE for the MCPs page.
  */
 
 import { existsSync, readFileSync, realpathSync, statSync, mkdirSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
@@ -8,7 +11,7 @@ import { join, resolve, dirname } from "node:path";
 import { listAccounts, listRepos } from "./db";
 import { claudeJsonPath, detectCli } from "./accounts/homes";
 import { setsFlag, type Launch } from "./launch";
-import { enabledServers, mcpDir, mcpExecutable, mcpProxy, ensureMcpDir, readRegistry, sameServer, writePrivate, type McpServer } from "./mcp";
+import { mcpDir, mcpExecutable, mcpProxy, ensureMcpDir, readRegistry, sameServer, touch, writePrivate, type McpServer } from "./mcp";
 import { userHome } from "./paths";
 import type { Command } from "./providers/types";
 import type { Account, McpAgent, McpCheck, McpFound, McpReach, McpServerView, McpTransport, ProviderId } from "./types";
@@ -299,8 +302,8 @@ function split(own: Native[], servers: McpServer[]): { give: McpServer[]; kept: 
 }
 
 function writeIfChanged(path: string, text: string): void {
-  if (readText(path) === text) return;
-  writePrivate(path, text);
+  if (readText(path) === text) touch(path);
+  else writePrivate(path, text);
 }
 
 function claudeDef(s: McpServer): Record<string, unknown> {
@@ -318,12 +321,18 @@ function snapshot(kind: string, body: unknown): string {
   writeIfChanged(file, text);
   return file;
 }
-interface Layer {
+/** Which global servers a launch gets, decided without writing anything. */
+interface Plan {
   give: McpServer[];
   kept: { server: McpServer; same: boolean; enabled?: boolean }[];
+  /** Enabled servers left out of this launch, and why (a command not on its PATH). */
+  skipped: { name: string; why: string }[];
+}
+interface Layer extends Plan {
   args: string[];
   env: Record<string, string>;
-  error: string | null;
+  /** Names in `env` whose values hold server env or header values. */
+  secret: string[];
 }
 
 /** Symlink the same config location, never credentials into another account.
@@ -348,16 +357,39 @@ function devinLayer(c: Context, give: McpServer[]): string {
   linkOthers(source, dir, "devin");
   linkOthers(join(source, "devin"), join(dir, "devin"), "mcp_config.json");
   writeIfChanged(join(dir, "devin/mcp_config.json"), JSON.stringify({ mcpServers }));
+  touch(dir);
   return dir;
 }
 
-function layer(provider: ProviderId, account: Account | null, servers = enabledServers(), c = context()): Layer {
-  if (!servers.length) return { give: [], kept: [], args: [], env: {}, error: null };
+/** Reads the agent's own configs, so it throws when one cannot be read: the
+ *  caller cannot tell which names it would keep. */
+function plan(provider: ProviderId, account: Account | null, servers: McpServer[], c = context()): Plan {
+  if (!servers.length) return { give: [], kept: [], skipped: [] };
   const own = ownServers(provider, account, c);
   const { give: pending, kept } = split(own, servers);
-  const give = pending.filter((s) => s.enabled).map((s) => s.transport === "stdio" ? { ...s, command: mcpExecutable(s, c.cwd, c.env) } : s);
   const byName = new Map(own.map((n) => [n.name, n]));
-  const none: Layer = { give, kept: kept.map((k) => ({ ...k, enabled: byName.get(k.server.name)?.enabled !== false })), args: [], env: {}, error: null };
+  const give: McpServer[] = [];
+  const skipped: Plan["skipped"] = [];
+  for (const s of pending) {
+    if (!s.enabled) continue;
+    if (s.transport !== "stdio") give.push(s);
+    else {
+      try { give.push({ ...s, command: mcpExecutable(s, c.cwd, c.env) }); }
+      catch (e) { skipped.push({ name: s.name, why: (e as Error).message }); }
+    }
+  }
+  return { give, kept: kept.map((k) => ({ ...k, enabled: byName.get(k.server.name)?.enabled !== false })), skipped };
+}
+
+/** A URL whose query may carry a token: argv would show it. */
+const queried = (s: McpServer): boolean => {
+  try { return s.transport === "http" && !!new URL(s.url!).search; } catch { return false; }
+};
+
+/** The files and flags that hand `p.give` to the CLI. Writes private snapshots. */
+function layer(provider: ProviderId, p: Plan, c: Context): Layer {
+  const none: Layer = { ...p, args: [], env: {}, secret: [] };
+  const give = p.give;
   if (!give.length) return none;
   switch (provider) {
     case "claude": {
@@ -368,8 +400,9 @@ function layer(provider: ProviderId, account: Account | null, servers = enabledS
       const args: string[] = [];
       for (const s of give) {
         // CLI overrides preserve any selected profile. Keep secret values
-        // in a private proxy snapshot, never in the process's argument list.
-        const secret = Object.keys(s.env ?? {}).length > 0 || Object.keys(s.headers ?? {}).length > 0;
+        // (and a URL's query) in a private proxy snapshot, never in the
+        // process's argument list.
+        const secret = Object.keys(s.env ?? {}).length > 0 || Object.keys(s.headers ?? {}).length > 0 || queried(s);
         const def = secret ? { transport: "stdio", ...mcpProxy(s, c.cwd) } : s;
         const fields = def.transport === "stdio" ? `command = ${toml(def.command!)}, args = [${(def.args ?? []).map(toml).join(", ")}]` : `url = ${toml(s.url!)}`;
         args.push("-c", `mcp_servers.${toml(s.name)}={ ${fields} }`);
@@ -379,7 +412,7 @@ function layer(provider: ProviderId, account: Account | null, servers = enabledS
     case "opencode": {
       const existing = c.env.OPENCODE_CONFIG_CONTENT ? jsonArgument(c.env.OPENCODE_CONFIG_CONTENT, c) : {};
       const mcp = Object.fromEntries(give.map((s) => [s.name, s.transport === "stdio" ? { type: "local", command: [s.command!, ...(s.args ?? [])], environment: s.env ?? {}, enabled: true } : { type: "remote", url: s.url, headers: s.headers ?? {}, oauth: false, enabled: true }]));
-      return { ...none, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...existing, mcp: { ...mcp, ...obj(existing.mcp) } }) } };
+      return { ...none, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...existing, mcp: { ...mcp, ...obj(existing.mcp) } }) }, secret: ["OPENCODE_CONFIG_CONTENT"] };
     }
     case "muse": {
       const args: string[] = [];
@@ -389,10 +422,11 @@ function layer(provider: ProviderId, account: Account | null, servers = enabledS
         const name = `AGENTBOX_MCP_${++n}`; env[name] = v; return [k, `\${${name}}`];
       }));
       for (const s of give) {
-        const def = s.transport === "stdio" ? { command: s.command, args: s.args ?? [], env: vars(s.env) } : { url: s.url, headers: vars(s.headers) };
+        const def = queried(s) ? { ...mcpProxy(s, c.cwd), env: {} }
+          : s.transport === "stdio" ? { command: s.command, args: s.args ?? [], env: vars(s.env) } : { url: s.url, headers: vars(s.headers) };
         args.push("-c", `mcpServers.${s.name}=${JSON.stringify(def)}`);
       }
-      return { ...none, args, env };
+      return { ...none, args, env, secret: Object.keys(env) };
     }
     case "devin": return { ...none, env: { XDG_CONFIG_HOME: devinLayer(c, give) } };
     case "omp": {
@@ -405,6 +439,7 @@ function layer(provider: ProviderId, account: Account | null, servers = enabledS
       writeIfChanged(join(dir, "mcp.json"), readFileSync(file, "utf8"));
       writeIfChanged(join(dir, "package.json"), JSON.stringify({ name: "agentbox-global-mcp", version: "1.0.0", type: "module", main: "index.js" }));
       writeIfChanged(join(dir, "index.js"), "export default function () {}\n");
+      touch(dir);
       return { ...none, args: ["--extension", dir] };
     }
   }
@@ -417,9 +452,17 @@ export function cleanMcpLaunch(provider: ProviderId, launch: Launch, original?: 
   let args = [...launch.args];
   const env = { ...launch.env };
   const marker = original?.get("AGENTBOX_MCP_LAUNCH");
+  let managed: ManagedLaunch | null = null;
   if (marker) {
-    let managed: ManagedLaunch;
-    try { managed = JSON.parse(marker); } catch { throw new Error("Cannot read this session's MCP launch metadata"); }
+    try {
+      const v = JSON.parse(marker);
+      if (Array.isArray(v?.args) && Array.isArray(v.restoreArgs) && v.env && typeof v.env === "object") managed = v;
+    } catch { /* below */ }
+    // Resume as it was carried rather than not at all; the args the next
+    // layer adds come after, so they still take effect.
+    if (!managed) console.error("agentbox: a session's MCP launch metadata is unreadable; its flags are carried as they are");
+  }
+  if (managed) {
     for (const hash of managed.args) {
       for (let i = 0; i + 1 < args.length; i++) {
         if (digest(JSON.stringify(args.slice(i, i + 2))) === hash) { args.splice(i, 2); break; }
@@ -449,30 +492,61 @@ export function cleanMcpLaunch(provider: ProviderId, launch: Launch, original?: 
   return { args, env };
 }
 
-/** No catch-and-continue: callers surface the setup error on the failed
- * session action. Adopt preflights this before stopping the original process. */
+/** Anything an earlier agentbox MCP launch left in what this one carries. */
+function carriesManaged(carry: string[], inherited: Record<string, string>): boolean {
+  const dir = `${mcpDir()}/`;
+  return Object.entries(inherited).some(([k, v]) => k.startsWith("AGENTBOX_MCP_") || v.includes(dir)) || carry.some((a) => a.includes(dir));
+}
+
+/**
+ * `cmd` with the global MCP layer for its CLI, account and directory. With no
+ * server enabled it is `cmd` itself, unchanged. It never throws: a server
+ * that cannot be given is left out and the rest are given; a layer that
+ * cannot be built (an agent config that does not parse, a snapshot that
+ * cannot be written, a whole-map override) is left off. Either is logged and
+ * recorded in AGENTBOX_MCP_STATE, which the MCPs page reads. Env values that
+ * carry server secrets are named in `secret`, for a private launch.
+ */
 export function withGlobalMcp<C extends Command>(provider: ProviderId, account: Account, cmd: C, carry: string[] = [], cwd = userHome(), inherited: Record<string, string> = {}): C {
-  if (provider === "opencode" && inherited.OPENCODE_CONFIG_CONTENT) {
-    const c = { cwd, carry, env: process.env };
-    const native = jsonArgument(inherited.OPENCODE_CONFIG_CONTENT, c);
-    const generated = cmd.env.OPENCODE_CONFIG_CONTENT ? jsonArgument(cmd.env.OPENCODE_CONFIG_CONTENT, c) : {};
-    const merge = (a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> => {
-      const result = { ...a };
-      for (const [k, v] of Object.entries(b)) result[k] = v && typeof v === "object" && !Array.isArray(v) ? merge(obj(a[k]), obj(v)) : v;
-      return result;
-    };
-    const cfg = { ...generated, ...native, provider: merge(obj(native.provider), obj(generated.provider)), mcp: { ...obj(generated.mcp), ...obj(native.mcp) }, instructions: [...new Set([...(strs(native.instructions) ?? []), ...(strs(generated.instructions) ?? [])])] };
-    cmd = { ...cmd, env: { ...cmd.env, OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg) } };
+  let registry: ReturnType<typeof readRegistry>;
+  try {
+    registry = readRegistry();
+  } catch (e) {
+    return withoutLayer(provider, cmd, null, (e as Error).message);
   }
-  const effective = { ...process.env, ...inherited, ...cmd.env };
-  for (const k of cmd.unset ?? []) delete effective[k];
-  const c: Context = { cwd, carry, env: effective };
-  if ((provider === "codex" || provider === "muse") && values(carry, "-c", "--config").some((v) => /^(?:mcp_servers|mcpServers)\s*=/.test(v))) {
-    throw new Error("Global MCP setup: an explicit whole-map MCP override would discard the global list; use per-server overrides to keep both");
+  if (!registry.servers.some((s) => s.enabled) && !carriesManaged(carry, inherited)) return cmd;
+  if (registry.servers.some((s) => s.enabled) && (provider === "codex" || provider === "muse") && values(carry, "-c", "--config").some((v) => /^(?:mcp_servers|mcpServers)\s*=/.test(v))) {
+    return withoutLayer(provider, cmd, registry.changedAt, "an explicit whole-map MCP override (-c mcp_servers=…) replaces the global list; per-server overrides keep both");
   }
-  const registry = readRegistry();
-  const l = layer(provider, account, registry.servers, c);
-  let argv = [...cmd.argv];
+  let l: Layer;
+  let base = cmd;
+  try {
+    // The adopted shell's own OPENCODE_CONFIG_CONTENT is kept under the
+    // adapter's (its bridge and briefing win, as without a layer) so its
+    // MCP entries count as the agent's own.
+    let merged = cmd;
+    if (provider === "opencode" && inherited.OPENCODE_CONFIG_CONTENT) {
+      const c = { cwd, carry, env: process.env };
+      const native = jsonArgument(inherited.OPENCODE_CONFIG_CONTENT, c);
+      const generated = cmd.env.OPENCODE_CONFIG_CONTENT ? jsonArgument(cmd.env.OPENCODE_CONFIG_CONTENT, c) : {};
+      const merge = (a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> => {
+        const result = { ...a };
+        for (const [k, v] of Object.entries(b)) result[k] = v && typeof v === "object" && !Array.isArray(v) ? merge(obj(a[k]), obj(v)) : v;
+        return result;
+      };
+      const cfg = { ...native, ...generated, provider: merge(obj(native.provider), obj(generated.provider)), mcp: { ...obj(native.mcp), ...obj(generated.mcp) }, instructions: [...new Set([...(strs(native.instructions) ?? []), ...(strs(generated.instructions) ?? [])])] };
+      merged = { ...cmd, env: { ...cmd.env, OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg) } };
+    }
+    const effective = { ...process.env, ...inherited, ...merged.env };
+    for (const k of merged.unset ?? []) delete effective[k];
+    const c: Context = { cwd, carry, env: effective };
+    l = layer(provider, plan(provider, account, registry.servers, c), c);
+    if (l.give.length) base = merged;
+  } catch (e) {
+    return withoutLayer(provider, cmd, registry.changedAt, (e as Error).message);
+  }
+  for (const s of l.skipped) console.error(`agentbox: global MCP server ${s.name} is left out of this ${LABEL[provider]} launch: ${s.why}`);
+  let argv = [...base.argv];
   const restoreArgs: string[] = [];
   if (provider === "claude" && l.args.length) {
     for (let i = 1; i < argv.length; i++) {
@@ -487,10 +561,23 @@ export function withGlobalMcp<C extends Command>(provider: ProviderId, account: 
   const injected = provider === "claude" && l.args.length ? [l.args] : Array.from({ length: l.args.length / 2 }, (_, i) => l.args.slice(i * 2, i * 2 + 2));
   const managed: ManagedLaunch = { args: injected.map((a) => digest(JSON.stringify(a))), restoreArgs, env: {} };
   for (const k of Object.keys(l.env)) managed.env[k] = inherited[k] ?? process.env[k] ?? null;
+  const state = mcpState(registry.changedAt, l, null);
   // Provider-supplied variables (OpenCode bridge settings) remain in cmd.env.
-  const env = { ...cmd.env, ...l.env, AGENTBOX_MCP_LAUNCH: JSON.stringify(managed), AGENTBOX_MCP_STATE: JSON.stringify({ changedAt: registry.changedAt, given: l.give.map((s) => s.name), kept: l.kept.map((k) => ({ name: k.server.name, same: k.same, enabled: k.enabled })) }) };
+  const env = { ...base.env, ...l.env, AGENTBOX_MCP_LAUNCH: JSON.stringify(managed), AGENTBOX_MCP_STATE: state };
   argv.splice(provider === "muse" && ["resume", "exec"].includes(argv[1] ?? "") ? 2 : 1, 0, ...l.args, ...(provider === "claude" && l.args.length && !argv[1]?.startsWith("-") ? ["--"] : []));
-  return { ...cmd, argv, env };
+  const secret = [...new Set([...(base.secret ?? []), ...l.secret])];
+  return { ...base, argv, env, ...(secret.length ? { secret } : {}) };
+}
+
+/** What a session was handed, for the MCPs page (src/server/index.ts reads it back). */
+function mcpState(changedAt: number | null, p: Plan, error: string | null): string {
+  return JSON.stringify({ changedAt, given: p.give.map((s) => s.name), kept: p.kept.map((k) => ({ name: k.server.name, same: k.same, enabled: k.enabled })), skipped: p.skipped, error });
+}
+
+/** `cmd` launched without the global layer, and why, logged and recorded. */
+function withoutLayer<C extends Command>(provider: ProviderId, cmd: C, changedAt: number | null, why: string): C {
+  console.error(`agentbox: ${LABEL[provider]} launches without the global MCP servers: ${why}`);
+  return { ...cmd, env: { ...cmd.env, AGENTBOX_MCP_STATE: mcpState(changedAt, { give: [], kept: [], skipped: [] }, why) } };
 }
 
 function targets(provider: ProviderId): (Account | null)[] {
@@ -506,9 +593,10 @@ export async function reachAll(): Promise<{ agents: McpAgent[]; reach: Map<strin
   const agents: McpAgent[] = [];
   for (const provider of PASSED) {
     const installed = (await detectCli(provider)).installed;
+    // Planned only: the page never writes the snapshots, which hold values.
     const layers = targets(provider).map((a) => {
-      try { return { a, l: layer(provider, a, servers) }; }
-      catch (e) { return { a, l: { give: [], kept: [], args: [], env: {}, error: (e as Error).message } as Layer }; }
+      try { return { a, l: { ...plan(provider, a, servers), error: null as string | null } }; }
+      catch (e) { return { a, l: { give: [], kept: [], skipped: [], error: (e as Error).message } }; }
     });
     const error = layers.map((x) => x.l.error).filter(Boolean).join("; ") || null;
     agents.push({ provider, installed, supported: true, how: error ?? howOf(provider, installed), error });
@@ -516,11 +604,13 @@ export async function reachAll(): Promise<{ agents: McpAgent[]; reach: Map<strin
   }
   return { agents, reach };
 }
-function reachOne(provider: ProviderId, s: McpServer, installed: boolean, layers: { a: Account | null; l: Layer }[]): McpReach {
+function reachOne(provider: ProviderId, s: McpServer, installed: boolean, layers: { a: Account | null; l: Plan & { error: string | null } }[]): McpReach {
   if (!installed) return { provider, state: "unsupported", detail: `${LABEL[provider]} is not installed; the launch integration is available` };
   if (!layers.length) return { provider, state: "unsupported", detail: "No accounts yet; new ones get the global list" };
   const errors = layers.filter((x) => x.l.error);
-  if (errors.length) return { provider, state: "error", detail: errors.map((x) => x.l.error).join("; ") };
+  if (errors.length) return { provider, state: "error", detail: `${errors.map((x) => x.l.error).join("; ")}. Sessions start without the global servers until this is fixed.` };
+  const skipped = layers.flatMap((x) => x.l.skipped.filter((k) => k.name === s.name));
+  if (skipped.length) return { provider, state: "error", detail: `${skipped[0]!.why}. Sessions start without this server; the others are given.` };
   const own = layers.flatMap((x) => x.l.kept.filter((k) => k.server.name === s.name).map((k) => ({ ...k, account: accountName(x.a) })));
   if (own.length) return { provider, state: own.every((k) => k.same && k.enabled) ? "own" : "conflict", detail: `${own.map((k) => `${k.account}: ${k.enabled ? (k.same ? "same native server remains enabled" : "different native server remains enabled") : "native server is disabled"}`).join("; ")}. ${s.enabled ? "Native settings take precedence." : "Turning off the global entry does not turn off native definitions."}` };
   if (!s.enabled) return { provider, state: "off", detail: "Global entry is off; project or profile definitions can still provide this name" };

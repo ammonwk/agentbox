@@ -908,7 +908,8 @@ export interface McpReach {
   /** on: passed to it; own: it has its own server of this name with the same
    *  definition; conflict: it has a different one, which it keeps; off: the
    *  server is turned off; unsupported: agentbox does not pass servers to it;
-   *  error: the file agentbox writes for it could not be written. */
+   *  error: sessions start without it (its command is not on the PATH, or the
+   *  agent's own config cannot be read), and `detail` says why. */
   state: "on" | "own" | "conflict" | "off" | "unsupported" | "error";
   detail: string;
 }
@@ -940,7 +941,8 @@ export interface McpAgent {
   installed: boolean;
   /** Whether agentbox passes global servers to its sessions. */
   supported: boolean;
-  /** A configuration problem that prevents launch. */
+  /** A configuration problem that keeps the global servers out of its
+   *  launches (they still start, without them). */
   error?: string | null;
   /** How, or why not, in words. */
   how: string;
@@ -954,7 +956,11 @@ export interface McpState {
   /** When the global list last changed. */
   changedAt: number | null;
   /** Configuration snapshot handed to each running session, not a health check. */
-  sessions?: { id: string; title: string; provider: ProviderId; changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; known: boolean }[];
+  sessions?: { id: string; title: string; provider: ProviderId; changedAt: number | null; given: string[]; kept: { name: string; same: boolean; enabled: boolean }[]; known: boolean;
+    /** Servers left out of its launch, and why. */
+    skipped?: { name: string; why: string }[];
+    /** Why it was launched without the global layer at all. */
+    error?: string | null }[];
   /** Sessions agentbox runs whose process started before that change: they
    *  get it when they next start or resume. */
   stale: { id: string; title: string; provider: ProviderId; since: number }[];
