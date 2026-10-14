@@ -25,6 +25,7 @@ export const AgentBinding = z
   .strict();
 export type AgentBinding = z.infer<typeof AgentBinding>;
 export interface LocalRun {
+  promptRevision?: string;
   run: AgentRun;
   session: string;
   phase: "claiming" | "starting" | "attached" | "stopping" | "done";
