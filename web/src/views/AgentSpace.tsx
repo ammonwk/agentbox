@@ -76,6 +76,7 @@ export function SharedAgentSpace({
   options,
   onCreate,
   reload,
+  control,
 }: {
   a: SharedAgent;
   board: AgentBoard;
@@ -86,6 +87,7 @@ export function SharedAgentSpace({
   options: AgentOption[];
   onCreate: () => void;
   reload: () => Promise<unknown>;
+  control?: ReactNode;
 }) {
   const conversation = useMemo(() => new AgentConversation(api.human), [api]);
   const runs = useRef(board.runs); runs.current = board.runs;
@@ -151,6 +153,7 @@ export function SharedAgentSpace({
       }
       transport={transport}
       disabled={!a.enabled}
+      control={control}
       mayDecide={mayDecide}
       actions={actions}
       about={children}
@@ -159,6 +162,8 @@ export function SharedAgentSpace({
 }
 import type { LocalAgent } from "../../../src/core/agents/conversation";
 import { useScope } from "../lib/projects";
+import { chooseWhere, sharedTwinOf } from "../lib/moveagents";
+import { WhereToggle } from "./AgentWhere";
 import { selectScope, scopeOf } from "../route";
 export function LocalAgentSpace({
   state,
@@ -183,6 +188,7 @@ export function LocalAgentSpace({
       detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.unavailable ? "History" : a.enabled ? "Local" : "Paused"}` };
   });
   const selected = agents.data?.find((a) => a.id === id);
+  const sharedId = selected ? sharedTwinOf(selected.id) : undefined;
   useEffect(() => {
     if (!id && options.length) {
       const saved = options.find((a) => a.id === rememberAgent());
@@ -263,7 +269,7 @@ export function LocalAgentSpace({
       }
       transport={transport}
       disabled={!selected.enabled || !!selected.unavailable}
-      control={selected.unavailable ? <span className="muted" title={selected.unavailable}>History</span> : <EnabledToggle agent={selected} live={state.sessions.some((s) => s.host !== "none" && (s.agentOwner === selected.id || [selected.session, ...(selected.workSessions ?? [])].includes(s.id)))} onChange={agents.reload} />}
+      control={selected.unavailable ? <span className="muted" title={selected.unavailable}>History</span> : <>{sharedId && <WhereToggle where="local" onChange={() => { chooseWhere(sharedId, "hosted"); go({ page: "agents", id: sharedId }); }} />}<EnabledToggle agent={selected} live={state.sessions.some((s) => s.host !== "none" && (s.agentOwner === selected.id || [selected.session, ...(selected.workSessions ?? [])].includes(s.id)))} onChange={agents.reload} /></>}
       mayDecide={() => true}
       about={
         <div className="agent-about">

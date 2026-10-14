@@ -27,7 +27,8 @@ import { go, selectScope } from "../route";
 import { useScope } from "../lib/projects";
 import "./agents.css";
 import { rememberAgent, landingForAgent, agentActivity } from "./AgentBrowser";
-import { pendingMoves } from "../lib/moveagents";
+import { chooseWhere, chosenWhere, hostConnected, localTwin, pendingMoves, rememberTwins } from "../lib/moveagents";
+import { WhereToggle } from "./AgentWhere";
 import type { LocalAgent } from "../../../src/core/agents/conversation";
 import { LocalAgentSpace, SharedAgentSpace } from "./AgentSpace";
 
@@ -173,6 +174,24 @@ function Directory({
     }
   };
   const selected = data.data?.board.agents.find((a) => a.id === id);
+  const locals = useLoad(() => request<LocalAgent[]>("GET", "/api/agents/local"), []);
+  const connected = !!selected && !!data.data && hostConnected(selected, data.data.hosts);
+  const selectedTwin = selected ? localTwin(selected, locals.data ?? [], state.repos) : undefined;
+  // Local unless chosen otherwise while the execution host is offline: open this machine's copy.
+  const where = selected ? chosenWhere(selected.id) ?? (connected ? "hosted" : "local") : "hosted";
+  const twin = data.data && where === "local" ? selectedTwin : undefined;
+  useEffect(() => {
+    if (twin) go({ page: "agents", id: twin.id }, true);
+  }, [twin?.id]);
+  useEffect(() => {
+    if (!data.data || !locals.data) return;
+    const pairs: Record<string, string> = {};
+    for (const a of data.data.board.agents) {
+      const l = localTwin(a, locals.data, state.repos);
+      if (l) pairs[l.id] = a.id;
+    }
+    rememberTwins(pairs);
+  }, [data.data, locals.data, state.repos]);
   const inProject = (a: SharedAgent) => !scope.project || !!project && a.definition.repos.some((slug) => slug.toLowerCase() === (project.fullName ?? (project.kind === "github" ? project.ref : "")).toLowerCase());
   const creating = useRef(false);
   const creator = useCallback(async () => {
@@ -286,6 +305,16 @@ function Directory({
           api={api}
           user={user}
           actions={data.data.actions}
+          control={selectedTwin && (
+            <WhereToggle
+              where="hosted"
+              hostOk={connected}
+              onChange={() => {
+                chooseWhere(selected.id, "local");
+                go({ page: "agents", id: selectedTwin.id });
+              }}
+            />
+          )}
         >
           <div className="agents-detail-head">
             <div>
@@ -503,6 +532,7 @@ function Directory({
           user={user}
           workspace={workspace}
           shared={data.data.board.agents}
+          locals={locals.data ?? []}
           repos={state.repos}
           run={run}
           busy={busy}
@@ -517,6 +547,7 @@ function MoveLocalAgents({
   user,
   workspace,
   shared,
+  locals,
   repos,
   run,
   busy,
@@ -525,12 +556,12 @@ function MoveLocalAgents({
   user: string;
   workspace: string;
   shared: SharedAgent[];
+  locals: LocalAgent[];
   repos: AppState["repos"];
   run: Task;
   busy: boolean;
 }) {
-  const locals = useLoad(() => request<LocalAgent[]>("GET", "/api/agents/local"), []);
-  const moves = useMemo(() => pendingMoves(locals.data ?? [], repos, shared), [locals.data, repos, shared]);
+  const moves = useMemo(() => pendingMoves(locals, repos, shared), [locals, repos, shared]);
   if (!workspace || moves.length === 0) return null;
   return (
     <div className="card agent-section">

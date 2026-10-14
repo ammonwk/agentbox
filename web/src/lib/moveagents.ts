@@ -44,3 +44,61 @@ export function pendingMoves(locals: LocalAgent[], repos: Repo[], shared: Shared
   }
   return out;
 }
+
+/** A host counts as connected when it reported in the last two minutes. */
+export function hostConnected(a: SharedAgent, hosts: { id: string; last_seen_at: string | null; revoked_at: string | null }[], now = Date.now()): boolean {
+  const h = hosts.find((x) => x.id === a.execution_installation_id);
+  return !!h && !h.revoked_at && !!h.last_seen_at && now - Date.parse(h.last_seen_at) < 120_000;
+}
+
+/** This machine's copy of a shared agent: the same name on the same repository. */
+export function localTwin(a: SharedAgent, locals: LocalAgent[], repos: Repo[]): LocalAgent | undefined {
+  const want = [...a.definition.repos].sort().join(",");
+  const repoOf = (l: LocalAgent) => {
+    const r = repos.find((x) => x.id === (l.project ?? l.repo));
+    return (r?.fullName ?? (r?.kind === "github" ? r.ref : "") ?? "").toLowerCase();
+  };
+  return locals
+    .filter((l) => !l.unavailable && l.name.trim().toLowerCase() === a.name.trim().toLowerCase() && repoOf(l) === want)
+    .sort((x, y) => Number(y.enabled) - Number(x.enabled))[0];
+}
+
+/** Where a shared agent runs for this browser: on this machine, through its
+ *  local copy, or on the workspace's execution host. */
+export type Where = "local" | "hosted";
+const whereKey = (shared: string) => `agentbox.agents.where.${shared}`;
+const TWINS = "agentbox.agents.twins";
+
+export function chosenWhere(shared: string): Where | null {
+  try {
+    const v = localStorage.getItem(whereKey(shared));
+    return v === "local" || v === "hosted" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function chooseWhere(shared: string, where: Where): void {
+  try {
+    localStorage.setItem(whereKey(shared), where);
+  } catch {
+    // Not remembered: the default (local while the host is offline) applies.
+  }
+}
+
+/** Local agent id → its shared agent id, so a local agent's page can switch back. */
+export function rememberTwins(pairs: Record<string, string>): void {
+  try {
+    localStorage.setItem(TWINS, JSON.stringify(pairs));
+  } catch {
+    // The local page then shows no Hosted switch.
+  }
+}
+
+export function sharedTwinOf(local: string): string | undefined {
+  try {
+    return (JSON.parse(localStorage.getItem(TWINS) ?? "{}") as Record<string, string>)[local];
+  } catch {
+    return undefined;
+  }
+}
