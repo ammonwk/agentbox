@@ -540,9 +540,12 @@ export class AgentConversations {
     // Proven only once its transcript exists: the CLI took the first prompt.
     if (!failure && !(await this.proveStarted(to))) failure = "it never wrote its transcript";
     if (failure) {
-      if (await this.undoSuccessor(agent, to, `the fresh conversation could not start: ${failure}`)) return false;
-      // Its process could not be proven gone: neither conversation gets the message twice.
-      throw new FleetError(409, `the fresh conversation ${to} could not be proven started or stopped; check it before sending again`);
+      const undone = await this.undoSuccessor(agent, to, `the fresh conversation could not start: ${failure}`);
+      if (undone === "undone") return false;
+      if (undone === "stuck")
+        // Its process could not be proven gone: neither conversation gets the message twice.
+        throw new FleetError(409, `the fresh conversation ${to} could not be proven started or stopped; check it before sending again`);
+      return true;
     }
     await this.completeRollover(agent);
     console.log(`agentbox: ${agent} continues ${old} in ${to} from handoff ${handoff} (${why})`);
@@ -554,7 +557,7 @@ export class AgentConversations {
     return !!rec?.transcriptPath && existsSync(transcriptFile(rec.transcriptPath));
   }
   /** How long a successor has to write its transcript. */
-  proofMs = 90_000;
+  proofMs = 60_000;
   private async proveStarted(id: string) {
     const fleet = this.runtime.fleet, from = Date.now(), grace = this.proofMs / 9;
     for (;;) {
@@ -568,23 +571,31 @@ export class AgentConversations {
     }
   }
   /** Stop a successor that never proved itself and make the replaced
-   *  conversation current again; false when its process will not stop. */
-  private async undoSuccessor(agent: string, to: string, error: string) {
+   *  conversation current again: "undone"; "completed" when it wrote its
+   *  transcript after all (it has the message); "stuck" when it will not stop. */
+  private async undoSuccessor(agent: string, to: string, error: string): Promise<"undone" | "completed" | "stuck"> {
     const fleet = this.runtime.fleet;
     if (getSessionRecord(to)) {
-      const v = fleet.sessions().find((s) => s.id === to);
-      if (v && (v.host !== "none" || v.pid)) await fleet.stopSession(to).catch(() => undefined);
       await fleet.tick();
-      const after = fleet.sessions().find((s) => s.id === to);
-      if (after && (after.host !== "none" || after.pid)) return false;
-      // It wrote its transcript after all: it is the successor.
-      if (this.started(to)) {
-        await this.completeRollover(agent);
-        return false;
+      if (!this.started(to)) {
+        const v = fleet.sessions().find((s) => s.id === to);
+        if (v && (v.host !== "none" || v.pid)) await fleet.stopSession(to).catch(() => undefined);
+        // Two fresh passes: one may have begun before a late transcript was written.
+        await fleet.tick();
+        await fleet.tick();
+        const after = fleet.sessions().find((s) => s.id === to);
+        if (after && (after.host !== "none" || after.pid)) return "stuck";
       }
+      if (this.started(to)) {
+        this.unstop(to);
+        await this.completeRollover(agent);
+        return "completed";
+      }
+      // Off the board: it never had a conversation.
+      await fleet.close(to, true, true).catch(() => undefined);
     }
     this.revert(agent, error);
-    return true;
+    return "undone";
   }
   private async completeRollover(agent: string) {
     const r = this.stored().find((x) => x.id === agent)?.rollover;
