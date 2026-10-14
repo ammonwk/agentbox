@@ -813,6 +813,10 @@ export interface SessionDiff {
 
 export interface Repo {
   id: string;
+  /** The repo's checkout on this machine, symlinks resolved, or its repoRoot
+   *  when that could not be read. Derived for the board: a session's worktree
+   *  is matched against this, not against `ref`, which may be a slug. */
+  checkoutRoot?: string;
   /** Local absolute path, or an `owner/name` GitHub slug. */
   ref: string;
   kind: "local" | "github";
