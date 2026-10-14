@@ -118,7 +118,16 @@ try {
   await page.locator(".project-brand").focus(); await page.keyboard.press("Enter"); await page.getByRole("textbox", { name: "Search projects" }).fill("Alpha"); await page.keyboard.press("Enter"); await page.locator(".agent-directory-card").first().waitFor(); assert.ok(page.url().includes("project=alpha"));
   await openSwitcher(); await page.screenshot({ path: join(out, "project-switcher-desktop.png") }); await page.keyboard.press("Escape");
   await agent(); await page.screenshot({ path: join(out, "project-chat-desktop.png") });
-  await page.setViewportSize({ width: 390, height: 844 }); await openSwitcher(); await page.screenshot({ path: join(out, "project-switcher-mobile.png") }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false); await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const send = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
+  const systemBar = await page.locator(".sysbar").boundingBox() ?? await page.locator(".sidebar-slot").boundingBox();
+  assert.ok(send && systemBar && send.y + send.height <= systemBar.y, "mobile composer must remain above system bar");
+  await page.evaluate(() => document.documentElement.style.setProperty("--kbh", "300px"));
+  const raisedSend = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
+  const raisedSystem = await page.locator(".sysbar").boundingBox() ?? await page.locator(".sidebar-slot").boundingBox();
+  assert.ok(raisedSend && raisedSystem && raisedSend.y + raisedSend.height <= raisedSystem.y, "keyboard-resized composer must remain visible");
+  await page.evaluate(() => document.documentElement.style.removeProperty("--kbh"));
+  await openSwitcher(); await page.screenshot({ path: join(out, "project-switcher-mobile.png") }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false); await page.keyboard.press("Escape");
   available = repos.filter((r) => r.id !== "alpha"); for (const ws of sockets) ws.send(JSON.stringify({ type: "cold", state: state() })); await page.getByText("This project is no longer registered", { exact: true }).waitFor(); await page.getByRole("button", { name: "All projects", exact: true }).click(); await page.locator(".agent-directory-card").first().waitFor(); assert.ok(await page.getByText("General conversation", { exact: true }).count());
   assert.equal(starts, 0); assert.equal(stops, 0); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ ok: true, output: out, twoProjects: true, linkedWorktrees: true, distinctChatFeedDrafts: true, delayedResponseDiscarded: true, archivedSessionsScoped: true, scopedSessionsReview: true, newSessionDefaultsDrafts: true, historyReloadDeepLinks: true, multiTab: true, explicitClearKeepsOtherTabDraft: true, keyboardMobile: true, removedProject: true, starts, stops, errors }));
