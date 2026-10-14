@@ -67,7 +67,7 @@ describe("what a transcript says of its model", () => {
 
   test("a 4xx that is not about the request is a refusal, and only an answer clears it", () => {
     const down = msg(T(1), { stopReason: "error", errorStatus: 400, errorMessage: `${UNAVAILABLE}\nUpstream request failed` });
-    expect(fold(msg(T(0), { stopReason: "stop" }), down)).toEqual({ model: BUNNY, okAt: NOW, refusedAt: NOW + M, detail: UNAVAILABLE });
+    expect(fold(msg(T(0), { stopReason: "stop", content: [{ type: "text", text: "Ready." }] }), down)).toEqual({ model: BUNNY, okAt: NOW, refusedAt: NOW + M, detail: UNAVAILABLE });
     // A prompt, and omp giving up on its retries, are not the route working.
     const prompt = { type: "message", timestamp: T(2), message: { role: "user", content: "Continue." } };
     const gaveUp = msg(T(3), { stopReason: "error", errorMessage: "Retry budget exhausted after 10 attempts" });
