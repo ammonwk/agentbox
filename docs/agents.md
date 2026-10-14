@@ -284,10 +284,11 @@ proves stop before takeover. It also checks shared read/edit boundaries and the
 create/edit, desktop/mobile/keyboard UI. It never provisions or logs into a real
 provider or GitHub bot. See [validation evidence](agents-validation.md).
 
-## Chat, About and Feed
+## Chat, Feed and Settings
 
 Agent detail opens **Chat**: one logical conversation across its managed run and
-predecessor-session references. About contains configuration, human and host
+predecessor-session references. Settings contains what the agent is, where it
+runs (Local or Hosted), the Enabled switch, configuration, human and host
 accountability, work controls and history. Feed contains immutable recommendations
 created by the current agent writer with `agentbox agent recommend RUN --request
 UUID --file proposal.json`. The JSON fields are `title`, `finding`, `reason`,
@@ -301,7 +302,7 @@ responsible run; dismissal never starts work.
 With no shared project configured, three local agents are available immediately.
 Their definitions and session references are local operational records. Sending
 the first message starts the selected existing provider via Fleet; later messages
-resume that same conversation. Provider/repository can be changed in About after
+resume that same conversation. Provider/repository can be changed in Settings after
 the current turn is idle. Agentbox proves the old transcript exists, stops the old
 process, retains its reference, and starts the next message in a fresh scoped
 session. This does not move a warm session between accounts. Local agents inherit the existing loopback operator trust boundary;
@@ -318,17 +319,17 @@ open questions, commitments and references. A later message after the cache
 went cold (or past 60% context) starts a fresh conversation from that handoff,
 your durable preferences and the live state of its work, and Chat follows it.
 If the handoff is missing or older than the last real message, the message goes
-to the old conversation instead; nothing is dropped. About → Memory shows the
+to the old conversation instead; nothing is dropped. Settings → Memory shows the
 policy, preferences, handoffs and search, and the form sets the idle minutes,
 the context budget, or turns rollover off. The agent records decisions with
 `agentbox agent memory <ID> note` and reads older handoffs with `search` and
 `show`; each record names its source conversation, and the provider transcript
 stays the record. Memory never authorizes anything. Waits, Review cards, PR
 claims, work grants and messages to the old conversation pass to the new one.
-A local agent's provider is Automatic unless you choose one in About: its first
+A local agent's provider is Automatic unless you choose one in Settings: its first
 conversation, and each fresh one after the cache went cold, starts on whichever
 installed, logged-in provider has room (Claude before Codex, the previous one
-first when both have room); a warm conversation never moves. About says which
+first when both have room); a warm conversation never moves. Settings says which
 provider the current conversation runs on and why. A message another agent sends
 shows that agent's name and picture only when Agentbox recorded the send;
 anything else is marked unverified. A five-minute cache gets its handoff after
@@ -339,7 +340,7 @@ and a mark where the carried history starts; older conversations stay in the
 session list. Shared coordinators keep handoffs on their execution host and start from them
 after a human rotation or a new run; they do not roll over automatically.
 
-About → Picture uploads a PNG, JPEG, GIF or WebP (up to 2 MB) for a local agent.
+Settings → Picture uploads a PNG, JPEG, GIF or WebP (up to 2 MB) for a local agent.
 It stays with the agent across reloads, restarts and fresh conversations, and
 Chat shows it beside each reply. Without one, or when it fails to load, the
 agent's own icon is shown. Shared agents use their icon; their definitions do not
@@ -375,7 +376,7 @@ Its managed repository actions are refused; `agentbox agent intake RUN --file
 issue.json` queues a canonical source under the configured activation policy.
 Scheduled intake can therefore start its one allowed issue worker while Chat
 is idle, without allowing a second writer for the same issue. Manual activation
-still requires a maintainer to run queued work from About.
+still requires a maintainer to run queued work from Settings.
 
 Local Feed decisions are persisted before delivery with one stable receipt ID.
 Approval, dismissal and retries cannot overwrite or repeat that decision. A
@@ -402,7 +403,7 @@ Vulcan, Caelus and Salus. It starts no session or repository work. Each project'
 instances retain separate provider conversations, drafts and Feed recommendations;
 their repository binding cannot be changed. Earlier general conversations stay
 reachable in All projects. Shared agents deliberately scoped to several repositories
-appear in those projects with the same identity and conversation; About lists their
+appear in those projects with the same identity and conversation; Settings lists their
 full scope. New shared definitions and templates default to the selected repository.
 
 Sessions use canonical checkout/worktree roots and local-agent bindings. Review
@@ -431,7 +432,7 @@ The searchable selector replaces the template landing page. The left rail uses
 Sessions' Active/Inactive controls and real linked session rows; the right pane
 shows only the selected provider conversation. Activity means running or active
 within three hours; closed conversations are inactive. Retained predecessors are
-read-only. About and Feed remain agent-level views. Mobile Back returns to that
+read-only. Feed and Settings remain agent-level views. Mobile Back returns to that
 agent's rail. Ordinary Sessions uses actual local agent/project metadata for its
 row attribution, so a private execution directory is not mistaken for a project.
 
@@ -450,7 +451,7 @@ Requested automation is recorded as unconfigured; it does not create a schedule.
 Local instances use the existing provider accounts on their first explicit Send.
 Shared instances retain the authenticated creator as maintainer. Only a human
 who owns the existing authorized execution installation can reuse it during
-creation; otherwise About truthfully requires host setup. Provider logins remain
+creation; otherwise Settings truthfully requires host setup. Provider logins remain
 on that host. Jupiter does not manage, monitor, or delete agents in this version.
 
 Read-through accepts an exact session ID only after verifying its recorded agent

@@ -40,7 +40,7 @@ export function NeutralAgent({ size = 12 }: { size?: number }) {
 export const localAvatarUrl = (agent: { id: string; avatar?: { at: number } }) =>
   agent.avatar ? `/api/agents/local/${encodeURIComponent(agent.id)}/avatar?v=${agent.avatar.at}` : null;
 
-/** About → Picture for a local agent: preview, replace and remove. The
+/** Settings → Picture for a local agent: preview, replace and remove. The
  *  picture belongs to the agent, so every conversation it has shows it. */
 export function AgentPictureEditor({ agent, onChange }: { agent: { id: string; name: string; role: string; capability?: string; avatar?: { at: number } }; onChange: () => Promise<unknown> }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);

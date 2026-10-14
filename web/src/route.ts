@@ -1,12 +1,14 @@
 /** URL ↔ route. Selection lives in the hash so every screen is linkable and
  *  the back button works; go() is how the app moves between them. */
 
+import { agentViewOf, type AgentView } from "./lib/agentviews";
+
 export type SessionTab = "terminal" | "timeline" | "diff" | "load";
 /** The tabs as they appear, left to right. The first is the default. */
 export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "diff", "load"];
 
 export type Route =
-  | { page: "agents"; id?: string; thread?: string; view?: "chat" | "about" | "feed" | "sessions" }
+  | { page: "agents"; id?: string; thread?: string; view?: AgentView }
   | { page: "sessions" }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
@@ -42,7 +44,7 @@ function decode(p: string): string {
 export function parseHash(hash: string): Route {
   const parts = hash.split("?")[0]!.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
-  if (head === "agents") return { page: "agents", ...(a ? { id: a } : {}), ...(b ? { view: ["about", "feed", "sessions"].includes(b) ? b as "about" | "feed" | "sessions" : "chat", ...(parts[3] ? { thread: parts[3] } : {}) } : {}) };
+  if (head === "agents") return { page: "agents", ...(a ? { id: a } : {}), ...(b ? { view: agentViewOf(b), ...(parts[3] ? { thread: parts[3] } : {}) } : {}) };
   if (head === "s" && a) {
     const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
     return { page: "session", id: a, tab };

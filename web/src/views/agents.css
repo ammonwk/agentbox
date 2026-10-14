@@ -340,7 +340,7 @@
   min-height: 0;
   overflow: auto;
 }
-/* The conversation is the primary surface; configuration lives in About. */
+/* The conversation is the primary surface; configuration lives in Settings. */
 .agent-space {
   display: flex;
   flex-direction: column;
@@ -584,7 +584,7 @@
   .agent-browser .agent-space { flex: 1; min-height: 0; }
 }
 
-/* About → Memory */
+/* Settings → Memory */
 .agent-memory { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
 .agent-memory h3, .agent-memory h4 { margin: 0; }
 .agent-memory h4 { margin-top: 8px; font-size: 13px; }
@@ -674,11 +674,12 @@
   .agent-composer .att-frame.cmp-frame { min-height: 50px; border-radius: 18px; padding: 5px 6px; }
   .agent-composer .cmp-frame .btn.cmp-go { min-width: 38px; height: 38px; min-height: 38px; }
 }
-/* The header switch sits on the tabs' line: `.toggle` is otherwise pinned to
-   the top (align-self, for column forms) and is shorter than a tab. */
 .agent-space-head nav { align-items: center; }
-.agent-enabled { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; }
-.agent-space-head nav .agent-enabled .toggle { align-self: center; padding: 0 4px; color: var(--muted); font-size: 13px; }
+/* Settings opens on where the agent runs and whether it is enabled (#35).
+   `.toggle` is otherwise pinned to the top (align-self, for column forms). */
+.agent-settings-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.agent-enabled { display: inline-flex; align-items: center; gap: 6px; }
+.agent-settings-controls .agent-enabled .toggle { align-self: center; padding: 0 4px; font-size: 13px; }
 .agent-enabled .error { font-size: 12px; }
 
 .agent-about-controls { border: 0; padding: 0; margin: 0; min-width: 0; }

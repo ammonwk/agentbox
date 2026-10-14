@@ -43,6 +43,7 @@ import "./session/session.css";
 import { AgentBrowser, agentRoute, firstActive, landingForAgent, agentActivity, agentName, type AgentOption } from "./AgentBrowser";
 import { shownStatus } from "../lib/board";
 import { go, hrefOf } from "../route";
+import { AGENT_TABS, type AgentTab } from "../lib/agentviews";
 
 type Receipt = { state: string; result: string; issue?: string };
 const providerName = { codex: "Codex", claude: "Claude", muse: "Muse" } as const;
@@ -156,7 +157,7 @@ export function SharedAgentSpace({
       control={control}
       mayDecide={mayDecide}
       actions={actions}
-      about={children}
+      settings={children}
     />
   );
 }
@@ -269,10 +270,10 @@ export function LocalAgentSpace({
       }
       transport={transport}
       disabled={!selected.enabled || !!selected.unavailable}
-      control={selected.unavailable ? <span className="muted" title={selected.unavailable}>History</span> : <>{sharedId && <WhereToggle where="local" onChange={() => { chooseWhere(sharedId, "hosted"); go({ page: "agents", id: sharedId }); }} />}<EnabledToggle agent={selected} live={state.sessions.some((s) => s.host !== "none" && (s.agentOwner === selected.id || [selected.session, ...(selected.workSessions ?? [])].includes(s.id)))} onChange={agents.reload} /></>}
+      control={selected.unavailable ? null : <>{sharedId && <WhereToggle where="local" onChange={() => { chooseWhere(sharedId, "hosted"); go({ page: "agents", id: sharedId }); }} />}<EnabledToggle agent={selected} live={state.sessions.some((s) => s.host !== "none" && (s.agentOwner === selected.id || [selected.session, ...(selected.workSessions ?? [])].includes(s.id)))} onChange={agents.reload} /></>}
       mayDecide={() => true}
-      about={
-        <div className="agent-about">
+      settings={
+        <>
           {selected.unavailable && <p role="status">{selected.unavailable}</p>}
           <fieldset className="agent-about-controls" disabled={!!selected.unavailable}>
           <AgentPictureEditor agent={selected} onChange={agents.reload} />
@@ -293,7 +294,7 @@ export function LocalAgentSpace({
                 {
                   provider: data.get("provider"),
                   repo: selected.project ?? (data.get("repo") || null),
-                  enabled: data.get("enabled") === "on",
+                  enabled: selected.enabled,
                   memoryPolicy: {
                     rollover: data.get("rollover") === "on",
                     idleMin: Number(data.get("idleMin")),
@@ -345,14 +346,6 @@ export function LocalAgentSpace({
             <label>
               <input
                 type="checkbox"
-                name="enabled"
-                defaultChecked={selected.enabled}
-              />{" "}
-              Enabled
-            </label>
-            <label>
-              <input
-                type="checkbox"
                 name="rollover"
                 defaultChecked={selected.memoryPolicy?.rollover ?? true}
               />{" "}
@@ -371,12 +364,12 @@ export function LocalAgentSpace({
           <AgentMemory key={selected.session ?? "none"} agent={selected} />
           <a href="#/team">Connect a shared workspace</a>
           </fieldset>
-        </div>
+        </>
       }
     />
   );
 }
-/** The header's switch: the About form's own configure request, with the
+/** Settings' Enabled switch: the form's own configure request, with the
  *  provider and repository it already has, so no conversation is replaced.
  *  Pausing stops the agent's running sessions; it asks first when any runs. */
 function EnabledToggle({ agent, live, onChange }: { agent: LocalAgent; live: boolean; onChange: () => Promise<unknown> }) {
@@ -406,7 +399,7 @@ function AgentSpace({
   transport,
   disabled,
   mayDecide,
-  about,
+  settings,
   control,
   actions = [],
   conversationSession,
@@ -426,8 +419,9 @@ function AgentSpace({
   transport: Transport;
   disabled: boolean;
   mayDecide: (p: Proposal) => boolean;
-  about: ReactNode;
-  /** Agent-level controls beside the view tabs. */
+  /** The Settings tab: what the agent is, and its configuration. */
+  settings: ReactNode;
+  /** Where it runs and whether it is enabled, at the top of Settings. */
   control?: ReactNode;
   actions?: AgentAction[];
   conversationSession?: string | null;
@@ -440,7 +434,7 @@ function AgentSpace({
   const requestedTarget = route.thread ?? "new";
   const target = requestedTarget === "new" ? conversationSession ?? "new" : requestedTarget;
   useEffect(() => { if (!route.view) go(landingForAgent(id), true); }, [id, route.view]);
-  const setTab = (view: "chat" | "about" | "feed") => go({ page: "agents", id, view, thread: target });
+  const setTab = (view: AgentTab) => go({ page: "agents", id, view, thread: target });
   const [threads, setThreads] = useState<AgentThread[]>([]), [more, setMore] = useState<number | null>(null), [railError, setRailError] = useState<string | null>(null);
   const selected = threads.find((t) => t.id === target);
   const now = useNow(15000);
@@ -468,7 +462,8 @@ function AgentSpace({
     finally { setSessionBusy(false); }
   };
   useEffect(() => {
-    if (requestedTarget === "new" && ongoing) go({ page: "agents", id, view: route.view === "sessions" ? "sessions" : "chat", thread: ongoing }, true);
+    // A link without a thread opens the main chat's thread in the view it names.
+    if (requestedTarget === "new" && ongoing) go({ page: "agents", id, view: route.view ?? "chat", thread: ongoing }, true);
     // Continued in a fresh conversation: follow it from the one it replaced.
     else if (ongoing && followed.current && ongoing !== followed.current && target === followed.current) {
       const from = followed.current;
@@ -748,8 +743,7 @@ function AgentSpace({
         <nav aria-label="Agent views">
           {transport.sessionAction && selected?.kind === "work" && selected.status !== "closed" &&
             <Button variant="ghost" size="sm" loading={sessionBusy} onClick={() => void manageSession("close")}>Close session</Button>}
-          {control}
-          {(["chat", "about", "feed"] as const).map((t) => (
+          {AGENT_TABS.map((t) => (
             <button
               key={t}
               className={tab === t ? "active" : ""}
@@ -762,8 +756,11 @@ function AgentSpace({
           ))}
         </nav>
       </header>
-      {tab === "about" ? (
-        <div className="agent-about">{about}</div>
+      {tab === "settings" ? (
+        <div className="agent-about agent-settings">
+          {control && <div className="agent-settings-controls">{control}</div>}
+          {settings}
+        </div>
       ) : tab === "feed" ? (
         <div className="agent-feed">
           {feed.error && <p className="error">{feed.error}</p>}

@@ -21,7 +21,7 @@ const checkpointWords: Record<Checkpoint["state"], string> = {
   failed: "Handoff not saved",
 };
 
-/** About → Memory for a local agent: what a fresh conversation starts from.
+/** Settings → Memory for a local agent: what a fresh conversation starts from.
  *  The handoffs are summaries; each links its source conversation. */
 export function AgentMemory({ agent }: { agent: LocalAgent }) {
   const [query, setQuery] = useState(""),

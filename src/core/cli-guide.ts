@@ -40,7 +40,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox agent send <agent> [--project P] <text…|->   # into another agent's chat, by name; starts one if it has none
     agentbox agent memory <ID> prefer --key <key> --text <text>   # or --file <text file>; local agents; forget --key <key>
 
-Chat, About and Feed share one agent identity. Recommendations are immutable
+Chat, Feed and Settings share one agent identity. Recommendations are immutable
 {title,finding,reason,next,evidence:[{url,label}],action:<optional action UUID>}.
 Only the associated session can publish them. Chat coordinators queue scoped
 work and keep worker capacity available; they cannot publish repository actions.
