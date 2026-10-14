@@ -3865,10 +3865,17 @@ function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
   try {
     sessionCapability(id);
   } catch (e) {
-    // Without it the session cannot hand a PR over; it still starts.
+    // Managed requests fail closed without it; ordinary sessions still start.
     console.error(`agentbox: ${id}'s session capability could not be written:`, e);
   }
-  return { AGENTBOX_SESSION: id, ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}) };
+  // A session's CLI must talk to the server that started it, isolated or not.
+  return {
+    AGENTBOX_SESSION: id,
+    ...(process.env.AGENTBOX_HOME ? { AGENTBOX_HOME: process.env.AGENTBOX_HOME } : {}),
+    ...(process.env.AGENTBOX_PORT ? { AGENTBOX_PORT: process.env.AGENTBOX_PORT } : {}),
+    ...(process.env.AGENTBOX_TMUX_SOCKET ? { AGENTBOX_TMUX_SOCKET: process.env.AGENTBOX_TMUX_SOCKET } : {}),
+    ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}),
+  };
 }
 
 /** The variables a launch marks secret (`Command.secret`) apart from the
