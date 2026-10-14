@@ -1537,3 +1537,79 @@ export type ServerMessage =
 export type ClientMessage =
   | { type: "watch"; sessionId: string | null }
   | { type: "ping" };
+
+/** A superagent as the Agents page shows it (`GET /api/superagents`, src/core/superagents.ts). */
+export interface SuperagentInfo {
+  name: string;
+  title: string;
+  description: string;
+  /** Where its `superagent.json` and code are. */
+  dir: string;
+  enabled: boolean;
+  /** Why its manifest cannot be read, when it cannot. */
+  error: string | null;
+  /** Its main conversation now, following handovers. */
+  main: string | null;
+  /** The sessions that were its main before, newest first. */
+  previous: string[];
+  /** No main yet, and the manifest says how agentbox starts one on the first message. */
+  canStart: boolean;
+  /** It has a program (run, or a url) that answers for its page. */
+  hasPage: boolean;
+  /** The program agentbox keeps running for it, when its manifest has `run`. */
+  process: {
+    state: "running" | "starting" | "backoff" | "stopped";
+    pid: number | null;
+    since: number | null;
+    restarts: number;
+    lastExit: { code: number | null; at: number } | null;
+  } | null;
+  createdAt: number;
+}
+
+/** What a superagent's page is made of: its program answers `GET /agentbox/view` with this (docs/superagents.md). */
+export interface SuperagentView {
+  title?: string;
+  /** Its tabs, beside Chat; the page asks for one with `?tab=`. */
+  tabs?: { id: string; title: string; badge?: number | string }[];
+  blocks: SuperagentBlock[];
+  /** Ask again after this many seconds (at least 2). */
+  refresh?: number;
+}
+
+export interface SuperagentAction {
+  id: string;
+  label: string;
+  style?: "primary" | "danger";
+  /** Asked before the action is sent. */
+  confirm?: string;
+  /** Sent with the action, beside the form's values. */
+  values?: Record<string, unknown>;
+}
+
+export type SuperagentField =
+  | { name: string; label: string; kind: "text" | "textarea"; value?: string; placeholder?: string; rows?: number }
+  | { name: string; label: string; kind: "select"; value?: string; options: { value: string; label: string }[] }
+  | { name: string; label: string; kind: "checkbox"; value?: boolean };
+
+export type SuperagentBlock =
+  | { type: "heading"; text: string }
+  | { type: "markdown"; text: string }
+  | { type: "fields"; items: { label: string; value: string }[] }
+  | { type: "divider" }
+  | { type: "actions"; actions: SuperagentAction[] }
+  | { type: "form"; id: string; fields: SuperagentField[]; actions: SuperagentAction[] }
+  | {
+      type: "item";
+      id?: string;
+      title: string;
+      subtitle?: string;
+      status?: "ok" | "warn" | "bad" | "busy" | "idle";
+      /** Markdown. */
+      body?: string;
+      /** Session ids, linked to their pages. */
+      sessions?: string[];
+      links?: { label: string; url: string }[];
+      actions?: SuperagentAction[];
+      children?: SuperagentBlock[];
+    };

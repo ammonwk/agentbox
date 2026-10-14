@@ -267,6 +267,9 @@ export interface SpawnOptions {
   /** One of the adapter's `efforts`; absent means the CLI's default. */
   effort?: string;
   autoApprove: boolean;
+  /** It may read but not write or run anything that changes the machine
+   *  (`ProviderAdapter.readOnly` says whether the CLI can). */
+  readOnly?: boolean;
 }
 
 export interface ResumeOptions {
@@ -310,6 +313,9 @@ export interface ProviderAdapter {
   /** Reasoning-effort levels the CLI takes, lowest first; empty when it has
    *  no such knob. */
   readonly efforts: readonly string[];
+  /** The launch args that make a session read-only (`SpawnOptions.readOnly`),
+   *  when the CLI can be held to that; absent when it cannot. */
+  readonly readOnly?: readonly string[];
 
   /** Is the CLI installed, and what version. */
   detect(): Promise<{ installed: boolean; version: string | null }>;

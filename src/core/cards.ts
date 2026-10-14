@@ -67,6 +67,8 @@ export interface NewCard {
   about?: string | null;
   /** When it happened, for one added after the fact; never later than now. */
   at?: number | null;
+  /** False: a decision that does not push to your devices (a superagent's Feed already shows it). */
+  notify?: boolean;
 }
 
 export interface CardFilter {
@@ -157,7 +159,7 @@ export class Cards {
     );
     const card = this.get(Number(lastInsertRowid));
     this.changed();
-    if (card.kind === "decision") this.pushSoon(card);
+    if (card.kind === "decision" && c.notify !== false) this.pushSoon(card);
     return card;
   }
 

@@ -401,6 +401,19 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE sessions ADD COLUMN pin_order REAL;
   ALTER TABLE sessions ADD COLUMN bookmarked_at INTEGER;
   `,
+  // 28 — superagents (src/core/superagents.ts): a name, where its code is,
+  // and its main conversation. Its manifest, code and state are its own.
+  `
+  CREATE TABLE superagents (
+    name       TEXT PRIMARY KEY,
+    dir        TEXT NOT NULL,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    main       TEXT,
+    previous   TEXT NOT NULL DEFAULT '[]',
+    main_send  TEXT,
+    created_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 function migrate(d: Database) {

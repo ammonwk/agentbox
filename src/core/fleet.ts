@@ -263,6 +263,9 @@ interface Tracked {
 
 export interface SpawnRequest {
   provider: ProviderId;
+  /** Reads, never writes: for a reviewer. Only a provider whose CLI can be
+   *  held to it (`ProviderAdapter.readOnly`); it gets no global MCP servers. */
+  readOnly?: boolean;
   cwd?: string;
   repoId?: string;
   worktree?: boolean;
@@ -2661,6 +2664,7 @@ export class Fleet extends EventEmitter {
 
   async spawn(req: SpawnRequest): Promise<{ session: Session; placement: Placement }> {
     const adapter = this.adapter(req.provider);
+    if (req.readOnly && !adapter.readOnly) throw new FleetError(400, `${adapter.label} sessions cannot be started read-only`);
     const settings = getSettings();
     if (req.effort && !adapter.efforts.includes(req.effort)) {
       throw new FleetError(400, `${adapter.label} takes no effort "${req.effort}"${adapter.efforts.length ? ` (${adapter.efforts.join(", ")})` : ""}`);
@@ -2700,7 +2704,8 @@ export class Fleet extends EventEmitter {
 
     const model = req.model || settings.models[req.provider] || undefined;
     const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
-    const cmd = withGlobalMcp(req.provider, account, adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove }), [], cwd);
+    const launched = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
+    const cmd = req.readOnly ? launched : withGlobalMcp(req.provider, account, launched, [], cwd);
     const now = this.now();
     const name = tmuxName(id);
     const parent = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
@@ -2727,6 +2732,8 @@ export class Fleet extends EventEmitter {
       parent: parent ?? null,
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
+    // Carried on every resume, as an adopted session's own flags are.
+    if (req.readOnly) updateSessionRecord(id, { launch: { args: [...adapter.readOnly!], env: {} } });
     insertAssignment({
       id: randomUUID(),
       sessionId: id,
@@ -3026,7 +3033,9 @@ export class Fleet extends EventEmitter {
       autoApprove: getSettings().autoApprove,
       ...(launch ? { carry: launch.args } : {}),
     };
-    const cmd = withGlobalMcp(rec.provider, account, adapter.resumeCommand(opts), opts.carry, cwd, launch?.env);
+    const resumed = adapter.resumeCommand(opts);
+    const readOnly = !!adapter.readOnly && !!launch && adapter.readOnly.every((a) => launch.args.includes(a));
+    const cmd = readOnly ? resumed : withGlobalMcp(rec.provider, account, resumed, opts.carry, cwd, launch?.env);
     return { opts, cmd, typed, inherited: launch?.env };
   }
 

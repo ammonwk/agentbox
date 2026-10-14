@@ -744,16 +744,21 @@ const isHeadless = (argv: string[]): boolean => ["exec", "e", "review"].includes
  * The flags a session starts with. A carried launch decides model and
  * permissions (ResumeOptions.carry); what it does not set is ours.
  */
-function sessionFlags(opts: { model?: string; effort?: string; autoApprove: boolean; carry?: string[] }): string[] {
+function sessionFlags(opts: { model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
   const c = opts.carry;
   const a: string[] = [...(c ?? [])];
   const configs = (c ?? []).filter((x, i) => c![i - 1] === "-c" || c![i - 1] === "--config" || x.startsWith("--config="));
   if (opts.model && !(c && setsFlag(c, "-m", "--model"))) a.push("--model", opts.model);
   if (opts.effort && !configs.some((x) => /(^|=)model_reasoning_effort=/.test(x))) a.push("-c", `model_reasoning_effort="${opts.effort}"`);
-  if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox");
+  if (opts.readOnly) a.push(...READ_ONLY);
+  else if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox");
   if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told());
   return a;
 }
+
+/** Codex's own sandbox: it reads, and asks for nothing it could not do. Kept
+ *  as the session's launch, so a resume is read-only too. */
+export const READ_ONLY = ["--sandbox", "read-only", "--ask-for-approval", "never"];
 
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
   const argv = ["codex", ...sessionFlags(opts)];
@@ -817,6 +822,7 @@ export const codexAdapter: ProviderAdapter = {
   },
 
   reader: codexReader,
+  readOnly: READ_ONLY,
   spawnCommand,
   resumeCommand,
   carryOver: (argv) => carryFlags(codexArgs(argv), CARRIED),
