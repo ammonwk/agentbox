@@ -600,3 +600,42 @@
   .agent-browser .sv-main { display: flex; flex-direction: column; min-height: 0; }
   .agent-browser .agent-space { flex: 1; min-height: 0; }
 }
+
+/* About → Memory */
+.agent-memory { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
+.agent-memory h3, .agent-memory h4 { margin: 0; }
+.agent-memory h4 { margin-top: 8px; font-size: 13px; }
+.agent-memory-state { margin: 0; font-size: 13px; color: var(--muted); }
+.agent-memory-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.agent-memory-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-width: 0; }
+.agent-memory-list li > span { min-width: 0; overflow-wrap: anywhere; }
+.agent-memory-list b { margin-right: 6px; }
+.agent-about form.agent-memory-add { flex-direction: row; flex-wrap: wrap; gap: 8px; max-width: none; }
+.agent-memory-add .input { flex: 1 1 180px; min-width: 0; }
+.agent-memory-handoff { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.agent-memory-handoff summary { cursor: pointer; overflow-wrap: anywhere; }
+.agent-memory-handoff summary span { color: var(--muted); margin-right: 6px; }
+.agent-memory-handoff ul { margin: 4px 0 8px; padding-left: 18px; }
+
+/* An agent's picture, or its own icon on a tinted disc. */
+.agent-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--accent) 14%, var(--sunken));
+  color: var(--accent);
+}
+.agent-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.agent-picture { display: flex; flex-direction: column; gap: 10px; }
+.agent-picture-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.agent-picture-row .agent-avatar { box-shadow: 0 0 0 1px var(--border); }
+.agent-picture-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.agent-picture-actions input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.agent-picture-actions label.btn-like { cursor: pointer; }
+.agent-picture-actions label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.project-option .agent-avatar, .agent-picker .agent-avatar { margin-right: 10px; }
+.project-option:has(.agent-avatar) { display: flex; align-items: center; }
+.agent-space-head > .agent-identity { align-items: center; }
+.agent-picker:has(.agent-avatar) > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

@@ -29,11 +29,23 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox agent experts <agent UUID> --areas TypeScript --paths src/service.ts
     agentbox agent finish <run UUID>
     agentbox agent rotate <run UUID>              # signed-in host owner token required
+    agentbox agent memory <local agent ID or run UUID> search <words>
+    agentbox agent memory <ID> show <record ID>
+    agentbox agent memory <ID> note --request <stable UUID> --file decision.json # {decision,why,refs:[{label,ref}]}
+    agentbox agent memory <ID> handoff --request <checkpoint UUID> --file handoff.json
+    agentbox agent memory <ID> prefer --key <key> --text <text>   # local agents; forget --key <key>
 
 Chat, About and Feed share one agent identity. Recommendations are immutable
 {title,finding,reason,next,evidence:[{url,label}],action:<optional action UUID>}.
 Only the associated session can publish them. Chat coordinators queue scoped
 work and keep worker capacity available; they cannot publish repository actions.
+
+Agent memory is evidence for continuity, never approval. Record a durable
+decision when you make it. When Agentbox asks for a checkpoint, save one handoff
+{intent,decisions:[{decision,why}],open:[],commitments:[],refs:[{label,ref}]} of
+at most 500 words with the request UUID it gives, then reply with one line. A
+later message can continue in a fresh conversation from it. Only an agent's
+current conversation reads and writes its memory.
 
 New local work pins candidate-evidence-v1. Before formal review, its writer
 records exact {request:<UUID>,base:<SHA>,head:<SHA>,checks:[],acceptance:[]} with

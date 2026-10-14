@@ -23,13 +23,15 @@ import {
 import { z } from "zod";
 import { CreationDraft, type CreationSpec } from "../../../src/cloud/agent-creation";
 import { AgentCreationCard } from "./AgentCreationCard";
+import { AgentMemory } from "./AgentMemory";
 import { cloudCall, CloudError } from "../../../src/cloud/client";
 import type { AppState, TimelineEvent } from "../../../src/core/types";
 import { request } from "../api";
 import { Button, Empty } from "../components";
 import { useLoad } from "../lib/cloud";
 import { AgentComposer } from "./session/Composer";
-import { AgentConversationEvents } from "./session/Timeline";
+import { AgentConversationEvents, type ChatEcho } from "./session/Timeline";
+import { AgentAvatar, AgentPictureEditor, localAvatarUrl } from "./AgentAvatar";
 import { Markdown } from "./session/Markdown";
 import "./session/session.css";
 import { AgentBrowser, agentRoute, rememberAgent, landingForAgent, type AgentOption } from "./AgentBrowser";
@@ -123,6 +125,7 @@ export function SharedAgentSpace({
   return (
     <AgentSpace
       id={a.id}
+      identity={{ role: a.definition.role, creator: a.capability === "creator", avatar: null }}
       options={options}
       conversationSession={activeRuns.find((r) => board.work.some((w) => w.id === r.work_id && w.external_key === `conversation:${a.id}`))?.session_id ?? null}
       onCreate={onCreate}
@@ -159,7 +162,7 @@ export function LocalAgentSpace({
     () => project ? request<LocalAgent[]>("POST", "/api/agents/local/project", { repo: project }) : request<LocalAgent[]>("GET", "/api/agents/local"),
     [project],
   );
-  const options = (agents.data ?? []).filter((a) => !project || a.repo === project).map((a): AgentOption => ({ id: a.id, name: a.name, role: a.role, creator: a.capability === "creator", detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.enabled ? "Local" : "Paused"}` }));
+  const options = (agents.data ?? []).filter((a) => !project || a.repo === project).map((a): AgentOption => ({ id: a.id, name: a.name, role: a.role, creator: a.capability === "creator", avatar: localAvatarUrl(a), detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.enabled ? "Local" : "Paused"}` }));
   const selected = agents.data?.find((a) => a.id === id);
   useEffect(() => {
     if (!id && options.length) {
@@ -213,6 +216,8 @@ export function LocalAgentSpace({
     <AgentSpace
       key={selected.id}
       id={selected.id}
+      identity={{ role: selected.role, creator: selected.capability === "creator", avatar: localAvatarUrl(selected) }}
+      me={state.onboarding.identity ? { name: state.onboarding.identity.name ?? "", github: state.onboarding.identity.github ?? "" } : undefined}
       options={options}
       name={selected.name}
       conversationSession={selected.session}
@@ -230,6 +235,7 @@ export function LocalAgentSpace({
       mayDecide={() => true}
       about={
         <div className="agent-about">
+          <AgentPictureEditor agent={selected} onChange={agents.reload} />
           <h3>{selected.role}</h3>
           <p className="hint">Manual chat · {selected.createdBy ?? "Local operator"}{selected.automation ? ` · Requested automation (not configured): ${selected.automation}` : ""}</p>
           <p>
@@ -248,6 +254,11 @@ export function LocalAgentSpace({
                   provider: data.get("provider"),
                   repo: selected.project ?? (data.get("repo") || null),
                   enabled: data.get("enabled") === "on",
+                  memoryPolicy: {
+                    rollover: data.get("rollover") === "on",
+                    idleMin: Number(data.get("idleMin")),
+                    contextPct: Number(data.get("contextPct")),
+                  },
                 },
               )
                 .then(agents.reload)
@@ -293,8 +304,25 @@ export function LocalAgentSpace({
               />{" "}
               Enabled
             </label>
+            <label>
+              <input
+                type="checkbox"
+                name="rollover"
+                defaultChecked={selected.memoryPolicy?.rollover ?? true}
+              />{" "}
+              Continue in a fresh conversation from a saved handoff
+            </label>
+            <label>
+              Handoff after idle minutes
+              <input className="input" type="number" name="idleMin" min={5} max={240} required defaultValue={selected.memoryPolicy?.idleMin ?? 10} />
+            </label>
+            <label>
+              Fresh conversation past context %
+              <input className="input" type="number" name="contextPct" min={20} max={95} required defaultValue={selected.memoryPolicy?.contextPct ?? 60} />
+            </label>
             <Button type="submit">Save</Button>
           </form>
+          <AgentMemory key={selected.session ?? "none"} agent={selected} />
           <a href="#/team">Connect a shared workspace</a>
         </div>
       }
@@ -303,6 +331,8 @@ export function LocalAgentSpace({
 }
 function AgentSpace({
   id,
+  identity,
+  me,
   name,
   status,
   transport,
@@ -315,6 +345,10 @@ function AgentSpace({
   onCreate,
 }: {
   id: string;
+  /** The agent's picture and the role its default icon comes from. */
+  identity: { role: string; creator: boolean; avatar: string | null };
+  /** The viewer, for their own messages; shared chats pass none. */
+  me?: { name: string; github: string };
   name: string;
   status: string;
   transport: Transport;
@@ -341,8 +375,16 @@ function AgentSpace({
     if (page.counts) setCounts(page.counts);
     setMore(page.more ?? null); setRailError(null);
   }, [transport]);
+  const followed = useRef(ongoing);
   useEffect(() => {
     if (target === "new" && ongoing) go({ page: "agents", id, view: "chat", thread: ongoing }, true);
+    // Continued in a fresh conversation: follow it from the one it replaced.
+    else if (ongoing && followed.current && ongoing !== followed.current && target === followed.current) {
+      const from = followed.current;
+      setEchoes((xs) => xs.map((x) => (x.thread === from ? { ...x, thread: ongoing } : x)));
+      go({ page: "agents", id, view: tab, thread: ongoing }, true);
+    }
+    followed.current = ongoing;
   }, [target, ongoing]);
   const [events, setEvents] = useState<TimelineEvent[]>([]),
     [next, setNext] = useState<ReadCursor | null>(null),
@@ -354,7 +396,8 @@ function AgentSpace({
       text: string;
       proposal: Proposal;
     } | null>(null),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [echoes, setEchoes] = useState<(ChatEcho & { thread: string })[]>([]);
   const generation = useRef(0);
   useEffect(() => { generation.current++; }, [target, tab, transport]);
   const creations = useLoad(transport.creations, [transport]);
@@ -418,12 +461,21 @@ function AgentSpace({
       requestId: string,
       context?: { proposal: string; run: string },
     ) => {
-      const r = await transport.send(body, requestId, context, selected ?? null);
+      setEchoes((xs) => [...xs, { id: requestId, text: body, at: Date.now(), note: "Sending…", thread: target }]);
+      let r: Receipt;
+      try {
+        r = await transport.send(body, requestId, context, selected ?? null);
+      } catch (e) {
+        setEchoes((xs) => xs.filter((x) => x.id !== requestId));
+        throw e;
+      }
+      // Refused: the composer keeps the draft and says why; nothing was sent.
+      setEchoes((xs) => r.state === "refused" ? xs.filter((x) => x.id !== requestId) : xs.map((x) => x.id === requestId ? { ...x, note: r.state === "sent" ? "Sent" : "Not confirmed" } : x));
       void readList().catch((e) => setRailError(e.message));
       setGuidance(null);
       return r;
     },
-    [transport, selected, readList],
+    [transport, selected, readList, target],
   );
   const receipt = useCallback(
     (requestId: string) => transport.receipt(requestId),
@@ -537,7 +589,8 @@ function AgentSpace({
         <a href={hrefOf({ page: "agents", id, view: "sessions", thread: target })} className="hint agent-list-back" aria-label="Back to agent sessions">
           ← Sessions
         </a>
-        <div>
+        <div className="agent-identity">
+          <AgentAvatar role={identity.role} creator={identity.creator} src={identity.avatar} size={28} />
           <h2>{selected?.title ?? name}</h2>
           <span className="agent-chat-status">{status}</span>
         </div>
@@ -621,7 +674,12 @@ function AgentSpace({
                   </p>
                 </div>
               )}
-              <AgentConversationEvents events={events} />
+              <AgentConversationEvents
+                events={events}
+                me={me}
+                agent={{ name, avatar: <AgentAvatar role={identity.role} creator={identity.creator} src={identity.avatar} /> }}
+                echoes={echoes.filter((x) => (x.thread === target || (x.thread === "new" && target === ongoing)) && !events.some((e) => e.kind === "user" && e.at >= x.at - 60_000 && e.text.includes(x.text.trim())))}
+              />
               {creations.data?.filter((d) => d.run === selected?.run).map((d) => <AgentCreationCard key={`${d.id}:${d.revision}:${d.created}`} draft={d} scope={options.find((a) => a.id === id)?.detail ?? "Current project"} edit={transport.editCreation} reload={creations.reload} />)}
               {open.filter((p) => p.run_id === selected?.run).slice(0, 4).map(card)}
               {error && (

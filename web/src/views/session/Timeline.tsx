@@ -625,9 +625,11 @@ function Starting({ session }: { session: Session }) {
 /** Your GitHub picture, or your initials when there is none. */
 function Avatar() {
   const me = useContext(Me);
-  const [failed, setFailed] = useState(false);
-  if (me.github && !failed) {
-    return <img className="tl-avatar" src={`https://github.com/${encodeURIComponent(me.github)}.png?size=80`} alt="" onError={() => setFailed(true)} />;
+  const src = me.github ? `https://github.com/${encodeURIComponent(me.github)}.png?size=80` : null;
+  // Remembered per source: a new identity gets its own try.
+  const [failed, setFailed] = useState<string | null>(null);
+  if (src && failed !== src) {
+    return <img className="tl-avatar" src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailed(src)} />;
   }
   const initials = me.name.split(/\s+/).filter(Boolean).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   return (
@@ -1206,6 +1208,53 @@ function Field({ f }: { f: InputField }) {
 
 /** Read-through shared agent conversation: the same provider-neutral bubbles as
  * Sessions, without remote terminal controls or unrelated local session links. */
-export function AgentConversationEvents({events}:{events:readonly TimelineEvent[]}) {
- return <div className="tl-stream">{events.filter(e=>e.kind==='user'||e.kind==='assistant').map(e=><EventRow key={e.id} ev={e as Extract<TimelineEvent,{kind:'user'|'assistant'}>} />)}</div>;
+/** Who is on each side of an agent chat. `me` is the viewer, for their own
+ *  messages only: a shared chat whose transcript does not say which human
+ *  wrote a message passes none, so no one else's message wears your picture. */
+export type ChatSides = {
+  me?: { name: string; github: string };
+  agent?: { name: string; avatar: React.ReactNode };
+};
+/** Sent from here and not yet in the transcript. */
+export type ChatEcho = { id: string; text: string; at: number; note: string };
+
+export function AgentConversationEvents({ events, me, agent, echoes = [] }: { events: readonly TimelineEvent[]; echoes?: readonly ChatEcho[] } & ChatSides) {
+  const shown = events.filter((e): e is Extract<TimelineEvent, { kind: "user" | "assistant" }> => e.kind === "user" || e.kind === "assistant");
+  return (
+    <Me.Provider value={me ?? NOBODY}>
+      <div className="tl-stream">
+        {shown.map((e, i) =>
+          e.kind === "assistant" && agent ? (
+            <AgentReply key={e.id} ev={e} agent={agent} first={shown[i - 1]?.kind !== "assistant"} />
+          ) : (
+            <EventRow key={e.id} ev={e} />
+          ),
+        )}
+        {echoes.map((e) => (
+          <Bubble key={e.id} at={e.at} className="tl-echo" note={e.note} copy={e.text}>
+            <Markdown text={e.text} />
+          </Bubble>
+        ))}
+      </div>
+    </Me.Provider>
+  );
+}
+const NOBODY = { name: "", github: "" };
+
+/** An agent's reply: its picture and name, then the reply in a card on the
+ *  left, weighted like your bubble on the right. A run of replies shows the
+ *  picture and name once. */
+function AgentReply({ ev, agent, first }: { ev: Extract<TimelineEvent, { kind: "assistant" }>; agent: NonNullable<ChatSides["agent"]>; first: boolean }) {
+  return (
+    <div className={`tl-agent${first ? "" : " tl-agent-more"}`} data-ev={ev.id}>
+      <div className="tl-agent-face">{first ? agent.avatar : null}</div>
+      <div className="tl-agent-body">
+        {first && <div className="tl-agent-name">{agent.name}</div>}
+        <div className="tl-agent-card">
+          <AssistantRow ev={ev} />
+        </div>
+        <time className="tl-agent-time" dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>
+      </div>
+    </div>
+  );
 }

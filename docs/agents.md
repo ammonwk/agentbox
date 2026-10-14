@@ -309,6 +309,31 @@ this does not isolate malicious code running as the same Unix user. Local scope
 is explicit and never presented as workspace sharing. Creating a local agent does
 not authorize external outreach or repository scans.
 
+### Memory and fresh conversations
+
+A local agent keeps one provider conversation while you chat with it. When you
+have been away for 10 minutes and its prompt cache is still warm, Agentbox asks
+it for a handoff of at most about 500 words: what you want, decisions and why,
+open questions, commitments and references. A later message after the cache
+went cold (or past 60% context) starts a fresh conversation from that handoff,
+your durable preferences and the live state of its work, and Chat follows it.
+If the handoff is missing or older than the last real message, the message goes
+to the old conversation instead; nothing is dropped. About → Memory shows the
+policy, preferences, handoffs and search, and the form sets the idle minutes,
+the context budget, or turns rollover off. The agent records decisions with
+`agentbox agent memory <ID> note` and reads older handoffs with `search` and
+`show`; each record names its source conversation, and the provider transcript
+stays the record. Memory never authorizes anything. Waits, Review cards, PR
+claims, work grants and messages to the old conversation pass to the new one.
+Shared coordinators keep handoffs on their execution host and start from them
+after a human rotation or a new run; they do not roll over automatically.
+
+About → Picture uploads a PNG, JPEG, GIF or WebP (up to 2 MB) for a local agent.
+It stays with the agent across reloads, restarts and fresh conversations, and
+Chat shows it beside each reply. Without one, or when it fails to load, the
+agent's own icon is shown. Shared agents use their icon; their definitions do not
+store pictures yet.
+
 Shared transcript reads use **live encrypted Realtime Broadcast** (enable
 Supabase Realtime). A human JWT queues a bounded 45-second read request containing
 only an agent ID, cursor and ephemeral P-256 public key. The current authorized

@@ -30,6 +30,8 @@ export interface LocalRun {
   session: string;
   phase: "claiming" | "starting" | "attached" | "stopping" | "done";
   finish: boolean;
+  /** The agent's Chat coordinator rather than a repository writer. */
+  coordinator?: boolean;
 }
 export interface ActionRecord {
   id: string;

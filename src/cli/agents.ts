@@ -21,6 +21,8 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       "kind",
       "number",
       "condition",
+      "key",
+      "text",
     ],
     ["json"],
   );
@@ -103,6 +105,28 @@ export async function agent(api: Api, args: string[]): Promise<number> {
         { request: str("request"), proposal: file() },
       );
       break;
+    case "memory": {
+      const [, what, ...words] = rest;
+      if (!id)
+        throw new Error(
+          "agent memory <local agent ID|run UUID> [search WORDS | show ID | handoff|note --request UUID --file JSON | prefer --key K --text T | forget --key K]",
+        );
+      const base = `/api/agents/${encodeURIComponent(id)}/memory`;
+      if (!what || what === "search")
+        value = await api("GET", `${base}?q=${encodeURIComponent(words.join(" "))}`);
+      else if (what === "show") {
+        if (!words[0]) throw new Error("agent memory <ID> show <record ID>");
+        value = await api("GET", `${base}/${encodeURIComponent(words[0])}`);
+      } else if (what === "handoff" || what === "note") {
+        if (!str("request")) throw new Error(`agent memory <ID> ${what} --request <stable UUID> --file <JSON>`);
+        value = await api("POST", `${base}/${what}`, { request: str("request"), body: file() });
+      } else if (what === "prefer" || what === "forget") {
+        if (!str("key") || (what === "prefer" && !str("text")))
+          throw new Error("agent memory <ID> prefer --key <key> --text <text>, or forget --key <key>");
+        value = await api("POST", `${base}/prefer`, { body: { key: str("key"), text: what === "prefer" ? str("text") : "" } });
+      } else throw new Error(`unknown memory verb ${what}`);
+      break;
+    }
     case undefined:
     case "status":
       value = await api("GET", "/api/agents/runtime");

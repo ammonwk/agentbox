@@ -318,7 +318,7 @@ export class AgentWorks {
       throw new FleetError(403, "Agent paused or project changed");
     if (
       !caller ||
-      (caller !== w.session && (writerOnly || caller !== g.requester))
+      (caller !== w.session && (writerOnly || !this.runtime.conversations.continues(g.requester, caller)))
     )
       throw new FleetError(
         403,
@@ -383,7 +383,8 @@ export class AgentWorks {
   async start(caller: string | null, input: unknown) {
     const p = WorkInput.parse(input),
       g = this.grant(p.grant);
-    if (!caller || caller !== g.requester)
+    // The coordinator's own successor after a memory rollover keeps its grant.
+    if (!caller || !this.runtime.conversations.continues(g.requester, caller))
       throw new FleetError(403, "This grant belongs to another coordinator");
     return this.lock(p.id, async () => {
       const prior = this.list().find((w) => w.id === p.id);

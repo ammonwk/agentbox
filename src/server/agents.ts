@@ -5,6 +5,7 @@ import { authenticatedSession } from "../core/session-authority";
 import { cloudConfig } from "../core/cloud/config";
 import { FleetError } from "../core/fleet";
 import { requireOperator } from "../core/agents/work";
+import { AVATAR_MAX_BYTES } from "../core/agents/avatar";
 
 export function agentRoutes(router: Router, agents: AgentsRuntime) {
   const human = async (req: Request, b: Record<string, unknown>) => {
@@ -192,6 +193,45 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
           return json({ id: b.request, state: "refused", result: e.message });
         throw e;
       }
+    })
+    // Memory: an agent's own conversation (by its session capability) or the
+    // local operator. Handoffs and decisions come only from the conversation.
+    .add("GET", "/api/agents/:id/memory", ({ req, params, url }) =>
+      agents.memoryView(params.id!, authenticatedSession(req), z.string().max(400).parse(url.searchParams.get("q") ?? "")).then(json),
+    )
+    .add("GET", "/api/agents/:id/memory/:record", ({ req, params }) =>
+      agents.memoryRecord(params.id!, authenticatedSession(req), z.string().uuid().parse(params.record)).then(json),
+    )
+    .add("POST", "/api/agents/:id/memory/:kind", async ({ req, params }) => {
+      const b = await readBody(req),
+        kind = z.enum(["handoff", "note", "prefer"]).parse(params.kind);
+      return json(
+        await agents.remember(
+          params.id!,
+          authenticatedSession(req),
+          kind,
+          kind === "prefer" ? null : z.string().uuid().parse(b.request),
+          b.body,
+        ),
+      );
+    })
+    .add("PUT", "/api/agents/local/:id/avatar", async ({ req, params }) => {
+      if (Number(req.headers.get("content-length") ?? 0) > AVATAR_MAX_BYTES)
+        throw new HttpError(413, `Choose an image of at most ${AVATAR_MAX_BYTES / 1024 / 1024} MB`);
+      return json(
+        agents.conversations.setAvatar(params.id!, authenticatedSession(req), new Uint8Array(await req.arrayBuffer()), req.headers.get("content-type") ?? ""),
+      );
+    })
+    .add("DELETE", "/api/agents/local/:id/avatar", ({ req, params }) =>
+      json(agents.conversations.clearAvatar(params.id!, authenticatedSession(req))),
+    )
+    .add("GET", "/api/agents/local/:id/avatar", ({ params }) => {
+      const f = agents.conversations.avatar(params.id!);
+      if (!f) throw new HttpError(404, "This agent has no picture");
+      // The URL carries the picture's version, so a replaced one is a new URL.
+      return new Response(Bun.file(f.path), {
+        headers: { "content-type": f.mime, "cache-control": "private, max-age=31536000, immutable", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'" },
+      });
     })
     .add("GET", "/api/agents/local/:id/receipt/:request", ({ params }) =>
       json(agents.conversations.localReceipt(params.id!, params.request!)),

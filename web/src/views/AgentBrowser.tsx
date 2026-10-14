@@ -3,7 +3,8 @@ import type { AgentThread } from "../../../src/cloud/agent-conversation";
 import { Button, Modal, RelativeTime } from "../components";
 import { go, hrefOf, parseHash, scopeOf } from "../route";
 import { RailTabs } from "./session/Rail";
-export type AgentOption = { id: string; name: string; detail: string; role: string; creator?: boolean };
+import { AgentAvatar } from "./AgentAvatar";
+export type AgentOption = { id: string; name: string; detail: string; role: string; creator?: boolean; avatar?: string | null };
 export function agentRoute() { const r = parseHash(location.hash); return r.page === "agents" ? r : { page: "agents" as const }; }
 export function landingForAgent(id: string) {
   return { page: "agents" as const, id, view: "chat" as const, thread: "new" };
@@ -43,7 +44,7 @@ export function AgentBrowser({ id, options, threads, counts, more, loadMore, err
       else if (e.key === "ArrowRight") el.click(); else return;
       e.preventDefault(); e.stopPropagation();
     }}>
-      <div className="rail-top"><button className="agent-picker" onClick={() => setPicker(true)} aria-label="Select agent" aria-haspopup="dialog"><span>{selected?.name ?? "Select agent"}<small>{selected?.detail}</small></span><span>⌄</span></button></div>
+      <div className="rail-top"><button className="agent-picker" onClick={() => setPicker(true)} aria-label="Select agent" aria-haspopup="dialog">{selected && <AgentAvatar role={selected.role} creator={selected.creator} src={selected.avatar} size={26} />}<span>{selected?.name ?? "Select agent"}<small>{selected?.detail}</small></span><span>⌄</span></button></div>
       <a className="rail-row agent-main-row" aria-current={route.thread === ongoing || route.thread === "new" ? "page" : undefined} href={hrefOf({ page: "agents", id, view: "chat", thread: ongoing ?? "new" })}><span className="rail-title">Main chat</span></a>
       <RailTabs view={view} counts={counts} onChange={setView} />
       <div className="rail-scroll">
@@ -68,7 +69,7 @@ export function AgentBrowser({ id, options, threads, counts, more, loadMore, err
         if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
         const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button")], at = rows.indexOf(document.activeElement as HTMLButtonElement);
         e.preventDefault(); rows[e.key === "Home" ? 0 : e.key === "End" ? rows.length - 1 : (at + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length]?.focus();
-      }}>{visible.map((a) => <button className="project-option" key={a.id} aria-pressed={id === a.id} onClick={() => choose(a)}><span><strong>{a.name}</strong><small>{a.detail}</small><small>{a.role}</small></span></button>)}</div>
+      }}>{visible.map((a) => <button className="project-option" key={a.id} aria-pressed={id === a.id} onClick={() => choose(a)}><AgentAvatar role={a.role} creator={a.creator} src={a.avatar} size={30} /><span><strong>{a.name}</strong><small>{a.detail}</small><small>{a.role}</small></span></button>)}</div>
       {(onCreate || options.some((a) => a.creator)) && <Button onClick={() => { setPicker(false); if (onCreate) onCreate(); else { const a = options.find((a) => a.creator)!; go({ page: "agents", id: a.id, view: "chat", thread: "new" }); } }}>Create agent…</Button>}
       <a href="#/agents/manage">Manage shared agents</a>
     </Modal>}

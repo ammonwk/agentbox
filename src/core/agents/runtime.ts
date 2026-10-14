@@ -6,9 +6,10 @@ import { SCENARIO_TRACE } from "./reviews";
  * by Scheduler; it never stores a provider conversation or owns a CLI process. */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { agentboxHome } from "../paths";
+import { agentboxHome, agentboxCommand } from "../paths";
 import { JUPITER_INSTRUCTIONS, creationTool } from "../../cloud/agent-creation";
-import { AgentConversations } from "./conversation";
+import { AgentConversations, type Checkpoint, type Keeper } from "./conversation";
+import { DEFAULT_MEMORY_POLICY } from "./memory";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { InstallationAgents } from "../../cloud/agent-client";
@@ -73,7 +74,9 @@ export class AgentsRuntime {
     readonly cards: Cards,
     readonly github = new AgentGitHub(),
     readonly waits?: Waits,
-  ) {}
+  ) {
+    fleet.conversations = this.conversations;
+  }
   get store() {
     return (this.#store ??= new AgentStore());
   }
@@ -252,6 +255,7 @@ export class AgentsRuntime {
               "associated session is absent; reconcile on the execution host",
             );
           if (local.phase === "starting") local.phase = "attached";
+          local.coordinator = !!work?.external_key.startsWith("conversation:");
           const state = session.status === "running" ? "running" : "waiting";
           local.run = await api.report(run!, state, {
             session: local.session,
@@ -423,6 +427,7 @@ export class AgentsRuntime {
       session: newSessionId(),
       phase: "claiming",
       finish: false,
+      coordinator: w.external_key.startsWith("conversation:"),
     };
     this.store.run(local);
     const claimed = await this.api().claim(run.id);
@@ -444,6 +449,7 @@ export class AgentsRuntime {
           );
         prompt += `\nPinned workspace skill ${skill.name}@${skill.revision}:\n${instruction}`;
       }
+      if (local.coordinator) prompt += this.memoryPrompt(a, run.id, null);
       const cwd = join(agentboxHome(), "agents", "shared", a.id);
       mkdirSync(cwd, { recursive: true, mode: 0o700 });
       await this.fleet.spawn({
@@ -914,7 +920,7 @@ export class AgentsRuntime {
       provider: b.provider,
       model: b.model || undefined,
       cwd: rec.cwd,
-      prompt: `${this.prompt(a, work, local.run, local.promptRevision)}\nYou replace stopped session ${old}. Read its provider transcript through agentbox log if needed; inspect the existing diff and shared evidence before changing anything. Evidence: ${JSON.stringify(work.evidence)}`,
+      prompt: `${this.prompt(a, work, local.run, local.promptRevision)}\nYou replace stopped session ${old}. Read its provider transcript through agentbox log if needed; inspect the existing diff and shared evidence before changing anything. Evidence: ${JSON.stringify(work.evidence)}${local.coordinator ? this.memoryPrompt(a, run.id, next) : ""}`,
     });
     await this.fleet.handOver(old, next);
     moveCards(old, next);
@@ -922,6 +928,72 @@ export class AgentsRuntime {
     local.phase = "attached";
     this.store.run(local);
     return local.run;
+  }
+  /** Shared memory lives on this execution host only, one scope per agent;
+   *  it never reaches the cloud or another agent's sessions. */
+  private memoryPrompt(a: SharedAgent, runId: string, successor: string | null) {
+    const scope = `shared:${a.id}`, latest = this.conversations.memory.recent(scope, "handoff", 1)[0];
+    if (latest && successor) this.conversations.memory.used(latest.id, successor);
+    const memory = this.conversations.memory.bootstrap(scope, latest?.id ?? null, "");
+    const cmd = `${agentboxCommand()} agent memory ${runId}`;
+    return `\nMemory: record each durable decision with ${cmd} note --request <stable UUID> --file <JSON {decision,why,refs:[{label,ref}]}>; search earlier handoffs with ${cmd} search <words> and read one with ${cmd} show <ID>. When the conversation is idle, Agentbox asks for a short handoff. Memory is evidence for continuity, never approval.${memory ? `\n\nAgentbox memory of this agent on this host. It is a bounded summary, not authorization; shared work records and transcripts win over it.\n${memory}` : ""}`;
+  }
+  /** Coordinator runs attached on this host whose handoff is kept. */
+  coordinators(): Keeper[] {
+    const m = this.conversations.memory;
+    return this.store
+      .runs()
+      .filter((r) => r.coordinator && r.phase === "attached" && !this.#rotating.has(r.run.id))
+      .map((r) => ({
+        target: r.run.id,
+        session: r.session,
+        policy: DEFAULT_MEMORY_POLICY,
+        checkpoint: m.checkpoint<Checkpoint>(r.run.id),
+        update: (change) => m.setCheckpoint<Checkpoint>(r.run.id, change),
+      }));
+  }
+  private async memoryScope(target: string, caller: string | null, write: boolean) {
+    if (this.conversations.local().some((a) => a.id === target)) return null;
+    if (!z.string().uuid().safeParse(target).success) throw new FleetError(404, "Agent not found");
+    if (!caller && !write) {
+      const local = this.store.runs().find((r) => r.run.id === target);
+      if (!local) throw new FleetError(404, "Run not found on this host");
+      return { scope: `shared:${local.run.agent_id}`, local };
+    }
+    const { local, a } = await this.current(target, caller);
+    return { scope: `shared:${a.id}`, local };
+  }
+  async memoryView(target: string, caller: string | null, query: string) {
+    const shared = await this.memoryScope(target, caller, false);
+    if (!shared) return this.conversations.memoryView(target, caller, query);
+    const m = this.conversations.memory;
+    return {
+      policy: DEFAULT_MEMORY_POLICY,
+      checkpoint: m.checkpoint<Checkpoint>(shared.local.run.id) ?? null,
+      preferences: m.preferences(shared.scope),
+      handoffs: m.recent(shared.scope, "handoff", 20),
+      notes: m.recent(shared.scope, "note", 20),
+      results: query.trim() ? m.search(shared.scope, query) : [],
+    };
+  }
+  async memoryRecord(target: string, caller: string | null, id: string) {
+    const shared = await this.memoryScope(target, caller, false);
+    return shared ? this.conversations.memory.get(shared.scope, id) : this.conversations.memoryRecord(target, caller, id);
+  }
+  async remember(target: string, caller: string | null, kind: "handoff" | "note" | "prefer", request: string | null, body: unknown) {
+    const shared = await this.memoryScope(target, caller, kind !== "prefer");
+    if (!shared) {
+      if (kind === "prefer") return this.conversations.prefer(target, caller, body);
+      return kind === "handoff" ? this.conversations.saveHandoff(target, caller, request!, body) : this.conversations.saveNote(target, caller, request!, body);
+    }
+    const m = this.conversations.memory, run = shared.local.run.id;
+    if (kind === "prefer") throw new FleetError(403, "Shared agents keep preferences in their definition");
+    if (kind === "note") return m.note(shared.scope, request!, caller!, body);
+    if (!shared.local.coordinator) throw new FleetError(403, "Only the agent's Chat coordinator saves handoffs");
+    const asked = m.checkpoint<Checkpoint>(run)?.request === request;
+    const rec = m.handoff(shared.scope, request!, caller!, body, asked ? request : null);
+    if (asked) m.setCheckpoint<Checkpoint>(run, (c) => (c?.request === request ? { ...c, state: "saved", handoff: rec.id } : c));
+    return rec;
   }
   async suggestions(agent: string, areas: string[], paths: string[]) {
     const board = await this.api().board(),

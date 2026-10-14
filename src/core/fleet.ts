@@ -2818,6 +2818,8 @@ export class Fleet extends EventEmitter {
     const view = this.get(id);
     if (view.host === "subagent") throw this.callersAgent(view);
     if (view.host !== "none" || this.paneAlive(rec.tmux)) throw new FleetError(409, `session is already running (${view.host === "none" ? "tmux" : view.host})`);
+    const replaced = this.conversations?.replacedBy(id);
+    if (replaced) throw new FleetError(409, `this agent conversation continues in ${replaced}; message that session instead (\`agentbox log ${id}\` still reads this one)`);
     // Its teammates were stopped with it and do not come back; say so, or it
     // will message them and wait for answers that never come.
     if (prompt && rec.parkedAt && rec.parkedMates?.length) {
@@ -3155,8 +3157,35 @@ export class Fleet extends EventEmitter {
    *  does one that was stopped or closed, which otherwise is an error. */
   send(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
     return this.serial(id, async () => {
+      if (await this.conversations?.deliver(id, text, attempt)) return;
       if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt, resume);
     });
+  }
+
+  /**
+   * Set by the Agents runtime (src/core/agents/conversation.ts). Before a
+   * message reaches an agent's conversation, `deliver` may start its
+   * successor with the message instead (a cold or oversized conversation
+   * with a saved handoff), or pass it on to the successor of one it already
+   * replaced; true when it delivered. `replacedBy` keeps a replaced one from
+   * being resumed beside its successor.
+   */
+  conversations: {
+    deliver(id: string, text: string, attempt?: () => void): Promise<boolean>;
+    replacedBy(id: string): string | null;
+  } | null = null;
+
+  /** Why stopping this session's process now would lose something, or null:
+   *  the same checks as parking, for one session, without waiting for idle. */
+  async stopHold(id: string): Promise<string | null> {
+    const v = this.views.get(id);
+    if (!v || v.host === "none") return null;
+    if (v.host !== "tmux" || !v.tmux) return "it runs outside agentbox's tmux";
+    const table = await sharedProcTable().catch(() => null);
+    if (!table) return "the process table could not be read";
+    const panes = this.deps.runtime.listPanes().filter((p) => p.name === v.tmux);
+    const check = await this.parkHold(v, table, panes, readLive().filter((e) => subagentWorking(e.text)), this.now(), 0);
+    return typeof check === "string" ? check : null;
   }
 
   /** Type into the session on the account it is on, however cold: the
@@ -3168,7 +3197,9 @@ export class Fleet extends EventEmitter {
   /** A schedule's note for the session it keeps to: typed where it is, as
    *  the fleet's own nudges are, and a stopped one is resumed with it. */
   note(id: string, text: string): Promise<void> {
-    return this.serial(id, () => this.sendNow(id, text, undefined, true));
+    return this.serial(id, async () => {
+      if (!(await this.conversations?.deliver(id, text))) await this.sendNow(id, text, undefined, true);
+    });
   }
 
   /** Wake a cold tmux session on the balancer's pick with `text` as its
