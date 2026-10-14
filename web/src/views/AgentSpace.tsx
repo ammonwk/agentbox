@@ -220,6 +220,7 @@ export function LocalAgentSpace({
     <AgentSpace
       key={selected.id}
       id={selected.id}
+      attachments
       identity={{ role: selected.role, creator: selected.capability === "creator", avatar: localAvatarUrl(selected) }}
       me={state.onboarding.identity ? { name: state.onboarding.identity.name ?? "", github: state.onboarding.identity.github ?? "" } : undefined}
       options={options}
@@ -341,6 +342,7 @@ export function LocalAgentSpace({
 }
 function AgentSpace({
   id,
+  attachments = false,
   identity,
   me,
   name,
@@ -355,6 +357,8 @@ function AgentSpace({
   onCreate,
 }: {
   id: string;
+  /** Images in the composer: a local agent reads them from this machine. */
+  attachments?: boolean;
   /** The agent's picture and the role its default icon comes from. */
   identity: { role: string; creator: boolean; avatar: string | null };
   /** The viewer, for their own messages; shared chats pass none. */
@@ -726,6 +730,7 @@ function AgentSpace({
               id={`${id}:${target}`}
               run={selected?.run}
               recoverFrom={[id, ...(target !== "new" ? [`${id}:new`] : [])]}
+              attachments={attachments}
               name={name}
               send={send}
               receipt={receipt}

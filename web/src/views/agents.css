@@ -614,3 +614,60 @@
 .project-option:has(.agent-avatar) { display: flex; align-items: center; }
 .agent-space-head > .agent-identity { align-items: center; }
 .agent-picker:has(.agent-avatar) > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* Agents' message bar, after the user's reference: one low rounded bar, the
+   paperclip unboxed at its left, Send a lighter rounded square at its right,
+   both centred on a single line; they settle to the bottom once it grows. */
+.agent-composer .att-frame.cmp-frame {
+  align-items: center;
+  min-height: 56px;
+  padding: 7px 8px 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--raised);
+}
+.agent-composer[data-multi] .att-frame.cmp-frame { align-items: end; }
+[data-theme="dark"] .agent-composer .att-frame.cmp-frame {
+  background: #1c1c20;
+  border-color: #2d2d33;
+}
+.agent-composer .att-frame.cmp-frame:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.agent-composer .cmp-frame > textarea {
+  min-height: 40px;
+  padding: 9px 8px;
+  font-size: 15px;
+}
+.agent-composer .cmp-frame > textarea::placeholder { color: var(--faint); }
+.agent-composer .cmp-attach.att-pick {
+  width: 38px;
+  height: 38px;
+  margin: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--muted);
+}
+.agent-composer .cmp-attach.att-pick:hover { background: var(--hover); color: var(--text); }
+.agent-composer .cmp-attach.att-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.agent-composer .cmp-tools { margin: 0; }
+.agent-composer .cmp-frame .btn.cmp-go {
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--muted);
+}
+[data-theme="dark"] .agent-composer .cmp-frame .btn.cmp-go { background: #2a2a30; color: #c9c9d0; }
+.agent-composer .cmp-frame .btn.cmp-go[data-ready] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+.agent-composer .cmp-frame .btn.cmp-go:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 700px) {
+  .agent-composer .att-frame.cmp-frame { min-height: 50px; border-radius: 18px; padding: 5px 6px; }
+  .agent-composer .cmp-frame .btn.cmp-go { min-width: 38px; height: 38px; min-height: 38px; }
+}

@@ -545,10 +545,14 @@ export function AgentComposer({
   onGuidanceApplied,
   recoverFrom = [],
   run,
+  attachments = false,
 }: {
   id: string;
   recoverFrom?: string[];
   run?: string;
+  /** Images, uploaded to this machine and named by path: only for an agent
+   *  that runs here. A shared agent's host could not read the path. */
+  attachments?: boolean;
   name: string;
   send: (
     body: string,
@@ -579,13 +583,15 @@ export function AgentComposer({
     if (!s.trim()) context.current = undefined;
     setText(s);
   };
+  const images = useAttachments({ text, setText: edit, textareaRef: ref, initial: attachments ? initial?.images : [] });
+  const savedImages = images.saved(), savedKey = JSON.stringify(savedImages);
   useEffect(() => {
     // An explicit clear replaces our previous saved revision, never a newer
     // draft written by another tab. The storage lock orders queued saves.
     const previous = lastQueuedRevision.current;
     lastQueuedRevision.current = revision.current;
-    void saveDraft(key, text, [], revision.current, context.current, previous);
-  }, [key, text]);
+    void saveDraft(key, text, savedImages, revision.current, context.current, previous);
+  }, [key, text, savedKey]);
   useEffect(() => {
     if (guidance) {
       context.current = guidance.context;
@@ -600,9 +606,10 @@ export function AgentComposer({
         if (draftTaken(key, revision.current)) {
           revision.current = newRevision();
           setText("");
+          images.clear();
         }
       }),
-    [key],
+    [key, images.clear],
   );
   const check = useCallback(
     async (p: PendingSend) => {
@@ -622,7 +629,15 @@ export function AgentComposer({
     [receipt, key],
   );
   async function submit() {
-    if (!text.trim() || busy || disabled) return;
+    if (!text.trim() || busy || disabled || images.uploading) return;
+    // Uploaded images go as their paths on this machine, as in Sessions.
+    const shots = images.saved(), paths = new Map(shots.map((i) => [i.n, i.path]));
+    const missing = attachments ? [...tokensIn(text)].filter((n) => !paths.has(n)) : [];
+    if (missing.length) {
+      setError(`image #${missing.join(", #")} did not upload — retry it or remove it`);
+      return;
+    }
+    const body = attachments && shots.length ? expandImages(text, paths).trim() : text;
     setBusy(true);
     setError(null);
     const p: PendingSend = {
@@ -630,14 +645,14 @@ export function AgentComposer({
       sessionId: key,
       draft: {
         text,
-        images: [],
+        images: shots,
         at: Date.now(),
         revision: revision.current,
         agentContext: context.current,
       },
       kind: "send",
-      body: text,
-      bodyHash: submissionHash(text),
+      body,
+      bodyHash: submissionHash(body),
       at: Date.now(),
       state: "pending",
       error: null,
@@ -648,6 +663,7 @@ export function AgentComposer({
       context.current = undefined;
       revision.current = newRevision();
       setText("");
+      images.clear();
       const r = await send(p.body, p.id, p.draft.agentContext);
       if (r.state === "sent") await forgetPending(key, p.id);
       else
@@ -668,8 +684,32 @@ export function AgentComposer({
       setBusy(false);
     }
   }
+  // The paperclip, the text and Send in one low box (Sessions' composer).
+  const box = (
+    <>
+        {attachments && <AttachButton a={images} className="cmp-attach" />}
+        <ComposerInput
+          textareaRef={ref}
+          onSend={() => void submit()}
+          aria-label={`Message ${name}`}
+          placeholder={`Message ${name}`}
+          value={text}
+          disabled={disabled}
+          onChange={(e) => edit(e.target.value)}
+        />
+        <div className="cmp-tools">
+          <ComposerSend
+            type="submit"
+            aria-label="Send"
+            disabled={!text.trim() || disabled}
+            loading={busy}
+            data-ready={text.trim() ? true : undefined}
+          />
+        </div>
+    </>
+  );
   return (
-    <div className="cmp agent-composer">
+    <div className="cmp agent-composer" data-attachments={attachments || undefined} data-multi={text.includes("\n") || text.length > 90 || undefined}>
       {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { context.current = d.agentContext; revision.current = d.revision; setText(d.text); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
       {recoverFrom.map((from) => <PendingSends key={from} sessionId={`agent:${from}`} reconcileSend={check} />)}
       <PendingSends
@@ -677,9 +717,15 @@ export function AgentComposer({
         reconcileSend={check}
         onRestore={async (p) => {
           const previous = revision.current;
+          // Restored images take numbers after the ones already in the box.
+          let n = Math.max(0, ...images.atts.map((a) => a.n), ...tokensIn(text));
+          const numbers = new Map(p.draft.images.map((a) => [a.n, ++n]));
+          const restoredImages = p.draft.images.map((a) => ({ ...a, n: numbers.get(a.n)! }));
+          const recovered = p.draft.text.replace(/\[Image #(\d+)\]/g, (token, old: string) => numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
           const next = {
             ...p.draft,
-            text: [text.trimEnd(), p.draft.text].filter(Boolean).join("\n\n"),
+            text: [text.trimEnd(), recovered].filter(Boolean).join("\n\n"),
+            images: [...images.saved(), ...restoredImages],
             revision: newRevision(),
           };
           await restorePending(
@@ -694,6 +740,7 @@ export function AgentComposer({
             context.current = restored.agentContext;
             revision.current = restored.revision;
             setText(restored.text);
+            images.restore(restoredImages);
           }
         }}
       />
@@ -708,26 +755,7 @@ export function AgentComposer({
           void submit();
         }}
       >
-        <div className="att-frame cmp-frame">
-          <ComposerInput
-            textareaRef={ref}
-            onSend={() => void submit()}
-            aria-label={`Message ${name}`}
-            placeholder={`Message ${name}…`}
-            value={text}
-            disabled={disabled}
-            onChange={(e) => edit(e.target.value)}
-          />
-          <div className="cmp-tools">
-            <ComposerSend
-              type="submit"
-              aria-label="Send"
-              disabled={!text.trim() || disabled}
-              loading={busy}
-              data-ready={text.trim() ? true : undefined}
-            />
-          </div>
-        </div>
+        {attachments ? <AttachFrame a={images} className="cmp-frame">{box}</AttachFrame> : <div className="att-frame cmp-frame">{box}</div>}
       </form>
     </div>
   );
