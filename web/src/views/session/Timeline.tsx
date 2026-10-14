@@ -117,20 +117,7 @@ export function Timeline({ session }: { session: Session }) {
     : (session.lastActivityAt ?? Date.now());
   // Ticks once a second while the turn runs, so live durations advance.
   const now = useNow(session.status === "running");
-  // How long each thinking block took: the gap from the previous step's end.
-  const thinkDur = useMemo(() => {
-    const m = new Map<string, number>();
-    let prev: { at: number; end: number } | null = null;
-    for (const ev of events) {
-      const end = ev.kind === "tool" && typeof ev.endedAt === "number" && ev.endedAt > ev.at ? ev.endedAt : ev.at;
-      if (ev.kind === "thinking" && prev && ev.at > prev.at) {
-        const d = ev.at - prev.end;
-        if (d > 0 && d <= THINK_CAP_MS) m.set(ev.id, d);
-      }
-      prev = { at: ev.at, end };
-    }
-    return m;
-  }, [events]);
+  const thinkDur = useThinkDur(events);
 
   const boxRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
@@ -429,6 +416,7 @@ export function Timeline({ session }: { session: Session }) {
 export function AgentSteps({ events, live, from }: { events: readonly TimelineEvent[]; live: boolean; from: string }) {
   const rows = useMemo(() => groupTimeline(events), [events]);
   const now = useNow(live);
+  const thinkDur = useThinkDur(events);
   return (
     <div className="tl-stream">
       {rows.map((r) =>
@@ -451,7 +439,7 @@ export function AgentSteps({ events, live, from }: { events: readonly TimelineEv
             </Clamp>
           </div>
         ) : r.type === "event" ? (
-          <EventRow key={r.event.id} ev={r.event} />
+          <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
         ) : null,
       )}
     </div>
@@ -489,6 +477,23 @@ function useNow(active: boolean): number {
     return () => clearInterval(t);
   }, [active]);
   return Date.now();
+}
+
+/** How long each thinking block took: the gap from the previous step's end. */
+function useThinkDur(events: readonly TimelineEvent[]): ReadonlyMap<string, number> {
+  return useMemo(() => {
+    const m = new Map<string, number>();
+    let prev: { at: number; end: number } | null = null;
+    for (const ev of events) {
+      const end = ev.kind === "tool" && typeof ev.endedAt === "number" && ev.endedAt > ev.at ? ev.endedAt : ev.at;
+      if (ev.kind === "thinking" && prev && ev.at > prev.at) {
+        const d = ev.at - prev.end;
+        if (d > 0 && d <= THINK_CAP_MS) m.set(ev.id, d);
+      }
+      prev = { at: ev.at, end };
+    }
+    return m;
+  }, [events]);
 }
 
 const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number }) {
@@ -1056,24 +1061,25 @@ function IdleRow({ events }: { events: { at: number; mate: MateMessage }[] }) {
   );
 }
 
-/** One line — how long, and how the thought began — and the whole of it on click. */
+/** One line — how the thought began, and how long it took — and the whole of it on click. */
 function Thinking({ text, dur }: { text: string; dur?: number }) {
   const [open, setOpen] = useState(false);
   const body = text.trim();
   return (
-    <div className="tl-thinking">
-      <button className="tl-thinking-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Icon.brain size={13} />
-        <span className="tl-thinking-label">Thinking</span>
+    <div className={`tl-thinking${open ? " is-open" : ""}`}>
+      <button
+        type="button"
+        className="tl-thinking-head"
+        aria-expanded={open}
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest("a") || (open && window.getSelection()?.toString())) return;
+          setOpen(!open);
+        }}
+      >
+        <span className="tl-thinking-fill">{open ? <Markdown text={body} /> : <Markdown inline text={firstLine(body, 400)} />}</span>
         {dur !== undefined ? <span className="tl-dur">{fmtDur(dur)}</span> : null}
-        <span className="tl-thinking-fill">{open ? null : <Markdown inline text={firstLine(body, 400)} />}</span>
         <Icon.chevronDown size={12} className={open ? "rot" : undefined} />
       </button>
-      {open ? (
-        <div className="tl-thinking-body">
-          <Markdown text={body} />
-        </div>
-      ) : null}
     </div>
   );
 }
