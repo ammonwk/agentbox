@@ -1180,14 +1180,18 @@ export class AgentConversations {
     const p = z.object({ request: z.string().uuid(), action: z.enum(["close", "restore"]), activity: z.number().finite(), reason: z.string().trim().min(1).max(1000) }).strict().parse(input);
     const authorize = () => {
       const a = this.local().find((a) => a.id === agent), w = this.runtime.works.forSession(session);
-      const worker = w?.agent.id === agent && w.session === session;
+      // A session the chat started itself (`agentbox claude --detach`) is its
+      // work too, though no work record names it: the startup context lists
+      // it as "still yours", so the chat can also close or restore it.
+      const child = !!a?.session && session !== a.session && getSessionRecord(session)?.parent === a.session;
+      const worker = (w?.agent.id === agent && w.session === session) || child;
       if (!a || (!worker && a.session !== session)) throw new FleetError(403, "This is not the agent's current chat or work session");
-      if (caller && caller !== a.session && (!worker || caller !== w!.session)) throw new FleetError(403, "Only this agent's current coordinator or work owner may manage this session");
+      if (caller && caller !== a.session && (child || !worker || caller !== w!.session)) throw new FleetError(403, "Only this agent's current coordinator or work owner may manage this session");
       if (p.action === "close") {
         if (!worker) throw new FleetError(409, "Keep the main chat available; close completed work sessions instead");
         if (this.runtime.cards.list().some((c) => c.kind === "decision" && (c.state === "open" || c.state === "later") && (c.sessionId === session || c.about === session)))
           throw new FleetError(409, "This session is still waiting on a decision");
-      } else if (!a.enabled || (worker && !this.runtime.works.restorable(agent, session))) {
+      } else if (!a.enabled || (worker && !child && !this.runtime.works.restorable(agent, session))) {
         throw new FleetError(403, "This session's work authority has expired or cannot be restored");
       }
     };

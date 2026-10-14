@@ -104,3 +104,14 @@ test("resume capability is rechecked after waiting for an in-flight send",async(
   runtime.fleet.serial=async(_id:string,fn:()=>any)=>{runtime.works.restorable=()=>false;return fn();};
   await expect(run(action("restore"))).rejects.toThrow("authority");expect(resumed).toBe(0);
 });
+test("the coordinator can close a session it started itself, which no work record names",async()=>{
+  insertSessionRecord({...getSessionRecord("worker")!,id:"detached",agentSessionId:"provider-detached",parent:"coordinator",parentByHand:true});
+  insertSessionRecord({...getSessionRecord("worker")!,id:"stranger",agentSessionId:"provider-stranger",parent:"someone-else"});
+  view = {...view,id:"detached"};
+  await expect(run(action(),"coordinator","stranger")).rejects.toThrow("not the agent");
+  await expect(run(action(),"worker","detached")).rejects.toThrow("Only this agent");
+  expect(closed).toBe(0);
+  expect((await run(action(),"coordinator","detached")).state).toBe("done");expect(closed).toBe(1);
+  runtime.works.restorable=()=>false;
+  expect((await run(action("restore"),"coordinator","detached")).state).toBe("done");expect(resumed).toBe(1);
+});
