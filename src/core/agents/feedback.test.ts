@@ -5,17 +5,17 @@ import { AgentFeedback } from "./feedback";
 
 function fixture(gh: (path: string, body?: any) => Promise<any>) {
   const db = new Database(":memory:");
-  const runtime: any = {store:{db},conversations:{local:()=>[{id:"vulcan",name:"VULCAN",role:"Issue triage",session:"main",previous:["old"],workSessions:["work"]}]}};
+  const runtime: any = {store:{db},conversations:{threads:()=>["main","old","work"].map(id=>({id})),local:()=>[{id:"vulcan",name:"VULCAN",role:"Issue triage",session:"main",previous:["old"],workSessions:["work"]}]}};
   return {db,feedback:new AgentFeedback(runtime,gh),runtime};
 }
 test("feedback retries and concurrent submissions publish once, storing no report body",async()=>{
   let posts=0; let body:any;
   const f=fixture(async(path,payload)=>{expect(path).toBe("repos/ammonwk/agentbox/issues");posts++;body=payload;return {html_url:"https://github.com/ammonwk/agentbox/issues/123"};});
   try {
-    const p={request:crypto.randomUUID(),text:"Keep already approved work moving",target:"work"};
+    const p={request:crypto.randomUUID(),text:"Keep already approved work moving",target:"work",uiRevision:{commit:"a".repeat(40),dirty:true}};
     const results=await Promise.all([f.feedback.submit("vulcan",p),f.feedback.submit("vulcan",p)]);
     expect(results.every(r=>r.state==="sent")).toBe(true);expect(posts).toBe(1);
-    expect(body.body).toContain("Keep already approved work moving");expect(body.body).toContain("Session: work");
+    expect(body.body).toContain("Keep already approved work moving");expect(body.body).toContain("Session: work");expect(body.body).toContain(`UI revision: ${"a".repeat(40)} (local changes)`);expect(body.body).toContain("Server revision:");
     expect(JSON.stringify(f.db.query("SELECT * FROM agent_feedback").all())).not.toContain(p.text);
     await expect(f.feedback.submit("vulcan",{...p,text:"Changed report"})).rejects.toThrow("already used");
     expect((await f.feedback.submit("vulcan",p)).issue).toEndWith("/123");expect(posts).toBe(1);

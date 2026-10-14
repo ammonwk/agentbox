@@ -188,6 +188,17 @@ export async function forgetPending(sessionId: string, id: string): Promise<void
   });
 }
 
+/** Preserve the current draft while appending recovered text and renumbering images. */
+export function appendDraft(current: Draft | null, recovered: Draft): { draft: Draft; addedImages: SavedAttachment[] } {
+  if (current?.agentContext && recovered.agentContext && (current.agentContext.proposal !== recovered.agentContext.proposal || current.agentContext.run !== recovered.agentContext.run))
+    throw Error("Finish or clear the current recommendation reply before restoring another one.");
+  let number = Math.max(0,...(current?.images ?? []).map(image=>image.n),...[...(current?.text ?? "").matchAll(/\[Image #(\d+)\]/g)].map(match=>Number(match[1])));
+  const numbers = new Map(recovered.images.map(image=>[image.n,++number]));
+  const addedImages = recovered.images.map(image=>({...image,n:numbers.get(image.n)!}));
+  const text = recovered.text.replace(/\[Image #(\d+)\]/g,(token,old:string)=>numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
+  return {addedImages,draft:{text:[current?.text.trimEnd(),text].filter(Boolean).join("\n\n"),images:[...(current?.images ?? []),...addedImages],agentContext:current?.agentContext ?? recovered.agentContext,revision:newRevision(),at:Date.now()}};
+}
+
 /** Restoring a known failure is an explicit edit, saved with the removal of
  *  the pending copy in one transaction. A newer draft is never replaced. */
 export async function restorePending(sessionId: string, id: string, draft: Draft, previousRevision: string, unchanged: () => boolean): Promise<void> {
@@ -211,7 +222,7 @@ export async function recoverAgentDraft(from: string, to: string, run: string | 
     if (!source || !draft) return;
     if (draft.agentContext && draft.agentContext.run !== run) throw Error("This guidance belongs to another conversation; open that conversation to recover it.");
     const target = all[to] ??= {};
-    result = { ...draft, text: [target.draft?.text.trimEnd(), draft.text].filter(Boolean).join("\n\n"), revision: newRevision() };
+    result = appendDraft(target.draft ?? null,draft).draft;
     source.taken = [...(source.taken ?? []), draft.revision]; delete source.draft;
     target.draft = result; write(all);
   });

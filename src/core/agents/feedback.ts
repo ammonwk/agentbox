@@ -1,6 +1,7 @@
 /** Human-authored /help reports. GitHub owns the report; this journal keeps
  * only identity, hashes and delivery outcomes, never a conversation copy. */
 import { createHash } from "node:crypto";
+import { RUNNING_REVISION } from "../../revision";
 import { z } from "zod";
 import { FleetError } from "../fleet";
 import type { AgentsRuntime } from "./runtime";
@@ -19,7 +20,7 @@ const github: GitHub = async (path, body) => {
   if (code) throw Error("GitHub could not complete the request. Check your gh login and repository access.");
   return JSON.parse(out);
 };
-const input = z.object({request:z.string().uuid(), text:z.string().trim().min(1).max(10000), target:z.string().max(200).nullable()}).strict();
+const input = z.object({request:z.string().uuid(), text:z.string().trim().min(1).max(10000), target:z.string().max(200).nullable(), uiRevision:z.object({commit:z.string().regex(/^[0-9a-f]{40}$/),dirty:z.boolean()}).strict().nullable().optional()}).strict();
 const marker = (id: string) => `agentbox-help:${id}`;
 const issueUrl = (url: unknown): url is string => typeof url === "string" && /^https:\/\/github\.com\/ammonwk\/agentbox\/issues\/\d+$/.test(url);
 
@@ -53,7 +54,7 @@ export class AgentFeedback {
     const p = input.parse(value);
     const a = this.runtime.conversations.local().find(a => a.id === agent);
     if (!a) throw new FleetError(404,"Agent not found");
-    if (p.target && ![a.session,...a.previous,...(a.workSessions ?? [])].includes(p.target))
+    if (p.target && !this.runtime.conversations.threads(agent).some(t=>t.id===p.target))
       throw new FleetError(403,"This session does not belong to the reported agent");
     if (/(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|-----BEGIN .*PRIVATE KEY-----|sk-(?:live-|proj-)?[A-Za-z0-9_-]{24,})/.test(p.text))
       return {state:"refused",result:"Remove credentials from the report before publishing it."};
@@ -68,7 +69,8 @@ export class AgentFeedback {
       try {
         const name = a.name.charAt(0).toUpperCase()+a.name.slice(1).toLowerCase();
         const title = `[Agent feedback] ${name}: ${p.text.split(/\r?\n/)[0]}`.slice(0,200);
-        const body = `<!-- ${marker(p.request)} -->\n\n## Feedback\n\n${p.text}\n\n## Agent context\n\n- Agent: ${name}\n- Role: ${a.role}\n- Agent ID: ${a.id}\n- Session: ${p.target ?? "Not started"}\n\nSubmitted by the user through Agentbox /help for Vulcan to triage. No conversation transcript was uploaded.`;
+        const revision = (r: {commit:string;dirty:boolean}|null|undefined) => r ? `${r.commit}${r.dirty ? " (local changes)" : ""}` : "Unavailable";
+        const body = `<!-- ${marker(p.request)} -->\n\n## Feedback\n\n${p.text}\n\n## Agent context\n\n- Agent: ${name}\n- Role: ${a.role}\n- Agent ID: ${a.id}\n- Session: ${p.target ?? "Not started"}\n- Server revision: ${revision(RUNNING_REVISION)}\n- UI revision: ${revision(p.uiRevision)}\n\nSubmitted by the user through Agentbox /help for Vulcan to triage. No conversation transcript was uploaded.`;
         const issue = await this.gh(`repos/${FEEDBACK_REPO}/issues`,{title,body});
         if (!issueUrl(issue.html_url)) throw Error("GitHub did not return a verified issue link");
         r.state="sent";r.issue=issue.html_url;r.result=`Issue created: ${r.issue}`;

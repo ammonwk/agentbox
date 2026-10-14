@@ -37,6 +37,8 @@ export async function deliverPending(p: PendingSend): Promise<void> {
 
 /** A send that lands quickly never shows its note: it would only flash. */
 const QUIET_MS = 500;
+const UNCONFIRMED_MS = 5000;
+const visibleAt = (p: PendingSend) => p.at + (p.state === "unconfirmed" ? UNCONFIRMED_MS : sending(p) ? QUIET_MS : 0);
 const sending = (p: PendingSend) => p.state === "pending" || p.state === "attempting";
 
 const normalized = (text: string) => dropPasteTags(text).replace(/\r\n/g, "\n").trim();
@@ -87,9 +89,9 @@ export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }
   const all = useMemo(() => pendingSends(sessionId), [sessionId, snapshot]);
   const ids = all.map((p) => p.id).join(",");
   const [now, setNow] = useState(Date.now);
-  const pending = all.filter((p) => !sending(p) || now - p.at >= QUIET_MS);
+  const pending = all.filter((p) => now >= visibleAt(p));
   // Re-render when the next quiet send has waited long enough to be shown.
-  const reveal = Math.min(...all.filter((p) => sending(p) && now - p.at < QUIET_MS).map((p) => p.at + QUIET_MS));
+  const reveal = Math.min(...all.map(visibleAt).filter((at) => at > now));
   useEffect(() => {
     if (!Number.isFinite(reveal)) return;
     const timer = setTimeout(() => setNow(Date.now()), Math.max(0, reveal - Date.now()));

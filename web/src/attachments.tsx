@@ -10,8 +10,9 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { api, uploadUrl } from "./api";
+import { api, request, uploadUrl } from "./api";
 import { Icon, Spinner } from "./components";
+import { useDismiss, useFloating } from "./views/newsession/popover";
 
 export interface Attachment {
   n: number;
@@ -241,9 +242,9 @@ export type Attachments = ReturnType<typeof useAttachments>;
  * and the drop highlight are on this, so the thumbnails read as part of the
  * box rather than something under it.
  */
-export function AttachFrame({ a, className, children, footer }: { a: Attachments; className?: string; children: React.ReactNode; footer?: React.ReactNode }) {
+export function AttachFrame({ a, className, children, footer, enabled = true }: { a: Attachments; enabled?: boolean; className?: string; children: React.ReactNode; footer?: React.ReactNode }) {
   return (
-    <div className={`att-frame${className ? ` ${className}` : ""}`} data-drop={a.dropping || undefined} {...a.handlers}>
+    <div className={`att-frame${className ? ` ${className}` : ""}`} data-drop={a.dropping || undefined} {...(enabled ? a.handlers : {})}>
       {children}
       <AttachmentStrip a={a} />
       {footer}
@@ -252,33 +253,48 @@ export function AttachFrame({ a, className, children, footer }: { a: Attachments
   );
 }
 
-/** A paperclip that opens the file picker. */
+/** Hover or focus previews recent screenshots; clicking still opens the file picker. */
 export function AttachButton({ a, className }: { a: Attachments; className?: string }) {
-  const input = useRef<HTMLInputElement>(null);
-  return (
-    <>
-      <button
-        type="button"
-        className={`att-pick${className ? ` ${className}` : ""}`}
-        title="Attach images — or paste or drop them into the box"
-        aria-label="Attach images"
-        onClick={() => input.current?.click()}
-      >
-        <Icon.paperclip size={17} />
-      </button>
-      <input
-        ref={input}
-        type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
-        multiple
-        hidden
-        onChange={(e) => {
-          a.add([...(e.target.files ?? [])]);
-          e.target.value = "";
-        }}
-      />
-    </>
-  );
+  const input = useRef<HTMLInputElement>(null), anchor = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
+  const [open,setOpen] = useState(false), [recent,setRecent] = useState<{id:string;name:string;at:number}[]|null>(null);
+  const [error,setError] = useState<string|null>(null), [picking,setPicking] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
+  const enter = () => { if(closeTimer.current) clearTimeout(closeTimer.current);setOpen(true); };
+  const leave = () => { if(closeTimer.current) clearTimeout(closeTimer.current);closeTimer.current=setTimeout(()=>setOpen(false),180); };
+  useEffect(()=>()=>{if(closeTimer.current)clearTimeout(closeTimer.current);},[]);
+  useDismiss(open,()=>setOpen(false),[anchor,popup]);
+  const style=useFloating(anchor,open,220,Math.min(360,window.innerWidth-16));
+  useEffect(()=>{
+    if(!open)return;
+    let live=true;setRecent(null);setError(null);
+    void request<{id:string;name:string;at:number}[]>("GET","/api/screenshots").then(rows=>{if(live)setRecent(rows);}).catch(()=>{if(live)setError("Screenshot previews unavailable. Click the paperclip to choose a file.");});
+    return()=>{live=false;};
+  },[open]);
+  async function pick(screenshot: {id:string;name:string}) {
+    setPicking(true);setError(null);
+    try {
+      const response=await fetch(`/api/screenshots/${encodeURIComponent(screenshot.id)}`);
+      if(!response.ok)throw Error("Screenshot changed or expired. Reopen the picker to refresh it.");
+      const blob=await response.blob();
+      a.add([new File([blob],screenshot.name,{type:blob.type})]);setOpen(false);
+    } catch(e){setError((e as Error).message);} finally{setPicking(false);}
+  }
+  return <>
+    <button ref={anchor} type="button" className={`att-pick${className ? ` ${className}` : ""}`}
+      title="Attach images — hover for recent screenshots" aria-label="Attach images" aria-expanded={open}
+      onMouseEnter={enter} onMouseLeave={leave} onFocus={enter}
+      onKeyDown={e=>{if(e.key==="ArrowUp"||e.key==="ArrowDown"){e.preventDefault();popup.current?.querySelector<HTMLButtonElement>("button")?.focus();}}}
+      onClick={()=>{setOpen(false);input.current?.click();}}><Icon.paperclip size={17}/></button>
+    <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden
+      onChange={e=>{a.add([...(e.target.files??[])]);e.target.value="";}}/>
+    {open && createPortal(<div ref={popup} className="att-recent" style={style} role="group" aria-label="Recent screenshots" onMouseEnter={enter} onMouseLeave={leave}>
+      <strong>Recent screenshots</strong>
+      {error ? <p role="status">{error}</p> : recent===null ? <p>Loading screenshots…</p> : recent.length===0 ? <p>No recent screenshots. Click the paperclip to choose a file.</p> :
+        <div className="att-recent-grid">{recent.map(screenshot=><button key={screenshot.id} type="button" disabled={picking} onClick={()=>void pick(screenshot)} title={screenshot.name} aria-label={`Attach ${screenshot.name}`}>
+          <img src={`/api/screenshots/${encodeURIComponent(screenshot.id)}`} alt=""/><span>{screenshot.name}</span>
+        </button>)}</div>}
+    </div>,document.body)}
+  </>;
 }
 
 function AttachmentStrip({ a }: { a: Attachments }) {

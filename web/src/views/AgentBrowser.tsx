@@ -36,6 +36,13 @@ export function AgentBrowser({ id, options, threads, more, loadMore, error, chil
   const route = agentRoute();
   const narrow = useIsNarrow();
   const [expanded, setExpanded] = useState(true);
+  const [showLoading, setShowLoading] = useState(false);
+  useEffect(() => {
+    setShowLoading(false);
+    if (!loading) return;
+    const timer = setTimeout(() => setShowLoading(true), 800);
+    return () => clearTimeout(timer);
+  }, [id, loading]);
   const [showClosed, setShowClosed] = useState(false);
   const rail = useRef<HTMLElement>(null), hadDetail = useRef(route.view !== "sessions");
   useEffect(() => { rememberAgent(id); }, [id]);
@@ -98,13 +105,13 @@ export function AgentBrowser({ id, options, threads, more, loadMore, error, chil
                 <ActivityIcon activity={a.activity} />
                 <span className="agent-role-icon" role="img" aria-label={a.role} title={a.role}><AgentAvatar role={a.role} creator={a.creator} src={a.avatar} size={22} /></span>
               </button>
-              {open && (work.length > 0 || loading || error || more) && <ul className="agent-threads" id={`agent-sessions-${a.id}`} aria-label={`${name} work sessions`}>
+              {open && (work.length > 0 || showLoading || error || more) && <ul className="agent-threads" id={`agent-sessions-${a.id}`} aria-label={`${name} work sessions`}>
                 {ordered.map((t) => <li key={t.id}><a className="rail-row" data-nav-item data-nav-id={`agent-session-${t.id}`} data-id={t.id} data-status={t.status} aria-current={route.thread === t.id && (!route.view || route.view === "chat" || route.view === "sessions") ? "page" : undefined} href={hrefOf({ page: "agents", id, view: "chat", thread: t.id })} title={`${t.title} · ${t.status}${t.writable ? "" : " · Read-only"}`}>
                   <span className="rail-title">{t.title}</span><span className="rail-when">{t.at > 0 && <RelativeTime ts={t.at} short />}</span>
                   <ActivityIcon activity={agentActivity(true, [t.status])} />
                 </a></li>)}
                 {closed.length > 0 && <li><Button variant="ghost" size="sm" aria-expanded={showClosed} onClick={() => setShowClosed((v) => !v)}>{showClosed ? "Hide" : "Show"} closed sessions ({closed.length})</Button></li>}
-                {loading && !threads.length && <li className="agent-tree-message" role="status">Loading sessions…</li>}
+                {loading && showLoading && !threads.length && <li className="agent-tree-message" role="status">Loading sessions…</li>}
                 {error && <li className="agent-tree-message error" role="alert">{error}</li>}
                 {more && <li><Button variant="ghost" size="sm" onClick={loadMore}>Load more sessions</Button></li>}
               </ul>}

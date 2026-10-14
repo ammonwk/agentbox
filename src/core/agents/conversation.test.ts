@@ -7,12 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentStore } from "./store";
 import { AgentConversations } from "./conversation";
-import type { AgentsRuntime } from "./runtime";
+import { AgentsRuntime } from "./runtime";
 import {
   closeDb,
   getSessionRecord,
   insertRepo,
   insertSessionRecord,
+  updateSessionRecord,
 } from "../db";
 
 let home: string,
@@ -56,6 +57,7 @@ beforeEach(() => {
   } as unknown as AgentsRuntime;
   Object.assign(runtime, {works: new AgentWorks(runtime)});
   conversations = new AgentConversations(runtime);
+  Object.assign(runtime, {conversations, sessionOwnership: AgentsRuntime.prototype.sessionOwnership.bind(runtime)});
   conversations.local();
 });
 afterEach(() => {
@@ -359,4 +361,22 @@ test("a creation proposal from a replaced creator is read-only", async () => {
   creator.previous = ["old"]; creator.session = "new";
   store.db.run("UPDATE local_agents SET body=? WHERE id=?",[JSON.stringify(creator),creator.id]);
   expect(() => conversations.editCreation(creator.id,d.id,d.revision,null,d.spec,true)).toThrow("replaced");
+});
+
+// Descendant discovery is read-only and must never cross another agent's link.
+test("local chat lists recorded descendants without granting sends or exposing foreign children",async()=>{
+  link("coordinator");
+  for (const id of ["coordinator","child","grandchild","foreign","foreign-child","unrelated","cycle-a","cycle-b"]) record(id,null);
+  updateSessionRecord("child",{parent:"coordinator"});
+  updateSessionRecord("grandchild",{parent:"child"});
+  updateSessionRecord("foreign",{parent:"coordinator"});
+  updateSessionRecord("foreign-child",{parent:"foreign"});
+  updateSessionRecord("cycle-a",{parent:"cycle-b"});updateSessionRecord("cycle-b",{parent:"cycle-a"});
+  const other=conversations.local().find(a=>a.id!=="local-vulcan")!;
+  other.session="foreign";store.db.run("UPDATE local_agents SET body=? WHERE id=?",[JSON.stringify(other),other.id]);
+  const threads=conversations.threads("local-vulcan");
+  expect(threads.map(t=>t.id).sort()).toEqual(["child","coordinator","grandchild"]);
+  expect(threads.find(t=>t.id==="child")?.writable).toBe(false);
+  await expect(conversations.localSend("local-vulcan",crypto.randomUUID(),"Do something",undefined,"child")).rejects.toThrow("current session");
+  await expect(conversations.page("local-vulcan",{session:0,before:null,target:"foreign-child"})).rejects.toThrow("does not belong");
 });

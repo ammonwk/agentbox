@@ -1,3 +1,4 @@
+import { chatTimestamps, recommendationReply, type ReplyRecommendation } from "./chatPresentation";
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
@@ -307,6 +308,7 @@ export function Timeline({ session }: { session: Session }) {
     if (el.scrollHeight <= el.clientHeight * 1.5) loadOlder(FILL_PAGE);
   }, [ready, staged, exhausted, loadingOlder, error, loadOlder, rows]);
 
+  const timeIds = chatTimestamps(events.filter((e) => e.kind === "user" || e.kind === "assistant"));
   const renderRow = (r: Exclude<TimelineRow, { type: "trace" }>) =>
     r.type === "tools" ? (
       <ToolRun key={r.id} events={r.events} now={now} />
@@ -320,7 +322,7 @@ export function Timeline({ session }: { session: Session }) {
     ) : r.type === "sent" ? (
       <SentRow key={r.event.id} ev={r.event} send={r.send} />
     ) : (
-      <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
+      <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} showTime={timeIds.has(r.event.id)} />
     );
 
   // Just started, and the CLI has not written its first turn: what you asked
@@ -503,12 +505,12 @@ function useNow(active: boolean): number {
 }
 
 type ChatAgent = { name: string; role: string; creator: boolean; avatar: string | null };
-const EventRow = memo(function EventRow({ ev, dur, agent }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent }) {
+const EventRow = memo(function EventRow({ ev, dur, agent, showTime, recommendations = [] }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent; showTime?: boolean; recommendations?: readonly ReplyRecommendation[] }) {
   switch (ev.kind) {
     case "user":
-      return <UserRow ev={ev} />;
+      return <UserRow ev={ev} showTime={showTime} recommendations={recommendations} />;
     case "assistant":
-      return <AssistantRow ev={ev} agent={agent} />;
+      return <AssistantRow ev={ev} agent={agent} showTime={showTime} />;
     case "thinking":
       return <Thinking text={ev.text} dur={dur} />;
     case "meta":
@@ -529,9 +531,11 @@ const EventRow = memo(function EventRow({ ev, dur, agent }: { ev: Exclude<Timeli
  * "agentbox", that opens on a click to who sent it (linked) and all of it.
  * Pastes are shown as pastes: Claude records one wrapped in `<pasted_content>`.
  */
-function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean }) {
+function UserRow({ ev, queued, showTime, recommendations = [] }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean; showTime?: boolean; recommendations?: readonly ReplyRecommendation[] }) {
   const sent = useMemo(() => readSent(ev.text), [ev.text]);
-  const parts = useMemo(() => splitPastes(sent.text), [sent.text]);
+  const reply = recommendationReply(sent.text, recommendations);
+  const displayText = reply?.body ?? sent.text;
+  const parts = useMemo(() => splitPastes(displayText), [displayText]);
   const [open, setOpen] = useState(false);
   const bodyId = useId();
   const body = parts.map((p, i) =>
@@ -546,7 +550,12 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
   if (!sent.agent) {
     const images = ev.images ? `${ev.images} image${ev.images === 1 ? "" : "s"}` : null;
     return (
-      <Bubble id={ev.id} at={ev.at} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : null].filter(Boolean).join(" · ")} copy={sent.text}>
+      <Bubble id={ev.id} at={ev.at} showTime={showTime} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : null].filter(Boolean).join(" · ")} copy={sent.text}>
+        {reply && <div className="tl-reply-preview" aria-label="Reply to recommendation">
+          <span className="faint">Replied to</span>
+          <strong>{reply.title}</strong>
+          {reply.quote && <blockquote>{reply.quote}</blockquote>}
+        </div>}
         {body}
       </Bubble>
     );
@@ -595,7 +604,7 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
  * your picture, and under it a copy button and the time. `note` says what
  * else is true of it — its images, that it waits in the queue.
  */
-function Bubble({ id, at, className, note, title, copy, children }: { id?: string; at: number; className?: string; note?: string; title?: string; copy: string; children: React.ReactNode }) {
+function Bubble({ id, at, className, note, title, copy, children, showTime = true }: { id?: string; at: number; showTime?: boolean; className?: string; note?: string; title?: string; copy: string; children: React.ReactNode }) {
   return (
     <div className={`tl-me${className ? ` ${className}` : ""}`} data-ev={id} title={title}>
       <div className="tl-me-row">
@@ -605,7 +614,7 @@ function Bubble({ id, at, className, note, title, copy, children }: { id?: strin
       <div className="tl-me-foot">
         <CopyIcon text={copy} />
         {note ? <span>{note}</span> : null}
-        <time dateTime={new Date(at).toISOString()}>{fmtHourMin(at)}</time>
+        {showTime && <time dateTime={new Date(at).toISOString()}>{fmtHourMin(at)}</time>}
       </div>
     </div>
   );
@@ -834,7 +843,7 @@ function citations(text: string): { text: string; cites: string[] } {
   return { text: rest.trim(), cites };
 }
 
-function AssistantRow({ ev, agent }: { ev: Extract<TimelineEvent, { kind: "assistant" }>; agent?: ChatAgent }) {
+function AssistantRow({ ev, agent, showTime = !!agent }: { ev: Extract<TimelineEvent, { kind: "assistant" }>; agent?: ChatAgent; showTime?: boolean }) {
   const { text, cites } = useMemo(() => citations(ev.text), [ev.text]);
   const content = (
     <div className="tl-assistant">
@@ -854,7 +863,7 @@ function AssistantRow({ ev, agent }: { ev: Extract<TimelineEvent, { kind: "assis
       ) : null}
     </div>
   );
-  if (!agent) return content;
+  if (!agent) return <div data-ev={ev.id}>{content}{showTime && <time className="tl-assistant-time" dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>}</div>;
   return <div className="tl-agent-reply" data-ev={ev.id}>
     <div className="tl-agent-row">
       <AgentAvatar role={agent.role} creator={agent.creator} src={agent.avatar} />
@@ -865,7 +874,7 @@ function AssistantRow({ ev, agent }: { ev: Extract<TimelineEvent, { kind: "assis
     </div>
     <div className="tl-agent-foot">
       <CopyIcon text={text} />
-      <time dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>
+      {showTime && <time dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>}
     </div>
   </div>;
 }
@@ -1248,14 +1257,15 @@ export type ChatEcho = { id: string; text: string; at: number; note: string };
  *  summary (`ChatEvent` in src/cloud/agent-conversation.ts). */
 type Carried = { source?: string; carried?: { handoff: string; at: number; oldest: boolean } };
 
-export function AgentConversationEvents({ events, me, agent, echoes = [] }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[] } & ChatSides) {
+export function AgentConversationEvents({ events, me, agent, echoes = [], recommendations = [] }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[]; recommendations?: readonly ReplyRecommendation[] } & ChatSides) {
   const shown = events.filter((e): e is Extract<TimelineEvent, { kind: "user" | "assistant" }> & Carried => e.kind === "user" || e.kind === "assistant");
+  const times = chatTimestamps([...shown, ...echoes]);
   return (
     <Me.Provider value={me ?? NOBODY}>
       <div className="tl-stream">
         {shown.map((e, i) => {
           const prev = shown[i - 1];
-          const row = <EventRow key={e.id} ev={e} agent={agent} />;
+          const row = <EventRow key={e.id} ev={e} agent={agent} showTime={times.has(e.id)} recommendations={recommendations} />;
           // Where one conversation ends and the next begins, say which was carried how.
           const divider =
             prev?.source !== e.source ? (
@@ -1276,7 +1286,7 @@ export function AgentConversationEvents({ events, me, agent, echoes = [] }: { ev
           return e.carried ? [divider, <div key={`c-${e.id}`} className="tl-carried">{row}</div>] : [divider, row];
         })}
         {echoes.map((e) => (
-          <Bubble key={e.id} at={e.at} className="tl-echo" note={e.note} copy={e.text}>
+          <Bubble key={e.id} at={e.at} showTime={times.has(e.id)} className="tl-echo" note={e.note} copy={e.text}>
             <Markdown text={e.text} />
           </Bubble>
         ))}

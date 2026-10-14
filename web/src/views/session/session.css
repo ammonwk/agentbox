@@ -3570,3 +3570,9 @@ a.wk-item:hover {
 .tl-current-divider {
   border-top-style: solid;
 }
+
+/* A recommendation reply reads as quoted context; transport IDs stay out of the bubble. */
+.tl-reply-preview { border-left: 3px solid var(--accent); padding: 6px 10px; margin-bottom: 10px; border-radius: 4px; background: color-mix(in srgb, var(--text) 4%, transparent); font-size: 12px; }
+.tl-reply-preview strong { display: block; font-weight: 600; }
+.tl-reply-preview blockquote { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; max-height: 4.5em; overflow: hidden; }
+.tl-assistant-time { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }

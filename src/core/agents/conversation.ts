@@ -18,7 +18,7 @@ import { AGENT_TEMPLATES } from "../../cloud/agents";
 import { FleetError, newSessionId } from "../fleet";
 import { submitWithReceipt, sendReceipt } from "../send-receipts";
 import type { TimelineEvent } from "../types";
-import { getRepoById, getSessionRecord, listOpenWaits, updateSessionRecord } from "../db";
+import { getRepoById, getSessionRecord, listSessionRecords, listOpenWaits, updateSessionRecord } from "../db";
 import { AgentMemory, DEFAULT_MEMORY_POLICY, MemoryPolicy, type Supplied } from "./memory";
 import { avatarFile, removeAvatar, saveAvatar } from "./avatar";
 import { AUTO_PROVIDERS, chooseProvider, type AgentProvider, type ProviderChoice } from "./providers";
@@ -1100,6 +1100,15 @@ export class AgentConversations {
     }
     for(const w of this.runtime.works.list().filter(w=>w.agent.id===agent)) {
       linked.push({id:w.session,run:w.session,kind:"work",current:this.runtime.works.writable(agent,w.session),successor:null});
+    }
+    if (local) {
+      // Persisted parents also link ordinary detached child sessions. Listing
+      // them grants transcript reads only; send/close/restore keep their gates.
+      const owner = this.runtime.sessionOwnership(), known = new Set(linked.map((s) => s.id));
+      for (const record of listSessionRecords()) {
+        if (record.parent && !known.has(record.id) && owner(record.id) === agent)
+          linked.push({id:record.id,run:record.id,kind:"work",current:false,successor:null});
+      }
     }
     const live = new Map(this.runtime.fleet.sessions().map((s) => [s.id, s]));
     return [...new Map(linked.map((x) => [x.id, x])).values()].map((x) => {

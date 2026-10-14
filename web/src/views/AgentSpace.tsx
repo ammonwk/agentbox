@@ -32,6 +32,8 @@ import { request, useNow } from "../api";
 import { Button, Empty } from "../components";
 import { useLoad } from "../lib/cloud";
 import { AgentComposer } from "./session/Composer";
+import { UI_REVISION } from "../build";
+import { SessionFacts } from "./session/SessionFacts";
 import { AgentConversationEvents, type ChatEcho } from "./session/Timeline";
 import { followsAfterScroll, onChatSubmitted, followChatSize } from "./session/scroll";
 import { AgentAvatar, AgentPictureEditor, localAvatarUrl } from "./AgentAvatar";
@@ -44,6 +46,7 @@ import { go, hrefOf } from "../route";
 type Receipt = { state: string; result: string; issue?: string };
 const providerName = { codex: "Codex", claude: "Claude", muse: "Muse" } as const;
 type Transport = {
+  attachments?: boolean;
   help?: (text: string, request: string, target: string | null) => Promise<Receipt>;
   sessionAction?: (thread: AgentThread, action: "close" | "restore") => Promise<{state: string; result: string}>;
   creations: () => Promise<CreationDraft[]>;
@@ -176,7 +179,7 @@ export function LocalAgentSpace({
   const options = (agents.data ?? []).filter((a) => !project || a.repo === project).map((a): AgentOption => {
     const linked = new Set([a.session, ...a.previous, ...(a.workSessions ?? [])]);
     return { id: a.id, name: a.name, role: a.role, creator: a.capability === "creator", avatar: localAvatarUrl(a),
-      activity: agentActivity(a.enabled, state.sessions.filter((s) => linked.has(s.id)).map(shownStatus)),
+      activity: agentActivity(a.enabled, state.sessions.filter((s) => linked.has(s.id) || s.agentOwner === a.id).map(shownStatus)),
       detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.enabled ? "Local" : "Paused"}` };
   });
   const selected = agents.data?.find((a) => a.id === id);
@@ -192,8 +195,9 @@ export function LocalAgentSpace({
   }, [selected?.id]);
   const transport = useMemo<Transport>(
     () => ({
+      attachments: true,
       read: (cursor) => request("POST", `/api/agents/local/${id}/read`, cursor),
-      help: (text, requestId, target) => request("POST", `/api/agents/local/${id}/help`, {text, request:requestId, target}),
+      help: (text, requestId, target) => request("POST", `/api/agents/local/${id}/help`, {text, request:requestId, target, uiRevision:UI_REVISION}),
       creations: () => request("GET", `/api/agents/local/${id}/creations`),
       editCreation: async (draft, spec, create) => { const d = await request<CreationDraft>("POST", `/api/agents/local/${id}/creations/${draft.id}`, { revision: draft.revision, spec, create, repo: selected?.repo ?? null }); await agents.reload(); return d; },
       proposals: () => request("GET", `/api/agents/local/${id}/proposals`),
@@ -233,9 +237,13 @@ export function LocalAgentSpace({
   if (id && !selected) return <Empty title="Agent not found" />;
   if (!selected) return <Empty title="Loading agents…" />;
   const session = state.sessions.find((s) => s.id === selected.session);
+  const route = agentRoute();
+  const viewedId = route.thread && route.thread !== "new" ? route.thread : selected.session;
+  const viewed = state.sessions.find((s) => s.id === viewedId && (s.agentOwner === selected.id || [selected.session, ...selected.previous, ...(selected.workSessions ?? [])].includes(s.id)));
   return (
     <AgentSpace
       key={selected.id}
+      footer={(!route.view || route.view === "chat" || route.view === "sessions") && viewed ? <SessionFacts session={viewed} state={state} /> : null}
       id={selected.id}
       identity={{ role: selected.role, creator: selected.capability === "creator", avatar: localAvatarUrl(selected) }}
       me={state.onboarding.identity ? { name: state.onboarding.identity.name ?? "", github: state.onboarding.identity.github ?? "" } : undefined}
@@ -357,6 +365,7 @@ export function LocalAgentSpace({
   );
 }
 function AgentSpace({
+  footer,
   id,
   identity,
   me,
@@ -372,6 +381,7 @@ function AgentSpace({
   onCreate,
 }: {
   id: string;
+  footer?: ReactNode;
   /** The agent's picture and the role its default icon comes from. */
   identity: { role: string; creator: boolean; avatar: string | null };
   /** The viewer, for their own messages; shared chats pass none. */
@@ -680,6 +690,7 @@ function AgentSpace({
   }
   return (
     <AgentBrowser id={id} options={options} onCreate={onCreate} ongoing={ongoing} threads={threads} loading={!ready} more={more !== null} loadMore={() => { void readList(more ?? 0).catch((e) => setRailError(e.message)); }} error={railError}>
+      {footer}
     <div className={`agent-space agent-space-${tab}`}>
 
       <header className="agent-space-head">
@@ -759,6 +770,7 @@ function AgentSpace({
                 </div>
               )}
               <AgentConversationEvents
+                recommendations={feed.data ?? []}
                 events={events}
                 me={me}
                 agent={{ ...identity, name }}
@@ -783,6 +795,7 @@ function AgentSpace({
               run={selected?.run}
               recoverFrom={[id, ...(target !== "new" ? [`${id}:new`] : [])]}
               name={name}
+              attachments={transport.attachments}
               send={send}
               receipt={receipt}
               disabled={disabled || !!railError}

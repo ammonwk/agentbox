@@ -57,6 +57,7 @@ import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
+import { recentScreenshots, screenshotImage } from "../core/screenshots";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
@@ -934,6 +935,17 @@ const router = new Router(mapError)
     scheduleHot();
     scheduleCold();
     return json(s);
+  })
+  .add("GET", "/api/screenshots", ({req}) => {
+    if (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token")) throw new HttpError(403,"Screenshot previews belong to the user's attachment picker");
+    return json(recentScreenshots());
+  })
+  .add("GET", "/api/screenshots/:id", ({req,params}) => {
+    if (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token")) throw new HttpError(403,"Screenshot previews belong to the user's attachment picker");
+    try {
+      const image = screenshotImage(params.id!);
+      return new Response(Bun.file(image.path), {headers:{"content-type":image.mime,"cache-control":"private, no-store","x-content-type-options":"nosniff"}});
+    } catch (e) { throw new HttpError(404,(e as Error).message); }
   })
   .add("POST", "/api/uploads", async ({ req }) => {
     const len = Number(req.headers.get("content-length") ?? 0);

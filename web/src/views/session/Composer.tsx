@@ -8,7 +8,7 @@ import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
-import { recoverAgentDraft, draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, type AgentDraftContext, updatePending, forgetPending } from "./drafts";
+import { appendDraft, recoverAgentDraft, draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, type AgentDraftContext, updatePending, forgetPending } from "./drafts";
 import { PendingSends, deliverPending, submitPending } from "./submissions";
 import "../newsession.css";
 import { useAction } from "./useAction";
@@ -180,16 +180,11 @@ export function Composer({ session, accounts, skills, textareaRef }: {
     <div className="cmp" data-mode={mode.kind}>
       <PendingSends sessionId={session.id} onRestore={async (p) => {
         const previousRevision = revision.current;
-        const restoredRevision = newRevision();
-        let n = Math.max(0, ...images.atts.map((a) => a.n), ...tokensIn(text));
-        const numbers = new Map(p.draft.images.map((a) => [a.n, ++n]));
-        const restoredImages = p.draft.images.map((a) => ({ ...a, n: numbers.get(a.n)! }));
-        const recovered = p.draft.text.replace(/\[Image #(\d+)\]/g, (token, old: string) => numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
-        const restored = [text.trimEnd(), recovered].filter(Boolean).join("\n\n");
-        await restorePending(session.id, p.id, { text: restored, images: [...images.saved(), ...restoredImages], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
-        images.restore(restoredImages);
-        revision.current = restoredRevision;
-        setTextState(restored);
+        const {draft:restored,addedImages} = appendDraft({text,images:images.saved(),revision:previousRevision,at:Date.now()},p.draft);
+        await restorePending(session.id,p.id,restored,previousRevision,()=>revision.current===previousRevision);
+        images.restore(addedImages);
+        revision.current = restored.revision;
+        setTextState(restored.text);
       }} />
       {error ? (
         <div className="cmp-error" role="alert">
@@ -536,6 +531,7 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
  * Transport can be a local Fleet send or an authenticated shared command. */
 export function AgentComposer({
   id,
+  attachments = false,
   name,
   send,
   receipt,
@@ -546,6 +542,7 @@ export function AgentComposer({
   run,
 }: {
   id: string;
+  attachments?: boolean;
   recoverFrom?: string[];
   run?: string;
   name: string;
@@ -578,13 +575,15 @@ export function AgentComposer({
     if (!s.trim()) context.current = undefined;
     setText(s);
   };
+  const images = useAttachments({text,setText:edit,textareaRef:ref,initial:initial?.images});
+  const savedImages = images.saved(), savedImagesKey = JSON.stringify(savedImages);
   useEffect(() => {
     // An explicit clear replaces our previous saved revision, never a newer
     // draft written by another tab. The storage lock orders queued saves.
     const previous = lastQueuedRevision.current;
     lastQueuedRevision.current = revision.current;
-    void saveDraft(key, text, [], revision.current, context.current, previous);
-  }, [key, text]);
+    void saveDraft(key, text, savedImages, revision.current, context.current, previous);
+  }, [key, text, savedImagesKey]);
   useEffect(() => {
     if (guidance) {
       context.current = guidance.context;
@@ -600,9 +599,10 @@ export function AgentComposer({
           context.current = undefined;
           revision.current = newRevision();
           setText("");
+          images.clear();
         }
       }),
-    [key],
+    [key, images.clear],
   );
   const check = useCallback(
     async (p: PendingSend) => {
@@ -622,7 +622,11 @@ export function AgentComposer({
     [receipt, key],
   );
   async function submit() {
-    if (!text.trim() || busy || disabled) return;
+    if (!text.trim() || busy || disabled || images.uploading) return;
+    const uploaded = images.saved(), paths = new Map(uploaded.map(image=>[image.n,image.path]));
+    const missing = [...tokensIn(text)].filter(n=>!paths.has(n));
+    if(missing.length){setError(`Image #${missing.join(", #")} did not upload — retry it or remove it`);return;}
+    const body = expandImages(text,paths);
     setBusy(true);
     setError(null);
     const p: PendingSend = {
@@ -630,14 +634,14 @@ export function AgentComposer({
       sessionId: key,
       draft: {
         text,
-        images: [],
+        images: uploaded,
         at: Date.now(),
         revision: revision.current,
         agentContext: context.current,
       },
       kind: "send",
-      body: text,
-      bodyHash: submissionHash(text),
+      body,
+      bodyHash: submissionHash(body),
       at: Date.now(),
       state: "pending",
       error: null,
@@ -661,39 +665,30 @@ export function AgentComposer({
       });
     } catch (e) {
       const message = (e as Error).message;
-      setError(message);
-      await updatePending(p.id, { state: "unconfirmed", error: message });
+      if (!draftTaken(key,p.draft.revision)) setError(message);
+      else {
+        try { await updatePending(p.id, { state: "unconfirmed", error: message }); }
+        catch { setError("Could not save delivery status. Check the conversation before sending again."); }
+      }
     } finally {
       setBusy(false);
     }
   }
   return (
     <div className="cmp agent-composer">
-      {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { context.current = d.agentContext; revision.current = d.revision; setText(d.text); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
+      {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { images.clear(); images.restore(d.images); context.current = d.agentContext; revision.current = d.revision; setText(d.text); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
       {recoverFrom.map((from) => <PendingSends key={from} sessionId={`agent:${from}`} reconcileSend={check} />)}
       <PendingSends
         sessionId={key}
         reconcileSend={check}
         onRestore={async (p) => {
           const previous = revision.current;
-          const next = {
-            ...p.draft,
-            text: [text.trimEnd(), p.draft.text].filter(Boolean).join("\n\n"),
-            revision: newRevision(),
-          };
-          await restorePending(
-            key,
-            p.id,
-            next,
-            previous,
-            () => revision.current === previous,
-          );
-          const restored = loadDraft(key);
-          if (restored) {
-            context.current = restored.agentContext;
-            revision.current = restored.revision;
-            setText(restored.text);
-          }
+          const {draft:next,addedImages} = appendDraft({text,images:images.saved(),agentContext:context.current,revision:previous,at:Date.now()},p.draft);
+          await restorePending(key,p.id,next,previous,()=>revision.current===previous);
+          images.restore(addedImages);
+          context.current = next.agentContext;
+          revision.current = next.revision;
+          setText(next.text);
         }}
       />
       {error && (
@@ -707,7 +702,8 @@ export function AgentComposer({
           void submit();
         }}
       >
-        <div className="att-frame cmp-frame">
+        <AttachFrame a={images} className="cmp-frame" enabled={attachments}>
+          {attachments && <AttachButton a={images} className="cmp-attach" />}
           <ComposerInput
             textareaRef={ref}
             onSend={() => void submit()}
@@ -715,18 +711,19 @@ export function AgentComposer({
             placeholder={`Message ${name}…`}
             value={text}
             disabled={disabled}
+            onKeyDown={event=>{if(attachments)images.onKeyDown(event);}}
             onChange={(e) => edit(e.target.value)}
           />
           <div className="cmp-tools">
             <ComposerSend
               type="submit"
               aria-label="Send"
-              disabled={!text.trim() || disabled}
+              disabled={!text.trim() || disabled || images.uploading}
               loading={busy}
               data-ready={text.trim() ? true : undefined}
             />
           </div>
-        </div>
+        </AttachFrame>
       </form>
     </div>
   );
