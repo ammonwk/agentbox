@@ -52,3 +52,24 @@ test("a public issue names no local home path or uploaded file path",async()=>{
     expect(body.body).toContain("~/Desktop/Dev/agentbox/src/x.ts");expect(body.body).toContain("~/repo");expect(body.body).toContain("/opt/tools");
   } finally {f.db.close();}
 });
+test("an agent files its own report as the agent's, at most three a day; another session cannot",async()=>{
+  const bodies:any[]=[];
+  const f=fixture(async(_path,payload)=>{bodies.push(payload);return {html_url:`https://github.com/ammonwk/agentbox/issues/${200+bodies.length}`};});
+  f.runtime.conversations.registeredAgent=(s:string)=>["main","work"].includes(s)?{id:"vulcan"}:null;
+  try {
+    await expect(f.feedback.report("stranger",{request:crypto.randomUUID(),text:"Spam"})).rejects.toThrow("registered agent");
+    const first={request:crypto.randomUUID(),text:"agent send needs a dry run\nDetails here"};
+    expect((await f.feedback.report("work",first)).state).toBe("sent");
+    expect(bodies[0].title).toBe("[Agent report] Vulcan: agent send needs a dry run");
+    expect(bodies[0].body).toContain("Filed by the agent Vulcan itself, from session work");
+    expect(bodies[0].body).toContain("No person reviewed it");
+    expect((await f.feedback.report("work",first)).issue).toEndWith("/201");
+    for (const n of [2,3]) expect((await f.feedback.report("main",{request:crypto.randomUUID(),text:`Finding ${n}`})).state).toBe("sent");
+    const fourth=await f.feedback.report("main",{request:crypto.randomUUID(),text:"Finding 4"});
+    expect(fourth.state).toBe("refused");expect(fourth.result).toContain("at most 3");
+    expect(bodies).toHaveLength(3);
+    // The person's /help is not counted against the agent.
+    expect((await f.feedback.submit("vulcan",{request:crypto.randomUUID(),text:"From the user",target:"main"})).state).toBe("sent");
+    expect(bodies[3].title).toStartWith("[Agent feedback]");
+  } finally {f.db.close();}
+});

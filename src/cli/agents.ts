@@ -79,6 +79,16 @@ export async function agent(api: Api, args: string[]): Promise<number> {
   // These two print lines of their own, and send's text may hold any word.
   if (verb === "ls") return agentList(api, more);
   if (verb === "send") return agentSend(api, more);
+  if (verb === "report") {
+    // --file for a report with lines; its first line is the issue's title.
+    const { flags } = parseArgs(more, ["request", "text", "file"]);
+    const get = (k: string) => (typeof flags.get(k) === "string" ? (flags.get(k) as string) : "");
+    const text = get("file") ? readFileSync(get("file"), "utf8").trim() : get("text");
+    if (!get("request") || !text) throw new Error("agent report --request <stable UUID> --text <text> | --file <text file>");
+    const r = await api<{ state: string; result: string; issue?: string }>("POST", "/api/agents/report", { request: get("request"), text });
+    console.log(r.result);
+    return r.state === "sent" ? 0 : 1;
+  }
   const { flags, rest } = parseArgs(
     more,
     [

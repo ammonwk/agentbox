@@ -170,6 +170,12 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
         throw new HttpError(403,"Only the user can publish an agent feedback report");
       return json(await feedback.submit(params.id!,await readBody(req)));
     })
+    // An agent's own report: only its session capability, filed as the agent's.
+    .add("POST", "/api/agents/report", async ({ req }) => {
+      const by = authenticatedSession(req);
+      if (!by) throw new HttpError(403, "Only an agent session can file an agent report; use /help in Agent chat");
+      return json(await feedback.report(by, await readBody(req)));
+    })
     .add("GET", "/api/agents/local/:id/help/:request", async ({params}) =>
       json(await feedback.receipt(params.id!,z.string().uuid().parse(params.request))),
     )

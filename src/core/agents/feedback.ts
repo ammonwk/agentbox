@@ -9,7 +9,10 @@ import type { AgentsRuntime } from "./runtime";
 
 export const FEEDBACK_REPO = "ammonwk/agentbox";
 type Receipt = { state: "sent" | "refused" | "uncertain" | "attempting"; result: string; issue?: string };
-type Record = Receipt & { id: string; agent: string; fingerprint: string; at: number };
+/** `by`: the agent session that filed it (`agentbox agent report`); absent for the person's /help. */
+type Record = Receipt & { id: string; agent: string; fingerprint: string; at: number; by?: string };
+/** Reports one agent may file in a day: the repository is public. */
+export const AGENT_REPORTS_PER_DAY = 3;
 type GitHub = (path: string, body?: unknown) => Promise<any>;
 const github: GitHub = async (path, body) => {
   const p = Bun.spawn(["gh", "api", path, ...(body === undefined ? [] : ["--method", "POST", "--input", "-"])], {
@@ -61,7 +64,21 @@ export class AgentFeedback {
     }
     return {state:r.state,result:r.result,...(r.issue ? {issue:r.issue} : {})};
   }
-  async submit(agent: string, value: unknown): Promise<Receipt> {
+  /** An agent's own report, from its chat or work session `by`: filed as the
+   *  agent's, never the person's, and at most AGENT_REPORTS_PER_DAY a day. */
+  async report(by: string, value: unknown): Promise<Receipt> {
+    const p = z.object({ request: z.string().uuid(), text: z.string().trim().min(1).max(10000) }).strict().parse(value);
+    const agent = this.runtime.conversations.registeredAgent(by)?.id;
+    if (!agent) throw new FleetError(403, "Only a registered agent's chat or work session can file a report");
+    if (!this.record(p.request)) {
+      const since = Date.now() - 24 * 3_600_000;
+      const today = (this.runtime.store.db.query("SELECT body FROM agent_feedback WHERE agent=?").all(agent) as { body: string }[])
+        .map((r) => JSON.parse(r.body) as Record).filter((r) => r.by && r.at >= since && r.state !== "refused").length;
+      if (today >= AGENT_REPORTS_PER_DAY) return { state: "refused", result: `This agent filed ${today} reports in the last day; at most ${AGENT_REPORTS_PER_DAY}. Keep the finding in a recommendation or note instead.` };
+    }
+    return this.submit(agent, { request: p.request, text: p.text, target: by }, by);
+  }
+  async submit(agent: string, value: unknown, by?: string): Promise<Receipt> {
     const p = input.parse(value);
     const a = this.runtime.conversations.local().find(a => a.id === agent);
     if (!a) throw new FleetError(404,"Agent not found");
@@ -73,16 +90,16 @@ export class AgentFeedback {
     const old = this.record(p.request);
     if (old && (old.agent !== agent || old.fingerprint !== fingerprint)) throw new FleetError(409,"Report request ID was already used for different feedback");
     if (old) return this.active.get(p.request) ?? (await this.receipt(agent,p.request))!;
-    const r: Record = {id:p.request,agent,fingerprint,at:Date.now(),state:"attempting",result:"Creating GitHub issue…"};
+    const r: Record = {id:p.request,agent,fingerprint,at:Date.now(),state:"attempting",result:"Creating GitHub issue…",...(by ? { by } : {})};
     // Persist before the only external mutation. Every retry reads this record.
     this.save(r);
     const pending = (async (): Promise<Receipt> => {
       try {
         const name = a.name.charAt(0).toUpperCase()+a.name.slice(1).toLowerCase();
         const text = publicText(p.text);
-        const title = `[Agent feedback] ${name}: ${text.split(/\r?\n/)[0]}`.slice(0,200);
+        const title = `[${by ? "Agent report" : "Agent feedback"}] ${name}: ${text.split(/\r?\n/)[0]}`.slice(0,200);
         const revision = (r: {commit:string;dirty:boolean}|null|undefined) => r ? `${r.commit}${r.dirty ? " (local changes)" : ""}` : "Unavailable";
-        const body = `<!-- ${marker(p.request)} -->\n\n## Feedback\n\n${text}\n\n## Agent context\n\n- Agent: ${name}\n- Role: ${a.role}\n- Agent ID: ${a.id}\n- Session: ${p.target ?? "Not started"}\n- Server revision: ${revision(RUNNING_REVISION)}\n- UI revision: ${revision(p.uiRevision)}\n\nSubmitted by the user through Agentbox /help for Vulcan to triage. No conversation transcript was uploaded.`;
+        const body = `<!-- ${marker(p.request)} -->\n\n## Feedback\n\n${text}\n\n## Agent context\n\n- Agent: ${name}\n- Role: ${a.role}\n- Agent ID: ${a.id}\n- Session: ${p.target ?? "Not started"}\n- Server revision: ${revision(RUNNING_REVISION)}\n- UI revision: ${revision(p.uiRevision)}\n\n${by ? `Filed by the agent ${name} itself, from session ${by}, for Vulcan to triage. No person reviewed it before it was filed.` : "Submitted by the user through Agentbox /help for Vulcan to triage."} No conversation transcript was uploaded.`;
         const issue = await this.gh(`repos/${FEEDBACK_REPO}/issues`,{title,body});
         if (!issueUrl(issue.html_url)) throw Error("GitHub did not return a verified issue link");
         r.state="sent";r.issue=issue.html_url;r.result=`Issue created: ${r.issue}`;
