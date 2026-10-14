@@ -20,6 +20,7 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox agent work-review <work UUID> --file validation.json
     agentbox agent work-collect <work UUID>
     agentbox agent work-publish <work UUID> --file publication.json
+    agentbox agent work-follow <work UUID>
     agentbox agent work-milestone <work UUID> --file milestone.json
     agentbox agent action <run UUID> --request <UUID retained for retries> --file action.json
     agentbox agent recommend <run UUID or local agent ID> --request <stable UUID> --file proposal.json
@@ -96,6 +97,11 @@ See docs/agents.md for exact action JSON, host configuration and boundaries.
                                     # its merge (or its closing); with --head, also its
                                     # head moving off that commit: the wait for a PR
                                     # yours is stacked on. Use this, not an until over gh
+    agentbox wait pr <n> --feedback --head <sha>
+                                    # new/edited review or comment, failed check, or moved head;
+                                    # independent of queued CI. Read the actual verdict now,
+                                    # then rearm: a durable cursor skips observed feedback.
+                                    # Keep a separate full-check wait; neither is merge permission.
     agentbox wait run <id|url> [-R owner/repo]   # a GitHub Actions run concluding
     agentbox wait job [--name N] -- <command…>   # start a long command as a systemd unit of
                                     # its own, in this directory and environment, and be

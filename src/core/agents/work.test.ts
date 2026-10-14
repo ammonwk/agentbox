@@ -7,8 +7,11 @@ import { join } from "node:path";
 import { AgentWorks, agentPrTitle, requireOperator } from "./work";
 import { AgentStore } from "./store";
 import { AgentConversations } from "./conversation";
+import { claimPr, releasePr } from "../prclaims";
 import {
   closeDb,
+  getWait,
+  updateWait,
   insertRepo,
   insertSessionRecord,
   updateSessionRecord,
@@ -391,9 +394,19 @@ test("family claims, independent exact-head rounds and revoked publication autho
         );
         remoteBase = base;
         churnOnPush = false;
-        expect(
-          (await works.publish(work.id, work.session, candidate)).state,
-        ).toBe("sent");
+        const publication = await works.publish(work.id, work.session, candidate);
+        expect(publication.state).toBe("sent");
+        expect(getWait(publication.feedbackWait)).toMatchObject({ sessionId: work.session, spec: { kind: "pr", head: round.head, feedback: true, all: false } });
+        await expect(works.followPublication(work.id, "unrelated")).rejects.toThrow();
+        updateWait(publication.wait, { ended: "happened", endedAt: Date.now(), outcome: "CI failure" });
+        const followed = await works.followPublication(work.id, grant.requester);
+        expect(followed.wait).toBe(publication.wait);
+        expect(followed.waitEnded).toBe("happened");
+        expect(followed.feedbackWait).toBe(publication.feedbackWait);
+        expect(works.get(work.id).rounds.length).toBe(n);
+        releasePr(work.session, { repo: "fixture/work", number: 1 });
+        await expect(works.followPublication(work.id, grant.requester)).rejects.toThrow("released the PR");
+        claimPr([], sessions, "fixture/work", 1, work.session, Date.now());
         expect(publicationWrites).toBe(1);
         expect(published.title).toBe("[VULCAN · Human] Fix shared rule");
         await works.publish(work.id, work.session, candidate);

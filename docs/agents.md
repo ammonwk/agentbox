@@ -459,7 +459,17 @@ mentions or automatic-closing directives in title/body/commits. Titles are
 stages: `work-reconcile` can confirm a branch before resuming an unattempted PR
 request; ambiguous PR requests require positive remote reconciliation. Updates
 preserve the existing PR and never force-push. The persistent writer owns its PR
-and current-head check waits; repository standing rules supply human-review gates.
+and separate current-head full-check and review-feedback waits; repository
+standing rules supply human-review gates. Feedback wakes for submitted/edited
+reviews and comments or failed checks while other CI is queued. The notice is
+not a clean verdict; the owner must read all actual surfaces before disposition.
+`work-follow ID` lets the authorized writer or requester rearm feedback after
+disposition (and add it to an already published work family). It retains the
+full-check wait/evidence and returns its `waitEnded` state, without immediately
+rearming unchanged failed CI. After repairing or rerunning CI, explicitly arm a
+new full-check PR wait. Existing feedback is skipped using the durable same-head
+cursor; owner, cumulative rounds and outbound consent are unchanged. No comments,
+review requests, merges or issue closures are sent by these waits.
 Pausing the agent, revoking its grant or expiry prevents publication and stops its
 associated work processes during runtime reconciliation.
 

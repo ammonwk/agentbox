@@ -44,6 +44,7 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       );
       break;
     case "work-review":
+    case "work-follow":
     case "work-collect":
     case "work-publish":
     case "work-failure":
@@ -55,7 +56,7 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       value = await api(
         "POST",
         `/api/agents/work/${encodeURIComponent(id)}/${verb.slice(5)}`,
-        ["work-collect", "work-reconcile", "work-retry-start"].includes(verb)
+        ["work-follow", "work-collect", "work-reconcile", "work-retry-start"].includes(verb)
           ? {}
           : file(),
       );
@@ -239,7 +240,7 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       break;
     default:
       throw new Error(
-        "agent takes status, bind, sync, read, progress, prepare, review, collect, retry-review, action, experts, finish, rotate; local work uses work-start, work, work-review, work-collect, work-retry-review, work-retry-start, work-publish, work-reconcile, work-failure; create agents through Jupiter",
+        "agent takes status, bind, sync, read, progress, prepare, review, collect, retry-review, action, experts, finish, rotate; local work uses work-start, work, work-review, work-collect, work-retry-review, work-retry-start, work-publish, work-follow, work-reconcile, work-failure; create agents through Jupiter",
       );
   }
   console.log(JSON.stringify(value, null, 2));

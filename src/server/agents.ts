@@ -70,6 +70,9 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
         ),
       ),
     )
+    .add("POST", "/api/agents/work/:id/follow", ({ req, params }) =>
+      agents.works.followPublication(params.id!, authenticatedSession(req)).then(json),
+    )
     .add("POST", "/api/agents/work/:id/collect", ({ req, params }) =>
       agents.works.collect(params.id!, authenticatedSession(req)).then(json),
     )

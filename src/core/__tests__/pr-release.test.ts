@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, getWait, insertWait, updateWait, insertSessionRecord, type SessionRecord, insertSchedule, insertAccount } from "../db";
 import { claimPr, releasePr, prClaims, prReleased, movePrClaims } from "../prclaims";
-import { Waits } from "../waits";
+import { Waits, lookPr } from "../waits";
 import { Fleet, type Runtime } from "../fleet";
 import { claudeAdapter } from "../providers/claude";
 import { Scheduler } from "../scheduler";
@@ -73,6 +73,34 @@ test("taking a lapsed claim also revokes its old holder; a schedule replacement 
   expect(getWait(kept.id)!.sessionId).toBe("replacement");
   releasePr("replacement", { repo: "o/r", number: 9001 });
   expect(getWait(kept.id)!.ended).toBe("cancelled");
+});
+
+test("feedback cursor survives restart without reviving a released owner's notifications", () => {
+  claim("old", 9003);
+  const feedback = { ...spec(9003), all: false, feedback: true } as Extract<WaitSpec, { kind: "pr" }>;
+  const w = insertWait({ sessionId: "old", spec: feedback, createdAt: now, deadline: now + 60_000 });
+  const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async () => {} });
+  // Exercise the durable transition without starting a GitHub read for this fixture.
+  waits.tick = async () => {};
+  const read = { state: "OPEN" as const, head: "a".repeat(40), base: "main", mergeable: "MERGEABLE" as const, checks: [], feedback: { fingerprint: "observed", count: 1 } };
+  (waits as any).looked(w, lookPr(feedback, {}, read, now, now), now);
+  closeDb();
+  expect(getWait(w.id)).toMatchObject({ ended: "happened", toldAt: null, memo: { feedback: "observed" } });
+  const again = waits.arm("old", { ...feedback, head: read.head }).wait;
+  closeDb();
+  expect(getWait(again.id)?.memo.feedback).toBe("observed");
+  expect(again.memo.feedback).toBe("observed");
+  expect(lookPr(feedback, again.memo, read, now, now)).not.toHaveProperty("end");
+  expect(lookPr(feedback, again.memo, { ...read, feedback: { fingerprint: "edited", count: 1 } }, now, now)).toHaveProperty("end");
+  releasePr("old", { repo: "o/r", number: 9003 });
+  claim("new", 9003);
+  closeDb();
+  for (const id of [w.id, again.id]) expect(getWait(id)?.ended).toBe("cancelled");
+  expect(() => waits.arm("old", feedback)).toThrow("You no longer hold");
+  const next = waits.arm("new", feedback).wait;
+  expect(next.memo.feedback).toBeUndefined();
+  expect(lookPr(feedback, next.memo, read, now, now)).toHaveProperty("end");
+  releasePr("new", { repo: "o/r", number: 9003 });
 });
 
 test("warm messages and schedule ticks carry release state even when queued before release", async () => {
