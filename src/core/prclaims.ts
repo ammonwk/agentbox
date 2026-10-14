@@ -45,7 +45,9 @@ export function assignedPrHolder(pr: PrRef): string | null {
 }
 
 export function prReleased(sessionId: string, pr: PrRef): boolean {
-  return !!getDb().query("SELECT 1 FROM pr_releases WHERE session_id = ? AND repo = ? AND number = ?").get(sessionId, pr.repo, pr.number);
+  // A release recorded as Team/Repo is the record for team/repo: a claim, a
+  // rename or another session's casing is not a new PR.
+  return !!getDb().query("SELECT 1 FROM pr_releases WHERE session_id = ? AND lower(repo) = lower(?) AND number = ?").get(sessionId, pr.repo, pr.number);
 }
 
 /** Read at delivery, not when a message is queued: ownership can move meanwhile. */
@@ -127,7 +129,7 @@ export function claimPr(claims: readonly PrClaim[], sessions: readonly Session[]
     for (const old of prior) if (old.session_id !== sessionId) releasePr(old.session_id, { repo: old.repo, number });
     db.run("DELETE FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?", [repo, number]);
     db.run("INSERT INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held?.repo ?? repo, number, sessionId, now]);
-    db.run("DELETE FROM pr_releases WHERE session_id = ? AND repo = ? AND number = ?", [sessionId, repo, number]);
+    db.run("DELETE FROM pr_releases WHERE session_id = ? AND lower(repo) = lower(?) AND number = ?", [sessionId, repo, number]);
   })();
   return { repo: held?.repo ?? repo, number, sessionId, how: "said", at: now };
 }
