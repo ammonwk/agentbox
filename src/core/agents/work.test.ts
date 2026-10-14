@@ -337,7 +337,10 @@ test("family claims, independent exact-head rounds and revoked publication autho
                     },
                   ]
                 : [],
-            evidence: ["app.txt"],
+            evidence: Array.from(
+              { length: 42 },
+              (_, i) => `app.txt consumer ${i}`,
+            ),
           }),
         );
       if (n === 1) {
