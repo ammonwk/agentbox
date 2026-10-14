@@ -26,7 +26,7 @@ import {
 import { go, selectScope } from "../route";
 import { useScope } from "../lib/projects";
 import "./agents.css";
-import { rememberAgent, landingForAgent, agentActivity } from "./AgentBrowser";
+import { firstActive, landingForAgent, agentActivity, type AgentOption } from "./AgentBrowser";
 import { chooseWhere, chosenWhere, hostConnected, isAgentboxRepo, localTwin, pendingMoves, rememberTwins } from "../lib/moveagents";
 import { WhereToggle } from "./AgentWhere";
 import type { LocalAgent } from "../../../src/core/agents/conversation";
@@ -211,10 +211,7 @@ function Directory({
   const hiddenJupiter = selected?.capability === "creator" && !jupiterHere;
   useEffect(() => {
     if ((!id || hiddenJupiter) && data.data) {
-      const scoped = data.data.board.agents.filter(inProject);
-      const saved = scoped.find((a) => a.id === rememberAgent());
-      const used = scoped.find((a) => data.data!.board.runs.some((r) => r.agent_id === a.id));
-      const first = saved ?? used ?? scoped.find((a) => a.capability === "creator") ?? scoped.find((a) => a.name.toLowerCase() === "vulcan") ?? scoped[0];
+      const first = firstActive(data.data.board.agents.filter(inProject).map(optionOf));
       if (first) go(landingForAgent(first.id), true);
       else if (!jupiterHere) go({ page: "agents", id: "manage" }, true);
       else if (!error) void creator();
@@ -227,6 +224,10 @@ function Directory({
           ?.display_name ||
         data.data?.members.find((m) => m.user_id === id)?.person?.email ||
         id.slice(0, 8);
+  // A function declaration: the landing effect above uses it too.
+  function optionOf(a: SharedAgent): AgentOption {
+    return { id: a.id, name: a.name, role: a.definition.role, creator: a.capability === "creator", activity: agentActivity(a.enabled, data.data!.board.runs.filter((r) => r.agent_id === a.id).map((r) => r.state)), detail: `${a.definition.repos.join(", ") || "General"} · ${a.team ? "Team" : person(a.created_by)} · ${a.enabled ? "Shared" : "Needs setup"}` };
+  }
   if (me.error || data.error) return <Empty title="Workspace unavailable">{me.error ?? data.error}<Button onClick={() => { void me.reload(); void data.reload(); }}>Retry</Button></Empty>;
   if (!me.data) return <Empty title="Loading workspaces…" />;
   if (hiddenJupiter) return <Empty title="Opening agents…" />;
@@ -303,7 +304,7 @@ function Directory({
         <SharedAgentSpace
           key={selected.id}
           a={selected}
-          options={data.data.board.agents.filter(inProject).map((a) => ({ id: a.id, name: a.name, role: a.definition.role, creator: a.capability === "creator", activity: agentActivity(a.enabled, data.data!.board.runs.filter((r) => r.agent_id === a.id).map((r) => r.state)), detail: `${a.definition.repos.join(", ") || "General"} · ${a.team ? "Team" : person(a.created_by)} · ${a.enabled ? "Shared" : "Needs setup"}` }))}
+          options={data.data.board.agents.filter(inProject).map(optionOf)}
           onCreate={() => jupiterHere ? void creator() : go({ page: "agents", id: "manage" })}
           reload={data.reload}
           board={data.data.board}

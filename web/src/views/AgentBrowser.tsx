@@ -6,12 +6,12 @@ import { useIsNarrow } from "./session/useIsNarrow";
 import { AgentAvatar } from "./AgentAvatar";
 import { halfOf, placeIn, ranksOf, readOrder, saveOrder, stepIn } from "../lib/manualorder";
 import { useDismiss } from "./newsession/popover";
+import { firstActiveIn, resting, sidebarOrder, type AgentActivity, type AgentOption } from "../lib/agentorder";
 /** Your order of the agents, by workspace and project, and of each agent's
  *  work sessions, by agent (lib/manualorder.ts). */
 const AGENT_ORDER_KEY = "agentbox.agentOrder";
 const THREAD_ORDER_KEY = "agentbox.agentSessionOrder";
-type AgentActivity = "working" | "approval" | "waiting" | "idle" | "paused";
-export type AgentOption = { id: string; name: string; detail: string; role: string; creator?: boolean; avatar?: string | null; activity: AgentActivity };
+export type { AgentOption } from "../lib/agentorder";
 export const agentName = (name: string) => name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 export function agentActivity(enabled: boolean, statuses: readonly string[]): AgentActivity {
   if (statuses.includes("paused")) return "paused";
@@ -27,13 +27,13 @@ function ActivityIcon({ activity }: { activity: AgentActivity }) {
   </span>;
 }
 
+const agentScopeKey = () => `${scopeOf().get("workspace") ?? ""}:${scopeOf().get("project") ?? ""}`;
+/** Where the agents page opens, from its link or a project tab (lib/agentorder.ts). */
+export const firstActive = (options: readonly AgentOption[]) => firstActiveIn(options, readOrder(AGENT_ORDER_KEY, agentScopeKey()));
+
 export function agentRoute() { const r = parseHash(location.hash); return r.page === "agents" ? r : { page: "agents" as const }; }
 export function landingForAgent(id: string) {
   return { page: "agents" as const, id, view: "chat" as const, thread: "new" };
-}
-export function rememberAgent(id?: string) {
-  const key = `agentbox.selectedAgent:${scopeOf().get("workspace") ?? ""}:${scopeOf().get("project") ?? ""}`;
-  try { if (id) localStorage.setItem(key, id); return localStorage.getItem(key); } catch { return null; }
 }
 export function AgentBrowser({ id, options, threads, more, loadMore, error, children, onCreate, ongoing, loading }: {
   id: string; options: AgentOption[]; threads: AgentThread[]; more: boolean;
@@ -52,7 +52,6 @@ export function AgentBrowser({ id, options, threads, more, loadMore, error, chil
   }, [id, loading]);
   const [showClosed, setShowClosed] = useState(false);
   const rail = useRef<HTMLElement>(null), hadDetail = useRef(route.view !== "sessions");
-  useEffect(() => { rememberAgent(id); }, [id]);
   useEffect(() => { setExpanded(true); }, [id, route.thread, route.view]);
   useEffect(() => { setShowClosed(false); }, [id]);
   useEffect(() => {
@@ -73,19 +72,20 @@ export function AgentBrowser({ id, options, threads, more, loadMore, error, chil
   // Your order: the agents you placed first, then the rest as they come; an
   // agent's work sessions stay active first, and within that one you have
   // not placed comes first, the newest on top.
-  const agentScope = `${scopeOf().get("workspace") ?? ""}:${scopeOf().get("project") ?? ""}`;
+  const agentScope = agentScopeKey();
   const [agentOrder, setAgentOrder] = useState(() => ({ scope: agentScope, ids: readOrder(AGENT_ORDER_KEY, agentScope) }));
   const agentIds = useMemo(() => (agentOrder.scope === agentScope ? agentOrder.ids : readOrder(AGENT_ORDER_KEY, agentScope)), [agentOrder, agentScope]);
   const [threadOrder, setThreadOrder] = useState(() => ({ scope: id, ids: readOrder(THREAD_ORDER_KEY, id) }));
   const threadIds = useMemo(() => (threadOrder.scope === id ? threadOrder.ids : readOrder(THREAD_ORDER_KEY, id)), [threadOrder, id]);
-  const agentRanks = ranksOf(agentIds), threadRanks = ranksOf(threadIds);
-  const agents = [...options].sort((a, b) => (agentRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (agentRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+  const threadRanks = ranksOf(threadIds);
+  const agents = sidebarOrder(options, agentIds);
   const ordered = work.filter((t) => t.status !== "closed" || showClosed)
     .sort((a, b) => Number(b.active) - Number(a.active) || (threadRanks.get(a.id) ?? -1) - (threadRanks.get(b.id) ?? -1) || b.at - a.at);
   const creator = options.find((a) => a.creator);
-  // The rows beside each other: the agents, and each agent's active work and the rest.
+  // The rows beside each other: the active agents and the paused ones, and
+  // each agent's active work and the rest.
   const siblingsOf = (row: Row): string[] => row.kind === "agent"
-    ? agents.map((a) => a.id)
+    ? agents.filter((a) => resting(a) === resting(agents.find((x) => x.id === row.id)!)).map((a) => a.id)
     : ordered.filter((t) => t.active === ordered.find((x) => x.id === row.id)?.active).map((t) => t.id);
   const place = (row: Row, next: string[] | null) => {
     if (!next) return false;

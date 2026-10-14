@@ -40,7 +40,7 @@ import { followsAfterScroll, onChatSubmitted, followChatSize } from "./session/s
 import { AgentAvatar, AgentPictureEditor, localAvatarUrl } from "./AgentAvatar";
 import { Markdown } from "./session/Markdown";
 import "./session/session.css";
-import { AgentBrowser, agentRoute, rememberAgent, landingForAgent, agentActivity, agentName, type AgentOption } from "./AgentBrowser";
+import { AgentBrowser, agentRoute, firstActive, landingForAgent, agentActivity, agentName, type AgentOption } from "./AgentBrowser";
 import { shownStatus } from "../lib/board";
 import { go, hrefOf } from "../route";
 
@@ -191,11 +191,7 @@ export function LocalAgentSpace({
   const selected = agents.data?.find((a) => a.id === id);
   const sharedId = selected ? sharedTwinOf(selected.id) : undefined;
   useEffect(() => {
-    if (!id && options.length) {
-      const saved = options.find((a) => a.id === rememberAgent());
-      const used = options.find((a) => agents.data?.find((x) => x.id === a.id)?.session);
-      go(landingForAgent((saved ?? used ?? options.find((a) => a.creator) ?? options[0])!.id), true);
-    }
+    if (!id && options.length) go(landingForAgent(firstActive(options)!.id), true);
   }, [id, agents.data, project]);
   useEffect(() => {
     if (selected && !scopeOf().has("project")) selectScope("project", selected.repo, { ...agentRoute(), page: "agents", id: selected.id }, true);
