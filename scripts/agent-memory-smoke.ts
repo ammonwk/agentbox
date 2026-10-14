@@ -292,6 +292,7 @@ try {
   await page.locator(".agent-picture .agent-avatar-icon").waitFor();
   rmSync(join(process.env.AGENTBOX_HOME!, "agents", "avatars", agentBody().avatar!.file));
   await page.goto(`${origin}/#/agents/${vulcan.id}/chat/${next}?project=alpha`);
+  await page.reload(); // Request the removed file; hash navigation can reuse the decoded image.
   await page.locator(".tl-agent-reply .agent-avatar-icon").first().waitFor();
   // Remove: back to the icon, after a reload too.
   await page.goto(`${origin}/#/agents/${vulcan.id}/about/${agentBody().session}?project=alpha`);
