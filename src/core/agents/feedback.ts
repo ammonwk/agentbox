@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { RUNNING_REVISION } from "../../revision";
 import { z } from "zod";
 import { FleetError } from "../fleet";
+import { userHome } from "../paths";
 import type { AgentsRuntime } from "./runtime";
 
 export const FEEDBACK_REPO = "ammonwk/agentbox";
@@ -22,6 +23,16 @@ const github: GitHub = async (path, body) => {
 };
 const input = z.object({request:z.string().uuid(), text:z.string().trim().min(1).max(10000), target:z.string().max(200).nullable(), uiRevision:z.object({commit:z.string().regex(/^[0-9a-f]{40}$/),dirty:z.boolean()}).strict().nullable().optional()}).strict();
 const marker = (id: string) => `agentbox-help:${id}`;
+/** The issue is public. An image token names a file that stays on this Mac,
+ * and any home path names the person's account, so neither is published. */
+export function publicText(text: string, home = userHome()): string {
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const root = home.replace(/\/+$/, "");
+  text = text.replace(/\[Image #(\d+): [^\]\n]*\]/g, "[Image #$1: kept on the reporter's machine, not uploaded]");
+  if (root.length > 1) text = text.replace(new RegExp(`${esc(root)}(?![\\w.-])`, "g"), "~");
+  return text
+    .replace(/(?<![\w.~-])\/(?:Users|home)\/[^\s/'"`)\]]+/g, "~");
+}
 const issueUrl = (url: unknown): url is string => typeof url === "string" && /^https:\/\/github\.com\/ammonwk\/agentbox\/issues\/\d+$/.test(url);
 
 export class AgentFeedback {
@@ -68,9 +79,10 @@ export class AgentFeedback {
     const pending = (async (): Promise<Receipt> => {
       try {
         const name = a.name.charAt(0).toUpperCase()+a.name.slice(1).toLowerCase();
-        const title = `[Agent feedback] ${name}: ${p.text.split(/\r?\n/)[0]}`.slice(0,200);
+        const text = publicText(p.text);
+        const title = `[Agent feedback] ${name}: ${text.split(/\r?\n/)[0]}`.slice(0,200);
         const revision = (r: {commit:string;dirty:boolean}|null|undefined) => r ? `${r.commit}${r.dirty ? " (local changes)" : ""}` : "Unavailable";
-        const body = `<!-- ${marker(p.request)} -->\n\n## Feedback\n\n${p.text}\n\n## Agent context\n\n- Agent: ${name}\n- Role: ${a.role}\n- Agent ID: ${a.id}\n- Session: ${p.target ?? "Not started"}\n- Server revision: ${revision(RUNNING_REVISION)}\n- UI revision: ${revision(p.uiRevision)}\n\nSubmitted by the user through Agentbox /help for Vulcan to triage. No conversation transcript was uploaded.`;
+        const body = `<!-- ${marker(p.request)} -->\n\n## Feedback\n\n${text}\n\n## Agent context\n\n- Agent: ${name}\n- Role: ${a.role}\n- Agent ID: ${a.id}\n- Session: ${p.target ?? "Not started"}\n- Server revision: ${revision(RUNNING_REVISION)}\n- UI revision: ${revision(p.uiRevision)}\n\nSubmitted by the user through Agentbox /help for Vulcan to triage. No conversation transcript was uploaded.`;
         const issue = await this.gh(`repos/${FEEDBACK_REPO}/issues`,{title,body});
         if (!issueUrl(issue.html_url)) throw Error("GitHub did not return a verified issue link");
         r.state="sent";r.issue=issue.html_url;r.result=`Issue created: ${r.issue}`;
