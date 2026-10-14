@@ -205,6 +205,7 @@ why). Arming the same wait twice is one wait.
     agentbox adopt <id>... --detach # move a session from another terminal into agentbox
     agentbox label <id> 'name'      # rename it on the board
     agentbox claude|codex|omp|opencode|devin|muse --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
+    agentbox claude --detach --worktree 'prompt'   # in a new worktree of the repo you are in: for a worker, never the shared checkout
     agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.

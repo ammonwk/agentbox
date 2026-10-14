@@ -152,7 +152,7 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
       continue;
     }
     const [, key, inline] = m;
-    const takesValue = key === "account" || key === "model" || key === "claim";
+    const takesValue = key === "account" || key === "model" || key === "claim" || key === "branch";
     if (inline !== undefined) flags.set(key!, inline);
     else if (takesValue && args[i + 1] !== undefined) flags.set(key!, args[++i]!);
     else flags.set(key!, true);
@@ -160,7 +160,16 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
   return { flags, rest };
 }
 
-/** `agentbox claude [--account X] [--model M] [--detach] [prompt…]` */
+/** The registered repo whose checkout holds `dir` (a linked worktree counts
+ *  as its main checkout), for a session started in a worktree of its own. */
+export function repoOfDir(repos: { id: string; checkoutRoot?: string }[], dir: string): string | null {
+  const p = Bun.spawnSync(["git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { stdout: "pipe", stderr: "ignore" });
+  if (p.exitCode !== 0) return null;
+  const root = p.stdout.toString().trim().replace(/\/\.git\/?$/, "");
+  return repos.find((r) => r.checkoutRoot === root)?.id ?? null;
+}
+
+/** `agentbox claude [--account X] [--model M] [--worktree [--branch B]] [--detach] [prompt…]` */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
   const { flags, rest } = parseFlags(args);
   // Asking how is not asking to start one.
@@ -185,11 +194,25 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
     accountId = match.id;
   }
 
+  // --worktree: a new worktree of the registered repo this runs in, never
+  // the shared checkout, as New session in the app does; --branch B: the
+  // worktree of existing branch B, as the app's branch pick.
+  let place: { repoId: string; worktree: true; branch?: string } | null = null;
+  if (flags.has("worktree") || flags.has("branch")) {
+    const state = await api<AppState>("GET", "/api/state");
+    const repoId = repoOfDir(state.repos, process.cwd());
+    if (!repoId) {
+      console.error("agentbox: --worktree needs a registered repo here: run it inside one, or add it in Settings");
+      return 2;
+    }
+    place = { repoId, worktree: true, ...(typeof flags.get("branch") === "string" ? { branch: flags.get("branch") as string } : {}) };
+  }
+
   let out: { session: Session; placement: Placement };
   try {
     out = await api("POST", "/api/sessions", {
       provider,
-      cwd: process.cwd(),
+      ...(place ?? { cwd: process.cwd() }),
       prompt: rest.join(" ") || undefined,
       model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
       accountId,
@@ -411,7 +434,7 @@ const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
   start                 start the backend in the background, if needed
   service install       keep the backend available at login (macOS) or boot (Linux)
-  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--detach] [prompt…]
+  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--worktree | --branch B] [--detach] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d)
   kill                  stop the server; sessions keep running in tmux
