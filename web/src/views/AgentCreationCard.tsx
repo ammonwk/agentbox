@@ -4,6 +4,8 @@ import { Button } from "../components";
 import { hrefOf } from "../route";
 export function AgentCreationCard({ draft, edit, reload, scope }: { draft: CreationDraft; scope: string; edit: (draft: CreationDraft, spec: CreationSpec, create: boolean) => Promise<CreationDraft>; reload: () => Promise<unknown> }) {
   const [spec, setSpec] = useState(draft.spec), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  // Automatic is a local agent policy; a shared agent runs on its host's configured provider.
+  const local = draft.creator.startsWith("local-");
   async function submit(create: boolean) {
     setBusy(true); setError("");
     try {
@@ -19,7 +21,8 @@ export function AgentCreationCard({ draft, edit, reload, scope }: { draft: Creat
     <label>Name<input className="input" value={spec.name} required maxLength={80} onChange={(e) => setSpec({ ...spec, name: e.target.value })} /></label>
     <label>Purpose<input className="input" value={spec.role} required maxLength={120} onChange={(e) => setSpec({ ...spec, role: e.target.value })} /></label>
     <label>Instructions<textarea className="input" value={spec.instructions} required maxLength={20000} rows={4} onChange={(e) => setSpec({ ...spec, instructions: e.target.value })} /></label>
-    <label>Provider<select className="input" value={spec.provider} onChange={(e) => setSpec({ ...spec, provider: e.target.value as CreationSpec["provider"] })}><option value="codex">Codex</option><option value="claude">Claude</option><option value="muse">Muse</option></select></label>
+    <label>Provider<select className="input" value={spec.provider} onChange={(e) => setSpec({ ...spec, provider: e.target.value as CreationSpec["provider"] })}>{local && <option value="auto">Automatic</option>}<option value="codex">Codex</option><option value="claude">Claude</option><option value="muse">Muse</option></select></label>
+    {local && spec.provider === "auto" && <p className="hint">Each fresh conversation starts on whichever logged-in provider has room; memory carries across.</p>}
     <label>Limits<textarea className="input" value={spec.limits} maxLength={2000} rows={2} onChange={(e) => setSpec({ ...spec, limits: e.target.value })} /></label>
     <label>Requested automation<input className="input" value={spec.automation} maxLength={1000} placeholder="None — manual chat" onChange={(e) => setSpec({ ...spec, automation: e.target.value })} /></label>
     {spec.automation && <p className="hint">Recorded for later setup. This will not configure a schedule, monitoring or an integration.</p>}

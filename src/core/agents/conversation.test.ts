@@ -31,6 +31,7 @@ beforeEach(() => {
   stopped = 0;
   closed = 0;
   fleet = {
+    placement: (provider: string) => ({ provider, accountId: `${provider}-1`, mode: "auto", claim: 0, candidates: [], why: "room" }),
     sessions: () => sessions,
     tick: async () => {},
     stopSession: async () => {

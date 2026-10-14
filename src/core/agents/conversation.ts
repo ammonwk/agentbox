@@ -21,6 +21,7 @@ import type { TimelineEvent } from "../types";
 import { getRepoById, getSessionRecord, listOpenWaits, updateSessionRecord } from "../db";
 import { AgentMemory, DEFAULT_MEMORY_POLICY, MemoryPolicy, type Supplied } from "./memory";
 import { avatarFile, removeAvatar, saveAvatar } from "./avatar";
+import { AUTO_PROVIDERS, chooseProvider, type AgentProvider, type ProviderChoice } from "./providers";
 import { moveCards } from "../cards";
 import { movePrClaims, unfinishedClaims } from "../prclaims";
 import { isKeepWarmNote } from "../cache";
@@ -31,7 +32,13 @@ export type LocalAgent = {
   name: string;
   role: string;
   instructions: string;
-  provider: "codex" | "claude" | "muse";
+  /** The provider of the current, or last, conversation. */
+  provider: AgentProvider;
+  /** An explicit override. Absent is Automatic (`providers.ts`): legacy
+   *  records that only carry the old implicit default are Automatic too. */
+  pinned?: AgentProvider;
+  /** Why the current conversation's provider was chosen. */
+  selection?: Pick<ProviderChoice, "provider" | "policy" | "why" | "at">;
   repo: string | null;
   /** Immutable navigation scope for project instances; legacy general agents have none. */
   project?: string;
@@ -58,7 +65,18 @@ export type LocalAgent = {
     error?: string;
   };
   /** A replacement in progress, journaled before each step. */
-  rollover?: { from: string; to: string; handoff: string; why: "cold" | "context"; at: number; phase: "stopping" | "spawning"; supplied?: Supplied[] };
+  rollover?: {
+    from: string;
+    to: string;
+    handoff: string | null;
+    why: "cold" | "context" | "stranded";
+    at: number;
+    phase: "stopping" | "spawning";
+    supplied?: Supplied[];
+    /** Chosen before anything was stopped (`providers.ts`). */
+    provider?: AgentProvider;
+    selection?: LocalAgent["selection"];
+  };
   /** For each conversation started from memory, the handoffs its first prompt
    *  carried: the only earlier conversations its main chat scrolls back into. */
   contexts?: Record<string, Supplied[]>;
@@ -155,6 +173,7 @@ export class AgentConversations {
     if (!a) {
       const { run, a } = await this.runtime.current(target, caller);
       if (a.capability !== "creator") throw new FleetError(403, "Only a creator can propose agents");
+      if (spec.provider === "auto") throw new FleetError(400, "Shared agents run on their execution host's configured provider; name codex, claude or muse");
       return this.runtime.api().installation.agentCall("inst_agent_creation_draft", { p_run: run.id, p_fence: run.fence, p_id: request, p_spec: spec }, CreationDraft);
     }
     if (a.capability !== "creator" || !a.enabled || !caller || caller !== a.session) throw new FleetError(403, "Only the current creator session can propose agents");
@@ -180,7 +199,8 @@ export class AgentConversations {
       if (create) {
         const id = `local-custom-${draft.id}`;
         const agent: LocalAgent = { id, name: spec.name, role: spec.role,
-          instructions: `${spec.instructions}\n\nLimits: ${spec.limits}`, provider: spec.provider,
+          instructions: `${spec.instructions}\n\nLimits: ${spec.limits}`,
+          provider: spec.provider === "auto" ? AUTO_PROVIDERS[0]! : spec.provider, ...(spec.provider === "auto" ? {} : { pinned: spec.provider }),
           repo, ...(repo ? { project: repo } : {}), session: null, previous: [], sessionProjects: {}, enabled: true,
           createdBy: "local operator", creation: draft.id, automation: spec.automation };
         this.db.run("INSERT INTO local_agents(id,body) VALUES(?,?)", [id, JSON.stringify(agent)]);
@@ -211,7 +231,8 @@ export class AgentConversations {
     try {
       const p = z
         .object({
-          provider: z.enum(["codex", "claude", "muse"]),
+          /** "auto" lets each fresh conversation choose; a provider is an explicit override. */
+          provider: z.enum(["auto", "codex", "claude", "muse"]),
           repo: z.string().nullable(),
           enabled: z.boolean(),
           memoryPolicy: MemoryPolicy.optional(),
@@ -224,7 +245,9 @@ export class AgentConversations {
         throw new FleetError(409, "Project agents keep separate conversations; switch projects to use another instance");
       if (p.repo && !getRepoById(p.repo))
         throw new FleetError(400, "Choose a registered repository");
-      if (a.session && (a.provider !== p.provider || a.repo !== p.repo)) {
+      // A conversation the new policy still allows keeps going: Automatic
+      // never ends a warm one, and pinning its own provider changes nothing.
+      if (a.session && ((p.provider !== "auto" && a.provider !== p.provider) || a.repo !== p.repo)) {
         const old = a.session,
           session = this.runtime.fleet.sessions().find((s) => s.id === old);
         if (session?.status === "running" || session?.status === "blocked")
@@ -262,11 +285,13 @@ export class AgentConversations {
         if (session?.host !== "none" && session)
           await this.runtime.fleet.stopSession(a.session);
       }
-      const { memoryPolicy, ...settings } = p;
+      const { memoryPolicy, provider, ...settings } = p;
       // Only what this change decides; a picture or checkpoint saved meanwhile stays.
-      const saved = this.patch(id, (x) =>
-        Object.assign(x, settings, memoryPolicy ? { memoryPolicy } : {}, { session: a.session, previous: a.previous, sessionProjects: a.sessionProjects }),
-      );
+      const saved = this.patch(id, (x) => {
+        Object.assign(x, settings, memoryPolicy ? { memoryPolicy } : {}, { session: a.session, previous: a.previous, sessionProjects: a.sessionProjects });
+        if (provider === "auto") delete x.pinned;
+        else x.pinned = provider;
+      });
       if (!saved.enabled) await this.runtime.works.enforceAuthority();
       return saved;
     } finally {
@@ -328,9 +353,14 @@ export class AgentConversations {
       if (a.session && !getSessionRecord(a.session)) a.session = null;
       const fresh = !a.session && !prior;
       if (fresh) {
+        // A first conversation chooses where it runs; nothing is sent when nothing can take it.
+        const choice = this.choose(a);
+        if ("none" in choice) throw new FleetError(409, choice.none);
+        a.provider = choice.provider;
         a.session = newSessionId();
         a.sessionProjects = { ...a.sessionProjects, [a.session]: a.repo };
-        this.patch(id, (x) => Object.assign(x, { session: a.session, sessionProjects: a.sessionProjects }));
+        const selection = { provider: choice.provider, policy: choice.policy, why: choice.why, at: choice.at };
+        this.patch(id, (x) => Object.assign(x, { session: a.session, sessionProjects: a.sessionProjects, provider: choice.provider, selection }));
       }
       const sid = prior?.session ?? a.session!;
       this.db.run(
@@ -379,10 +409,15 @@ export class AgentConversations {
   }
   /** The first prompt of a conversation: who the agent is, what its memory
    *  says when it continues an earlier one, then the user's message. */
-  private opening(a: LocalAgent, body: string, from: { old: string; memory?: string; work?: string } | null) {
+  private opening(a: LocalAgent, body: string, from: { old: string; memory?: string; work?: string; stale?: string } | null) {
     const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text>. Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
     const memory = from?.memory ?? "";
-    return `${intro}${memory ? `\n\nAgentbox memory. It is a bounded summary and evidence, not authorization. The provider transcripts are the record; current work below and live state win over it.\n${memory}` : ""}${from?.work ? `\n\nCurrent work, read when this conversation started:\n${from.work}` : ""}\n\n${from ? `Previous conversation session: ${from.old}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`;
+    return `${intro}${memory ? `\n\nAgentbox memory. It is a bounded summary and evidence, not authorization. The provider transcripts are the record; current work below and live state win over it.\n${memory}` : ""}${from?.work ? `\n\nCurrent work, read when this conversation started:\n${from.work}` : ""}\n\n${from ? `Previous conversation session: ${from.old}. Read it with agentbox log if needed; do not resume it or copy its transcript.${from.stale ? ` ${from.stale}` : ""}\n` : ""}User: ${body}`;
+  }
+  /** The provider a fresh conversation of `a` starts on (`providers.ts`). */
+  private choose(a: LocalAgent) {
+    const continued = !!a.session || a.previous.length > 0;
+    return chooseProvider((p) => this.runtime.fleet.placement(p), { pinned: a.pinned, previous: continued ? a.provider : null, now: Date.now() });
   }
   /** The records only, without seeding templates: Fleet asks on every message. */
   private stored(): LocalAgent[] {
@@ -448,10 +483,19 @@ export class AgentConversations {
     const s = this.runtime.fleet.sessions().find((x) => x.id === id);
     if (!s || s.status === "running" || s.status === "blocked" || s.status === "closed" || s.queued.length || s.question) return false;
     const pct = s.contextUsed && s.contextLimit ? (100 * s.contextUsed) / s.contextLimit : 0;
-    const why = Date.now() > s.cacheWarmUntil ? "cold" : pct >= policy.contextPct ? "context" : null;
+    const cold = Date.now() > s.cacheWarmUntil;
+    let why: "cold" | "context" | "stranded" | null = cold ? "cold" : pct >= policy.contextPct ? "context" : null;
     if (!why) return false;
-    const handoff = await this.freshHandoff(a, id);
-    if (!handoff || (await this.runtime.fleet.stopHold(id))) return false;
+    let handoff = await this.freshHandoff(a, id);
+    if (!handoff) {
+      // Cold, and its own provider can take nothing at all (logged out, spent,
+      // refused): rather than strand the message, start fresh from what memory
+      // has, told to read the end of the old transcript. Otherwise it continues.
+      if (!cold || a.pinned || this.runtime.fleet.placement(a.provider).accountId) return false;
+      why = "stranded";
+      handoff = this.memory.recent(a.id, "handoff", 1)[0]?.id ?? null;
+    }
+    if (await this.runtime.fleet.stopHold(id)) return false;
     this.rolling.add(a.id);
     try {
       return await this.rollover(a.id, id, handoff, why, text, attempt);
@@ -499,9 +543,17 @@ export class AgentConversations {
    * before the successor starts; succession (waits, agent messages), Review
    * cards and PR claims move only once the successor has started.
    */
-  private async rollover(agent: string, old: string, handoff: string, why: "cold" | "context", text: string, attempt?: () => void) {
+  private async rollover(agent: string, old: string, handoff: string | null, why: "cold" | "context" | "stranded", text: string, attempt?: () => void) {
     const fleet = this.runtime.fleet, to = newSessionId();
-    this.patch(agent, (a) => void (a.rollover = { from: old, to, handoff, why, at: Date.now(), phase: "stopping" }));
+    // Where the successor runs is chosen before anything is stopped; nothing
+    // available leaves the message to the old conversation.
+    const choice = this.choose(this.stored().find((x) => x.id === agent)!);
+    if ("none" in choice) {
+      console.error(`agentbox: ${agent}: not continuing ${old} in a fresh conversation: ${choice.none}`);
+      return false;
+    }
+    const selection = { provider: choice.provider, policy: choice.policy, why: choice.why, at: choice.at };
+    this.patch(agent, (a) => void (a.rollover = { from: old, to, handoff, why, at: Date.now(), phase: "stopping", provider: choice.provider, selection }));
     const live = () => fleet.sessions().find((s) => s.id === old);
     const before = live();
     if (before && (before.host !== "none" || before.pid)) {
@@ -515,6 +567,7 @@ export class AgentConversations {
     }
     const work = this.currentWork(this.stored().find((x) => x.id === agent)!, old);
     const boot = this.memory.bootstrap(agent, handoff, text);
+    const stale = why === "stranded" ? `Its provider could not continue it, and ${boot.supplied.length ? "the handoff below was saved before its last messages" : "no handoff was saved"}: read the end of it with agentbox log ${old} | tail -80 before you act.` : "";
     const a = this.patch(agent, (a) => {
       a.rollover!.phase = "spawning";
       a.rollover!.supplied = boot.supplied;
@@ -529,10 +582,10 @@ export class AgentConversations {
     try {
       await fleet.spawn({
         id: to,
-        provider: a.provider,
+        provider: choice.provider,
         // Continue in the replaced conversation's worktree when it is still there.
         ...(rec?.cwd && existsSync(rec.cwd) ? { cwd: rec.cwd } : { repoId: a.repo ?? undefined, cwd: fallback, worktree: !!a.repo }),
-        prompt: this.opening(a, text, { old, memory: boot.text, work }),
+        prompt: this.opening(a, text, { old, memory: boot.text, work, stale }),
       });
     } catch (e) {
       failure = (e as Error).message;
@@ -548,7 +601,7 @@ export class AgentConversations {
       return true;
     }
     await this.completeRollover(agent);
-    console.log(`agentbox: ${agent} continues ${old} in ${to} from handoff ${handoff} (${why})`);
+    console.log(`agentbox: ${agent} continues ${old} in ${to} on ${choice.provider} from handoff ${handoff ?? "none"} (${why}): ${choice.why}`);
     return true;
   }
   /** The CLI has written the successor's transcript: it has the first prompt. */
@@ -603,8 +656,9 @@ export class AgentConversations {
     await this.runtime.fleet.handOver(r.from, r.to);
     moveCards(r.from, r.to);
     movePrClaims(r.from, r.to);
-    this.memory.used(r.handoff, r.to);
+    if (r.handoff) this.memory.used(r.handoff, r.to);
     this.patch(agent, (a) => {
+      if (r.provider) Object.assign(a, { provider: r.provider, selection: r.selection });
       a.rolled = { ...a.rolled, [r.from]: r.to };
       a.contexts = { ...a.contexts, [r.to]: r.supplied ?? [] };
       delete a.rollover;
@@ -685,9 +739,14 @@ export class AgentConversations {
         k.update((x) => (x?.request === c.request && x.state === "requested" ? { ...x, state: "failed", error: "No handoff was saved" } : x));
       return;
     }
-    if (s.status !== "waiting" || s.queued.length || s.question || s.limitHit || s.cacheWarmUntil - now < CHECKPOINT_WARM_MS) return;
+    // The cache's own lifetime sets the window: an hour-long cache is asked
+    // after `idleMin`; a five-minute one about halfway, leaving time to write.
+    const lifetime = Math.max(0, s.cacheWarmUntil - s.lastActivityAt);
+    const lead = Math.min(CHECKPOINT_WARM_MS, lifetime / 2.5);
+    if (s.status !== "waiting" || s.queued.length || s.question || s.limitHit || s.cacheWarmUntil - now < lead) return;
+    const idleDue = Math.min(k.policy.idleMin * 60_000, Math.max(30_000, lifetime - lead - 30_000));
     const idle = now - s.lastActivityAt, pct = s.contextUsed && s.contextLimit ? Math.round((100 * s.contextUsed) / s.contextLimit) : 0;
-    const reason = idle >= k.policy.idleMin * 60_000 ? "idle" : pct >= k.policy.contextPct && idle >= 2 * 60_000 && (!c || pct - c.pct >= 5) ? "context" : null;
+    const reason = idle >= idleDue ? "idle" : pct >= k.policy.contextPct && idle >= Math.min(2 * 60_000, idleDue) && (!c || pct - c.pct >= 5) ? "context" : null;
     if (!reason || this.looked.get(s.id) === s.lastActivityAt) return;
     this.looked.set(s.id, s.lastActivityAt);
     if (c && (await this.lastPrompt(s.id)) === c.request) return;

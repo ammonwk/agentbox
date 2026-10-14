@@ -41,6 +41,7 @@ import { AgentBrowser, agentRoute, rememberAgent, landingForAgent, type AgentOpt
 import { go, hrefOf } from "../route";
 
 type Receipt = { state: string; result: string };
+const providerName = { codex: "Codex", claude: "Claude", muse: "Muse" } as const;
 type Transport = {
   creations: () => Promise<CreationDraft[]>;
   editCreation: (draft: CreationDraft, spec: CreationSpec, create: boolean) => Promise<CreationDraft>;
@@ -273,15 +274,21 @@ export function LocalAgentSpace({
               <select
                 name="provider"
                 className="input"
-                defaultValue={selected.provider}
+                defaultValue={selected.pinned ?? "auto"}
               >
+                <option value="auto">Automatic</option>
                 <option value="codex">Codex</option>
                 <option value="claude">Claude</option>
                 <option value="muse">Muse</option>
               </select>
             </label>
+            <p className="hint agent-provider-now">
+              {selected.session || selected.previous.length
+                ? `Current conversation: ${providerName[selected.provider]}${selected.selection ? ` — ${selected.selection.why}` : ""}`
+                : "No conversation yet: the first message chooses where it runs."}
+            </p>
             <p className="hint">
-              {selected.project ? "This agent stays in its project. Switch projects to use a separate conversation. Changing provider preserves history and starts a fresh session when idle." : "Changing provider or repository preserves history and starts a fresh session when idle. General conversations remain available in All projects."}
+              {selected.project ? "This agent stays in its project. Switch projects to use a separate conversation. Automatic keeps a warm conversation where it is and chooses again only for a fresh one; choosing a provider is an override that starts a fresh session when idle." : "Automatic keeps a warm conversation where it is and chooses again only for a fresh one. Choosing a provider, or changing the repository, preserves history and starts a fresh session when idle. General conversations remain available in All projects."}
             </p>
             <label>
               Repository

@@ -13,7 +13,7 @@ import { closeDb, getSessionRecord, insertSessionRecord, updateSessionRecord } f
 
 let home: string, previous: string | undefined, store: AgentStore, conversations: AgentConversations;
 let views: Map<string, any>, prompts: Map<string, string[]>, spawns: any[], typed: { id: string; text: string }[], handed: string[][];
-let fleet: any, runtime: AgentsRuntime;
+let fleet: any, runtime: AgentsRuntime, placements: Record<string, "auto" | "overflow" | "none">;
 const NOW = Date.now();
 const handoff = { intent: "Ship the memory feature", decisions: [{ decision: "Use the warm cache clock", why: "one clock" }], refs: [{ label: "PR", ref: "https://github.com/o/r/pull/1" }] };
 
@@ -51,7 +51,9 @@ beforeEach(() => {
   spawns = [];
   typed = [];
   handed = [];
+  placements = { claude: "auto", codex: "auto" };
   fleet = {
+    placement: (provider: string) => ({ provider, accountId: placements[provider] === "none" ? null : `${provider}-1`, mode: placements[provider] ?? "none", claim: 0, candidates: [], why: placements[provider] === "none" ? `${provider} is at its weekly limit` : "room" }),
     sessions: () => [...views.values()],
     tick: async () => {},
     timeline: async (id: string) => ({ events: (prompts.get(id) ?? []).map((text, i) => ({ id: String(i), at: i, kind: "user", text })) }),
@@ -217,4 +219,148 @@ test("memory stays inside its agent and refuses oversized or credential-bearing 
   expect(() => conversations.saveNote("local-vulcan", "old", crypto.randomUUID(), { decision: "token ghp_abcdefghijklmnopqrstuvwxyz0123" })).toThrow("credentials");
   // An operator (no session) cannot forge an agent's handoff.
   expect(() => conversations.saveHandoff("local-vulcan", null, crypto.randomUUID(), handoff)).toThrow();
+});
+
+test("Automatic keeps a warm conversation on its provider, and a cold one keeps it while it has room", async () => {
+  link("old", { provider: "codex" });
+  await checkpointed("old");
+  placements = { claude: "auto", codex: "overflow" };
+  await fleet.send("old", "Still warm");
+  expect(spawns).toHaveLength(0);
+  expect(typed.at(-1)).toEqual({ id: "old", text: "Still warm" });
+  view("old", { lastActivityAt: NOW - 15 * 60_000 });
+  await checkpointed("old");
+  placements = { claude: "auto", codex: "auto" };
+  view("old", { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
+  await fleet.send("old", "Cold now");
+  expect(spawns[0].provider).toBe("codex");
+  expect(agent().selection?.why).toMatch(/Codex, as before/);
+});
+
+test("a cold rollover moves to the provider with room and records why before stopping anything", async () => {
+  link("old", { provider: "codex" });
+  await checkpointed("old");
+  placements = { claude: "auto", codex: "none" };
+  view("old", { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
+  await fleet.send("old", "Switch please");
+  expect(spawns[0].provider).toBe("claude");
+  const a = agent();
+  expect(a.provider).toBe("claude");
+  expect(a.selection?.why).toMatch(/Codex: codex is at its weekly limit/);
+  expect(a.contexts?.[a.session!]?.map((x) => x.session)).toEqual(["old"]);
+});
+
+test("with no provider available, or an exhausted explicit override, the old conversation keeps the message", async () => {
+  link("old", { provider: "codex" });
+  await checkpointed("old");
+  placements = { claude: "none", codex: "none" };
+  view("old", { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
+  await fleet.send("old", "Anyone?");
+  expect(spawns).toHaveLength(0);
+  expect(agent().session).toBe("old");
+  expect(agent().rollover).toBeUndefined();
+  expect(typed.at(-1)).toEqual({ id: "old", text: "Anyone?" });
+  placements = { claude: "auto", codex: "none" };
+  link("old", { provider: "codex", pinned: "codex" });
+  await fleet.send("old", "Pinned");
+  expect(spawns).toHaveLength(0);
+});
+
+test("a cold conversation whose provider can take nothing starts fresh, told to read the old transcript", async () => {
+  link("old", { provider: "codex" });
+  conversations.saveNote("local-vulcan", "old", crypto.randomUUID(), { decision: "Keep going" });
+  placements = { claude: "auto", codex: "none" };
+  view("old", { host: "none", pid: null, cacheWarmUntil: NOW - 1 });
+  await fleet.send("old", "Hello after the limit");
+  expect(spawns[0].provider).toBe("claude");
+  expect(spawns[0].prompt).toContain("agentbox log old | tail -80");
+  expect(spawns[0].prompt.endsWith("User: Hello after the limit")).toBe(true);
+  expect(handed).toEqual([["old", agent().session!]]);
+});
+
+test("a restart during a recorded provider switch finishes on the chosen provider", async () => {
+  record("next", true);
+  link("next", { provider: "codex", previous: ["old"], rollover: { from: "old", to: "next", handoff: null, why: "cold", at: NOW, phase: "spawning", provider: "claude", selection: { provider: "claude", policy: "auto", why: "Claude has room.", at: NOW } } });
+  await (conversations as any).remember();
+  expect(agent().provider).toBe("claude");
+  expect(agent().selection?.why).toBe("Claude has room.");
+});
+
+test("a never-started agent's first message starts on a provider with room, and refuses cleanly when none has", async () => {
+  link(null as any, { provider: "codex", previous: [] });
+  placements = { claude: "none", codex: "none" };
+  const refused = await conversations.localSend("local-vulcan", crypto.randomUUID(), "Hi").catch((e) => ({ state: "refused", result: e.message }));
+  expect(refused.state).toBe("refused");
+  expect(spawns).toHaveLength(0);
+  expect(agent().session).toBeNull();
+  placements = { claude: "auto", codex: "none" };
+  const sent = await conversations.localSend("local-vulcan", crypto.randomUUID(), "Hi again");
+  expect(sent.state).toBe("sent");
+  expect(spawns[0].provider).toBe("claude");
+  expect(agent().provider).toBe("claude");
+  expect(agent().pinned).toBeUndefined();
+});
+
+test("a full bootstrap records exactly the summaries whose text it carried, and history follows that record", async () => {
+  const m = conversations.memory;
+  const w = (n: number, c: string) => c.repeat(n);
+  const max = () => ({
+    intent: w(1200, "i"),
+    decisions: Array.from({ length: 12 }, () => ({ decision: w(400, "d"), why: w(600, "y") })),
+    open: Array.from({ length: 10 }, () => w(400, "o")),
+    commitments: Array.from({ length: 10 }, () => w(400, "c")),
+    refs: Array.from({ length: 20 }, (_, i) => ({ label: `ref${i}`, ref: w(500, "r") })),
+  });
+  const ancient = m.handoff("local-vulcan", crypto.randomUUID(), "ancient", { intent: "Ancient calendar work" }, null);
+  const first = m.handoff("local-vulcan", crypto.randomUUID(), "first", { ...max(), intent: `Older parser work ${w(1100, "p")}` }, null);
+  const big = m.handoff("local-vulcan", crypto.randomUUID(), "old", max(), null);
+  for (const pref of Array.from({ length: 10 }, (_, i) => ({ key: `pref-${i}`, text: w(390, "x") }))) m.prefer("local-vulcan", null, pref);
+  const boot = m.bootstrap("local-vulcan", big.id, "parser calendar");
+  expect(boot.text.length).toBeLessThanOrEqual(12_000);
+  expect(boot.text).toContain(`read it with the show command for ${big.id}`);
+  // Recorded if, and only if, its text went in.
+  for (const h of [ancient, first, big]) expect(boot.supplied.some((x) => x.handoff === h.id)).toBe(boot.text.includes(h.id));
+  expect(boot.supplied[0]?.handoff).toBe(big.id);
+  // Across sizes, the budget both carries and leaves out earlier summaries, and the record always matches.
+  let carried = 0, left = 0;
+  for (const n of [40, 200, 400, 600, 800, 1000]) {
+    const scope = `size-${n}`;
+    const older = m.handoff(scope, crypto.randomUUID(), "s1", { intent: `parser ${w(n, "q")}` }, null);
+    const latest = m.handoff(scope, crypto.randomUUID(), "s2", max(), null);
+    const b = m.bootstrap(scope, latest.id, "parser");
+    expect(b.text.length).toBeLessThanOrEqual(12_000);
+    expect(b.supplied.some((x) => x.handoff === older.id)).toBe(b.text.includes(older.id));
+    if (b.text.includes(older.id)) carried++;
+    else left++;
+  }
+  expect(carried).toBeGreaterThan(0);
+  expect(left).toBeGreaterThan(0);
+  record("next", true);
+  view("next");
+  link("next", { previous: ["old", "first", "ancient"], contexts: { next: boot.supplied } });
+  for (const h of [ancient, first].filter((h) => !boot.supplied.some((x) => x.handoff === h.id)))
+    await expect(conversations.page("local-vulcan", { session: 0, target: "next", history: h.session, before: null })).rejects.toThrow("not carried");
+});
+
+test("a five-minute cache is asked for its handoff while still warm, once per activity", async () => {
+  const t = Date.now();
+  // 1 minute idle: too early.
+  view("old", { lastActivityAt: t - 60_000, cacheWarmUntil: t + 4 * 60_000 });
+  await (conversations as any).remember();
+  expect(agent().checkpoint).toBeUndefined();
+  // 2.6 minutes idle, 2.4 left: asked.
+  view("old", { lastActivityAt: t - 156_000, cacheWarmUntil: t + 144_000 });
+  await (conversations as any).remember();
+  expect(agent().checkpoint?.state).toBe("requested");
+  conversations.saveHandoff("local-vulcan", "old", agent().checkpoint!.request, handoff);
+  // Its reply refreshed the five minutes: not asked again without new activity.
+  view("old", { lastActivityAt: Date.now() - 156_000, cacheWarmUntil: Date.now() + 144_000 });
+  await (conversations as any).remember();
+  expect(typed.filter((x) => x.text.startsWith(CHECKPOINT_MARK))).toHaveLength(1);
+  // Too late: under two minutes left means no request at all.
+  link("old", { checkpoint: undefined });
+  prompts.set("old", ["a real prompt"]);
+  view("old", { lastActivityAt: Date.now() - 200_000, cacheWarmUntil: Date.now() + 100_000 });
+  await (conversations as any).remember();
+  expect(agent().checkpoint).toBeUndefined();
 });

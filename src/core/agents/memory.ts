@@ -42,6 +42,8 @@ export const DEFAULT_MEMORY_POLICY: MemoryPolicy = MemoryPolicy.parse({});
 /** About 500 words, with a margin for references. */
 export const HANDOFF_WORDS = 550;
 export const PREFERENCES_MAX = 40;
+/** The memory part of a fresh conversation's first prompt, at most. */
+export const BOOTSTRAP_CHARS = 12_000;
 
 export type MemoryKind = "handoff" | "note" | "preference";
 /** A handoff put into a conversation's first prompt, and the conversation it summarizes. */
@@ -164,42 +166,67 @@ export class AgentMemory {
   /**
    * What a fresh conversation starts from: durable preferences, the latest
    * handoff, up to two earlier ones that share words with the message, and
-   * decisions recorded since. Bounded (about 12k characters) however long
-   * the journal grows; the rest stays a search away.
+   * decisions recorded since, within `BOOTSTRAP_CHARS` however long the
+   * journal grows. Assembled by whole lines: a handoff too long for what is
+   * left loses its last lines (said, with how to read the rest), and an
+   * earlier one that does not fit is left out. `supplied` names exactly the
+   * handoffs whose text went in; the rest stays a search away.
    */
   bootstrap(scope: string, latest: string | null, message: string): { text: string; supplied: Supplied[] } {
     const out: string[] = [], supplied: Supplied[] = [];
+    let left = BOOTSTRAP_CHARS;
+    /** Whole lines while they fit; how many did not. */
+    const take = (lines: string[], room: number) => {
+      const kept: string[] = [];
+      for (const l of lines) {
+        if (l.length + 1 > room) break;
+        kept.push(l);
+        room -= l.length + 1;
+      }
+      return { kept, dropped: lines.length - kept.length };
+    };
+    const block = (head: string, lines: string[], room = left) => {
+      const { kept } = take([head, ...lines], Math.min(room, left - 2));
+      if (kept.length < 2) return 0;
+      out.push(kept.join("\n"));
+      left -= kept.join("\n").length + 2;
+      return kept.length - 1;
+    };
     const prefs = this.preferences(scope);
-    if (prefs.length) out.push(`Durable preferences:\n${prefs.map((p) => `- ${p.key}: ${(p.body as { text: string }).text}`).join("\n").slice(0, 4000)}`);
+    if (prefs.length) block("Durable preferences:", prefs.map((p) => `- ${p.key}: ${(p.body as { text: string }).text}`), 4000);
     const handoffs = this.recent(scope, "handoff", 40);
     const last = (latest && handoffs.find((h) => h.id === latest)) || handoffs[0];
     if (last) {
-      supplied.push({ handoff: last.id, session: last.session, at: last.at });
       const h = last.body as Handoff;
-      out.push(
-        [
-          `Latest handoff ${last.id} (from conversation ${last.session}, ${new Date(last.at).toISOString()}):`,
-          `Intent: ${h.intent}`,
-          ...(h.decisions.length ? ["Decisions:", ...h.decisions.map((d) => `- ${d.decision}${d.why ? ` (why: ${d.why})` : ""}`)] : []),
-          ...(h.open.length ? ["Open questions:", ...h.open.map((x) => `- ${x}`)] : []),
-          ...(h.commitments.length ? ["Commitments:", ...h.commitments.map((x) => `- ${x}`)] : []),
-          ...(h.refs.length ? ["References:", ...h.refs.map((r) => `- ${r.label}: ${r.ref}`)] : []),
-        ].join("\n"),
-      );
+      const lines = [
+        `Intent: ${h.intent}`,
+        ...(h.decisions.length ? ["Decisions:", ...h.decisions.map((d) => `- ${d.decision}${d.why ? ` (why: ${d.why})` : ""}`)] : []),
+        ...(h.open.length ? ["Open questions:", ...h.open.map((x) => `- ${x}`)] : []),
+        ...(h.commitments.length ? ["Commitments:", ...h.commitments.map((x) => `- ${x}`)] : []),
+        ...(h.refs.length ? ["References:", ...h.refs.map((r) => `- ${r.label}: ${r.ref}`)] : []),
+      ];
+      const tail = `(The rest of this handoff did not fit; read it with the show command for ${last.id}.)`;
+      const { kept, dropped } = take(lines, left - 200 - tail.length);
+      if (kept.length) {
+        block(`Latest handoff ${last.id} (from conversation ${last.session}, ${new Date(last.at).toISOString()}):`, dropped ? [...kept, tail] : kept);
+        supplied.push({ handoff: last.id, session: last.session, at: last.at });
+      }
       const want = terms(message);
       const related = handoffs
         .filter((x) => x.id !== last.id)
         .map((x, i) => ({ x, i, shared: [...terms(JSON.stringify(x.body))].filter((t) => want.has(t)).length }))
         .filter((r) => r.shared > 0 || r.i === 0)
         .sort((a, b) => b.shared - a.shared || a.i - b.i)
-        .slice(0, 2);
-      supplied.push(...related.map(({ x }) => ({ handoff: x.id, session: x.session, at: x.at })));
-      if (related.length)
-        out.push(`Earlier handoffs (read one with the show command below):\n${related.map(({ x }) => `- ${x.id} (${new Date(x.at).toISOString().slice(0, 10)}, conversation ${x.session}): ${(x.body as Handoff).intent.slice(0, 600)}`).join("\n")}`);
+        .slice(0, 2)
+        .map(({ x }) => ({ x, line: `- ${x.id} (${new Date(x.at).toISOString().slice(0, 10)}, conversation ${x.session}): ${(x.body as Handoff).intent.slice(0, 600)}` }));
+      const head = "Earlier handoffs (read one with the show command below):";
+      const fits = take(related.map((r) => r.line), left - head.length - 3).kept.length;
+      if (fits && block(head, related.slice(0, fits).map((r) => r.line)) === fits)
+        supplied.push(...related.slice(0, fits).map(({ x }) => ({ handoff: x.id, session: x.session, at: x.at })));
     }
     const notes = this.recent(scope, "note", 10, last?.at ?? 0);
     if (notes.length)
-      out.push(`Decisions recorded since then:\n${notes.reverse().map((n) => `- ${(n.body as Note).decision}${(n.body as Note).why ? ` (why: ${(n.body as Note).why})` : ""}`).join("\n").slice(0, 3000)}`);
-    return { text: out.join("\n\n").slice(0, 12000), supplied };
+      block("Decisions recorded since then:", notes.reverse().map((n) => `- ${(n.body as Note).decision}${(n.body as Note).why ? ` (why: ${(n.body as Note).why})` : ""}`), 3000);
+    return { text: out.join("\n\n"), supplied };
   }
 }
