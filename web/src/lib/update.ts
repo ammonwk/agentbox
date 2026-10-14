@@ -63,6 +63,7 @@ export function useUpdateReady(): boolean {
 /** Nothing on screen a reload would interrupt or throw away. */
 function quiet(): boolean {
   if (composing || dragging) return false;
+  if (document.querySelector('.dictation[data-phase="starting"], .dictation[data-phase="recording"], .dictation[data-phase="transcribing"]')) return false;
   if (parseHash(location.hash).page === "voice") return false;
   if (document.querySelector('.modal-backdrop, [role="dialog"], [aria-busy="true"], .att-strip, [data-rec], .xterm, [data-phase="starting"], [data-phase="recording"], [data-phase="transcribing"]')) return false;
   for (const el of edited) {

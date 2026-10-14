@@ -22,6 +22,7 @@ import { Skills } from "./views/Skills";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
+import { Dictation } from "./Dictation";
 import { request } from "./api";
 import { useLoad } from "./lib/cloud";
 import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
@@ -181,6 +182,7 @@ export function App() {
 
   return (
     <ProjectContext.Provider value={{ repos: state?.repos ?? [], agents }}><div className="app" data-page={route.page}>
+      <Dictation />
       <a className="skip" href="#content">
         Skip to content
       </a>
