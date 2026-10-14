@@ -708,7 +708,7 @@ export function AgentComposer({
   );
   return (
     <div className="cmp agent-composer" data-attachments={attachments || undefined} data-multi={text.includes("\n") || text.length > 90 || undefined}>
-      {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { context.current = d.agentContext; revision.current = d.revision; setText(d.text); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
+      {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { context.current = d.agentContext; revision.current = d.revision; setText(d.text); images.clear(); images.restore(d.images); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
       {recoverFrom.map((from) => <PendingSends key={from} sessionId={`agent:${from}`} reconcileSend={check} />)}
       <PendingSends
         sessionId={key}

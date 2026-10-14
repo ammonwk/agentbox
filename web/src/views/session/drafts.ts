@@ -211,7 +211,19 @@ export async function recoverAgentDraft(from: string, to: string, run: string | 
     if (!source || !draft) return;
     if (draft.agentContext && draft.agentContext.run !== run) throw Error("This guidance belongs to another conversation; open that conversation to recover it.");
     const target = all[to] ??= {};
-    result = { ...draft, text: [target.draft?.text.trimEnd(), draft.text].filter(Boolean).join("\n\n"), revision: newRevision() };
+    const current = target.draft;
+    const numbersIn = (text: string) => [...text.matchAll(/\[Image #(\d+)\]/g)].map((m) => Number(m[1]));
+    let n = Math.max(0, ...numbersIn(current?.text ?? ""), ...(current?.images ?? []).map((a) => a.n));
+    // Renumber even an unfinished upload's token: it must never take an
+    // unrelated image already attached to the destination draft.
+    const numbers = new Map([...new Set([...numbersIn(draft.text), ...draft.images.map((a) => a.n)])].map((old) => [old, ++n]));
+    const recovered = draft.text.replace(/\[Image #(\d+)\]/g, (_, old: string) => `[Image #${numbers.get(Number(old))}]`);
+    result = {
+      ...draft,
+      text: [current?.text.trimEnd(), recovered].filter(Boolean).join("\n\n"),
+      images: [...(current?.images ?? []), ...draft.images.map((a) => ({ ...a, n: numbers.get(a.n)! }))],
+      revision: newRevision(),
+    };
     source.taken = [...(source.taken ?? []), draft.revision]; delete source.draft;
     target.draft = result; write(all);
   });

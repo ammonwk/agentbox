@@ -365,9 +365,25 @@ try {
   await page.locator('.agent-composer input[type="file"]').setInputFiles(join(files, "teal.png"));
   await page.locator(".agent-composer .att img").waitFor();
   await bar.screenshot({ path: join(out, "memory-composer-multiline-image.png") });
+  // Recover an earlier draft without losing either image or colliding with
+  // the current draft's image number, including across a reload.
+  await page.waitForFunction((key: string) => JSON.parse(localStorage.getItem("agentbox.composerWork") ?? "{}")[key]?.draft?.images.length === 1, `agent:${vulcan.id}:${next}`);
+  const recoveredImage = saveUpload(png([234, 120, 40]), "image/png");
+  await page.evaluate(({ key, uploaded }: any) => {
+    const all = JSON.parse(localStorage.getItem("agentbox.composerWork") ?? "{}");
+    all[key] = { draft: { text: "Earlier image [Image #1]", images: [{ n: 1, ...uploaded }], at: Date.now(), revision: crypto.randomUUID() } };
+    localStorage.setItem("agentbox.composerWork", JSON.stringify(all));
+    dispatchEvent(new Event("agentbox:composer-work"));
+  }, { key: `agent:${vulcan.id}:new`, uploaded: recoveredImage });
+  await page.getByRole("button", { name: "Recover earlier agent draft here", exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".agent-composer .att img").length === 2);
+  assert.match(await page.getByRole("textbox", { name: `Message ${shown(vulcan.name)}` }).inputValue(), /Earlier image \[Image #2\]/);
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll(".agent-composer .att img").length === 2);
   await page.getByRole("button", { name: "Send" }).click();
   await page.getByText("Noted: Line one", { exact: false }).waitFor();
   assert.match(events.get(next)!.filter((e) => e.kind === "user").at(-1)!.text, /\/uploads\/\d{8}-[0-9a-f]{12}\.png/, "the image goes as its path on this machine");
+  assert.ok(events.get(next)!.filter((e) => e.kind === "user").at(-1)!.text.includes(`[Image #2: ${recoveredImage.path}]`), "recovered image keeps its own uploaded path");
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
   await bar.screenshot({ path: join(out, "memory-composer-dark.png") });
   await page.evaluate(() => document.documentElement.removeAttribute("data-theme"));
