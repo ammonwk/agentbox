@@ -19,12 +19,14 @@ export const HandoffInput = z
   })
   .strict();
 export type Handoff = z.infer<typeof HandoffInput>;
+/** One preference: a rule with its reason and exceptions, not only a phrase. */
+export const PREFERENCE_CHARS = 1500;
 export const NoteInput = z
   .object({ decision: text(400), why: z.string().trim().max(600).default(""), refs: z.array(Ref).max(8).default([]) })
   .strict();
 export type Note = z.infer<typeof NoteInput>;
 export const PreferenceInput = z
-  .object({ key: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,59}$/i, "key: letters, digits, . _ -"), text: z.string().trim().max(400) })
+  .object({ key: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,59}$/i, "key: letters, digits, . _ -"), text: z.string().trim().max(PREFERENCE_CHARS) })
   .strict();
 /** Per instance. `idleMin`: the user is away this long while the cache is
  *  still warm, so save a handoff. `contextPct`: a conversation this full is
@@ -193,7 +195,15 @@ export class AgentMemory {
       return kept.length - 1;
     };
     const prefs = this.preferences(scope);
-    if (prefs.length) block("Durable preferences:", prefs.map((p) => `- ${p.key}: ${(p.body as { text: string }).text}`), 4000);
+    if (prefs.length) {
+      const shown = block("Durable preferences:", prefs.map((p) => `- ${p.key}: ${(p.body as { text: string }).text}`), 6000);
+      // Never dropped without a word: the rest are a search away.
+      if (shown < prefs.length) {
+        const rest = `${prefs.length - shown} more preference(s) did not fit: ${prefs.slice(shown).map((p) => p.key).join(", ")}. Read them with agentbox agent memory <ID> search <key>.`;
+        out.push(rest);
+        left -= rest.length + 2;
+      }
+    }
     const handoffs = this.recent(scope, "handoff", 40);
     const last = (latest && handoffs.find((h) => h.id === latest)) || handoffs[0];
     if (last) {

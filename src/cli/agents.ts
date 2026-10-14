@@ -132,9 +132,11 @@ export async function agent(api: Api, args: string[]): Promise<number> {
         if (!str("request")) throw new Error(`agent memory <ID> ${what} --request <stable UUID> --file <JSON>`);
         value = await api("POST", `${base}/${what}`, { request: str("request"), body: file() });
       } else if (what === "prefer" || what === "forget") {
-        if (!str("key") || (what === "prefer" && !str("text")))
-          throw new Error("agent memory <ID> prefer --key <key> --text <text>, or forget --key <key>");
-        value = await api("POST", `${base}/prefer`, { body: { key: str("key"), text: what === "prefer" ? str("text") : "" } });
+        // --file: the text of a file, for a rule too long to quote on a command line.
+        const text = what === "prefer" ? (str("file") ? readFileSync(str("file"), "utf8").trim() : str("text")) : "";
+        if (!str("key") || (what === "prefer" && !text))
+          throw new Error("agent memory <ID> prefer --key <key> --text <text> | --file <text file>, or forget --key <key>");
+        value = await api("POST", `${base}/prefer`, { body: { key: str("key"), text } });
       } else throw new Error(`unknown memory verb ${what}`);
       break;
     }

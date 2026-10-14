@@ -334,9 +334,12 @@ test("a full bootstrap records exactly the summaries whose text it carried, and 
   const ancient = m.handoff("local-vulcan", crypto.randomUUID(), "ancient", { intent: "Ancient calendar work" }, null);
   const first = m.handoff("local-vulcan", crypto.randomUUID(), "first", { ...max(), intent: `Older parser work ${w(1100, "p")}` }, null);
   const big = m.handoff("local-vulcan", crypto.randomUUID(), "old", max(), null);
-  for (const pref of Array.from({ length: 10 }, (_, i) => ({ key: `pref-${i}`, text: w(390, "x") }))) m.prefer("local-vulcan", null, pref);
+  for (const pref of Array.from({ length: 10 }, (_, i) => ({ key: `pref-${i}`, text: w(1400, "x") }))) m.prefer("local-vulcan", null, pref);
+  expect(() => m.prefer("local-vulcan", null, { key: "too-long", text: w(1501, "x") })).toThrow();
   const boot = m.bootstrap("local-vulcan", big.id, "parser calendar");
   expect(boot.text.length).toBeLessThanOrEqual(12_000);
+  // Preferences past their budget are named, never dropped without a word.
+  expect(boot.text).toContain("more preference(s) did not fit: pref-4, pref-5");
   expect(boot.text).toContain(`read it with the show command for ${big.id}`);
   // Recorded if, and only if, its text went in.
   for (const h of [ancient, first, big]) expect(boot.supplied.some((x) => x.handoff === h.id)).toBe(boot.text.includes(h.id));
