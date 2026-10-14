@@ -1,0 +1,14 @@
+{
+  "name": "vulcan",
+  "title": "Vulcan",
+  "description": "Turns reported issues into a reviewed pull request: one writer per family of issues in its own worktree, three independent read-only reviewers per round, at most three rounds, a guarded publication, and follow-up waits for review feedback and checks.",
+  "run": ["bun", "main.ts"],
+  "main": {
+    "start": { "provider": "claude", "cwd": "." },
+    "instructions": "MAIN.md"
+  },
+  "vulcan": {
+    "writer": { "provider": "codex" },
+    "promptRevision": "producer-to-assertion-v1"
+  }
+}
