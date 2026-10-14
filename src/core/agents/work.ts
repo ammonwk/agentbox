@@ -12,6 +12,7 @@ import { agentboxHome, worktreeRoot, agentboxCommand } from "../paths";
 import { mentionedPeople, refuseAutomaticClosure } from "./github";
 import type { AgentsRuntime } from "./runtime";
 import type { LocalAgent } from "./conversation";
+import type { ProviderChoice } from "./providers";
 import { Waits } from "../waits";
 import { claimPr, prClaims, prReleased } from "../prclaims";
 import { branchHolders } from "../prs";
@@ -80,6 +81,8 @@ export type AgentWork = {
   input: z.infer<typeof WorkInput>;
   grant: Grant;
   agent: LocalAgent;
+  /** The writer's provider and why (`providers.ts`); before this, `agent.provider`. */
+  writer?: Pick<ProviderChoice, "provider" | "policy" | "why" | "at">;
   config: string;
   promptRevision?: string;
   validationProtocol?: typeof CANDIDATE_PROTOCOL;
@@ -424,6 +427,15 @@ export class AgentWorks {
         if (issue.state !== "open" || issue.pull_request)
           throw new FleetError(409, "Trial issues must be real open issues");
       }
+      const last = this.list()
+        .filter((x) => x.agent.id === agent.id && x.writer)
+        .sort((a, b) => b.writer!.at - a.writer!.at)[0]?.writer!.provider ?? null;
+      const choice = await this.runtime.conversations.choose(agent, { last });
+      // With no provider placeable now, the agent's own provider as before: spawn refuses with its reasons.
+      const writer =
+        "none" in choice
+          ? { provider: agent.provider, policy: agent.pinned ? ("pinned" as const) : ("auto" as const), why: `${choice.none} It starts on ${agent.provider}, the agent's conversation provider.`.slice(0, 400), at: Date.now() }
+          : { provider: choice.provider, policy: choice.policy, why: choice.why, at: choice.at };
       const sid = newSessionId(),
         root = repoCheckoutPath(project),
         ref = `refs/agentbox/work/${p.id}/base`;
@@ -442,6 +454,7 @@ export class AgentWorks {
         input: p,
         grant: g,
         agent,
+        writer,
         promptRevision: PRE_ACTION_TRACE.revision,
         validationProtocol: CANDIDATE_PROTOCOL,
         config: createHash("sha256")
@@ -452,7 +465,7 @@ export class AgentWorks {
               instructions: agent.instructions,
               promptRevision: PRE_ACTION_TRACE.revision,
               validationProtocol: CANDIDATE_PROTOCOL,
-              provider: agent.provider,
+              provider: writer.provider,
               repo: agent.repo,
             }),
           )
@@ -524,7 +537,7 @@ export class AgentWorks {
       this.authority(w, w.grant.requester);
       await this.runtime.fleet.spawn({
         id: w.session,
-        provider: w.agent.provider,
+        provider: w.writer?.provider ?? w.agent.provider,
         cwd: w.cwd,
         prompt: this.prompt(w),
         // The agent's chat asked for this work; the writer shows it as the agent.
@@ -548,7 +561,7 @@ export class AgentWorks {
       const record = getSessionRecord(w.session);
       if (record) {
         if (
-          record.provider !== w.agent.provider ||
+          record.provider !== (w.writer?.provider ?? w.agent.provider) ||
           record.origin !== "agentbox" ||
           record.cwd !== w.cwd ||
           record.archivedAt ||

@@ -566,9 +566,10 @@ export class AgentConversations {
   }
   /** Is a provider's CLI installed here: its cached detection; tests replace it. */
   installed = async (p: AgentProvider) => (await detectCli(p)).installed;
-  /** The provider, account and model a fresh conversation of `a` starts on (`providers.ts`). */
-  private async choose(a: LocalAgent) {
-    const continued = !!a.session || a.previous.length > 0;
+  /** The provider, account and model a fresh conversation of `a` starts on
+   *  (`providers.ts`); with `writer`, one of its implementation sessions. */
+  async choose(a: LocalAgent, writer?: { last: AgentProvider | null }) {
+    const continued = !!writer || !!a.session || a.previous.length > 0;
     const candidates = a.pinned ? [a.pinned] : AUTO_PROVIDERS;
     const present = new Map(await Promise.all(candidates.map(async (p) => [p, await this.installed(p).catch(() => false)] as const)));
     return chooseProvider((p) => this.runtime.fleet.placement(p), {
@@ -577,6 +578,7 @@ export class AgentConversations {
       installed: (p) => present.get(p) === true,
       model: (p) => getSettings().models[p] || null,
       now: Date.now(),
+      ...(writer ? { writer } : {}),
     });
   }
   /** The records only, without seeding templates: Fleet asks on every message. */
