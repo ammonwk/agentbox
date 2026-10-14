@@ -191,6 +191,19 @@ try {
   await page.getByText("Noted: Thanks, I will review it after lunch.").waitFor();
   assert.equal(await page.getByText(CHECKPOINT_MARK, { exact: false }).count(), 0, "checkpoint requests stay out of Chat");
 
+  // Two earlier conversations with their own handoffs: the newer one is
+  // carried as a related summary, the oldest shares nothing and is not.
+  for (const [id, days, topic] of [["ancient", 5, "Calendar sync flakiness"], ["first", 3, "Release notes parser design"]] as const) {
+    session(id, { status: "closed", host: "none", pid: null, tmux: null, lastActivityAt: now - days * 86_400_000 });
+    for (let i = 0; i < 3; i++) {
+      say(id, "user", `${topic}: question ${i + 1}`, now - days * 86_400_000 + i * 60_000);
+      say(id, "assistant", `${topic}: answer ${i + 1}`, now - days * 86_400_000 + i * 60_000 + 30_000);
+    }
+    const h = conversations.memory.handoff(vulcan.id, crypto.randomUUID(), id, { intent: `${topic} for the release`, decisions: [] }, null);
+    // Saved when that conversation went idle, days ago.
+    store.db.run("UPDATE agent_memory SET at=? WHERE id=?", [now - days * 86_400_000 + 3_600_000, h.id]);
+    store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify({ ...agentBody(), previous: [...agentBody().previous, id] }), vulcan.id]);
+  }
   // Cold and parked: the next message starts a fresh conversation from the handoff.
   session(old, { host: "none", pid: null, tmux: null, parkedAt: Date.now(), cacheWarmUntil: Date.now() - 1 });
   await page.getByRole("textbox", { name: `Message ${vulcan.name}` }).fill("Morning! Where were we?");
@@ -207,6 +220,50 @@ try {
   await page.getByText("Morning! Where were we?", { exact: true }).waitFor();
   assert.match((await page.locator(".tl-agent img.agent-avatar").first().getAttribute("src"))!, /\/avatar\?v=/, "the picture outlives the rollover");
   await shot("memory-chat-after-rollover.png");
+  // Provenance: exactly the summaries this conversation started from.
+  assert.deepEqual(agentBody().contexts![next]!.map((x) => x.session).sort(), ["chat-alpha", "first"]);
+  const refused = await fetch(`${origin}/api/agents/local/${vulcan.id}/read`, { method: "POST", headers: { "content-type": "application/json", "x-agentbox": "1" }, body: JSON.stringify({ session: 0, target: next, history: "ancient", before: null }) });
+  assert.equal(refused.status, 403, "an archive that was not summarized into this conversation is not main-chat history");
+
+  // Enough current conversation to scroll, then scroll up into the summarized history.
+  for (let i = 0; i < 12; i++) {
+    say(next, "user", `Follow-up ${i + 1}`);
+    say(next, "assistant", `Reply ${i + 1}: still on track.\n\nNothing else changed since the last message.`);
+  }
+  await page.reload();
+  await page.getByText("Reply 12: still on track.", { exact: false }).waitFor();
+  const scroller = page.locator(".agent-chat-scroll");
+  const mark = page.getByText("Morning! Where were we?", { exact: true });
+  await scroller.evaluate((el: HTMLElement) => el.scrollTo({ top: 400 }));
+  await scroller.evaluate((el: HTMLElement) => el.scrollTo({ top: 0 }));
+  await page.getByText("Noted: Thanks, I will review it after lunch.").waitFor();
+  const top = (await mark.boundingBox())!.y;
+  assert.ok(top > 0, `the reader's place is kept after older messages load above it (${top})`);
+  await page.locator(".tl-carried").first().waitFor();
+  assert.equal(await page.getByText("Release notes parser design: answer 3").count(), 0, "one summarized conversation per page");
+  await scroller.evaluate((el: HTMLElement) => el.scrollTo({ top: 300 }));
+  await scroller.evaluate((el: HTMLElement) => el.scrollTo({ top: 0 }));
+  await page.getByText("Release notes parser design: answer 3").waitFor();
+  await page.getByText("Start of the history carried into this conversation").waitFor();
+  await scroller.evaluate((el: HTMLElement) => el.scrollTo({ top: 0 }));
+  await page.waitForTimeout(500);
+  assert.equal(await page.getByText("Calendar sync flakiness", { exact: false }).count(), 0, "the unsummarized archive never joins the main chat");
+  assert.equal(await page.getByRole("button", { name: /Earlier/ }).count(), 0, "history ends at the carried boundary");
+  assert.equal(await page.locator(".tl-carried .tl-me img.tl-avatar").count() > 0, true);
+  assert.equal(await page.locator(".tl-carried .tl-agent img.agent-avatar").count() > 0, true);
+  const fade = await page.locator(".tl-carried .tl-agent-card").first().evaluate((el: HTMLElement) => getComputedStyle(el).opacity);
+  assert.ok(Number(fade) < 1);
+  assert.equal(await page.locator(".tl-agent-card").last().evaluate((el: HTMLElement) => getComputedStyle(el).opacity), "1");
+  await shot("memory-chat-summarized-history.png");
+  await page.locator(".tl-current-divider").evaluate((el: HTMLElement) => el.scrollIntoView({ block: "center" }));
+  await shot("memory-chat-history-boundary.png");
+  // Sending while the old messages are on screen goes to the current conversation.
+  await page.getByRole("textbox", { name: `Message ${vulcan.name}` }).fill("Sent while reading history");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByText("Noted: Sent while reading history").waitFor();
+  assert.equal(events.get(next)!.filter((e) => e.text === "Sent while reading history").length, 1);
+  for (const id of ["chat-alpha", "first", "ancient"]) assert.equal(events.get(id)!.some((e) => e.text === "Sent while reading history"), false);
+  assert.equal(agentBody().session, next);
   await page.goto(`${origin}/#/agents/${vulcan.id}/about/${agentBody().session}?project=alpha`);
   await page.getByText("Fix the release notes job", { exact: false }).first().waitFor();
   await page.getByText("1 earlier conversation continued this way", { exact: false }).waitFor();

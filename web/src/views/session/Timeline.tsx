@@ -1218,18 +1218,42 @@ export type ChatSides = {
 /** Sent from here and not yet in the transcript. */
 export type ChatEcho = { id: string; text: string; at: number; note: string };
 
-export function AgentConversationEvents({ events, me, agent, echoes = [] }: { events: readonly TimelineEvent[]; echoes?: readonly ChatEcho[] } & ChatSides) {
-  const shown = events.filter((e): e is Extract<TimelineEvent, { kind: "user" | "assistant" }> => e.kind === "user" || e.kind === "assistant");
+/** A message of an earlier conversation, carried into this one only as a
+ *  summary (`ChatEvent` in src/cloud/agent-conversation.ts). */
+type Carried = { source?: string; carried?: { handoff: string; at: number; oldest: boolean } };
+
+export function AgentConversationEvents({ events, me, agent, echoes = [] }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[] } & ChatSides) {
+  const shown = events.filter((e): e is Extract<TimelineEvent, { kind: "user" | "assistant" }> & Carried => e.kind === "user" || e.kind === "assistant");
   return (
     <Me.Provider value={me ?? NOBODY}>
       <div className="tl-stream">
-        {shown.map((e, i) =>
-          e.kind === "assistant" && agent ? (
-            <AgentReply key={e.id} ev={e} agent={agent} first={shown[i - 1]?.kind !== "assistant"} />
-          ) : (
-            <EventRow key={e.id} ev={e} />
-          ),
-        )}
+        {shown.map((e, i) => {
+          const prev = shown[i - 1];
+          const row =
+            e.kind === "assistant" && agent ? (
+              <AgentReply key={e.id} ev={e} agent={agent} first={prev?.kind !== "assistant" || prev.source !== e.source} />
+            ) : (
+              <EventRow key={e.id} ev={e} />
+            );
+          // Where one conversation ends and the next begins, say which was carried how.
+          const divider =
+            prev?.source !== e.source ? (
+              e.carried ? (
+                <div key={`d-${e.id}`} className="tl-carried-divider" role="separator">
+                  {e.carried.oldest && <strong>Start of the history carried into this conversation</strong>}
+                  <span>
+                    Summarized conversation · {new Date(e.carried.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                  </span>
+                  <small>Only its summary was carried forward; the full messages are shown here for reference.</small>
+                </div>
+              ) : prev?.carried ? (
+                <div key={`d-${e.id}`} className="tl-carried-divider tl-current-divider" role="separator">
+                  <span>This conversation</span>
+                </div>
+              ) : null
+            ) : null;
+          return e.carried ? [divider, <div key={`c-${e.id}`} className="tl-carried">{row}</div>] : [divider, row];
+        })}
         {echoes.map((e) => (
           <Bubble key={e.id} at={e.at} className="tl-echo" note={e.note} copy={e.text}>
             <Markdown text={e.text} />

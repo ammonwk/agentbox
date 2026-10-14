@@ -44,6 +44,8 @@ export const HANDOFF_WORDS = 550;
 export const PREFERENCES_MAX = 40;
 
 export type MemoryKind = "handoff" | "note" | "preference";
+/** A handoff put into a conversation's first prompt, and the conversation it summarizes. */
+export type Supplied = { handoff: string; session: string; at: number };
 export type MemoryRecord = {
   id: string;
   scope: string;
@@ -165,13 +167,14 @@ export class AgentMemory {
    * decisions recorded since. Bounded (about 12k characters) however long
    * the journal grows; the rest stays a search away.
    */
-  bootstrap(scope: string, latest: string | null, message: string): string {
-    const out: string[] = [];
+  bootstrap(scope: string, latest: string | null, message: string): { text: string; supplied: Supplied[] } {
+    const out: string[] = [], supplied: Supplied[] = [];
     const prefs = this.preferences(scope);
     if (prefs.length) out.push(`Durable preferences:\n${prefs.map((p) => `- ${p.key}: ${(p.body as { text: string }).text}`).join("\n").slice(0, 4000)}`);
     const handoffs = this.recent(scope, "handoff", 40);
     const last = (latest && handoffs.find((h) => h.id === latest)) || handoffs[0];
     if (last) {
+      supplied.push({ handoff: last.id, session: last.session, at: last.at });
       const h = last.body as Handoff;
       out.push(
         [
@@ -190,12 +193,13 @@ export class AgentMemory {
         .filter((r) => r.shared > 0 || r.i === 0)
         .sort((a, b) => b.shared - a.shared || a.i - b.i)
         .slice(0, 2);
+      supplied.push(...related.map(({ x }) => ({ handoff: x.id, session: x.session, at: x.at })));
       if (related.length)
         out.push(`Earlier handoffs (read one with the show command below):\n${related.map(({ x }) => `- ${x.id} (${new Date(x.at).toISOString().slice(0, 10)}, conversation ${x.session}): ${(x.body as Handoff).intent.slice(0, 600)}`).join("\n")}`);
     }
     const notes = this.recent(scope, "note", 10, last?.at ?? 0);
     if (notes.length)
       out.push(`Decisions recorded since then:\n${notes.reverse().map((n) => `- ${(n.body as Note).decision}${(n.body as Note).why ? ` (why: ${(n.body as Note).why})` : ""}`).join("\n").slice(0, 3000)}`);
-    return out.join("\n\n").slice(0, 12000);
+    return { text: out.join("\n\n").slice(0, 12000), supplied };
   }
 }

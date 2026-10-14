@@ -325,7 +325,10 @@ the context budget, or turns rollover off. The agent records decisions with
 `show`; each record names its source conversation, and the provider transcript
 stays the record. Memory never authorizes anything. Waits, Review cards, PR
 claims, work grants and messages to the old conversation pass to the new one.
-Shared coordinators keep handoffs on their execution host and start from them
+Scrolling up in Chat past the start of a fresh conversation loads the
+conversations whose summaries it started from, muted, with a divider for each
+and a mark where the carried history starts; older conversations stay in the
+session list. Shared coordinators keep handoffs on their execution host and start from them
 after a human rotation or a new run; they do not roll over automatically.
 
 About → Picture uploads a PNG, JPEG, GIF or WebP (up to 2 MB) for a local agent.

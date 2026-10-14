@@ -63,9 +63,20 @@ export const ReadCursor = z
     target: z.string().min(1).max(200).optional(),
     list: z.boolean().optional(),
     offset: z.number().int().min(0).max(100000).optional(),
+    /** Reading `target`'s main chat back into this earlier conversation,
+     *  one whose summary `target` started from. */
+    history: z.string().min(1).max(200).optional(),
   })
   .strict();
 export type ReadCursor = z.infer<typeof ReadCursor>;
+/** A message of an earlier conversation shown in the main chat: its source
+ *  session (ids are prefixed with it), and `carried`: the handoff that carried it into
+ *  the current conversation in its place. `oldest` marks the start of what
+ *  was carried. */
+export type ChatEvent = TimelineEvent & {
+  source?: string;
+  carried?: { handoff: string; at: number; oldest: boolean };
+};
 export type AgentThread = {
   id: string; run: string; title: string; status: string; at: number;
   active: boolean; writable: boolean; successor: string | null;
@@ -75,7 +86,7 @@ export type ConversationPage = {
   counts?: { active: number; inactive: number };
   more?: number | null;
   thread?: AgentThread;
-  events: TimelineEvent[];
+  events: ChatEvent[];
   next: ReadCursor | null;
   session: string | null;
   status: string;

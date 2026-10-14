@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,6 +13,7 @@ import {
   type ConversationPage,
   type ReadCursor,
   type AgentThread,
+  type ChatEvent,
 } from "../../../src/cloud/agent-conversation";
 import type { HumanAgents } from "../../../src/cloud/agent-client";
 import {
@@ -25,7 +27,7 @@ import { CreationDraft, type CreationSpec } from "../../../src/cloud/agent-creat
 import { AgentCreationCard } from "./AgentCreationCard";
 import { AgentMemory } from "./AgentMemory";
 import { cloudCall, CloudError } from "../../../src/cloud/client";
-import type { AppState, TimelineEvent } from "../../../src/core/types";
+import type { AppState } from "../../../src/core/types";
 import { request } from "../api";
 import { Button, Empty } from "../components";
 import { useLoad } from "../lib/cloud";
@@ -386,7 +388,7 @@ function AgentSpace({
     }
     followed.current = ongoing;
   }, [target, ongoing]);
-  const [events, setEvents] = useState<TimelineEvent[]>([]),
+  const [events, setEvents] = useState<ChatEvent[]>([]),
     [next, setNext] = useState<ReadCursor | null>(null),
     [error, setError] = useState<string | null>(null),
     [reading, setReading] = useState(false),
@@ -455,6 +457,33 @@ function AgentSpace({
   useEffect(() => {
     if (pinned.current) bottom.current?.scrollIntoView({ block: "end" });
   }, [events.length, tab]);
+  // Older pages go above what is shown: keep the reader's place.
+  const lastTop = useRef(0), anchor = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && anchor.current !== null) el.scrollTop = el.scrollHeight - anchor.current;
+    anchor.current = null;
+  }, [events]);
+  const loadEarlier = () => {
+    if (!next || reading) return;
+    setReading(true);
+    const mine = generation.current, el = scroller.current;
+    void transport
+      .read(next)
+      .then((page) => {
+        if (mine !== generation.current) return;
+        if (el) anchor.current = el.scrollHeight - el.scrollTop;
+        setEvents((old) => {
+          const m = new Map(old.map((e) => [e.id, e]));
+          page.events.forEach((e) => m.set(e.id, e));
+          return [...m.values()].sort((a, b) => a.at - b.at);
+        });
+        setNext(page.next);
+        setError(page.error ?? null);
+      })
+      .catch((e) => { if (mine === generation.current) setError(e.message); })
+      .finally(() => { if (mine === generation.current) setReading(false); });
+  };
   const send = useCallback(
     async (
       body: string,
@@ -633,35 +662,17 @@ function AgentSpace({
             ref={scroller}
             onScroll={() => {
               const el = scroller.current;
-              if (el)
-                pinned.current =
-                  el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+              if (!el) return;
+              pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+              // Scrolled up to the top: the next page loads by itself.
+              if (el.scrollTop < 200 && el.scrollTop < lastTop.current) loadEarlier();
+              lastTop.current = el.scrollTop;
             }}
           >
             <div className="agent-conversation-width">
               {next && (
-                <Button
-                  variant="ghost"
-                  loading={reading}
-                  onClick={() => {
-                    setReading(true);
-                    const mine = generation.current;
-                    void transport
-                      .read(next)
-                      .then((page) => {
-                        if (mine !== generation.current) return;
-                        setEvents((old) => {
-                          const m = new Map(old.map((e) => [e.id, e]));
-                          page.events.forEach((e) => m.set(e.id, e));
-                          return [...m.values()].sort((a, b) => a.at - b.at);
-                        });
-                        setNext(page.next);
-                      })
-                      .catch((e) => { if (mine === generation.current) setError(e.message); })
-                      .finally(() => { if (mine === generation.current) setReading(false); });
-                  }}
-                >
-                  Earlier messages
+                <Button variant="ghost" loading={reading} onClick={loadEarlier}>
+                  {next.history ? "Earlier, summarized conversation" : "Earlier messages"}
                 </Button>
               )}
               {!events.length && (

@@ -116,6 +116,9 @@ test("a cold conversation with a saved handoff continues in a successor that get
   expect(handed).toEqual([["old", a.session!]]);
   expect(a.rolled).toEqual({ old: a.session! });
   expect(a.previous[0]).toBe("old");
+  // Main-chat history is exactly what the first prompt carried, nothing older.
+  expect(a.contexts?.[a.session!]?.map((x) => x.session)).toEqual(["old"]);
+  await expect(conversations.page("local-vulcan", { session: 0, target: a.session!, history: "older", before: null })).rejects.toThrow("not carried");
   expect(typed.filter((t) => t.id === "old" && !t.text.startsWith(CHECKPOINT_MARK))).toHaveLength(0);
   // A message still addressed to the replaced conversation reaches the successor, not the old one.
   await fleet.send("old", "Late wait result");

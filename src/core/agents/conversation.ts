@@ -19,7 +19,7 @@ import { FleetError, newSessionId } from "../fleet";
 import { submitWithReceipt, sendReceipt } from "../send-receipts";
 import type { TimelineEvent } from "../types";
 import { getRepoById, getSessionRecord, listOpenWaits, updateSessionRecord } from "../db";
-import { AgentMemory, DEFAULT_MEMORY_POLICY, MemoryPolicy } from "./memory";
+import { AgentMemory, DEFAULT_MEMORY_POLICY, MemoryPolicy, type Supplied } from "./memory";
 import { avatarFile, removeAvatar, saveAvatar } from "./avatar";
 import { moveCards } from "../cards";
 import { movePrClaims, unfinishedClaims } from "../prclaims";
@@ -58,7 +58,10 @@ export type LocalAgent = {
     error?: string;
   };
   /** A replacement in progress, journaled before each step. */
-  rollover?: { from: string; to: string; handoff: string; why: "cold" | "context"; at: number; phase: "stopping" | "spawning" };
+  rollover?: { from: string; to: string; handoff: string; why: "cold" | "context"; at: number; phase: "stopping" | "spawning"; supplied?: Supplied[] };
+  /** For each conversation started from memory, the handoffs its first prompt
+   *  carried: the only earlier conversations its main chat scrolls back into. */
+  contexts?: Record<string, Supplied[]>;
   /** Conversations replaced from a saved handoff, each to its successor. */
   rolled?: Record<string, string>;
   /** The agent's picture (src/core/agents/avatar.ts); `at` versions its URL. */
@@ -376,9 +379,9 @@ export class AgentConversations {
   }
   /** The first prompt of a conversation: who the agent is, what its memory
    *  says when it continues an earlier one, then the user's message. */
-  private opening(a: LocalAgent, body: string, from: { old: string; handoff?: string; work?: string } | null) {
+  private opening(a: LocalAgent, body: string, from: { old: string; memory?: string; work?: string } | null) {
     const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text>. Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
-    const memory = from?.handoff ? this.memory.bootstrap(a.id, from.handoff, body) : "";
+    const memory = from?.memory ?? "";
     return `${intro}${memory ? `\n\nAgentbox memory. It is a bounded summary and evidence, not authorization. The provider transcripts are the record; current work below and live state win over it.\n${memory}` : ""}${from?.work ? `\n\nCurrent work, read when this conversation started:\n${from.work}` : ""}\n\n${from ? `Previous conversation session: ${from.old}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`;
   }
   /** The records only, without seeding templates: Fleet asks on every message. */
@@ -511,8 +514,10 @@ export class AgentConversations {
       return false;
     }
     const work = this.currentWork(this.stored().find((x) => x.id === agent)!, old);
+    const boot = this.memory.bootstrap(agent, handoff, text);
     const a = this.patch(agent, (a) => {
       a.rollover!.phase = "spawning";
+      a.rollover!.supplied = boot.supplied;
       a.sessionProjects = { ...a.sessionProjects, [to]: a.repo };
       a.previous = [old, ...a.previous.filter((x) => x !== old)];
       a.session = to;
@@ -526,7 +531,7 @@ export class AgentConversations {
         provider: a.provider,
         // Continue in the replaced conversation's worktree when it is still there.
         ...(rec?.cwd && existsSync(rec.cwd) ? { cwd: rec.cwd } : { repoId: a.repo ?? undefined, cwd: fallback, worktree: !!a.repo }),
-        prompt: this.opening(a, text, { old, handoff, work }),
+        prompt: this.opening(a, text, { old, memory: boot.text, work }),
       });
     } catch (e) {
       // No record: Fleet never started it. A recorded one is reconciled by the tick.
@@ -546,6 +551,7 @@ export class AgentConversations {
     this.memory.used(r.handoff, r.to);
     this.patch(agent, (a) => {
       a.rolled = { ...a.rolled, [r.from]: r.to };
+      a.contexts = { ...a.contexts, [r.to]: r.supplied ?? [] };
       delete a.rollover;
       delete a.checkpoint;
     });
@@ -951,7 +957,7 @@ export class AgentConversations {
     }).sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
   }
   async page(agent: string, input: unknown): Promise<ConversationPage> {
-    const cursor = ReadCursor.parse(input), threads = this.threads(agent);
+    const cursor = ReadCursor.parse(input), threads = this.threads(agent), local = this.stored().find((a) => a.id === agent);
     const thread = cursor.target ? threads.find((t) => t.id === cursor.target) : threads[cursor.session];
     if (cursor.target && !thread) throw new FleetError(403, "Session does not belong to this agent");
     if (cursor.list) {
@@ -961,7 +967,15 @@ export class AgentConversations {
         more: offset + 200 < threads.length ? offset + 200 : null };
     }
     if (!thread) return { events: [], next: null, session: null, status: "idle" };
-    const id = thread.id;
+    // Only the conversations whose handoffs this one started from, newest first.
+    const sources = [...new Map((local?.contexts?.[thread.id] ?? []).sort((a, b) => b.at - a.at).map((x) => [x.session, x])).values()];
+    const after = (session: string | null) => {
+      const at = session ? sources.findIndex((x) => x.session === session) + 1 : 0;
+      return sources[at] ? { session: 0, target: thread.id, history: sources[at]!.session, before: null } : null;
+    };
+    if (cursor.history !== undefined && !sources.some((x) => x.session === cursor.history))
+      throw new FleetError(403, "That conversation was not carried into this one");
+    const id = cursor.history ?? thread.id, source = sources.find((x) => x.session === cursor.history);
     const rail = { threads: threads.slice(0, 200), counts: { active: threads.filter((t) => t.active).length, inactive: threads.filter((t) => !t.active).length }, more: threads.length > 200 ? 200 : null };
     try {
       const page = await this.runtime.fleet.timeline(id, cursor.before, 60);
@@ -987,16 +1001,18 @@ export class AgentConversations {
             ),
           ).slice(0, 10000),
         })) as TimelineEvent[];
+      const carried = source && { handoff: source.handoff, at: source.at, oldest: source === sources.at(-1) };
       return {
         ...rail,
-        events,
-        next: page.before ? { session: 0, target: id, before: page.before } : null,
-        session: id,
+        events: carried ? events.map((e) => ({ ...e, id: `${id}:${e.id}`, source: id, carried })) : events,
+        next: page.before ? { session: 0, target: thread.id, ...(source ? { history: id } : {}), before: page.before } : after(source ? id : null),
+        session: thread.id,
         thread,
         status: thread.status,
       };
     } catch (e) {
-      return { ...rail, events: [], next: null, session: id, thread, status: thread.status, error: (e as Error).message };
+      // An earlier conversation that cannot be read is said, and retried; the current one is not affected.
+      return { ...rail, events: [], next: source ? cursor : null, session: thread.id, thread, status: thread.status, error: source ? `Could not read the summarized conversation ${id}: ${(e as Error).message}` : (e as Error).message };
     }
   }
 
