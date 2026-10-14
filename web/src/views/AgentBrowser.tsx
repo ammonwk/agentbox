@@ -27,7 +27,7 @@ export function AgentBrowser({ id, options, threads, counts, more, loadMore, err
     if (t) setView(t.active ? "active" : "inactive");
   }, [route.thread, threads.find((t) => t.id === route.thread)?.active]);
   useEffect(() => {
-    if (hadDetail.current && route.view === "sessions") rail.current?.querySelector<HTMLAnchorElement>('[aria-current="page"], .rail-row')?.focus();
+    if (hadDetail.current && route.view === "sessions") (rail.current?.querySelector<HTMLAnchorElement>('[aria-current="page"]') ?? rail.current?.querySelector<HTMLAnchorElement>(".rail-row"))?.focus();
     hadDetail.current = route.view !== "sessions";
   }, [route.view]);
   const choose = (a: AgentOption) => { setPicker(false); setQuery(""); go(landingForAgent(a.id)); };

@@ -7,7 +7,12 @@ import { join } from "node:path";
 import { AgentWorks, agentPrTitle, requireOperator } from "./work";
 import { AgentStore } from "./store";
 import { AgentConversations } from "./conversation";
-import { closeDb, insertRepo, insertSessionRecord } from "../db";
+import {
+  closeDb,
+  insertRepo,
+  insertSessionRecord,
+  updateSessionRecord,
+} from "../db";
 
 function git(cwd: string, ...args: string[]) {
   const r = Bun.spawnSync(["git", ...args], {
@@ -51,11 +56,17 @@ test("family claims, independent exact-head rounds and revoked publication autho
     const sessions: any[] = [],
       prompts: any[] = [],
       messages = new Map<string, string>();
-    let failWriter = true, failReviewer = true;
+    let failWriter = true,
+      failReviewer = true;
     const fleet: any = {
       sessions: () => sessions,
       get: (id: string) => sessions.find((s) => s.id === id),
       tick: async () => {},
+      close: async (id: string) => {
+        updateSessionRecord(id, { archivedAt: Date.now() });
+        const s = sessions.find((s) => s.id === id);
+        if (s) Object.assign(s, { status: "closed", host: "none", pid: null });
+      },
       timeline: async (id: string) => ({
         events: [
           {
@@ -67,8 +78,14 @@ test("family claims, independent exact-head rounds and revoked publication autho
         ],
       }),
       spawn: async (o: any) => {
-        if (!o.readOnly && failWriter) { failWriter = false; throw Error("No available writer account"); }
-        if (o.readOnly && failReviewer) { failReviewer = false; throw Error("No available reviewer account"); }
+        if (!o.readOnly && failWriter) {
+          failWriter = false;
+          throw Error("No available writer account");
+        }
+        if (o.readOnly && failReviewer) {
+          failReviewer = false;
+          throw Error("No available reviewer account");
+        }
         prompts.push(o);
         const s = {
           id: o.id,
@@ -95,6 +112,9 @@ test("family claims, independent exact-head rounds and revoked publication autho
           lastActivityAt: Date.now(),
           archivedAt: null,
           facts: {},
+          launch: o.readOnly
+            ? { args: ["--sandbox", "read-only"], env: {} }
+            : null,
           createdAt: Date.now(),
         });
         return { session: s };
@@ -102,15 +122,29 @@ test("family claims, independent exact-head rounds and revoked publication autho
     };
     const runtime: any = { store, fleet, cards: { add: () => ({ id: 1 }) } };
     const requests: string[] = [];
-    let remoteBase = base, churnOnPush = false, published: any = null, publicationWrites = 0;
+    let remoteBase = base,
+      churnOnPush = false,
+      failPush = false,
+      published: any = null,
+      publicationWrites = 0;
     const github = async <T>(path: string, body?: unknown): Promise<T> => {
       requests.push(path);
       if (path.includes("/pulls?")) return (published ? [published] : []) as T;
       if (body) {
-        if (!path.endsWith("/pulls")) throw Error("Unexpected external write in controlled transport");
+        if (!path.endsWith("/pulls"))
+          throw Error("Unexpected external write in controlled transport");
         publicationWrites++;
-        const w = runtime.works.list()[0], head = git(w.cwd,"rev-parse","HEAD");
-        published = { ...(body as object), number:1, html_url:"https://github.com/fixture/work/pull/1", state:"open", user:{login:"operator"}, head:{sha:head,ref:w.branch},base:{ref:"main"} };
+        const w = runtime.works.list()[0],
+          head = git(w.cwd, "rev-parse", "HEAD");
+        published = {
+          ...(body as object),
+          number: 1,
+          html_url: "https://github.com/fixture/work/pull/1",
+          state: "open",
+          user: { login: "operator" },
+          head: { sha: head, ref: w.branch },
+          base: { ref: "main" },
+        };
         return published as T;
       }
       return (
@@ -124,10 +158,14 @@ test("family claims, independent exact-head rounds and revoked publication autho
       ) as T;
     };
     const gitTransport = async (cwd: string, ...args: string[]) => {
+      if (args[0] === "push" && failPush) {
+        failPush = false;
+        throw Error("Push transport unavailable");
+      }
       if (args[0] === "push" && churnOnPush) remoteBase = "b".repeat(40);
       return git(
         cwd,
-        ...(["fetch","push","ls-remote"].includes(args[0]!)
+        ...(["fetch", "push", "ls-remote"].includes(args[0]!)
           ? args.map((a) => (a === "origin" ? remote : a))
           : args),
       );
@@ -173,9 +211,24 @@ test("family claims, independent exact-head rounds and revoked publication autho
       },
     };
     await expect(works.start("forged", input)).rejects.toThrow("coordinator");
-    await expect(works.start("coordinator", input)).rejects.toThrow("writer account");
+    await expect(works.start("coordinator", input)).rejects.toThrow(
+      "writer account",
+    );
     expect(works.get(input.id).state).toBe("uncertain");
     const work = await works.retryStart(input.id, "coordinator");
+    expect(prompts.length).toBe(1);
+    const interrupted = works.get(work.id);
+    interrupted.state = "uncertain";
+    (works as any).save(interrupted);
+    await expect(works.retryStart(work.id, "coordinator")).rejects.toThrow(
+      "not yet proven",
+    );
+    updateSessionRecord(work.session, {
+      transcriptPath: join(home, "provider-writer.jsonl"),
+    });
+    expect((await works.retryStart(work.id, "coordinator")).state).toBe(
+      "working",
+    );
     expect(prompts.length).toBe(1);
     expect(work.agent.id).toBe(agent.id);
     expect(work.input.issues.length).toBe(2);
@@ -196,10 +249,26 @@ test("family claims, independent exact-head rounds and revoked publication autho
       writeFileSync(join(work.cwd, "app.txt"), `candidate ${n}\n`);
       git(work.cwd, "add", "app.txt");
       git(work.cwd, "commit", "-m", `Candidate ${n}`);
-      const round = await works.review(work.id, work.session, {
+      let round = await works.review(work.id, work.session, {
         validation: [`artifact-${n}.json`],
       });
-      for (const r of round.reviewers.filter((r) => r.state !== "started")) await works.retryReview(work.id, work.session, {focus:r.focus});
+      for (const r of round.reviewers.filter((r) => r.state !== "started"))
+        await works.retryReview(work.id, work.session, { focus: r.focus });
+      if (n === 1) {
+        const interruptedReviewer = works.get(work.id),
+          r = interruptedReviewer.rounds[0]!.reviewers[1]!;
+        r.state = "uncertain";
+        (works as any).save(interruptedReviewer);
+        updateSessionRecord(r.session, {
+          agentSessionId: null,
+          transcriptPath: null,
+        });
+        const retired = r.session;
+        await works.retryReview(work.id, work.session, { focus: r.focus });
+        round = works.get(work.id).rounds[0]!;
+        expect(round.reviewers[1]!.retired).toEqual([retired]);
+        expect(round.reviewers[1]!.session).not.toBe(retired);
+      }
       expect(round.number).toBe(n);
       expect(new Set(round.reviewers.map((r) => r.session)).size).toBe(3);
       expect(
@@ -230,16 +299,46 @@ test("family claims, independent exact-head rounds and revoked publication autho
             evidence: ["app.txt"],
           }),
         );
+      if (n === 1) {
+        const crash = works.get(work.id),
+          reviewer = crash.rounds[0]!.reviewers[0]!;
+        reviewer.state = "uncertain";
+        (works as any).save(crash);
+        updateSessionRecord(reviewer.session, {
+          transcriptPath: join(home, "provider-review.jsonl"),
+          launch: { args: ["--sandbox", "read-only"], env: {} },
+        });
+      }
       await works.collect(work.id, work.session);
       if (n === 1) {
-        const candidate = { head: round.head, title: "Fix shared rule", body: "Plain reproduction evidence" };
+        const candidate = {
+          head: round.head,
+          title: "Fix shared rule",
+          body: "Plain reproduction evidence",
+        };
+        failPush = true;
+        await expect(
+          works.publish(work.id, work.session, candidate),
+        ).rejects.toThrow("Push transport unavailable");
+        expect(works.get(work.id).publication?.state).toBe("uncertain");
+        expect((await works.reconcile(work.id, work.session)).state).toBe(
+          "prepared",
+        );
+        expect(works.get(work.id).publication).toBeUndefined();
         churnOnPush = true;
-        await expect(works.publish(work.id, work.session, candidate)).rejects.toThrow("exact base/head");
+        await expect(
+          works.publish(work.id, work.session, candidate),
+        ).rejects.toThrow("exact base/head");
         expect(works.get(work.id).publication?.state).toBe("prepared");
         expect(publicationWrites).toBe(0);
-        expect((await works.reconcile(work.id, work.session)).state).toBe("prepared");
-        remoteBase = base; churnOnPush = false;
-        expect((await works.publish(work.id, work.session, candidate)).state).toBe("sent");
+        expect((await works.reconcile(work.id, work.session)).state).toBe(
+          "prepared",
+        );
+        remoteBase = base;
+        churnOnPush = false;
+        expect(
+          (await works.publish(work.id, work.session, candidate)).state,
+        ).toBe("sent");
         expect(publicationWrites).toBe(1);
         expect(published.title).toBe("[VULCAN · Human] Fix shared rule");
         await works.publish(work.id, work.session, candidate);

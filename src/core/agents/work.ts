@@ -111,6 +111,7 @@ export type ReviewRound = {
     state: "reserved" | "started" | "uncertain";
     verdict?: Verdict;
     retries: string[];
+    retired?: string[];
   }[];
 };
 export type AgentWork = {
@@ -129,6 +130,16 @@ export type AgentWork = {
   publication?: {
     state: "prepared" | "attempting" | "sent" | "uncertain";
     stage?: "push" | "branch" | "request";
+    remoteBefore?: string | null;
+    previous?: {
+      state: "sent" | "prepared";
+      stage?: "branch";
+      head: string;
+      title: string;
+      body: string;
+      number?: number;
+      url?: string;
+    };
     head: string;
     title: string;
     body: string;
@@ -275,7 +286,11 @@ export class AgentWorks {
     return this.list().find(
       (w) =>
         w.session === session ||
-        w.rounds.some((r) => r.reviewers.some((x) => x.session === session)),
+        w.rounds.some((r) =>
+          r.reviewers.some(
+            (x) => x.session === session || x.retired?.includes(session),
+          ),
+        ),
     );
   }
   writable(agent: string, session: string) {
@@ -555,7 +570,23 @@ export class AgentWorks {
       this.authority(w, caller);
       if (w.state !== "starting" && w.state !== "uncertain")
         throw new FleetError(409, "Work is not awaiting launch recovery");
-      await this.launchWriter(w);
+      const record = getSessionRecord(w.session);
+      if (record) {
+        if (
+          record.provider !== w.agent.provider ||
+          record.origin !== "agentbox" ||
+          record.cwd !== w.cwd ||
+          record.archivedAt ||
+          !record.agentSessionId ||
+          !record.transcriptPath
+        )
+          throw new FleetError(
+            409,
+            "Existing launch is not yet proven by its provider transcript; inspect it without replaying the writer prompt",
+          );
+        w.state = "working";
+        this.save(w);
+      } else await this.launchWriter(w);
       return w;
     });
   }
@@ -695,7 +726,20 @@ export class AgentWorks {
           .sessions()
           .find((s) => s.id === r.session);
         if (live?.status === "running" || live?.status === "blocked") continue;
-        if (!getSessionRecord(r.session)) continue;
+        const record = getSessionRecord(r.session);
+        if (!record) continue;
+        if (r.state !== "started") {
+          if (
+            record.provider !== "codex" ||
+            record.cwd !== r.cwd ||
+            record.origin !== "agentbox" ||
+            !record.agentSessionId ||
+            !record.transcriptPath ||
+            !record.launch?.args.includes("read-only")
+          )
+            continue;
+          r.state = "started";
+        }
         const page = await this.runtime.fleet.timeline(r.session, null, 200);
         const messages = page.events
           .filter((e) => e.kind === "assistant" && "text" in e)
@@ -857,6 +901,20 @@ export class AgentWorks {
       w.publication = {
         state: "attempting",
         stage: "push",
+        remoteBefore: remoteHead,
+        ...(old
+          ? {
+              previous: {
+                state: old.state as "sent" | "prepared",
+                ...(old.stage === "branch" ? { stage: "branch" as const } : {}),
+                head: old.head,
+                title: old.title,
+                body: old.body,
+                number: old.number,
+                url: old.url,
+              },
+            }
+          : {}),
         head: p.head,
         title,
         body,
@@ -971,7 +1029,33 @@ export class AgentWorks {
         throw new FleetError(409, "Reviewer checkout changed");
       r.retries.push(new Date().toISOString());
       this.save(w);
-      if (!getSessionRecord(r.session)) await this.launchReviewer(w, round, r);
+      let record = getSessionRecord(r.session);
+      if (record && !record.agentSessionId) {
+        if (
+          record.provider !== "codex" ||
+          record.cwd !== r.cwd ||
+          record.origin !== "agentbox" ||
+          record.transcriptPath ||
+          !record.launch?.args.includes("read-only")
+        )
+          throw new FleetError(
+            409,
+            "Unproven reviewer identity; do not replace it",
+          );
+        await this.runtime.fleet.close(r.session, true, true);
+        await this.runtime.fleet.tick();
+        const stopped = this.runtime.fleet
+          .sessions()
+          .find((s) => s.id === r.session);
+        if (stopped && (stopped.host !== "none" || stopped.pid))
+          throw new FleetError(409, "Old reviewer has not stopped");
+        r.retired = [...(r.retired ?? []), r.session];
+        r.session = newSessionId();
+        r.state = "reserved";
+        this.save(w);
+        record = null;
+      }
+      if (!record) await this.launchReviewer(w, round, r);
       else
         await this.runtime.fleet.send(
           r.session,
@@ -1020,8 +1104,38 @@ export class AgentWorks {
           "origin",
           `refs/heads/${w.branch}`,
         );
+        const actual = remote.split(/\s+/)[0] || null;
         if (
-          remote.split(/\s+/)[0] !== p.head ||
+          p.stage === "push" &&
+          p.remoteBefore !== undefined &&
+          actual === p.remoteBefore &&
+          actual !== p.head
+        ) {
+          const prior = p.previous;
+          const unchanged = p.number
+            ? rows.length === 1 &&
+              rows[0]?.number === p.number &&
+              rows[0]?.head.sha === prior?.head &&
+              rows[0]?.title === prior?.title &&
+              rows[0]?.body === prior?.body &&
+              rows[0]?.state === "open" &&
+              rows[0]?.user.login.toLowerCase() === w.grant.actor.toLowerCase()
+            : rows.length === 0;
+          if (!unchanged)
+            throw new FleetError(
+              409,
+              "Previous publication changed; no push or request will be replayed",
+            );
+          w.publication = prior;
+          this.save(w);
+          return {
+            state: "prepared",
+            result:
+              "Branch is unchanged and no PR request was attempted; retry after current authority and candidate validation",
+          };
+        }
+        if (
+          actual !== p.head ||
           (p.number
             ? rows.length !== 1 ||
               rows[0]?.number !== p.number ||
