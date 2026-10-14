@@ -10,6 +10,7 @@
  */
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { spawn } from "node:child_process";
 import type { WaitSpec } from "./types";
 
 type PrSpec = Extract<WaitSpec, { kind: "pr" }>;
@@ -214,20 +215,48 @@ const UNTIL_MAX = 4_000;
  * the server's environment (not the session's), told which wait and session
  * it answers for.
  */
-export async function readUntil(spec: UntilSpec, wait: number, session: string): Promise<{ yes: boolean; said: string }> {
+export async function readUntil(spec: UntilSpec, wait: number, session: string, timeoutMs = UNTIL_TIMEOUT_S * 1000): Promise<{ yes: boolean; said: string }> {
   if (!existsSync(spec.cwd)) throw new Error(`its directory is gone: ${spec.cwd}`);
-  const p = Bun.spawn(["nice", "-n", "19", "timeout", "--kill-after=5", String(UNTIL_TIMEOUT_S), "sh", "-c", spec.cmd], {
-    cwd: spec.cwd,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, AGENTBOX_WAIT: String(wait), AGENTBOX_SESSION: session },
+  // A separate POSIX process group bounds the shell *and* its children on
+  // macOS/Linux. Killing only the shell leaves a blocked child holding pipes
+  // open; GNU timeout is not installed on a stock Mac. The shorter internal
+  // deadline is for exercising cleanup without a two-minute validation delay.
+  const { out, tail, err, code, signal, timedOut } = await new Promise<{
+    out: string; tail: string; err: string; code: number | null; signal: string | null; timedOut: boolean;
+  }>((resolve, reject) => {
+    const p = spawn("nice", ["-n", "19", "sh", "-c", spec.cmd], {
+      cwd: spec.cwd,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, AGENTBOX_WAIT: String(wait), AGENTBOX_SESSION: session },
+    });
+    let out = "", tail = "", err = "", timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (p.pid) {
+        try { process.kill(-p.pid, "SIGKILL"); }
+        catch { p.kill("SIGKILL"); }
+      }
+      // Even a child which deliberately left the group cannot hold this
+      // probe open through an inherited pipe. This is not an OS sandbox.
+      p.stdout.destroy();
+      p.stderr.destroy();
+    }, Math.max(1, Math.min(timeoutMs, UNTIL_TIMEOUT_S * 1000)));
+    p.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      out += chunk.slice(0, Math.max(0, UNTIL_MAX + 1 - out.length));
+      tail = (tail + chunk).slice(-200);
+    });
+    p.stderr.setEncoding("utf8").on("data", (chunk: string) => { err = (err + chunk).slice(-300); });
+    p.once("error", e => { clearTimeout(timer); reject(e); });
+    p.once("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ out, tail, err, code, signal, timedOut });
+    });
   });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  if (timedOut) throw new Error(`the command did not finish in ${timeoutMs / 1000}s`);
   const said = out.trim();
   if (code === 0) return { yes: true, said: said.length > UNTIL_MAX ? `${said.slice(0, UNTIL_MAX)}\n(cut here, at ${UNTIL_MAX} characters)` : said };
-  const error = err.trim().split("\n").pop()!.slice(0, 300);
-  if (code === 1 && !error) return { yes: false, said: said.split("\n").pop()!.slice(0, 200) };
-  if (code === 124 || code === 137) throw new Error(`the command did not finish in ${UNTIL_TIMEOUT_S}s`);
-  throw new Error(`the command exited ${code}${error ? `: ${error}` : ""} (0 means it happened, 1 with nothing on stderr not yet)`);
+  const error = err.trim().split("\n").pop()!;
+  if (code === 1 && !error) return { yes: false, said: tail.trim().split("\n").pop()! };
+  throw new Error(`the command ${signal ? `was killed by ${signal}` : `exited ${code}`}${error ? `: ${error}` : ""} (0 means it happened, 1 with nothing on stderr not yet)`);
 }
