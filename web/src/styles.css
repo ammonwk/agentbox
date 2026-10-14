@@ -547,39 +547,6 @@ code {
   font-size: 11px;
 }
 
-.theme-control {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--sunken);
-  border-radius: var(--radius-sm);
-  flex: none;
-}
-/* Collapsed, only the current theme shows; the choice appears with the room. */
-.sidebar:not(:hover):not(:has(:focus-visible)):not(:has(.nav-bell[aria-expanded="true"])) .theme-opt:not(.on) {
-  display: none;
-}
-.theme-opt {
-  flex: 1 0 28px;
-  min-height: var(--tap);
-  display: grid;
-  place-items: center;
-  border: none;
-  background: none;
-  border-radius: 5px;
-  color: var(--muted);
-  cursor: pointer;
-}
-.theme-opt:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-.theme-opt.on {
-  background: var(--panel);
-  color: var(--text);
-  box-shadow: var(--shadow-sm);
-}
-
 .main {
   flex: 1;
   display: flex;
@@ -2535,8 +2502,6 @@ kbd {
   .sidebar [data-nav-id="team"] { order: 6; }
   .sidebar [data-nav-id="profile"] { order: 7; }
   .sidebar [data-nav-id="settings"] { order: 8; }
-  .sidebar .theme-control { order: 10; min-width: 108px; align-items: center; }
-  .sidebar .theme-control .theme-opt { display: grid; min-height: 40px; }
   .settings-nav { padding: 8px 12px; }
   .settings-nav a { padding: 7px 9px; }
   /* The bell is the bar's last tab, and its inbox a sheet above the bar. */
