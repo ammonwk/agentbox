@@ -216,6 +216,9 @@ const CAPACITY_RETRY_MS = 10 * 60_000;
 
 const MAX_HITS = 200;
 const PROMPT_CAP = 2000;
+/** Codex closes an answer that drew on its memory with this block, on lines
+ *  of its own (as the timeline reads it, `Timeline.tsx`). */
+const MEM_CITE = /(?:^|\n)[ \t]*<oai-mem-citation>[\s\S]*?(?:<\/oai-mem-citation>|(?![\s\S]))/g;
 
 export class CodexFold {
   private lineage: CodexLineage | null = null;
@@ -306,7 +309,10 @@ export class CodexFold {
         }
       } else if (p.type === "message" && p.role === "assistant") {
         const text = contentText(p.content).trim();
-        if (text) this.lastMessage = text.length > 300 ? `…${text.slice(-299)}` : text;
+        // The tail is where a session's STATUS line is: not the memory
+        // citation Codex closes an answer with.
+        const said = text.replace(MEM_CITE, "").trim();
+        if (said) this.lastMessage = said.length > 300 ? `…${said.slice(-299)}` : said;
         this.prRepo.add(text);
       } else if (p.type === "function_call" || p.type === "custom_tool_call") {
         // A JSON string of the arguments; unescaped so `-R "owner/name"` reads as typed.

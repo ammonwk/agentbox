@@ -37,3 +37,18 @@ describe("codex: a turn refused for capacity", () => {
     expect(fold([rec("2026-09-30T15:05:03.122Z", { type: "task_complete", turn_id: "a", last_agent_message: "done" })]).facts().turnError).toBeNull();
   });
 });
+
+describe("codex: the last message", () => {
+  const said = (text: string) => ({ timestamp: "2026-10-14T10:00:00.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } });
+
+  test("ends with what the agent said, not the memory citation after it", () => {
+    const cite = `<oai-mem-citation>\n<citation_entries>\n${"MEMORY.md:1-20|note=[x]\n".repeat(20)}</citation_entries>\n<rollout_ids>\nabc\n</rollout_ids>\n</oai-mem-citation>`;
+    const f = fold([said(`Pushed the fix.\n\nSTATUS: done\n\n${cite}`)]).facts();
+    expect(f.lastMessage).toBe("Pushed the fix.\n\nSTATUS: done");
+  });
+
+  test("keeps prose that names the tag", () => {
+    const f = fold([said("Codex appends `<oai-mem-citation>` blocks.")]).facts();
+    expect(f.lastMessage).toBe("Codex appends `<oai-mem-citation>` blocks.");
+  });
+});
