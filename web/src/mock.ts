@@ -69,6 +69,8 @@ const HOME = "/home/dev";
 
 const settings: AgentSettings = {
   theme: "system",
+  repoMark: "name",
+  hideSteps: "always",
   boardDays: 7,
   autoApprove: false,
   parkIdleMin: 60,
@@ -559,6 +561,23 @@ const sessions: MockSession[] = [
     lastMessage: "docs/v2.md now describes the tie band; report ready.", lastActivityAt: T0 - 12 * M,
   }),
 ];
+
+// `?mock=1&fleet=650`: a Steward that started that many sessions, the last 40
+// of them recent, to try the list at the size a fleet takes it to.
+const FLEET = typeof location === "undefined" ? 0 : Number(new URLSearchParams(location.search).get("fleet") ?? 0);
+if (FLEET > 0) {
+  sessions.push(sess({ id: "stwd", provider: "claude", accountId: "cl-work", status: "waiting", host: "tmux", title: "Steward", cwd: AB, repoRoot: AB, lastActivityAt: T0 - 20 * M }));
+  for (let i = 0; i < FLEET; i++) {
+    const recent = i >= FLEET - 40;
+    sessions.push(
+      sess({
+        id: `fl${i.toString(36).padStart(3, "0")}`, provider: "claude", accountId: "cl-work", status: recent && i % 3 === 0 ? "running" : recent ? "waiting" : "stopped",
+        host: recent ? "tmux" : "none", origin: "agentbox", parent: "stwd", title: `Fleet task ${i + 1}`, cwd: AB, repoRoot: AB,
+        lastMessage: "Opened the pull request; CI is green and the review is clean.", lastActivityAt: recent ? T0 - (FLEET - i) * M : T0 - 2 * D + i * M,
+      }),
+    );
+  }
+}
 
 const REASON: Record<AttentionKind, (s: Session) => string> = {
   blocked: (s) => (s.question ? "Asking a question" : "Waiting on a permission prompt"),

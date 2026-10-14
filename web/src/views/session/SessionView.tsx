@@ -17,7 +17,7 @@ import {
   titleOf,
   type SessionRow,
 } from "../../lib/board";
-import { closedSessions, Rail, useListState } from "./Rail";
+import { closedSessions, Rail, shownBy, useListState } from "./Rail";
 import { closeNow, forget, hideWhile, useClosing } from "./closing";
 import { toggleBookmark, togglePin, usePinned } from "./pins";
 import { justStarted } from "./started";
@@ -112,20 +112,23 @@ export function SessionView({
   }, [missing, id]);
   const narrow = useIsNarrow();
   const list = useListState();
-  const { filter, sort, view, open, setOpen, hovered, focused } = list;
+  const { filter, sort, view, kids, quiet, reveal, toggleKids } = list;
   // Moves a session to Inactive once its last activity is 3 hours old, with no new state frame.
   const now = useNow(60_000);
   const closing = useClosing().pending;
 
-  // Keep the current, hovered and focused branches open while moving into their children.
-  const above = useMemo(() => {
+  // The open session and those above it: expanded unless you fold them.
+  const keep = useMemo(() => {
     const byId = new Map(state.sessions.map((s) => [s.id, s]));
     const set = new Set<string>();
-    for (const start of [session?.id, hovered, focused]) {
-      for (let p = start; p && !set.has(p); p = byId.get(p)?.parent) set.add(p);
-    }
+    for (let p: string | null | undefined = session?.id; p && !set.has(p); p = byId.get(p)?.parent) set.add(p);
     return set;
-  }, [state.sessions, session?.id, hovered, focused]);
+  }, [state.sessions, session?.id]);
+  // Going to a session unfolds what you folded above it.
+  const keepKey = [...keep].join();
+  useEffect(() => {
+    if (keepKey) reveal(keepKey.split(",").slice(1));
+  }, [keepKey, reveal]);
 
   // Folded as the user left it, but never with the open session folded out of
   // sight. Closed ones are not here: they have their own list under Inactive,
@@ -138,10 +141,14 @@ export function SessionView({
     const tabs = splitActive(rows, now);
     const roots = (r: SessionRow[]) => r.length - parentsOf(r).size;
     return {
-      sections: sectionsOf(tabs[view], (x) => open.has(x) || above.has(x), sort),
+      sections: sectionsOf(
+        tabs[view],
+        { open: (x, auto) => shownBy(kids, x, auto), quiet: (x, auto) => shownBy(quiet, x, auto), keep, now },
+        sort,
+      ),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
     };
-  }, [state.sessions, above, filter, sort, view, now, open, closing]);
+  }, [state.sessions, keep, filter, sort, view, now, kids, quiet, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
@@ -247,13 +254,13 @@ export function SessionView({
           e.preventDefault();
           onOpen(next);
         }
-      } else if (e.key === "l" && row?.kids && !open.has(row.id)) {
+      } else if (e.key === "l" && row?.kids && !row.open) {
         e.preventDefault();
-        setOpen(row.id, true);
+        toggleKids(row.id, false);
       } else if (e.key === "h" && row) {
-        if (row.kids && open.has(row.id)) {
+        if (row.kids && row.open) {
           e.preventDefault();
-          setOpen(row.id, false);
+          toggleKids(row.id, true);
         } else if (row.depth > 0 && row.parent) {
           e.preventDefault();
           onOpen(row.parent);
@@ -276,7 +283,7 @@ export function SessionView({
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
-      {showRail ? <Rail sections={sections} counts={counts} state={state} current={id} forcedOpen={above} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
+      {showRail ? <Rail sections={sections} counts={counts} state={state} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
       {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
       ) : sched ? (

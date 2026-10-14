@@ -85,6 +85,17 @@ export interface Section<T> {
   /** What it colours the label by: the attention kind, when there is one. */
   kind?: AttentionKind;
   rows: T[];
+  /** The inactive sessions a row started, folded behind one line of their
+   *  own: by the id of the row that line follows. */
+  quiet?: Map<string, Quiet[]>;
+}
+
+/** A parent's inactive children: how many, and whether they are shown. */
+export interface Quiet {
+  parent: string;
+  depth: number;
+  count: number;
+  open: boolean;
 }
 
 /** How the session list is ordered.
@@ -114,6 +125,11 @@ export const ACTIVE_MS = 3 * 60 * 60_000;
  * pinned: a pin keeps its place at the top. A tree goes whole to Active when any session in it is active, so a
  * lead and its teammates stay together.
  */
+/** Active on its own: running, recent, needing you or pinned (see splitActive). */
+export function isActive(s: SessionRow, now: number): boolean {
+  return s.status === "running" || s.status === "blocked" || !!s.turnError || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS;
+}
+
 export function splitActive<T extends SessionRow>(rows: readonly T[], now: number): Record<RailView, T[]> {
   const up = parentsOf(rows);
   const rootOf = (id: string) => {
@@ -121,7 +137,7 @@ export function splitActive<T extends SessionRow>(rows: readonly T[], now: numbe
     for (let p = up.get(r); p !== undefined; p = up.get(r)) r = p;
     return r;
   };
-  const live = new Set(rows.filter((s) => s.status === "running" || s.status === "blocked" || !!s.turnError || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS).map((s) => rootOf(s.id)));
+  const live = new Set(rows.filter((s) => isActive(s, now)).map((s) => rootOf(s.id)));
   const out: Record<RailView, T[]> = { active: [], inactive: [] };
   for (const s of rows) out[live.has(rootOf(s.id)) ? "active" : "inactive"].push(s);
   return out;
@@ -161,8 +177,36 @@ export function runningDescendants<T extends Pick<Session, "id" | "parent" | "st
 }
 
 /** A row placed in the tree: how deep it sits under the session that started
- *  it, and how many sessions it started are here under it. */
-export type Nested<T> = T & { depth: number; kids: number };
+ *  it, how many sessions it started are here under it, and whether they show. */
+export type Nested<T> = T & { depth: number; kids: number; open: boolean };
+
+/** What is folded in the list. Each is asked with `auto`, what the row would
+ *  be left alone, and says what you made of it. */
+export interface Folds {
+  /** Whether the sessions `id` started show under it. Left alone, the open
+   *  session's and those above it do. */
+  open: (id: string, auto: boolean) => boolean;
+  /** Whether the inactive ones among them show too. Left alone, they do when
+   *  all of them are inactive, or the open session is one of them. */
+  quiet: (id: string, auto: boolean) => boolean;
+  /** The open session and those above it. */
+  keep: ReadonlySet<string>;
+  now: number;
+}
+
+const NO_FOLDS: Folds = { open: () => true, quiet: () => true, keep: new Set(), now: 0 };
+
+/** The last rows placed, by session: one whose session and place did not
+ *  change is the same object, so its row in the list need not draw again. */
+const placed = new WeakMap<object, Nested<SessionRow>>();
+
+function nest<T extends SessionRow>(s: T, depth: number, kids: number, open: boolean): Nested<T> {
+  const was = placed.get(s) as Nested<T> | undefined;
+  if (was && was.depth === depth && was.kids === kids && was.open === open) return was;
+  const row = { ...s, depth, kids, open };
+  placed.set(s, row);
+  return row;
+}
 
 /**
  * The row each row nests under: its parent, when the parent is one of `rows`.
@@ -224,7 +268,7 @@ export function pinBetween(before: number | null, after: number | null): number 
  */
 export function sectionsOf<T extends SessionRow>(
   rows: readonly T[],
-  open: (id: string) => boolean = () => true,
+  folds: Folds = NO_FOLDS,
   sort: SortKey = "status",
 ): Section<Nested<T>>[] {
   const up = parentsOf(rows);
@@ -233,21 +277,47 @@ export function sectionsOf<T extends SessionRow>(
   const roots: T[] = [];
   for (const s of ordered(rows, sort)) {
     const p = up.get(s.id);
-    if (p) kids.set(p, [...(kids.get(p) ?? []), s]);
-    else roots.push(s);
+    if (!p) roots.push(s);
+    else {
+      const k = kids.get(p);
+      if (k) k.push(s);
+      else kids.set(p, [s]);
+    }
   }
-  const place = (s: T, depth: number, out: Nested<T>[]) => {
+  // A child is active when it or anything under it is.
+  const busy = new Map<string, boolean>();
+  const active = (s: T): boolean => {
+    let b = busy.get(s.id);
+    if (b === undefined) {
+      busy.set(s.id, false); // a loop, which parentsOf has already broken
+      b = (folds === NO_FOLDS || isActive(s, folds.now)) || (kids.get(s.id) ?? []).some(active);
+      busy.set(s.id, b);
+    }
+    return b;
+  };
+  const place = (s: T, depth: number, out: Nested<T>[], quiet: Map<string, Quiet[]>) => {
     const k = kids.get(s.id) ?? [];
-    out.push({ ...s, depth, kids: k.length });
-    if (open(s.id)) for (const c of k) place(c, depth + 1, out);
+    const open = k.length > 0 && folds.open(s.id, folds.keep.has(s.id));
+    out.push(nest(s, depth, k.length, open));
+    if (!open) return;
+    const awake = k.filter(active);
+    for (const c of awake) place(c, depth + 1, out, quiet);
+    if (awake.length === k.length) return;
+    const asleep = k.filter((c) => !active(c));
+    const shown = folds.quiet(s.id, awake.length === 0 || asleep.some((c) => folds.keep.has(c.id)));
+    const after = out[out.length - 1]!.id;
+    quiet.set(after, [...(quiet.get(after) ?? []), { parent: s.id, depth: depth + 1, count: asleep.length, open: shown }]);
+    if (shown) for (const c of asleep) place(c, depth + 1, out, quiet);
   };
   const build = (key: string, label: string, pick: (r: T) => boolean, kind?: AttentionKind): Section<Nested<T>> => {
     const out: Nested<T>[] = [];
-    for (const r of roots) if (pick(r)) place(r, 0, out);
-    return { key, label, kind, rows: out };
+    const quiet = new Map<string, Quiet[]>();
+    for (const r of roots) if (pick(r)) place(r, 0, out, quiet);
+    return { key, label, kind, rows: out, quiet };
   };
   const pinned: Nested<T>[] = [];
-  for (const r of pinnedOf(roots)) place(r, 0, pinned);
+  const pinnedQuiet = new Map<string, Quiet[]>();
+  for (const r of pinnedOf(roots)) place(r, 0, pinned, pinnedQuiet);
   const unpinned = (r: T) => r.pinOrder === null;
   let sections: Section<Nested<T>>[];
   if (sort === "status") {
@@ -261,7 +331,7 @@ export function sectionsOf<T extends SessionRow>(
     // A flat list under the pinned still wants a label, or it reads as more pins.
     sections = [build("all", pinned.length ? "Sessions" : "", unpinned)];
   }
-  return [{ key: "pinned", label: "Pinned", rows: pinned }, ...sections].filter((s) => s.rows.length > 0);
+  return [{ key: "pinned", label: "Pinned", rows: pinned, quiet: pinnedQuiet }, ...sections].filter((s) => s.rows.length > 0);
 }
 
 /** The shapes a session's status dot takes, one per repo. */

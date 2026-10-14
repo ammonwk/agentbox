@@ -768,6 +768,12 @@ export interface LoginFlow {
 
 export interface AgentSettings {
   theme: "light" | "dark" | "system";
+  /** How the session list says which repo or folder a session is in: its
+   *  name before the title, or the repo's shape, which takes less room. */
+  repoMark: "name" | "shape";
+  /** Which of the agent's working steps the timeline folds away between the
+   *  things it says: all of them, those of turns it has finished, or none. */
+  hideSteps: "always" | "done" | "never";
   /** Days of inactive sessions to keep on the board. */
   boardDays: number;
   /** Skip permission prompts (each provider's bypass flag). */

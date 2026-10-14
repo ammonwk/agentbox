@@ -31,6 +31,9 @@ const THINK_CAP_MS = 10 * 60_000;
  *  rest of the page renders right after, off the path to the first paint —
  *  building 200 rows of markdown before showing any took up to a second. */
 const FIRST_ROWS = 40;
+/** Events per page while filling a view too short to scroll: folded work
+ *  takes little room, and a page at a time of it is many round trips. */
+const FILL_PAGE = 400;
 
 /**
  * The conversation as the provider's transcript records it, folded into
@@ -45,13 +48,18 @@ export function Timeline({ session }: { session: Session }) {
   const allRows = useMemo(() => traceTurns(withBtw(groupTimeline(events), btw, exhausted), live), [events, btw, exhausted, live]);
   // Which trace holds each event, so a jump to one inside opens it first.
   const traceOf = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const r of allRows) if (r.type === "trace") for (const x of r.rows) for (const id of rowEventIds(x)) m.set(id, r.id);
+    const m = new Map<string, Extract<TimelineRow, { type: "trace" }>>();
+    for (const r of allRows) if (r.type === "trace") for (const x of r.rows) for (const id of rowEventIds(x)) m.set(id, r);
     return m;
   }, [allRows]);
-  const [openTraces, setOpenTraces] = useState<ReadonlySet<string>>(new Set());
+  // Whether a trace is open is the setting's, until you open or fold it.
+  const { state } = useAppState();
+  const hideSteps = state?.settings.hideSteps ?? "always";
+  const [flipped, setFlipped] = useState<ReadonlySet<string>>(new Set());
+  const isOpen = (r: Extract<TimelineRow, { type: "trace" }>) =>
+    flipped.has(r.id) !== (hideSteps === "never" || (hideSteps === "done" && r.live));
   const toggleTrace = useCallback((id: string) => {
-    setOpenTraces((o) => {
+    setFlipped((o) => {
       const next = new Set(o);
       if (!next.delete(id)) next.add(id);
       return next;
@@ -75,7 +83,6 @@ export function Timeline({ session }: { session: Session }) {
       clearTimeout(t);
     };
   }, [ready, whole, session.id]);
-  const { state } = useAppState();
   const board = useMemo(() => new Map((state?.sessions ?? []).map((s) => [s.id, s])), [state?.sessions]);
   const identity = state?.onboarding.identity;
   const me = useMemo(() => ({ name: identity?.name ?? "", github: identity?.github ?? "" }), [identity?.name, identity?.github]);
@@ -232,10 +239,10 @@ export function Timeline({ session }: { session: Session }) {
       return;
     }
     const trace = traceOf.get(jump);
-    if (trace && !openTraces.has(trace)) toggleTrace(trace);
+    if (trace && !isOpen(trace)) toggleTrace(trace.id);
     else if (exhausted || error) setJump(null);
     else if (!loadingOlder) loadOlder(1000);
-  }, [jump, ready, staged, events, exhausted, error, loadingOlder, loadOlder, rowOf, traceOf, openTraces, toggleTrace]);
+  }, [jump, ready, staged, events, exhausted, error, loadingOlder, loadOlder, rowOf, traceOf, flipped, hideSteps, toggleTrace]);
 
   const local = useMemo(() => ({ names: agentNames, jump: (id: string) => setJump(id) }), [agentNames]);
 
@@ -275,9 +282,19 @@ export function Timeline({ session }: { session: Session }) {
     prev.current.scrollHeight = el.scrollHeight;
     const nowPinned = isPinnedToBottom(el);
     if (nowPinned !== pinned) setPinned(nowPinned);
-    if (isAtTop(el) && !exhausted && !loadingOlder) loadOlder();
+    // A screenful from the top, so the next page is in before you reach it.
+    if (isAtTop(el, el.clientHeight) && !exhausted && !loadingOlder && !error) loadOlder();
     findCurrent();
   };
+
+  // Too little to scroll — a turn whose work is folded to one line can be
+  // the whole page — means no scroll will ever ask for more: page older
+  // history in until there is something to read, or nothing more.
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el || !ready || staged || exhausted || loadingOlder || error) return;
+    if (el.scrollHeight <= el.clientHeight * 1.5) loadOlder(FILL_PAGE);
+  }, [ready, staged, exhausted, loadingOlder, error, loadOlder, rows]);
 
   const renderRow = (r: Exclude<TimelineRow, { type: "trace" }>) =>
     r.type === "tools" ? (
@@ -331,7 +348,7 @@ export function Timeline({ session }: { session: Session }) {
     <Me.Provider value={me}>
     <div className="tl-wrap">
       <div className="sx-panel tl" ref={boxRef} onScroll={onScroll} tabIndex={0} aria-label="Timeline">
-        <div className="tl-edge" role="status">
+        <div className="tl-edge" role="status" data-idle={!loadingOlder && !error && !exhausted ? "" : undefined}>
           {loadingOlder ? (
             <>
               <Spinner size={12} /> Loading earlier events…
@@ -345,11 +362,7 @@ export function Timeline({ session }: { session: Session }) {
             </>
           ) : exhausted ? (
             "Start of the conversation"
-          ) : (
-            <button className="linkish" onClick={() => loadOlder()}>
-              Load earlier
-            </button>
-          )}
+          ) : null}
         </div>
         <div className="tl-stream">
           {rows.map((r) =>
@@ -357,7 +370,7 @@ export function Timeline({ session }: { session: Session }) {
               <Trace
                 key={r.id}
                 row={r}
-                open={openTraces.has(r.id)}
+                open={isOpen(r)}
                 onToggle={toggleTrace}
                 now={now}
                 tail={thinking && r.live ? <ThinkingLive since={liveSince} now={now} background={false} /> : null}
@@ -832,8 +845,8 @@ function AssistantRow({ ev }: { ev: Extract<TimelineEvent, { kind: "assistant" }
 type Flat = Exclude<TimelineRow, { type: "trace" }>;
 
 /**
- * A turn's work — thinking, tool calls, what the agent said on the way —
- * folded to one line, so the conversation reads as messages and answers.
+ * The work between two things the agent said — thinking, tool calls — folded
+ * to one line, so the conversation reads as what was said on both sides.
  * While the agent works, the line says what it does now and for how long.
  */
 function Trace({
@@ -905,7 +918,6 @@ function NowDoing({ rows }: { rows: Flat[] }) {
       );
     }
   }
-  if (r?.type === "event" && r.event.kind === "assistant") return <>{firstLine(r.event.text, 200)}</>;
   return <>Thinking…</>;
 }
 
