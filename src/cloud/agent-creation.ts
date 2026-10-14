@@ -13,6 +13,8 @@ export type CreationSpec = z.infer<typeof CreationSpec>;
 export const CreationDraft = z.object({
   id: z.string().uuid(), creator: z.string(), run: z.string(), revision: z.number().int(),
   spec: CreationSpec, created: z.string().nullable(),
+  /** When it was proposed: its card's place in the creator's chat. */
+  at: z.number().optional(),
 });
 export type CreationDraft = z.infer<typeof CreationDraft>;
 export const JUPITER_ROLE = "Create agents from your instructions";

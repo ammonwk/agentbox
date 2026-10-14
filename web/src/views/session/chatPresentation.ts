@@ -25,3 +25,18 @@ export function chatTimestamps(events: readonly { id: string; at: number; source
   });
   return times;
 }
+
+/** A card in the chat (a creation draft, a recommendation) sits at its time,
+ *  like a message: before the first message newer than it. One older than the
+ *  loaded page shows with that page; one newer than every message comes last. */
+export function placeCards<C extends { at: number }>(messages: readonly { id: string; at: number }[], cards: readonly C[], earlier: boolean) {
+  const before = new Map<string, C[]>(), after: C[] = [];
+  const oldest = messages[0]?.at ?? -Infinity;
+  for (const card of [...cards].sort((a, b) => a.at - b.at)) {
+    if (earlier && card.at < oldest) continue;
+    const next = messages.find((m) => m.at > card.at);
+    if (next) before.set(next.id, [...(before.get(next.id) ?? []), card]);
+    else after.push(card);
+  }
+  return { before, after };
+}

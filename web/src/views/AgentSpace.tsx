@@ -813,9 +813,14 @@ function AgentSpace({
                 echoes={echoes.filter((x) => (x.thread === target || (x.thread === "new" && target === ongoing)) && !events.some((e) => e.kind === "user" && e.at >= x.at - 60_000 && e.text.includes(x.text.trim())))
                   // Delivered mid-turn and held by the agent: its queue says so, not a guess.
                   .map((x, _, pending) => x.note === "Sent" && presence?.queued.filter((q) => q.trim() === x.text.trim()).length === 1 && pending.filter((p) => p.text.trim() === x.text.trim()).length === 1 ? { ...x, note: "Queued" } : x)}
+                earlier={!!next}
+                cards={[
+                  // A draft from before drafts recorded their time comes last, as it did.
+                  ...(creations.data?.filter((d) => d.run === selected?.run).map((d) => ({ id: `creation-${d.id}`, at: d.at ?? Infinity,
+                    node: <AgentCreationCard key={`${d.id}:${d.revision}:${d.created}`} draft={d} scope={options.find((a) => a.id === id)?.detail ?? "Current project"} edit={transport.editCreation} reload={creations.reload} /> })) ?? []),
+                  ...open.filter((p) => p.run_id === selected?.run).slice(0, 4).map((p) => ({ id: `proposal-${p.id}`, at: Date.parse(p.created_at), node: card(p) })),
+                ]}
               />
-              {creations.data?.filter((d) => d.run === selected?.run).map((d) => <AgentCreationCard key={`${d.id}:${d.revision}:${d.created}`} draft={d} scope={options.find((a) => a.id === id)?.detail ?? "Current project"} edit={transport.editCreation} reload={creations.reload} />)}
-              {open.filter((p) => p.run_id === selected?.run).slice(0, 4).map(card)}
               {error && (
                 <p className="agent-chat-notice" role="status">
                   {error}

@@ -1,5 +1,5 @@
-import { chatTimestamps, recommendationReply, type ReplyRecommendation } from "./chatPresentation";
-import { createContext, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { chatTimestamps, placeCards, recommendationReply, type ReplyRecommendation } from "./chatPresentation";
+import { createContext, Fragment, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import type { ChatPresence } from "../../../../src/cloud/agent-conversation";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
@@ -1313,12 +1313,17 @@ export type ChatEcho = { id: string; text: string; at: number; note: string };
  *  summary (`ChatEvent` in src/cloud/agent-conversation.ts). */
 type Carried = { source?: string; carried?: { handoff: string; at: number; oldest: boolean } };
 
+/** A card that sits in the chat at its time (`placeCards`). */
+export type ChatCard = { id: string; at: number; node: React.ReactNode };
+
 /** Agent chat, with what the transcript and session say now (`ChatPresence`):
  *  Sent or Read under the person's newest message, and the agent typing
- *  while a turn shown here is open. */
-export function AgentConversationEvents({ events, me, agent, echoes = [], recommendations = [], presence }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[]; recommendations?: readonly ReplyRecommendation[]; presence?: ChatPresence | null } & ChatSides) {
+ *  while a turn shown here is open. `earlier`: older messages are not loaded yet. */
+export function AgentConversationEvents({ events, me, agent, echoes = [], recommendations = [], presence, cards = [], earlier = false }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[]; recommendations?: readonly ReplyRecommendation[]; presence?: ChatPresence | null; cards?: readonly ChatCard[]; earlier?: boolean } & ChatSides) {
   const shown = events.filter((e): e is Extract<TimelineEvent, { kind: "user" | "assistant" }> & Carried => e.kind === "user" || e.kind === "assistant");
   const times = chatTimestamps([...shown, ...echoes]);
+  const placed = placeCards(shown, cards, earlier);
+  const card = (c: ChatCard) => <Fragment key={`card-${c.id}`}>{c.node}</Fragment>;
   return (
     <Me.Provider value={me ?? NOBODY}>
       <div className="tl-stream">
@@ -1343,13 +1348,14 @@ export function AgentConversationEvents({ events, me, agent, echoes = [], recomm
                 </div>
               ) : null
             ) : null;
-          return e.carried ? [divider, <div key={`c-${e.id}`} className="tl-carried">{row}</div>] : [divider, row];
+          const own = placed.before.get(e.id)?.map(card) ?? [];
+          return e.carried ? [...own, divider, <div key={`c-${e.id}`} className="tl-carried">{row}</div>] : [...own, divider, row];
         })}
-        {echoes.map((e) => (
+        {[...placed.after.map((c) => ({ at: c.at, node: card(c) })), ...echoes.map((e) => ({ at: e.at, node: (
           <Bubble key={e.id} at={e.at} showTime={times.has(e.id)} className="tl-echo" note={e.note} copy={e.text}>
             <Markdown text={e.text} />
           </Bubble>
-        ))}
+        ) }))].sort((a, b) => a.at - b.at).map((x) => x.node)}
         {presence?.working && (
           <div className="tl-agent-reply tl-typing" role="status" aria-label={`${agent?.name ?? "The agent"} is working`}>
             <div className="tl-agent-row">

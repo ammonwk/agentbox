@@ -277,7 +277,7 @@ export class AgentConversations {
     }
     if (a.unavailable || a.capability !== "creator" || !a.enabled || !caller || caller !== a.session) throw new FleetError(403, "Only the current creator session can propose agents");
     if (!this.db.query("SELECT 1 FROM local_creations WHERE id=?").get(request)) this.nameFree(spec.name);
-    const draft: CreationDraft = { id: request, creator: a.id, run: caller, revision: 1, spec, created: null };
+    const draft: CreationDraft = { id: request, creator: a.id, run: caller, revision: 1, spec, created: null, at: Date.now() };
     const old = this.db.query("SELECT body FROM local_creations WHERE id=?").get(request) as {body: string} | null;
     if (old) {
       const prior = CreationDraft.parse(JSON.parse(old.body));
