@@ -267,6 +267,8 @@ export interface SpawnRequest {
   /** Reads, never writes: for a reviewer. Only a provider whose CLI can be
    *  held to it (`ProviderAdapter.readOnly`); it gets no global MCP servers. */
   readOnly?: boolean;
+  /** False: its stops are not pushed (`Session.quiet`). */
+  notify?: boolean;
   cwd?: string;
   repoId?: string;
   worktree?: boolean;
@@ -2352,6 +2354,7 @@ export class Fleet extends EventEmitter {
       closedAt: rec.archivedAt,
       pinOrder: rec.pinOrder ?? null,
       bookmarkedAt: rec.bookmarkedAt ?? null,
+      ...(rec.quiet ? { quiet: true } : {}),
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
@@ -2750,6 +2753,7 @@ export class Fleet extends EventEmitter {
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     // Carried on every resume, as an adopted session's own flags are.
     if (req.readOnly) updateSessionRecord(id, { launch: { args: [...adapter.readOnly!], env: {} } });
+    if (req.notify === false) updateSessionRecord(id, { quiet: true });
     insertAssignment({
       id: randomUUID(),
       sessionId: id,

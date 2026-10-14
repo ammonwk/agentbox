@@ -158,7 +158,8 @@ lean on:
   superagent's main on the board, `claim` to give it a PR from its first
   moment, `branch`/`worktree` to put it in a worktree, and `readOnly` for a
   reviewer that must not write (Codex; refused for a CLI that cannot be held
-  to it).
+  to it). `notify: false` keeps its stops off your phone, for a session the
+  superagent watches and shows on its own page; the board still shows it.
 - `POST /api/sessions/:id/send` with `from: "agent"`: type into one, under
   the send guard.
 - `GET /api/sessions/:id/timeline`: read what a session said, from its

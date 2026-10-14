@@ -732,6 +732,7 @@ const router = new Router(mapError)
       const out = await fleet.spawn({
         provider: provider(b.provider),
         readOnly: b.readOnly === true,
+        notify: b.notify === false ? false : undefined,
         cwd: optionalString(b, "cwd"),
         repoId: optionalString(b, "repoId"),
         worktree: b.worktree === true,

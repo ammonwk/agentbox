@@ -583,6 +583,9 @@ export interface Session {
   pinOrder: number | null;
   /** When you bookmarked it, for the list's bookmarks menu; null when it is not. */
   bookmarkedAt: number | null;
+  /** Started with `notify: false` (POST /api/sessions): a stop of it is not
+   *  pushed to your phone. The board still shows it. */
+  quiet?: boolean;
   /**
    * When the fleet stopped its process for sitting idle. A parked session is
    * still shown as `waiting` — it is still your move — and the next message

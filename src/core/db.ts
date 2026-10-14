@@ -414,6 +414,9 @@ export const MIGRATIONS: readonly string[] = [
     created_at INTEGER NOT NULL
   );
   `,
+  // 29 — a session whose stops are not pushed to your phone: one a program
+  // started, whose own page shows what it waits on.
+  `ALTER TABLE sessions ADD COLUMN quiet INTEGER;`,
 ];
 
 function migrate(d: Database) {
@@ -530,6 +533,8 @@ export interface SessionRecord {
   pinOrder?: number | null;
   /** When you bookmarked it; null when it is not bookmarked. */
   bookmarkedAt?: number | null;
+  /** Started with `notify: false`: its stops are not pushed. */
+  quiet?: boolean;
 }
 
 type SessionRow = {
@@ -540,7 +545,7 @@ type SessionRow = {
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
   parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
-  pin_order: number | null; bookmarked_at: number | null;
+  pin_order: number | null; bookmarked_at: number | null; quiet: number | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -572,6 +577,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     hoppedAt: r.hopped_at ?? null,
     pinOrder: r.pin_order ?? null,
     bookmarkedAt: r.bookmarked_at ?? null,
+    quiet: !!r.quiet,
   };
 }
 
@@ -603,6 +609,7 @@ const RECORD_COLUMNS = {
   hoppedAt: "hopped_at",
   pinOrder: "pin_order",
   bookmarkedAt: "bookmarked_at",
+  quiet: "quiet",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;

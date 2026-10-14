@@ -82,6 +82,8 @@ export const agentbox = {
     claim?: string;
     /** Reads, never writes (codex): for a reviewer. */
     readOnly?: boolean;
+    /** False: its stops are not pushed to the phone; its page shows them instead. */
+    notify?: boolean;
   }) => call<{ session: Session }>("POST", "/api/sessions", spec).then((r) => r.session),
   /** Type into a session as an agent: the send guard applies (docs/v2.md, Messages between sessions). */
   send: (id: string, text: string, opts: { wake?: boolean; from?: string } = {}) =>

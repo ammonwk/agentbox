@@ -144,7 +144,7 @@ async function launchWriter(ctx: Ctx, w: Work, now = Date.now()): Promise<void> 
     w.launch = { at: now };
     w.state = "starting";
     ctx.store.saveWork(w);
-    const s = await agentbox.start({ provider: w.provider, repoId: repo.id, branch: w.branch, parent: w.main, prompt: writerPrompt(w, ctx.config.cli, ctx.revision(w.promptRevision)) });
+    const s = await agentbox.start({ provider: w.provider, notify: false, repoId: repo.id, branch: w.branch, parent: w.main, prompt: writerPrompt(w, ctx.config.cli, ctx.revision(w.promptRevision)) });
     w.session = s.id;
     w.cwd = s.cwd;
     w.state = "working";

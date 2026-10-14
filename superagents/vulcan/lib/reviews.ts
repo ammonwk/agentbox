@@ -87,7 +87,7 @@ async function launchReviewer(ctx: Ctx, w: Work, round: Round, r: Reviewer, now:
   if (slug !== w.repo || (await ctx.tools.git(r.cwd, "rev-parse", "HEAD")) !== round.head || (await ctx.tools.git(r.cwd, "status", "--porcelain")))
     throw new ActionError("Reserved reviewer checkout changed", 409);
   authority(ctx, w, w.session, true, now);
-  const s = await agentbox.start({ provider: "codex", readOnly: true, cwd: r.cwd, parent: w.session!, prompt: reviewerPrompt(w, round, r.focus, ctx.revision(round.promptRevision)) });
+  const s = await agentbox.start({ provider: "codex", readOnly: true, notify: false, cwd: r.cwd, parent: w.session!, prompt: reviewerPrompt(w, round, r.focus, ctx.revision(round.promptRevision)) });
   r.session = s.id;
   r.state = "started";
 }
