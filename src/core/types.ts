@@ -756,6 +756,8 @@ export interface SessionDiff {
 
 export interface Repo {
   id: string;
+  /** Resolved checkout root for navigation, including GitHub clones and linked worktrees. */
+  checkoutRoot?: string;
   /** Local absolute path, or an `owner/name` GitHub slug. */
   ref: string;
   kind: "local" | "github";

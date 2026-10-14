@@ -2409,12 +2409,12 @@ export class Fleet extends EventEmitter {
    * of them, not only the board's window, so an old one can be found and
    * reopened. `q` matches as the board's search does; `offset` pages.
    */
-  closed(q: string, offset: number, limit: number): { sessions: Session[]; total: number } {
+  closed(q: string, offset: number, limit: number, include?: (s: Session) => boolean): { sessions: Session[]; total: number } {
     const needle = q.trim().toLowerCase();
     const all: Session[] = [];
     for (const rec of listClosedRecords()) {
       const s = this.views.get(rec.id) ?? this.viewOf(rec, this.now());
-      if (!s) continue;
+      if (!s || (include && !include(s))) continue;
       if (needle && ![s.label, s.title, s.cwd, s.branch, s.lastMessage, s.firstPrompt, s.id, s.model, s.provider].some((x) => x?.toLowerCase().includes(needle))) continue;
       all.push(s);
     }
@@ -3853,7 +3853,10 @@ const roots = new Map<string, string | null>();
 export function repoRootOf(cwd: string): string | null {
   if (!cwd) return null;
   if (roots.has(cwd)) return roots.get(cwd)!;
-  const root = existsSync(cwd) ? gitRootOf(cwd) : null;
+  let root = existsSync(cwd) ? gitRootOf(cwd) : null;
+  // Worktree git files contain physical paths; the main checkout may have
+  // been registered through a symlink (notably /var on macOS).
+  if (root) { try { root = realpathSync(root); } catch { /* removed meanwhile */ } }
   roots.set(cwd, root);
   return root;
 }

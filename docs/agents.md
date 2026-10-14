@@ -351,3 +351,39 @@ requires the old recommendation to be reviewed anew before approval.
 Cross-installation Chat requires a secure browser context (HTTPS or localhost)
 for WebCrypto and a reachable Realtime service. Plain HTTP on a tailnet address
 cannot provide the encrypted shared relay; local Chat remains usable there.
+
+## Projects and navigation
+
+Click the sidebar logo (or the project name above the page on a phone) to search
+registered repositories. Each registered repository is one project. **All projects**
+includes general conversations, unassigned sessions and global Review cards.
+**Manage projects** opens the existing repository settings. Workspace selection is
+shared by Agents and Team; a workspace is the membership boundary, not a repository
+or an execution host.
+
+Opening a local project's Agents directory creates only stable definitions for
+Vulcan, Caelus and Salus. It starts no session or repository work. Each project's
+instances retain separate provider conversations, drafts and Feed recommendations;
+their repository binding cannot be changed. Earlier general conversations stay
+reachable in All projects. Shared agents deliberately scoped to several repositories
+appear in those projects with the same identity and conversation; About lists their
+full scope. New shared definitions and templates default to the selected repository.
+
+Sessions use canonical checkout/worktree roots and local-agent bindings. Review
+uses a card's GitHub PR repository or linked session. Archived sessions are filtered
+before pagination. Badges follow this scope; account warnings and system status
+stay global. Session close/stop warnings still account for running descendants
+outside the selected project.
+
+Project and workspace selections are in the URL, including explicit All projects.
+Back, reload and separate browser tabs retain their context. A mismatched detail
+link offers an explicit switch; an unscoped local agent/session link resolves to its
+actual project. A removed repository leaves an unavailable page with an All projects
+escape, and its conversations are retained. New-session drafts are stored per
+project; provider defaults stay available, intentional location choices and prompt
+inference still work. Existing general new-session drafts stay in All projects.
+
+These are navigation filters, not new access grants. Switching projects does not
+stop running work, rebind an agent, grant publication or change credentials. Shared
+Chat still checks current membership and host grants at dispatch; Feed approval and
+contact consent keep their existing boundaries. Standalone Sessions remain private.

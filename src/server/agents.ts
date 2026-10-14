@@ -41,6 +41,10 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
   };
   router
     .add("GET", "/api/agents/local", () => json(agents.conversations.local()))
+    .add("POST", "/api/agents/local/project", async ({ req }) => {
+      const b = await readBody(req);
+      return json(agents.conversations.local(z.string().min(1).max(200).parse(b.repo)));
+    })
     .add("POST", "/api/agents/local/:id/configure", async ({ req, params }) => {
       const b = await readBody(req);
       return json(await agents.conversations.configure(params.id!, b));

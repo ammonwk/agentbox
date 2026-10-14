@@ -883,6 +883,24 @@ try {
     await other
       .getByText("Sum returns a difference", { exact: true })
       .waitFor();
+    const removed = await human("RemovedMember");
+    await removed.api.acceptInvite((await alice.api.createInvite(ws.id, { email: removed.email })).token);
+    const removedContext = await browser.newContext();
+    const revokedPage = await removedContext.newPage();
+    await revokedPage.goto(`http://127.0.0.1:${server.port}/`);
+    await revokedPage.evaluate(({ key, session }: any) => localStorage.setItem(key, JSON.stringify(session)), { key: `agentbox.cloud.auth.${new URL(cfg.url).host}`, session: removed.session });
+    await revokedPage.goto(`http://127.0.0.1:${server.port}/#/agents/${a.id}?workspace=${ws.id}`);
+    await revokedPage.reload();
+    await revokedPage.getByRole("heading", { name: "VULCAN", exact: true }).waitFor();
+    await alice.api.removeMember(ws.id, removed.id);
+    await revokedPage.getByText("Workspace unavailable", { exact: true }).waitFor({ timeout: 20000 });
+    assert.equal(await revokedPage.getByRole("textbox", { name: "Message VULCAN" }).count(), 0);
+    // Real sign-out in Team must unmount shared data, including when returning through history.
+    await page.locator('[data-nav-id="team"]').click();
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await page.locator('[data-nav-id="agents"]').click();
+    await page.getByText("Sign in to see your shared agents", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("textbox", { name: "Message VULCAN" }).count(), 0);
     assert.deepEqual(errors, []);
   } finally {
     if (browser) await browser.close();
@@ -1024,6 +1042,8 @@ try {
         "git-history expertise",
         "desktop/mobile/keyboard",
         "viewer cannot edit/run",
+        "membership removal unmounts stale shared conversation",
+        "real sign-out clears shared agent access",
         "fenced session rotation",
         "takeover waits for stop",
         "evidence-gated human outcome",

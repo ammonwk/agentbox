@@ -9,6 +9,7 @@
  *  holds the machine's credential. Nothing here needs the cloud to run
  *  agentbox: without it the page says how to set one up. */
 
+import { useScope } from "../lib/projects";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import type { HumanCloud } from "../../../src/cloud/client";
 import {
@@ -200,12 +201,17 @@ function SignedIn({ human, status, refresh, state }: { human: HumanCloud; status
   const settings = useLoad(() => human.settings(), []);
   const web = (settings.data?.frontend[WEB_NAMESPACE] ?? {}) as { teamTab?: Tab; workspace?: string };
   const [tab, setTab] = useState<Tab | null>(null);
-  const [wsId, setWsId] = useState<string | null>(null);
+  const scope = useScope();
+  const wsId = scope.workspace || null;
+  const setWsId = (id: string) => scope.select("workspace", id);
   useEffect(() => {
     if (settings.data) rememberDefaults(settings.data.defaults);
   }, [settings.data]);
   const memberships = me.data?.memberships ?? [];
-  const current = memberships.find((m) => m.workspace.id === (wsId ?? web.workspace ?? status.installation?.workspaceId)) ?? memberships[0] ?? null;
+  const current = memberships.find((m) => m.workspace.id === (wsId ?? status.installation?.workspaceId)) ?? memberships[0] ?? null;
+  useEffect(() => {
+    if (me.data && current && scope.workspace !== current.workspace.id) setWsId(current.workspace.id);
+  }, [me.data, current?.workspace.id, scope.workspace]);
   const shownTab = tab ?? web.teamTab ?? "you";
   // Where you were on this page is a frontend preference, kept under this
   // app's own namespace so another frontend's settings are left alone.

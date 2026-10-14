@@ -23,7 +23,8 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { DEFAULT_PORT, webDist } from "../core/paths";
-import { Fleet, FleetError } from "../core/fleet";
+import { Fleet, FleetError, repoRootOf } from "../core/fleet";
+import { sessionProject } from "../core/projects";
 import * as tmux from "../core/tmux";
 import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
@@ -51,7 +52,7 @@ import type { CardKind, CardState, McpServerInput, McpState } from "../core/type
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
 import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
-import { repoFullNameOf } from "../core/git";
+import { repoFullNameOf, repoCheckoutPath } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { agentTimeline, sessionWork } from "../core/work";
@@ -380,7 +381,7 @@ function coldState(): ColdState {
   return {
     accounts: views,
     logins: accounts.loginFlows(),
-    repos: listRepos(),
+    repos: listRepos().map((r) => ({ ...r, checkoutRoot: repoRootOf(repoCheckoutPath(r)) ?? repoCheckoutPath(r) })),
     prs: slow.prs.map((p) => ({ ...p, owner: holderOf(prClaims, p.repo, p.number)?.sessionId ?? null })),
     prClaims,
     skills: slow.skills,
@@ -1135,7 +1136,10 @@ const router = new Router(mapError)
   .add("GET", "/api/sessions/closed", ({ url }) => {
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 30));
-    const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit);
+    const project = url.searchParams.get("project");
+    const repos = listRepos().map((r) => ({ ...r, checkoutRoot: repoRootOf(repoCheckoutPath(r)) ?? repoCheckoutPath(r) }));
+    const local = project ? agents.conversations.local() : [];
+    const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit, project ? (s) => sessionProject(repos, local, s) === project : undefined);
     return json({ sessions: page.sessions.map((s) => ({ ...s, attention: attentionOf(s, null) })), total: page.total });
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {

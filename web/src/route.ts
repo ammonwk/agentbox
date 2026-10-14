@@ -38,7 +38,7 @@ function decode(p: string): string {
 }
 
 export function parseHash(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
+  const parts = hash.split("?")[0]!.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
   if (head === "agents") return { page: "agents", ...(a ? { id: a } : {}) };
   if (head === "s" && a) {
@@ -58,7 +58,7 @@ export function parseHash(hash: string): Route {
   return { page: "sessions" };
 }
 
-export function hrefOf(route: Route): string {
+function routePath(route: Route): string {
   switch (route.page) {
     case "agents": return `#/agents${route.id ? `/${encodeURIComponent(route.id)}` : ""}`;
     case "session":
@@ -69,6 +69,37 @@ export function hrefOf(route: Route): string {
     default:
       return `#/${route.page}`;
   }
+}
+
+/** Scope is part of each history entry, so separate tabs and Back cannot
+ * silently change the context of a draft. No process changes on navigation. */
+export function scopeOf(hash = location.hash): URLSearchParams {
+  return new URLSearchParams(hash.split("?")[1] ?? "");
+}
+export function hrefOf(route: Route): string {
+  const scope = scopeOf().toString();
+  return routePath(route) + (scope ? `?${scope}` : "");
+}
+export function selectScope(key: "project" | "workspace", value: string | null, to?: Route, replace = false): void {
+  const scope = scopeOf();
+  scope.set(key, value ?? ""); // explicit All overrides any remembered default
+  const from = parseHash(location.hash);
+  const route = to ?? (from.page === "agents" ? { page: "agents" } : from.page === "session" ? { page: "sessions" } : from);
+  const href = routePath(route) + `?${scope}`;
+  if (href === location.hash) return;
+  history[replace ? "replaceState" : "pushState"](null, "", href);
+  try { localStorage.setItem("agentbox.navigationScope", scope.toString()); } catch { /* private browser */ }
+  moved.forEach((fn) => fn());
+}
+export function restoreScope(): void {
+  if (location.hash.includes("?")) return;
+  // Old deep links are intentionally unscoped: their actual detail remains reachable.
+  const route = parseHash(location.hash);
+  if (route.page === "session" || (route.page === "agents" && route.id)) return;
+  try {
+    const scope = localStorage.getItem("agentbox.navigationScope");
+    if (scope) history.replaceState(history.state, "", routePath(route) + `?${scope}`);
+  } catch { /* private browser */ }
 }
 
 // ------------------------------------------------------------------ moving
@@ -131,8 +162,8 @@ export function listUnderSession(): void {
 }
 
 /**
- * On a narrow screen, send the app's own links through go(), so they keep
- * history as it does. On React's root and added after it: React's handlers
+ * Send the app's own links through go() to preserve the selected project
+ * and the narrow-screen session history. On React's root and added after it: React's handlers
  * have run (a preventDefault is seen) and its stopPropagation, which a link
  * in a clickable row uses, does not hide the click from a listener on the
  * same element.
@@ -140,10 +171,14 @@ export function listUnderSession(): void {
 export function followLinks(root: HTMLElement): void {
   root.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    if (!matchMedia(NARROW).matches) return;
     const a = (e.target as Element | null)?.closest?.("a[href^='#/']");
     if (!a || a.getAttribute("target")) return;
     e.preventDefault();
-    go(parseHash(a.getAttribute("href") ?? ""));
+    const href = a.getAttribute("href") ?? "";
+    if (href.includes("?") && scopeOf(href).toString() !== scopeOf().toString()) {
+      location.hash = href;
+      return;
+    }
+    go(parseHash(href));
   });
 }

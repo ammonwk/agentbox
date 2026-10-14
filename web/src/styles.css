@@ -2570,3 +2570,18 @@ kbd {
     padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   }
 }
+
+/* The logo and compact breadcrumb open the same project navigation. */
+.project-brand { border: 0; background: none; color: var(--text); cursor: pointer; text-align: left; }
+.project-brand .nav-label { overflow: hidden; text-overflow: ellipsis; }
+.project-bar { display: flex; align-items: center; gap: 16px; min-height: 36px; padding: 3px 18px; border-bottom: 1px solid var(--border); flex: none; }
+.project-bar > button { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 4px 0; color: var(--muted); cursor: pointer; min-width: 0; }
+.project-bar > button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-bar img { display: none; width: 20px; height: 20px; }
+.project-options { display: flex; flex-direction: column; max-height: min(52vh, 420px); overflow: auto; margin: 12px 0; gap: 4px; }
+.project-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-radius: 8px; background: none; color: var(--text); text-align: left; cursor: pointer; padding: 12px; }
+.project-option:hover, .project-option[aria-pressed="true"] { background: var(--hover); }
+.project-option > span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.project-option small { color: var(--muted); overflow-wrap: anywhere; }
+.project-option svg { flex: none; }
+@media (max-width: 900px) { .project-bar { padding: 4px 12px; } .project-bar img { display: block; } .project-bar > .hint { margin-left: auto; font-size: 11px; } }

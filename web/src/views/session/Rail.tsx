@@ -27,6 +27,7 @@ import { fmtBytes } from "../../lib/format";
 import { openingTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
+import { useScope } from "../../lib/projects";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
 import { ScheduledRow } from "./Scheduled";
@@ -57,7 +58,7 @@ function readView(): RailView {
 /** Survive a trip to Accounts and back: a list that forgets its search every
  *  time you look away is a list you stop searching. The sort and the
  *  Active/Inactive tab are preferences, so they outlive the browser tab too. */
-let rememberedFilter: BoardFilter = EMPTY_FILTER;
+const rememberedFilters = new Map<string, BoardFilter>();
 /** Parents kept expanded after selection and hover move elsewhere. */
 let openParents: ReadonlySet<string> = new Set();
 /** How far down the list was scrolled. On a phone the list is not mounted
@@ -65,7 +66,8 @@ let openParents: ReadonlySet<string> = new Set();
 let railTop = 0;
 
 export function useListState() {
-  const [filter, setFilterState] = useState<BoardFilter>(rememberedFilter);
+  const { project } = useScope();
+  const [filter, setFilterState] = useState<BoardFilter>(rememberedFilters.get(project ?? "") ?? EMPTY_FILTER);
   const [sort, setSortState] = useState<SortKey>(readSort);
   const [view, setViewState] = useState<RailView>(readView);
   const [open, setOpenState] = useState(openParents);
@@ -74,7 +76,7 @@ export function useListState() {
   return {
     filter,
     setFilter: (f: BoardFilter) => {
-      rememberedFilter = f;
+      rememberedFilters.set(project ?? "", f);
       setFilterState(f);
     },
     sort,
@@ -643,7 +645,7 @@ const PAGE = 30;
 let closedOpen = false;
 /** The closed list as it was last shown, so it comes back as long as it was
  *  and the rail's scroll position can be put back inside it. */
-let closedShown: { query: string; rows: SessionRow[]; total: number | null } | null = null;
+let closedShown: { query: string; project: string | null; rows: SessionRow[]; total: number | null } | null = null;
 /** Closed sessions fetched so far, by id: the session view falls back to
  *  these for one too old to be in the app state. */
 export const closedSessions = new Map<string, SessionRow>();
@@ -656,7 +658,8 @@ export const closedSessions = new Map<string, SessionRow>();
  */
 function ClosedList({ query, current, stamp }: { query: string; current: string | null; stamp: number }) {
   const [open, setOpenState] = useState(closedOpen);
-  const shown = closedShown?.query === query ? closedShown : null;
+  const { project } = useScope();
+  const shown = closedShown?.query === query && closedShown.project === project ? closedShown : null;
   const [rows, setRows] = useState<SessionRow[]>(shown?.rows ?? []);
   const [total, setTotal] = useState<number | null>(shown?.total ?? null);
   // The first refresh fetches as many as were shown, not just the first page.
@@ -671,7 +674,7 @@ function ClosedList({ query, current, stamp }: { query: string; current: string 
     loading.current = true;
     const mine = gen.current;
     try {
-      const page = await api.closed(query.trim(), offset, limit);
+      const page = await api.closed(query.trim(), offset, limit, project);
       if (mine !== gen.current) return;
       for (const s of page.sessions) closedSessions.set(s.id, s);
       setRows((r) => (offset === 0 ? page.sessions : [...r, ...page.sessions]));
@@ -692,13 +695,13 @@ function ClosedList({ query, current, stamp }: { query: string; current: string 
     const limit = Math.max(PAGE, keep.current);
     keep.current = 0;
     const t = setTimeout(() => void load(0, limit), query ? 200 : 0);
-    return () => clearTimeout(t);
+    return () => { clearTimeout(t); gen.current++; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, query, stamp]);
+  }, [open, query, stamp, project]);
 
   // Rows only change through load(), which drops a page fetched for an old search.
   useEffect(() => {
-    closedShown = { query, rows, total };
+    closedShown = { query, project, rows, total };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, total]);
 

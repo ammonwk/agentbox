@@ -18,13 +18,16 @@ import { submitWithReceipt, sendReceipt } from "../send-receipts";
 import type { TimelineEvent } from "../types";
 import { getRepoById, getSessionRecord } from "../db";
 
-type LocalAgent = {
+export type LocalAgent = {
   id: string;
   name: string;
   role: string;
   instructions: string;
   provider: "codex" | "claude" | "muse";
   repo: string | null;
+  /** Immutable navigation scope for project instances; legacy general agents have none. */
+  project?: string;
+  sessionProjects?: Record<string, string | null>;
   session: string | null;
   previous: string[];
   enabled: boolean;
@@ -51,10 +54,11 @@ export class AgentConversations {
     );
     return db;
   }
-  local(): LocalAgent[] {
+  local(project?: string): LocalAgent[] {
+    if (project && !getRepoById(project)) throw new FleetError(404, "Project is no longer registered");
     const db = this.db;
     for (const t of AGENT_TEMPLATES) {
-      const id = `local-${t.name.toLowerCase()}`;
+      const id = `local-${t.name.toLowerCase()}${project ? `-project-${encodeURIComponent(project)}` : ""}`;
       db.run("INSERT OR IGNORE INTO local_agents(id,body) VALUES (?,?)", [
         id,
         JSON.stringify({
@@ -63,7 +67,9 @@ export class AgentConversations {
           role: t.definition.role,
           instructions: t.definition.instructions,
           provider: "codex",
-          repo: null,
+          repo: project ?? null,
+          ...(project ? { project } : {}),
+          sessionProjects: {},
           session: null,
           previous: [],
           enabled: true,
@@ -103,6 +109,8 @@ export class AgentConversations {
         .parse(input);
       const a = this.local().find((x) => x.id === id);
       if (!a) throw new FleetError(404, "Agent not found");
+      if (a.project && p.repo !== a.project)
+        throw new FleetError(409, "Project agents keep separate conversations; switch projects to use another instance");
       if (p.repo && !getRepoById(p.repo))
         throw new FleetError(400, "Choose a registered repository");
       if (a.session && (a.provider !== p.provider || a.repo !== p.repo)) {
@@ -132,6 +140,7 @@ export class AgentConversations {
             409,
             "Previous session has not stopped; binding unchanged",
           );
+        a.sessionProjects = { ...a.sessionProjects, [old]: a.repo };
         a.previous = [old, ...a.previous];
         a.session = null;
       }
@@ -185,6 +194,7 @@ export class AgentConversations {
       const fresh = !a.session && !prior;
       if (fresh) {
         a.session = newSessionId();
+        a.sessionProjects = { ...a.sessionProjects, [a.session]: a.repo };
         this.put(a);
       }
       const sid = prior?.session ?? a.session!;

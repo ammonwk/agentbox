@@ -21,6 +21,12 @@ import { Skills } from "./views/Skills";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
+import { request } from "./api";
+import { useLoad } from "./lib/cloud";
+import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
+import { ProjectSwitcher } from "./ProjectSwitcher";
+import { restoreScope, selectScope, scopeOf } from "./route";
+import type { LocalAgent } from "../../src/core/agents/conversation";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -33,11 +39,12 @@ const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice
 // ----------------------------------------------------------------- routing
 
 function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
-  const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
+  const [route, setRoute] = useState<Route>(() => { restoreScope(); return parseHash(location.hash); });
 
   useEffect(() => {
     const onChange = () => setRoute(parseHash(location.hash));
     addEventListener("hashchange", onChange);
+    addEventListener("popstate", onChange);
     const off = onGo(onChange);
     // Normalise "" and anything unrecognised without adding a history entry.
     if (hrefOf(parseHash(location.hash)) !== location.hash) {
@@ -45,6 +52,7 @@ function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
     }
     return () => {
       removeEventListener("hashchange", onChange);
+      removeEventListener("popstate", onChange);
       off();
     };
   }, []);
@@ -96,11 +104,27 @@ export function App() {
   }, []);
   const theme = useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const scope = useScope();
+  const project = state?.repos.find((r) => r.id === scope.project) ?? null;
+  const localAgents = useLoad(() => request<LocalAgent[]>("GET", "/api/agents/local"), []);
+  useEffect(() => { const t = setInterval(() => void localAgents.reload(), 10000); return () => clearInterval(t); }, [localAgents.reload]);
+  const agents = localAgents.data ?? [];
+  const scoped = useMemo(() => state ? scopedState(state, scope.project, agents) : null, [state, scope.project, localAgents.data]);
+  const staleProject = !!state && !!scope.project && !project;
+  const selectedSession = route.page === "session" ? state?.sessions.find((s) => s.id === route.id) : null;
+  useEffect(() => {
+    if (selectedSession && !scopeOf().has("project") && localAgents.data) {
+      selectScope("project", sessionProject(state!.repos, agents, selectedSession), route, true);
+    }
+  }, [selectedSession?.id, localAgents.data]);
+  const wrongSession = scope.project && selectedSession && sessionProject(state!.repos, agents, selectedSession) !== scope.project;
+  const projectName = project?.displayName ?? (staleProject ? "Unavailable project" : "All projects");
   const nav = navOf(route);
   // The start of the system bar, where an open session puts its facts.
   const [sysbarSlot, setSysbarSlot] = useState<HTMLElement | null>(null);
 
-  const counts = useMemo(() => countsOf(state), [state]);
+  const counts = useMemo(() => countsOf(scoped), [scoped]);
 
   const contentRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -149,7 +173,7 @@ export function App() {
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
-    <div className="app" data-page={route.page}>
+    <ProjectContext.Provider value={{ repos: state?.repos ?? [], agents }}><div className="app" data-page={route.page}>
       <a className="skip" href="#content">
         Skip to content
       </a>
@@ -158,15 +182,15 @@ export function App() {
           itself widens over the page on hover, so nothing beside it reflows. */}
       <div className="sidebar-slot">
         <aside className="sidebar" data-nav-region="navigation" aria-label="Application navigation">
-          <div className="brand">
+          <button type="button" className="brand project-brand" aria-label={`Switch project: ${projectName}`} title={`Switch project · ${projectName}`} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
             <BrandMark />
-            <span className="nav-label">agentbox</span>
+            <span className="nav-label">{projectName}</span>
             {MOCK ? (
               <span className="mock-tag" title="Opened with ?mock=1 — nothing here is real and nothing is sent anywhere">
                 mock
               </span>
             ) : null}
-          </div>
+          </button>
 
           {/* Blurring on a mouse click (e.detail > 0) keeps the Modal from
               handing focus back here on close: a script refocus outside the
@@ -224,6 +248,7 @@ export function App() {
       </div>
 
       <div className="main">
+        <div className="project-bar"><button type="button" aria-label={`Switch project: ${projectName}`} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}><BrandMark /><span>{projectName}</span><Icon.chevronDown size={12} /></button>{["accounts", "settings", "skills", "mcps", "team", "voice"].includes(route.page) && <span className="hint">{route.page === "team" ? "Workspace settings" : "Global settings and tools"}</span>}</div>
         {/* The sessions pages carry their own header — the board's filter bar,
             the session's title — so a page title above them is a second one. */}
         {flush ? null : (
@@ -258,9 +283,15 @@ export function App() {
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
+            ) : staleProject && ["agents", "session", "sessions", "review"].includes(route.page) ? (
+              <Empty title="This project is no longer registered"><p>Your conversations and work remain in All projects.</p><Button onClick={() => selectScope("project", null)}>All projects</Button></Empty>
+            ) : wrongSession ? (
+              <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", sessionProject(state.repos, agents, selectedSession!), route)}>Open in its project</Button></Empty>
             ) : route.page === "sessions" || route.page === "session" ? (
               <SessionView
+                key={scope.project ?? "all"}
                 state={state}
+                visible={scoped!}
                 id={route.page === "session" ? route.id : null}
                 tab={route.page === "session" ? route.tab : "timeline"}
                 onTab={(tab) => route.page === "session" && navigate({ page: "session", id: route.id, tab }, true)}
@@ -274,7 +305,7 @@ export function App() {
                 onNew={() => setNewOpen(true)}
               />
             ) : route.page === "agents" ? (
-              <Suspense fallback={<Empty title="Loading…" />}><Agents state={state} id={route.id} /></Suspense>
+              <Suspense fallback={<Empty title="Loading…" />}><Agents key={`${scope.workspace}:${scope.project ?? "all"}`} state={state} id={route.id} /></Suspense>
             ) : route.page === "accounts" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
                 <Accounts state={state} route={route} />
@@ -284,7 +315,7 @@ export function App() {
                 <Voice />
               </Suspense>
             ) : route.page === "review" ? (
-              <Review state={state} />
+              <Review key={scope.project ?? "all"} state={scoped!} />
             ) : route.page === "skills" ? (
               <Skills skills={state.skills} />
             ) : route.page === "team" ? (
@@ -303,9 +334,12 @@ export function App() {
         </ErrorBoundary>
       </div>
 
+      {switcherOpen && state && <ProjectSwitcher repos={state.repos} selected={scope.project} onClose={() => setSwitcherOpen(false)} />}
       {newOpen && state ? (
         <ErrorBoundary label="The new-session dialog">
           <NewSession
+            key={scope.project ?? "all"}
+            project={project?.id ?? null}
             state={state}
             onClose={() => setNewOpen(false)}
             onCreated={(id) => {
@@ -320,7 +354,7 @@ export function App() {
           />
         </ErrorBoundary>
       ) : null}
-    </div>
+    </div></ProjectContext.Provider>
   );
 }
 

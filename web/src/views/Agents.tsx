@@ -25,7 +25,8 @@ import {
   useCloudUser,
   useLoad,
 } from "../lib/cloud";
-import { go } from "../route";
+import { go, selectScope } from "../route";
+import { useScope } from "../lib/projects";
 import "./agents.css";
 import { LocalAgentSpace, SharedAgentSpace } from "./AgentSpace";
 
@@ -86,13 +87,13 @@ function Connected({
   if (!human || !user.ready) return <Empty title="Loading your workspace…" />;
   if (!user.userId)
     return (
-      <Empty title="Sign in to see your shared agents">
+      <><Empty title="Sign in to see your shared agents">
         <p>
           Your workspace identity controls authoring, execution requests and
           outreach preferences.
         </p>
         <Button onClick={() => go({ page: "team" })}>Sign in on Team</Button>
-      </Empty>
+      </Empty><LocalAgentSpace state={state} /></>
     );
   return (
     <Directory
@@ -120,9 +121,10 @@ function Directory({
 }) {
   const api = useMemo(() => new HumanAgents(human), [human]);
   const me = useLoad(() => human.me(), [human]);
-  const [workspace, setWorkspace] = useState(
-    status.installation?.workspaceId ?? "",
-  );
+  const scope = useScope();
+  const project = state.repos.find((r) => r.id === scope.project);
+  const workspace = scope.workspace || status.installation?.workspaceId || "";
+  const setWorkspace = (id: string) => selectScope("workspace", id);
   const [filter, setFilter] = useState("team");
   const [editing, setEditing] = useState<SharedAgent | AgentDefinition | null>(
     null,
@@ -170,6 +172,7 @@ function Directory({
     }
   };
   const selected = data.data?.board.agents.find((a) => a.id === id);
+  const inProject = (a: SharedAgent) => !scope.project || !!project && a.definition.repos.some((slug) => slug.toLowerCase() === (project.fullName ?? (project.kind === "github" ? project.ref : "")).toLowerCase());
   const person = (id: string | null) =>
     !id
       ? "Unassigned"
@@ -177,7 +180,9 @@ function Directory({
           ?.display_name ||
         data.data?.members.find((m) => m.user_id === id)?.person?.email ||
         id.slice(0, 8);
-  if (!me.data) return <Empty title={me.error ?? "Loading workspaces…"} />;
+  if (me.error || data.error) return <Empty title="Workspace unavailable">{me.error ?? data.error}<Button onClick={() => { void me.reload(); void data.reload(); }}>Retry</Button></Empty>;
+  if (!me.data) return <Empty title="Loading workspaces…" />;
+  if (selected && !inProject(selected)) return <Empty title="This shared agent works in other projects"><Button onClick={() => selectScope("project", null, { page: "agents", id: selected.id })}>Open in All projects</Button></Empty>;
   if (!me.data.memberships.length)
     return (
       <Empty title="Create or join a workspace first">
@@ -259,6 +264,7 @@ function Directory({
               </span>
               <h2>{selected.name}</h2>
               <p>{selected.definition.role}</p>
+              <p className="hint">Repositories: {selected.definition.repos.join(", ") || "None configured"}. One shared conversation across this agent’s scope.</p>
             </div>
             <div className="agents-buttons">
               <span className={`agent-pill ${selected.enabled ? "on" : ""}`}>
@@ -387,6 +393,7 @@ function Directory({
                   AgentDefinition.parse({
                     role: "Custom responsibility",
                     instructions: "",
+                    repos: project?.fullName ? [project.fullName] : project?.kind === "github" ? [project.ref] : [],
                   }),
                 );
               }}
@@ -396,7 +403,7 @@ function Directory({
           </div>
           <div className="agent-directory">
             {data.data?.board.agents
-              .filter((a) => filter !== "mine" || a.maintainers.includes(user))
+              .filter((a) => inProject(a) && (filter !== "mine" || a.maintainers.includes(user)))
               .map((a) => {
                 const runs = data.data!.board.runs.filter(
                     (r) => r.agent_id === a.id && active(r.state),
@@ -425,6 +432,7 @@ function Directory({
                     </div>
                     <h3>{a.name}</h3>
                     <p>{a.definition.role}</p>
+                    <small>{a.definition.repos.join(", ") || "No repositories configured"}</small>
                     <div className="agent-directory-meta">
                       <span>
                         {a.team
@@ -452,11 +460,12 @@ function Directory({
           <Templates
             onChoose={(template) => {
               setName(template.name);
-              setEditing(template.definition);
+              setEditing({ ...template.definition, repos: project?.fullName ? [project.fullName] : project?.kind === "github" ? [project.ref] : template.definition.repos });
             }}
           />
         </>
       )}
+      {!id && !editing && <details className="card agent-section"><summary>Local agents on this machine</summary><LocalAgentSpace state={state} /></details>}
       {data.data && (
         <details className="card agent-section">
           <summary>My expertise and contact preferences</summary>

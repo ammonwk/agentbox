@@ -33,6 +33,8 @@ import { isInstalledApp, useIsPhone } from "../../lib/phone";
 import { useSysbarSlot } from "../../sysbarslot";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
+import { useScope, useProjectData, sessionProject } from "../../lib/projects";
+import { selectScope } from "../../route";
 import { ago, fmtRetryAt } from "../../lib/format";
 import { outstandingOf, sortWindows } from "../../lib/usage";
 import { useDismiss, useFloating } from "../newsession/popover";
@@ -62,6 +64,7 @@ const TAB_LABEL: Record<SessionTab, string> = {
  */
 export function SessionView({
   state,
+  visible = state,
   id,
   tab,
   onTab,
@@ -69,6 +72,8 @@ export function SessionView({
   onNew,
 }: {
   state: AppState;
+  /** Scope the list without hiding running descendants from close/stop warnings. */
+  visible?: AppState;
   id: string | null;
   tab: SessionTab;
   onTab: (t: SessionTab) => void;
@@ -101,6 +106,8 @@ export function SessionView({
   }, [missing, id]);
   const narrow = useIsNarrow();
   const list = useListState();
+  const scope = useScope();
+  const projectData = useProjectData();
   const { filter, sort, view, open, setOpen, hovered, focused } = list;
   // Moves a session to Inactive once its last activity is 3 hours old, with no new state frame.
   const now = useNow(60_000);
@@ -120,7 +127,7 @@ export function SessionView({
   // sight. Closed ones are not here: they have their own list under Inactive.
   const { sections, counts } = useMemo(() => {
     const rows = filterSessions(
-      state.sessions.filter((s) => s.status !== "closed" && !closing.has(s.id)),
+      visible.sessions.filter((s) => s.status !== "closed" && !closing.has(s.id)),
       filter,
     );
     const tabs = splitActive(rows, now);
@@ -129,15 +136,15 @@ export function SessionView({
       sections: sectionsOf(tabs[view], (x) => open.has(x) || above.has(x), sort),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
     };
-  }, [state.sessions, above, filter, sort, view, now, open, closing]);
+  }, [visible.sessions, above, filter, sort, view, now, open, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
-    return state.schedules
+    return visible.schedules
       .filter((s) => !isRecurring(s.rule) && !closing.has(s.id))
       .filter((s) => !q || `${s.label ?? ""} ${s.spec.prompt ?? ""} ${s.id}`.toLowerCase().includes(q))
       .sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity));
-  }, [state.schedules, filter.query, closing]);
+  }, [visible.schedules, filter.query, closing]);
   const cancelSchedule = (sc: Schedule) => {
     hideWhile(sc.id, scheduleTitle(sc), "cancel", api.deleteSchedule(sc.id));
     if (sc.id !== id) return;
@@ -167,7 +174,7 @@ export function SessionView({
   // reopen it and open it. Pressed again it reopens the one before, since
   // the one just reopened is closed no more.
   const reopenLast = () => {
-    api.closed("", 0, 1).then((page) => {
+    api.closed("", 0, 1, scope.project).then((page) => {
       const s = page.sessions[0];
       if (!s) return;
       forget(s.id);
@@ -261,6 +268,7 @@ export function SessionView({
   const [railW, setRailW] = useRailWidth();
   const showRail = !narrow || !id;
   const showMain = !narrow || !!id;
+  if (session && scope.project && sessionProject(projectData.repos, projectData.agents, session) !== scope.project) return <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", sessionProject(projectData.repos, projectData.agents, session), { page: "session", id: session.id, tab })}>Open in its project</Button></Empty>;
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
@@ -280,7 +288,7 @@ export function SessionView({
         </div>
       ) : (
         <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main sv-none">
-          {state.sessions.length === 0 && scheduled.length === 0 ? (
+          {visible.sessions.length === 0 && scheduled.length === 0 ? (
             <Empty
               title="No sessions yet"
               action={

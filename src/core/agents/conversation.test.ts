@@ -284,3 +284,26 @@ test("changing conversation cannot silently authorize an old recommendation in a
     ).state,
   ).toBe("dismissed");
 });
+
+test("project identity cannot be rebound or consume another project's recommendation", async () => {
+  for (const id of ["alpha", "beta"]) insertRepo({ id, kind: "local", ref: join(home, id), displayName: id, fullName: `fixture/${id}`, defaultBranch: "main", addedAt: Date.now(), worktreeDefault: true, setup: { copy: [], run: "" } });
+  const a = conversations.local("alpha").find((a) => a.project === "alpha" && a.name === "VULCAN")!;
+  const b = conversations.local("beta").find((a) => a.project === "beta" && a.name === "VULCAN")!;
+  expect(a.id).not.toBe(b.id);
+  expect(spawns).toHaveLength(0);
+  expect(stopped).toBe(0);
+  expect(new AgentConversations(runtime).local("alpha").filter((x) => x.id === a.id)).toHaveLength(1);
+  await expect(conversations.configure(a.id, { provider: "codex", repo: "beta", enabled: true })).rejects.toThrow("separate conversations");
+  for (const agent of [a, b]) {
+    agent.session = `session-${agent.project}`;
+    store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(agent), agent.id]);
+  }
+  const p = await conversations.propose(a.id, a.session, crypto.randomUUID(), { title: "Alpha only", finding: "Alpha failure", reason: "Fix Alpha", next: "Edit Alpha", evidence: [] });
+  await expect(conversations.propose(b.id, a.session, crypto.randomUUID(), { title: "Wrong project", finding: "Alpha", reason: "Alpha", next: "Edit Beta", evidence: [] })).rejects.toThrow();
+  await expect(conversations.localDecide(b.id, p.id, "approved", crypto.randomUUID())).rejects.toThrow();
+  await expect(conversations.localSend(b.id, crypto.randomUUID(), "Approve Alpha", { proposal: p.id, run: a.session! })).rejects.toThrow();
+  expect(conversations.localProposals(b.id)).toEqual([]);
+  expect(conversations.local().find((x) => x.id === a.id)?.session).toBe(a.session);
+  expect(spawns).toHaveLength(0);
+  expect(stopped).toBe(0);
+});

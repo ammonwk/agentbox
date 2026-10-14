@@ -135,16 +135,9 @@ export function SharedAgentSpace({
     />
   );
 }
-type LocalAgent = {
-  id: string;
-  name: string;
-  role: string;
-  instructions: string;
-  provider: string;
-  repo: string | null;
-  session: string | null;
-  enabled: boolean;
-};
+import type { LocalAgent } from "../../../src/core/agents/conversation";
+import { useScope } from "../lib/projects";
+import { selectScope, scopeOf } from "../route";
 export function LocalAgentSpace({
   state,
   id,
@@ -152,11 +145,15 @@ export function LocalAgentSpace({
   state: AppState;
   id?: string;
 }) {
+  const { project } = useScope();
   const agents = useLoad(
-    () => request<LocalAgent[]>("GET", "/api/agents/local"),
-    [],
+    () => project ? request<LocalAgent[]>("POST", "/api/agents/local/project", { repo: project }) : request<LocalAgent[]>("GET", "/api/agents/local"),
+    [project],
   );
   const selected = agents.data?.find((a) => a.id === id);
+  useEffect(() => {
+    if (selected && !scopeOf().has("project")) selectScope("project", selected.repo, { page: "agents", id: selected.id }, true);
+  }, [selected?.id]);
   const transport = useMemo<Transport>(
     () => ({
       read: (cursor) => request("POST", `/api/agents/local/${id}/read`, cursor),
@@ -188,6 +185,8 @@ export function LocalAgentSpace({
   if (agents.error)
     return <Empty title="Could not load local agents">{agents.error}</Empty>;
   if (!agents.data) return <Empty title="Loading agents…" />;
+  if (selected && project && selected.repo !== project) return <Empty title="This agent belongs to another project"><Button onClick={() => selectScope("project", selected.repo, { page: "agents", id: selected.id })}>Open in its project</Button></Empty>;
+  if (id && !selected) return <Empty title="Agent not found" />;
   if (!selected)
     return (
       <div className="agents-page agent-local-directory">
@@ -199,13 +198,14 @@ export function LocalAgentSpace({
           </p>
         </div>
         <div className="agent-directory">
-          {agents.data.map((a) => (
+          {agents.data.filter((a) => !project || a.repo === project).map((a) => (
             <a
               key={a.id}
               href={`#/agents/${a.id}`}
               className="card agent-directory-card"
             >
               <h3>{a.name}</h3>
+              <span className="hint">{state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General conversation")}</span>
               <p>{a.role}</p>
               <span className="hint">
                 {a.session ? "Continue conversation" : "Start chatting"} →
@@ -254,7 +254,7 @@ export function LocalAgentSpace({
                 `/api/agents/local/${selected.id}/configure`,
                 {
                   provider: data.get("provider"),
-                  repo: data.get("repo") || null,
+                  repo: selected.project ?? (data.get("repo") || null),
                   enabled: data.get("enabled") === "on",
                 },
               )
@@ -275,15 +275,14 @@ export function LocalAgentSpace({
               </select>
             </label>
             <p className="hint">
-              Changing provider or repository after a conversation starts
-              preserves its history and starts a fresh session once the current
-              turn is idle.
+              {selected.project ? "This agent stays in its project. Switch projects to use a separate conversation. Changing provider preserves history and starts a fresh session when idle." : "Changing provider or repository preserves history and starts a fresh session when idle. General conversations remain available in All projects."}
             </p>
             <label>
               Repository
               <select
                 className="input"
                 name="repo"
+                disabled={!!selected.project}
                 defaultValue={selected.repo ?? ""}
               >
                 <option value="">Conversation only</option>
