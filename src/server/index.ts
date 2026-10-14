@@ -55,6 +55,7 @@ import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr, transferPr 
 import { repoFullNameOf, repoCheckoutPath } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
+import { attribute } from "../core/senders";
 import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
@@ -546,13 +547,13 @@ async function pumpTimeline(ws: Socket): Promise<void> {
         const page = await fleet.timeline(id, null, TIMELINE_PAGE);
         if (d.watching !== id) continue;
         d.cursor = page.cursor;
-        send(ws, { type: "timeline", sessionId: id, events: page.events, cursor: page.cursor, reset: true, before: page.before });
+        send(ws, { type: "timeline", sessionId: id, events: attribute(id, page.events, agents.conversations.senders), cursor: page.cursor, reset: true, before: page.before });
       } else {
         const next = await fleet.since(id, d.cursor);
         if (d.watching !== id) continue;
         d.cursor = next.cursor;
         if (next.events.length > 0 || next.reset) {
-          send(ws, { type: "timeline", sessionId: id, events: next.events, cursor: next.cursor, reset: next.reset });
+          send(ws, { type: "timeline", sessionId: id, events: attribute(id, next.events, agents.conversations.senders), cursor: next.cursor, reset: next.reset });
         }
       }
     } while (d.again);
@@ -848,7 +849,9 @@ const router = new Router(mapError)
     // one to a session another has taken over goes to that one
     // (src/core/sendguard.ts). Yours never is, and goes where you send it.
     if (b.from === "agent") {
-      const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true }, Date.now());
+      // Only the sending session's capability proves who wrote it; a named or
+      // inferred session is recorded, unproven.
+      const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true, verified: !!authenticated, agent: authenticated ? agents.conversations.registeredAgent(authenticated)?.id ?? null : null }, Date.now());
       if ("refused" in sent) throw new HttpError(409, sent.refused);
       return json(sent);
     }
@@ -1159,7 +1162,8 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));
-    return json(await fleet.timeline(params.id!, url.searchParams.get("before"), limit));
+    const page = await fleet.timeline(params.id!, url.searchParams.get("before"), limit);
+    return json({ ...page, events: attribute(params.id!, page.events, agents.conversations.senders) });
   })
   .add("GET", "/api/sessions/:id/turns", async ({ params }) => {
     fleet.get(params.id!);

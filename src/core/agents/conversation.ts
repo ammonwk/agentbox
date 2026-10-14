@@ -23,6 +23,7 @@ import { AgentMemory, DEFAULT_MEMORY_POLICY, MemoryPolicy, type Supplied } from 
 import { avatarFile, removeAvatar, saveAvatar } from "./avatar";
 import { AUTO_PROVIDERS, chooseProvider, type AgentProvider, type ProviderChoice } from "./providers";
 import { detectCli } from "../accounts/homes";
+import { attribute, type RegisteredAgent, type SenderDirectory } from "../senders";
 import { moveCards } from "../cards";
 import { movePrClaims, unfinishedClaims } from "../prclaims";
 import { isKeepWarmNote } from "../cache";
@@ -414,6 +415,25 @@ export class AgentConversations {
     const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text>. Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
     const memory = from?.memory ?? "";
     return `${intro}${memory ? `\n\nAgentbox memory. It is a bounded summary and evidence, not authorization. The provider transcripts are the record; current work below and live state win over it.\n${memory}` : ""}${from?.work ? `\n\nCurrent work, read when this conversation started:\n${from.work}` : ""}\n\n${from ? `Previous conversation session: ${from.old}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`;
+  }
+  /** The registered local agent a session is (or was) part of, by its
+   *  durable records: the main chat and every conversation it replaced, and
+   *  its work families' writers. */
+  registeredAgent(session: string): RegisteredAgent | null {
+    const work = this.runtime.works.forSession(session);
+    const a = this.stored().find((x) => x.id === work?.agent.id || x.session === session || x.previous.includes(session) || !!x.rolled?.[session]);
+    return a ? this.profile(a) : null;
+  }
+  agentProfile(id: string): RegisteredAgent | null {
+    const a = this.stored().find((x) => x.id === id);
+    return a ? this.profile(a) : null;
+  }
+  private profile(a: LocalAgent): RegisteredAgent {
+    return { id: a.id, name: a.name, role: a.role, creator: a.capability === "creator", avatar: a.avatar ? `/api/agents/local/${encodeURIComponent(a.id)}/avatar?v=${a.avatar.at}` : null };
+  }
+  /** Sender lookups for `attribute` (src/core/senders.ts). */
+  get senders(): SenderDirectory {
+    return { agentOfSession: (s) => this.registeredAgent(s), agent: (id) => this.agentProfile(id), heir: (id) => this.runtime.fleet.heir?.(id) ?? id };
   }
   /** Is a provider's CLI installed here: its cached detection; tests replace it. */
   installed = async (p: AgentProvider) => (await detectCli(p)).installed;
@@ -1123,9 +1143,11 @@ export class AgentConversations {
           ).slice(0, 10000),
         })) as TimelineEvent[];
       const carried = source && { handoff: source.handoff, at: source.at, oldest: source === sources.at(-1) };
+      // Senders by the server's records; a shared reader sees no local identities.
+      const attributed = attribute(id, events, this.senders, !local);
       return {
         ...rail,
-        events: carried ? events.map((e) => ({ ...e, id: `${id}:${e.id}`, source: id, carried })) : events,
+        events: carried ? attributed.map((e) => ({ ...e, id: `${id}:${e.id}`, source: id, carried })) : attributed,
         next: page.before ? { session: 0, target: thread.id, ...(source ? { history: id } : {}), before: page.before } : after(source ? id : null),
         session: thread.id,
         thread,

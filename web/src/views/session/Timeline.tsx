@@ -19,6 +19,7 @@ import { hrefOf } from "../../route";
 import { readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
+import { AgentAvatar, NeutralAgent } from "../AgentAvatar";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -558,13 +559,13 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
   return (
     <div className={`tl-user tl-sent tl-sent-fold${open ? " is-open" : ""}${queued ? " tl-queued" : ""}`} data-ev={ev.id}>
       <button type="button" className="tl-sent-toggle" aria-expanded={open} aria-controls={bodyId} title={open ? "Hide the message" : "Show who sent it and the whole message"} onClick={() => setOpen(!open)}>
-        <Icon.send size={12} /> <span className="tl-sent-label">agentbox</span>
+        {ev.sender ? <SenderBadge sender={ev.sender} claimed={sent.from} /> : <><Icon.send size={12} /> <span className="tl-sent-label">agentbox</span></>}
         {open ? null : queuedNote}
       </button>
       {open ? (
         <div id={bodyId} className="tl-sent-full">
           <div className="tl-who">
-            <Party name={sent.from} />
+            {ev.sender?.kind === "agent" || ev.sender?.kind === "session" ? <Party name={ev.sender.session} /> : ev.sender ? null : <Party name={sent.from} />}
             {sent.via ? <span className="tl-via">via {sent.via}</span> : null}
             {queuedNote}
             <time className="tl-time">{fmtHourMin(ev.at)}</time>
@@ -585,6 +586,35 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Who sent a message that came in through the user role, as the server
+ * proved it: a registered agent with its picture (or its own icon), another
+ * agent session, agentbox itself, or an unverified mark, which never takes a
+ * name or picture from its own text. Shown folded or open.
+ */
+function SenderBadge({ sender, claimed }: { sender: NonNullable<Extract<TimelineEvent, { kind: "user" }>["sender"]>; claimed: string | null }) {
+  const face =
+    sender.kind === "agent" && sender.agent ? (
+      <AgentAvatar role={sender.agent.role} creator={sender.agent.creator} src={sender.agent.avatar} size={20} />
+    ) : (
+      <span className={`tl-sender-face tl-sender-${sender.kind}`} aria-hidden="true">
+        {sender.kind === "system" || sender.kind === "schedule" ? <Icon.send size={11} /> : <NeutralAgent size={12} />}
+      </span>
+    );
+  const title =
+    sender.kind === "unverified"
+      ? `agentbox has no record of this message being sent${claimed ? ` (it names ${claimed})` : ""}; its text is shown as written`
+      : sender.kind === "agent" || sender.kind === "session"
+        ? `Sent by ${sender.label}${sender.session ? ` (${sender.session})` : ""}`
+        : sender.label;
+  return (
+    <span className={`tl-sender-badge tl-sender-kind-${sender.kind}`} title={title}>
+      {face}
+      <span className="tl-sent-label">{sender.label}</span>
+    </span>
   );
 }
 

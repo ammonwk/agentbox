@@ -625,8 +625,22 @@ export interface Attention {
  * A provider-neutral transcript event. Each adapter folds its own format into
  * these; the UI renders only these.
  */
+/** Who sent a message that came in through the provider's user role, as the
+ *  server verified it (src/core/senders.ts); absent on your own messages. */
+export interface SenderView {
+  /** agent: a registered agent; session: another agent session; system and
+   *  schedule: agentbox's own notes; cloud: another installation, as the
+   *  cloud vouches; peer: Claude's own delivery between its sessions;
+   *  unverified: a mark the server has no matching record of. */
+  kind: "agent" | "session" | "system" | "schedule" | "cloud" | "peer" | "unverified";
+  label: string;
+  /** The sending session, when known and in scope. */
+  session: string | null;
+  agent?: { id: string; name: string; role: string; creator: boolean; avatar: string | null };
+}
+
 export type TimelineEvent = { id: string; at: number } & (
-  | { kind: "user"; text: string; images?: number }
+  | { kind: "user"; text: string; images?: number; sender?: SenderView }
   | { kind: "assistant"; text: string }
   | { kind: "thinking"; text: string }
   | {

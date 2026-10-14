@@ -1020,7 +1020,8 @@ export class AgentWorks {
       this.runtime.fleet,
       g.requester,
       `[${w.agent.name} work ${w.id}] ${body}`,
-      { from: w.session, wake: false },
+      // The writer's identity is the server's own record of the work.
+      { from: w.session, wake: false, verified: true, agent: w.agent.id },
       Date.now(),
     );
     if ("refused" in result) throw new FleetError(409, result.refused);

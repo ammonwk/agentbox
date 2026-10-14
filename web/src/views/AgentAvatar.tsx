@@ -4,6 +4,7 @@ import { Cloud } from "@phosphor-icons/react/dist/csr/Cloud";
 import { Heartbeat } from "@phosphor-icons/react/dist/csr/Heartbeat";
 import { Sparkle } from "@phosphor-icons/react/dist/csr/Sparkle";
 import { Brain } from "@phosphor-icons/react/dist/csr/Brain";
+import { Robot } from "@phosphor-icons/react/dist/csr/Robot";
 
 /** Each agent's own icon, from what it does: Jupiter creates, Caelus
  *  releases, Salus watches health, Vulcan fixes; anything else thinks.
@@ -29,6 +30,11 @@ export function AgentAvatar({ role, creator, src, size = 34, className }: { role
       <Glyph size={Math.round(size * 0.55)} weight="duotone" aria-hidden="true" focusable="false" />
     </span>
   );
+}
+
+/** An agent that is not a registered one, or not proven to be: never anyone's picture. */
+export function NeutralAgent({ size = 12 }: { size?: number }) {
+  return <Robot size={size} aria-hidden="true" focusable="false" />;
 }
 
 export const localAvatarUrl = (agent: { id: string; avatar?: { at: number } }) =>
