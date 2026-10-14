@@ -535,7 +535,8 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
     const images = ev.images ? `${ev.images} image${ev.images === 1 ? "" : "s"}` : null;
     return (
       <Bubble id={ev.id} at={ev.at} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : null].filter(Boolean).join(" · ")} copy={sent.text}>
-        {body}
+        {/* A long brief is its first lines; the rest on a click. */}
+        <Clamp lines={14}>{body}</Clamp>
       </Bubble>
     );
   }

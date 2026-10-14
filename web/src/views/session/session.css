@@ -1293,13 +1293,14 @@ a.tl-sender:hover .tl-sender-name {
   background: color-mix(in srgb, var(--accent) 14%, var(--panel));
   color: var(--text);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
-/* The dark theme's accents are light: deepened, they keep white text at 4.5:1. */
+/* A tint, not a slab: a long brief in a saturated block was a wall of colour,
+ * and the dark theme's light accents need no white text on a tint this faint. */
 [data-theme="dark"] .tl-bubble {
-  background: color-mix(in srgb, var(--accent) 58%, #0b0b0e);
-  color: #fff;
+  background: color-mix(in srgb, var(--accent) 16%, var(--raised));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .tl-bubble .sx-md > :first-child {
   margin-top: 0;
@@ -1310,6 +1311,7 @@ a.tl-sender:hover .tl-sender-name {
 .tl-bubble a {
   color: inherit;
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 70%, transparent);
 }
 .tl-bubble .tl-paste {
   border-color: color-mix(in srgb, currentColor 25%, transparent);
@@ -1989,13 +1991,17 @@ a.tl-sender:hover .tl-sender-name {
 .sx-md ul, .sx-md ol { margin: 0 0 10px; padding-left: 22px; }
 .sx-md li { margin: 3px 0; }
 .sx-md a { color: var(--accent); text-underline-offset: 2px; }
+/* Inline code is a tint of whatever it sits on — prose, a bubble, a card —
+ * with no border, so chips on neighbouring lines do not touch, and one that
+ * wraps keeps its padding and corners on each line. */
 .sx-md code {
   font-family: var(--mono);
-  font-size: 12px;
-  background: var(--sunken);
-  border: 1px solid var(--border);
+  font-size: 0.87em;
+  background: color-mix(in srgb, currentColor 9%, transparent);
   border-radius: 4px;
-  padding: 1px 4px;
+  padding: 0.1em 0.35em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 .sx-md pre {
   margin: 0 0 10px;
@@ -2013,6 +2019,24 @@ a.tl-sender:hover .tl-sender-name {
 .sx-filelink > svg { display: inline; vertical-align: -2px; margin-right: 4px; opacity: .7; }
 .sx-md a.sx-filelink code { color: inherit; cursor: pointer; }
 .sx-md a.sx-desktoplink code { color: inherit; cursor: pointer; }
+/* A path in code is one chip, its folder inside it, moving to the next line
+ * whole: no underline under the chip, and no icon left behind at the end of
+ * a line. Hover says it opens. */
+.sx-md a.sx-filelink:has(> code) {
+  display: inline-block;
+  max-width: 100%;
+  line-height: 1.4;
+  text-decoration: none;
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 0.87em;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  border-radius: 4px;
+  padding: 0 0.35em;
+}
+.sx-md a.sx-filelink:has(> code):hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.sx-md a.sx-filelink:has(> code) > svg { width: 1em; height: 1em; vertical-align: -0.12em; margin-right: 0.3em; opacity: 0.6; }
+.sx-md a.sx-filelink > code { font-size: inherit; background: none; padding: 0; }
 .sx-filelink[aria-disabled="true"], .sx-desktoplink[aria-disabled="true"] { cursor: progress; }
 .sx-filelink-error { color: var(--danger); font-size: 12px; }
 .sx-md blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
