@@ -8,14 +8,13 @@ import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
-import { recoverAgentDraft, draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, type AgentDraftContext, beginSend, updatePending, forgetPending } from "./drafts";
-import { PendingSends, deliverPending } from "./submissions";
+import { recoverAgentDraft, draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, type AgentDraftContext, updatePending, forgetPending } from "./drafts";
+import { PendingSends, deliverPending, submitPending } from "./submissions";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { useVoiceNote, voiceNotes } from "./voicenote";
 import { accountProvider } from "../../../../src/core/providers/account";
 import { ComposerInput, ComposerSend } from "./ComposerInput";
-import { chatSubmitted } from "./scroll";
 
 /** What the composer can do for a session, and the sentence that says so. */
 export type ComposerMode =
@@ -604,6 +603,7 @@ export function AgentComposer({
     () =>
       onDraftWork(() => {
         if (draftTaken(key, revision.current)) {
+          context.current = undefined;
           revision.current = newRevision();
           setText("");
           images.clear();
@@ -658,24 +658,22 @@ export function AgentComposer({
       error: null,
     };
     try {
-      await beginSend(p);
-      chatSubmitted(key);
-      context.current = undefined;
-      revision.current = newRevision();
-      setText("");
-      images.clear();
-      const r = await send(p.body, p.id, p.draft.agentContext);
-      if (r.state === "sent") await forgetPending(key, p.id);
-      else
-        await updatePending(p.id, {
-          state:
-            r.state === "refused"
-              ? "failed"
-              : r.state === "queued"
-                ? "pending"
-                : "unconfirmed",
-          error: r.result || null,
-        });
+      // onDraftWork clears only the revision taken by this send. Any newer
+      // typing (including its guidance context) remains a separate draft.
+      await submitPending(p, async () => {
+        const r = await send(p.body, p.id, p.draft.agentContext);
+        if (r.state === "sent") await forgetPending(key, p.id);
+        else
+          await updatePending(p.id, {
+            state:
+              r.state === "refused"
+                ? "failed"
+                : r.state === "queued"
+                  ? "pending"
+                  : "unconfirmed",
+            error: r.result || null,
+          });
+      });
     } catch (e) {
       const message = (e as Error).message;
       setError(message);
