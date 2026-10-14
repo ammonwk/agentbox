@@ -75,7 +75,10 @@ server starts, and again whenever it exits: at once if it ran a minute,
 otherwise after a backoff doubling to a minute. Its output is in
 `<agentbox home>/superagents/<name>/process.log` (`agentbox superagent log`).
 A restart of agentbox stops and starts it, so a program keeps what matters in
-its own store and picks up where it was. Its environment:
+its own store and picks up where it was. The restart stops what the program
+started too (under systemd, agentbox's whole unit stops), so long work that
+must not be cut in half runs as a session, or in a unit of its own
+(`systemctl --user start` of a oneshot). Its environment:
 
 | Variable | |
 |---|---|
