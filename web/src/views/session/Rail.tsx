@@ -1,5 +1,6 @@
 /** The session list beside whatever session is open: search, a sort, the
- *  Active and Inactive tabs, and one row per session. It is the whole
+ *  Active and Inactive tabs (unless the splitActive setting is off), and one
+ *  row per session. It is the whole
  *  Sessions page's list; on a narrow screen with nothing open it is the page. */
 
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
@@ -158,7 +159,7 @@ export function Rail({
   scheduled,
   onCancelSchedule,
 }: {
-  /** The sections of the tab `list.view` names. */
+  /** The sections of the tab `list.view` names, or of every row unsplit. */
   sections: Section<Nested<SessionRow>>[];
   /** Top-level rows in each tab, after the search. */
   counts: Record<RailView, number>;
@@ -187,6 +188,8 @@ export function Rail({
     [state.closedStamp, state.sessions],
   );
   const { filter, setFilter, sort, view } = list;
+  // Off, there are no tabs: one list, the scheduled at its top and the closed at its end.
+  const split = state.settings.splitActive;
   const cur = useRef<HTMLAnchorElement>(null);
   // Before paint, and before the effect below brings the open session into view.
   const scroller = useRef<HTMLDivElement>(null);
@@ -333,7 +336,7 @@ export function Rail({
         <BookmarksMenu sessions={visibleSessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
       </div>
-      <RailTabs view={view} counts={counts} onChange={list.setView} />
+      {split ? <RailTabs view={view} counts={counts} onChange={list.setView} /> : null}
 
       <div
         className="rail-scroll"
@@ -356,7 +359,7 @@ export function Rail({
         }}
       >
         <CloseFailure />
-        {view === "active" && scheduled.length ? (
+        {(!split || view === "active") && scheduled.length ? (
           <div className="rail-sec" data-kind="scheduled">
             <div className="rail-label">
               Scheduled <span>{scheduled.length}</span>
@@ -366,9 +369,13 @@ export function Rail({
             ))}
           </div>
         ) : null}
-        {rows.length === 0 && (view === "inactive" || scheduled.length === 0) ? (
+        {rows.length === 0 && ((split && view === "inactive") || scheduled.length === 0) ? (
           <p className="rail-none">
-            {filter.query ? `Nothing ${view} matches.` : state.sessions.length ? `Nothing ${view}.` : "No sessions yet."}
+            {filter.query
+              ? `Nothing ${split ? `${view} ` : ""}matches.`
+              : state.sessions.length
+                ? split ? `Nothing ${view}.` : "Nothing open."
+                : "No sessions yet."}
           </p>
         ) : null}
         {sections.map((sec) => (
@@ -397,7 +404,7 @@ export function Rail({
             ))}
           </div>
         ))}
-        {view === "inactive" ? <ClosedList query={filter.query} current={current} stamp={closedStamp} onMenu={onMenu} /> : null}
+        {!split || view === "inactive" ? <ClosedList query={filter.query} current={current} stamp={closedStamp} onMenu={onMenu} /> : null}
       </div>
       {drag ? (
         <div className="rail-drophint" data-active={over === "root" || undefined} aria-hidden="true">

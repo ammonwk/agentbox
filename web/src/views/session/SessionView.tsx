@@ -143,7 +143,9 @@ export function SessionView({
 
   // Folded as the user left it, but never with the open session folded out of
   // sight. Closed ones are not here: they have their own list under Inactive,
-  // unless pinned: a pin holds its place closed or not.
+  // unless pinned: a pin holds its place closed or not. With the split off,
+  // the list is every row in the sort's order, whatever it last did.
+  const split = state.settings.splitActive;
   const { sections, counts } = useMemo(() => {
     const rows = filterSessions(
       visible.sessions.filter((s) => s.pinOrder !== null || (s.status !== "closed" && !closing.has(s.id))),
@@ -153,13 +155,13 @@ export function SessionView({
     const roots = (r: SessionRow[]) => r.length - parentsOf(r).size;
     return {
       sections: sectionsOf(
-        tabs[view],
+        split ? tabs[view] : rows,
         { open: (x, auto) => shownBy(kids, x, auto), quiet: (x, auto) => shownBy(quiet, x, auto), keep, now },
         sort,
       ),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
     };
-  }, [visible.sessions, keep, filter, sort, view, now, kids, quiet, closing]);
+  }, [visible.sessions, keep, filter, sort, view, split, now, kids, quiet, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();

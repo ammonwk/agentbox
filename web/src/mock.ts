@@ -70,6 +70,7 @@ const HOME = "/home/dev";
 const settings: AgentSettings = {
   theme: "system",
   repoMark: "name",
+  splitActive: true,
   hideSteps: "always",
   boardDays: 7,
   autoApprove: false,

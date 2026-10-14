@@ -249,6 +249,14 @@ function General({ settings, save, saveStateOf }: SectionProps) {
       </Field>
       <SaveMark state={saveStateOf("repoMark")} />
 
+      <ToggleRow
+        label="Split Active and Inactive"
+        hint="Two tabs in the session list: sessions that did something in the last 3 hours, are running, need you or are pinned, and the rest. Off, they are one list in the sort's order, with closed sessions at the end."
+        checked={settings.splitActive}
+        onChange={(v) => save("splitActive", { splitActive: v })}
+      />
+      <SaveMark state={saveStateOf("splitActive")} />
+
       <Field label="Hide working steps" hint="The thinking and tool calls between the things an agent says, folded to one line you can open. When done shows them while the agent works, and folds them once its turn is over.">
         {(id) => (
           <div className="seg" role="group" aria-label="Hide working steps" id={id}>

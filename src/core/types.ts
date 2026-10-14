@@ -776,6 +776,9 @@ export interface AgentSettings {
   /** How the session list says which repo or folder a session is in: its
    *  name before the title, or the repo's shape, which takes less room. */
   repoMark: "name" | "shape";
+  /** Whether the session list splits into Active and Inactive tabs, or is
+   *  one list in the sort's order whatever each session last did. */
+  splitActive: boolean;
   /** Which of the agent's working steps the timeline folds away between the
    *  things it says: all of them, those of turns it has finished, or none. */
   hideSteps: "always" | "done" | "never";
