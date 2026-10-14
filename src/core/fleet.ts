@@ -3858,7 +3858,12 @@ function resumeModel(rec: SessionRecord): string | null {
  * `agentbox send` went there. Claude does not pass it on to its shells.
  */
 function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
-  sessionCapability(id);
+  try {
+    sessionCapability(id);
+  } catch (e) {
+    // Managed requests fail closed without it; ordinary sessions still start.
+    console.error(`agentbox: ${id}'s session capability could not be written:`, e);
+  }
   return { AGENTBOX_SESSION: id, ...(process.env.AGENTBOX_HOME ? { AGENTBOX_HOME: process.env.AGENTBOX_HOME } : {}), ...(process.env.AGENTBOX_PORT ? { AGENTBOX_PORT: process.env.AGENTBOX_PORT } : {}), ...(process.env.AGENTBOX_TMUX_SOCKET ? { AGENTBOX_TMUX_SOCKET: process.env.AGENTBOX_TMUX_SOCKET } : {}), ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}) };
 }
 

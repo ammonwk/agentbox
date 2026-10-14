@@ -33,7 +33,6 @@ import { diffOf } from "../core/diff";
 import { grepInWorker } from "../core/grep";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
-
 import { McpError, addServer, importServer, readRegistry, removeServer, setEnabled, updateServer } from "../core/mcp";
 import { checkServer, discover, foundDefinition, publicFound, reachAll, viewOf } from "../core/mcp-reach";
 import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
@@ -788,7 +787,9 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/prs/transfer", async ({ req }) => {
     const b = await readBody(req);
-    // A process ID or --for is not authority to transfer somebody else's PR.
+    // The caller's session capability (src/core/session-authority.ts), not a
+    // process ID or --for. It keeps a session from handing over another's PR
+    // by mistake; a process of the same user that sets out to can read it.
     const actor = authenticatedSession(req);
     if (!actor) throw new HttpError(403, "run pr transfer inside the session that currently holds the PR");
     const expected = requireString(b, "expected");
@@ -1471,8 +1472,7 @@ const router = new Router(mapError)
     const r = demoteSkill(requireString(b, "name"));
     void refreshSlow();
     return json(r);
-  })
-  ;
+  });
 agentRoutes(router, agents);
 cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);

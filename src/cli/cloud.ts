@@ -6,7 +6,6 @@
 import { hostname } from "node:os";
 import { resolve } from "node:path";
 import type { Api } from "../client";
-import { HumanCloud, supabaseFor } from "../cloud/client";
 import {
   DEFAULT_SCOPES,
   INSTALLATION_NAME_RE,
@@ -119,6 +118,8 @@ async function login(api: Api, args: string[]): Promise<number> {
   const email = str(flags.get("email")) ?? prompt("email:")?.trim();
   if (!email) throw new Error("login needs an email");
   // In memory only: the session ends with this command.
+  // Loaded here, not with the CLI: supabase-js costs every other command ~40 ms.
+  const { HumanCloud, supabaseFor } = await import("../cloud/client");
   const human = new HumanCloud(supabaseFor(config));
   await human.sendCode(email);
   const code = prompt(`a sign-in code was sent to ${email}; code:`)?.trim();

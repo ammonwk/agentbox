@@ -10,7 +10,7 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkConfig, type CloudConfig } from "../../cloud/client";
+import { checkConfig, type CloudConfig } from "../../cloud/config";
 import { INSTALLATION_SECRET_RE, InstallationSettings } from "../../cloud/protocol";
 import { readEnvFile } from "../envfile";
 import { agentboxHome } from "../paths";

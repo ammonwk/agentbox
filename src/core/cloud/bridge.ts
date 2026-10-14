@@ -123,10 +123,11 @@ export class CloudBridge {
   start(): void {
     this.reload();
     const loop = (): void => {
+      // With no cloud set up a pass only looks for cloud.env: once a minute.
       this.#timer = setTimeout(async () => {
         await this.tick().catch((e: unknown) => console.error("agentbox cloud:", e));
         loop();
-      }, readInstallationSettings().pollSeconds * 1000);
+      }, this.#cfg ? readInstallationSettings().pollSeconds * 1000 : 60_000);
       this.#timer.unref?.();
     };
     loop();

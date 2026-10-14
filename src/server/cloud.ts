@@ -6,7 +6,7 @@
  *  bridge, which only calls out. The installation secret goes in once
  *  (`POST /api/cloud/installation`) and never comes back out. */
 
-import { CloudError } from "../cloud/client";
+import { CloudError } from "../cloud/config";
 import { SKILL_NAME_RE } from "../cloud/protocol";
 import { SkillBundleError } from "../cloud/skillbundle";
 import type { CloudBridge } from "../core/cloud/bridge";
@@ -41,7 +41,12 @@ export function cloudRoutes(router: Router, bridge: CloudBridge, fleet: Pick<Fle
   /** What changes this machine's trust or contents is the human's to do:
    *  refused to a caller running inside an agent session. Agents run as the
    *  same user, so this stops their ordinary CLI use, not a determined process. */
-  const yours = (pid: unknown, what: string): void => {
+  const yours = (req: Request, pid: unknown, what: string): void => {
+    // The CLI names its process and a browser sends an Origin: a request with
+    // neither (curl from inside an agent, say) cannot show it is yours.
+    if ((pid === undefined || pid === null) && !req.headers.get("origin")) {
+      throw new HttpError(403, `${what} is yours to do, not an agent's: run it in your own terminal (agentbox cloud …) or on the Team page`);
+    }
     const n = Number(pid);
     const inside = Number.isInteger(n) && n > 1 ? fleet.callerOf(n) : null;
     if (inside) throw new HttpError(403, `${what} is yours to do, not an agent's (this came from session ${inside}): run it in your own terminal or on the Team page`);
@@ -50,18 +55,18 @@ export function cloudRoutes(router: Router, bridge: CloudBridge, fleet: Pick<Fle
     .add("GET", "/api/cloud", () => json(bridge.status()))
     .add("POST", "/api/cloud/installation", async ({ req }) => {
       const b = await readBody(req);
-      yours(b.callerPid, "registering this machine");
+      yours(req, b.callerPid, "registering this machine");
       // Asked first, before a person registers it in the cloud for nothing.
       if (b.check === true) return json(null);
       return json(await bridge.register(requireString(b, "secret")));
     })
-    .add("DELETE", "/api/cloud/installation", async ({ url }) => {
-      yours(url.searchParams.get("callerPid"), "forgetting this machine's credential");
+    .add("DELETE", "/api/cloud/installation", async ({ req, url }) => {
+      yours(req, url.searchParams.get("callerPid"), "forgetting this machine's credential");
       return json(await bridge.forget(url.searchParams.get("revoke") === "1"));
     })
     .add("PUT", "/api/cloud/settings", async ({ req }) => {
       const b = await readBody(req);
-      yours(b.callerPid, "changing this machine's cloud settings");
+      yours(req, b.callerPid, "changing this machine's cloud settings");
       const patch: Record<string, unknown> = {};
       for (const k of ["allowRemoteWake", "shareAccountEmails"]) if (typeof b[k] === "boolean") patch[k] = b[k];
       if (b.skillRoot === "claude" || b.skillRoot === "agents") patch.skillRoot = b.skillRoot;
@@ -140,7 +145,7 @@ export function cloudRoutes(router: Router, bridge: CloudBridge, fleet: Pick<Fle
       // caller first, so what was installed is always a number it saw.
       const rev = int(b.rev, "rev");
       if (!rev) throw new HttpError(400, "name the revision to install (rev)");
-      yours(b.callerPid, "installing a skill");
+      yours(req, b.callerPid, "installing a skill");
       return json(await bridge.installSkill(params.name!, rev, b.force === true));
     })
     .add("POST", "/api/cloud/skills/publish", async ({ req }) => {
@@ -149,7 +154,7 @@ export function cloudRoutes(router: Router, bridge: CloudBridge, fleet: Pick<Fle
       const path = optionalString(b, "path");
       if (!name && !path) throw new HttpError(400, "name a local skill, or give its path");
       if (name && !SKILL_NAME_RE.test(name)) throw new HttpError(400, "not a skill name");
-      yours(b.callerPid, "publishing a skill to the workspace");
+      yours(req, b.callerPid, "publishing a skill to the workspace");
       return json(await bridge.publishSkill({ name, path, summary: optionalString(b, "summary"), baseRev: b.baseRev === undefined ? undefined : base(b.baseRev) }));
     });
 }

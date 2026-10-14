@@ -191,7 +191,7 @@ why). Arming the same wait twice is one wait.
                                     # naming "another session", if another live session has it
     agentbox pr release [<n|…>]     # release ownership and its PR waits (one, or all)
     agentbox pr transfer <repo#n> --expect <holder> --to <successor>
-                                    # current holder hands off; stale ownership is refused
+                                    # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has
 
 ## Across machines (when this machine is in an agentbox cloud workspace)

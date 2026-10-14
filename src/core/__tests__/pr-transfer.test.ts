@@ -26,6 +26,8 @@ test("only the current holder can transfer; a competing stale handoff cannot rep
   expect(transferPr(claims(), sessions, "team/repo", 1, "holder", "holder", "next", 2).sessionId).toBe("next");
   expect(() => transferPr(claims(), sessions, "team/repo", 1, "holder", "holder", "racer", 3)).toThrow("ownership changed");
   expect(() => claimPr(claims(), sessions, "team/repo", 1, "holder", 4)).toThrow("held by another session, next");
+  // The old holder lets go as on a release: its own branch no longer holds it.
+  expect(prReleased("holder", { repo: "team/repo", number: 1 })).toBe(true);
   expect(claims()).toHaveLength(1);
   expect(claims()[0]!.sessionId).toBe("next");
 });

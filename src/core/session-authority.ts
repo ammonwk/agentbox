@@ -55,8 +55,14 @@ export function sessionHeaders(): Record<string, string> {
   )
     id = environOf(pid)?.get("AGENTBOX_SESSION");
   if (!id || !/^[\w-]{1,64}$/.test(id)) return {};
-  return {
-    "x-agentbox-session": id,
-    "x-agentbox-session-token": sessionCapability(id),
-  };
+  // Only a handoff needs it: a capability that cannot be read or made costs
+  // that one command its authority, never every other command.
+  try {
+    return {
+      "x-agentbox-session": id,
+      "x-agentbox-session-token": sessionCapability(id),
+    };
+  } catch {
+    return {};
+  }
 }
