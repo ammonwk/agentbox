@@ -20,6 +20,7 @@ import { readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
 import { AgentAvatar, NeutralAgent } from "../AgentAvatar";
+import { agentName } from "../AgentBrowser";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -557,6 +558,26 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
       · queued
     </span>
   ) : null;
+  // A registered agent proven to have sent it: its message, beside its own
+  // picture and name, on the left with the replies; never the recipient's.
+  const from = ev.sender?.kind === "agent" ? ev.sender.agent : undefined;
+  if (from)
+    return (
+      <div className="tl-agent-reply tl-from-agent" data-ev={ev.id} title={`Sent by ${agentName(from.name)}${ev.sender?.session ? ` (${ev.sender.session})` : ""}`}>
+        <div className="tl-agent-row">
+          <AgentAvatar role={from.role} creator={from.creator} src={from.avatar} />
+          <div className="tl-bubble tl-agent-bubble">
+            <div className="tl-agent-name">{agentName(from.name)}</div>
+            {body}
+          </div>
+        </div>
+        <div className="tl-agent-foot">
+          <CopyIcon text={sent.text} />
+          <span>via agentbox send{queued ? " · queued" : ""}</span>
+          <time dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>
+        </div>
+      </div>
+    );
   return (
     <div className={`tl-user tl-sent tl-sent-fold${open ? " is-open" : ""}${queued ? " tl-queued" : ""}`} data-ev={ev.id}>
       <button type="button" className="tl-sent-toggle" aria-expanded={open} aria-controls={bodyId} title={open ? "Hide the message" : "Show who sent it and the whole message"} onClick={() => setOpen(!open)}>
@@ -609,12 +630,12 @@ function SenderBadge({ sender, claimed }: { sender: NonNullable<Extract<Timeline
     sender.kind === "unverified"
       ? `agentbox has no record of this message being sent${claimed ? ` (it names ${claimed})` : ""}; its text is shown as written`
       : sender.kind === "agent" || sender.kind === "session"
-        ? `Sent by ${sender.label}${sender.session ? ` (${sender.session})` : ""}`
+        ? `Sent by ${sender.kind === "agent" ? agentName(sender.label) : sender.label}${sender.session ? ` (${sender.session})` : ""}`
         : sender.label;
   return (
     <span className={`tl-sender-badge tl-sender-kind-${sender.kind}`} title={title}>
       {face}
-      <span className="tl-sent-label">{sender.label}</span>
+      <span className="tl-sent-label">{sender.kind === "agent" ? agentName(sender.label) : sender.label}</span>
     </span>
   );
 }

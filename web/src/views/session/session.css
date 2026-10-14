@@ -3599,3 +3599,15 @@ a.wk-item:hover {
 .tl-sender-kind-unverified .tl-sent-label {
   font-style: italic;
 }
+
+/* An agent's picture, or its own icon on a tinted disc: in Agents and in
+ * Sessions, where a message an agent sent carries it. */
+.agent-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--accent) 14%, var(--sunken));
+  color: var(--accent);
+}

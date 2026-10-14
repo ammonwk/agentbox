@@ -325,6 +325,14 @@ the context budget, or turns rollover off. The agent records decisions with
 `show`; each record names its source conversation, and the provider transcript
 stays the record. Memory never authorizes anything. Waits, Review cards, PR
 claims, work grants and messages to the old conversation pass to the new one.
+A local agent's provider is Automatic unless you choose one in About: its first
+conversation, and each fresh one after the cache went cold, starts on whichever
+installed, logged-in provider has room (Claude before Codex, the previous one
+first when both have room); a warm conversation never moves. About says which
+provider the current conversation runs on and why. A message another agent sends
+shows that agent's name and picture only when Agentbox recorded the send;
+anything else is marked unverified. A five-minute cache gets its handoff after
+about two and a half idle minutes.
 Scrolling up in Chat past the start of a fresh conversation loads the
 conversations whose summaries it started from, muted, with a divider for each
 and a mark where the carried history starts; older conversations stay in the

@@ -600,16 +600,6 @@
 .agent-memory-handoff summary span { color: var(--muted); margin-right: 6px; }
 .agent-memory-handoff ul { margin: 4px 0 8px; padding-left: 18px; }
 
-/* An agent's picture, or its own icon on a tinted disc. */
-.agent-avatar {
-  display: grid;
-  place-items: center;
-  flex: none;
-  border-radius: 50%;
-  object-fit: cover;
-  background: color-mix(in srgb, var(--accent) 14%, var(--sunken));
-  color: var(--accent);
-}
 .agent-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .agent-picture { display: flex; flex-direction: column; gap: 10px; }
 .agent-picture-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }

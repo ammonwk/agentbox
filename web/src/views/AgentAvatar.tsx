@@ -87,7 +87,7 @@ export function AgentPictureEditor({ agent, onChange }: { agent: { id: string; n
           )}
         </div>
       </div>
-      <p className="hint">PNG, JPEG, GIF or WebP, up to 2 MB. Shown beside {agent.name}'s replies; without one, its own icon is used.</p>
+      <p className="hint">PNG, JPEG, GIF or WebP, up to 2 MB. Shown beside {agent.name.charAt(0).toUpperCase() + agent.name.slice(1).toLowerCase()}'s replies; without one, its own icon is used.</p>
       {error && <p className="error" role="alert">{error}</p>}
     </section>
   );
