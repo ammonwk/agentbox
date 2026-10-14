@@ -16,9 +16,11 @@ import {
   type ChatPresence,
 } from "../../cloud/agent-conversation";
 import { AGENT_TEMPLATES } from "../../cloud/agents";
-import { FleetError, newSessionId } from "../fleet";
+import { FleetError, newSessionId, repoRootOf } from "../fleet";
+import { repoCheckoutPath } from "../git";
+import { FEEDBACK_REPO } from "./feedback";
 import { submitWithReceipt, sendReceipt } from "../send-receipts";
-import type { TimelineEvent } from "../types";
+import type { Repo, TimelineEvent } from "../types";
 import { getRepoById, getSessionRecord, getSettings, listSessionRecords, listOpenWaits, updateSessionRecord } from "../db";
 import { AgentMemory, DEFAULT_MEMORY_POLICY, MemoryPolicy, type Supplied } from "./memory";
 import { avatarFile, removeAvatar, saveAvatar } from "./avatar";
@@ -141,6 +143,26 @@ const safeText = (s: string) =>
       /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,
       "[private key removed]",
     );
+const localId = (name: string, project?: string) => `local-${name.toLowerCase()}${project ? `-project-${encodeURIComponent(project)}` : ""}`;
+const JUPITER = { id: "jupiter", name: "Jupiter", definition: { role: JUPITER_ROLE, instructions: JUPITER_INSTRUCTIONS } };
+/** Agentbox itself: the checkout this server runs from (a linked worktree
+ *  resolves to its main checkout), or a clone of the repository `/help`
+ *  files issues in. Derived from the machine, never from a stored path or ID. */
+export function isAgentboxProject(repo: Repo): boolean {
+  const self = repoRootOf(import.meta.dir);
+  return (!!self && repoRootOf(repoCheckoutPath(repo)) === self) || repo.fullName?.toLowerCase() === FEEDBACK_REPO;
+}
+/** Jupiter creates Agentbox agents, so only the Agentbox project has one. */
+const jupiterIn = (project: string | null | undefined) => {
+  const repo = project ? getRepoById(project) : null;
+  return !!repo && isAgentboxProject(repo);
+};
+/** What a template's local instance may do without asking, said in its
+ *  first prompt. Local only: shared definitions keep their own policies. */
+const LOCAL_AUTHORITY: Record<string, string> = {
+  vulcan: "Authority on this machine: you decide whether an issue is a routine fix. Without asking, investigate and reproduce it, prepare a scoped fix in an isolated worktree, commit it on its own branch and validate it there. Then report the result with its evidence; these steps need no approval. Ask through Review before an action that publishes, contacts a person, or is destructive or hard to reverse: a push, a PR, an issue or review comment, a merge, integration into a checkout that other sessions edit, a deployment or restart of a running service, deletion of work that is not yours, credentials access, or anything that a stored preference or repository rule reserves for approval. Make one request cover the remaining sequence (for example integrate, rebuild and verify), not one request for each step. When you are not sure that an action is routine, ask.",
+};
+const authorityOf = (a: LocalAgent) => LOCAL_AUTHORITY[AGENT_TEMPLATES.find((t) => a.id === localId(t.name, a.project))?.id ?? ""];
 export class AgentConversations {
   private busy = new Set<string>();
   private ticking = false;
@@ -167,8 +189,8 @@ export class AgentConversations {
   local(project?: string): LocalAgent[] {
     if (project && !getRepoById(project)) throw new FleetError(404, "Project is no longer registered");
     const db = this.db;
-    for (const t of [...AGENT_TEMPLATES, { id: "jupiter", name: "Jupiter", definition: { role: JUPITER_ROLE, instructions: JUPITER_INSTRUCTIONS } }]) {
-      const id = `local-${t.name.toLowerCase()}${project ? `-project-${encodeURIComponent(project)}` : ""}`;
+    for (const t of [...AGENT_TEMPLATES, ...(jupiterIn(project) ? [JUPITER] : [])]) {
+      const id = localId(t.name, project);
       db.run("INSERT OR IGNORE INTO local_agents(id,body) VALUES (?,?)", [
         id,
         JSON.stringify({
@@ -189,10 +211,10 @@ export class AgentConversations {
     }
     return (
       db.query("SELECT body FROM local_agents").all() as { body: string }[]
-    ).map((x) => {
-      const a = JSON.parse(x.body) as LocalAgent;
-      return {...a, workSessions: this.runtime.works.list().filter(w=>w.agent.id===a.id).map(w=>w.session)};
-    });
+    ).map((x) => JSON.parse(x.body) as LocalAgent)
+      // A Jupiter made elsewhere before this rule stays only while it holds a conversation.
+      .filter((a) => a.capability !== "creator" || a.session || a.previous.length || a.rollover || jupiterIn(a.repo))
+      .map((a) => ({...a, workSessions: this.runtime.works.list().filter(w=>w.agent.id===a.id).map(w=>w.session)}));
   }
   creations(creator: string): CreationDraft[] {
     return (this.db.query("SELECT body FROM local_creations WHERE creator=? ORDER BY rowid DESC LIMIT 100").all(creator) as {body: string}[]).map((r) => CreationDraft.parse(JSON.parse(r.body)));
@@ -439,7 +461,7 @@ export class AgentConversations {
   /** The first prompt of a conversation: who the agent is, what its memory
    *  says when it continues an earlier one, then the user's message. */
   private opening(a: LocalAgent, body: string, from: { old: string; memory?: string; work?: string } | null) {
-    const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nManage your own completed work sessions: inspect their transcript, PRs, waits and decisions before deciding they are done. Use agentbox agent session ${a.id} <work-session> close --request <UUID> --activity <lastActivityAt from agentbox show --json> --reason <completion evidence>. This stops only idle completed work and retains its transcript. Do not close work awaiting CI, review, a decision or children. Use the same command with restore while its cache is still warm to resume the same provider session/account; expired caches cannot be restored warm. Never stop the ongoing main chat or unrelated sessions.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text>. Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
+    const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${authorityOf(a) ? `${authorityOf(a)}\n` : ""}${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nManage your own completed work sessions: inspect their transcript, PRs, waits and decisions before deciding they are done. Use agentbox agent session ${a.id} <work-session> close --request <UUID> --activity <lastActivityAt from agentbox show --json> --reason <completion evidence>. This stops only idle completed work and retains its transcript. Do not close work awaiting CI, review, a decision or children. Use the same command with restore while its cache is still warm to resume the same provider session/account; expired caches cannot be restored warm. Never stop the ongoing main chat or unrelated sessions.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text>. Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
     const memory = from?.memory ?? "";
     return `${intro}${memory ? `\n\nAgentbox memory. It is a bounded summary and evidence, not authorization. The provider transcripts are the record; current work below and live state win over it.\n${memory}` : ""}${from?.work ? `\n\nCurrent work, read when this conversation started:\n${from.work}` : ""}\n\n${from ? `Previous conversation session: ${from.old}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`;
   }

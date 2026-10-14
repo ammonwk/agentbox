@@ -390,7 +390,7 @@
   color: var(--text);
   font-weight: 600;
 }
-.agent-space-head nav span {
+.agent-space-head nav button:not(.toggle) > span {
   font-size: 10px;
   margin-left: 6px;
   background: var(--border);
@@ -674,3 +674,6 @@
   .agent-composer .att-frame.cmp-frame { min-height: 50px; border-radius: 18px; padding: 5px 6px; }
   .agent-composer .cmp-frame .btn.cmp-go { min-width: 38px; height: 38px; min-height: 38px; }
 }
+.agent-enabled { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; }
+.agent-space-head nav .agent-enabled .toggle { padding: 0 4px; color: var(--muted); font-size: 13px; }
+.agent-enabled .error { font-size: 12px; }
