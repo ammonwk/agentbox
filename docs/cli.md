@@ -120,11 +120,11 @@ See docs/agents.md for exact action JSON, host configuration and boundaries.
                                     # then rearm: a durable cursor skips observed feedback.
                                     # Keep a separate full-check wait; neither is merge permission.
     agentbox wait run <id|url> [-R owner/repo]   # a GitHub Actions run concluding
-    agentbox wait job [--name N] -- <command…>   # start a long command as a systemd unit of
-                                    # its own, in this directory and environment, and be
-                                    # told how it ended (exit, signal, out of memory) with
-                                    # the end of its output. One argument is a shell
-                                    # command line ('a | b > out.log'); several are an argv
+    agentbox wait job [--name N] -- <command…>   # start a long command as a native service
+                                    # (systemd on Linux, launchd on macOS), in this
+                                    # directory and environment, and be told its recorded
+                                    # exit or signal with the end of its output. One argument
+                                    # is a shell line ('a | b > out.log'); several are an argv
     agentbox wait session <id>...   # the first of those sessions to end its turn, ask
                                     # something or stop (at once if one already has)
     agentbox wait until [--every 2m] -- <command>
