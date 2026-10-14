@@ -227,6 +227,8 @@ test("family claims, independent exact-head rounds and revoked publication autho
     expect(works.get(input.id).state).toBe("uncertain");
     const work = await works.retryStart(input.id, "coordinator");
     expect(prompts.length).toBe(1);
+    expect(work.promptRevision).toBe("pre-action-proof-v2");
+    expect(work.validationProtocol).toBe("candidate-evidence-v1");
     const interrupted = works.get(work.id);
     interrupted.state = "uncertain";
     (works as any).save(interrupted);
@@ -259,9 +261,51 @@ test("family claims, independent exact-head rounds and revoked publication autho
       writeFileSync(join(work.cwd, "app.txt"), `candidate ${n}\n`);
       git(work.cwd, "add", "app.txt");
       git(work.cwd, "commit", "-m", `Candidate ${n}`);
+      const head = git(work.cwd, "rev-parse", "HEAD");
+      const check = `if (await Bun.file('app.txt').text() !== 'candidate ${n}\\n') throw Error('candidate mismatch'); console.log('candidate observed')`;
+      const executionCommand = `bun -e ${JSON.stringify(check)}`;
+      const exclusion = { kind: "typecheck", status: "not_applicable", evidence: ["app.txt"], reason: "Disposable repo contains only app.txt; there is no compiler or source project" };
+      if (n === 1) {
+        await expect(works.review(work.id, work.session, { validation: ["source only"] })).rejects.toThrow("unknown");
+        expect(works.get(work.id).rounds).toHaveLength(0);
+        const blocked = { request: crypto.randomUUID(), base, head, checks: [exclusion, { kind: "acceptance", command: executionCommand, status: "blocked", evidence: [], reason: "Execution not yet attempted" }], acceptance: [] };
+        await expect(works.validation(work.id, grant.requester, blocked)).rejects.toThrow("owner");
+        await expect(works.validation(work.id, work.session, { ...blocked, head: base })).rejects.toThrow("clean committed");
+        const recorded = await works.validation(work.id, work.session, blocked);
+        expect(recorded.state).toBe("unknown");
+        expect(await works.validation(work.id, work.session, blocked)).toEqual(recorded);
+        await expect(works.validation(work.id, work.session, { ...blocked, checks: [] })).rejects.toThrow("already used");
+        await expect(works.validation(work.id, work.session, { ...blocked, request: crypto.randomUUID(), checks: [{ ...blocked.checks[1], status: "passed", exitCode: 0 }] })).rejects.toThrow("timestamps");
+        await expect(works.review(work.id, work.session, { validation: ["blocked"] })).rejects.toThrow("unknown");
+        expect(works.get(work.id).rounds).toHaveLength(0);
+      }
+      const runCheck = (suffix: string) => {
+        const startedAt = Date.now();
+        const executed = Bun.spawnSync(["bun", "-e", check], { cwd: work.cwd, stdout: "pipe", stderr: "pipe" });
+        const completedAt = Date.now(), log = join(home, `execution-${n}-${suffix}.log`);
+        writeFileSync(log, executed.stdout.toString() + executed.stderr.toString());
+        expect(executed.exitCode).toBe(0);
+        return { kind: "acceptance", command: executionCommand, status: "passed", evidence: [log], startedAt, completedAt, exitCode: executed.exitCode };
+      };
+      const execution = runCheck("initial");
+      const report = { request: crypto.randomUUID(), base, head, checks: [exclusion, execution], acceptance: input.issues.map((i) => ({ issue: i.source, evidence: execution.evidence[0]!, proof: `Reads committed candidate ${n}, not a setup acknowledgement; baseline content fails this assertion` })) };
+      const validation = await works.validation(work.id, work.session, report);
+      expect(validation).toMatchObject({ state: "reported_pass", reportedBy: work.session, provenance: "writer_reported", base, head });
+      if (n === 1) {
+        const omitted = await works.validation(work.id, work.session, { ...report, request: crypto.randomUUID(), checks: [exclusion] });
+        expect(omitted.state).toBe("unknown");
+        expect(omitted.gaps.some((g) => g.includes("omitted"))).toBe(true);
+        await works.validation(work.id, work.session, { ...report, request: crypto.randomUUID() });
+      }
       let round = await works.review(work.id, work.session, {
         validation: [`artifact-${n}.json`],
       });
+      if (n === 1) {
+        await works.validation(work.id, work.session, { ...report, request: crypto.randomUUID(), checks: [exclusion, { kind: "acceptance", command: executionCommand, status: "blocked", reason: "New execution unavailable", evidence: [] }] });
+        await expect(works.retryReview(work.id, work.session, { focus: "architecture" })).rejects.toThrow("unknown");
+        expect(works.get(work.id).rounds).toHaveLength(1);
+        await works.validation(work.id, work.session, { ...report, request: crypto.randomUUID(), checks: [exclusion, runCheck("retry")] });
+      }
       for (const r of round.reviewers.filter((r) => r.state !== "started"))
         await works.retryReview(work.id, work.session, { focus: r.focus });
       if (n === 1) {
@@ -280,6 +324,8 @@ test("family claims, independent exact-head rounds and revoked publication autho
         expect(round.reviewers[1]!.session).not.toBe(retired);
       }
       expect(round.number).toBe(n);
+      expect(round.candidateValidation?.provenance).toBe("writer_reported");
+      expect(round.promptRevision).toBe("pre-action-proof-v2");
       expect(new Set(round.reviewers.map((r) => r.session)).size).toBe(3);
       if (n === 1) {
         const reviewer = round.reviewers[0]!;
@@ -374,6 +420,21 @@ test("family claims, independent exact-head rounds and revoked publication autho
           title: "Fix shared rule",
           body: "Plain reproduction evidence",
         };
+        const legacy = structuredClone(works.get(work.id));
+        delete legacy.validationProtocol;
+        delete legacy.validations;
+        delete legacy.rounds[0]!.candidateValidation;
+        works.assertReviewed(legacy, round.base, round.head);
+        const failed = await works.validation(work.id, work.session, { ...report, request: crypto.randomUUID(), checks: [exclusion, { ...report.checks[1], status: "failed", exitCode: 1 }] });
+        expect(failed.state).toBe("failed");
+        await expect(works.publish(work.id, work.session, candidate)).rejects.toThrow("execution is failed");
+        expect(publicationWrites).toBe(0);
+        expect(works.get(work.id).rounds[0]!.candidateValidation).toEqual(round.candidateValidation);
+        const stale = await works.validation(work.id, work.session, { ...report, request: crypto.randomUUID() });
+        expect(stale.state).toBe("failed");
+        await expect(works.publish(work.id, work.session, candidate)).rejects.toThrow("execution is failed");
+        const recovered = await works.validation(work.id, work.session, { ...report, request: crypto.randomUUID(), checks: [exclusion, runCheck("recovered")] });
+        expect(recovered.state).toBe("reported_pass");
         failPush = true;
         await expect(
           works.publish(work.id, work.session, candidate),

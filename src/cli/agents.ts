@@ -43,6 +43,7 @@ export async function agent(api: Api, args: string[]): Promise<number> {
         `/api/agents/work${id ? `/${encodeURIComponent(id)}` : ""}`,
       );
       break;
+    case "work-validation":
     case "work-review":
     case "work-follow":
     case "work-collect":
@@ -240,7 +241,7 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       break;
     default:
       throw new Error(
-        "agent takes status, bind, sync, read, progress, prepare, review, collect, retry-review, action, experts, finish, rotate; local work uses work-start, work, work-review, work-collect, work-retry-review, work-retry-start, work-publish, work-follow, work-reconcile, work-failure; create agents through Jupiter",
+        "agent takes status, bind, sync, read, progress, prepare, review, collect, retry-review, action, experts, finish, rotate; local work uses work-start, work, work-validation, work-review, work-collect, work-retry-review, work-retry-start, work-publish, work-follow, work-reconcile, work-failure; create agents through Jupiter",
       );
   }
   console.log(JSON.stringify(value, null, 2));

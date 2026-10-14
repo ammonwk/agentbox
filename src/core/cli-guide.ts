@@ -17,6 +17,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox agent review <run UUID> --file validation.json
     agentbox agent collect <run UUID>
     agentbox agent work-start --file family.json
+    agentbox agent work-validation <work UUID> --file execution.json
     agentbox agent work-review <work UUID> --file validation.json
     agentbox agent work-collect <work UUID>
     agentbox agent work-publish <work UUID> --file publication.json
@@ -33,6 +34,22 @@ Chat, About and Feed share one agent identity. Recommendations are immutable
 {title,finding,reason,next,evidence:[{url,label}],action:<optional action UUID>}.
 Only the associated session can publish them. Chat coordinators queue scoped
 work and keep worker capacity available; they cannot publish repository actions.
+
+New local work pins candidate-evidence-v1. Before formal review, its writer
+records exact {request:<UUID>,base:<SHA>,head:<SHA>,checks:[],acceptance:[]} with
+work-validation. Each check has kind (typecheck/acceptance/other), command,
+status (passed/failed/blocked/not_run), evidence references, and actual
+startedAt/completedAt epoch milliseconds and exitCode for executed commands.
+Unexecuted checks have a reason and no execution fields. Only a compiler
+genuinely absent from the repo may use typecheck/status:not_applicable with
+repo-specific reason/evidence and no command. Each acceptance entry names
+{issue,evidence,proof}: actual producer, pre-action state, action, and why the
+assertion cannot pass without it. Keep previously declared commands in later
+reports of that candidate. Reports are idempotent by request and append-only.
+Resolve failures or blocked checks with a later execution, never an older pass.
+Execution is writer-reported, never server-attested. Failed/unknown evidence
+cannot spend a review round or publish. A clean source review, reported
+execution pass, publication, and required CI/human readiness are separate.
 
 Author shared instances on the Agents page. A run has one accountable human and
 one fenced execution host. Only its associated session can report progress or

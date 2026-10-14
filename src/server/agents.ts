@@ -61,6 +61,9 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
         ),
       ),
     )
+    .add("POST", "/api/agents/work/:id/validation", async ({ req, params }) =>
+      json(await agents.works.validation(params.id!, authenticatedSession(req), await readBody(req))),
+    )
     .add("POST", "/api/agents/work/:id/review", async ({ req, params }) =>
       json(
         await agents.works.review(

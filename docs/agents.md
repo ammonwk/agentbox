@@ -442,6 +442,32 @@ and preparation covering the problem, consumers, edges, non-goals, design and
 validation. Work/history appears under that agent; navigation still opens its
 separate Main chat and never starts a writer.
 
+New local work pins `pre-action-proof-v2` and `candidate-evidence-v1` in its
+configuration. Before formal review, only its writer can append
+`work-validation ID --file execution.json`: `{request,base,head,checks,acceptance}`.
+Checks carry kind (`typecheck`, `acceptance`, `other`), actual/planned command,
+status, evidence references, and actual start/end epoch milliseconds and exit
+code when executed. `blocked`/`not_run` carry a reason without execution fields.
+Only a genuinely inapplicable compiler can use `not_applicable`, with repo-specific
+reason/evidence and no command. Acceptance entries are `{issue,evidence,proof}`:
+describe the actual producer, pre-action state, action and why the final assertion
+cannot pass without it, including background producers. Reports are capped at
+32 KB and retain references rather than logs. The CLI guide gives the field names.
+
+Agentbox verifies the clean committed candidate and authenticated writer; execution
+remains explicitly **writer-reported**, not server-attested. Missing, blocked or
+failed evidence cannot spend a formal review round or permit publication. Later
+reports retain previously declared commands for that candidate; an omitted failed
+check cannot turn it green. Idempotent requests cannot rewrite prior reports.
+Resolving failed/blocked evidence requires a later execution; re-submitting an
+older pass under a new request does not resolve it. Reviewer retries recheck the
+same execution gate without replacing the original snapshot or consuming a round.
+Each round snapshots its submitted evidence, and publication also checks the latest
+report for that base/head. Reviewers inspect evidence, including compiler exclusions.
+This is a prepublication execution floor, not a readiness verdict: full applicable
+CI, actual review feedback, requested acceptance and human review remain required.
+Legacy works/hashes/rounds keep their original contract; shared work is unchanged.
+
 `work-review ID --file validation.json` starts three distinct read-only Codex
 reviewers of the same committed base/head: architecture, correctness and deslop.
 `work-collect ID` reads structured verdicts from their provider transcripts. The
