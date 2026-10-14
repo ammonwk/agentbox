@@ -28,6 +28,7 @@ import { claimFor, listedClaim } from "./claim";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
 import { Forecaster } from "./forecast";
 import {
+  attachDiscoveredSpawn,
   dismissBtw,
   failUnfinishedBtw,
   findSessionRecord,
@@ -1123,20 +1124,28 @@ export class Fleet extends EventEmitter {
    */
   private matchPendingSpawns(now: number): void {
     const defaults = new Set(listAccounts().filter((a) => a.isDefault).map((a) => a.id));
+    // No window here: a process in a pane of ours that names its own session
+    // is proof whenever it arrives, and discovery can run before the pane
+    // becomes visible. The window still bounds the weaker sibling guess below.
     const pending = listSessionRecords(now - MATCH_WINDOW_MS).filter(
-      (r) => r.agentSessionId === null && r.origin === "agentbox" && now - r.createdAt < MATCH_WINDOW_MS,
+      (r) => r.agentSessionId === null && r.origin === "agentbox" && !r.archivedAt && !r.successor,
     );
     for (const rec of pending) {
       // Strongest evidence first: the process in our pane says which session it is.
       const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
-      const proc = pane ? this.processUnder(pane.pid, rec.provider) : undefined;
+      const proc = pane && !pane.dead ? this.processUnder(pane.pid, rec.provider) : undefined;
       let agentId = proc?.agentSessionId ?? null;
+      // A pane is only evidence of our own spawn if the process there is the
+      // one we started: on our account, in our directory, and not older than
+      // the row. Another process's transcript can otherwise be read as ours.
+      if (agentId && (!proc!.accountId || !samePath(proc!.cwd, rec.cwd) || proc!.accountId !== rec.accountId || proc!.startedAt < rec.createdAt - 10_000)) continue;
       // One we just spawned never began before us, so a process naming an older
       // conversation is misread: wait for it to name its own rather than guess
       // among siblings started beside it.
       if (agentId && this.transcriptStartedBefore(rec.provider, agentId, rec.createdAt - 10_000)) continue;
 
       if (!agentId) {
+        if (now - rec.createdAt >= MATCH_WINDOW_MS) continue;
         let best: Tracked | null = null;
         for (const t of this.tracked.values()) {
           const f = t.facts;
@@ -1157,8 +1166,14 @@ export class Fleet extends EventEmitter {
         }
         agentId = best?.facts?.agentSessionId ?? null;
       }
-      if (!agentId || findSessionRecord(rec.provider, agentId)) continue;
-      updateSessionRecord(rec.id, { agentSessionId: agentId });
+      if (!agentId) continue;
+      const discovered = findSessionRecord(rec.provider, agentId);
+      // Discovery already made a row for the process we started. Ours, which
+      // holds the claim, the pin and the tmux session, is the real one: the
+      // discovered row becomes its closed alias.
+      if (discovered) {
+        if (!proc?.agentSessionId || !samePath(discovered.cwd, rec.cwd) || !attachDiscoveredSpawn(rec.id, discovered.id, now)) continue;
+      } else updateSessionRecord(rec.id, { agentSessionId: agentId });
       this.byAgentId.set(`${rec.provider}:${agentId}`, rec.id);
     }
   }

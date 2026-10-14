@@ -663,6 +663,30 @@ export function findSessionRecord(provider: ProviderId, agentSessionId: string):
   return row ? rowToRecord(row) : null;
 }
 
+/** Reconcile discovery that ran before a managed pane became visible: the
+ * pending row takes the identity, the discovered row becomes a closed alias
+ * of it. The caller must prove the provider identity from the live process in
+ * that pane. One transaction, so a crash leaves one of the two, not both. */
+export function attachDiscoveredSpawn(pendingId: string, discoveredId: string, now: number): boolean {
+  const pending = getSessionRecord(pendingId), discovered = getSessionRecord(discoveredId);
+  if (!pending || !discovered || pending.agentSessionId || pending.origin !== "agentbox" || !pending.tmux || pending.archivedAt || pending.successor ||
+      discovered.origin !== "external" || !discovered.agentSessionId || discovered.tmux || discovered.archivedAt || discovered.successor ||
+      discovered.label || discovered.launch || discovered.worktree || discovered.parentByHand || discovered.hoppedAt ||
+      discovered.provider !== pending.provider || discovered.accountId !== pending.accountId || discovered.createdAt < pending.createdAt ||
+      discovered.startedAt < pending.createdAt - 10_000) return false;
+  try {
+    getDb().transaction(() => {
+      updateSessionRecord(discovered.id, { agentSessionId: null, transcriptPath: null, facts: null, archivedAt: now, successor: pending.id, pinOrder: null, bookmarkedAt: null });
+      updateSessionRecord(pending.id, { agentSessionId: discovered.agentSessionId, transcriptPath: discovered.transcriptPath, facts: discovered.facts, lastActivityAt: discovered.lastActivityAt, pinOrder: pending.pinOrder ?? discovered.pinOrder, bookmarkedAt: pending.bookmarkedAt ?? discovered.bookmarkedAt });
+      for (const child of listSessionRecords()) if (child.parent === discovered.id && !child.parentByHand) updateSessionRecord(child.id, { parent: pending.id });
+    })();
+  } catch (e) {
+    recordCache = null;
+    throw e;
+  }
+  return true;
+}
+
 /** Sessions active since `sinceMs`, plus every session that is not closed
  *  and was started by agentbox (those stay until you close them), and every
  *  one you pinned or bookmarked, closed or not.
