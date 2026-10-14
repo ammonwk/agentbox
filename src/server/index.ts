@@ -844,8 +844,6 @@ const router = new Router(mapError)
     const fromSession = authenticated ??
       (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
       (b.from === "agent" && callerPid ? fleet.callerOf(callerPid) : null);
-    const contactRefusal = agents.directContactRefusal(fromSession);
-    if (contactRefusal) throw new HttpError(403, contactRefusal);
     // An agent's message is refused, before anything is typed or resumed, when
     // it would wake a cold or stopped session unasked or is one too many, and
     // one to a session another has taken over goes to that one
