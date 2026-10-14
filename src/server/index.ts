@@ -18,6 +18,7 @@
  */
 
 import { ensureBridge } from "../bridge/service";
+import { ZodError } from "zod";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
@@ -659,6 +660,8 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
+  // A schema refusal is the request's shape, not the server's fault.
+  if (e instanceof ZodError) return new HttpError(400, e.message);
   const c = cloudHttpError(e);
   if (c) return c;
   if (e instanceof DesktopError) return new HttpError(e.status, e.message);
