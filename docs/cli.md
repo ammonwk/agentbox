@@ -30,6 +30,7 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox agent finish <run UUID>
     agentbox agent rotate <run UUID>              # signed-in host owner token required
     agentbox agent memory <local agent ID or run UUID> search <words>
+    agentbox agent session <local agent ID> <session ID> close|restore --request <UUID> --activity <lastActivityAt> --reason <evidence>
     agentbox agent memory <ID> show <record ID>
     agentbox agent memory <ID> note --request <stable UUID> --file decision.json # {decision,why,refs:[{label,ref}]}
     agentbox agent memory <ID> handoff --request <checkpoint UUID> --file handoff.json
@@ -46,6 +47,14 @@ decision when you make it. When Agentbox asks for a checkpoint, save one handoff
 at most 500 words with the request UUID it gives, then reply with one line. A
 later message can continue in a fresh conversation from it. Only an agent's
 current conversation reads and writes its memory.
+
+Local coordinators may close their own finished work sessions after inspecting
+their result. Close refuses changed activity, a working/blocked session, live
+children, pending decisions, open PR claims or waits. It retains the transcript
+and working directory. Restore resumes the same session/account only while
+Session.cacheWarmUntil is still in the future and work authority remains valid.
+Closed work is under Show closed sessions in the Agents rail. Never label
+waiting for CI, human review, a merge decision, or external work as completion.
 
 New local work pins candidate-evidence-v1. Before formal review, its writer
 records exact {request:<UUID>,base:<SHA>,head:<SHA>,checks:[],acceptance:[]} with

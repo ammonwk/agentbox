@@ -549,11 +549,20 @@
 .agent-browser .agent-space-head > div { min-width: 0; }
 .agent-browser .agent-chat-status { display: none; }
 .agent-browser .agent-about { padding: 18px; }
-.agent-picker { display: flex; align-items: center; justify-content: space-between; text-align: left; width: 100%; min-height: 45px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; font: inherit; cursor: pointer; }
-.agent-picker > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.agent-picker small { display: block; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
-.agent-row-status { color: var(--muted); font-size: 12px; }
-.agent-rail-actions { display: flex; gap: 14px; padding: 14px 18px; border-top: 1px solid var(--border); font-size: 12px; }
+.agent-tree-head { display: flex; align-items: center; gap: 4px; min-height: 48px; padding: 6px 12px 4px 18px; }
+.agent-tree-head h2 { flex: 1; margin: 0; font-size: 13px; font-weight: 600; }
+.agent-tree-head .btn, .agent-manage { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; color: var(--muted); }
+.agent-manage:hover { color: var(--text); background: var(--hover); }
+.agent-tree-list, .agent-threads { list-style: none; margin: 0; padding: 0; }
+.agent-tree-row { width: calc(100% - 16px); border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+.agent-tree-row[data-selected="true"] { background: var(--hover); }
+.agent-tree-row > svg { flex: none; color: var(--faint); }
+.agent-tree-count { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.agent-role-icon { flex: none; display: grid; place-items: center; width: 18px; height: 18px; color: var(--muted); }
+.agent-threads { margin: 2px 0 6px 23px; border-left: 1px solid var(--border); }
+.agent-threads .rail-row > svg { flex: none; color: var(--muted); }
+.agent-tree-message { margin: 0; padding: 8px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.agent-tree-message.error { color: var(--danger); }
 .agent-creation label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; }
 .agent-list-back { display: none; }
 .agent-browser .agent-compose-wrap { padding: 10px 14px; }
@@ -568,10 +577,9 @@
   .agent-browser .agent-space-head nav { margin-left: auto; }
 }
 
-.agent-mobile-picker { display: none; }
-.agent-main-row { flex-shrink: 0; }
 @media (max-width: 900px) {
-  .agent-mobile-picker { display: block; border: 0; background: var(--surface); color: inherit; text-align: left; padding: 10px 12px; font: inherit; font-weight: 600; }
+  /* Like Sessions' other single-line rows, keep phone targets at 48px. */
+  .sv.agent-browser[data-rail="full"] .rail-row { align-items: center; min-height: 48px; }
   .agent-browser .sv-main { display: flex; flex-direction: column; min-height: 0; }
   .agent-browser .agent-space { flex: 1; min-height: 0; }
 }
@@ -613,6 +621,11 @@
 .project-option .agent-avatar, .agent-picker .agent-avatar { margin-right: 10px; }
 .project-option:has(.agent-avatar) { display: flex; align-items: center; }
 .agent-space-head > .agent-identity { align-items: center; }
+.agent-heading { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.agent-heading h2 { overflow-wrap: anywhere; }
+.agent-description { font-size: 12px; line-height: 1.35; color: var(--muted); }
+.agent-help-hint { font-size: 11px; color: var(--faint); margin: 6px 12px 0; }
+.agent-help-result { font-size: 13px; color: var(--muted); margin: 0 12px 10px; }
 .agent-picker:has(.agent-avatar) > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 /* Agents' message bar, after the user's reference: one low rounded bar, the

@@ -6,8 +6,10 @@ import { cloudConfig } from "../core/cloud/config";
 import { FleetError } from "../core/fleet";
 import { requireOperator } from "../core/agents/work";
 import { AVATAR_MAX_BYTES } from "../core/agents/avatar";
+import { AgentFeedback } from "../core/agents/feedback";
 
 export function agentRoutes(router: Router, agents: AgentsRuntime) {
+  const feedback = new AgentFeedback(agents);
   const human = async (req: Request, b: Record<string, unknown>) => {
     const cfg = cloudConfig().config,
       host = agents.cloud.status().installation?.id;
@@ -161,6 +163,16 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
       },
     )
     .add("GET", "/api/agents/local", () => json(agents.conversations.local()))
+    .add("POST", "/api/agents/local/:id/help", async ({req,params}) => {
+      // Same trusted-loopback UI boundary as local chat; a session capability
+      // cannot use the human's feedback command to bypass publication grants.
+      if (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token"))
+        throw new HttpError(403,"Only the user can publish an agent feedback report");
+      return json(await feedback.submit(params.id!,await readBody(req)));
+    })
+    .add("GET", "/api/agents/local/:id/help/:request", async ({params}) =>
+      json(await feedback.receipt(params.id!,z.string().uuid().parse(params.request))),
+    )
     .add("POST", "/api/agents/local/project", async ({ req }) => {
       const b = await readBody(req);
       return json(
@@ -233,12 +245,18 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
         headers: { "content-type": f.mime, "cache-control": "private, max-age=31536000, immutable", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'" },
       });
     })
-    .add("GET", "/api/agents/local/:id/receipt/:request", ({ params }) =>
-      json(agents.conversations.localReceipt(params.id!, params.request!)),
+    .add("GET", "/api/agents/local/:id/receipt/:request", async ({ params }) =>
+      json(await feedback.receipt(params.id!,params.request!) ?? agents.conversations.localReceipt(params.id!, params.request!)),
     )
     .add("POST", "/api/agents/local/:id/read", async ({ req, params }) =>
       json(await agents.conversations.page(params.id!, await readBody(req))),
     )
+    .add("POST", "/api/agents/local/:id/sessions/:session", async ({ req, params }) => {
+      const caller = authenticatedSession(req);
+      if (!caller && (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token")))
+        throw new HttpError(403, "Invalid session capability");
+      return json(await agents.conversations.sessionAction(params.id!, params.session!, caller, await readBody(req)));
+    })
     .add("GET", "/api/agents/local/:id/proposals", ({ params }) =>
       json(agents.conversations.localProposals(params.id!)),
     )

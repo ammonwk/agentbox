@@ -23,6 +23,8 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       "condition",
       "key",
       "text",
+      "activity",
+      "reason",
     ],
     ["json"],
   );
@@ -36,6 +38,15 @@ export async function agent(api: Api, args: string[]): Promise<number> {
   };
   let value: unknown;
   switch (verb) {
+    case "session": {
+      const [, session, action] = rest;
+      if (!id || !session || !["close", "restore"].includes(action ?? "") || !str("request") || !str("activity") || !str("reason"))
+        throw new Error("agent session <agent ID> <session ID> close|restore --request <UUID> --activity <lastActivityAt> --reason <why>");
+      value = await api("POST", `/api/agents/local/${encodeURIComponent(id)}/sessions/${encodeURIComponent(session)}`, {
+        request: str("request"), action, activity: Number(str("activity")), reason: str("reason"),
+      });
+      break;
+    }
     case "work-start":
       value = await api("POST", "/api/agents/work", file());
       break;

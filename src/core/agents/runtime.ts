@@ -102,6 +102,36 @@ export class AgentsRuntime {
       ? "Shared agents cannot use session messaging as an outreach channel. Publish needs-human progress and a Review card; managed GitHub outreach checks the recipient's verified opt-in at dispatch."
       : null;
   }
+  /** A navigation snapshot, including retired conversations and reviewers.
+   * This does not grant authority or replace capability checks. */
+  sessionOwnership(): (id: string) => string | null {
+    const owners = new Map<string, string | null>();
+    for (const a of this.conversations.local())
+      for (const id of [a.session, ...a.previous]) if (id) owners.set(id, a.id);
+    for (const w of this.works.list()) {
+      owners.set(w.session, w.agent.id);
+      for (const round of w.rounds)
+        for (const reviewer of round.reviewers)
+          for (const id of [reviewer.session, ...(reviewer.retired ?? [])]) if (id) owners.set(id, w.agent.id);
+    }
+    const runs = new Map(this.store.runs().map((r) => [r.run.id, r.run.agent_id]));
+    const linked = this.store.db.query("SELECT id,run FROM sessions UNION SELECT id,run FROM review_sessions").all() as { id: string; run: string }[];
+    for (const row of linked) {
+      const agent = runs.get(row.run);
+      if (agent) owners.set(row.id, agent);
+    }
+    return (id) => {
+      const path = new Set<string>();
+      let at: string | null = id;
+      while (at && !owners.has(at) && !path.has(at)) {
+        path.add(at);
+        at = getSessionRecord(at)?.parent ?? null;
+      }
+      const owner = at ? owners.get(at) ?? null : null;
+      for (const seen of path) owners.set(seen, owner);
+      return owner;
+    };
+  }
   status() {
     return {
       lastError: this.lastError,

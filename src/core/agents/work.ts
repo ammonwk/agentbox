@@ -259,11 +259,14 @@ export class AgentWorks {
     );
   }
   writable(agent: string, session: string) {
+    return !getSessionRecord(session)?.archivedAt && this.restorable(agent, session);
+  }
+  restorable(agent: string, session: string) {
     const w = this.list().find(
       (w) =>
         w.agent.id === agent && w.session === session && w.state === "working",
     );
-    if (!w || getSessionRecord(session)?.archivedAt) return false;
+    if (!w || getSessionRecord(session)?.successor) return false;
     try {
       this.authority(w, session, true);
       return true;

@@ -28,7 +28,7 @@ import {
 import { go, selectScope } from "../route";
 import { useScope } from "../lib/projects";
 import "./agents.css";
-import { rememberAgent, landingForAgent } from "./AgentBrowser";
+import { rememberAgent, landingForAgent, agentActivity } from "./AgentBrowser";
 import { LocalAgentSpace, SharedAgentSpace } from "./AgentSpace";
 
 const when = (s?: string | null) =>
@@ -280,7 +280,7 @@ function Directory({
         <SharedAgentSpace
           key={selected.id}
           a={selected}
-          options={data.data.board.agents.filter(inProject).map((a) => ({ id: a.id, name: a.name, role: a.definition.role, creator: a.capability === "creator", detail: `${a.definition.repos.join(", ") || "General"} · ${a.team ? "Team" : person(a.created_by)} · ${a.enabled ? "Shared" : "Needs setup"}` }))}
+          options={data.data.board.agents.filter(inProject).map((a) => ({ id: a.id, name: a.name, role: a.definition.role, creator: a.capability === "creator", activity: agentActivity(a.enabled, data.data!.board.runs.filter((r) => r.agent_id === a.id).map((r) => r.state)), detail: `${a.definition.repos.join(", ") || "General"} · ${a.team ? "Team" : person(a.created_by)} · ${a.enabled ? "Shared" : "Needs setup"}` }))}
           onCreate={() => void creator()}
           reload={data.reload}
           board={data.data.board}

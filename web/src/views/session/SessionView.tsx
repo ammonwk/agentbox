@@ -89,8 +89,9 @@ export function SessionView({
   // Pins and bookmarks just asked for, shown before the server's state has them.
   const pinned = usePinned(given.sessions);
   const state = useMemo(() => (pinned === given.sessions ? given : { ...given, sessions: [...pinned] }), [given, pinned]);
-  const visiblePinned = usePinned(scoped.sessions);
-  const visible = useMemo(() => (visiblePinned === scoped.sessions ? scoped : { ...scoped, sessions: [...visiblePinned] }), [scoped, visiblePinned]);
+  const humanSessions = useMemo(() => scoped.sessions.filter((s) => !s.agentOwner), [scoped.sessions]);
+  const visiblePinned = usePinned(humanSessions);
+  const visible = useMemo(() => ({ ...scoped, sessions: [...visiblePinned] }), [scoped, visiblePinned]);
   // One closed too long ago to be in the state comes from the closed list's
   // fetches, or is looked up by id for a link straight to it.
   const [, found] = useState(0);
@@ -195,7 +196,7 @@ export function SessionView({
   // reopen it and open it. Pressed again it reopens the one before, since
   // the one just reopened is closed no more.
   const reopenLast = () => {
-    api.closed("", 0, 1, scope.project).then((page) => {
+    api.closed("", 0, 1, scope.project, true).then((page) => {
       const s = page.sessions[0];
       if (!s) return;
       forget(s.id);

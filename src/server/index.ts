@@ -222,6 +222,7 @@ let voice: VoiceHub;
  *  those at hand — for `GET /api/state` and the sockets' frames. */
 function hotState(open = false): HotState {
   let closedStamp = 0;
+  const owner = agents.sessionOwnership();
   const sessions = fleet
     .sessions()
     .filter((s) => {
@@ -229,7 +230,7 @@ function hotState(open = false): HotState {
       closedStamp += 1 + (s.closedAt ?? 0);
       return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
-    .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }))
+    .map((s) => ({ ...s, agentOwner: owner(s.id), attention: attentionOf(s, fleet.blockedReason(s.id)) }))
     .sort(byAttention);
   return { sessions, serverTime: Date.now(), closedStamp };
 }
@@ -1157,8 +1158,10 @@ const router = new Router(mapError)
     const project = url.searchParams.get("project");
     const repos = listRepos().map((r) => ({ ...r, checkoutRoot: repoRootOf(repoCheckoutPath(r)) ?? repoCheckoutPath(r) }));
     const local = project ? agents.conversations.local() : [];
-    const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit, project ? (s) => sessionProject(repos, local, s) === project : undefined);
-    return json({ sessions: page.sessions.map((s) => ({ ...s, attention: attentionOf(s, null) })), total: page.total });
+    const owner = agents.sessionOwnership(), human = url.searchParams.get("human") === "1";
+    const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit,
+      (s) => (!human || !owner(s.id)) && (!project || sessionProject(repos, local, s) === project));
+    return json({ sessions: page.sessions.map((s) => ({ ...s, agentOwner: owner(s.id), attention: attentionOf(s, null) })), total: page.total });
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));

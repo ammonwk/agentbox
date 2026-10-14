@@ -186,14 +186,17 @@ export function Rail({
     setFolds(value);
     try { localStorage.setItem("agentbox.railSections", JSON.stringify(value)); } catch { /* this tab still remembers */ }
   };
-  const sectionOpen = (key: string) => !!list.filter.query || !collapsed.has(key);
+  // The project tab already selects this group. Its sessions stay visible
+  // without another project heading or a saved collapsed state hiding them.
+  const projectSection = (key: string) => !!project && list.sort === "repo" && key !== "pinned" && key !== "scheduled";
+  const sectionOpen = (key: string) => projectSection(key) || !!list.filter.query || !collapsed.has(key);
   const revealed = useRef<string | null>(null);
   useEffect(() => {
     if (!current || revealed.current === `${foldKey}:${current}`) return;
     const section = sections.find((sec) => sec.rows.some((row) => row.id === current));
     if (!section) return;
     revealed.current = `${foldKey}:${current}`;
-    if (collapsed.has(section.key)) toggleSection(section.key);
+    if (!projectSection(section.key) && collapsed.has(section.key)) toggleSection(section.key);
   }, [current, foldKey, sections]);
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const usual = useMemo(() => usualProvider(rows), [rows]);
@@ -404,7 +407,7 @@ export function Rail({
         ) : null}
         {sections.map((sec) => (
           <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
-            {sec.label ? (
+            {sec.label && !projectSection(sec.key) ? (
               <button type="button" className="rail-label rail-section-toggle" aria-expanded={sectionOpen(sec.key)} disabled={!!filter.query} onClick={() => toggleSection(sec.key)} title={sec.key === "pinned" ? "Drag a pinned session to reorder them" : sort === "repo" ? sec.key : undefined}>
                 <Icon.chevronRight size={11} className="section-chevron" />
                 {sec.key === "pinned" ? <Icon.pin size={11} /> : null}
@@ -1027,7 +1030,7 @@ function ClosedList({
     loading.current = true;
     const mine = gen.current;
     try {
-      const page = await api.closed(query.trim(), offset, limit, project);
+      const page = await api.closed(query.trim(), offset, limit, project, true);
       if (mine !== gen.current) return;
       for (const s of page.sessions) closedSessions.set(s.id, s);
       setRows((r) => (offset === 0 ? page.sessions : [...r, ...page.sessions]));

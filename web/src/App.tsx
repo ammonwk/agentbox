@@ -397,7 +397,7 @@ function countsOf(state: AppState | null): Record<NavId, number> {
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
     agents: 0,
-    sessions: needsYou(state.sessions),
+    sessions: needsYou(state.sessions.filter((s) => !s.agentOwner)),
     // Kept for later is still yours, but you have seen it: it does not nag.
     review: state.cards.filter((c) => c.state === "open").length,
     voice: 0,

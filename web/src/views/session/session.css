@@ -1382,6 +1382,23 @@ a.tl-sender:hover .tl-sender-name {
   }
 }
 /* Long content cut to its first lines; the rest on a click. */
+.tl-agent-reply { margin: 8px 0 4px; }
+.tl-agent-row { display: flex; align-items: flex-end; gap: 10px; }
+.tl-agent-row .agent-avatar { flex: none; }
+.tl-bubble.tl-agent-bubble,
+[data-theme="dark"] .tl-bubble.tl-agent-bubble {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.tl-agent-name { color: var(--muted); font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.tl-agent-bubble .tl-assistant { padding: 0; margin: 0; }
+.tl-agent-foot { display: flex; align-items: center; gap: 10px; padding: 5px 0 0 44px; color: var(--faint); font-size: 12px; }
+.tl-agent-reply:hover .tl-me-copy { opacity: 1; }
+@media (max-width: 640px) {
+  .agent-chat-scroll .tl-avatar { display: grid; }
+  .agent-chat-scroll .tl-me-foot { padding-right: 44px; }
+}
 .tl-clamp-body.is-clamped {
   max-height: calc(var(--lines) * 1.55em + 0.4em);
   overflow: hidden;
@@ -3525,7 +3542,7 @@ a.wk-item:hover {
 /* Agent chat history carried only as a summary: both sides muted, the
  * pictures and links still readable; a divider says where each began. */
 .tl-carried .tl-bubble,
-.tl-carried .tl-assistant {
+.tl-carried > .tl-assistant {
   opacity: 0.62;
 }
 .tl-carried .tl-me-foot {

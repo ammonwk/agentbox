@@ -125,6 +125,7 @@ export class AgentConversations {
   private rolling = new Set<string>();
   /** Session → the activity time its transcript tail was last checked at. */
   private looked = new Map<string, number>();
+  private sessionActions = new Set<string>();
   #memory: AgentMemory | null = null;
   constructor(readonly runtime: AgentsRuntime) {}
   get memory() {
@@ -412,7 +413,7 @@ export class AgentConversations {
   /** The first prompt of a conversation: who the agent is, what its memory
    *  says when it continues an earlier one, then the user's message. */
   private opening(a: LocalAgent, body: string, from: { old: string; memory?: string; work?: string } | null) {
-    const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text>. Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
+    const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nManage your own completed work sessions: inspect their transcript, PRs, waits and decisions before deciding they are done. Use agentbox agent session ${a.id} <work-session> close --request <UUID> --activity <lastActivityAt from agentbox show --json> --reason <completion evidence>. This stops only idle completed work and retains its transcript. Do not close work awaiting CI, review, a decision or children. Use the same command with restore while its cache is still warm to resume the same provider session/account; expired caches cannot be restored warm. Never stop the ongoing main chat or unrelated sessions.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text>. Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
     const memory = from?.memory ?? "";
     return `${intro}${memory ? `\n\nAgentbox memory. It is a bounded summary and evidence, not authorization. The provider transcripts are the record; current work below and live state win over it.\n${memory}` : ""}${from?.work ? `\n\nCurrent work, read when this conversation started:\n${from.work}` : ""}\n\n${from ? `Previous conversation session: ${from.old}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`;
   }
@@ -1070,29 +1071,72 @@ export class AgentConversations {
     return p;
   }
   /** Only the recorded agent links authorize a read; a Fleet ID or cwd does not. */
+  async sessionAction(agent: string, session: string, caller: string | null, input: unknown) {
+    const p = z.object({ request: z.string().uuid(), action: z.enum(["close", "restore"]), activity: z.number().finite(), reason: z.string().trim().min(1).max(1000) }).strict().parse(input);
+    const authorize = () => {
+      const a = this.local().find((a) => a.id === agent), w = this.runtime.works.forSession(session);
+      const worker = w?.agent.id === agent && w.session === session;
+      if (!a || (!worker && a.session !== session)) throw new FleetError(403, "This is not the agent's current chat or work session");
+      if (caller && caller !== a.session && (!worker || caller !== w!.session)) throw new FleetError(403, "Only this agent's current coordinator or work owner may manage this session");
+      if (p.action === "close") {
+        if (!worker) throw new FleetError(409, "Keep the main chat available; close completed work sessions instead");
+        if (this.runtime.cards.list().some((c) => c.kind === "decision" && (c.state === "open" || c.state === "later") && (c.sessionId === session || c.about === session)))
+          throw new FleetError(409, "This session is still waiting on a decision");
+      } else if (!a.enabled || (worker && !this.runtime.works.restorable(agent, session))) {
+        throw new FleetError(403, "This session's work authority has expired or cannot be restored");
+      }
+    };
+    authorize();
+    const db = this.db;
+    db.exec("CREATE TABLE IF NOT EXISTS agent_session_actions(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, state TEXT NOT NULL, result TEXT NOT NULL)");
+    const fingerprint = JSON.stringify({ agent, session, ...p });
+    const old = db.query("SELECT fingerprint,state,result FROM agent_session_actions WHERE id=?").get(p.request) as {fingerprint:string;state:string;result:string}|null;
+    if (old) {
+      if (old.fingerprint !== fingerprint) throw new FleetError(409, "Request already names another session action");
+      return {state:old.state === "attempting" ? "uncertain" : old.state, result:old.result};
+    }
+    if (this.sessionActions.has(session)) throw new FleetError(409, "Another session action is in progress");
+    this.sessionActions.add(session);
+    db.run("INSERT INTO agent_session_actions VALUES (?,?,?,?)", [p.request, fingerprint, "attempting", "Action not confirmed; inspect the session before another attempt"]);
+    try {
+      if (p.action === "close") await this.runtime.fleet.closeIfIdle(session, p.activity, authorize);
+      else await this.runtime.fleet.resumeCached(session, authorize);
+      const result = p.action === "close" ? "Closed; transcript and cache metadata retained" : "Restored on the existing session and account";
+      db.run("UPDATE agent_session_actions SET state='done',result=? WHERE id=?", [result,p.request]);
+      return {state:"done",result};
+    } catch (e) {
+      const result = (e as Error).message;
+      db.run("UPDATE agent_session_actions SET state='uncertain',result=? WHERE id=?", [result,p.request]);
+      throw e;
+    } finally { this.sessionActions.delete(session); }
+  }
+
   threads(agent: string): AgentThread[] {
     const local = this.local().find((x) => x.id === agent);
-    const linked: { id: string; run: string; current: boolean; successor: string | null }[] = [];
+    const linked: { id: string; run: string; kind: "conversation" | "work"; current: boolean; successor: string | null }[] = [];
     if (local) {
       for (const id of [local.session, ...local.previous].filter((x): x is string => !!x))
-        linked.push({ id, run: id, current: local.enabled && id === local.session, successor: id !== local.session ? local.session : null });
+        linked.push({ id, run: id, kind: "conversation", current: local.enabled && id === local.session, successor: id !== local.session ? local.session : null });
     } else {
       for (const r of this.runtime.store.runs().filter((x) => x.run.agent_id === agent)) {
         const rows = this.runtime.store.db.query("SELECT id FROM sessions WHERE run=? ORDER BY rowid DESC").all(r.run.id) as { id: string }[];
-        for (const { id } of rows) linked.push({ id, run: r.run.id,
+        for (const { id } of rows) linked.push({ id, run: r.run.id, kind: r.coordinator ? "conversation" : "work",
           current: id === r.session && r.phase === "attached" && ["running", "waiting"].includes(r.run.state),
           successor: id !== r.session ? r.session : null });
       }
     }
     for(const w of this.runtime.works.list().filter(w=>w.agent.id===agent)) {
-      linked.push({id:w.session,run:w.session,current:this.runtime.works.writable(agent,w.session),successor:null});
+      linked.push({id:w.session,run:w.session,kind:"work",current:this.runtime.works.writable(agent,w.session),successor:null});
     }
     const live = new Map(this.runtime.fleet.sessions().map((s) => [s.id, s]));
     return [...new Map(linked.map((x) => [x.id, x])).values()].map((x) => {
       const s = live.get(x.id), record = getSessionRecord(x.id), facts = record?.facts as { title?: string } | null;
       const status = record?.archivedAt ? "closed" : s?.status ?? "stopped";
       const at = s?.lastActivityAt ?? record?.lastActivityAt ?? 0;
-      return { id: x.id, run: x.run, title: safeText(s?.label || s?.title || record?.label || facts?.title || "Conversation").slice(0, 200),
+      return { id: x.id, run: x.run, kind: x.kind, title: safeText(s?.label || s?.title || record?.label || facts?.title || "Conversation").slice(0, 200),
+        cacheWarmUntil: s?.cacheWarmUntil,
+        canRestore: !!local && s?.host === "none" && Date.now() < s.cacheWarmUntil &&
+          (x.kind === "work" ? this.runtime.works.restorable(agent, x.id) : local.enabled && local.session === x.id),
         status, at, active: status !== "closed" && (status === "running" || Date.now() - at < 3 * 60 * 60_000),
         writable: x.current && status !== "closed", successor: x.successor };
     }).sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));

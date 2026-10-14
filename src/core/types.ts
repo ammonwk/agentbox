@@ -446,6 +446,8 @@ export type SessionHost =
 export interface Session {
   /** agentbox's short id, stable for the row's life. */
   id: string;
+  /** Registered agent ownership for navigation; not a messaging capability. */
+  agentOwner?: string | null;
   provider: ProviderId;
   /** The provider's own session id — what `--resume` takes. Null for the few
    *  seconds between spawning a provider that cannot be told its id up front
