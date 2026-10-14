@@ -60,8 +60,10 @@ export interface SessionWork {
 
 const NONE: SessionWork = { shells: [], agents: [], workflows: [] };
 
-/** One transcript scan per session, kept: after the first read a check costs one stat. */
+/** One transcript scan per session, kept: after the first read a check costs
+ *  one stat. The least recently asked about go past MAX_SCANS. */
 const scans = new Map<string, LaunchScan>();
+const MAX_SCANS = 64;
 
 export async function sessionWork(s: Session): Promise<SessionWork> {
   if (!s.pid || s.host === "none") return NONE;
@@ -71,7 +73,10 @@ export async function sessionWork(s: Session): Promise<SessionWork> {
   const file = s.transcriptPath ? transcriptFile(s.transcriptPath) : null;
   if (s.provider !== "claude" || !file) return NONE;
   let scan = scans.get(file);
-  if (!scan) scans.set(file, (scan = new LaunchScan(file)));
+  if (scan) scans.delete(file);
+  else scan = new LaunchScan(file);
+  scans.set(file, scan);
+  if (scans.size > MAX_SCANS) scans.delete(scans.keys().next().value!);
   await scan.read();
   const started = startedAtOf(agent);
   const own = s.agentSessionId && started !== null ? { dir: join(dirname(file), s.agentSessionId), started } : null;
@@ -249,16 +254,23 @@ export async function agentTimeline(s: Session, agentId: string, since: string |
   agentReaders.set(file, reader);
   if (agentReaders.size > MAX_AGENT_READERS) agentReaders.delete(agentReaders.keys().next().value!);
 
-  let page: Omit<AgentTimeline, "state">;
-  if (since) {
-    const r = await reader.since(since);
-    page = { events: r.events, cursor: r.cursor, reset: r.reset, more: r.reset };
-  } else {
-    const r = await reader.timeline({ limit: AGENT_PAGE });
-    page = { events: r.events, cursor: r.cursor, reset: true, more: r.before !== null };
+  try {
+    let page: Omit<AgentTimeline, "state">;
+    if (since) {
+      const r = await reader.since(since);
+      page = { events: r.events, cursor: r.cursor, reset: r.reset, more: r.reset };
+    } else {
+      const r = await reader.timeline({ limit: AGENT_PAGE });
+      page = { events: r.events, cursor: r.cursor, reset: true, more: r.before !== null };
+    }
+    const state = finished(file) ? "done" : !s.pid || Date.now() - statSync(file).mtimeMs > SUBAGENT_QUIET_MS ? "stopped" : "running";
+    return { ...page, state };
+  } catch (e) {
+    // Deleted since it was found: no such agent any more.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    agentReaders.delete(file);
+    return null;
   }
-  const state = finished(file) ? "done" : !s.pid || Date.now() - statSync(file).mtimeMs > SUBAGENT_QUIET_MS ? "stopped" : "running";
-  return { ...page, state };
 }
 
 /** Claude flags every record of an agent's own file `isSidechain`, which the

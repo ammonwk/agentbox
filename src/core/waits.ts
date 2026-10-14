@@ -31,6 +31,7 @@
  */
 
 import { getWait, insertWait, listOpenWaits, listWaits, updateWait } from "./db";
+import { assignedPrHolder, prReleased, prReleaseNotice } from "./prclaims";
 import { FleetError, type Fleet } from "./fleet";
 import { Held, logTail, prKey, readJob, readPrs, readRun, readUntil, type JobRead, type PrRead, type RunRead } from "./waitreads";
 import type { Session, Wait, WaitEnd, WaitSpec } from "./types";
@@ -71,6 +72,9 @@ type Ending = { how: Exclude<WaitEnd, "cancelled" | "timeout">; text: string };
 /** One look: how it ends the wait, or what it saw and hands the next look. */
 export type Look = { end: Ending } | { seen: string; memo?: Wait["memo"] };
 
+// Merge authorization belongs to the steward, not the owner waiting for CI/review.
+const isMergeGate = (name: string): boolean => name.trim().toLowerCase() === "merge gate";
+
 const short = (sha: string): string => sha.slice(0, 10);
 const sameCommit = (a: string, b: string): boolean => a.length > 0 && b.length > 0 && (a.startsWith(b) || b.startsWith(a));
 const list = (names: string[], max = 8): string => (names.length > max ? `${names.slice(0, max).join(", ")} and ${names.length - max} more` : names.join(", "));
@@ -89,7 +93,7 @@ const oneLine = (s: string, max: number): string => {
 export function describe(spec: WaitSpec): string {
   switch (spec.kind) {
     case "pr": {
-      if (spec.merged) return `PR #${spec.number} merging`;
+      if (spec.merged) return `PR #${spec.number} merging${spec.head ? ` from ${short(spec.head)}` : ""}`;
       const what = oneLine([...(spec.all ? ["every check"] : []), ...spec.checks].join(", "), 120);
       return `PR #${spec.number}: ${what}${spec.head ? ` on ${short(spec.head)}` : ""}`;
     }
@@ -125,10 +129,11 @@ export function parseSpec(raw: unknown): WaitSpec {
   switch (o.kind) {
     case "pr": {
       const checks = Array.isArray(o.checks) ? o.checks.filter((c): c is string => typeof c === "string" && !!c.trim()).map((c) => c.trim()) : [];
+      if (checks.some(isMergeGate)) throw new FleetError(400, "Merge gate is merge authorization, not a CI/review check; use --merged to wait for the merge");
       const head = typeof o.head === "string" && o.head.trim() ? o.head.trim().toLowerCase() : null;
       if (head && !/^[0-9a-f]{7,40}$/.test(head)) throw new FleetError(400, `--head takes a commit (7 to 40 hex), not "${head}"`);
       const merged = o.merged === true;
-      if (merged && (checks.length || o.all === true || head)) throw new FleetError(400, "a wait for the merge is its own wait: arm one for the checks and another with --merged");
+      if (merged && (checks.length || o.all === true)) throw new FleetError(400, "a wait for the merge is its own wait: arm one for the checks and another with --merged");
       return { kind: "pr", repo: repo(), number: whole("number", 1e9), head, all: !merged && (o.all === true || checks.length === 0), checks, merged };
     }
     case "run":
@@ -159,26 +164,31 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
   const name = `PR #${spec.number}`;
   if (pr.state === "MERGED") return { end: { how: "happened", text: `${name} merged.` } };
   if (pr.state === "CLOSED") return { end: { how: "stuck", text: `${name} was closed without merging.` } };
-  if (spec.merged) return { seen: "open, not merged" };
 
-  const want = spec.head ?? memo.head ?? pr.head;
+  const want = spec.merged ? (spec.head ?? pr.head) : (spec.head ?? memo.head ?? pr.head);
   if (!sameCommit(pr.head, want)) {
     if (spec.head && !memo.head && now - createdAt < HEAD_GRACE_MS) return { seen: `GitHub still shows head ${short(pr.head)}, not ${short(want)}`, memo };
     return {
       end: {
         how: "stuck",
-        text: memo.head
-          ? `${name}'s head moved to ${short(pr.head)}; this wait was for ${short(want)}, whose checks no longer decide anything. Arm it again for the new head.`
-          : `${name}'s head is ${short(pr.head)}, and ${short(want)} never became it. Check the push went to this PR's branch.`,
+        text: spec.merged
+          ? `${name}'s head moved to ${short(pr.head)} before it merged; this wait was for ${short(want)}. Arm it again with --head ${short(pr.head)}.`
+          : memo.head
+            ? `${name}'s head moved to ${short(pr.head)}; this wait was for ${short(want)}, whose checks no longer decide anything. Arm it again for the new head.`
+            : `${name}'s head is ${short(pr.head)}, and ${short(want)} never became it. Check the push went to this PR's branch.`,
       },
     };
   }
+  if (spec.merged) return { seen: `open on ${short(pr.head)}, not merged`, memo: spec.head ? { head: pr.head } : {} };
   const base = { head: pr.head };
 
-  const asked = spec.checks.map((n) => ({ n, found: pr.checks.filter((c) => named(c.name, n)) }));
-  const scope = spec.all ? pr.checks : [...new Set(asked.flatMap((a) => a.found))];
+  // Apply the policy here so already-armed waits and every diagnostic use the same scope.
+  if (spec.checks.some(isMergeGate)) return { end: { how: "stuck", text: "This wait explicitly requires merge authorization. Arm a CI/review wait, or use --merged for the merge." } };
+  const checks = pr.checks.filter((c) => !isMergeGate(c.name));
+  const asked = spec.checks.map((n) => ({ n, found: checks.filter((c) => named(c.name, n)) }));
+  const scope = spec.all ? checks : [...new Set(asked.flatMap((a) => a.found))];
   const failed = scope.filter((c) => c.done && !c.ok);
-  const running = pr.checks.filter((c) => !c.done);
+  const running = checks.filter((c) => !c.done);
   const absent = asked.filter((a) => a.found.length === 0).map((a) => a.n);
   const passed = scope.filter((c) => c.done && c.ok).length;
   if (failed.length) {
@@ -189,14 +199,26 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
       },
     };
   }
+  // A conflicting PR starts no pull_request workflows, even when an external check reports.
+  if (spec.all || absent.length) {
+    if (pr.mergeable === "CONFLICTING") {
+      return {
+        end: {
+          how: "stuck",
+          text: `${name} on ${short(pr.head)} conflicts with ${pr.base}. GitHub does not start pull_request workflows while a PR has merge conflicts; external checks can still report. Resolve the conflicts with the base branch and push the resolution, then arm a wait for the new head. An empty commit will not resolve the conflicts.`,
+        },
+      };
+    }
+    if (pr.mergeable === "UNKNOWN") return { seen: `GitHub is still determining whether ${name} on ${short(pr.head)} merges with ${pr.base}`, memo: base };
+  }
   const owed = [...(spec.all ? running : scope.filter((c) => !c.done)).map((c) => c.name), ...absent.map((n) => `${n} (not reported yet)`)];
-  const none = spec.all && pr.checks.length === 0;
+  const none = spec.all && checks.length === 0;
   if (owed.length === 0 && !none) {
     if (spec.all && !(memo.readyAt && now - memo.readyAt >= READY_TWICE_MS)) {
       return { seen: `every check has concluded on ${short(pr.head)}; looking once more before saying so`, memo: { ...base, readyAt: memo.readyAt ?? now } };
     }
     const other = running.length ? ` Other checks still running: ${list(running.map((c) => c.name))}.` : "";
-    return { end: { how: "happened", text: `${name}: ${spec.all ? `all ${pr.checks.length} checks` : list(scope.map((c) => c.name))} concluded on ${short(pr.head)}, ${passed} passed and none failed.${other}` } };
+    return { end: { how: "happened", text: `${name}: ${spec.all ? `all ${checks.length} checks` : list(scope.map((c) => c.name))} concluded on ${short(pr.head)}, ${passed} passed and none failed.${other}` } };
   }
   // Nothing is running that could report what is missing.
   if ((absent.length || none) && running.length === 0) {
@@ -206,7 +228,7 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
         end: {
           how: "stuck",
           text: none
-            ? `${name}: no check has reported on ${short(pr.head)} in ${span(now - absentAt)}. No workflow started for this head: look at why (a draft, a paths filter, Actions down) rather than wait.`
+            ? `${name}: no check has reported on ${short(pr.head)} in ${span(now - absentAt)}. Check the workflow event filters and run history; an empty check list does not prove whether a workflow started.`
             : `${name}: ${list(absent)} has not reported on ${short(pr.head)}, and nothing has been running or queued there for ${span(now - absentAt)}. Nothing in sight will report it, so this wait ends here instead of waiting blind: look at the workflow that should report it, and arm again if it is in fact still coming.`,
         },
       };
@@ -297,6 +319,7 @@ export class Waits {
     if (s.host === "external" || s.host === "subagent") {
       throw new FleetError(409, `${sessionId} ${s.host === "subagent" ? "is a subagent" : "runs in a terminal of the user's own"}: agentbox cannot type into it, so it could never be told how the wait ended. A subagent hands the waiting to its parent session or to a session of its own (agentbox claude --detach).`);
     }
+    if (spec.kind === "pr" && prReleased(sessionId, spec)) throw new FleetError(409, prReleaseNotice(sessionId));
     const ms = timeoutMs ?? DEFAULT_TIMEOUT_MS[spec.kind];
     if (!Number.isFinite(ms) || ms < MIN_TIMEOUT_MS || ms > MAX_TIMEOUT_MS) throw new FleetError(400, `a wait's timeout is between ${span(MIN_TIMEOUT_MS)} and ${span(MAX_TIMEOUT_MS)}`);
     const going = listOpenWaits(0).filter((w) => w.sessionId === sessionId && !w.ended);
@@ -463,7 +486,13 @@ export class Waits {
    */
   private async tell(w: Wait): Promise<void> {
     const now = this.now();
+    w = getWait(w.id)!;
+    if (w.ended === "cancelled" || w.toldAt !== null) return;
     const s = this.sessionOf(w);
+    if (w.spec.kind === "pr" && prReleased(s?.id ?? w.sessionId, w.spec)) {
+      updateWait(w.id, { ended: "cancelled", endedAt: now, outcome: prReleaseNotice(s?.id ?? w.sessionId), untold: null });
+      return;
+    }
     const hold = !s
       ? "its session is gone"
       : s.closedAt
@@ -481,7 +510,11 @@ export class Waits {
     const drafted = this.draftLeft.get(w.id);
     if (drafted !== undefined && s.lastActivityAt <= drafted) return;
     try {
-      await this.fleet.note(s.id, message(w, now));
+      const holder = w.spec.kind === "pr" ? assignedPrHolder(w.spec) : null;
+      const notice = holder && holder !== s.id
+        ? `[agentbox: This PR is assigned to ${holder}, not you (${s.id}). This wait is observation only; it does not authorize edits, merges, pushes or use of the holder's worktree.]\n\n`
+        : "";
+      await this.fleet.note(s.id, notice + message(w, now));
       updateWait(w.id, { toldAt: this.now(), untold: null });
       this.tellAfter.delete(w.id);
       this.draftLeft.delete(w.id);

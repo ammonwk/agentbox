@@ -22,10 +22,11 @@
  * file's mtime and poll straight away.
  */
 
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { statSync } from "node:fs";
 import { getKv, insertUsageSample, lastUsageSample, setKv, type UsageSampleRow } from "../db";
-import type { Account, AccountProvider, AccountUsage, ProviderId, UsageWindow, WindowKind } from "../types";
+import type { Account, AccountProvider, AccountUsage, ProviderId, ResetConsumeResult, ResetCredit, ResetCredits, ResetOutcome, UsageWindow, WindowKind } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
 import { AccountError, claudeJsonPath, credentialsPath, detectCli } from "./homes";
 import { bridgeUrl } from "../../bridge/models";
@@ -54,10 +55,12 @@ const SAMPLE_EVERY_MS = HOUR;
 
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const CODEX_RESET_CONSUME_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 const DEVIN_STATUS_PATH = "/exa.seat_management_pb.SeatManagementService/GetUserStatus";
 
 export type Reading =
-  | { kind: "ok"; at: number; windows: UsageWindow[]; notes: string[]; source: AccountUsage["source"] }
+  | { kind: "ok"; at: number; windows: UsageWindow[]; notes: string[]; source: AccountUsage["source"]; resets?: ResetCredits | null }
   /** We chose not to ask (token expired, scope missing, not logged in). */
   | { kind: "skip"; stale: string }
   | { kind: "error"; stale: string; rateLimited?: boolean; retryAfterMs?: number | null; unauthorized?: boolean };
@@ -309,9 +312,10 @@ function codexWindow(w: unknown, now: number, prefix?: { id: string; label: stri
  * `wham/usage` → windows, by window LENGTH rather than primary/secondary
  * position: since August 2026 some plans have only a weekly window and it
  * arrives as `primary_window`. `additional_rate_limits` are per-model meters
- * (e.g. a Spark model) and become model-scoped windows.
+ * (e.g. a Spark model) and become model-scoped windows. The same body carries
+ * the reset-credit count (`rate_limit_reset_credits`).
  */
-export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindow[]; notes: string[]; plan: string | null } {
+export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindow[]; notes: string[]; plan: string | null; resets: ResetCredits | null } {
   const b = rec(body) ?? {};
   const windows: UsageWindow[] = [];
   const notes: string[] = [];
@@ -336,11 +340,79 @@ export function mapCodexUsage(body: unknown, now: number): { windows: UsageWindo
   const credits = rec(b.credits);
   if (credits?.unlimited === true) notes.push("credits: unlimited");
   else if (credits?.has_credits === true && credits.balance != null) notes.push(`credits: ${String(credits.balance)}`);
-  return { windows, notes, plan: typeof b.plan_type === "string" ? b.plan_type : null };
+  const rc = rec(b.rate_limit_reset_credits);
+  const availableCount = toNum(rc?.available_count);
+  const applicableCount = toNum(rc?.applicable_available_count);
+  const resets =
+    availableCount !== null
+      ? { availableCount: Math.max(0, Math.floor(availableCount)), applicableCount: applicableCount === null ? null : Math.max(0, Math.floor(applicableCount)), credits: [] }
+      : null;
+  return { windows, notes, plan: typeof b.plan_type === "string" ? b.plan_type : null, resets };
+}
+
+/** `GET /wham/rate-limit-reset-credits` → the credits themselves. Timestamps
+ *  arrive RFC3339; a missing one is null, not a parse failure. */
+export function mapCodexResetCredits(body: unknown): ResetCredit[] {
+  const b = rec(body);
+  const list = b && Array.isArray(b.credits) ? (b.credits as unknown[]) : [];
+  const out: ResetCredit[] = [];
+  for (const c of list) {
+    const o = rec(c);
+    const id = typeof o?.id === "string" && o.id ? o.id : null;
+    if (!o || !id) continue;
+    const status = o.status === "available" || o.status === "redeeming" || o.status === "redeemed" ? o.status : "unknown";
+    const granted = isoMs(o.granted_at);
+    out.push({
+      id,
+      resetType: typeof o.reset_type === "string" ? o.reset_type : "unknown",
+      status,
+      grantedAt: granted,
+      expiresAt: isoMs(o.expires_at),
+      title: typeof o.title === "string" && o.title ? o.title : null,
+      description: typeof o.description === "string" && o.description ? o.description : null,
+    });
+  }
+  return out.sort((a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0));
 }
 
 function codexUA(version: string | null): string {
   return `codex_cli_rs/${version ?? "0.0.0"} (${process.platform === "darwin" ? "Mac OS" : "Linux"}; ${process.arch === "arm64" ? "aarch64" : "x86_64"}) agentbox`;
+}
+
+/** What every codex backend call needs: the account's own access token, its
+ *  workspace, and a user agent the CLI itself would send. */
+function codexHeaders(auth: { accessToken: string | null; accountId: string | null }, version: string | null): Record<string, string> {
+  const h: Record<string, string> = {
+    Authorization: `Bearer ${auth.accessToken}`,
+    Accept: "application/json",
+    "User-Agent": codexUA(version),
+    originator: "codex_cli_rs",
+  };
+  if (auth.accountId) h["ChatGPT-Account-Id"] = auth.accountId;
+  return h;
+}
+
+/** The credits themselves, when the usage body's count says there are any:
+ *  it carries only the count. Best effort — a failure leaves the count. */
+async function enrichCodexResets(count: ResetCredits | null, headers: Record<string, string>, deps: UsageDeps): Promise<ResetCredits | null> {
+  if (!count || count.availableCount <= 0) return count;
+  let res: Response;
+  try {
+    res = await deps.fetch(CODEX_RESET_CREDITS_URL, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  } catch {
+    return count;
+  }
+  if (!res.ok) {
+    await res.arrayBuffer().catch(() => undefined);
+    return count;
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return count;
+  }
+  return { ...count, credits: mapCodexResetCredits(body) };
 }
 
 export async function fetchCodexUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
@@ -351,13 +423,7 @@ export async function fetchCodexUsage(account: Pick<Account, "home">, deps: Usag
   if (auth.expiresAt !== null && auth.expiresAt <= now + 30_000) {
     return { kind: "skip", stale: "token expired — refreshes next time this account runs" };
   }
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${auth.accessToken}`,
-    Accept: "application/json",
-    "User-Agent": codexUA(await deps.version("codex")),
-    originator: "codex_cli_rs",
-  };
-  if (auth.accountId) headers["ChatGPT-Account-Id"] = auth.accountId;
+  const headers = codexHeaders(auth, await deps.version("codex"));
   let res: Response;
   try {
     res = await deps.fetch(CODEX_USAGE_URL, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -372,9 +438,63 @@ export async function fetchCodexUsage(account: Pick<Account, "home">, deps: Usag
     return { kind: "error", stale: "usage endpoint returned something that is not JSON" };
   }
   const at = deps.now();
-  const { windows, notes } = mapCodexUsage(body, at);
+  const { windows, notes, resets } = mapCodexUsage(body, at);
   if (windows.length === 0) return { kind: "error", stale: "usage endpoint returned no windows" };
-  return { kind: "ok", at, windows, notes, source: "endpoint" };
+  return { kind: "ok", at, windows, notes, source: "endpoint", resets: await enrichCodexResets(resets, headers, deps) };
+}
+
+export type { ResetOutcome, ResetConsumeResult } from "../types";
+
+/**
+ * Spend one Codex usage-limit reset — the CLI's `/usage` → "Full reset".
+ * `creditId` picks one of several; omitted, the provider uses whichever
+ * applies to a window that is spent right now. The request carries a fresh
+ * idempotency key (`redeem_request_id`), so a dropped answer cannot spend two.
+ */
+export async function consumeCodexResetCredit(
+  account: Pick<Account, "home">,
+  deps: UsageDeps,
+  creditId?: string | null,
+): Promise<ResetConsumeResult> {
+  const auth = readCodexAuth(account.home);
+  if (!auth || auth.mode !== "chatgpt" || !auth.accessToken) {
+    throw new Error("this is not a ChatGPT login, which is what a usage reset needs");
+  }
+  const now = deps.now();
+  if (auth.expiresAt !== null && auth.expiresAt <= now + 30_000) {
+    throw new Error("the login's token has expired — it refreshes the next time this account runs, then try again");
+  }
+  const payload: Record<string, string> = { redeem_request_id: randomUUID() };
+  if (creditId) payload.credit_id = creditId;
+  let res: Response;
+  try {
+    res = await deps.fetch(CODEX_RESET_CONSUME_URL, {
+      method: "POST",
+      headers: { ...codexHeaders(auth, await deps.version("codex")), "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const name = (err as Error)?.name;
+    throw new Error(name === "TimeoutError" || name === "AbortError" ? "the reset request timed out" : "could not reach the reset endpoint");
+  }
+  if (!res.ok) {
+    await res.arrayBuffer().catch(() => undefined);
+    if (res.status === 401 || res.status === 403) throw new Error("the reset was refused: this login cannot reset usage (it may have expired) — log in again");
+    throw new Error(`the reset was refused (HTTP ${res.status})`);
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    throw new Error("the reset answer was not JSON");
+  }
+  const b = rec(body) ?? {};
+  const code = b.code;
+  const outcome: ResetOutcome =
+    code === "reset" ? "reset" : code === "nothing_to_reset" ? "nothing-to-reset" : code === "no_credit" ? "no-credit" : code === "already_redeemed" ? "already-redeemed" : "unknown";
+  const windows = toNum(b.windows_reset);
+  return { outcome, windowsReset: windows === null ? 0 : Math.max(0, Math.floor(windows)) };
 }
 
 // ------------------------------------------------------------------- devin
@@ -665,6 +785,25 @@ export class UsageService extends EventEmitter {
     return took;
   }
 
+  /**
+   * Spend one of a codex account's usage-limit resets, then read the account
+   * again so the board, the balancer and every session stopped at the limit
+   * see that the window is no longer spent. The reading is taken whether or
+   * not the normal poll was due: the whole point is the immediate lift.
+   */
+  async consumeReset(accountId: string, creditId?: string | null): Promise<ResetConsumeResult> {
+    const account = this.opts.accounts().find((a) => a.id === accountId);
+    if (!account) throw new AccountError(404, `no account ${accountId}`);
+    if (account.provider !== "codex") throw new AccountError(400, `usage resets are a Codex feature; "${account.label}" is ${account.provider}`);
+    const result = await consumeCodexResetCredit(account, this.deps, creditId);
+    if (result.outcome === "reset") {
+      // A reset that worked changed the numbers; take a fresh reading now.
+      // A no-op (nothing to reset, no credit, already redeemed) leaves them.
+      await this.fetchNow(account).catch(() => undefined);
+    }
+    return result;
+  }
+
   // -------------------------------------------------------------- internals
 
   private poll(accountId: string): PollState {
@@ -767,7 +906,17 @@ export class UsageService extends EventEmitter {
   private accept(accountId: string, r: Extract<Reading, { kind: "ok" }>): boolean {
     const cur = this.get(accountId);
     if (cur.at !== null && r.at <= cur.at && cur.windows.length > 0) return false;
-    const next: AccountUsage = { accountId, at: r.at, windows: r.windows, stale: null, source: r.source, notes: r.notes };
+    const next: AccountUsage = {
+      accountId,
+      at: r.at,
+      windows: r.windows,
+      stale: null,
+      source: r.source,
+      notes: r.notes,
+      // A rollout reading carries no reset credits: keep what the last
+      // endpoint reading found rather than forgetting them.
+      resets: r.resets === undefined ? (cur.resets ?? null) : r.resets,
+    };
     try {
       recordSamples(accountId, r.at, r.windows, r.source);
     } catch (err) {

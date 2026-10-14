@@ -294,22 +294,16 @@ export function strandedNudgeAfter(parkIdleMin: number): number {
   return Math.max(60_000, Math.min(STRANDED_NUDGE_MS, parkIdleMin * 60_000 - STRANDED_LEAD_MS));
 }
 
-/** Did the session's last try at a turn hit a usage limit, with no answer
- *  since? A notification lines up behind the limit like anything else, and
- *  telling the session about it only meets the limit again: Claude does not
- *  retry on its own, and moving or continuing it is the limit banner's. The
- *  newest model call, not the newest line: notifications queued after the
- *  hit move `lastActivityAt` on but answer nothing. */
-export function stoppedAtLimit(facts: { rateLimitHits: { at: number }[]; lastTurnAt?: number | null; lastActivityAt?: number | null }): boolean {
-  return limitStop(facts) !== null;
-}
-
-/** The limit hit the session is still stopped at (`stoppedAtLimit`), or null.
- *  The one rule for it: the board's `limitHit`, and so the move off the
- *  account (`Fleet.continueStalled`), read a hit as answered once any line
- *  followed it by a minute, and a session waiting on CI gets a monitor event
- *  every few minutes. Where the provider's transcript does not say when the
- *  model last answered, the hit has to be the session's last word. */
+/** The limit hit the session's last try at a turn stopped on, with no answer
+ *  since, or null. A notification lines up behind the limit like anything
+ *  else, and telling the session about it only meets the limit again: Claude
+ *  does not retry on its own. The newest model call, not the newest line:
+ *  the board's `limitHit`, and so the move off the account
+ *  (`Fleet.continueStalled`), read a hit as answered once any line followed
+ *  it by a minute, and a session waiting on CI gets a monitor event every few
+ *  minutes. Where the provider's transcript does not say when the model last
+ *  answered, the hit has to be the session's last word. Whether that limit
+ *  still stands is the account's usage to say (`Fleet.limitEnd`). */
 export function limitStop<H extends { at: number }>(facts: { rateLimitHits?: H[]; lastTurnAt?: number | null; lastActivityAt?: number | null }): H | null {
   const hit = facts.rateLimitHits?.at(-1);
   if (!hit) return null;

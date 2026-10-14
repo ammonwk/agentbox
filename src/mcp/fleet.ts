@@ -17,7 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { VERSION } from "../version";
 import { apiClient } from "../client";
-import type { AppState, Placement, Session, TimelineEvent, TimelinePage } from "../core/types";
+import type { AppState, Closed, Placement, Session, TimelineEvent, TimelinePage } from "../core/types";
 import { retryClock } from "../core/attention";
 import { accountProvider } from "../core/providers/account";
 
@@ -217,12 +217,12 @@ export async function runMcp(base: string): Promise<void> {
     "close",
     {
       title: "Close or reopen a session",
-      description: "Close stops a finished session's process and takes it, and every session it started (at any depth), off the fleet; they stay resumable. Running ones are stopped, so ask before closing a session whose children are running. closed: false reopens it (back on the list, still stopped).",
+      description: "Close stops a finished session's process and takes it, and every session it started (at any depth), off the fleet; they stay resumable. Running ones are stopped, so ask before closing a session whose children are running. One it started that has a wait armed or has claimed an open PR is left open, and the answer names it. closed: false reopens it (back on the list, still stopped).",
       inputSchema: { id: z.string(), closed: z.boolean().optional() },
     },
     async ({ id, closed }) => {
-      await api("POST", `/api/sessions/${id}/close`, { closed: closed ?? true });
-      return text(`${closed === false ? "reopened" : "closed"} ${id}`);
+      const out = (await api("POST", `/api/sessions/${id}/close`, { closed: closed ?? true })) as Closed | null;
+      return text(`${closed === false ? "reopened" : "closed"} ${id}${out?.said ?? ""}`);
     },
   );
 

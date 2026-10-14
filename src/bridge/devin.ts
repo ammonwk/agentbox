@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { userHome } from "../core/paths";
 import { GO_ACCOUNT_BEARER, GO_CONSOLE_UPSTREAM, GO_CONSOLE_USAGE, GO_KEY_UPSTREAM, goHomeForAccount } from "../core/accounts/gocred";
 import { freshGoLogin } from "../core/accounts/godevice";
+import { ForeignReasoning, refusedForeignReasoning } from "./reasoning";
 import { repairToolArguments } from "./toolargs";
 import { BRIDGED, bridgePort, bridgedModel, type BridgedModel } from "./models";
 import {
@@ -425,8 +426,11 @@ async function passThrough(req: Request, url: URL, body: Uint8Array | null): Pro
  * terminal, and goes through untouched: agentbox holds no key of its own.
  * `/go/<account>/v1/usage` is Go's own usage
  * report for that credential (accounts/usage.ts). The session's own headers
- * (`x-opencode-session`) ride along; the reply streams back.
+ * (`x-opencode-session`) ride along; the reply streams back. Reasoning the
+ * session was given on another account is left out (./reasoning.ts).
  */
+const foreignReasoning = new ForeignReasoning();
+
 async function goProxy(req: Request, url: URL, log: (line: string) => void): Promise<Response> {
   const refuse = (message: string) => Response.json({ type: "error", error: { type: "AuthError", message: `agentbox bridge: ${message}` } }, { status: 401 });
   const m = /^\/go\/([^/]+)(\/anthropic)?\/v1(\/.*)$/.exec(url.pathname);
@@ -456,6 +460,15 @@ async function goProxy(req: Request, url: URL, log: (line: string) => void): Pro
     if (headers.has("x-api-key")) headers.set("x-api-key", token);
   };
 
+  const replays = shape === "openai" && req.method === "POST" && m[3] === "/responses";
+  const without = (fixed: { body: string; dropped: number } | null, why: string): boolean => {
+    if (!fixed) return false;
+    log(`go ${selector} ${m[3]}: left out ${fixed.dropped} reasoning item(s) another account issued (${why})`);
+    body = new TextEncoder().encode(fixed.body).buffer as ArrayBuffer;
+    return true;
+  };
+  if (body && replays) without(foreignReasoning.strip(selector, new TextDecoder().decode(body)), "refused before");
+
   const home = goHomeForAccount(selector);
   for (const force of [false, true]) {
     const login = home ? await freshGoLogin(home, { force }).catch((e: Error) => (log(`go ${selector}: ${e.message}`), null)) : null;
@@ -464,7 +477,14 @@ async function goProxy(req: Request, url: URL, log: (line: string) => void): Pro
     if (login.orgID) headers.set("x-opencode-org-id", login.orgID);
     else headers.delete("x-opencode-org-id");
     const target = shape === "openai" && m[3] === "/usage" ? `${GO_CONSOLE_USAGE}${url.search}` : `${GO_CONSOLE_UPSTREAM[shape]}${rest}`;
-    const res = await goSend(target, req, headers, body, log, selector);
+    let res = await goSend(target, req, headers, body, log, selector);
+    if (res.status === 400 && body && replays) {
+      const said = await res.text();
+      if (!refusedForeignReasoning(res.status, said) || !without(foreignReasoning.refused(selector, new TextDecoder().decode(body)), "refused now, sent again")) {
+        return new Response(said, { status: res.status, headers: res.headers });
+      }
+      res = await goSend(target, req, headers, body, log, selector);
+    }
     // A token refused before its time: refresh once and ask again.
     if (res.status !== 401 || force) return res;
     await res.arrayBuffer().catch(() => undefined);

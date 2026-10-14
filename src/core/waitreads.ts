@@ -35,6 +35,8 @@ export interface Check {
 export interface PrRead {
   state: "OPEN" | "MERGED" | "CLOSED";
   head: string;
+  base: string;
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   checks: Check[];
 }
 
@@ -105,7 +107,7 @@ export const prKey = (s: Pick<PrSpec, "repo" | "number">): string => `${s.repo}#
  */
 export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<Map<string, PrRead | Error>> {
   const repos = [...new Set(prs.map((p) => p.repo))];
-  const fields = `state headRefOid commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
+  const fields = `state headRefOid baseRefName mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
   const query = `{ ${repos
     .map((repo, i) => {
       const [owner, name] = repo.split("/");
@@ -121,7 +123,7 @@ export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<M
   repos.forEach((repo, i) => {
     for (const p of prs.filter((x) => x.repo === repo)) {
       const node = body.data![`r${i}`]?.[`p${p.number}`] as
-        | { state: PrRead["state"]; headRefOid: string; commits: { nodes: { commit: { oid: string; statusCheckRollup: { contexts: { totalCount: number; nodes: RawContext[] } } | null } }[] } }
+        | { state: PrRead["state"]; headRefOid: string; baseRefName: string; mergeable: PrRead["mergeable"]; commits: { nodes: { commit: { oid: string; statusCheckRollup: { contexts: { totalCount: number; nodes: RawContext[] } } | null } }[] } }
         | null
         | undefined;
       if (!node) {
@@ -140,7 +142,7 @@ export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<M
         out.set(prKey(p), new Error(`${prKey(p)} has ${contexts.totalCount} checks on its head, more than one look reads (${contexts.nodes.length})`));
         continue;
       }
-      out.set(prKey(p), { state: node.state, head: node.headRefOid, checks: (contexts?.nodes ?? []).map(check) });
+      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: node.baseRefName, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check) });
     }
   });
   return out;
@@ -204,8 +206,10 @@ const UNTIL_MAX = 4_000;
 
 /**
  * One asking of an `until` command: `yes` with what it printed when it exits
- * 0, `no` (with its last line) when it exits 1. Any other exit, or not
- * finishing, throws: that is the command failing, not an answer. Run by
+ * 0, `no` (with its last line) when it exits 1 and writes nothing to stderr.
+ * Any other exit, an exit 1 with an error on stderr (a `gh` read that failed
+ * makes a test after it false), or not finishing, throws: that is the command
+ * failing to look, not an answer. Run by
  * `sh -c` in the directory the wait was made in, at the lowest priority, in
  * the server's environment (not the session's), told which wait and session
  * it answers for.
@@ -222,7 +226,8 @@ export async function readUntil(spec: UntilSpec, wait: number, session: string):
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   const said = out.trim();
   if (code === 0) return { yes: true, said: said.length > UNTIL_MAX ? `${said.slice(0, UNTIL_MAX)}\n(cut here, at ${UNTIL_MAX} characters)` : said };
-  if (code === 1) return { yes: false, said: said.split("\n").pop()!.slice(0, 200) };
+  const error = err.trim().split("\n").pop()!.slice(0, 300);
+  if (code === 1 && !error) return { yes: false, said: said.split("\n").pop()!.slice(0, 200) };
   if (code === 124 || code === 137) throw new Error(`the command did not finish in ${UNTIL_TIMEOUT_S}s`);
-  throw new Error(`the command exited ${code}${err.trim() ? `: ${err.trim().split("\n").pop()!.slice(0, 300)}` : ""} (0 means it happened, 1 not yet)`);
+  throw new Error(`the command exited ${code}${error ? `: ${error}` : ""} (0 means it happened, 1 with nothing on stderr not yet)`);
 }

@@ -23,10 +23,11 @@
 import { addUsage, emptyTotals } from "../pricing";
 import type { TimelineEvent, TokenTotals, UsageWindow, WindowKind } from "../types";
 import { PrRepoFold } from "../prrepo";
+import { isFleetNote } from "../sent";
 import { loadFields, saveFields } from "./foldstate";
 import { oneLine, tidyPath } from "./claude-transcript";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
-import { isAgentSent, type TranscriptFacts, type TranscriptRef } from "./types";
+import type { TranscriptFacts, TranscriptRef } from "./types";
 
 const ms = (t: unknown): number | null => {
   if (typeof t !== "string") return null;
@@ -291,13 +292,13 @@ export class CodexFold {
     if (r.type === "response_item") {
       if (p.type === "message" && p.role === "user") {
         const prompt = codexUserPrompt(p.content);
-        if (prompt?.text) {
+        if (prompt?.text && !isFleetNote(prompt.text)) {
           const t = prompt.text.slice(0, PROMPT_CAP);
           this.firstPrompt ??= t;
           this.lastPrompt = t;
+          this.lastPromptAt = at;
           this.prRepo.add(prompt.text);
         }
-        if (prompt && at !== null && !isAgentSent(prompt.text ?? "")) this.lastPromptAt = at;
         // Rollouts from before task_started existed only had the message.
         if (prompt) {
           this.turnOpen = true;

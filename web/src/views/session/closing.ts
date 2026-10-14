@@ -8,8 +8,9 @@ import { api } from "../../api";
 
 /** Ids asked to close whose close the app state does not show yet. */
 let pending: ReadonlySet<string> = new Set();
-/** The last thing that could not be done, and to what: "close" unless said. */
-let failure: { id: string; title: string; message: string; verb?: string } | null = null;
+/** The last thing that could not be done, and to what: "close" unless said;
+ *  or, `left`, a close that left sessions it started open for their work. */
+let failure: { id: string; title: string; message: string; verb?: string; left?: boolean } | null = null;
 const listeners = new Set<() => void>();
 
 function set(next: ReadonlySet<string>, f = failure): void {
@@ -36,7 +37,11 @@ export function closeNow(id: string, title: string, family: readonly string[] = 
   api.close(id, true).then(
     // Held a little past the answer: the state push that shows them closed can
     // land just after, and the rows should not blink back in between.
-    () => setTimeout(() => ids.forEach(forget), 5000),
+    (out) => {
+      for (const k of out.kept) forget(k.id);
+      if (out.kept.length || out.dropped.length) set(pending, { id, title, message: out.said.replace(/^[,;] /, ""), left: true });
+      setTimeout(() => ids.forEach(forget), 5000);
+    },
     (e: Error) => {
       ids.forEach(forget);
       set(pending, { id, title, message: e.message });

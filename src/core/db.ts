@@ -386,6 +386,21 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX waits_open ON waits(ended, told_at);
   `,
+  // 26 — releasing a PR survives the session's next wake and branch discovery.
+  `
+  CREATE TABLE pr_releases (
+    session_id TEXT NOT NULL,
+    repo TEXT NOT NULL COLLATE NOCASE,
+    number INTEGER NOT NULL,
+    PRIMARY KEY (session_id, repo, number)
+  );
+  `,
+  // 27 — your pins and bookmarks on the session list: where a pinned session
+  // sits among the pinned (lower first), and when one was bookmarked.
+  `
+  ALTER TABLE sessions ADD COLUMN pin_order REAL;
+  ALTER TABLE sessions ADD COLUMN bookmarked_at INTEGER;
+  `,
 ];
 
 function migrate(d: Database) {
@@ -497,6 +512,11 @@ export interface SessionRecord {
   successor?: string | null;
   /** When the fleet moved it off an account at its limit; it does not again. */
   hoppedAt?: number | null;
+  /** Pinned to the top of the list, at this place among the pinned (lower
+   *  first); null when it is not pinned. */
+  pinOrder?: number | null;
+  /** When you bookmarked it; null when it is not bookmarked. */
+  bookmarkedAt?: number | null;
 }
 
 type SessionRow = {
@@ -507,6 +527,7 @@ type SessionRow = {
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
   parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
+  pin_order: number | null; bookmarked_at: number | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -536,6 +557,8 @@ function rowToRecord(r: SessionRow): SessionRecord {
     parkedWhy: r.parked_why ?? null,
     successor: r.successor ?? null,
     hoppedAt: r.hopped_at ?? null,
+    pinOrder: r.pin_order ?? null,
+    bookmarkedAt: r.bookmarked_at ?? null,
   };
 }
 
@@ -565,6 +588,8 @@ const RECORD_COLUMNS = {
   parkedWhy: "parked_why",
   successor: "successor",
   hoppedAt: "hopped_at",
+  pinOrder: "pin_order",
+  bookmarkedAt: "bookmarked_at",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;
@@ -639,11 +664,12 @@ export function findSessionRecord(provider: ProviderId, agentSessionId: string):
 }
 
 /** Sessions active since `sinceMs`, plus every session that is not closed
- *  and was started by agentbox (those stay until you close them).
+ *  and was started by agentbox (those stay until you close them), and every
+ *  one you pinned or bookmarked, closed or not.
  *  (`archived_at` is when it was closed: the old name for it.) */
 export function listSessionRecords(sinceMs = 0): SessionRecord[] {
   return [...cachedRecords().values()]
-    .filter((r) => r.lastActivityAt >= sinceMs || (r.origin === "agentbox" && r.archivedAt === null))
+    .filter((r) => r.lastActivityAt >= sinceMs || (r.origin === "agentbox" && r.archivedAt === null) || r.pinOrder != null || r.bookmarkedAt != null)
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
@@ -986,6 +1012,19 @@ export function usageSamplesSince(sinceMs: number, accountId?: string): UsageSam
     accountId: r.account_id, at: r.at, windowId: r.window_id, kind: r.kind,
     usedPct: r.used_pct, resetsAt: r.resets_at, source: r.source,
   }));
+}
+
+/** Was one of these windows of an account read as spent when `at` struck: a
+ *  reading at 100% whose reset lay beyond that moment, taken no later than
+ *  an hour after it (the next reading of an account nobody is running on). */
+export function windowSpentAt(accountId: string, windowIds: string[], at: number): boolean {
+  if (windowIds.length === 0) return false;
+  return !!getDb()
+    .query(
+      `SELECT 1 FROM usage_samples WHERE account_id = ? AND window_id IN (${windowIds.map(() => "?").join(",")})
+        AND used_pct >= 100 AND resets_at > ? AND at <= ? LIMIT 1`,
+    )
+    .get(accountId, ...windowIds, at, at + 60 * 60_000);
 }
 
 export function insertTokenSample(sessionId: string, at: number, t: TokenTotals): void {

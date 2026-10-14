@@ -4,12 +4,14 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
-import { ProviderBadge } from "../../bits";
+import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
 import { Icon, RelativeTime, Spinner } from "../../components";
 import {
   descendantsOf,
   EMPTY_FILTER,
   projectOf,
+  repoKey,
+  repoShapes,
   SORT_LABEL,
   sortTime,
   sentTip,
@@ -21,20 +23,22 @@ import {
   type RailView,
   type Section,
   type SessionRow,
+  type Shape,
   type SortKey,
 } from "../../lib/board";
-import { fmtBytes } from "../../lib/format";
+import { baseName, fmtBytes } from "../../lib/format";
 import { openingTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
+import { movePin, toggleBookmark, togglePin } from "./pins";
 import { ScheduledRow } from "./Scheduled";
 
 // ------------------------------------------------------------------- state
 
 const SORT_KEY = "agentbox.sort";
-const SORTS: readonly SortKey[] = ["mine", "all", "status"];
+const SORTS: readonly SortKey[] = ["mine", "all", "status", "repo"];
 const VIEW_KEY = "agentbox.railView";
 
 function readSort(): SortKey {
@@ -143,6 +147,7 @@ export function Rail({
 }) {
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const usual = useMemo(() => usualProvider(rows), [rows]);
+  const shapes = useMemo(() => repoShapes(state.sessions), [state.sessions]);
   // Changes whenever something is closed or reopened, so an open closed list refetches.
   const closedStamp = useMemo(
     () => state.closedStamp ?? state.sessions.reduce((n, s) => (s.status === "closed" ? n + 1 + (s.closedAt ?? 0) : n), 0),
@@ -166,25 +171,44 @@ export function Rail({
   // the list, when it is under one now, takes it out to the top level. It
   // cannot go under itself or a session it started (a loop), and a subagent
   // stays with the session whose MCP runs it.
-  const [drag, setDrag] = useState<{ s: SessionRow; banned: ReadonlySet<string> } | null>(null);
+  //
+  // A pinned session dragged among the pinned is put in a new place there
+  // instead: before the row it is dropped on, or after it, by which half.
+  const [drag, setDrag] = useState<{ s: SessionRow; banned: ReadonlySet<string>; pin: boolean } | null>(null);
   const [over, setOver] = useState<string | null>(null);
+  const [pos, setPos] = useState<DropPos | null>(null);
   const endDrag = () => {
     setDrag(null);
     setOver(null);
+    setPos(null);
   };
   const move = (s: SessionRow, parent: string | null) => {
     endDrag();
     if (parent) list.setOpen(parent, true);
     api.patchSession(s.id, { parent }).catch((e: Error) => reportFailure(s.id, titleOf(s), "move", e.message));
   };
-  const toRoot = drag?.s.parent != null;
+  const toRoot = !drag?.pin && drag?.s.parent != null;
   const dropping: DropProps = {
-    start: (s) => setDrag({ s, banned: new Set([s.id, ...descendantsOf(s, state.sessions).map((c) => c.id)]) }),
+    start: (s, pin) => setDrag({ s, banned: new Set([s.id, ...descendantsOf(s, state.sessions).map((c) => c.id)]), pin }),
     end: endDrag,
-    can: (s) => !!drag && !drag.banned.has(s.id) && drag.s.parent !== s.id,
-    over: (id) => setOver(id),
-    drop: (s) => drag && move(drag.s, s.id),
+    can: (s, pin) =>
+      !!drag && (drag.pin ? pin && s.id !== drag.s.id : !drag.banned.has(s.id) && drag.s.parent !== s.id),
+    reordering: !!drag?.pin,
+    over: (id, p = null) => {
+      setOver(id);
+      setPos(p);
+    },
+    drop: (s, p) => {
+      if (!drag) return;
+      if (!drag.pin) return move(drag.s, s.id);
+      endDrag();
+      movePin(drag.s, s, p, state.sessions);
+    },
   };
+
+  // Right-click on a row: pin it, bookmark it.
+  const [menu, setMenu] = useState<{ id: string; fallback: SessionRow; x: number; y: number } | null>(null);
+  const onMenu = (s: SessionRow, x: number, y: number) => setMenu({ id: s.id, fallback: s, x, y });
 
   // Tree expansion stays local. At the root ← reaches application navigation;
   // → on an expanded parent or leaf opens the conversation.
@@ -238,6 +262,7 @@ export function Rail({
           />
           <kbd aria-hidden="true">/</kbd>
         </label>
+        <BookmarksMenu sessions={state.sessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
       </div>
       <div className="rail-views" role="tablist" aria-label="Which sessions">
@@ -307,7 +332,9 @@ export function Rail({
         {sections.map((sec) => (
           <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
             {sec.label ? (
-              <div className="rail-label">
+              <div className="rail-label" title={sec.key === "pinned" ? "Drag a pinned session to reorder them" : sort === "repo" ? sec.key : undefined}>
+                {sec.key === "pinned" ? <Icon.pin size={11} /> : null}
+                {sort === "repo" && shapes.has(sec.key) ? <ShapeMark shape={shapes.get(sec.key)!} /> : null}
                 {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length}</span>
               </div>
             ) : null}
@@ -320,37 +347,64 @@ export function Rail({
                 usual={usual}
                 sort={sort}
                 open={list.open.has(s.id) || forcedOpen.has(s.id)}
-                pinned={list.open.has(s.id)}
+                held={list.open.has(s.id)}
                 onToggle={() => {
                   list.setOpen(s.id, !list.open.has(s.id));
                 }}
                 onClose={onClose}
+                onMenu={onMenu}
                 dnd={dropping}
-                target={over === s.id}
+                pinned={sec.key === "pinned" && s.depth === 0}
+                target={over === s.id ? (drag?.pin ? pos : "under") : null}
               />
             ))}
           </div>
         ))}
-        {view === "inactive" ? <ClosedList query={filter.query} current={current} stamp={closedStamp} /> : null}
+        {view === "inactive" ? <ClosedList query={filter.query} current={current} stamp={closedStamp} onMenu={onMenu} /> : null}
       </div>
       {drag ? (
         <div className="rail-drophint" data-active={over === "root" || undefined} aria-hidden="true">
-          {toRoot ? "Drop on a session to put it under that one, or anywhere else for the top level" : "Drop on a session to put it under that one"}
+          {drag.pin
+            ? "Drop on a pinned session to put it before or after that one"
+            : toRoot
+              ? "Drop on a session to put it under that one, or anywhere else for the top level"
+              : "Drop on a session to put it under that one"}
         </div>
+      ) : null}
+      {menu ? (
+        <RowMenu
+          s={state.sessions.find((x) => x.id === menu.id) ?? menu.fallback}
+          sessions={state.sessions}
+          x={menu.x}
+          y={menu.y}
+          onDone={() => setMenu(null)}
+        />
       ) : null}
     </nav>
   );
 }
 
+type DropPos = "before" | "after";
+
 /** What a row needs to be dragged, and dropped on. */
 interface DropProps {
-  start: (s: SessionRow) => void;
+  /** `pin`: it is a pinned row, dragged to a new place among the pinned. */
+  start: (s: SessionRow, pin: boolean) => void;
   end: () => void;
-  /** Whether the row being dragged may go under `s`. */
-  can: (s: SessionRow) => boolean;
-  over: (id: string | null) => void;
-  drop: (s: SessionRow) => void;
+  /** Whether the row being dragged may go under `s`, or, reordering the
+   *  pinned, beside it; `pin` says `s` is a pinned row. */
+  can: (s: SessionRow, pin: boolean) => boolean;
+  /** The drag is one among the pinned: a drop goes before or after. */
+  reordering: boolean;
+  over: (id: string | null, pos?: DropPos | null) => void;
+  drop: (s: SessionRow, pos: DropPos) => void;
 }
+
+/** Which half of the row the pointer is over. */
+const halfOf = (e: { clientY: number; currentTarget: Element }): DropPos => {
+  const r = e.currentTarget.getBoundingClientRect();
+  return e.clientY < r.top + r.height / 2 ? "before" : "after";
+};
 
 function Row({
   s,
@@ -359,10 +413,12 @@ function Row({
   usual,
   sort,
   open,
-  pinned,
+  held,
   onToggle,
   onClose,
+  onMenu,
   dnd,
+  pinned,
   target,
 }: {
   s: Nested<SessionRow>;
@@ -371,15 +427,19 @@ function Row({
   usual: ProviderId | null;
   sort: SortKey;
   open: boolean;
-  pinned: boolean;
+  /** You expanded it, rather than its being open because a row under it is. */
+  held: boolean;
   onToggle: () => void;
   onClose: (s: SessionRow) => void;
+  onMenu: (s: SessionRow, x: number, y: number) => void;
   dnd: DropProps;
-  /** A dragged row is over this one, and may go under it. */
-  target: boolean;
+  /** A top-level row of the Pinned section: dragging it reorders the pinned. */
+  pinned: boolean;
+  /** A dragged row is over this one, and may go under it, or before or after it. */
+  target: "under" | DropPos | null;
 }) {
   const said = snippetOf(s);
-  const movable = s.host !== "subagent";
+  const movable = pinned || s.host !== "subagent";
   const row = (
     <a
       ref={refFn}
@@ -394,26 +454,30 @@ function Row({
       style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
       title={[namedTitle(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
       draggable={movable}
-      data-drop={target || undefined}
+      data-drop={target ?? undefined}
       onDragStart={(e) => {
         if (!movable) return e.preventDefault();
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/x-agentbox-session", s.id);
-        dnd.start(s);
+        dnd.start(s, pinned);
       }}
       onDragEnd={dnd.end}
       onDragOver={(e) => {
         // A row is never the list's top-level target, even one it cannot go under.
         e.stopPropagation();
-        if (!dnd.can(s)) return dnd.over(null);
+        if (!dnd.can(s, pinned)) return dnd.over(null);
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        dnd.over(s.id);
+        dnd.over(s.id, dnd.reordering ? halfOf(e) : null);
       }}
       onDrop={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (dnd.can(s)) dnd.drop(s);
+        if (dnd.can(s, pinned)) dnd.drop(s, halfOf(e));
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(s, e.clientX, e.clientY);
       }}
     >
       <span className="rail-text">
@@ -425,7 +489,7 @@ function Row({
           type="button"
           className="rail-kids"
           aria-expanded={open}
-          title={`${pinned ? "Stop keeping" : "Keep"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started expanded after leaving this session (← →)`}
+          title={`${held ? "Stop keeping" : "Keep"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started expanded after leaving this session (← →)`}
           onClick={(e) => {
             // Keep expansion separate from opening the session.
             e.preventDefault();
@@ -442,7 +506,7 @@ function Row({
         <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
       </span>
       <RowLoad id={s.id} />
-      {s.host === "subagent" ? null : <CloseX s={s} onClose={onClose} />}
+      {s.host === "subagent" || s.status === "closed" ? null : <CloseX s={s} onClose={onClose} />}
       <RowState s={s} />
     </a>
   );
@@ -556,13 +620,15 @@ function RowLoad({ id }: { id: string }) {
   );
 }
 
-/** A close the server refused: the row is back, and this says why. */
+/** A close the server refused: the row is back, and this says why. Or what a
+ *  close left open: the sessions it started that hold work stay on the list. */
 function CloseFailure() {
   const { failure, dismiss } = useClosing();
   if (!failure) return null;
   return (
     <p className="rail-err" role="alert">
-      Could not {failure.verb ?? "close"} “{failure.title}”: {failure.message}{" "}
+      {failure.left ? `Closed “${failure.title}”: ` : `Could not ${failure.verb ?? "close"} “${failure.title}”: `}
+      {failure.message}{" "}
       <button type="button" className="linkish" onClick={dismiss}>
         dismiss
       </button>
@@ -636,6 +702,145 @@ function SortMenu({ list }: { list: ListState }) {
   );
 }
 
+/** A row's right-click menu: pin it, bookmark it. */
+function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: readonly SessionRow[]; x: number; y: number; onDone: () => void }) {
+  const wrap = useRef<HTMLDivElement>(null);
+  useDismiss(true, onDone, [wrap]);
+  // Kept on screen: a right-click near the foot or the edge opens it upward or leftward.
+  const [at, setAt] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const r = wrap.current?.getBoundingClientRect();
+    if (!r) return;
+    setAt({ left: Math.max(8, Math.min(x, window.innerWidth - r.width - 8)), top: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) });
+  }, [x, y]);
+  useEffect(() => {
+    wrap.current?.querySelector<HTMLElement>("button")?.focus();
+  }, []);
+  const pick = (act: () => void) => () => {
+    act();
+    onDone();
+  };
+  // Rename turns the menu into the name's field; clearing it falls back to the derived title.
+  const [draft, setDraft] = useState<string | null>(null);
+  const rename = (next: string) => {
+    onDone();
+    if (next !== (s.label ?? titleOf(s))) api.patchSession(s.id, { label: next || null }).catch((e: Error) => reportFailure(s.id, titleOf(s), "rename", e.message));
+  };
+  if (draft !== null) {
+    return (
+      <div ref={wrap} className="rail-menu rail-rowmenu" style={{ position: "fixed", ...at }}>
+        <input
+          className="rail-rename"
+          aria-label="Session name"
+          autoFocus
+          value={draft}
+          placeholder={s.title || "Name"}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              rename(draft.trim());
+            } else if (e.key === "Escape") {
+              e.stopPropagation();
+              onDone();
+            }
+          }}
+        />
+      </div>
+    );
+  }
+  return (
+    <div ref={wrap} className="rail-menu rail-rowmenu" role="menu" aria-label={titleOf(s)} style={{ position: "fixed", ...at }}>
+      <div className="rail-menu-label">{titleOf(s)}</div>
+      <button type="button" role="menuitem" onClick={() => setDraft(s.label ?? titleOf(s))}>
+        <span className="rail-menu-check">
+          <Icon.edit size={12} />
+        </span>
+        Rename
+      </button>
+      <button type="button" role="menuitem" onClick={pick(() => togglePin(s, sessions))}>
+        <span className="rail-menu-check">
+          <Icon.pin size={12} />
+        </span>
+        {s.pinOrder !== null ? "Unpin" : "Pin to top"}
+      </button>
+      <button type="button" role="menuitem" onClick={pick(() => toggleBookmark(s))}>
+        <span className="rail-menu-check">
+          <Icon.bookmark size={12} />
+        </span>
+        {s.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
+      </button>
+    </div>
+  );
+}
+
+/** The bookmarks, beside the sort: open or closed, running or not, the most
+ *  recently bookmarked first, whatever the search says. */
+function BookmarksMenu({ sessions, current, shapes }: { sessions: readonly SessionRow[]; current: string | null; shapes: Map<string, Shape> }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  useDismiss(open, () => setOpen(false), [wrap]);
+  const marks = useMemo(
+    () => sessions.filter((s) => s.bookmarkedAt !== null).sort((a, b) => b.bookmarkedAt! - a.bookmarkedAt!),
+    [sessions],
+  );
+  // ↑/↓ walk the bookmarks, as they do the list.
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const links = [...e.currentTarget.querySelectorAll<HTMLElement>("a[role=menuitem]")];
+    if (!links.length) return;
+    e.preventDefault();
+    const i = links.indexOf(document.activeElement as HTMLElement);
+    links[e.key === "ArrowDown" ? (i + 1) % links.length : (i <= 0 ? links.length : i) - 1].focus();
+  };
+  return (
+    <div className="rail-sort rail-bm-wrap" ref={wrap}>
+      <button
+        type="button"
+        className="rail-sort-btn"
+        data-n={marks.length || undefined}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Bookmarks (${marks.length})`}
+        title={marks.length ? `Bookmarks (${marks.length})` : "Bookmarks"}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon.bookmark size={14} />
+        {marks.length ? <span className="rail-bm-n">{marks.length}</span> : null}
+      </button>
+      {open ? (
+        <div className="rail-menu rail-bm" role="menu" aria-label="Bookmarked sessions" onKeyDown={onKey}>
+          <div className="rail-menu-label">
+            Bookmarks{marks.length ? <span className="rail-menu-n">{marks.length}</span> : null}
+          </div>
+          {marks.length === 0 ? (
+            <p className="rail-bm-none">
+              None yet. Bookmark a session with <Icon.bookmark size={11} /> in its header, or right-click it in the list. Bookmarks stay here after the session is
+              closed.
+            </p>
+          ) : (
+            marks.map((s) => (
+              <div key={s.id} className="rail-bm-row" data-status={s.status} aria-current={s.id === current ? "page" : undefined}>
+                <a role="menuitem" href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })} title={titleOf(s)} onClick={() => setOpen(false)}>
+                  <StatusDot status={shownStatus(s)} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} />
+                  <span className="rail-title">{titleOf(s)}</span>
+                  <span className="rail-when">
+                    {s.status === "closed" ? "closed " : null}
+                    <RelativeTime ts={s.status === "closed" && s.closedAt ? s.closedAt : s.lastActivityAt} short />
+                  </span>
+                </a>
+                <button type="button" className="rail-x" aria-label={`Remove the bookmark from ${titleOf(s)}`} title="Remove the bookmark" onClick={() => toggleBookmark(s)}>
+                  <Icon.x size={12} />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ closed
 
 const PAGE = 30;
@@ -654,7 +859,17 @@ export const closedSessions = new Map<string, SessionRow>();
  * the server, so every session ever closed can be found and reopened, not
  * only those still inside the board's window.
  */
-function ClosedList({ query, current, stamp }: { query: string; current: string | null; stamp: number }) {
+function ClosedList({
+  query,
+  current,
+  stamp,
+  onMenu,
+}: {
+  query: string;
+  current: string | null;
+  stamp: number;
+  onMenu: (s: SessionRow, x: number, y: number) => void;
+}) {
   const [open, setOpenState] = useState(closedOpen);
   const shown = closedShown?.query === query ? closedShown : null;
   const [rows, setRows] = useState<SessionRow[]>(shown?.rows ?? []);
@@ -741,6 +956,10 @@ function ClosedList({ query, current, stamp }: { query: string; current: string 
               aria-current={s.id === current ? "page" : undefined}
               data-status={s.status}
               title={namedTitle(s)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onMenu(s, e.clientX, e.clientY);
+              }}
             >
               <span className="rail-text">
                 <RowTitle s={s} />

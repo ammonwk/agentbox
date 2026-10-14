@@ -186,7 +186,34 @@ const accounts: MockAccount[] = [
     enabled: true,
     createdAt: T0 - 90 * D,
     auth: { state: "ok", expiresAt: null, detail: null },
-    usage: usage("cx-main", [win("weekly", "weekly", "Weekly", 34, 4 * D + 3 * H)], { source: "rollout", at: T0 - 40 * 1000 }),
+    usage: usage("cx-main", [win("weekly", "weekly", "Weekly", 34, 4 * D + 3 * H)], {
+      source: "rollout",
+      at: T0 - 40 * 1000,
+      resets: {
+        availableCount: 2,
+        applicableCount: 0,
+        credits: [
+          {
+            id: "credit_main_1",
+            resetType: "codex_rate_limits",
+            status: "available",
+            grantedAt: T0 - 6 * D,
+            expiresAt: T0 + 24 * D,
+            title: "Full reset",
+            description: "Thanks for using Codex! You've been granted one free rate limit reset.",
+          },
+          {
+            id: "credit_main_2",
+            resetType: "codex_rate_limits",
+            status: "available",
+            grantedAt: T0 - 2 * D,
+            expiresAt: T0 + 28 * D,
+            title: "Full reset",
+            description: "Granted for the outage on Tuesday.",
+          },
+        ],
+      },
+    }),
   },
   {
     id: "cx-alt",
@@ -344,6 +371,8 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     startedAt: T0 - 2 * H,
     lastActivityAt: T0 - 5 * M,
     closedAt: null,
+    pinOrder: null,
+    bookmarkedAt: null,
     parkedAt: null,
     parkHold: null,
     background: false,
@@ -368,7 +397,7 @@ const sessions: MockSession[] = [
     startedAt: T0 - 48 * M, lastActivityAt: T0 - 8 * 1000,
   }),
   sess({
-    id: "3mq9", provider: "claude", accountId: "cl-work", status: "blocked", host: "tmux", claim: 20,
+    id: "3mq9", provider: "claude", accountId: "cl-work", status: "blocked", host: "tmux", claim: 20, pinOrder: 1, bookmarkedAt: T0 - 3 * H,
     title: "Migrate usage_samples to the v2 schema", cwd: `${AB}/.worktrees/usage-schema`, repoRoot: `${AB}/.worktrees/usage-schema`,
     branch: "feat/usage-samples-v2", worktree: `${AB}/.worktrees/usage-schema`, model: "claude-fable-5-1",
     firstPrompt: "Write the migration for usage_samples: add window id, kind and scope columns; backfill from the old rows.",
@@ -476,7 +505,7 @@ const sessions: MockSession[] = [
     startedAt: T0 - 70 * M, lastActivityAt: T0 - 66 * M,
   }),
   sess({
-    id: "m3n5", provider: "codex", accountId: "cx-alt", status: "stopped", host: "none",
+    id: "m3n5", provider: "codex", accountId: "cx-alt", status: "stopped", host: "none", bookmarkedAt: T0 - 2 * H,
     title: "Bump vite to 7.1 and fix the proxy config", cwd: `${SY}/.worktrees/vite7`, repoRoot: `${SY}/.worktrees/vite7`,
     branch: "chore/vite-7", worktree: `${SY}/.worktrees/vite7`, model: "gpt-5.4-codex",
     lastMessage: "Build passes on vite 7.1.9. The ws proxy needed `ws: true` on the /ws entry.",
@@ -501,7 +530,7 @@ const sessions: MockSession[] = [
     startedAt: T0 - 3 * D, lastActivityAt: T0 - 3 * D + 40 * M,
   }),
   sess({
-    id: "r5t4", provider: "claude", accountId: "cl-personal", status: "closed", host: "none",
+    id: "r5t4", provider: "claude", accountId: "cl-personal", status: "closed", host: "none", pinOrder: 2, bookmarkedAt: T0 - 1 * H,
     title: "Spike: xterm.js in React 19", cwd: `${HOME}/scratch/xterm-spike`, model: "claude-fable-5-1",
     lastMessage: "The addon-fit needs the container to have a real height before `fit()`; a ResizeObserver solves it.",
     tokens: { input: 8_000, output: 3_000, cacheRead: 40_000, cacheWrite: 9_000, costEquiv: 0.4 },
@@ -1546,6 +1575,25 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       else a.usage = { ...a.usage, stale: a.usage.stale ?? "token expired" };
       pushCold();
       return a.usage;
+    } else if (action === "reset") {
+      await sleep(500);
+      const resets = a.usage.resets;
+      if (!resets || resets.availableCount <= 0) return { outcome: "no-credit", windowsReset: 0 };
+      const chosen = body<{ creditId?: string }>(b).creditId;
+      const spent = chosen ? resets.credits.find((c) => c.id === chosen) : resets.credits[0];
+      a.usage = {
+        ...a.usage,
+        at: Date.now(),
+        stale: null,
+        windows: a.usage.windows.map((w) => ({ ...w, usedPct: 0 })),
+        resets: {
+          ...resets,
+          availableCount: Math.max(0, resets.availableCount - 1),
+          credits: resets.credits.filter((c) => c !== spent),
+        },
+      };
+      pushCold();
+      return { outcome: "reset", windowsReset: a.usage.windows.length };
     } else if (action === "login") {
       const login: LoginFlow = {
         id: `lg-${id}-${Date.now()}`, provider: a.provider, accountId: id, state: "starting", url: null, userCode: null,

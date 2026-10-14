@@ -33,6 +33,32 @@ export function parsePrRef(text: string, repo: string | null): { repo: string; n
   return { repo, number: Number(bare[1]) };
 }
 
+type PrRef = { repo: string; number: number };
+
+export function releasedPrs(sessionId: string): PrRef[] {
+  return getDb().query("SELECT repo, number FROM pr_releases WHERE session_id = ? ORDER BY repo, number").all(sessionId) as PrRef[];
+}
+
+export function assignedPrHolder(pr: PrRef): string | null {
+  const row = getDb().query("SELECT session_id FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?").get(pr.repo, pr.number) as { session_id: string } | null;
+  return row?.session_id ?? null;
+}
+
+export function prReleased(sessionId: string, pr: PrRef): boolean {
+  return !!getDb().query("SELECT 1 FROM pr_releases WHERE session_id = ? AND lower(repo) = lower(?) AND number = ?").get(sessionId, pr.repo, pr.number);
+}
+
+/** Read at delivery, not when a message is queued: ownership can move meanwhile. */
+export function prReleaseNotice(sessionId: string): string {
+  const refs = releasedPrs(sessionId);
+  if (!refs.length) return "";
+  const names = refs.map((p) => {
+    const holder = assignedPrHolder(p);
+    return `${p.repo}#${p.number}${holder ? ` (assigned to ${holder})` : " (released)"}`;
+  });
+  return `[agentbox: PR ownership changed. You no longer hold ${names.join(", ")}. Earlier prompts, waits, messages and schedules do not restore ownership. Do not edit, merge, push or use the successor's worktree for these PRs. Only a successful explicit agentbox pr claim can give one back to you.]`;
+}
+
 const holds = (s: Session | undefined): s is Session =>
   !!s && s.host !== "subagent" && (s.status === "running" || s.status === "waiting" || s.status === "blocked");
 
@@ -48,8 +74,24 @@ export function prClaims(sessions: readonly Session[], byBranch: readonly Omit<P
     .map((r) => ({ repo: r.repo, number: r.number, sessionId: r.session_id, how: "said" as const, at: r.at }));
   const said = new Set(out.map((c) => `${c.repo.toLowerCase()}#${c.number}`));
   for (const b of byBranch) {
-    if (!said.has(`${b.repo.toLowerCase()}#${b.number}`) && holds(byId.get(b.sessionId))) out.push({ ...b, how: "branch" });
+    if (!said.has(`${b.repo.toLowerCase()}#${b.number}`) && holds(byId.get(b.sessionId)) && !prReleased(b.sessionId, b)) out.push({ ...b, how: "branch" });
   }
+  return out;
+}
+
+/**
+ * The PRs each session said it has that are not known to be finished (open,
+ * or missing from the PR copy), whatever its status: `prClaims` asks which a
+ * live session holds; these must not lapse unseen when a session is folded
+ * into history or closed along with another (`Fleet.workHeld`). A branch is
+ * not one: finished sessions sit on open PRs' branches by the dozen.
+ */
+export function unfinishedClaims(): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const rows = getDb()
+    .query("SELECT c.* FROM pr_claims c LEFT JOIN prs p ON p.repo = c.repo AND p.number = c.number WHERE p.state IS NULL OR p.state = 'OPEN'")
+    .all() as Row[];
+  for (const r of rows) out.set(r.session_id, [...(out.get(r.session_id) ?? []), `${r.repo}#${r.number}`]);
   return out;
 }
 
@@ -57,13 +99,16 @@ export function holderOf(claims: readonly PrClaim[], repo: string, number: numbe
   return claims.find((c) => c.number === number && c.repo.toLowerCase() === repo.toLowerCase()) ?? null;
 }
 
-/** Another live session has it. */
+/** Another live session has it. `asker` is the session that asked, named
+ *  beside the holder: j2g254q4 read "#8154 is j2g254q4's" as another
+ *  session's and stood down from four PRs it held itself. */
 export class PrHeld extends Error {
-  constructor(readonly claim: PrClaim, holder: Session | undefined) {
+  constructor(readonly claim: PrClaim, holder: Session | undefined, asker?: string) {
     super(
-      `not claimed: ${claim.repo}#${claim.number} is held by ${claim.sessionId}` +
+      `not claimed: ${claim.repo}#${claim.number} is held by another session, ${claim.sessionId}` +
         `${holder ? ` (“${holder.label ?? holder.title}”, ${holder.status})` : ""}, ` +
-        `${claim.how === "said" ? "which claimed it" : "which is on its branch"}. ` +
+        `${claim.how === "said" ? "which claimed it" : "which is on its branch"}` +
+        `${asker ? `; you are ${asker}` : ""}. ` +
         `Do not work it as well: read \`agentbox show ${claim.sessionId}\`, and say what you know to that session if it matters. ` +
         `Its hold lapses when it stops or closes${claim.how === "said" ? ", or when it runs `agentbox pr release`" : ""}.`,
     );
@@ -74,9 +119,16 @@ export class PrHeld extends Error {
  *  again is no change. */
 export function claimPr(claims: readonly PrClaim[], sessions: readonly Session[], repo: string, number: number, sessionId: string, now: number): PrClaim {
   const held = holderOf(claims, repo, number);
-  if (held && held.sessionId !== sessionId) throw new PrHeld(held, sessions.find((s) => s.id === held.sessionId));
+  if (held && held.sessionId !== sessionId) throw new PrHeld(held, sessions.find((s) => s.id === held.sessionId), sessionId);
   if (held?.how === "said") return held;
-  getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held?.repo ?? repo, number, sessionId, now]);
+  const db = getDb();
+  db.transaction(() => {
+    const prior = db.query("SELECT * FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?").all(repo, number) as Row[];
+    for (const old of prior) if (old.session_id !== sessionId) releasePr(old.session_id, { repo: old.repo, number });
+    db.run("DELETE FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?", [repo, number]);
+    db.run("INSERT INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held?.repo ?? repo, number, sessionId, now]);
+    db.run("DELETE FROM pr_releases WHERE session_id = ? AND lower(repo) = lower(?) AND number = ?", [sessionId, repo, number]);
+  })();
   return { repo: held?.repo ?? repo, number, sessionId, how: "said", at: now };
 }
 
@@ -89,18 +141,43 @@ export function transferPr(claims: readonly PrClaim[], sessions: readonly Sessio
   if (actor !== expected) throw new Error(`only the current holder ${expected} may hand this PR over`);
   if (to === expected) throw new Error("the destination already holds this PR");
   if (!holds(sessions.find((s) => s.id === to))) throw new Error(`destination ${to} must be a live, independent session`);
-  getDb().run("INSERT OR REPLACE INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held.repo, number, to, now]);
+  const db = getDb();
+  db.transaction(() => {
+    releasePr(expected, { repo: held.repo, number });
+    db.run("DELETE FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?", [held.repo, number]);
+    db.run("INSERT INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held.repo, number, to, now]);
+    db.run("DELETE FROM pr_releases WHERE session_id = ? AND lower(repo) = lower(?) AND number = ?", [to, held.repo, number]);
+  })();
   return { repo: held.repo, number, sessionId: to, how: "said", at: now };
 }
 
-/** What `sessionId` said it holds, let go: one PR, or all of them. */
-export function releasePr(sessionId: string, pr: { repo: string; number: number } | null): number {
-  return pr
-    ? getDb().run("DELETE FROM pr_claims WHERE session_id = ? AND number = ? AND lower(repo) = lower(?)", [sessionId, pr.number, pr.repo]).changes
-    : getDb().run("DELETE FROM pr_claims WHERE session_id = ?", [sessionId]).changes;
+/** Cancel both armed waits and results still waiting to be delivered, atomically with release. */
+export function releasePr(sessionId: string, pr: PrRef | null): number {
+  const db = getDb();
+  return db.transaction(() => {
+    const refs = pr ? [pr] : db.query("SELECT repo, number FROM pr_claims WHERE session_id = ?").all(sessionId) as PrRef[];
+    let released = 0;
+    for (const ref of refs) {
+      db.run("INSERT OR IGNORE INTO pr_releases (session_id, repo, number) VALUES (?,?,?)", [sessionId, ref.repo, ref.number]);
+      db.run(`UPDATE waits SET ended = 'cancelled', ended_at = ?, outcome = ?, untold = NULL
+        WHERE session_id = ? AND told_at IS NULL AND json_extract(spec, '$.kind') = 'pr'
+        AND lower(json_extract(spec, '$.repo')) = lower(?) AND json_extract(spec, '$.number') = ?`,
+        [Date.now(), `PR ownership released: ${ref.repo}#${ref.number}; this session no longer holds it.`, sessionId, ref.repo, ref.number]);
+      released += db.run("DELETE FROM pr_claims WHERE session_id = ? AND number = ? AND lower(repo) = lower(?)", [sessionId, ref.number, ref.repo]).changes;
+    }
+    return released;
+  })();
 }
 
-/** A session that is being replaced hands what it claimed to its successor. */
+/** A schedule's replacement keeps its predecessor's obligations and exclusions. */
 export function movePrClaims(from: string, to: string): number {
-  return getDb().run("UPDATE pr_claims SET session_id = ? WHERE session_id = ?", [to, from]).changes;
+  const db = getDb();
+  return db.transaction(() => {
+    const moved = db.run("UPDATE pr_claims SET session_id = ? WHERE session_id = ?", [to, from]).changes;
+    db.run(`INSERT OR IGNORE INTO pr_releases (session_id, repo, number)
+      SELECT ?, r.repo, r.number FROM pr_releases r WHERE r.session_id = ?
+      AND NOT EXISTS (SELECT 1 FROM pr_claims c WHERE c.session_id = ? AND lower(c.repo) = lower(r.repo) AND c.number = r.number)`, [to, from, to]);
+    db.run("UPDATE waits SET session_id = ? WHERE session_id = ? AND told_at IS NULL AND ended IS NOT 'cancelled'", [to, from]);
+    return moved;
+  })();
 }

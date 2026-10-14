@@ -113,6 +113,8 @@ export function procInfo(pid: number): DarwinProc | null {
 }
 
 let argMax = 0;
+/** One KERN_PROCARGS2 buffer (kern.argmax, ~1 MiB), reused: a scan reads every process. */
+let argBuf: Uint8Array | null = null;
 
 /** argv and environment, exact: KERN_PROCARGS2 keeps the NULs between entries. */
 export function procArgs(pid: number): { argv: string[]; env: Map<string, string> } | null {
@@ -124,7 +126,7 @@ export function procArgs(pid: number): { argv: string[]; env: Map<string, string
     argMax = s.sysctl(ptr(mib), 2, ptr(out), ptr(len), null, 0) === 0 ? out[0]! : 1 << 20;
   }
   const mib = new Int32Array([1 /* CTL_KERN */, 49 /* KERN_PROCARGS2 */, pid]);
-  const buf = new Uint8Array(argMax);
+  const buf = (argBuf ??= new Uint8Array(argMax));
   const len = new BigUint64Array([BigInt(argMax)]);
   if (s.sysctl(ptr(mib), 3, ptr(buf), ptr(len), null, 0) !== 0) return null;
   const size = Number(len[0]);
@@ -207,6 +209,9 @@ export interface VmState {
   swapUsed: number;
 }
 
+/** The host port, taken once: each mach_host_self() adds a reference to it. */
+let hostPort = 0;
+
 /** Memory and swap, in bytes, from host_statistics64 and sysctl. */
 export function vmState(): VmState | null {
   const page = sysctlBytes("hw.pagesize", 8);
@@ -217,7 +222,7 @@ export function vmState(): VmState | null {
   // struct vm_statistics64: 38 natural_t long.
   const buf = new Uint8Array(152);
   const count = new Uint32Array([38]);
-  if (sys().host_statistics64(sys().mach_host_self(), 4 /* HOST_VM_INFO64 */, ptr(buf), ptr(count)) !== 0) return null;
+  if (sys().host_statistics64((hostPort ||= sys().mach_host_self()), 4 /* HOST_VM_INFO64 */, ptr(buf), ptr(count)) !== 0) return null;
   const v = new DataView(buf.buffer);
   const wired = v.getUint32(12, true);
   const purgeable = v.getUint32(88, true);
