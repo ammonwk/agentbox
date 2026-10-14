@@ -185,6 +185,9 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
     })
     .add("POST", "/api/agents/local/:id/chat", async ({ req, params }) => {
       const b = await readBody(req);
+      // The person's composer interrupts a running turn; a request carrying
+      // a session capability is a session's, and is only typed in.
+      const person = !req.headers.has("x-agentbox-session") && !req.headers.has("x-agentbox-session-token");
       try {
         return json(
           await agents.conversations.localSend(
@@ -197,6 +200,7 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
               .optional()
               .parse(b.context),
             z.string().min(1).max(200).nullable().parse(b.target),
+            person,
           ),
         );
       } catch (e) {

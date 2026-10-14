@@ -160,6 +160,11 @@ const READER_IDLE_MS = 10 * 60_000;
 /** A pass slower than this logs where its time went. */
 const SLOW_PASS_MS = 4 * TICK_MS;
 
+/** The providers whose TUI ends a running turn on one Escape and writes
+ *  that end to its transcript (Claude: "[Request interrupted by user]";
+ *  Codex: `turn_aborted`), and how long a person's message waits for it. */
+const ESCAPE_ENDS_TURN: ReadonlySet<ProviderId> = new Set(["claude", "codex"]);
+const INTERRUPT_WAIT_MS = 8_000;
 const screenKey = (pane: PaneInfo): string => `${pane.activity}:${pane.width}x${pane.height}`;
 /** Longest stretch of a pass without letting the event loop in. */
 const BREATHE_MS = 25;
@@ -3192,11 +3197,13 @@ export class Fleet extends EventEmitter {
   /** Type into the session. A cold one wakes where there is room, which may
    *  mean restarting it on another account with `text` as its prompt; a
    *  parked one resumes with `text` as its prompt — and with `resume`, so
-   *  does one that was stopped or closed, which otherwise is an error. */
-  send(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
+   *  does one that was stopped or closed, which otherwise is an error. With
+   *  `interrupt` (a person's message in Agent chat) a running turn is ended
+   *  first, where that is safe (`endTurnFor`). */
+  send(id: string, text: string, attempt?: () => void, resume = false, interrupt = false): Promise<void> {
     return this.serial(id, async () => {
       if (await this.handedOn(id, text, attempt)) return;
-      if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt, resume);
+      if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt, resume, interrupt);
     });
   }
 
@@ -3289,7 +3296,7 @@ export class Fleet extends EventEmitter {
     }
   }
 
-  private async sendNow(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
+  private async sendNow(id: string, text: string, attempt?: () => void, resume = false, interrupt = false): Promise<void> {
     const s = this.get(id);
     if (s.host === "none") {
       const rec = getSessionRecord(id);
@@ -3316,9 +3323,49 @@ export class Fleet extends EventEmitter {
     await this.untilReady(id);
     if (s.provider === "claude") await this.clearBtw(id, s.tmux);
     await this.clearLimitDialog(s.provider, s.tmux);
+    // Before the attempt boundary: Escape alone delivers nothing, so a
+    // failure here leaves the message unsent, never half-sent.
+    if (interrupt) await this.endTurnFor(id, s.provider, s.tmux);
     attempt?.();
     await this.typeInto(id, s.provider, s.tmux, text);
     if (s.provider === "devin") await this.deliverDevinQueue(s.tmux);
+  }
+
+  /**
+   * A person's message to an agent that is mid-turn: end the turn as
+   * Escape by hand does, and wait until the session says it ended, so the
+   * message starts the next turn instead of waiting behind this one (Claude
+   * queues it) or steering it (Codex). Only Claude and Codex are known to
+   * end a turn on one Escape and record it in the transcript; the others
+   * get the message as before. Nothing is pressed when the board, read
+   * fresh, does not show a turn worth ending:
+   *  - the turn is over (background work only) or a dialog is up, where
+   *    Escape would answer the dialog;
+   *  - something is queued: the interrupt would pull it back into the
+   *    input box and send it inside this message, under another sender;
+   *  - nothing was written since the newest prompt: the turn has just
+   *    begun, maybe on the previous message, which Escape could take back
+   *    into the input box.
+   * A turn still open after INTERRUPT_WAIT_MS gets the message mid-turn, as
+   * before, so it is delivered once whatever Escape did.
+   */
+  private async endTurnFor(id: string, provider: ProviderId, pane: string): Promise<void> {
+    if (!ESCAPE_ENDS_TURN.has(provider)) return;
+    await this.tick();
+    const s = this.get(id);
+    if (s.tmux !== pane || s.status !== "running" || s.background || s.question || s.queued.length) return;
+    if (s.lastActivityAt <= s.lastPromptAt) return;
+    const screen = this.deps.runtime.capture(pane) ?? "";
+    if (this.adapter(provider).blockedOn?.(screen)) return;
+    this.deps.runtime.sendKeys(pane, ["Escape"]);
+    const until = this.now() + INTERRUPT_WAIT_MS;
+    while (this.now() < until) {
+      await Bun.sleep(500);
+      await this.tick();
+      const v = this.get(id);
+      if (v.status !== "running" || v.background) return;
+    }
+    console.error(`agentbox: ${id} did not end its turn within ${INTERRUPT_WAIT_MS / 1000}s of Escape; the message goes in mid-turn`);
   }
 
   /**

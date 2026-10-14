@@ -372,7 +372,12 @@ export class AgentConversations {
     body: string,
     context?: { proposal: string; run: string },
     target?: string | null,
+    /** A person typed it into Agent chat: a running turn is ended for it
+     *  (`Fleet.endTurnFor`). Never for an approval or any machine prompt,
+     *  nor for guidance on a recommendation. */
+    interrupt = false,
   ) {
+    if (context) interrupt = false;
     if (this.busy.has(id) || this.rolling.has(id))
       throw new FleetError(409, "Another message is being delivered");
     this.busy.add(id);
@@ -393,7 +398,7 @@ export class AgentConversations {
         this.db.run("INSERT OR IGNORE INTO local_submissions(id,agent,session) VALUES (?,?,?)", [request,id,target]);
         const prior=this.db.query("SELECT agent,session FROM local_submissions WHERE id=?").get(request) as {agent:string;session:string};
         if(prior.agent!==id || prior.session!==target) throw new FleetError(409,"Submission belongs to another conversation");
-        return this.runtime.works.guide(id,target,request,body);
+        return this.runtime.works.guide(id,target,request,body,interrupt);
       }
       if (target !== undefined && target !== a.session)
         throw new FleetError(409, "Conversation changed. Open the current session before sending.");
@@ -455,7 +460,7 @@ export class AgentConversations {
               worktree: !!a.repo,
               prompt: this.opening(a, body, a.previous[0] ? { old: a.previous[0] } : null),
             });
-          } else await this.runtime.fleet.send(sid, body, attempt, true);
+          } else await this.runtime.fleet.send(sid, body, attempt, true, interrupt);
         },
       ).finally(() => this.sending.delete(id));
       if (!getSessionRecord(sid) && a.session === sid) {

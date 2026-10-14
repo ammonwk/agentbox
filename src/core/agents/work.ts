@@ -274,7 +274,7 @@ export class AgentWorks {
       return false;
     }
   }
-  async guide(agent: string, session: string, request: string, body: string) {
+  async guide(agent: string, session: string, request: string, body: string, interrupt = false) {
     if (!this.writable(agent, session))
       throw new FleetError(
         409,
@@ -288,7 +288,7 @@ export class AgentWorks {
       async (attempt) => {
         if (!this.writable(agent, session))
           throw new FleetError(409, "Work authority changed");
-        await this.runtime.fleet.send(session, body, attempt, true);
+        await this.runtime.fleet.send(session, body, attempt, true, interrupt);
       },
     );
     return {
