@@ -488,6 +488,8 @@ export class ClaudeFold {
   private queue: { text: string; at: number }[] = [];
   /** `dequeue`s whose delivery has not been seen yet: see `queueOp`. */
   private dequeued = 0;
+  /** Background work launched and not yet ended: see TranscriptFacts.backgroundTasks. */
+  private tasks = new Map<string, { kind: string; name: string; since: number }>();
   /** An AskUserQuestion still waiting for its answer. */
   private pendingAsk: { id: string; questions: AskQuestion[] } | null = null;
   /** The newest `permission-mode` record's (or prompt's) mode. */
@@ -748,6 +750,8 @@ export class ClaudeFold {
     switch (r.operation) {
       case "enqueue":
         if (text === null) return;
+        // Queued is enough: the task has ended, whenever the model reads it.
+        if (isTaskNotification({ text })) this.taskEnded(text);
         this.queue.push({ text, at: at ?? 0 });
         if (this.queue.length > MAX_QUEUED) this.queue.shift();
         return;
@@ -762,6 +766,13 @@ export class ClaudeFold {
         this.dequeued = 0;
         return;
     }
+  }
+
+  /** A `<task-notification>` ends its task, unless it only reports progress. */
+  private taskEnded(text: string): void {
+    const id = tag(text, "task-id")?.trim();
+    const status = tag(text, "status")?.trim();
+    if (id && status !== "running" && status !== "progress") this.tasks.delete(id);
   }
 
   /** The `dequeue`s no delivered record named took the oldest. */
@@ -791,6 +802,14 @@ export class ClaudeFold {
       return;
     }
     if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_result")) {
+      // A Workflow names its task `taskId`; a background Agent, `agentId`.
+      const launched = r.toolUseResult;
+      const id = launched?.status === "async_launched" ? (launched.taskId ?? launched.agentId) : undefined;
+      if (typeof id === "string") {
+        const kind = launched.taskType ?? (launched.agentId ? "local_agent" : "task");
+        const name = launched.workflowName ?? launched.description ?? kind;
+        this.tasks.set(id, { kind: String(kind), name: String(name), since: at ?? this.lastActivityAt ?? 0 });
+      }
       if (this.pendingAsk && content.some((b: any) => b?.type === "tool_result" && b.tool_use_id === this.pendingAsk!.id)) this.pendingAsk = null;
       // A tool finished; the model is about to continue.
       this.turnOpen = true;
@@ -806,6 +825,7 @@ export class ClaudeFold {
     }
     if (kind === "notification") {
       // Claude answers a finished background task on its own.
+      this.taskEnded(first);
       this.unqueue(first);
       this.turnOpen = true;
       this.turnError = null;
@@ -873,6 +893,7 @@ export class ClaudeFold {
           this.prRepo.add(b.input?.command);
           this.prRepo.add(b.input?.url);
         }
+        if (b?.type === "tool_use" && b.name === "TaskStop") this.tasks.delete(String(b.input?.task_id ?? b.input?.shell_id ?? ""));
         if (b?.type !== "tool_use" || b.name !== "AskUserQuestion" || typeof b.id !== "string") continue;
         const questions = askQuestionsOf(b.input);
         if (questions) this.pendingAsk = { id: b.id, questions };
@@ -956,6 +977,7 @@ export class ClaudeFold {
       team: this.team,
       teamsLed: [...this.teamsLed],
       pendingAsk: this.pendingAsk,
+      backgroundTasks: [...this.tasks].map(([id, t]) => ({ id, ...t })),
       skipsPermissions: this.permissionMode === "bypassPermissions",
       headless: this.entrypoint === "sdk-cli",
       wakes: this.wakes(),

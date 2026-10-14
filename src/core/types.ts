@@ -598,6 +598,10 @@ export interface Session {
    *  turn is over and it is waiting on teammates, background agents or
    *  shells, not thinking. */
   background: boolean;
+  /** Work it launched in the background that is still running, in words:
+   *  `workflow "babysit-fleet"`. It runs inside the session's process, so
+   *  the session counts as running, and is neither adopted nor parked. */
+  backgroundWork: string | null;
 }
 
 export interface TokenTotals {

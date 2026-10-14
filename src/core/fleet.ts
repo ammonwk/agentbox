@@ -63,6 +63,7 @@ import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
 import {
   LIMIT_DIALOG,
   transcriptFile,
+  type BackgroundTask,
   type LiveProcess,
   type ModelOutcome,
   type ProviderAdapter,
@@ -1637,6 +1638,7 @@ export class Fleet extends EventEmitter {
     // Told first (`keepWarm`), parked only if it goes quiet again. One
     // already nudged holds nothing: a nudge that never landed must not keep
     // the session up for good.
+    if (v.backgroundWork) return `${v.backgroundWork} is running`;
     const stranded = v.limitHit ? [] : this.strandedOf(v);
     if (stranded.length > 0 && this.strandedSeen.get(v.id) !== stranded.at(-1)!.at) {
       return `${stranded.length} finished background task${stranded.length === 1 ? "" : "s"} never woke it; it is told first`;
@@ -2178,6 +2180,7 @@ export class Fleet extends EventEmitter {
 
     let status: SessionStatus;
     let background = false;
+    let tasks: BackgroundTask[] = [];
     // Parked is still your move: the fleet stopped the process, not you, and
     // the next message resumes it.
     if (host === "none") status = rec.parkedAt ? "waiting" : "stopped";
@@ -2193,6 +2196,14 @@ export class Fleet extends EventEmitter {
       // Busy with its own turn over: the CLI is waiting on what it left going
       // (teammates, background agents, shells), not thinking.
       background = status === "running" && !!busy && host !== "subagent" && !!f && !f.turnOpen;
+      // A workflow or background agent it launched is still going: Claude
+      // calls the session idle meanwhile, but it is working, and stopping
+      // the process (adopting it, parking it) would kill that work.
+      tasks = this.liveTasks(f, pid, rec.transcriptPath, now);
+      if (tasks.length > 0 && status === "waiting") {
+        status = "running";
+        background = true;
+      }
       // Claude says so itself while a permission dialog is up, which is the
       // only way to know it for a session in some other terminal. Its /btw
       // panel is a dialog to Claude too, but a prompt to no one: while it
@@ -2358,7 +2369,25 @@ export class Fleet extends EventEmitter {
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
+      backgroundWork: tasks.length > 0 ? workOf(tasks) : null,
     };
+  }
+
+  /**
+   * The background work (TranscriptFacts.backgroundTasks) still running in a
+   * session's live process. A task launched before the process started died
+   * with the one before. One stopped from Claude's own task panel leaves no
+   * mark in the transcript, so after SUBAGENT_QUIET_MS a task is believed
+   * only while its subagents are still writing.
+   */
+  private liveTasks(f: Partial<TranscriptFacts> | null, pid: number | null, transcriptPath: string | null, now: number): BackgroundTask[] {
+    if (!pid || !f?.backgroundTasks?.length) return [];
+    const since = startedAtOf(pid);
+    if (since === null) return [];
+    const mine = f.backgroundTasks.filter((t) => t.since >= since);
+    if (mine.length === 0 || mine.some((t) => now - t.since < SUBAGENT_QUIET_MS)) return mine;
+    const sub = transcriptPath && f.agentSessionId ? lastWriteUnder(join(dirname(transcriptFile(transcriptPath)), f.agentSessionId, "subagents")) : null;
+    return sub !== null && now - sub < SUBAGENT_QUIET_MS ? mine : [];
   }
 
   /**
@@ -3180,6 +3209,11 @@ export class Fleet extends EventEmitter {
     if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
     if (!rec.transcriptPath || !existsSync(transcriptFile(rec.transcriptPath))) throw new FleetError(409, "its transcript is missing, so a resume would start empty");
 
+    // Adopting stops the process, and a workflow or background agent runs
+    // inside it: that work would be lost, not moved.
+    if (view.backgroundWork) {
+      throw new FleetError(409, `${view.backgroundWork} is still running in that process, and adopting stops it; adopt it once that finishes`);
+    }
     const pid = view.pid;
     // Read how it was launched before it is gone: the resume keeps its flags
     // and its shell's environment (src/core/launch.ts).
@@ -4155,4 +4189,13 @@ function expandHome(p: string): string {
   if (p === "~") return home;
   if (p.startsWith("~/")) return `${home}${p.slice(1)}`;
   return p;
+}
+
+/** Background work in words, for the board and for refusals: `workflow
+ *  "babysit-fleet"`, `background agent "Review the diff"`, `2 background tasks`. */
+export function workOf(tasks: readonly BackgroundTask[]): string {
+  if (tasks.length !== 1) return `${tasks.length} background tasks`;
+  const t = tasks[0]!;
+  const kind = t.kind === "local_workflow" ? "workflow" : t.kind === "local_agent" ? "background agent" : "background task";
+  return `${kind} "${t.name}"`;
 }
