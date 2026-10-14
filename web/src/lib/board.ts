@@ -109,8 +109,9 @@ export const ACTIVE_MS = 3 * 60 * 60_000;
 
 /**
  * The rows of each tab. A session is active while it runs, when it did
- * something within ACTIVE_MS, or while it is pinned: a pin keeps its place at
- * the top. A tree goes whole to Active when any session in it is active, so a
+ * something within ACTIVE_MS, while it needs you (blocked on an approval or a
+ * question, or its turn failed) however long ago that was, and while it is
+ * pinned: a pin keeps its place at the top. A tree goes whole to Active when any session in it is active, so a
  * lead and its teammates stay together.
  */
 export function splitActive<T extends SessionRow>(rows: readonly T[], now: number): Record<RailView, T[]> {
@@ -120,7 +121,7 @@ export function splitActive<T extends SessionRow>(rows: readonly T[], now: numbe
     for (let p = up.get(r); p !== undefined; p = up.get(r)) r = p;
     return r;
   };
-  const live = new Set(rows.filter((s) => s.status === "running" || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS).map((s) => rootOf(s.id)));
+  const live = new Set(rows.filter((s) => s.status === "running" || s.status === "blocked" || !!s.turnError || s.pinOrder !== null || now - s.lastActivityAt < ACTIVE_MS).map((s) => rootOf(s.id)));
   const out: Record<RailView, T[]> = { active: [], inactive: [] };
   for (const s of rows) out[live.has(rootOf(s.id)) ? "active" : "inactive"].push(s);
   return out;

@@ -591,6 +591,32 @@ function Detail({
     </div>
   );
 
+  // Pin and bookmark: in the tabs' row on a computer, beside the name on a phone.
+  const marks = (
+    <>
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={session.pinOrder !== null ? PinOn : Icon.pin}
+        className="sx-mark"
+        aria-pressed={session.pinOrder !== null}
+        aria-label={session.pinOrder !== null ? "Unpin" : "Pin to the top of the list"}
+        title={session.pinOrder !== null ? "Unpin it from the top of the list" : "Pin it to the top of the list, open or closed; drag pinned sessions to reorder them"}
+        onClick={() => togglePin(session, state.sessions)}
+      />
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={session.bookmarkedAt !== null ? BookmarkOn : Icon.bookmark}
+        className="sx-mark"
+        aria-pressed={session.bookmarkedAt !== null}
+        aria-label={session.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
+        title={session.bookmarkedAt !== null ? "Remove it from the bookmarks" : "Bookmark it: the bookmarks menu beside the list's sort finds it, open or closed"}
+        onClick={() => toggleBookmark(session)}
+      />
+    </>
+  );
+
   return (
     <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main" onClick={(e) => {
       if (e.defaultPrevented || e.button !== 0 || e.detail > 1 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
@@ -604,6 +630,14 @@ function Detail({
       {/* No title, ids or status: the list shows which session is open and
           what it is doing. The facts, then the tabs with the actions. */}
       <header className="sx-header">
+        {/* A phone shows no list beside the session: name it, and rename it, here.
+            On a computer the list's right-click menu renames. */}
+        {narrow ? (
+          <div className="sx-title-row">
+            <TitleEdit session={session} />
+            {marks}
+          </div>
+        ) : null}
         {/* On a computer the facts go in the system bar along the bottom. A
             phone hides that bar in a session, so there they stay here. */}
         {inBar && sysbarSlot ? createPortal(facts, sysbarSlot) : facts}
@@ -649,26 +683,7 @@ function Detail({
             ))}
           </div>
           <div className="sx-tabbar-actions">
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={session.pinOrder !== null ? PinOn : Icon.pin}
-              className="sx-mark"
-              aria-pressed={session.pinOrder !== null}
-              aria-label={session.pinOrder !== null ? "Unpin" : "Pin to the top of the list"}
-              title={session.pinOrder !== null ? "Unpin it from the top of the list" : "Pin it to the top of the list, open or closed; drag pinned sessions to reorder them"}
-              onClick={() => togglePin(session, state.sessions)}
-            />
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={session.bookmarkedAt !== null ? BookmarkOn : Icon.bookmark}
-              className="sx-mark"
-              aria-pressed={session.bookmarkedAt !== null}
-              aria-label={session.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
-              title={session.bookmarkedAt !== null ? "Remove it from the bookmarks" : "Bookmark it: the bookmarks menu beside the list's sort finds it, open or closed"}
-              onClick={() => toggleBookmark(session)}
-            />
+            {narrow ? null : marks}
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt
@@ -875,6 +890,63 @@ function TranscriptInstead({
         <Timeline session={session} />
       </Suspense>
     </div>
+  );
+}
+
+/** The title, click to rename. Clearing it falls back to the derived title. */
+function TitleEdit({ session }: { session: SessionRow }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const { run, busy } = useAction();
+  const title = titleOf(session);
+
+  if (!editing) {
+    return (
+      <h2 className="sx-title">
+        <button
+          className="sx-title-btn"
+          title="Rename"
+          onClick={() => {
+            setDraft(session.label ?? title);
+            setEditing(true);
+          }}
+        >
+          <span className="sx-title-text">{title}</span>
+          <Icon.edit size={13} className="sx-title-pen" />
+        </button>
+      </h2>
+    );
+  }
+
+  const commit = async () => {
+    const next = draft.trim();
+    if (next === (session.label ?? title)) {
+      setEditing(false);
+      return;
+    }
+    if (await run(() => api.patchSession(session.id, { label: next || null }))) setEditing(false);
+  };
+
+  return (
+    <input
+      className="sx-title-input"
+      aria-label="Session label"
+      autoFocus
+      value={draft}
+      disabled={busy}
+      placeholder={session.title || "Label"}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => void commit()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          void commit();
+        } else if (e.key === "Escape") {
+          e.stopPropagation();
+          setEditing(false);
+        }
+      }}
+    />
   );
 }
 

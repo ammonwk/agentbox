@@ -720,9 +720,44 @@ function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: reado
     act();
     onDone();
   };
+  // Rename turns the menu into the name's field; clearing it falls back to the derived title.
+  const [draft, setDraft] = useState<string | null>(null);
+  const rename = (next: string) => {
+    onDone();
+    if (next !== (s.label ?? titleOf(s))) api.patchSession(s.id, { label: next || null }).catch((e: Error) => reportFailure(s.id, titleOf(s), "rename", e.message));
+  };
+  if (draft !== null) {
+    return (
+      <div ref={wrap} className="rail-menu rail-rowmenu" style={{ position: "fixed", ...at }}>
+        <input
+          className="rail-rename"
+          aria-label="Session name"
+          autoFocus
+          value={draft}
+          placeholder={s.title || "Name"}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              rename(draft.trim());
+            } else if (e.key === "Escape") {
+              e.stopPropagation();
+              onDone();
+            }
+          }}
+        />
+      </div>
+    );
+  }
   return (
     <div ref={wrap} className="rail-menu rail-rowmenu" role="menu" aria-label={titleOf(s)} style={{ position: "fixed", ...at }}>
       <div className="rail-menu-label">{titleOf(s)}</div>
+      <button type="button" role="menuitem" onClick={() => setDraft(s.label ?? titleOf(s))}>
+        <span className="rail-menu-check">
+          <Icon.edit size={12} />
+        </span>
+        Rename
+      </button>
       <button type="button" role="menuitem" onClick={pick(() => togglePin(s, sessions))}>
         <span className="rail-menu-check">
           <Icon.pin size={12} />

@@ -249,6 +249,16 @@
   z-index: 60;
   max-width: 280px;
 }
+.rail-rename {
+  width: 240px;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
 .rail-rowmenu .rail-menu-label {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3399,4 +3409,55 @@ a.wk-item:hover {
   color: var(--muted);
   font-size: 13px;
   padding: 24px 0;
+}
+
+/* A phone's session header names the session, the list being out of sight;
+   a click renames it. Pin and bookmark sit beside it. */
+.sx-title-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.sx-title-row .sx-title {
+  flex: 1 1 auto;
+}
+.sx-title {
+  margin: 0;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.sx-title-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+.sx-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-title-pen {
+  flex: none;
+  color: var(--faint);
+}
+.sx-title-input {
+  width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
 }
