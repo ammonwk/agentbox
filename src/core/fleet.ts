@@ -50,6 +50,7 @@ import {
   listClosedRecords,
   listOpenWaits,
   listSessionRecords,
+  moveWaits,
   updateSessionRecord,
   usageSamplesSince,
   type SessionRecord,
@@ -3799,6 +3800,10 @@ export class Fleet extends EventEmitter {
     if (getSessionRecord(from)?.successor !== to) updateSessionRecord(from, { successor: to });
     const moved = this.startedBy(from).filter((id) => id !== to);
     for (const id of moved) updateSessionRecord(id, { parent: to, parentByHand: true });
+    // Its waits too: told through `heir` either way, but the successor's own
+    // checks (arm's one-per-thing, the idle close, agentbox waits) read them
+    // by session, and a loop must not lose its timer to a new conversation.
+    moveWaits(from, to);
     await this.tick();
     return moved;
   }

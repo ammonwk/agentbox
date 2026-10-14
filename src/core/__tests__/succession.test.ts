@@ -166,3 +166,21 @@ test("late pane discovery attaches only the proven new provider identity, preser
   expect(getSessionRecord(discovered.id)!.agentSessionId).toBeNull();
   expect(fleet.byAgentId.get("codex:provider-own")).toBe(pending.id);
 });
+
+describe("waits across a handover", () => {
+  test("open waits and finished ones not yet told move to the session that takes over; told ones stay", async () => {
+    const { insertWait, updateWait, getWait, listOpenWaits } = await import("../db");
+    insertSessionRecord(record("loop-old"));
+    insertSessionRecord(record("loop-new"));
+    const open = insertWait({ sessionId: "loop-old", spec: { kind: "time" }, createdAt: NOW, deadline: NOW + 3_600_000 });
+    const untold = insertWait({ sessionId: "loop-old", spec: { kind: "time" }, createdAt: NOW, deadline: NOW + 60_000 });
+    updateWait(untold.id, { ended: "happened", endedAt: NOW + 60_000 });
+    const told = insertWait({ sessionId: "loop-old", spec: { kind: "time" }, createdAt: NOW, deadline: NOW + 60_000 });
+    updateWait(told.id, { ended: "happened", endedAt: NOW + 60_000, toldAt: NOW + 61_000 });
+    const fleet = { startedBy: () => [], tick: async () => {} };
+    await Fleet.prototype.handOver.call(fleet as unknown as Fleet, "loop-old", "loop-new");
+    expect([getWait(open.id)!.sessionId, getWait(untold.id)!.sessionId, getWait(told.id)!.sessionId]).toEqual(["loop-new", "loop-new", "loop-old"]);
+    // What reads a session's own waits (arm's duplicate check, the idle close) now sees them.
+    expect(listOpenWaits(0).filter((w) => w.sessionId === "loop-new").map((w) => w.id)).toContain(open.id);
+  });
+});

@@ -750,6 +750,12 @@ export function insertWait(w: Pick<Wait, "sessionId" | "spec" | "createdAt" | "d
   return getWait(Number(lastInsertRowid))!;
 }
 
+/** Move `from`'s waits that are open, or ended but not yet told, to `to`:
+ *  the session that took over from it (`Fleet.handOver`). Told ones stay. */
+export function moveWaits(from: string, to: string): number {
+  return getDb().run("UPDATE waits SET session_id = ? WHERE session_id = ? AND (ended IS NULL OR told_at IS NULL)", [to, from]).changes;
+}
+
 export function getWait(id: number): Wait | null {
   const row = getDb().query("SELECT * FROM waits WHERE id = ?").get(id) as WaitRow | null;
   return row ? rowToWait(row) : null;
