@@ -3,6 +3,7 @@ import type { AgentsRuntime } from "../core/agents/runtime";
 import { HttpError, json, readBody, type Router } from "./router";
 import { authenticatedSession } from "../core/session-authority";
 import { cloudConfig } from "../core/cloud/config";
+import { FleetError } from "../core/fleet";
 
 export function agentRoutes(router: Router, agents: AgentsRuntime) {
   const human = async (req: Request, b: Record<string, unknown>) => {
@@ -46,13 +47,25 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
     })
     .add("POST", "/api/agents/local/:id/chat", async ({ req, params }) => {
       const b = await readBody(req);
-      return json(
-        await agents.conversations.localSend(
-          params.id!,
-          z.string().uuid().parse(b.request),
-          z.string().parse(b.body),
-        ),
-      );
+      try {
+        return json(
+          await agents.conversations.localSend(
+            params.id!,
+            z.string().uuid().parse(b.request),
+            z.string().parse(b.body),
+            z
+              .object({ proposal: z.string().uuid(), run: z.string() })
+              .strict()
+              .optional()
+              .parse(b.context),
+          ),
+        );
+      } catch (e) {
+        // Errors after the attempt boundary are already caught by localSend.
+        if (e instanceof FleetError)
+          return json({ id: b.request, state: "refused", result: e.message });
+        throw e;
+      }
     })
     .add("GET", "/api/agents/local/:id/receipt/:request", ({ params }) =>
       json(agents.conversations.localReceipt(params.id!, params.request!)),
@@ -82,6 +95,16 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
           authenticatedSession(req),
           z.string().uuid().parse(b.request),
           b.proposal,
+        ),
+      );
+    })
+    .add("POST", "/api/agents/runs/:id/intake", async ({ req, params }) => {
+      const b = await readBody(req);
+      return json(
+        await agents.conversationIntake(
+          params.id!,
+          authenticatedSession(req),
+          b.item,
         ),
       );
     })

@@ -29,8 +29,8 @@ Sessions retain their existing private transcript and access boundaries.
    the assignee of a new execution.
 6. Follow the work from any workspace member's Agents page: current stage, next
    action, pending decision, host, heartbeat, evidence and session references.
-   A remote session reference does not grant a remote terminal or transcript.
-   Only the execution host's existing local UI can open that session.
+   Shared Chat reads the linked conversation through the authenticated live relay.
+   A session reference never grants a remote terminal or unrelated Session access.
 
 CAELUS and SALUS seed editable release and observability definitions through the
 same flow. Installing samples never starts scans, messages, merges or deployments.
@@ -301,8 +301,10 @@ responsible run; dismissal never starts work.
 With no shared project configured, three local agents are available immediately.
 Their definitions and session references are local operational records. Sending
 the first message starts the selected existing provider via Fleet; later messages
-resume that same conversation. Choose a provider/repository in About before the
-first message. Local agents inherit the existing loopback operator trust boundary;
+resume that same conversation. Provider/repository can be changed in About after
+the current turn is idle. Agentbox proves the old transcript exists, stops the old
+process, retains its reference, and starts the next message in a fresh scoped
+session. This does not move a warm session between accounts. Local agents inherit the existing loopback operator trust boundary;
 this does not isolate malicious code running as the same Unix user. Local scope
 is explicit and never presented as workspace sharing. Creating a local agent does
 not authorize external outreach or repository scans.
@@ -312,7 +314,7 @@ Supabase Realtime). A human JWT queues a bounded 45-second read request containi
 only an agent ID, cursor and ephemeral P-256 public key. The current authorized
 execution host reads only its verified managed-session references, records its
 own ephemeral public key via a scoped installation RPC, and sends AES-GCM encrypted
-chunks over HTTP/WebSocket broadcast. Bodies are never inserted into cloud tables
+chunks over WebSocket broadcast. Bodies are never inserted into cloud tables
 or written to another conversation log. The browser obtains that host key through
 a human-only RPC which rechecks current membership, installation and grant; request
 ID authentication binds the ciphertext to that read. The host rechecks before
@@ -329,3 +331,23 @@ session at dispatch; local durable send receipts guard the attempt boundary.
 Terminal outcomes purge the queued body. Uncertain attempts are reported and never
 replayed automatically. Browser drafts and pending sends reuse the Sessions model;
 reloading does not turn an uncertain submission back into an unsent draft.
+
+Any current workspace member can begin Chat on an enabled agent with an authorized
+execution host; opening Chat grants no repository publication permission.
+The persistent Chat coordinator has separate capacity from repository workers.
+Its managed repository actions are refused; `agentbox agent intake RUN --file
+issue.json` queues a canonical source under the configured activation policy.
+Scheduled intake can therefore start its one allowed issue worker while Chat
+is idle, without allowing a second writer for the same issue. Manual activation
+still requires a maintainer to run queued work from About.
+
+Local Feed decisions are persisted before delivery with one stable receipt ID.
+Approval, dismissal and retries cannot overwrite or repeat that decision. A
+refused or uncertain delivery remains visible; a server restart never retries it
+automatically. Guidance appends to existing browser drafts, and retains its
+proposal/run context through reload and failed-send recovery. A changed workspace
+requires the old recommendation to be reviewed anew before approval.
+
+Cross-installation Chat requires a secure browser context (HTTPS or localhost)
+for WebCrypto and a reachable Realtime service. Plain HTTP on a tailnet address
+cannot provide the encrypted shared relay; local Chat remains usable there.

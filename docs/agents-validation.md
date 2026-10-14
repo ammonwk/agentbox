@@ -6,8 +6,8 @@ lifecycle and boundaries without claiming a live model fixed a production issue,
 a GitHub App was provisioned, or a deployment occurred.
 
 - Typecheck and production web build pass.
-- Existing/local security checks: 266 pass, 20 optional cloud checks skipped in
-  the ordinary suite. The separate real-cloud run has 22 pass and 200 assertions.
+- Existing/local security checks: 272 pass, 22 optional cloud checks skipped in
+  the ordinary suite. The separate real-cloud run has 25 pass and 233 assertions.
 - All cloud migrations rebuild from an empty local database; schema lint is clean.
 - Two authenticated humans and two installations verify workspace visibility,
   denied edits/tenant access, independent executor grants, immutable approvals,
@@ -32,6 +32,30 @@ access. New-feature merge approval is separate. Hosted Supabase, OAuth linking,
 provider login, and repository-admin GitHub App installation are setup prerequisites;
 samples remain paused until explicitly connected and enabled.
 
-![Shared Vulcan work and progress](images/agents-vulcan.png)
+The Chat/Feed acceptance also verifies encrypted two-installation read-through
+from a real provider-format transcript reader, current-member guidance with
+receipts, immutable Feed publication through the associated runtime, approval
+and dismissal. Browser checks preserve an existing draft through Give guidance,
+reload, a controlled delivery refusal, newer typing and Restore draft. The
+restored guidance then reaches the actual Fleet session. A real coordinator and
+issue worker coexist with maxConcurrent=1; the worker curates a recommendation
+and receives its approved follow-up while Chat remains available.
+
+Local destructive-race checks cover approval versus dismissal, stable delivery
+identity and no replay after restart, refused/uncertain outcomes, recovery after
+a proven pre-start failure, exclusion after an uncertain start, and changing
+repository after first Chat with history retained and no concurrent writer.
+
+The user-authorized local integration is on the live checkout's main branch.
+Every tracked/untracked local change was snapshotted with manifests, patches and
+refs, then three-way reconciled before a normal fast-forward. Managed launchd
+restart preserved the live fleet. A real local Vulcan used the existing provider
+to answer Chat and publish a Feed recommendation; no repository work or outreach
+was started for this demonstration. The screenshots below use the separate
+controlled cloud fixture, not the user's private session history.
+
+![Shared Chat with a provider transcript and inline recommendation](images/agents-chat.png)
+
+![Durable agent-authored Feed proposal](images/agents-feed.png)
 
 ![Mobile Agents navigation and work](images/agents-mobile.png)

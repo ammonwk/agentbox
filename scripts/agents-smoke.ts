@@ -169,7 +169,9 @@ const adapter = {
       argv: [
         "sh",
         "-c",
-        "printf 'export const sum = (a: number, b: number) => a + b;\\n' > sum.ts; exec cat",
+        opts.prompt.includes("coordination conversation")
+          ? "exec cat"
+          : "printf 'export const sum = (a: number, b: number) => a + b;\\n' > sum.ts; exec cat",
       ],
       env: {},
       agentSessionId: null,
@@ -294,6 +296,138 @@ try {
     suggestions.suggestions[0].evidence.some((s: string) =>
       s.includes("commits"),
     ),
+  );
+
+  const transcript = join(dir, "controlled-provider.jsonl");
+  const stamp = new Date().toISOString();
+  writeFileSync(
+    transcript,
+    [
+      {
+        timestamp: stamp,
+        type: "session_meta",
+        payload: { id: crypto.randomUUID(), cwd: session.cwd },
+      },
+      {
+        timestamp: stamp,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Please investigate the arithmetic fixture.",
+            },
+          ],
+        },
+      },
+      {
+        timestamp: stamp,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "I reproduced the subtraction error and prepared a scoped fix.",
+            },
+          ],
+        },
+      },
+    ]
+      .map((x) => JSON.stringify(x))
+      .join("\n") + "\n",
+  );
+  const reader = codexAdapter.reader({
+    provider: "codex",
+    accountId: "smoke-account",
+    agentSessionId: crypto.randomUUID(),
+    path: transcript,
+    mtimeMs: Date.now(),
+    size: Bun.file(transcript).size,
+  });
+  const originalTimeline = fleet.timeline.bind(fleet);
+  fleet.timeline = async (id: string, before: string | null, limit: number) =>
+    id === live.session
+      ? reader.timeline({ before, limit })
+      : originalTimeline(id, before, limit);
+  const { AgentConversation } = await import(
+    join(root, "src/cloud/agent-conversation.ts")
+  );
+  const sharedChat = new AgentConversation(bob.api);
+  const relayRead = sharedChat.read(a.id);
+  void relayRead.catch(() => undefined);
+  // The read's subscription handshake must finish before a real host tick.
+  // This is a bounded smoke condition, not a persistent external watcher.
+  const readQueued = await new Promise<boolean>((resolve) => {
+    const timer = setInterval(async () => {
+      const q = await cloud
+        .api()
+        .agentCall(
+          "inst_agent_reads",
+          {},
+          (await import("zod")).z.array((await import("zod")).z.unknown()),
+        );
+      if (q.length) {
+        clearInterval(timer);
+        resolve(true);
+      }
+    }, 100);
+    setTimeout(() => {
+      clearInterval(timer);
+      resolve(false);
+    }, 5000);
+  });
+  assert.ok(
+    readQueued,
+    "Realtime subscription did not queue an authenticated read",
+  );
+  await runtime.conversations.tick();
+  if (runtime.lastError) console.log("RELAY HOST", runtime.lastError);
+  const pageFromHost = await relayRead;
+  assert.ok(
+    pageFromHost.events.some((e: any) =>
+      e.text?.includes("reproduced the subtraction error"),
+    ),
+    "relay did not read provider transcript",
+  );
+  assert.equal(pageFromHost.session, live.session);
+  const proposal = await runtime.conversations.propose(
+    r.id,
+    live.session,
+    crypto.randomUUID(),
+    {
+      title: "Validate the arithmetic fix",
+      finding: "The fixture subtracts instead of adding.",
+      reason: "The result is wrong for ordinary positive inputs.",
+      next: "Check sum(2, 3) and report the result.",
+      evidence: [
+        {
+          url: "https://github.com/fixture/repo/issues/7",
+          label: "Reported issue",
+        },
+      ],
+    },
+  );
+  assert.ok(
+    (await sharedChat.proposals(a.id)).some((p: any) => p.id === proposal.id),
+  );
+  const guidance = crypto.randomUUID();
+  await sharedChat.guide(
+    a.id,
+    r.id,
+    guidance,
+    "Please include a zero-input case",
+    proposal.id,
+  );
+  await runtime.conversations.tick();
+  assert.equal((await sharedChat.receipt(guidance)).state, "sent");
+  await runtime.conversations.tick();
+  assert.equal((await sharedChat.receipt(guidance)).state, "sent");
+  console.log(
+    "Verified encrypted two-installation read-through, real provider folding, durable Feed and scoped guidance receipt",
   );
   // Render the real cloud-backed feature. Only the surrounding board chrome
   // uses an empty fixture, so no live fleet/accounts/transcripts are exposed.
@@ -560,6 +694,7 @@ try {
       "fixture/repo",
       "fixture/second",
     ]);
+    await page.getByRole("button", { name: "About", exact: true }).click();
     await page.getByRole("button", { name: "Edit definition" }).click();
     await page
       .getByLabel("Instructions", { exact: true })
@@ -572,6 +707,132 @@ try {
 
     await page.goto(`http://127.0.0.1:${server.port}/#/agents/${a.id}`);
     await page.getByRole("heading", { name: "VULCAN", exact: true }).waitFor();
+    // Exercise the real shared Chat/Feed UI. Only refusal below is injected,
+    // so recovery can be checked without an actual network outage.
+    await page.waitForRequest(
+      (q: any) => q.url().endsWith("/agent_read_request"),
+      { timeout: 10000 },
+    );
+    await runtime.conversations.tick();
+    await page
+      .getByText(
+        "I reproduced the subtraction error and prepared a scoped fix.",
+        { exact: true },
+      )
+      .waitFor();
+    const composer = page.getByRole("textbox", { name: "Message VULCAN" });
+    await composer.fill("Keep my existing draft.");
+    await page.getByRole("button", { name: /^Feed/ }).click();
+    await page
+      .getByRole("button", { name: "Give guidance", exact: true })
+      .click();
+    await page.waitForFunction(() =>
+      document
+        .querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Message VULCAN"]',
+        )
+        ?.value.includes("Regarding"),
+    );
+    assert.match(
+      await composer.inputValue(),
+      /^Keep my existing draft\.\n\nRegarding/,
+    );
+    await page.reload();
+    await composer.waitFor();
+    assert.match(
+      await composer.inputValue(),
+      /^Keep my existing draft\.\n\nRegarding/,
+    );
+    let refused: any;
+    await page.route("**/rest/v1/rpc/agent_guide", async (route: any) => {
+      refused = route.request().postDataJSON();
+      await route.fulfill({
+        json: {
+          id: refused.p_id,
+          state: "refused",
+          result: "Controlled pre-delivery refusal",
+        },
+      });
+    });
+    await page.route(
+      "**/rest/v1/rpc/agent_command_receipt",
+      async (route: any) =>
+        route.fulfill({
+          json: {
+            id: route.request().postDataJSON().p_id,
+            state: "refused",
+            result: "Controlled pre-delivery refusal",
+          },
+        }),
+    );
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Restore draft", exact: true })
+      .waitFor();
+    assert.equal(refused.p_proposal, proposal.id);
+    assert.equal(refused.p_run, r.id);
+    await composer.fill("Newer typing.");
+    await page
+      .getByRole("button", { name: "Restore draft", exact: true })
+      .click();
+    await page.waitForFunction(() =>
+      document
+        .querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Message VULCAN"]',
+        )
+        ?.value.includes("Keep my existing draft"),
+    );
+    assert.match(
+      await composer.inputValue(),
+      /^Newer typing\.\n\nKeep my existing draft/,
+    );
+    await page.unroute("**/rest/v1/rpc/agent_guide");
+    await page.unroute("**/rest/v1/rpc/agent_command_receipt");
+    const guideResponse = page.waitForResponse((q: any) =>
+      q.url().endsWith("/agent_guide"),
+    );
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const guideReceipt = await (await guideResponse).json();
+    await runtime.conversations.tick();
+    assert.equal(
+      (await new AgentConversation(alice.api).receipt(guideReceipt.id)).state,
+      "sent",
+    );
+    await page.screenshot({ path: join(output, "chat.png"), fullPage: true });
+    await page.getByRole("button", { name: /^Feed/ }).click();
+    await page.screenshot({ path: join(output, "feed.png"), fullPage: true });
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.getByText("approved", { exact: true }).waitFor();
+    await runtime.conversations.tick();
+    assert.equal(
+      (await sharedChat.proposals(a.id)).find((p: any) => p.id === proposal.id)
+        ?.state,
+      "approved",
+    );
+    const dismissed = await runtime.conversations.propose(
+      r.id,
+      live.session,
+      crypto.randomUUID(),
+      {
+        title: "Review the zero case",
+        finding: "Zero-input coverage has been requested.",
+        reason: "It exercises the boundary.",
+        next: "Discuss the zero-input case before adding more scope.",
+        evidence: [],
+      },
+    );
+    await page.getByRole("button", { name: "Dismiss", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Dismiss", exact: true }).click();
+    await page.getByText("dismissed", { exact: true }).waitFor();
+    assert.equal(
+      (await sharedChat.proposals(a.id)).find((p: any) => p.id === dismissed.id)
+        ?.state,
+      "dismissed",
+    );
+    console.log(
+      "Verified draft append/reload/refusal/restore, real guidance delivery, Feed approval and dismissal",
+    );
+    await page.getByRole("button", { name: "About", exact: true }).click();
     await page.getByText("Sum returns a difference", { exact: true }).waitFor();
     await page.screenshot({ path: join(output, "vulcan.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -618,6 +879,7 @@ try {
       await other.getByRole("button", { name: "Run now", exact: true }).count(),
       0,
     );
+    await other.getByRole("button", { name: "About", exact: true }).click();
     await other
       .getByText("Sum returns a difference", { exact: true })
       .waitFor();
@@ -658,6 +920,90 @@ try {
       },
     ],
   });
+  // A real Fleet coordinator remains alive while the configured single worker
+  // claims a new canonical issue and publishes/receives its scoped follow-up.
+  let coordinated = await alice.agents.save({
+    workspace: ws.id,
+    name: "VULCAN coordination",
+    team: true,
+    maintainers: [alice.id],
+    definition: {
+      ...a.definition,
+      activation: { mode: "event", when: "" },
+      maxConcurrent: 1,
+      sources: [{ kind: "manual" }],
+    },
+  });
+  await alice.agents.authorize(coordinated.id, reg.installation.id, true);
+  coordinated = await alice.agents.save({
+    workspace: ws.id,
+    id: coordinated.id,
+    base: coordinated.revision,
+    name: coordinated.name,
+    team: true,
+    maintainers: coordinated.maintainers,
+    definition: coordinated.definition,
+    executor: reg.installation.id,
+    enabled: true,
+  });
+  await runtime.bind({
+    agent: coordinated.id,
+    url: cfg.url,
+    workspace: ws.id,
+    provider: "codex",
+    repos: { "fixture/repo": repository.id },
+  });
+  const begun = await alice.api.sb.rpc("agent_conversation_start", {
+    p_agent: coordinated.id,
+    p_request: crypto.randomUUID(),
+  });
+  assert.equal(begun.error, null);
+  await runtime.tick();
+  const coordination = runtime.store
+    .runs()
+    .find((x: any) => x.run.id === begun.data.id)!;
+  assert.equal(coordination.phase, "attached");
+  const queued = await runtime.conversationIntake(
+    coordination.run.id,
+    coordination.session,
+    {
+      source: "https://github.com/fixture/repo/issues/42",
+      title: "Next arithmetic issue",
+      acceptance: "Validate the scoped arithmetic behavior",
+    },
+  );
+  await runtime.tick();
+  const worker = runtime.store.runs().find((x: any) => x.run.id === queued.id)!;
+  assert.equal(worker.phase, "attached", runtime.lastError ?? "worker starved");
+  assert.equal(fleet.get(coordination.session).host, "tmux");
+  const recommended = await runtime.conversations.propose(
+    worker.run.id,
+    worker.session,
+    crypto.randomUUID(),
+    {
+      title: "Check the queued issue",
+      finding: "The scheduled issue has its own active worker.",
+      reason: "Chat remains available during work.",
+      next: "Run the local arithmetic check and report the result.",
+      evidence: [],
+    },
+  );
+  await new AgentConversation(alice.api).decide(
+    recommended.id,
+    "approved",
+    crypto.randomUUID(),
+  );
+  await runtime.conversations.tick();
+  assert.equal(
+    (await sharedChat.proposals(coordinated.id)).find(
+      (p: any) => p.id === recommended.id,
+    )?.delivery?.state,
+    "sent",
+  );
+  assert.equal(fleet.get(coordination.session).host, "tmux");
+  console.log(
+    "Verified real coordinator and exclusive issue worker coexist with maxConcurrent=1; approved Feed follow-up delivered",
+  );
   console.log(
     JSON.stringify({
       ok: true,

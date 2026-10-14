@@ -19,7 +19,7 @@ import {
   type SharedAgent,
   type AgentAction,
 } from "../../../src/cloud/agents";
-import { cloudCall } from "../../../src/cloud/client";
+import { cloudCall, CloudError } from "../../../src/cloud/client";
 import type { AppState, TimelineEvent } from "../../../src/core/types";
 import { request } from "../api";
 import { Button, Empty } from "../components";
@@ -32,7 +32,11 @@ import "./session/session.css";
 type Receipt = { state: string; result: string };
 type Transport = {
   read: (cursor: ReadCursor, signal?: AbortSignal) => Promise<ConversationPage>;
-  send: (body: string, id: string, proposal?: Proposal) => Promise<Receipt>;
+  send: (
+    body: string,
+    id: string,
+    proposal?: { proposal: string; run: string },
+  ) => Promise<Receipt>;
   receipt: (id: string) => Promise<Receipt | null>;
   proposals: () => Promise<Proposal[]>;
   decide: (
@@ -57,11 +61,17 @@ export function SharedAgentSpace({
   children: ReactNode;
 }) {
   const conversation = useMemo(() => new AgentConversation(api.human), [api]);
-  const responsible = board.runs.find(
+  const activeRuns = board.runs.filter(
     (r) =>
       r.agent_id === a.id &&
       ["running", "waiting", "starting", "queued"].includes(r.state),
   );
+  const responsible =
+    activeRuns.find((r) =>
+      board.work.some(
+        (w) => w.id === r.work_id && w.external_key === `conversation:${a.id}`,
+      ),
+    ) ?? activeRuns[0];
   const transport = useMemo<Transport>(
     () => ({
       read: (cursor, signal) => conversation.read(a.id, cursor, signal),
@@ -69,17 +79,32 @@ export function SharedAgentSpace({
       decide: (p, choice, id) => conversation.decide(p.id, choice, id),
       receipt: (id) => conversation.receipt(id),
       send: async (body, id, proposal) => {
-        const r =
-          (proposal
-            ? board.runs.find((r) => r.id === proposal.run_id)
-            : responsible) ??
-          (await cloudCall(
-            api.human.sb,
-            "agent_conversation_start",
-            { p_agent: a.id, p_request: crypto.randomUUID() },
-            AgentRun,
-          ));
-        return conversation.guide(a.id, r.id, id, body, proposal?.id ?? null);
+        try {
+          const r =
+            (proposal
+              ? board.runs.find((r) => r.id === proposal.run)
+              : responsible) ??
+            (await cloudCall(
+              api.human.sb,
+              "agent_conversation_start",
+              { p_agent: a.id, p_request: crypto.randomUUID() },
+              AgentRun,
+            ));
+          return await conversation.guide(
+            a.id,
+            r.id,
+            id,
+            body,
+            proposal?.proposal ?? null,
+          );
+        } catch (e) {
+          if (
+            e instanceof CloudError &&
+            [400, 401, 403, 409].includes(e.status)
+          )
+            return { state: "refused", result: e.message };
+          throw e;
+        }
       },
     }),
     [conversation, a.id, responsible?.id, api],
@@ -142,15 +167,23 @@ export function LocalAgentSpace({
           decision,
           request: requestId,
         }),
-      send: (body, requestId) =>
-        request("POST", `/api/agents/local/${id}/chat`, {
-          body,
-          request: requestId,
-        }),
+      send: async (body, requestId, context) => {
+        const receipt = await request<Receipt>(
+          "POST",
+          `/api/agents/local/${id}/chat`,
+          {
+            body,
+            request: requestId,
+            context,
+          },
+        );
+        await agents.reload();
+        return receipt;
+      },
       receipt: (requestId) =>
         request("GET", `/api/agents/local/${id}/receipt/${requestId}`),
     }),
-    [id],
+    [id, agents.reload],
   );
   if (agents.error)
     return <Empty title="Could not load local agents">{agents.error}</Empty>;
@@ -235,20 +268,23 @@ export function LocalAgentSpace({
                 name="provider"
                 className="input"
                 defaultValue={selected.provider}
-                disabled={!!selected.session}
               >
                 <option value="codex">Codex</option>
                 <option value="claude">Claude</option>
                 <option value="muse">Muse</option>
               </select>
             </label>
+            <p className="hint">
+              Changing provider or repository after a conversation starts
+              preserves its history and starts a fresh session once the current
+              turn is idle.
+            </p>
             <label>
               Repository
               <select
                 className="input"
                 name="repo"
                 defaultValue={selected.repo ?? ""}
-                disabled={!!selected.session}
               >
                 <option value="">Conversation only</option>
                 {state.repos.map((r) => (
@@ -353,8 +389,12 @@ function AgentSpace({
     if (pinned.current) bottom.current?.scrollIntoView({ block: "end" });
   }, [events.length, tab]);
   const send = useCallback(
-    async (body: string, requestId: string) => {
-      const r = await transport.send(body, requestId, guidance?.proposal);
+    async (
+      body: string,
+      requestId: string,
+      context?: { proposal: string; run: string },
+    ) => {
+      const r = await transport.send(body, requestId, context);
       setGuidance(null);
       return r;
     },
@@ -412,6 +452,13 @@ function AgentSpace({
               Existing checks and contact consent still apply.
             </p>
           </details>
+        )}
+        {p.delivery && (
+          <p className="hint" role="status">
+            {p.delivery.state === "sent"
+              ? "Delivered to the agent"
+              : `Delivery ${p.delivery.state}: ${p.delivery.result || "Waiting for confirmation"}`}
+          </p>
         )}
         {p.state === "open" && (
           <div className="agents-buttons">
@@ -559,7 +606,18 @@ function AgentSpace({
               send={send}
               receipt={receipt}
               disabled={disabled}
-              guidance={guidance}
+              onGuidanceApplied={() => setGuidance(null)}
+              guidance={
+                guidance
+                  ? {
+                      ...guidance,
+                      context: {
+                        proposal: guidance.proposal.id,
+                        run: guidance.proposal.run_id,
+                      },
+                    }
+                  : null
+              }
             />
           </div>
         </>

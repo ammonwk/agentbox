@@ -1,5 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { transcriptFile } from "../providers/types";
 import { agentboxHome } from "../paths";
 import { z } from "zod";
 import type { AgentsRuntime } from "./runtime";
@@ -85,35 +86,75 @@ export class AgentConversations {
     ]);
   }
   async configure(id: string, input: unknown) {
-    const p = z
-      .object({
-        provider: z.enum(["codex", "claude", "muse"]),
-        repo: z.string().nullable(),
-        enabled: z.boolean(),
-      })
-      .strict()
-      .parse(input);
-    const a = this.local().find((x) => x.id === id);
-    if (!a) throw new FleetError(404, "Agent not found");
-    if (p.repo && !getRepoById(p.repo))
-      throw new FleetError(400, "Choose a registered repository");
-    if (a.session && (a.provider !== p.provider || a.repo !== p.repo))
+    if (this.busy.has(id))
       throw new FleetError(
         409,
-        "This conversation already has a provider and workspace",
+        "Another message or workspace change is in progress",
       );
-    if (!p.enabled && a.session) {
-      const session = this.runtime.fleet
-        .sessions()
-        .find((s) => s.id === a.session);
-      if (session?.host !== "none" && session)
-        await this.runtime.fleet.stopSession(a.session);
+    this.busy.add(id);
+    try {
+      const p = z
+        .object({
+          provider: z.enum(["codex", "claude", "muse"]),
+          repo: z.string().nullable(),
+          enabled: z.boolean(),
+        })
+        .strict()
+        .parse(input);
+      const a = this.local().find((x) => x.id === id);
+      if (!a) throw new FleetError(404, "Agent not found");
+      if (p.repo && !getRepoById(p.repo))
+        throw new FleetError(400, "Choose a registered repository");
+      if (a.session && (a.provider !== p.provider || a.repo !== p.repo)) {
+        const old = a.session,
+          session = this.runtime.fleet.sessions().find((s) => s.id === old);
+        if (session?.status === "running" || session?.status === "blocked")
+          throw new FleetError(
+            409,
+            "Let the current turn finish before changing the workspace",
+          );
+        const record = getSessionRecord(old);
+        if (
+          record &&
+          (!record.transcriptPath ||
+            !existsSync(transcriptFile(record.transcriptPath)))
+        )
+          throw new FleetError(
+            409,
+            "The provider has not recorded this conversation yet; try after its first reply",
+          );
+        if (session && session.host !== "none")
+          await this.runtime.fleet.stopSession(old);
+        await this.runtime.fleet.tick();
+        const after = this.runtime.fleet.sessions().find((s) => s.id === old);
+        if (after && (after.host !== "none" || after.pid))
+          throw new FleetError(
+            409,
+            "Previous session has not stopped; binding unchanged",
+          );
+        a.previous = [old, ...a.previous];
+        a.session = null;
+      }
+      if (!p.enabled && a.session) {
+        const session = this.runtime.fleet
+          .sessions()
+          .find((s) => s.id === a.session);
+        if (session?.host !== "none" && session)
+          await this.runtime.fleet.stopSession(a.session);
+      }
+      Object.assign(a, p);
+      this.put(a);
+      return a;
+    } finally {
+      this.busy.delete(id);
     }
-    Object.assign(a, p);
-    this.put(a);
-    return a;
   }
-  async localSend(id: string, request: string, body: string) {
+  async localSend(
+    id: string,
+    request: string,
+    body: string,
+    context?: { proposal: string; run: string },
+  ) {
     if (this.busy.has(id))
       throw new FleetError(409, "Another message is being delivered");
     this.busy.add(id);
@@ -122,19 +163,37 @@ export class AgentConversations {
       if (!a || !a.enabled) throw new FleetError(409, "Agent is paused");
       if (!body.trim() || body.length > 24000)
         throw new FleetError(400, "Write a message up to 24000 characters");
-      const prior=this.db.query("SELECT agent,session FROM local_submissions WHERE id=?").get(request) as {agent:string;session:string}|null;
-      if(prior&&prior.agent!==id)throw new FleetError(409,"Submission belongs to another agent");
+      if (context) {
+        const p = this.localProposals(id).find(
+          (p) => p.id === context.proposal,
+        );
+        if (!p || p.run_id !== context.run || p.run_id !== a.session)
+          throw new FleetError(
+            409,
+            "This recommendation belongs to an earlier conversation. Review it before sending new guidance.",
+          );
+        body = `[Guidance on recommendation ${p.id}]\n${body}`;
+      }
+      const prior = this.db
+        .query("SELECT agent,session FROM local_submissions WHERE id=?")
+        .get(request) as { agent: string; session: string } | null;
+      if (prior && prior.agent !== id)
+        throw new FleetError(409, "Submission belongs to another agent");
       // Fleet records its identity before starting tmux. No record proves a
       // previous preflight never spawned; an uncertain existing session stays.
-      if(a.session&&!getSessionRecord(a.session))a.session=null;
-      const fresh = !a.session&&!prior;
+      if (a.session && !getSessionRecord(a.session)) a.session = null;
+      const fresh = !a.session && !prior;
       if (fresh) {
         a.session = newSessionId();
         this.put(a);
       }
-      const sid = prior?.session??a.session!;
-      this.db.run("INSERT OR IGNORE INTO local_submissions(id,agent,session) VALUES (?,?,?)",[request,id,sid]);
-      const cwd=join(agentboxHome(),"agents","local",a.id);mkdirSync(cwd,{recursive:true,mode:0o700});
+      const sid = prior?.session ?? a.session!;
+      this.db.run(
+        "INSERT OR IGNORE INTO local_submissions(id,agent,session) VALUES (?,?,?)",
+        [request, id, sid],
+      );
+      const cwd = join(agentboxHome(), "agents", "local", a.id);
+      mkdirSync(cwd, { recursive: true, mode: 0o700 });
       const receipt = await submitWithReceipt(
         sid,
         request,
@@ -149,12 +208,15 @@ export class AgentConversations {
               repoId: a.repo ?? undefined,
               cwd,
               worktree: !!a.repo,
-              prompt: `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\n\nUser: ${body}`,
+              prompt: `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\n\n${a.previous.length ? `Previous conversation session: ${a.previous[0]}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`,
             });
           } else await this.runtime.fleet.send(sid, body, attempt, true);
         },
       );
-      if(!getSessionRecord(sid)&&a.session===sid){a.session=null;this.put(a);}
+      if (!getSessionRecord(sid) && a.session === sid) {
+        a.session = null;
+        this.put(a);
+      }
       return {
         id: request,
         state:
@@ -171,8 +233,10 @@ export class AgentConversations {
   }
   localReceipt(id: string, request: string) {
     const a = this.local().find((x) => x.id === id),
-      prior=this.db.query("SELECT session FROM local_submissions WHERE id=? AND agent=?").get(request,id) as {session:string}|null,
-      sid=prior?.session??a?.session,
+      prior = this.db
+        .query("SELECT session FROM local_submissions WHERE id=? AND agent=?")
+        .get(request, id) as { session: string } | null,
+      sid = prior?.session ?? a?.session,
       r = sid ? sendReceipt(sid, request) : null;
     return r
       ? {
@@ -195,7 +259,26 @@ export class AgentConversations {
     )
       .map((x) => JSON.parse(x.body) as Proposal)
       .filter((p) => p.agent_id === id)
+      .map((p) => this.reconcileLocalDecision(p))
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+  private reconcileLocalDecision(p: Proposal): Proposal {
+    if (p.delivery?.state === "queued" && !this.busy.has(p.agent_id)) {
+      const receipt = this.localReceipt(p.agent_id, p.delivery.request);
+      p.delivery = {
+        ...p.delivery,
+        state:
+          (receipt?.state as "sent" | "refused" | "uncertain") || "uncertain",
+        result:
+          receipt?.result ||
+          "Decision recorded; delivery not confirmed. It will not be replayed.",
+      };
+      this.db.run("UPDATE local_proposals SET body=? WHERE id=?", [
+        JSON.stringify(p),
+        p.id,
+      ]);
+    }
+    return p;
   }
   async propose(
     target: string,
@@ -264,18 +347,16 @@ export class AgentConversations {
       return item;
     }
     const { local } = await this.runtime.current(target, session);
-    const proposal = await this.runtime
-      .api()
-      .installation.agentCall(
-        "inst_agent_propose",
-        {
-          p_run: local.run.id,
-          p_fence: local.run.fence,
-          p_id: id,
-          p_proposal: p,
-        },
-        Proposal,
-      );
+    const proposal = await this.runtime.api().installation.agentCall(
+      "inst_agent_propose",
+      {
+        p_run: local.run.id,
+        p_fence: local.run.fence,
+        p_id: id,
+        p_proposal: p,
+      },
+      Proposal,
+    );
     this.runtime.cards.add({
       kind: "note",
       key: `agent-proposal:${id}`,
@@ -292,35 +373,72 @@ export class AgentConversations {
     decision: string,
     request: string,
   ) {
-    const p = this.localProposals(agent).find((p) => p.id === id);
-    if (!p) throw new FleetError(404, "Recommendation not found");
     if (!["approved", "dismissed"].includes(decision))
       throw new FleetError(400, "Invalid decision");
-    if (p.state === decision) return p;
-    if (p.state !== "open") throw new FleetError(409, "Already decided");
-    const a = this.local().find((x) => x.id === agent);
-    if (!a?.session || !a.enabled)
-      throw new FleetError(409, "Agent unavailable");
-    if (decision === "approved")
-      await this.localSend(
-        agent,
-        request,
-        `Approved recommendation ${id}: ${p.next_step}. Only this next step is authorized; other actions and outreach keep their existing requirements.`,
-      );
-    p.state = decision as "approved" | "dismissed";
-    this.db.run("UPDATE local_proposals SET body=? WHERE id=?", [
-      JSON.stringify(p),
-      id,
-    ]);
+    let fresh = false;
+    const p = this.db.transaction(() => {
+      const row = this.db
+        .query("SELECT body FROM local_proposals WHERE id=?")
+        .get(id) as { body: string } | null;
+      const p = row ? (JSON.parse(row.body) as Proposal) : null;
+      if (!p || p.agent_id !== agent)
+        throw new FleetError(404, "Recommendation not found");
+      if (p.state === decision) return p;
+      if (p.state !== "open") throw new FleetError(409, "Already decided");
+      const a = this.local().find((x) => x.id === agent);
+      if (!a?.session || !a.enabled)
+        throw new FleetError(409, "Agent unavailable");
+      if (decision === "approved" && p.run_id !== a.session)
+        throw new FleetError(
+          409,
+          "Recommendation belongs to an earlier conversation; ask the agent to review it in the current workspace",
+        );
+      p.state = decision as "approved" | "dismissed";
+      if (decision === "approved")
+        p.delivery = { request, state: "queued", result: "" };
+      this.db.run("UPDATE local_proposals SET body=? WHERE id=?", [
+        JSON.stringify(p),
+        id,
+      ]);
+      fresh = true;
+      return p;
+    })();
+    if (fresh && decision === "approved") {
+      try {
+        const r = await this.localSend(
+          agent,
+          p.delivery!.request,
+          `Approved recommendation ${id}: ${p.next_step}. Only this next step is authorized; other actions and outreach keep their existing requirements.`,
+        );
+        p.delivery = {
+          request: p.delivery!.request,
+          state: r.state as "sent" | "refused" | "uncertain",
+          result: r.result,
+        };
+      } catch (e) {
+        p.delivery = {
+          request: p.delivery!.request,
+          state: e instanceof FleetError ? "refused" : "uncertain",
+          result: (e as Error).message,
+        };
+      }
+      this.db.run("UPDATE local_proposals SET body=? WHERE id=?", [
+        JSON.stringify(p),
+        id,
+      ]);
+    } else this.reconcileLocalDecision(p);
     const card = this.runtime.cards
       .list()
       .find((c) => c.key === `agent-proposal:${id}`);
-    if (card?.state === "open")
+    if (
+      card?.state === "open" &&
+      (decision === "dismissed" || p.delivery?.state === "sent")
+    )
       this.runtime.cards.close(
         card.id,
         decision === "dismissed"
           ? "Dismissed in Feed"
-          : "Decided in Feed; delivery has its own receipt",
+          : "Approved in Feed and delivered",
       );
     return p;
   }
@@ -355,9 +473,24 @@ export class AgentConversations {
       const page = await this.runtime.fleet.timeline(id, cursor.before, 60);
       const events = page.events
         .filter((e) => SAFE_EVENT.has(e.kind))
+        .filter(
+          (e) =>
+            !(
+              e.kind === "user" &&
+              "text" in e &&
+              /^You are [^\n]+, a shared Agentbox agent\. Run [a-f0-9-]{36}; work /.test(
+                String(e.text),
+              )
+            ),
+        )
         .map((e) => ({
           ...e,
-          text: safeText("text" in e ? String(e.text) : "").slice(0, 10000),
+          text: safeText(
+            ("text" in e ? String(e.text) : "").replace(
+              /^You are [\s\S]*?\n\n(?:Previous conversation session:[^\n]*\n)?User: /,
+              "",
+            ),
+          ).slice(0, 10000),
         })) as TimelineEvent[];
       return {
         events,
@@ -384,7 +517,11 @@ export class AgentConversations {
   async tick() {
     if (this.ticking) return;
     this.ticking = true;
-    try { await this.transportTick(); } finally { this.ticking = false; }
+    try {
+      await this.transportTick();
+    } finally {
+      this.ticking = false;
+    }
   }
   private async transportTick() {
     if (!this.runtime.cloud.status().installation) return;
@@ -506,27 +643,49 @@ export class AgentConversations {
         );
         const page = await this.page(q.agent_id, q.cursor),
           sealed = await sealPage(identity.pair, q.client_key, q.id, page);
-        const channel = api.sb.channel(`agent-read:${q.id}`);
+        const channel = api.sb.channel(`agent-read:${q.id}`, {
+          config: { broadcast: { ack: true } },
+        });
         try {
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(
+              () => reject(new Error("Realtime subscription timed out")),
+              8000,
+            );
+            channel.subscribe((status, error) => {
+              if (status === "SUBSCRIBED") {
+                clearTimeout(timeout);
+                resolve();
+              } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+                clearTimeout(timeout);
+                reject(error ?? new Error(status));
+              }
+            });
+          });
           for (let index = 0; index < sealed.chunks.length; index++) {
             await api.agentCall(
               "inst_agent_read_offer",
               { p_id: q.id, p_key: identity.key },
               z.unknown(),
             );
-            const result = await channel.httpSend("page", {
-              index,
-              total: sealed.chunks.length,
-              iv: sealed.iv,
-              data: sealed.chunks[index],
+            const result = await channel.send({
+              type: "broadcast",
+              event: "page",
+              payload: {
+                index,
+                total: sealed.chunks.length,
+                iv: sealed.iv,
+                data: sealed.chunks[index],
+              },
             });
-            if (!result.success)
-              throw new Error("Realtime read relay unavailable");
+            if (result !== "ok")
+              throw new Error(`Realtime read relay unavailable (${result})`);
           }
         } finally {
           await api.sb.removeChannel(channel);
         }
-      } catch {
+      } catch (e) {
+        this.runtime.lastError = `Conversation relay: ${(e as Error).message}`;
         /* No plaintext error/response on an unauthenticated broadcast. Request expires. */
       }
     }

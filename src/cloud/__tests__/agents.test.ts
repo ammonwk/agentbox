@@ -1,7 +1,11 @@
 /** Destructive/security boundaries, exercised through real human and machine
  * credentials against local Supabase. No production service key is accepted. */
 import { z } from "zod";
-import { AgentConversation, Proposal, relayIdentity } from "../agent-conversation";
+import {
+  AgentConversation,
+  Proposal,
+  relayIdentity,
+} from "../agent-conversation";
 import { beforeAll, describe, expect, test } from "bun:test";
 import { createClient } from "@supabase/supabase-js";
 import { HumanCloud, InstallationCloud, supabaseFor } from "../client";
@@ -478,47 +482,267 @@ describe.skipIf(!url || !publishableKey || !key || !db)(
       await machine.report(winner, "stopped");
     });
 
+    test("an idle coordinator leaves configured worker capacity and exclusive claims intact", async () => {
+      let c = await alice.agents.clone(a, alice.id);
+      await alice.agents.authorize(c.id, host, true);
+      c = await save(c, {
+        enabled: true,
+        executor: host,
+        definition: {
+          ...c.definition,
+          release: null,
+          maxConcurrent: 1,
+          activation: { mode: "schedule", when: "every 5 minutes" },
+        },
+      });
+      expect(
+        (
+          await outsider.api.sb.rpc("agent_conversation_start", {
+            p_agent: c.id,
+            p_request: crypto.randomUUID(),
+          })
+        ).error,
+      ).not.toBeNull();
+      const begun = await bob.api.sb.rpc("agent_conversation_start", {
+        p_agent: c.id,
+        p_request: crypto.randomUUID(),
+      });
+      expect(begun.error).toBeNull();
+      let coordinator = await machine.claim(begun.data.id);
+      coordinator = await machine.report(coordinator, "waiting", {
+        session: "coordinator",
+      });
+      await expect(
+        machine.prepare(coordinator, crypto.randomUUID(), {
+          kind: "comment",
+          repo: "fixture/repo",
+          number: 11,
+          body: "Forbidden coordinator action",
+        }),
+      ).rejects.toThrow("coordinator");
+      const work = await machine.intake(c.id, {
+        source: "https://github.com/fixture/repo/issues/911",
+        title: "Scheduled issue",
+        acceptance: "Investigate safely",
+      });
+      const queued = await machine.enqueue(work.id);
+      let worker = await machine.claim(queued.id);
+      worker = await machine.report(worker, "running", { session: "worker" });
+      const proposal = await raw.agentCall(
+        "inst_agent_propose",
+        {
+          p_run: worker.id,
+          p_fence: worker.fence,
+          p_id: crypto.randomUUID(),
+          p_proposal: {
+            title: "Check the regression",
+            finding: "Scheduled source identified a reproducer",
+            reason: "It affects the source",
+            next: "Run a focused local check",
+            evidence: [],
+            action: null,
+          },
+        },
+        Proposal,
+      );
+      expect(proposal.run_id).toBe(worker.id);
+      await alice.agents
+        .progress({ ...work, control: "human" } as WorkItem, {
+          stage: "in_progress",
+          next: "",
+          outcome: "",
+          evidence: [],
+        })
+        .then(
+          () => {
+            throw new Error("writer bypass");
+          },
+          () => {},
+        );
+      expect((await machine.enqueue(work.id)).id).toBe(worker.id);
+      const second = await machine.intake(c.id, {
+        source: "https://github.com/fixture/repo/issues/912",
+        title: "Second issue",
+        acceptance: "Wait for worker slot",
+      });
+      await expect(
+        machine.claim((await machine.enqueue(second.id)).id),
+      ).rejects.toThrow("workload limit");
+      await machine.report(worker, "stopped");
+      await machine.report(coordinator, "stopped");
+    });
+
     test("shared Feed and live reads require current human membership, immutable proposals and scoped host authority", async () => {
       let c = await alice.agents.clone(a, alice.id);
       await alice.agents.authorize(c.id, host, true);
-      c = await save(c, {enabled:true,executor:host,definition:{...c.definition,release:null}});
-      const work=await intake(900,c);
-      let run=await machine.claim((await alice.agents.run(work,crypto.randomUUID())).id);
-      run=await machine.report(run,"waiting",{session:"verified-chat-session"});
-      const p={title:"Investigate repeated failures",finding:"The linked issue contains a reproducible failure.",reason:"It affects the reported path.",next:"Reproduce locally and report evidence.",evidence:[{url:"https://github.com/fixture/repo/issues/900",label:"Issue"}],action:null};
-      const id=crypto.randomUUID();
-      const proposal=await raw.agentCall("inst_agent_propose",{p_run:run.id,p_fence:run.fence,p_id:id,p_proposal:p},Proposal);
-      await expect(other.installation.agentCall("inst_agent_propose",{p_run:run.id,p_fence:run.fence,p_id:crypto.randomUUID(),p_proposal:p},Proposal)).rejects.toThrow();
-      await expect(raw.agentCall("inst_agent_propose",{p_run:run.id,p_fence:run.fence,p_id:id,p_proposal:{...p,next:"Merge everything"}},Proposal)).rejects.toThrow();
-      const bobChat=new AgentConversation(bob.api),aliceChat=new AgentConversation(alice.api),outsideChat=new AgentConversation(outsider.api);
-      expect((await bobChat.proposals(c.id)).map(p=>p.id)).toContain(id);
+      c = await save(c, {
+        enabled: true,
+        executor: host,
+        definition: { ...c.definition, release: null },
+      });
+      const work = await intake(900, c);
+      let run = await machine.claim(
+        (await alice.agents.run(work, crypto.randomUUID())).id,
+      );
+      run = await machine.report(run, "waiting", {
+        session: "verified-chat-session",
+      });
+      const p = {
+        title: "Investigate repeated failures",
+        finding: "The linked issue contains a reproducible failure.",
+        reason: "It affects the reported path.",
+        next: "Reproduce locally and report evidence.",
+        evidence: [
+          { url: "https://github.com/fixture/repo/issues/900", label: "Issue" },
+        ],
+        action: null,
+      };
+      const id = crypto.randomUUID();
+      const proposal = await raw.agentCall(
+        "inst_agent_propose",
+        { p_run: run.id, p_fence: run.fence, p_id: id, p_proposal: p },
+        Proposal,
+      );
+      await expect(
+        other.installation.agentCall(
+          "inst_agent_propose",
+          {
+            p_run: run.id,
+            p_fence: run.fence,
+            p_id: crypto.randomUUID(),
+            p_proposal: p,
+          },
+          Proposal,
+        ),
+      ).rejects.toThrow();
+      await expect(
+        raw.agentCall(
+          "inst_agent_propose",
+          {
+            p_run: run.id,
+            p_fence: run.fence,
+            p_id: id,
+            p_proposal: { ...p, next: "Merge everything" },
+          },
+          Proposal,
+        ),
+      ).rejects.toThrow();
+      const bobChat = new AgentConversation(bob.api),
+        aliceChat = new AgentConversation(alice.api),
+        outsideChat = new AgentConversation(outsider.api);
+      expect((await bobChat.proposals(c.id)).map((p) => p.id)).toContain(id);
       expect(await outsideChat.proposals(c.id)).toEqual([]);
-      await expect(bobChat.decide(id,"approved",crypto.randomUUID())).rejects.toThrow();
-      const message=crypto.randomUUID();await bobChat.guide(c.id,run.id,message,"Please explain the evidence",proposal.id);
-      await expect(bobChat.guide(c.id,run.id,message,"Changed body",proposal.id)).rejects.toThrow();
-      await expect(outsideChat.guide(c.id,run.id,crypto.randomUUID(),"Spoofed guidance")).rejects.toThrow();
-      expect((await bob.api.sb.from("agent_commands").select("body")).error).not.toBeNull();
+      await expect(
+        bobChat.decide(id, "approved", crypto.randomUUID()),
+      ).rejects.toThrow();
+      const message = crypto.randomUUID();
+      await bobChat.guide(
+        c.id,
+        run.id,
+        message,
+        "Please explain the evidence",
+        proposal.id,
+      );
+      await expect(
+        bobChat.guide(c.id, run.id, message, "Changed body", proposal.id),
+      ).rejects.toThrow();
+      await expect(
+        outsideChat.guide(
+          c.id,
+          run.id,
+          crypto.randomUUID(),
+          "Spoofed guidance",
+        ),
+      ).rejects.toThrow();
+      expect(
+        (await bob.api.sb.from("agent_commands").select("body")).error,
+      ).not.toBeNull();
       await expect(aliceChat.receipt(message)).rejects.toThrow();
-      const claimed=await raw.agentCall("inst_agent_command_claim",{p_id:message},z.object({body:z.string(),session_id:z.string()}));
+      const claimed = await raw.agentCall(
+        "inst_agent_command_claim",
+        { p_id: message },
+        z.object({ body: z.string(), session_id: z.string() }),
+      );
       expect(claimed.session_id).toBe("verified-chat-session");
-      await raw.agentCall("inst_agent_command_result",{p_id:message,p_state:"sent",p_result:""},z.unknown());
+      await raw.agentCall(
+        "inst_agent_command_result",
+        { p_id: message, p_state: "sent", p_result: "" },
+        z.unknown(),
+      );
       expect((await bobChat.receipt(message)).state).toBe("sent");
-      await expect(raw.agentCall("inst_agent_command_claim",{p_id:message},z.unknown())).rejects.toThrow();
-      expect((await aliceChat.decide(id,"approved",crypto.randomUUID())).state).toBe("approved");
-      expect((await aliceChat.decide(id,"approved",crypto.randomUUID())).state).toBe("approved");
-      const reader=await relayIdentity(),hostKey=await relayIdentity(),read=crypto.randomUUID();
-      expect((await outsider.api.sb.rpc("agent_read_request",{p_id:crypto.randomUUID(),p_agent:c.id,p_key:reader.key,p_cursor:{session:0,before:null}})).error).not.toBeNull();
-      expect((await bob.api.sb.rpc("agent_read_request",{p_id:read,p_agent:c.id,p_key:reader.key,p_cursor:{session:0,before:null}})).error).toBeNull();
-      await expect(other.installation.agentCall("inst_agent_read_offer",{p_id:read,p_key:hostKey.key},z.unknown())).rejects.toThrow();
-      await raw.agentCall("inst_agent_read_offer",{p_id:read,p_key:hostKey.key},z.unknown());
-      expect((await bob.api.sb.rpc("agent_read_key",{p_id:read})).data).toBe(hostKey.key);
-      expect((await alice.api.sb.rpc("agent_read_key",{p_id:read})).error).not.toBeNull();
-      const after=crypto.randomUUID();await bobChat.guide(c.id,run.id,after,"Queued before removal");
-      sql(`delete from public.workspace_members where workspace_id='${ws}' and user_id='${bob.id}'`);
-      await expect(raw.agentCall("inst_agent_command_claim",{p_id:after},z.unknown())).rejects.toThrow();
-      expect((await bob.api.sb.rpc("agent_read_key",{p_id:read})).error).not.toBeNull();
-      await expect(raw.agentCall("inst_agent_read_offer",{p_id:read,p_key:hostKey.key},z.unknown())).rejects.toThrow();
-      await machine.report(run,"stopped");
+      await expect(
+        raw.agentCall(
+          "inst_agent_command_claim",
+          { p_id: message },
+          z.unknown(),
+        ),
+      ).rejects.toThrow();
+      expect(
+        (await aliceChat.decide(id, "approved", crypto.randomUUID())).state,
+      ).toBe("approved");
+      expect(
+        (await aliceChat.decide(id, "approved", crypto.randomUUID())).state,
+      ).toBe("approved");
+      const reader = await relayIdentity(),
+        hostKey = await relayIdentity(),
+        read = crypto.randomUUID();
+      expect(
+        (
+          await outsider.api.sb.rpc("agent_read_request", {
+            p_id: crypto.randomUUID(),
+            p_agent: c.id,
+            p_key: reader.key,
+            p_cursor: { session: 0, before: null },
+          })
+        ).error,
+      ).not.toBeNull();
+      expect(
+        (
+          await bob.api.sb.rpc("agent_read_request", {
+            p_id: read,
+            p_agent: c.id,
+            p_key: reader.key,
+            p_cursor: { session: 0, before: null },
+          })
+        ).error,
+      ).toBeNull();
+      await expect(
+        other.installation.agentCall(
+          "inst_agent_read_offer",
+          { p_id: read, p_key: hostKey.key },
+          z.unknown(),
+        ),
+      ).rejects.toThrow();
+      await raw.agentCall(
+        "inst_agent_read_offer",
+        { p_id: read, p_key: hostKey.key },
+        z.unknown(),
+      );
+      expect(
+        (await bob.api.sb.rpc("agent_read_key", { p_id: read })).data,
+      ).toBe(hostKey.key);
+      expect(
+        (await alice.api.sb.rpc("agent_read_key", { p_id: read })).error,
+      ).not.toBeNull();
+      const after = crypto.randomUUID();
+      await bobChat.guide(c.id, run.id, after, "Queued before removal");
+      sql(
+        `delete from public.workspace_members where workspace_id='${ws}' and user_id='${bob.id}'`,
+      );
+      await expect(
+        raw.agentCall("inst_agent_command_claim", { p_id: after }, z.unknown()),
+      ).rejects.toThrow();
+      expect(
+        (await bob.api.sb.rpc("agent_read_key", { p_id: read })).error,
+      ).not.toBeNull();
+      await expect(
+        raw.agentCall(
+          "inst_agent_read_offer",
+          { p_id: read, p_key: hostKey.key },
+          z.unknown(),
+        ),
+      ).rejects.toThrow();
+      await machine.report(run, "stopped");
     });
   },
 );

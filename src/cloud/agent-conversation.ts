@@ -40,6 +40,13 @@ export const Proposal = z.object({
   action_id: z.string().nullable(),
   state: z.enum(["open", "approved", "dismissed"]),
   decided_by: z.string().nullable(),
+  delivery: z
+    .object({
+      request: z.string(),
+      state: z.enum(["queued", "attempting", "sent", "refused", "uncertain"]),
+      result: z.string(),
+    })
+    .optional(),
   created_at: z.string(),
 });
 export type Proposal = z.infer<typeof Proposal>;
@@ -153,15 +160,14 @@ export async function openPage(
 export class AgentConversation {
   constructor(readonly human: HumanCloud) {}
   async proposals(agent: string) {
-    const r = await this.human.sb
-      .from("agent_proposals")
-      .select("*")
-      .eq("agent_id", agent)
-      .order("created_at", { ascending: false })
-      .limit(200);
-    if (r.error) throw r.error;
-    return z.array(Proposal).parse(r.data);
+    return cloudCall(
+      this.human.sb,
+      "agent_proposals_list",
+      { p_agent: agent },
+      z.array(Proposal),
+    );
   }
+
   guide(
     agent: string,
     run: string,

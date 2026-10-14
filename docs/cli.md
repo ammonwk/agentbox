@@ -14,9 +14,16 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox agent bind --file local-binding.json  # signed-in host owner token required
     agentbox agent progress <run UUID> --stage in_progress --next 'Validate the fix'
     agentbox agent action <run UUID> --request <UUID retained for retries> --file action.json
+    agentbox agent recommend <run UUID or local agent ID> --request <stable UUID> --file proposal.json
+    agentbox agent intake <run UUID> --file issue.json # {source,title,acceptance}; configured activation applies
     agentbox agent experts <agent UUID> --areas TypeScript --paths src/service.ts
     agentbox agent finish <run UUID>
     agentbox agent rotate <run UUID>              # signed-in host owner token required
+
+Chat, About and Feed share one agent identity. Recommendations are immutable
+{title,finding,reason,next,evidence:[{url,label}],action:<optional action UUID>}.
+Only the associated session can publish them. Chat coordinators queue scoped
+work and keep worker capacity available; they cannot publish repository actions.
 
 Author shared instances on the Agents page. A run has one accountable human and
 one fenced execution host. Only its associated session can report progress or

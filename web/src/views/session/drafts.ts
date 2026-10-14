@@ -3,7 +3,9 @@
 import type { SavedAttachment } from "../../attachments";
 import type { SendReceipt } from "../../../../src/core/types";
 
+export type AgentDraftContext = { proposal: string; run: string };
 export interface Draft {
+  agentContext?: AgentDraftContext;
   text: string;
   images: SavedAttachment[];
   at: number;
@@ -127,13 +129,13 @@ async function mutate(fn: () => void): Promise<void> {
     tx.onabort = () => reject(failure ?? tx.error);
   });
 }
-export async function saveDraft(id: string, text: string, images: SavedAttachment[], revision: string): Promise<void> {
+export async function saveDraft(id: string, text: string, images: SavedAttachment[], revision: string, agentContext?: AgentDraftContext): Promise<void> {
   try {
     await mutate(() => {
       const all = readAll();
       const w = all[id] ??= {};
       if (w.taken?.includes(revision)) return;
-      if (text.trim() || images.length) w.draft = { text, images, at: Date.now(), revision };
+      if (text.trim() || images.length) w.draft = { text, images, at: Date.now(), revision, ...(agentContext ? { agentContext } : {}) };
       // An empty field in another tab must not erase somebody else's draft.
       else if (w.draft?.revision === revision) delete w.draft;
       write(all);
