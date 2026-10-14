@@ -453,3 +453,16 @@ test("local chat lists recorded descendants without granting sends or exposing f
   await expect(conversations.localSend("local-vulcan",crypto.randomUUID(),"Do something",undefined,"child")).rejects.toThrow("current session");
   await expect(conversations.page("local-vulcan",{session:0,before:null,target:"foreign-child"})).rejects.toThrow("does not belong");
 });
+test("a new conversation names the other agents switched on in its project (#26)", async () => {
+  const all = conversations.local();
+  const save = (a: any) => store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(a), a.id]);
+  const [peer, off] = all.filter((a) => a.id !== "local-vulcan");
+  save({ ...peer, enabled: true, session: "peer-chat" });
+  save({ ...off, enabled: false, session: "off-chat" });
+  await conversations.localSend("local-vulcan", "first-task", "Investigate").catch(() => {});
+  const prompt: string = spawns.at(-1).prompt;
+  expect(prompt).toContain("Other agents active in this project");
+  expect(prompt).toContain(`- ${peer!.name}: ${peer!.role}. Its chat is session peer-chat.`);
+  expect(prompt).not.toContain("off-chat");
+  expect(prompt).not.toContain("- VULCAN:");
+});
