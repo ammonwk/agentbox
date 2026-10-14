@@ -4,7 +4,7 @@ Vulcan runs on the public API and changes nothing in `src/`. These are the
 places where the API falls short of what PR #4's in-core Vulcan had, with how
 Vulcan behaves until each is there.
 
-## 1. The PR feedback wait (depends on another session's port)
+## 1. The PR feedback wait (landed)
 
 PR #4 Part 2 items 1-11: `POST /api/waits` with `{kind: "pr", repo, number,
 head, feedback: true}` — a wait that wakes on new or edited reviews, inline
@@ -16,7 +16,7 @@ On a core without it, `parseSpec` ignores `feedback` and answers with a
 second full-check wait; Vulcan detects that from the returned `spec`, cancels
 it (`DELETE /api/waits/:id`), records `feedbackWait: null` on the family with
 a note the Work tab shows, and the writer's prompt still tells it to rearm
-with `follow`. Once the port lands nothing in Vulcan changes.
+with `follow`. The port has landed, so on a current core the feedback wait is armed as asked; nothing in Vulcan changed.
 
 ## 2. Reading PR releases (worked around)
 
@@ -39,10 +39,10 @@ detached worktree (a reviewer). This is a sound proof and no core change is
 asked for; it is noted because `retryStart` and `collect` depend on
 `cwd`/`worktree`/`parent` in `GET /api/state` staying what they are.
 
-## 4. A registered repo's checkout path (minor)
+## 4. A registered repo's checkout path (landed)
 
 `Repo` gives `ref` (a path for a local repo, a slug for a GitHub one) but not
 where a GitHub repo's clone is. Vulcan derives it as agentbox does
 (`<AGENTBOX_HOME>/repos/<safe ref>`, `lib/work.ts` `checkoutOf`). A
-`checkoutRoot` on `Repo` (PR #4 Part 2 item 26, being ported on another
-branch) would replace the derivation.
+`checkoutRoot` on `Repo` has since landed, and Vulcan uses it when the
+server gives it.

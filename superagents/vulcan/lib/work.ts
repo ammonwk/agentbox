@@ -14,6 +14,8 @@ import { sha, WorkInput, type Work } from "./types";
 
 /** Where a registered repo's checkout is: a local repo is its path; a GitHub one agentbox cloned under its home. */
 export function checkoutOf(repo: Repo): string {
+  // agentbox says where; the derivation is for a server older than checkoutRoot.
+  if (repo.checkoutRoot) return repo.checkoutRoot;
   if (repo.kind === "local") return repo.ref;
   const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".local", "share", "agentbox");
   return join(home, "repos", repo.ref.replace(/[^A-Za-z0-9._-]/g, "_"));
