@@ -358,6 +358,33 @@ test("creator capability, project and revision bind an idempotent human creation
   await conversations.localSend(made.created!,crypto.randomUUID(),"Explain the architecture",undefined,null);
   expect(spawns[0].prompt).toContain(spec.instructions); expect(spawns[0].repoId).toBe("project");
 });
+test("a created agent is listed and usable in every project, with its own conversation and switch there", async () => {
+  insertRepo({id:"agentbox",kind:"local",ref:home,displayName:"agentbox",fullName:"ammonwk/agentbox",defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
+  insertRepo({id:"other",kind:"local",ref:join(home,"other"),displayName:"other",fullName:"fixture/other",defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
+  const creator = conversations.local("agentbox").find((a) => a.capability === "creator")!;
+  creator.session = "jupiter-session";
+  store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(creator),creator.id]);
+  const spec = { name:"Terminus",role:"Close stale work",instructions:"Find finished sessions.",provider:"auto" as const,limits:"Ask first.",automation:"daily sweep" };
+  const d = await conversations.draft(creator.id,creator.session,crypto.randomUUID(),spec);
+  const first = conversations.editCreation(creator.id,d.id,d.revision,"agentbox",d.spec,true).created!;
+  await conversations.localSend(first,crypto.randomUUID(),"Start in agentbox",undefined,null);
+  const home1 = conversations.local("agentbox").find((a) => a.id === first)!;
+  const there = conversations.local("other").filter((a) => a.creation === d.id && a.repo === "other");
+  expect(there).toHaveLength(1);
+  const copy = there[0]!;
+  expect(copy.id).not.toBe(first);
+  expect([copy.name, copy.role, copy.instructions, copy.automation, copy.pinned]).toEqual([home1.name, home1.role, home1.instructions, home1.automation, home1.pinned]);
+  expect([copy.session, copy.enabled]).toEqual([null, true]);
+  expect(new AgentConversations(runtime).local("other").filter((a) => a.creation === d.id)).toHaveLength(2);
+  await conversations.localSend(copy.id,crypto.randomUUID(),"Start in other",undefined,null);
+  expect(spawns.map((s) => s.repoId)).toEqual(["agentbox","other"]);
+  expect(spawns[0].id).not.toBe(spawns[1].id);
+  expect(spawns[1].prompt).toContain(spec.instructions);
+  await conversations.configure(copy.id,{provider:"auto",repo:"other",enabled:false});
+  await expect(conversations.localSend(copy.id,crypto.randomUUID(),"Paused here",undefined,undefined)).rejects.toThrow("paused");
+  expect(conversations.local().find((a) => a.id === first)!.enabled).toBe(true);
+  expect(conversations.local("agentbox").filter((a) => a.creation === d.id && a.repo === "agentbox").map((a) => a.id)).toEqual([first]);
+});
 test("a creation proposal from a replaced creator is read-only", async () => {
   insertRepo({id:"agentbox",kind:"local",ref:home,displayName:"agentbox",fullName:"ammonwk/agentbox",defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
   const creator = conversations.local("agentbox").find((a) => a.capability === "creator" && a.repo === "agentbox")!; creator.session = "old";

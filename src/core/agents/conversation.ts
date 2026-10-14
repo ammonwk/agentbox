@@ -213,9 +213,21 @@ export class AgentConversations {
         }),
       ]);
     }
-    return (
-      db.query("SELECT body FROM local_agents").all() as { body: string }[]
-    ).map((x) => JSON.parse(x.body) as LocalAgent)
+    const rows = (db.query("SELECT body FROM local_agents").all() as { body: string }[]).map((x) => JSON.parse(x.body) as LocalAgent);
+    // A created agent is a definition like a template's: each project gets its
+    // own instance, conversation and switch. The first instance keeps its history.
+    if (project)
+      for (const d of rows.filter((a) => a.creation && a.id === `local-custom-${a.creation}`)) {
+        if (rows.some((a) => a.creation === d.creation && a.repo === project)) continue;
+        const id = `local-custom-${d.creation}-project-${encodeURIComponent(project)}`;
+        const agent: LocalAgent = { id, name: d.name, role: d.role, instructions: d.instructions,
+          provider: d.pinned ?? AUTO_PROVIDERS[0]!, ...(d.pinned ? { pinned: d.pinned } : {}),
+          repo: project, project, session: null, previous: [], sessionProjects: {}, enabled: true,
+          ...(d.createdBy ? { createdBy: d.createdBy } : {}), creation: d.creation, ...(d.automation ? { automation: d.automation } : {}) };
+        db.run("INSERT OR IGNORE INTO local_agents(id,body) VALUES(?,?)", [id, JSON.stringify(agent)]);
+        rows.push(agent);
+      }
+    return rows
       // A Jupiter made elsewhere before this rule stays only while it holds a conversation.
       .filter((a) => !isJupiter(a) || a.session || a.previous.length || a.rollover || jupiterIn(a.repo))
       .map((a) => ({...a, ...(isJupiter(a) && !jupiterIn(a.repo) ? { unavailable: "Jupiter is available in the Agentbox project. This conversation is kept as history." } : {}), workSessions: this.runtime.works.list().filter(w=>w.agent.id===a.id).map(w=>w.session)}));
