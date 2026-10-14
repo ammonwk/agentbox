@@ -452,6 +452,10 @@
   color: inherit;
   text-decoration: none;
   transition: background 0.1s;
+  /* A fleet's list runs to hundreds of rows: those out of view are not laid
+   * out or painted until scrolled to, sized meanwhile as the last time seen. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 34px;
 }
 .rail-row:hover {
   background: var(--hover);
@@ -489,26 +493,69 @@
   color: var(--faint);
   font-weight: 450;
 }
+/* Or the repo's shape, in the same quiet colour, where names take too much room. */
+.rail-proj-shape {
+  display: inline-block;
+  margin-right: 7px;
+  vertical-align: -0.5px;
+}
+.rail-proj-shape .st-shape {
+  display: inline-block;
+}
 .rail-row[data-status="stopped"] .rail-title,
 .rail-row[data-status="closed"] .rail-title {
   color: var(--muted);
   font-weight: 450;
 }
-.rail-reveal {
-  display: grid;
-  grid-template-rows: 1fr;
-  animation: rail-reveal 180ms cubic-bezier(0.2, 0, 0, 1);
-}
-.rail-reveal > div {
-  min-height: 0;
-  overflow: hidden;
+/* A row coming into view under the one that started it fades down into
+ * place. Opacity and transform only: hundreds of rows may come at once, and
+ * animating their height laid the whole list out again on every frame. */
+.rail-row[data-enter],
+.rail-quiet {
+  animation: rail-reveal 160ms cubic-bezier(0.2, 0, 0, 1);
 }
 @keyframes rail-reveal {
-  from { grid-template-rows: 0fr; opacity: 0; transform: translateY(-5px); }
-  to { grid-template-rows: 1fr; opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(-4px); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .rail-reveal { animation: none; }
+  .rail-row[data-enter],
+  .rail-quiet { animation: none; }
+}
+/* The inactive sessions a row started, folded to one quiet line under the
+ * active ones, in line with them. */
+.rail-quiet {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: calc(100% - 16px);
+  height: 24px;
+  margin: 1px 8px;
+  padding: 0 9px 0 calc(9px + var(--depth) * 14px);
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.1s, background 0.1s;
+}
+.rail-quiet:hover,
+.rail-quiet:focus-visible {
+  color: var(--muted);
+  background: var(--hover);
+}
+.rail-quiet:focus-visible {
+  outline-offset: -2px;
+}
+.rail-quiet-chev {
+  flex: none;
+  transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1);
+}
+.rail-quiet[aria-expanded="true"] .rail-quiet-chev {
+  transform: rotate(90deg);
 }
 .rail-row[data-depth] {
   padding-left: calc(9px + var(--depth) * 14px);
@@ -1076,6 +1123,14 @@ button.rail-state:hover {
   background: var(--border);
   flex: 1;
   max-width: 200px;
+}
+/* Between pages: the room the line takes, so nothing below it moves. */
+.tl-edge {
+  min-height: 33px;
+}
+.tl-edge[data-idle]::before,
+.tl-edge[data-idle]::after {
+  visibility: hidden;
 }
 
 /* Sent from here, not yet in the transcript; or in the agent's queue. */

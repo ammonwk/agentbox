@@ -2,7 +2,7 @@
  *  Active and Inactive tabs, and one row per session. It is the whole
  *  Sessions page's list; on a narrow screen with nothing open it is the page. */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
 import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
 import { Icon, RelativeTime, Spinner } from "../../components";
@@ -20,8 +20,9 @@ import {
   usualProvider,
   type BoardFilter,
   type Nested,
-  type RailView,
+  type Quiet,
   type Section,
+  type RailView,
   type SessionRow,
   type Shape,
   type SortKey,
@@ -62,8 +63,31 @@ function readView(): RailView {
  *  time you look away is a list you stop searching. The sort and the
  *  Active/Inactive tab are preferences, so they outlive the browser tab too. */
 let rememberedFilter: BoardFilter = EMPTY_FILTER;
-/** Parents kept expanded after selection and hover move elsewhere. */
-let openParents: ReadonlySet<string> = new Set();
+
+/** Rows you expanded or folded by hand. One in neither is as it would be left
+ *  alone (`Folds` in lib/board.ts). */
+interface ByHand {
+  open: ReadonlySet<string>;
+  shut: ReadonlySet<string>;
+}
+const NO_HAND: ByHand = { open: new Set(), shut: new Set() };
+export const shownBy = (h: ByHand, id: string, auto: boolean): boolean => h.open.has(id) || (auto && !h.shut.has(id));
+/** Fold it when it shows, else unfold it. */
+function flip(h: ByHand, id: string, shown: boolean): ByHand {
+  const open = new Set(h.open);
+  const shut = new Set(h.shut);
+  if (shown) {
+    open.delete(id);
+    shut.add(id);
+  } else {
+    open.add(id);
+    shut.delete(id);
+  }
+  return { open, shut };
+}
+/** Whether each row's children show, and each row's inactive children. */
+let kidsByHand = NO_HAND;
+let quietByHand = NO_HAND;
 /** How far down the list was scrolled. On a phone the list is not mounted
  *  while a session is open, and going back to it should find it where it was. */
 let railTop = 0;
@@ -72,9 +96,16 @@ export function useListState() {
   const [filter, setFilterState] = useState<BoardFilter>(rememberedFilter);
   const [sort, setSortState] = useState<SortKey>(readSort);
   const [view, setViewState] = useState<RailView>(readView);
-  const [open, setOpenState] = useState(openParents);
-  const [hovered, setHovered] = useState<string | null>(null);
-  const [focused, setFocused] = useState<string | null>(null);
+  const [kids, setKids] = useState(kidsByHand);
+  const [quiet, setQuiet] = useState(quietByHand);
+  const toggleKids = useCallback((id: string, shown: boolean) => setKids((kidsByHand = flip(kidsByHand, id, shown))), []);
+  const toggleQuiet = useCallback((id: string, shown: boolean) => setQuiet((quietByHand = flip(quietByHand, id, shown))), []);
+  /** Unfold what you folded above these, so the open session is in sight. */
+  const reveal = useCallback((ids: readonly string[]) => {
+    const unshut = (h: ByHand): ByHand => (ids.some((id) => h.shut.has(id)) ? { open: h.open, shut: new Set([...h.shut].filter((id) => !ids.includes(id))) } : h);
+    setKids((kidsByHand = unshut(kidsByHand)));
+    setQuiet((quietByHand = unshut(quietByHand)));
+  }, []);
   return {
     filter,
     setFilter: (f: BoardFilter) => {
@@ -99,18 +130,11 @@ export function useListState() {
       }
       setViewState(v);
     },
-    hovered,
-    setHovered,
-    focused,
-    setFocused,
-    open,
-    setOpen: (id: string, on: boolean) => {
-      const next = new Set(openParents);
-      if (on) next.add(id);
-      else next.delete(id);
-      openParents = next;
-      setOpenState(next);
-    },
+    kids,
+    quiet,
+    toggleKids,
+    toggleQuiet,
+    reveal,
   };
 }
 
@@ -123,7 +147,6 @@ export function Rail({
   counts,
   state,
   current,
-  forcedOpen,
   list,
   onOpenFirst,
   onClose,
@@ -136,8 +159,6 @@ export function Rail({
   counts: Record<RailView, number>;
   state: AppState;
   current: string | null;
-  /** Selected, hovered and focused sessions and their ancestors stay expanded. */
-  forcedOpen: ReadonlySet<string>;
   list: ListState;
   onOpenFirst: () => void;
   onClose: (s: SessionRow) => void;
@@ -147,7 +168,12 @@ export function Rail({
 }) {
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const usual = useMemo(() => usualProvider(rows), [rows]);
-  const shapes = useMemo(() => repoShapes(state.sessions), [state.sessions]);
+  // A new map only when a repo's shape changes, so the rows do not draw again on every frame.
+  const shapesNow = useMemo(() => repoShapes(state.sessions), [state.sessions]);
+  const shapeKey = [...shapesNow].join();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const shapes = useMemo(() => shapesNow, [shapeKey]);
+  const marks = useMemo(() => ({ shape: state.settings.repoMark === "shape", shapes }), [state.settings.repoMark, shapes]);
   // Changes whenever something is closed or reopened, so an open closed list refetches.
   const closedStamp = useMemo(
     () => state.closedStamp ?? state.sessions.reduce((n, s) => (s.status === "closed" ? n + 1 + (s.closedAt ?? 0) : n), 0),
@@ -184,7 +210,8 @@ export function Rail({
   };
   const move = (s: SessionRow, parent: string | null) => {
     endDrag();
-    if (parent) list.setOpen(parent, true);
+    const p = parent ? rows.find((r) => r.id === parent) : null;
+    if (p && !p.open) list.toggleKids(p.id, false);
     api.patchSession(s.id, { parent }).catch((e: Error) => reportFailure(s.id, titleOf(s), "move", e.message));
   };
   const toRoot = !drag?.pin && drag?.s.parent != null;
@@ -210,25 +237,58 @@ export function Rail({
   const [menu, setMenu] = useState<{ id: string; fallback: SessionRow; x: number; y: number } | null>(null);
   const onMenu = (s: SessionRow, x: number, y: number) => setMenu({ id: s.id, fallback: s, x, y });
 
+  // What a row calls back, one object for the life of the list, so a row
+  // whose session did not change is not drawn again when the list is.
+  const latest = useRef({ dropping, onClose, onMenu });
+  latest.current = { dropping, onClose, onMenu };
+  const { toggleKids } = list;
+  const rowApi = useMemo<RowApi>(
+    () => ({
+      toggle: toggleKids,
+      close: (s) => latest.current.onClose(s),
+      menu: (s, x, y) => latest.current.onMenu(s, x, y),
+      dnd: {
+        start: (s, pin) => latest.current.dropping.start(s, pin),
+        end: () => latest.current.dropping.end(),
+        can: (s, pin) => latest.current.dropping.can(s, pin),
+        get reordering() {
+          return latest.current.dropping.reordering;
+        },
+        over: (id, p) => latest.current.dropping.over(id, p),
+        drop: (s, p) => latest.current.dropping.drop(s, p),
+      },
+    }),
+    [toggleKids],
+  );
+
   // Tree expansion stays local. At the root ← reaches application navigation;
   // → on an expanded parent or leaf opens the conversation.
   const onArrow = (e: KeyboardEvent<HTMLElement>) => {
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.nativeEvent.isComposing || !e.key.startsWith("Arrow")) return;
     const t = e.target as HTMLElement;
     const nav = e.currentTarget;
-    const all = [...nav.querySelectorAll<HTMLElement>(".rail-row")];
+    const all = [...nav.querySelectorAll<HTMLElement>(".rail-row, .rail-quiet")];
     const search = nav.querySelector<HTMLElement>("[data-search]");
     if (t === search) {
       if (e.key !== "ArrowDown") return;
       (nav.querySelector<HTMLElement>('.rail-row[aria-current="page"]') ?? all[0])?.focus();
+    } else if (t.classList.contains("rail-quiet")) {
+      // The line over a row's inactive children: → and ← show and hide them.
+      const i = all.indexOf(t);
+      const open = t.getAttribute("aria-expanded") === "true";
+      if (e.key === "ArrowDown") all[i + 1]?.focus();
+      else if (e.key === "ArrowUp") (all[i - 1] ?? search)?.focus();
+      else if (e.key === "ArrowRight" && !open) startTransition(() => list.toggleQuiet(t.dataset.parent!, false));
+      else if (e.key === "ArrowLeft" && open) startTransition(() => list.toggleQuiet(t.dataset.parent!, true));
+      else if (e.key === "ArrowLeft") nav.querySelector<HTMLElement>(`.rail-row[data-id="${CSS.escape(t.dataset.parent!)}"]`)?.focus();
+      else return;
     } else if (t.classList.contains("rail-row")) {
       const i = all.indexOf(t);
       const s = rows.find((r) => r.id === t.dataset.id);
-      const unfolded = !!s && (list.open.has(s.id) || forcedOpen.has(s.id));
       if (e.key === "ArrowDown") all[i + 1]?.focus();
       else if (e.key === "ArrowUp") (all[i - 1] ?? search)?.focus();
-      else if (e.key === "ArrowRight" && s?.kids && !unfolded) list.setOpen(s.id, true);
-      else if (e.key === "ArrowLeft" && s?.kids && unfolded && !forcedOpen.has(s.id)) list.setOpen(s.id, false);
+      else if (e.key === "ArrowRight" && s?.kids && !s.open) list.toggleKids(s.id, false);
+      else if (e.key === "ArrowLeft" && s?.kids && s.open) list.toggleKids(s.id, true);
       else if (e.key === "ArrowLeft" && s?.parent) nav.querySelector<HTMLElement>(`.rail-row[data-id="${CSS.escape(s.parent)}"]`)?.focus();
       else return;
     } else return;
@@ -237,6 +297,7 @@ export function Rail({
   };
 
   return (
+    <RepoMarks.Provider value={marks}>
     <nav className="rail" data-nav-region="list" tabIndex={-1} aria-label="Sessions" onKeyDown={onArrow}>
       <div className="rail-top">
         <label className="rail-search">
@@ -285,18 +346,6 @@ export function Rail({
         className="rail-scroll"
         ref={scroller}
         onScroll={(e) => (railTop = e.currentTarget.scrollTop)}
-        onMouseOver={(e) => {
-          const row = (e.target as HTMLElement).closest<HTMLElement>(".rail-row");
-          list.setHovered(row?.dataset.id ?? null);
-        }}
-        onMouseLeave={() => list.setHovered(null)}
-        onFocus={(e) => {
-          const row = (e.target as HTMLElement).closest<HTMLElement>(".rail-row");
-          list.setFocused(row?.dataset.id ?? null);
-        }}
-        onBlur={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) list.setFocused(null);
-        }}
         data-drop={over === "root" || undefined}
         onDragOver={(e) => {
           if (!drag || !toRoot) return;
@@ -338,25 +387,20 @@ export function Rail({
                 {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length}</span>
               </div>
             ) : null}
-            {sec.rows.map((s) => (
-              <Row
-                key={s.id}
-                s={s}
-                current={s.id === current}
-                refFn={s.id === current ? cur : undefined}
-                usual={usual}
-                sort={sort}
-                open={list.open.has(s.id) || forcedOpen.has(s.id)}
-                held={list.open.has(s.id)}
-                onToggle={() => {
-                  list.setOpen(s.id, !list.open.has(s.id));
-                }}
-                onClose={onClose}
-                onMenu={onMenu}
-                dnd={dropping}
-                pinned={sec.key === "pinned" && s.depth === 0}
-                target={over === s.id ? (drag?.pin ? pos : "under") : null}
-              />
+            {sec.rows.map((s, i) => (
+              <RowAndQuiet key={s.id} quiet={sec.quiet?.get(s.id)} onQuiet={list.toggleQuiet}>
+                <Row
+                  s={s}
+                  enter={!!s.depth && enters(sec, i)}
+                  current={s.id === current}
+                  refFn={s.id === current ? cur : undefined}
+                  usual={usual}
+                  sort={sort}
+                  api={rowApi}
+                  pinned={sec.key === "pinned" && s.depth === 0}
+                  target={over === s.id ? (drag?.pin ? pos : "under") : null}
+                />
+              </RowAndQuiet>
             ))}
           </div>
         ))}
@@ -381,8 +425,72 @@ export function Rail({
         />
       ) : null}
     </nav>
+    </RepoMarks.Provider>
   );
 }
+
+/** Rows that fade in when they come into view: the first of each run of
+ *  children, about a screenful. Hundreds animating at once took longer to
+ *  draw than to build, and those past the first screenful are out of sight. */
+const ENTER_ROWS = 24;
+function enters(sec: Section<Nested<SessionRow>>, i: number): boolean {
+  for (let n = 0; n < ENTER_ROWS; n++, i--) {
+    const prev = sec.rows[i - 1];
+    if (!prev || prev.depth < sec.rows[i]!.depth || sec.quiet?.has(prev.id)) return true;
+  }
+  return false;
+}
+
+/** Whether rows name their repo or show its shape, and each repo's shape. */
+const RepoMarks = createContext<{ shape: boolean; shapes: ReadonlyMap<string, Shape> }>({ shape: false, shapes: new Map() });
+
+/** What a row calls back. The same object for the life of the list. */
+interface RowApi {
+  /** Show or hide the sessions it started; `shown` is whether they show now. */
+  toggle: (id: string, shown: boolean) => void;
+  close: (s: SessionRow) => void;
+  menu: (s: SessionRow, x: number, y: number) => void;
+  dnd: DropProps;
+}
+
+/** A row, then the lines for the inactive children of whichever rows end here. */
+function RowAndQuiet({ quiet, onQuiet, children }: { quiet: Quiet[] | undefined; onQuiet: (parent: string, shown: boolean) => void; children: ReactNode }) {
+  if (!quiet) return <>{children}</>;
+  return (
+    <>
+      {children}
+      {quiet.map((q) => (
+        <QuietLine key={q.parent} q={q} onToggle={onQuiet} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * The inactive sessions a row started, folded to one quiet line under the
+ * active ones: a Steward runs hundreds, and most of them finished long ago.
+ * Hundreds of rows take a while to build, so they are built in the
+ * background, and the line turns at once.
+ */
+const QuietLine = memo(function QuietLine({ q, onToggle }: { q: Quiet; onToggle: (parent: string, shown: boolean) => void }) {
+  const [pending, start] = useTransition();
+  const open = pending ? !q.open : q.open;
+  return (
+    <button
+      type="button"
+      className="rail-quiet"
+      data-parent={q.parent}
+      data-pending={pending || undefined}
+      aria-expanded={open}
+      style={{ "--depth": q.depth } as CSSProperties}
+      title={`${open ? "Hide" : "Show"} the ${q.count === 1 ? "session" : `${q.count} sessions`} it started with nothing in the last 3 hours (← →)`}
+      onClick={() => start(() => onToggle(q.parent, q.open))}
+    >
+      <Icon.chevronRight size={10} className="rail-quiet-chev" />
+      {q.count} inactive
+    </button>
+  );
+});
 
 type DropPos = "before" | "after";
 
@@ -406,33 +514,27 @@ const halfOf = (e: { clientY: number; currentTarget: Element }): DropPos => {
   return e.clientY < r.top + r.height / 2 ? "before" : "after";
 };
 
-function Row({
+/** Drawn again only when its session, its place or its state in the list
+ *  changes: the list holds hundreds of rows, and a frame changes a few. */
+const Row = memo(function Row({
   s,
   current,
   refFn,
   usual,
   sort,
-  open,
-  held,
-  onToggle,
-  onClose,
-  onMenu,
-  dnd,
+  api,
   pinned,
   target,
+  enter,
 }: {
   s: Nested<SessionRow>;
+  /** It fades in as it comes into view. */
+  enter: boolean;
   current: boolean;
   refFn?: Ref<HTMLAnchorElement>;
   usual: ProviderId | null;
   sort: SortKey;
-  open: boolean;
-  /** You expanded it, rather than its being open because a row under it is. */
-  held: boolean;
-  onToggle: () => void;
-  onClose: (s: SessionRow) => void;
-  onMenu: (s: SessionRow, x: number, y: number) => void;
-  dnd: DropProps;
+  api: RowApi;
   /** A top-level row of the Pinned section: dragging it reorders the pinned. */
   pinned: boolean;
   /** A dragged row is over this one, and may go under it, or before or after it. */
@@ -440,7 +542,8 @@ function Row({
 }) {
   const said = snippetOf(s);
   const movable = pinned || s.host !== "subagent";
-  const row = (
+  const { dnd } = api;
+  return (
     <a
       ref={refFn}
       className="rail-row"
@@ -451,6 +554,7 @@ function Row({
       data-nav-id={`session:${s.id}`}
       data-status={s.status}
       data-depth={s.depth || undefined}
+      data-enter={enter || undefined}
       style={s.depth ? ({ "--depth": s.depth } as CSSProperties) : undefined}
       title={[namedTitle(s), said ? said.slice(0, 240) : null].filter(Boolean).join("\n\n")}
       draggable={movable}
@@ -477,7 +581,7 @@ function Row({
       }}
       onContextMenu={(e) => {
         e.preventDefault();
-        onMenu(s, e.clientX, e.clientY);
+        api.menu(s, e.clientX, e.clientY);
       }}
     >
       <span className="rail-text">
@@ -488,16 +592,16 @@ function Row({
         <button
           type="button"
           className="rail-kids"
-          aria-expanded={open}
-          title={`${held ? "Stop keeping" : "Keep"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started expanded after leaving this session (← →)`}
+          aria-expanded={s.open}
+          title={`${s.open ? "Hide" : "Show"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started (← →)`}
           onClick={(e) => {
             // Keep expansion separate from opening the session.
             e.preventDefault();
             e.stopPropagation();
-            onToggle();
+            api.toggle(s.id, s.open);
           }}
         >
-          {open ? <Icon.chevronDown size={10} /> : <Icon.chevronRight size={10} />}
+          {s.open ? <Icon.chevronDown size={10} /> : <Icon.chevronRight size={10} />}
           {s.kids}
         </button>
       ) : null}
@@ -506,12 +610,11 @@ function Row({
         <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
       </span>
       <RowLoad id={s.id} />
-      {s.host === "subagent" || s.status === "closed" ? null : <CloseX s={s} onClose={onClose} />}
+      {s.host === "subagent" || s.status === "closed" ? null : <CloseX s={s} onClose={api.close} />}
       <RowState s={s} />
     </a>
   );
-  return s.depth ? <div className="rail-reveal"><div>{row}</div></div> : row;
-}
+});
 
 /**
  * What it is doing, as one icon at the row's right end: a spinner while it
@@ -639,9 +742,17 @@ function CloseFailure() {
 /** The session's name, after the project it works on, in quieter type. */
 function RowTitle({ s }: { s: SessionRow }) {
   const project = projectOf(s);
+  const marks = useContext(RepoMarks);
+  const shape = marks.shape ? marks.shapes.get(repoKey(s)) : undefined;
   return (
     <span className="rail-title">
-      {project ? <span className="rail-proj">{project}</span> : null}
+      {shape ? (
+        <span className="rail-proj-shape" title={project}>
+          <ShapeMark shape={shape} />
+        </span>
+      ) : project ? (
+        <span className="rail-proj">{project}</span>
+      ) : null}
       {titleOf(s)}
     </span>
   );

@@ -62,7 +62,7 @@ export function asObject(v: unknown, label: string): Record<string, unknown> {
  * setting nothing reads.
  */
 export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch {
-  const known = ["theme", "boardDays", "autoApprove", "parkIdleMin", "reclaimNightly", "models", "balancer"];
+  const known = ["theme", "repoMark", "hideSteps", "boardDays", "autoApprove", "parkIdleMin", "reclaimNightly", "models", "balancer"];
   for (const key of Object.keys(body)) {
     if (!known.includes(key)) throw new HttpError(400, `unknown setting: ${key}`);
   }
@@ -74,6 +74,16 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
       throw new HttpError(400, "theme must be light, dark or system");
     }
     patch.theme = body.theme;
+  }
+  if (body.repoMark !== undefined) {
+    if (body.repoMark !== "name" && body.repoMark !== "shape") throw new HttpError(400, "repoMark must be name or shape");
+    patch.repoMark = body.repoMark;
+  }
+  if (body.hideSteps !== undefined) {
+    if (body.hideSteps !== "always" && body.hideSteps !== "done" && body.hideSteps !== "never") {
+      throw new HttpError(400, "hideSteps must be always, done or never");
+    }
+    patch.hideSteps = body.hideSteps;
   }
   if (body.boardDays !== undefined) patch.boardDays = requirePositiveInt(body, "boardDays");
   if (body.autoApprove !== undefined) patch.autoApprove = requireBoolean(body, "autoApprove");
