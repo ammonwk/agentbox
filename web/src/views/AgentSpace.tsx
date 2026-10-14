@@ -178,7 +178,7 @@ export function LocalAgentSpace({
   }, [agents.reload]);
   const options = (agents.data ?? []).filter((a) => !project || a.repo === project).map((a): AgentOption => {
     const linked = new Set([a.session, ...a.previous, ...(a.workSessions ?? [])]);
-    return { id: a.id, name: a.name, role: a.role, creator: a.capability === "creator", avatar: localAvatarUrl(a),
+    return { id: a.id, name: a.name, role: a.role, creator: a.capability === "creator" && !a.unavailable, avatar: localAvatarUrl(a),
       activity: agentActivity(a.enabled && !a.unavailable, state.sessions.filter((s) => linked.has(s.id) || s.agentOwner === a.id).map(shownStatus)),
       detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.unavailable ? "History" : a.enabled ? "Local" : "Paused"}` };
   });
