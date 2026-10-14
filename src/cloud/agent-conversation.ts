@@ -79,6 +79,10 @@ export type ChatEvent = TimelineEvent & {
 };
 export type AgentThread = {
   id: string; run: string; title: string; status: string; at: number;
+  /** Main-chat provider conversations stay out of the work-session rail. */
+  kind?: "conversation" | "work";
+  cacheWarmUntil?: number;
+  canRestore?: boolean;
   active: boolean; writable: boolean; successor: string | null;
 };
 export type ConversationPage = {

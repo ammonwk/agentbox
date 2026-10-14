@@ -19,6 +19,7 @@ import { hrefOf } from "../../route";
 import { readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
+import { AgentAvatar } from "../AgentAvatar";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -501,12 +502,13 @@ function useNow(active: boolean): number {
   return Date.now();
 }
 
-const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number }) {
+type ChatAgent = { name: string; role: string; creator: boolean; avatar: string | null };
+const EventRow = memo(function EventRow({ ev, dur, agent }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent }) {
   switch (ev.kind) {
     case "user":
       return <UserRow ev={ev} />;
     case "assistant":
-      return <AssistantRow ev={ev} />;
+      return <AssistantRow ev={ev} agent={agent} />;
     case "thinking":
       return <Thinking text={ev.text} dur={dur} />;
     case "meta":
@@ -832,9 +834,9 @@ function citations(text: string): { text: string; cites: string[] } {
   return { text: rest.trim(), cites };
 }
 
-function AssistantRow({ ev }: { ev: Extract<TimelineEvent, { kind: "assistant" }> }) {
+function AssistantRow({ ev, agent }: { ev: Extract<TimelineEvent, { kind: "assistant" }>; agent?: ChatAgent }) {
   const { text, cites } = useMemo(() => citations(ev.text), [ev.text]);
-  return (
+  const content = (
     <div className="tl-assistant">
       <Markdown text={text} />
       {cites.length ? (
@@ -852,6 +854,20 @@ function AssistantRow({ ev }: { ev: Extract<TimelineEvent, { kind: "assistant" }
       ) : null}
     </div>
   );
+  if (!agent) return content;
+  return <div className="tl-agent-reply" data-ev={ev.id}>
+    <div className="tl-agent-row">
+      <AgentAvatar role={agent.role} creator={agent.creator} src={agent.avatar} />
+      <div className="tl-bubble tl-agent-bubble">
+        <div className="tl-agent-name">{agent.name}</div>
+        {content}
+      </div>
+    </div>
+    <div className="tl-agent-foot">
+      <CopyIcon text={text} />
+      <time dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>
+    </div>
+  </div>;
 }
 
 type Flat = Exclude<TimelineRow, { type: "trace" }>;
@@ -1223,6 +1239,7 @@ function Field({ f }: { f: InputField }) {
  *  wrote a message passes none, so no one else's message wears your picture. */
 export type ChatSides = {
   me?: { name: string; github: string };
+  agent?: ChatAgent;
 };
 /** Sent from here and not yet in the transcript. */
 export type ChatEcho = { id: string; text: string; at: number; note: string };
@@ -1231,14 +1248,14 @@ export type ChatEcho = { id: string; text: string; at: number; note: string };
  *  summary (`ChatEvent` in src/cloud/agent-conversation.ts). */
 type Carried = { source?: string; carried?: { handoff: string; at: number; oldest: boolean } };
 
-export function AgentConversationEvents({ events, me, echoes = [] }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[] } & ChatSides) {
+export function AgentConversationEvents({ events, me, agent, echoes = [] }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[] } & ChatSides) {
   const shown = events.filter((e): e is Extract<TimelineEvent, { kind: "user" | "assistant" }> & Carried => e.kind === "user" || e.kind === "assistant");
   return (
     <Me.Provider value={me ?? NOBODY}>
       <div className="tl-stream">
         {shown.map((e, i) => {
           const prev = shown[i - 1];
-          const row = <EventRow key={e.id} ev={e} />;
+          const row = <EventRow key={e.id} ev={e} agent={agent} />;
           // Where one conversation ends and the next begins, say which was carried how.
           const divider =
             prev?.source !== e.source ? (

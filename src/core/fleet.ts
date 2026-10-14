@@ -2812,6 +2812,39 @@ export class Fleet extends EventEmitter {
     return this.serial(id, () => this.resumeNow(id, prompt, attempt));
   }
 
+  /** Restore an idle agent worker without moving its still-warm account. */
+  resumeCached(id: string, authorize: () => void): Promise<Session> {
+    return this.serial(id, async () => {
+      await this.tick();
+      authorize();
+      const s = this.get(id);
+      if (!(s.cacheWarmUntil > this.now())) throw new FleetError(409, "This session's cache has expired; it cannot be restored warm");
+      return this.resumeNow(id);
+    });
+  }
+
+  /** Agent-initiated completion must not kill a new turn or abandon work. */
+  closeIfIdle(id: string, expectedActivity: number, authorize: () => void): Promise<Closed> {
+    return this.serial(id, async () => {
+      await this.tick();
+      authorize();
+      const s = this.get(id);
+      if (s.lastActivityAt !== expectedActivity) throw new FleetError(409, "Session activity changed; inspect it again before closing");
+      if (!["waiting", "stopped", "closed"].includes(s.status) || s.background || s.queued?.length || s.question || (s.status === "closed" && s.host !== "none"))
+        throw new FleetError(409, "The session is still working or needs attention");
+      if ((this.workHeld().get(id) ?? []).length || listOpenWaits(0).some((w) => w.sessionId === id))
+        throw new FleetError(409, "The session still owns unfinished PRs or waits");
+      if (listSessionRecords(0).some((r) => r.parent === id && !r.archivedAt))
+        throw new FleetError(409, "Finish this session's child sessions first");
+      if (!this.hasTranscript(id)) throw new FleetError(409, "The provider transcript must be available before closing");
+      const rec = getSessionRecord(id);
+      if (!rec?.agentSessionId || !rec.transcriptPath || !existsSync(rec.transcriptPath) || !this.accountFor(rec, s))
+        throw new FleetError(409, "Verify this session's transcript and account before closing");
+      if (!existsSync(this.resumeCwd(rec))) throw new FleetError(409, "The session's resume directory is missing");
+      return this.close(id, true, true);
+    });
+  }
+
   private async resumeNow(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);

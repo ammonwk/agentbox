@@ -1,10 +1,25 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentThread } from "../../../src/cloud/agent-conversation";
-import { Button, Modal, RelativeTime } from "../components";
+import { Button, Icon, RelativeTime, Spinner } from "../components";
 import { go, hrefOf, parseHash, scopeOf } from "../route";
-import { RailTabs } from "./session/Rail";
+import { useIsNarrow } from "./session/useIsNarrow";
 import { AgentAvatar } from "./AgentAvatar";
-export type AgentOption = { id: string; name: string; detail: string; role: string; creator?: boolean; avatar?: string | null };
+type AgentActivity = "working" | "approval" | "waiting" | "idle";
+export type AgentOption = { id: string; name: string; detail: string; role: string; creator?: boolean; avatar?: string | null; activity: AgentActivity };
+export const agentName = (name: string) => name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+export function agentActivity(enabled: boolean, statuses: readonly string[]): AgentActivity {
+  if (statuses.some((s) => s === "blocked" || s === "uncertain")) return "approval";
+  if (statuses.some((s) => ["running", "retrying", "starting", "queued"].includes(s))) return "working";
+  if (!enabled) return "idle";
+  return statuses.includes("waiting") ? "waiting" : "idle";
+}
+function ActivityIcon({ activity }: { activity: AgentActivity }) {
+  const label = { working: "Active", approval: "Needs attention", waiting: "Waiting for you", idle: "Inactive" }[activity];
+  return <span className="rail-state" data-state={activity} role="img" aria-label={label} title={label}>
+    {activity === "working" ? <Spinner size={12} /> : activity === "approval" ? <Icon.alert size={13} /> : activity === "waiting" ? <Icon.clock size={13} /> : <span className="st-dot st-closed" />}
+  </span>;
+}
+
 export function agentRoute() { const r = parseHash(location.hash); return r.page === "agents" ? r : { page: "agents" as const }; }
 export function landingForAgent(id: string) {
   return { page: "agents" as const, id, view: "chat" as const, thread: "new" };
@@ -13,65 +28,91 @@ export function rememberAgent(id?: string) {
   const key = `agentbox.selectedAgent:${scopeOf().get("workspace") ?? ""}:${scopeOf().get("project") ?? ""}`;
   try { if (id) localStorage.setItem(key, id); return localStorage.getItem(key); } catch { return null; }
 }
-export function AgentBrowser({ id, options, threads, counts, more, loadMore, error, children, onCreate, ongoing }: {
-  id: string; options: AgentOption[]; threads: AgentThread[]; counts: { active: number; inactive: number }; more: boolean;
-  onCreate?: () => void; ongoing?: string | null;
+export function AgentBrowser({ id, options, threads, more, loadMore, error, children, onCreate, ongoing, loading }: {
+  id: string; options: AgentOption[]; threads: AgentThread[]; more: boolean;
+  onCreate?: () => void; ongoing?: string | null; loading: boolean;
   loadMore: () => void; error: string | null; children: ReactNode;
 }) {
-  const route = agentRoute(), selected = options.find((a) => a.id === id);
-  const [picker, setPicker] = useState(false), [query, setQuery] = useState("");
-  const [view, setView] = useState<"active" | "inactive">("active");
+  const route = agentRoute();
+  const narrow = useIsNarrow();
+  const [expanded, setExpanded] = useState(true);
+  const [showClosed, setShowClosed] = useState(false);
   const rail = useRef<HTMLElement>(null), hadDetail = useRef(route.view !== "sessions");
   useEffect(() => { rememberAgent(id); }, [id]);
+  useEffect(() => { setExpanded(true); }, [id, route.thread, route.view]);
+  useEffect(() => { setShowClosed(false); }, [id]);
   useEffect(() => {
-    const t = threads.find((t) => t.id === route.thread);
-    if (t) setView(t.active ? "active" : "inactive");
-  }, [route.thread, threads.find((t) => t.id === route.thread)?.active]);
+    // AgentSpace remounts when choosing another agent. Keep keyboard focus in the list.
+    if (document.activeElement === document.body) rail.current?.querySelector<HTMLButtonElement>('[data-selected="true"]')?.focus();
+  }, [id]);
   useEffect(() => {
-    if (hadDetail.current && route.view === "sessions") (rail.current?.querySelector<HTMLAnchorElement>('[aria-current="page"]') ?? rail.current?.querySelector<HTMLAnchorElement>(".rail-row"))?.focus();
+    if (hadDetail.current && route.view === "sessions") (rail.current?.querySelector<HTMLElement>('[aria-current="page"]') ?? rail.current?.querySelector<HTMLElement>('[data-selected="true"]'))?.focus();
     hadDetail.current = route.view !== "sessions";
   }, [route.view]);
-  const choose = (a: AgentOption) => { setPicker(false); setQuery(""); go(landingForAgent(a.id)); };
-  const visible = options.filter((a) => `${a.name} ${a.detail} ${a.role}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="sv agent-browser" data-rail="on" data-detail={route.view !== "sessions"}>
-    <nav ref={rail} className="rail" aria-label="Agent sessions" data-nav-region="list" onKeyDown={(e) => {
+  const choose = (agent: string) => {
+    setExpanded(true);
+    go(landingForAgent(agent));
+  };
+  const work = threads.filter((t) => t.kind !== "conversation" && t.id !== ongoing);
+  const closed = work.filter((t) => t.status === "closed");
+  const activeCount = work.length - closed.length;
+  const ordered = work.filter((t) => t.status !== "closed" || showClosed)
+    .sort((a, b) => Number(b.active) - Number(a.active) || b.at - a.at);
+  const creator = options.find((a) => a.creator);
+  return <div className="sv agent-browser" data-rail={narrow && route.view === "sessions" ? "full" : "on"} data-detail={route.view !== "sessions"}>
+    <nav ref={rail} className="rail agent-tree" aria-label="Agent sessions" data-nav-region="list" onKeyDown={(e) => {
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.nativeEvent.isComposing) return;
       const el = e.target as HTMLElement;
-      if (!el.classList.contains("rail-row")) return;
-      const rows = [...e.currentTarget.querySelectorAll<HTMLAnchorElement>(".rail-row")], at = rows.indexOf(el as HTMLAnchorElement);
-      if (e.key === "ArrowDown") rows[at + 1]?.focus();
-      else if (e.key === "ArrowUp") (rows[at - 1] ?? e.currentTarget.querySelector<HTMLButtonElement>(".agent-picker"))?.focus();
-      else if (e.key === "ArrowRight") el.click(); else return;
+      if (!el.matches("[data-nav-item]")) return;
+      const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("[data-nav-item]")], at = rows.indexOf(el);
+      if (e.key === "ArrowDown") (rows[at + 1] ?? el).focus();
+      else if (e.key === "ArrowUp") (rows[at - 1] ?? el).focus();
+      else if (e.key === "Home") rows[0]?.focus();
+      else if (e.key === "End") rows.at(-1)?.focus();
+      else if (el.dataset.agent && e.key === "Enter") choose(el.dataset.agent);
+      else if (el.dataset.agent && e.key === "ArrowRight") {
+        if (el.dataset.agent !== id) choose(el.dataset.agent);
+        else if (!expanded) setExpanded(true);
+        else rail.current?.querySelector<HTMLElement>(".agent-threads [data-nav-item]")?.focus();
+      } else if (e.key === "ArrowLeft") {
+        if (!el.dataset.agent) rail.current?.querySelector<HTMLElement>('[data-selected="true"]')?.focus();
+        else if (el.dataset.agent === id && expanded) setExpanded(false);
+        else return; // The shell moves from a collapsed agent to app navigation.
+      } else return; // The shell opens session links and focuses their conversation.
       e.preventDefault(); e.stopPropagation();
     }}>
-      <div className="rail-top"><button className="agent-picker" onClick={() => setPicker(true)} aria-label="Select agent" aria-haspopup="dialog">{selected && <AgentAvatar role={selected.role} creator={selected.creator} src={selected.avatar} size={26} />}<span>{selected?.name ?? "Select agent"}<small>{selected?.detail}</small></span><span>⌄</span></button></div>
-      <a className="rail-row agent-main-row" aria-current={route.thread === ongoing || route.thread === "new" ? "page" : undefined} href={hrefOf({ page: "agents", id, view: "chat", thread: ongoing ?? "new" })}><span className="rail-title">Main chat</span></a>
-      <RailTabs view={view} counts={counts} onChange={setView} />
-      <div className="rail-scroll">
-        {threads.filter((t) => t.active === (view === "active")).map((t) => <a key={t.id} className="rail-row" data-id={t.id} data-status={t.status} aria-current={route.thread === t.id ? "page" : undefined} href={hrefOf({ page: "agents", id, view: "chat", thread: t.id })} title={`${t.title} · ${t.status}${t.writable ? "" : " · Read-only"}`}>
-          <span className="rail-title">{t.title}</span><span className="rail-when">{t.at > 0 && <RelativeTime ts={t.at} />}</span><span className="agent-row-status" aria-label={t.status}>{t.status === "running" ? "●" : t.writable ? "◷" : "○"}</span>
-        </a>)}
-        {!threads.some((t) => t.active === (view === "active")) && <p className="rail-none">{error || `No ${view} sessions.`}</p>}
-        {more && <Button variant="ghost" onClick={loadMore}>Load more sessions</Button>}
+      <div className="agent-tree-head">
+        <h2>Agents</h2>
+        {(onCreate || creator) && <Button variant="ghost" size="sm" icon={Icon.plus} aria-label="New agent" title="New agent" onClick={() => { if (onCreate) onCreate(); else if (creator) go(landingForAgent(creator.id)); }} />}
+        {onCreate && <a className="agent-manage" href={hrefOf({ page: "agents", id: "manage" })} aria-label="Manage shared agents" title="Manage shared agents"><Icon.settings size={16} /></a>}
       </div>
-      <div className="agent-rail-actions">
-        <a href={hrefOf({ page: "agents", id, view: "chat", thread: ongoing ?? "new" })}>Open chat</a>
-        <a href={hrefOf({ page: "agents", id, view: "about" })}>About</a><a href={hrefOf({ page: "agents", id, view: "feed" })}>Feed</a>
+      <div className="rail-scroll">
+        <ul className="agent-tree-list">
+          {options.map((a) => {
+            const open = a.id === id && expanded;
+            const name = agentName(a.name);
+            return <li key={a.id}>
+              <button className="rail-row agent-tree-row" data-agent={a.id} data-selected={a.id === id} data-nav-item data-nav-id={`agent-${a.id}`} aria-expanded={a.id === id && ordered.length ? open : undefined} aria-controls={open && ordered.length ? `agent-sessions-${a.id}` : undefined} onClick={() => choose(a.id)} title={`${name} · ${a.role}\n${a.detail}`}>
+                <span className="rail-title agent-tree-name">{name}</span>
+                {a.id === id && activeCount > 0 && <span className="agent-tree-count" aria-label={`${activeCount}${more ? " or more" : ""} work sessions`}>{activeCount}{more ? "+" : ""}</span>}
+                <ActivityIcon activity={a.activity} />
+                <span className="agent-role-icon" role="img" aria-label={a.role} title={a.role}><AgentAvatar role={a.role} creator={a.creator} src={a.avatar} size={22} /></span>
+              </button>
+              {open && (work.length > 0 || loading || error || more) && <ul className="agent-threads" id={`agent-sessions-${a.id}`} aria-label={`${name} work sessions`}>
+                {ordered.map((t) => <li key={t.id}><a className="rail-row" data-nav-item data-nav-id={`agent-session-${t.id}`} data-id={t.id} data-status={t.status} aria-current={route.thread === t.id && (!route.view || route.view === "chat" || route.view === "sessions") ? "page" : undefined} href={hrefOf({ page: "agents", id, view: "chat", thread: t.id })} title={`${t.title} · ${t.status}${t.writable ? "" : " · Read-only"}`}>
+                  <span className="rail-title">{t.title}</span><span className="rail-when">{t.at > 0 && <RelativeTime ts={t.at} short />}</span>
+                  <ActivityIcon activity={agentActivity(true, [t.status])} />
+                </a></li>)}
+                {closed.length > 0 && <li><Button variant="ghost" size="sm" aria-expanded={showClosed} onClick={() => setShowClosed((v) => !v)}>{showClosed ? "Hide" : "Show"} closed sessions ({closed.length})</Button></li>}
+                {loading && !threads.length && <li className="agent-tree-message" role="status">Loading sessions…</li>}
+                {error && <li className="agent-tree-message error" role="alert">{error}</li>}
+                {more && <li><Button variant="ghost" size="sm" onClick={loadMore}>Load more sessions</Button></li>}
+              </ul>}
+            </li>;
+          })}
+        </ul>
       </div>
     </nav>
-    <div className="sv-main"><button className="agent-mobile-picker" onClick={() => setPicker(true)} aria-label="Select agent">{selected?.name ?? "Select agent"} ⌄</button>{children}</div>
-    {picker && <Modal title="Choose agent" onClose={() => setPicker(false)}>
-      <input className="input" autoFocus aria-label="Search agents" placeholder="Search agents…" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
-        if (e.key === "ArrowDown") { e.preventDefault(); e.currentTarget.parentElement?.querySelector<HTMLButtonElement>(".project-option")?.focus(); }
-        if (e.key === "Enter" && visible.length === 1) { e.preventDefault(); choose(visible[0]!); }
-      }} />
-      <div className="project-options" onKeyDown={(e) => {
-        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
-        const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("button")], at = rows.indexOf(document.activeElement as HTMLButtonElement);
-        e.preventDefault(); rows[e.key === "Home" ? 0 : e.key === "End" ? rows.length - 1 : (at + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length]?.focus();
-      }}>{visible.map((a) => <button className="project-option" key={a.id} aria-pressed={id === a.id} onClick={() => choose(a)}><AgentAvatar role={a.role} creator={a.creator} src={a.avatar} size={30} /><span><strong>{a.name}</strong><small>{a.detail}</small><small>{a.role}</small></span></button>)}</div>
-      {(onCreate || options.some((a) => a.creator)) && <Button onClick={() => { setPicker(false); if (onCreate) onCreate(); else { const a = options.find((a) => a.creator)!; go({ page: "agents", id: a.id, view: "chat", thread: "new" }); } }}>Create agent…</Button>}
-      <a href="#/agents/manage">Manage shared agents</a>
-    </Modal>}
+    <div className="sv-main" data-nav-region="detail" tabIndex={-1}>{children}</div>
   </div>;
 }
