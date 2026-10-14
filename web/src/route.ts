@@ -39,7 +39,7 @@ function decode(p: string): string {
 }
 
 export function parseHash(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
+  const parts = hash.split("?")[0]!.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
   if (head === "s" && a) {
     const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
@@ -59,7 +59,7 @@ export function parseHash(hash: string): Route {
   return { page: "sessions" };
 }
 
-export function hrefOf(route: Route): string {
+function routePath(route: Route): string {
   switch (route.page) {
     case "session":
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
@@ -70,6 +70,71 @@ export function hrefOf(route: Route): string {
       return route.sub === "calibration" ? "#/accounts/calibration" : "#/accounts";
     default:
       return `#/${route.page}`;
+  }
+}
+
+// ------------------------------------------------------------------- scope
+
+/**
+ * What the board is looking at, beside where: the selected project (a repo
+ * id; "" is an explicit All projects) and the Team page's cloud workspace,
+ * as `#/route?project=…&workspace=…`. Part of each history entry, so Back,
+ * a reload and separate tabs cannot silently change the context a draft or
+ * a list is in. Selecting one is navigation only: no process starts or stops.
+ */
+export type ScopeKey = "project" | "workspace";
+
+export function scopeOf(hash = location.hash): URLSearchParams {
+  return new URLSearchParams(hash.split("?")[1] ?? "");
+}
+
+/** The link to a route, in the scope the page is in now. */
+export function hrefOf(route: Route): string {
+  const scope = scopeOf().toString();
+  return routePath(route) + (scope ? `?${scope}` : "");
+}
+
+const SCOPE_KEY = "agentbox.navigationScope";
+
+/** A route whose detail (an open session) may not belong to the new scope,
+ *  mapped to its list. A later page with details of its own extends this. */
+function listOf(route: Route): Route {
+  return route.page === "session" ? { page: "sessions" } : route;
+}
+
+/** Whether the route is a detail an old, unscoped link may point at. */
+function isDetail(route: Route): boolean {
+  return route.page === "session";
+}
+
+/** Select a scope, staying on the page (its list, if it was a detail) or
+ *  going to `to`, and remember it as what unscoped links open in. */
+export function selectScope(key: ScopeKey, value: string | null, to?: Route, replace = false): void {
+  const scope = scopeOf();
+  scope.set(key, value ?? ""); // an explicit All overrides the remembered default
+  const href = routePath(to ?? listOf(parseHash(location.hash))) + `?${scope}`;
+  if (href === location.hash) return;
+  history[replace ? "replaceState" : "pushState"](null, "", href);
+  try {
+    localStorage.setItem(SCOPE_KEY, scope.toString());
+  } catch {
+    /* private mode: this tab remembers it */
+  }
+  moved.forEach((fn) => fn());
+}
+
+/** On first render: an unscoped link to a list opens in the scope this
+ *  browser last used. A link to a detail stays unscoped — the detail says
+ *  which project it is in once it is known — so old links keep working. */
+export function restoreScope(): void {
+  if (location.hash.includes("?")) return;
+  const route = parseHash(location.hash);
+  if (isDetail(route)) return;
+  try {
+    const scope = localStorage.getItem(SCOPE_KEY);
+    if (scope) history.replaceState(history.state, "", routePath(route) + `?${scope}`);
+  } catch {
+    /* private mode: nothing remembered */
   }
 }
 
@@ -133,19 +198,24 @@ export function listUnderSession(): void {
 }
 
 /**
- * On a narrow screen, send the app's own links through go(), so they keep
- * history as it does. On React's root and added after it: React's handlers
- * have run (a preventDefault is seen) and its stopPropagation, which a link
- * in a clickable row uses, does not hide the click from a listener on the
- * same element.
+ * Send the app's own links through go(), so they keep the scope the page is
+ * in and, on a narrow screen, history as go() keeps it. A link into another
+ * scope is a plain hash navigation: it means that scope. On React's root and
+ * added after it: React's handlers have run (a preventDefault is seen) and
+ * its stopPropagation, which a link in a clickable row uses, does not hide
+ * the click from a listener on the same element.
  */
 export function followLinks(root: HTMLElement): void {
   root.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    if (!matchMedia(NARROW).matches) return;
     const a = (e.target as Element | null)?.closest?.("a[href^='#/']");
     if (!a || a.getAttribute("target")) return;
     e.preventDefault();
-    go(parseHash(a.getAttribute("href") ?? ""));
+    const href = a.getAttribute("href") ?? "";
+    if (href.includes("?") && scopeOf(href).toString() !== scopeOf().toString()) {
+      location.hash = href;
+      return;
+    }
+    go(parseHash(href));
   });
 }

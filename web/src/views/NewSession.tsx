@@ -48,16 +48,19 @@ import "./newsession.css";
  */
 export function NewSession({
   state,
+  project = null,
   onClose,
   onCreated,
   onScheduled,
 }: {
   state: AppState;
+  /** The selected project: its dialog remembers on its own and starts in its repo. */
+  project?: string | null;
   onClose: () => void;
   onCreated: (id: string) => void;
   onScheduled: (s: Schedule) => void;
 }) {
-  const [prefs] = useState<NewSessionPrefs>(loadPrefs);
+  const [prefs] = useState<NewSessionPrefs>(() => loadPrefs(project));
   const installed = state.providers.filter((p) => p.installed).map((p) => p.id);
   const [provider, setProvider] = useState<ProviderId>(
     prefs.provider && installed.includes(prefs.provider) ? prefs.provider : installed[0] ?? "claude",
@@ -300,7 +303,7 @@ export function NewSession({
   const draftImagesKey = JSON.stringify(draftImages);
   useEffect(() => {
     // A PR the prompt ticked off is not a preference for next time.
-    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider, wherePicked, draft: prompt, draftImages });
+    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider, wherePicked, draft: prompt, draftImages }, project);
   }, [provider, where, repoId, worktree, wtFromPrompt, path, perProvider, wherePicked, prompt, draftImagesKey]);
   // Typing `new` is the same as ticking the box again.
   useEffect(() => {
@@ -370,14 +373,14 @@ export function NewSession({
     try {
       if (mode === "schedule") {
         const sc = await api.createSchedule({ when, spec: input });
-        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider });
+        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider }, project);
         onScheduled(sc);
         return;
       }
       const r = await api.createSession(input);
       noteStarted(r.session);
       if (where === "path") noteFolderChoice(path.trim());
-      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider });
+      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider }, project);
       onCreated(r.session.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

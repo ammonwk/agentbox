@@ -2472,7 +2472,8 @@ export class Fleet extends EventEmitter {
   /**
    * Closed sessions for the See closed list, most recently closed first: all
    * of them, not only the board's window, so an old one can be found and
-   * reopened. `q` matches as the board's search does; `offset` pages.
+   * reopened. `q` matches as the board's search does; `offset` pages;
+   * `include` filters before paging, so a project's page is a full page.
    */
   closed(q: string, offset: number, limit: number, include?: (s: Session) => boolean): { sessions: Session[]; total: number } {
     const needle = q.trim().toLowerCase();

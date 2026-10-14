@@ -285,9 +285,10 @@ export const api = {
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
   /** Close stops it and takes it off the list; `false` reopens it (still stopped). */
   close: (id: string, closed: boolean) => post<Closed>(`/api/sessions/${enc(id)}/close`, { closed }),
-  /** A page of closed sessions, the most recently closed first, from all of history. */
-  closed: (q: string, offset: number, limit = 30) =>
-    get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit) })}`),
+  /** A page of closed sessions, the most recently closed first, from all of
+   *  history; only a project's, when one is selected. */
+  closed: (q: string, offset: number, limit = 30, project: string | null = null) =>
+    get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit), ...(project ? { project } : {}) })}`),
   timeline: (id: string, opts: { before?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set("before", opts.before);
