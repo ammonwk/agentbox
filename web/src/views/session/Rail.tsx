@@ -171,6 +171,7 @@ export function Rail({
   onClose,
   scheduled,
   onCancelSchedule,
+  onNew,
 }: {
   /** The sections of the tab `list.view` names. */
   sections: Section<Nested<SessionRow>>[];
@@ -185,6 +186,8 @@ export function Rail({
   /** One-time scheduled sessions, soonest first. */
   scheduled: Schedule[];
   onCancelSchedule: (sc: Schedule) => void;
+  /** Open New session (also `n`, anywhere but a text field). */
+  onNew: () => void;
 }) {
   const { project } = useScope();
   const foldKey = `agentbox.railSections:${project ?? "all"}:${list.view}:${list.sort}`;
@@ -445,6 +448,14 @@ export function Rail({
         </label>
         <BookmarksMenu sessions={visibleSessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
+        {/* Blurring on a mouse click (e.detail > 0) keeps the Modal from
+            handing focus back here on close; Enter keeps the restore. */}
+        <button type="button" className="rail-sort-btn rail-new" aria-label="New session" title="New session (n)" onClick={(e) => {
+          if (e.detail > 0) e.currentTarget.blur();
+          onNew();
+        }}>
+          <Icon.plus size={15} />
+        </button>
       </div>
       <RailTabs view={view} counts={counts} onChange={list.setView} />
 

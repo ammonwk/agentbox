@@ -429,18 +429,6 @@ code {
   border-radius: 0 3px 3px 0;
   background: var(--accent);
 }
-.nav-new {
-  color: var(--accent);
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-.nav-new:hover {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-.nav-new kbd {
-  margin-left: auto;
-}
 .nav-update {
   color: var(--accent);
 }
@@ -2447,16 +2435,14 @@ kbd {
     display: contents;
   }
   .sidebar .brand,
-  .nav-fullscreen,
-  .nav-new kbd {
+  .nav-fullscreen {
     display: none;
   }
   .sidebar .nav-label {
     opacity: 1;
     transition: none;
   }
-  .nav-item,
-  .nav-new {
+  .nav-item {
     flex: 1 1 0;
     min-width: 0;
     min-height: 48px;
@@ -2489,12 +2475,7 @@ kbd {
   /* Keep every destination available on narrow screens. The rail scrolls
      within itself; named entries keep Agents before Sessions as it grows. */
   .sidebar { overflow-x: auto; }
-  .sidebar .nav-item, .sidebar .nav-new, .sidebar .nav-bell { flex: 0 0 56px; }
-  .nav-new {
-    order: 4;
-  }
-  .nav-new .nav-label { display: none; }
-  .nav-new::after { content: "New"; }
+  .sidebar .nav-item, .sidebar .nav-bell { flex: 0 0 56px; }
   .sidebar [data-nav-id="agents"] { order: 1; }
   .sidebar [data-nav-id="sessions"] { order: 2; }
   .sidebar [data-nav-id="review"] { order: 3; }
