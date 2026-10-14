@@ -444,6 +444,8 @@ export type SessionHost =
   | "none";
 
 export interface Session {
+  /** Suspended by machine cleanup; the underlying turn stays intact. */
+  paused?: boolean;
   /** agentbox's short id, stable for the row's life. */
   id: string;
   /** Registered agent ownership for navigation; not a messaging capability. */
@@ -1321,6 +1323,8 @@ export interface Card {
 
 /** Changes on a slower clock; pushed only when it moves. */
 export interface ColdState {
+  /** The system-bar cleanup pause, including the one session allowed to work. */
+  cleanup?: import("./cleanup").CleanupState | null;
   accounts: AccountView[];
   logins: LoginFlow[];
   repos: Repo[];

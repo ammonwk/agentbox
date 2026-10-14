@@ -1,6 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import type { CleanupState } from "../../src/core/cleanup";
 import type { AccountView, Session, UsageWindow } from "../../src/core/types";
-import { useMetrics, useNow, type SystemState } from "./api";
+import { api, useMetrics, useNow, type SystemState } from "./api";
+import { Icon, Spinner } from "./components";
+import { selectScope } from "./route";
+import "./cleanup.css";
 import { accountHue, PROVIDER_LABEL } from "./bits";
 import { fmtCountdown } from "./lib/format";
 import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
@@ -42,10 +46,12 @@ export function SystemBar({
   sessions,
   focusAccount,
   slotRef,
+  cleanup,
 }: {
   accounts: readonly AccountView[];
   sessions: readonly Session[];
   focusAccount: string | null;
+  cleanup: CleanupState | null;
   /** Gets the element the open session's facts go in. */
   slotRef?: (el: HTMLElement | null) => void;
 }) {
@@ -59,7 +65,7 @@ export function SystemBar({
   // No machine figures: the first sweep has not landed, or this system gives
   // none. An empty strip would be a permanent piece of furniture claiming a
   // measurement, so only a session's facts show, and only while one is open.
-  if (!sys) return <div className="sysbar sysbar-bare">{slot}</div>;
+  if (!sys) return <div className="sysbar"><div className="sysbar-line">{slot}<CleanupControl state={cleanup} stale={stale} /></div></div>;
 
   const memUsed = sys.memTotal - sys.memAvailable;
   const memFrac = sys.memTotal ? memUsed / sys.memTotal : 0;
@@ -303,11 +309,46 @@ export function SystemBar({
           {open ? "▾" : "▴"}
         </span>
       </button>
+      <CleanupControl state={cleanup} stale={stale} />
       </div>
 
       {open ? <SystemDetail sys={sys} limits={limits} now={now} /> : null}
     </div>
   );
+}
+
+function CleanupControl({ state, stale }: { state: CleanupState | null; stale: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef(false);
+  const run = async (resume = false) => {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await (resume ? api.resumeCleanup() : api.startCleanup());
+      if (!resume && next?.sessionId && !next.error) selectScope("project", null, { page: "session", id: next.sessionId, tab: "timeline" });
+      if (next?.error) setError(next.error);
+    } catch (e) { setError((e as Error).message); }
+    finally { pending.current = false; setBusy(false); }
+  };
+  return <div className="sys-cleanup" data-active={!!state}>
+    {state ? <>
+      <button className="sys-cleanup-link" disabled={state.phase !== "paused" || !!state.error} onClick={() => selectScope("project", null, { page: "session", id: state.sessionId, tab: "timeline" })} title="Open the machine cleanup agent">
+        <Icon.pause size={14} /><span>{state.phase === "pausing" ? "Pausing…" : state.phase === "resuming" ? "Resuming…" : `${state.sessions.length} paused`}</span>
+      </button>
+      <button className="sys-cleanup-action" disabled={busy || stale || state.phase !== "paused"} onClick={() => void run(true)} aria-label="Finish cleanup and resume sessions" title="Finish cleanup and resume sessions">
+        {busy ? <Spinner size={16} /> : <Icon.play size={18} />}
+      </button>
+    </> : <button className="sys-cleanup-action" disabled={busy || stale} onClick={() => void run()} aria-label="Pause sessions and clean up" title="Pause all sessions and start an agent to clean up wasted CPU and memory">
+      {busy ? <Spinner size={16} /> : <Icon.heartbeat size={19} />}
+    </button>}
+    {error || state?.error ? <div className="sys-cleanup-error" role="alert">
+      <span>{error || state?.error}</span>
+      {error && !state?.error ? <button onClick={() => setError(null)} aria-label="Dismiss cleanup error"><Icon.x size={14} /></button> : null}
+    </div> : null}
+  </div>;
 }
 
 /** How many subscriptions the bar carries: the ones in use, newest first. */

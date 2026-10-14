@@ -18,10 +18,10 @@ export type SessionRow = Session & {
 /** A session's status as drawn: blocked or waiting on an error agentbox
  *  retries by itself is `retrying`, drawn as working — red or amber there
  *  read as yours to fix. */
-export type ShownStatus = SessionStatus | "retrying";
+export type ShownStatus = SessionStatus | "retrying" | "paused";
 
-export function shownStatus(s: Pick<Session, "status" | "autoResume">): ShownStatus {
-  return retrying(s) ? "retrying" : s.status;
+export function shownStatus(s: Pick<Session, "status" | "autoResume" | "paused">): ShownStatus {
+  return s.paused ? "paused" : retrying(s) ? "retrying" : s.status;
 }
 
 /** The fallback order when two rows carry the same server rank. */

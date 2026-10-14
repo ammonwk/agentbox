@@ -96,6 +96,7 @@ describe("a schedule that keeps to one session", () => {
         if (!s) throw new Error(`no session ${id}`);
         return s;
       },
+      activityAllowed: () => true,
       spawn: async () => {
         // A message wakes the old one while the new one starts.
         sessions.set("old", session("old", { status: "running" }));

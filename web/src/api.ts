@@ -200,6 +200,8 @@ export function healthRows(h: Health): { name: string; state: DepState; detail: 
 }
 
 export const api = {
+  startCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup"),
+  resumeCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup/resume"),
   /** The board's open sessions and cold state; the closed ones page from `closed`. */
   state: () => get<AppState>("/api/state?open=1"),
   /** Opening prompts you wrote, newest first, for the new-session box's ↑. */

@@ -10,19 +10,20 @@ import { useDismiss } from "./newsession/popover";
  *  work sessions, by agent (lib/manualorder.ts). */
 const AGENT_ORDER_KEY = "agentbox.agentOrder";
 const THREAD_ORDER_KEY = "agentbox.agentSessionOrder";
-type AgentActivity = "working" | "approval" | "waiting" | "idle";
+type AgentActivity = "working" | "approval" | "waiting" | "idle" | "paused";
 export type AgentOption = { id: string; name: string; detail: string; role: string; creator?: boolean; avatar?: string | null; activity: AgentActivity };
 export const agentName = (name: string) => name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 export function agentActivity(enabled: boolean, statuses: readonly string[]): AgentActivity {
+  if (statuses.includes("paused")) return "paused";
   if (statuses.some((s) => s === "blocked" || s === "uncertain")) return "approval";
   if (statuses.some((s) => ["running", "retrying", "starting", "queued"].includes(s))) return "working";
-  if (!enabled) return "idle";
+  if (!enabled) return "paused";
   return statuses.includes("waiting") ? "waiting" : "idle";
 }
 function ActivityIcon({ activity }: { activity: AgentActivity }) {
-  const label = { working: "Active", approval: "Needs attention", waiting: "Waiting for you", idle: "Inactive" }[activity];
+  const label = { working: "Active", approval: "Needs attention", waiting: "Waiting for you", idle: "Inactive", paused: "Paused" }[activity];
   return <span className="rail-state" data-state={activity} role="img" aria-label={label} title={label}>
-    {activity === "working" ? <Spinner size={12} /> : activity === "approval" ? <Icon.alert size={13} /> : activity === "waiting" ? <Icon.clock size={13} /> : <span className="st-dot st-closed" />}
+    {activity === "working" ? <Spinner size={12} /> : activity === "approval" ? <Icon.alert size={13} /> : activity === "waiting" ? <Icon.clock size={13} /> : activity === "paused" ? <Icon.pause size={13} /> : <span className="st-dot st-closed" />}
   </span>;
 }
 
