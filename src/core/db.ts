@@ -674,8 +674,8 @@ export function attachDiscoveredSpawn(pendingId: string, discoveredId: string, n
       discovered.startedAt < pending.createdAt - 10_000) return false;
   try {
     getDb().transaction(() => {
-      updateSessionRecord(discovered.id, { agentSessionId: null, transcriptPath: null, facts: null, archivedAt: now, successor: pending.id });
-      updateSessionRecord(pending.id, { agentSessionId: discovered.agentSessionId, transcriptPath: discovered.transcriptPath, facts: discovered.facts, lastActivityAt: discovered.lastActivityAt });
+      updateSessionRecord(discovered.id, { agentSessionId: null, transcriptPath: null, facts: null, archivedAt: now, successor: pending.id, pinOrder: null, bookmarkedAt: null });
+      updateSessionRecord(pending.id, { agentSessionId: discovered.agentSessionId, transcriptPath: discovered.transcriptPath, facts: discovered.facts, lastActivityAt: discovered.lastActivityAt, pinOrder: pending.pinOrder ?? discovered.pinOrder, bookmarkedAt: pending.bookmarkedAt ?? discovered.bookmarkedAt });
       for (const child of listSessionRecords()) if (child.parent === discovered.id && !child.parentByHand) updateSessionRecord(child.id, { parent: pending.id });
     })();
   } catch (e) {

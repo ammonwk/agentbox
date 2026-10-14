@@ -136,8 +136,8 @@ describe("a schedule that keeps to one session", () => {
 test("late pane discovery attaches only the proven new provider identity, preserving an alias", () => {
   const now = NOW + 20 * 60_000;
   insertAccount({id:"own-account",provider:"codex",label:"Fixture",email:null,plan:null,home:dir,isDefault:true,enabled:true,createdAt:NOW});
-  const pending = { ...record("late-spawn"), provider: "codex" as const, tmux: "ab-late-spawn", accountId: "own-account", cwd: "/tmp/own-writer" };
-  const discovered = { ...pending, id: "late-discovery", origin: "external" as const, tmux: null, agentSessionId: "provider-own", createdAt: NOW + 1000, transcriptPath: "/tmp/provider-own.jsonl" };
+  const pending = { ...record("late-spawn"), provider: "codex" as const, tmux: "ab-late-spawn", accountId: "own-account", cwd: "/tmp/own-writer", pinOrder: 3 };
+  const discovered = { ...pending, id: "late-discovery", origin: "external" as const, tmux: null, agentSessionId: "provider-own", createdAt: NOW + 1000, transcriptPath: "/tmp/provider-own.jsonl", pinOrder: 9, bookmarkedAt: NOW + 1000 };
   insertSessionRecord(pending); insertSessionRecord(discovered);
   const proc = { pid: 345, provider: "codex", accountId: "other-account", agentSessionId: "provider-own", cwd: pending.cwd, startedAt: NOW + 1000 };
   const fleet: any = Object.create(Fleet.prototype);
@@ -156,6 +156,10 @@ test("late pane discovery attaches only the proven new provider identity, preser
   fleet.matchPendingSpawns(now);
   expect(getSessionRecord(pending.id)!.agentSessionId).toBe("provider-own");
   expect(getSessionRecord(pending.id)!.transcriptPath).toBe(discovered.transcriptPath);
+  expect(getSessionRecord(pending.id)!.pinOrder).toBe(3);
+  expect(getSessionRecord(pending.id)!.bookmarkedAt).toBe(discovered.bookmarkedAt);
+  expect(getSessionRecord(discovered.id)!.pinOrder).toBeNull();
+  expect(getSessionRecord(discovered.id)!.bookmarkedAt).toBeNull();
   expect(getSessionRecord(discovered.id)!.successor).toBe(pending.id);
   expect(getSessionRecord(discovered.id)!.archivedAt).toBe(now);
   expect(getSessionRecord(discovered.id)!.agentSessionId).toBeNull();
