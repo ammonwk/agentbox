@@ -553,7 +553,7 @@ function UserRow({ ev, queued, showTime = true, recommendations = [], delivery }
     const images = ev.images ? `${ev.images} image${ev.images === 1 ? "" : "s"}` : null;
     return (
       <Bubble id={ev.id} at={ev.at} showTime={showTime} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : delivery ?? null].filter(Boolean).join(" · ")}
-        title={delivery === "Read" ? "The agent has started on this message" : delivery === "Sent" ? "Delivered; the agent has not started on it yet" : undefined} copy={sent.text}>
+        title={delivery === "Read" ? "The agent has started on this message" : delivery === "Sent" ? "Delivered; waiting for activity from the agent" : undefined} copy={sent.text}>
         {reply && <div className="tl-reply-preview" aria-label="Reply to recommendation">
           <span className="faint">Replied to</span>
           <strong>{reply.title}</strong>

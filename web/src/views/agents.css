@@ -677,3 +677,5 @@
 .agent-enabled { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; }
 .agent-space-head nav .agent-enabled .toggle { padding: 0 4px; color: var(--muted); font-size: 13px; }
 .agent-enabled .error { font-size: 12px; }
+
+.agent-about-controls { border: 0; padding: 0; margin: 0; min-width: 0; }

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { AgentStore } from "./store";
 import { AgentConversations, CHECKPOINT_MARK, type LocalAgent } from "./conversation";
 import { AgentWorks } from "./work";
-import type { AgentsRuntime } from "./runtime";
+import { AgentsRuntime } from "./runtime";
 import { closeDb, getSessionRecord, insertSessionRecord, updateSessionRecord } from "../db";
 
 let home: string, previous: string | undefined, store: AgentStore, conversations: AgentConversations;
@@ -81,6 +81,7 @@ beforeEach(() => {
   runtime = { store, fleet, cards: { add: () => {}, list: () => [], close: () => {} }, coordinators: () => [] } as unknown as AgentsRuntime;
   Object.assign(runtime, { works: new AgentWorks(runtime) });
   conversations = new AgentConversations(runtime);
+  Object.assign(runtime, { conversations, sessionOwnership: AgentsRuntime.prototype.sessionOwnership.bind(runtime) });
   conversations.proofMs = 900;
   conversations.installed = async () => true;
   conversations.local();

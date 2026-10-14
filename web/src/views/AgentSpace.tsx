@@ -179,8 +179,8 @@ export function LocalAgentSpace({
   const options = (agents.data ?? []).filter((a) => !project || a.repo === project).map((a): AgentOption => {
     const linked = new Set([a.session, ...a.previous, ...(a.workSessions ?? [])]);
     return { id: a.id, name: a.name, role: a.role, creator: a.capability === "creator", avatar: localAvatarUrl(a),
-      activity: agentActivity(a.enabled, state.sessions.filter((s) => linked.has(s.id) || s.agentOwner === a.id).map(shownStatus)),
-      detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.enabled ? "Local" : "Paused"}` };
+      activity: agentActivity(a.enabled && !a.unavailable, state.sessions.filter((s) => linked.has(s.id) || s.agentOwner === a.id).map(shownStatus)),
+      detail: `${state.repos.find((r) => r.id === a.repo)?.displayName ?? (a.repo ? "Unregistered project" : "General")} · ${a.unavailable ? "History" : a.enabled ? "Local" : "Paused"}` };
   });
   const selected = agents.data?.find((a) => a.id === id);
   useEffect(() => {
@@ -251,7 +251,9 @@ export function LocalAgentSpace({
       name={agentName(selected.name)}
       conversationSession={selected.session}
       status={
-        !selected.enabled
+        selected.unavailable
+          ? "History"
+          : !selected.enabled
           ? "Paused"
           : session?.status === "running"
             ? "Working"
@@ -260,11 +262,13 @@ export function LocalAgentSpace({
               : "Ready to begin"
       }
       transport={transport}
-      disabled={!selected.enabled}
-      control={<EnabledToggle agent={selected} live={state.sessions.some((s) => s.host !== "none" && (s.agentOwner === selected.id || [selected.session, ...(selected.workSessions ?? [])].includes(s.id)))} onChange={agents.reload} />}
+      disabled={!selected.enabled || !!selected.unavailable}
+      control={selected.unavailable ? <span className="muted" title={selected.unavailable}>History</span> : <EnabledToggle agent={selected} live={state.sessions.some((s) => s.host !== "none" && (s.agentOwner === selected.id || [selected.session, ...(selected.workSessions ?? [])].includes(s.id)))} onChange={agents.reload} />}
       mayDecide={() => true}
       about={
         <div className="agent-about">
+          {selected.unavailable && <p role="status">{selected.unavailable}</p>}
+          <fieldset className="agent-about-controls" disabled={!!selected.unavailable}>
           <AgentPictureEditor agent={selected} onChange={agents.reload} />
           <h3>{selected.role}</h3>
           <p className="hint">Manual chat · {selected.createdBy ?? "Local operator"}{selected.automation ? ` · Requested automation (not configured): ${selected.automation}` : ""}</p>
@@ -360,6 +364,7 @@ export function LocalAgentSpace({
           </form>
           <AgentMemory key={selected.session ?? "none"} agent={selected} />
           <a href="#/team">Connect a shared workspace</a>
+          </fieldset>
         </div>
       }
     />
@@ -807,7 +812,7 @@ function AgentSpace({
                 presence={presence}
                 echoes={echoes.filter((x) => (x.thread === target || (x.thread === "new" && target === ongoing)) && !events.some((e) => e.kind === "user" && e.at >= x.at - 60_000 && e.text.includes(x.text.trim())))
                   // Delivered mid-turn and held by the agent: its queue says so, not a guess.
-                  .map((x) => x.note === "Sent" && presence?.queued.some((q) => q.includes(x.text.trim())) ? { ...x, note: "Queued" } : x)}
+                  .map((x, _, pending) => x.note === "Sent" && presence?.queued.filter((q) => q.trim() === x.text.trim()).length === 1 && pending.filter((p) => p.text.trim() === x.text.trim()).length === 1 ? { ...x, note: "Queued" } : x)}
               />
               {creations.data?.filter((d) => d.run === selected?.run).map((d) => <AgentCreationCard key={`${d.id}:${d.revision}:${d.created}`} draft={d} scope={options.find((a) => a.id === id)?.detail ?? "Current project"} edit={transport.editCreation} reload={creations.reload} />)}
               {open.filter((p) => p.run_id === selected?.run).slice(0, 4).map(card)}

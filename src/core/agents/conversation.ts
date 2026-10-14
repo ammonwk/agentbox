@@ -54,6 +54,8 @@ export type LocalAgent = {
   workSessions?: string[];
   enabled: boolean;
   capability?: "creator";
+  /** Derived in the local directory; an older out-of-project Jupiter is history only. */
+  unavailable?: string;
   createdBy?: string;
   creation?: string;
   automation?: string;
@@ -119,12 +121,13 @@ const ACTING = new Set(["assistant", "thinking", "tool"]);
  *  at its own timestamp). A person's newest message is read once the agent
  *  has written anything after it; never by time or by an unrelated turn. */
 export function presenceOf(events: readonly TimelineEvent[], status: string, queued: readonly { text: string }[]): ChatPresence {
-  let message: string | null = null, read = false, turn: string | null = null;
+  let message: string | null = null, read = false, turn: string | null = null, awaiting = false;
   for (const e of events) {
     if (e.kind === "user") {
       turn = e.text;
-      if (!hiddenPrompt(e.text) && !readSent(e.text).agent) { message = e.id; read = false; }
-    } else if (ACTING.has(e.kind)) read = true;
+      awaiting = !hiddenPrompt(e.text) && !isKeepWarmNote(e.text) && !readSent(e.text).agent;
+      if (awaiting) { message = e.id; read = false; }
+    } else if (awaiting && ACTING.has(e.kind)) read = true;
   }
   // A turn the fleet started for itself (a handoff request, a keep-warm) is not shown as work.
   const working = status === "running" && !(turn !== null && (hiddenPrompt(turn) || isKeepWarmNote(turn)));
@@ -144,6 +147,7 @@ const safeText = (s: string) =>
       "[private key removed]",
     );
 const localId = (name: string, project?: string) => `local-${name.toLowerCase()}${project ? `-project-${encodeURIComponent(project)}` : ""}`;
+const isJupiter = (a: LocalAgent) => a.id === localId("Jupiter", a.project);
 const JUPITER = { id: "jupiter", name: "Jupiter", definition: { role: JUPITER_ROLE, instructions: JUPITER_INSTRUCTIONS } };
 /** Agentbox itself: the checkout this server runs from (a linked worktree
  *  resolves to its main checkout), or a clone of the repository `/help`
@@ -160,7 +164,7 @@ const jupiterIn = (project: string | null | undefined) => {
 /** What a template's local instance may do without asking, said in its
  *  first prompt. Local only: shared definitions keep their own policies. */
 const LOCAL_AUTHORITY: Record<string, string> = {
-  vulcan: "Authority on this machine: you decide whether an issue is a routine fix. Without asking, investigate and reproduce it, prepare a scoped fix in an isolated worktree, commit it on its own branch and validate it there. Then report the result with its evidence; these steps need no approval. Ask through Review before an action that publishes, contacts a person, or is destructive or hard to reverse: a push, a PR, an issue or review comment, a merge, integration into a checkout that other sessions edit, a deployment or restart of a running service, deletion of work that is not yours, credentials access, or anything that a stored preference or repository rule reserves for approval. Make one request cover the remaining sequence (for example integrate, rebuild and verify), not one request for each step. When you are not sure that an action is routine, ask.",
+  vulcan: "Within the user's requested scope, you decide whether an issue is a routine fix. Existing authorization persists: do not request permission again for an action the user has already authorized. Without asking, investigate and reproduce it, prepare a scoped fix in an isolated worktree, commit it on its own branch and validate it there. Then report the result with its evidence; these steps need no approval. When not already authorized by the user, ask through Review before an action that publishes, contacts a person, or is destructive or hard to reverse: a push, a PR, an issue or review comment, a merge, integration into a checkout that other sessions edit, a deployment or restart of a running service, deletion of work that is not yours, credentials access, or anything that a stored preference or repository rule reserves for approval. Make one request cover the remaining sequence (for example integrate, rebuild and verify), not one request for each step. Use your judgment for routine implementation choices; ask only for a material decision beyond the authorized scope.",
 };
 const authorityOf = (a: LocalAgent) => LOCAL_AUTHORITY[AGENT_TEMPLATES.find((t) => a.id === localId(t.name, a.project))?.id ?? ""];
 export class AgentConversations {
@@ -213,8 +217,8 @@ export class AgentConversations {
       db.query("SELECT body FROM local_agents").all() as { body: string }[]
     ).map((x) => JSON.parse(x.body) as LocalAgent)
       // A Jupiter made elsewhere before this rule stays only while it holds a conversation.
-      .filter((a) => a.capability !== "creator" || a.session || a.previous.length || a.rollover || jupiterIn(a.repo))
-      .map((a) => ({...a, workSessions: this.runtime.works.list().filter(w=>w.agent.id===a.id).map(w=>w.session)}));
+      .filter((a) => !isJupiter(a) || a.session || a.previous.length || a.rollover || jupiterIn(a.repo))
+      .map((a) => ({...a, ...(isJupiter(a) && !jupiterIn(a.repo) ? { unavailable: "Jupiter is available in the Agentbox project. This conversation is kept as history." } : {}), workSessions: this.runtime.works.list().filter(w=>w.agent.id===a.id).map(w=>w.session)}));
   }
   creations(creator: string): CreationDraft[] {
     return (this.db.query("SELECT body FROM local_creations WHERE creator=? ORDER BY rowid DESC LIMIT 100").all(creator) as {body: string}[]).map((r) => CreationDraft.parse(JSON.parse(r.body)));
@@ -227,7 +231,7 @@ export class AgentConversations {
       if (spec.provider === "auto") throw new FleetError(400, "Shared agents run on their execution host's configured provider; name codex, claude or muse");
       return this.runtime.api().installation.agentCall("inst_agent_creation_draft", { p_run: run.id, p_fence: run.fence, p_id: request, p_spec: spec }, CreationDraft);
     }
-    if (a.capability !== "creator" || !a.enabled || !caller || caller !== a.session) throw new FleetError(403, "Only the current creator session can propose agents");
+    if (a.unavailable || a.capability !== "creator" || !a.enabled || !caller || caller !== a.session) throw new FleetError(403, "Only the current creator session can propose agents");
     const draft: CreationDraft = { id: request, creator: a.id, run: caller, revision: 1, spec, created: null };
     const old = this.db.query("SELECT body FROM local_creations WHERE id=?").get(request) as {body: string} | null;
     if (old) {
@@ -242,7 +246,7 @@ export class AgentConversations {
     const spec = CreationSpec.parse(input);
     return this.db.transaction(() => {
       const a = this.local().find((a) => a.id === creator), draft = this.creations(creator).find((d) => d.id === id);
-      if (!a || a.capability !== "creator" || a.repo !== repo || !draft) throw new FleetError(403, "Draft does not belong to this creator/project");
+      if (!a || a.unavailable || a.capability !== "creator" || a.repo !== repo || !draft) throw new FleetError(403, "Draft does not belong to this creator/project");
       if (draft.revision !== revision || JSON.stringify(draft.spec) !== JSON.stringify(spec) && create) throw new FleetError(409, "Draft changed; save edits and review the current version");
       if (draft.created) { if (!create) throw new FleetError(409, "Already created"); return draft; }
       if (!a.enabled || a.session !== draft.run) throw new FleetError(409, "Creator conversation replaced; request a new proposal");
@@ -292,6 +296,7 @@ export class AgentConversations {
         .parse(input);
       const a = this.local().find((x) => x.id === id);
       if (!a) throw new FleetError(404, "Agent not found");
+      if (a.unavailable && p.enabled) throw new FleetError(403, a.unavailable);
       if (a.project && p.repo !== a.project)
         throw new FleetError(409, "Project agents keep separate conversations; switch projects to use another instance");
       if (p.repo && !getRepoById(p.repo))
@@ -361,6 +366,7 @@ export class AgentConversations {
     this.busy.add(id);
     try {
       const a = this.local().find((x) => x.id === id);
+      if (a?.unavailable) throw new FleetError(403, a.unavailable);
       if (!a || !a.enabled) throw new FleetError(409, "Agent is paused");
       if (a.rollover) throw new FleetError(409, "This conversation is being continued in a fresh session; send again in a moment");
       // A conversation replaced from its handoff continues in its successor.
@@ -1195,7 +1201,7 @@ export class AgentConversations {
         canRestore: !!local && s?.host === "none" && Date.now() < s.cacheWarmUntil &&
           (x.kind === "work" ? this.runtime.works.restorable(agent, x.id) : local.enabled && local.session === x.id),
         status, at, active: status !== "closed" && (status === "running" || Date.now() - at < 3 * 60 * 60_000),
-        writable: x.current && status !== "closed", successor: x.successor };
+        writable: x.current && status !== "closed" && !(local && isJupiter(local) && !jupiterIn(local.repo)), successor: x.successor };
     }).sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
   }
   async page(agent: string, input: unknown): Promise<ConversationPage> {

@@ -45,7 +45,7 @@ await Bun.write(join(files, "fake.png"), "not an image");
 const ref = join(dir, "alpha");
 mkdirSync(ref);
 Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: ref });
-db.insertRepo({ id: "alpha", kind: "local", ref, checkoutRoot: ref, displayName: "Alpha", fullName: "fixture/alpha", defaultBranch: "main", addedAt: Date.now(), worktreeDefault: false, setup: { copy: [], run: "" } } as any);
+db.insertRepo({ id: "alpha", kind: "local", ref, checkoutRoot: ref, displayName: "Alpha", fullName: "ammonwk/agentbox", defaultBranch: "main", addedAt: Date.now(), worktreeDefault: false, setup: { copy: [], run: "" } } as any);
 
 const base: any = await mockServer.request("GET", "/api/state", null);
 const now = Date.now();
