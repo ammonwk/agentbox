@@ -119,7 +119,7 @@ export function SessionView({
   const list = useListState();
   const scope = useScope();
   const projectData = useProjectData();
-  const { filter, sort, view, kids, quiet, reveal, toggleKids } = list;
+  const { filter, sort, view, kids, quiet, reveal, toggleKids, ranks } = list;
   // Moves a session to Inactive once its last activity is 3 hours old, with no new state frame.
   const now = useNow(60_000);
   const closing = useClosing().pending;
@@ -152,10 +152,11 @@ export function SessionView({
         tabs[view],
         { open: (x, auto) => shownBy(kids, x, auto), quiet: (x, auto) => shownBy(quiet, x, auto), keep, now },
         sort,
+        ranks,
       ),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
     };
-  }, [visible.sessions, keep, filter, sort, view, now, kids, quiet, closing]);
+  }, [visible.sessions, keep, filter, sort, ranks, view, now, kids, quiet, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
