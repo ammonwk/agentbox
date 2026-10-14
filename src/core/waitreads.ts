@@ -11,6 +11,7 @@
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { WaitSpec } from "./types";
 
 type PrSpec = Extract<WaitSpec, { kind: "pr" }>;
@@ -26,6 +27,8 @@ export class Held extends Error {
 
 export interface Check {
   name: string;
+  /** A stable identity for this run of this check, so a re-run counts as fresh. */
+  key?: string;
   done: boolean;
   /** Concluded without failing: success, neutral or skipped. */
   ok: boolean;
@@ -39,6 +42,10 @@ export interface PrRead {
   base: string;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   checks: Check[];
+  /** Every check could not be read: the rest of the read still stands. */
+  checksError?: Error;
+  /** A digest of this PR's reviews and comments, never their text; an error when they could not be read. */
+  feedback?: { fingerprint: string; count: number } | Error;
 }
 
 export interface RunRead {
@@ -84,6 +91,9 @@ const OK = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
 interface RawContext {
   __typename: string;
+  id?: string;
+  completedAt?: string;
+  createdAt?: string;
   name?: string;
   status?: string;
   conclusion?: string | null;
@@ -94,10 +104,10 @@ interface RawContext {
 function check(c: RawContext): Check {
   if (c.__typename === "CheckRun") {
     const done = c.status === "COMPLETED";
-    return { name: c.name ?? "?", done, ok: done && OK.has(c.conclusion ?? ""), how: (done ? (c.conclusion ?? "no conclusion") : (c.status ?? "queued")).toLowerCase() };
+    return { name: c.name ?? "?", key: `${c.id}:${c.completedAt ?? ""}:${c.conclusion ?? ""}`, done, ok: done && OK.has(c.conclusion ?? ""), how: (done ? (c.conclusion ?? "no conclusion") : (c.status ?? "queued")).toLowerCase() };
   }
   const done = c.state !== "PENDING" && c.state !== "EXPECTED";
-  return { name: c.context ?? "?", done, ok: c.state === "SUCCESS", how: (c.state ?? "pending").toLowerCase() };
+  return { name: c.context ?? "?", key: `${c.id}:${c.createdAt ?? ""}:${c.state ?? ""}`, done, ok: c.state === "SUCCESS", how: (c.state ?? "pending").toLowerCase() };
 }
 
 export const prKey = (s: Pick<PrSpec, "repo" | "number">): string => `${s.repo}#${s.number}`;
@@ -106,9 +116,9 @@ export const prKey = (s: Pick<PrSpec, "repo" | "number">): string => `${s.repo}#
  * Every pull request asked about, in one request: each one's read, or why it
  * could not be read. Throws when GitHub answered nothing usable at all.
  */
-export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<Map<string, PrRead | Error>> {
+export async function readPrs(prs: (Pick<PrSpec, "repo" | "number"> & { feedback?: boolean })[]): Promise<Map<string, PrRead | Error>> {
   const repos = [...new Set(prs.map((p) => p.repo))];
-  const fields = `state headRefOid baseRefName mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
+  const fields = `state headRefOid baseRefName mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{id name status conclusion completedAt} ... on StatusContext{id context state createdAt}}}}}}}`;
   const query = `{ ${repos
     .map((repo, i) => {
       const [owner, name] = repo.split("/");
@@ -139,14 +149,41 @@ export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<M
         continue;
       }
       const contexts = commit?.statusCheckRollup?.contexts;
-      if (contexts && contexts.totalCount > contexts.nodes.length) {
-        out.set(prKey(p), new Error(`${prKey(p)} has ${contexts.totalCount} checks on its head, more than one look reads (${contexts.nodes.length})`));
-        continue;
-      }
-      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: node.baseRefName, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check) });
+      const checksError = contexts && contexts.totalCount > contexts.nodes.length
+        ? new Error(`${prKey(p)} has ${contexts.totalCount} checks on its head, more than one look reads (${contexts.nodes.length})`) : undefined;
+      // Incomplete checks cannot establish readiness, but must not hide a
+      // separately complete review-feedback read while a large CI matrix runs.
+      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: node.baseRefName, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check), ...(checksError ? { checksError } : {}) });
     }
   });
+  const feedback = [...new Map(prs.filter(p => p.feedback).map(p => [prKey(p), p])).values()];
+  await Promise.all(feedback.map(async p => {
+    const read = out.get(prKey(p));
+    if (!read || read instanceof Error) return;
+    try { read.feedback = await readPrFeedback(p.repo, p.number); }
+    catch (e) { read.feedback = e instanceof Error ? e : new Error(String(e)); }
+  }));
   return out;
+}
+
+/** Review text stays on GitHub. Persist only a digest so edits and new replies
+ * wake the owner once, including comments inside previously resolved threads. */
+export async function readPrFeedback(repo: string, number: number, request: (path: string) => Promise<Response> = github): Promise<{ fingerprint: string; count: number }> {
+  const surfaces = [`pulls/${number}/reviews`, `pulls/${number}/comments`, `issues/${number}/comments`];
+  const rows = await Promise.all(surfaces.map(async surface => {
+    const marks: string[] = [];
+    for (let page = 1; page <= 10; page++) {
+      const res = await request(`/repos/${repo}/${surface}?per_page=100&page=${page}`);
+      if (!res.ok) throw new Error(`GitHub answered ${res.status} reading PR feedback`);
+      const data = await res.json() as { id: number; state?: string; submitted_at?: string; updated_at?: string; body?: string }[];
+      if (!Array.isArray(data) || data.some(r => !Number.isSafeInteger(r?.id))) throw new Error("GitHub returned invalid PR feedback");
+      for (const r of data) if (r.state !== "PENDING") marks.push(createHash("sha256").update(JSON.stringify([surface, r.id, r.state, r.submitted_at, r.updated_at, r.body])).digest("hex"));
+      if (!res.headers.get("link")?.includes('rel="next"')) return marks;
+    }
+    throw new Error("PR feedback exceeds 1000 records on one surface; read it manually before rearming");
+  }));
+  const marks = rows.flat().sort();
+  return { fingerprint: createHash("sha256").update(JSON.stringify(marks)).digest("hex"), count: marks.length };
 }
 
 const runs = new Map<string, { etag: string | null; run: RunRead }>();

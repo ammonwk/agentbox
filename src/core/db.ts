@@ -721,9 +721,9 @@ const WAIT_COLUMNS = {
   memo: "memo",
 } as const;
 
-export function insertWait(w: Pick<Wait, "sessionId" | "spec" | "createdAt" | "deadline">): Wait {
-  const { lastInsertRowid } = getDb().run("INSERT INTO waits (session_id, spec, created_at, deadline) VALUES (?,?,?,?)", [
-    w.sessionId, JSON.stringify(w.spec), w.createdAt, w.deadline,
+export function insertWait(w: Pick<Wait, "sessionId" | "spec" | "createdAt" | "deadline"> & { memo?: Wait["memo"] }): Wait {
+  const { lastInsertRowid } = getDb().run("INSERT INTO waits (session_id, spec, created_at, deadline, memo) VALUES (?,?,?,?,?)", [
+    w.sessionId, JSON.stringify(w.spec), w.createdAt, w.deadline, JSON.stringify(w.memo ?? {}),
   ]);
   return getWait(Number(lastInsertRowid))!;
 }

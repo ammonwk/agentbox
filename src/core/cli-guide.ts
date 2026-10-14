@@ -44,6 +44,11 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
                                     # those named (a name takes its shards too: "API Tests
                                     # (shard 1/3)"). A check that fails ends it at once and
                                     # is named
+    agentbox wait pr <n> --feedback --head <sha>
+                                    # new/edited review or comment, failed check, or moved head;
+                                    # independent of queued CI. Read the actual verdict now,
+                                    # then rearm: a durable cursor skips observed feedback.
+                                    # Keep a separate full-check wait; neither is merge permission.
     agentbox wait pr <n> --merged [--head <sha>]
                                     # its merge (or its closing); with --head, also its
                                     # head moving off that commit: the wait for a PR
