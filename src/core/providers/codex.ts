@@ -541,17 +541,25 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
 
 /** Of the threads a process is proven to hold, its own session: not a
  *  subagent it spawned, and the newest (after `/new`, the old thread may
- *  still be listed). Thread ids are v7 uuids, so they sort by creation. */
-function pickThread(ids: string[], home: string): string | null {
+ *  still be listed). Thread ids are v7 uuids, so they sort by creation.
+ *  A thread with a rollout goes first: `codex exec` (0.156) also holds the
+ *  writer lock of a side thread it never writes a rollout for, created just
+ *  after its own, and that id matches no session. */
+export function pickThread(
+  ids: string[],
+  home: string,
+  find: (id: string) => string | null = (id) => indexFor(home).find(id),
+  lineage: (path: string) => Pick<CodexLineage, "isSubagent"> | null = lineageOf,
+): string | null {
   if (!ids.length) return null;
-  const ix = indexFor(home);
-  const own = ids.filter((id) => {
-    const path = ix.find(id);
-    const l = path ? lineageOf(path) : null;
-    return !l?.isSubagent;
+  const paths = new Map(ids.map((id) => [id, find(id)]));
+  const own = [...paths.keys()].filter((id) => {
+    const path = paths.get(id);
+    return !(path && lineage(path)?.isSubagent);
   });
   if (!own.length) return null;
-  return own.sort().reverse()[0]!;
+  const written = own.filter((id) => paths.get(id));
+  return (written.length ? written : own).sort().reverse()[0]!;
 }
 
 export interface CwdCandidate {

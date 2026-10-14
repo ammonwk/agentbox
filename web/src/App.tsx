@@ -25,6 +25,7 @@ import { Review } from "./views/Review";
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
 // heaviest thing in the bundle.)
+const Team = lazy(() => import("./views/Team").then((m) => ({ default: m.Team })));
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
 const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice })));
 
@@ -67,6 +68,7 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
   { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
   { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
+  { id: "team", label: "Team", icon: Icon.link, to: { page: "team" } },
   { id: "mcps", label: "MCPs", icon: Icon.plugs, to: { page: "mcps" } },
   { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
 ];
@@ -78,6 +80,7 @@ const PAGE_TITLE: Record<NavId, string> = {
   accounts: "Accounts",
   skills: "Skills",
   mcps: "MCPs",
+  team: "Team",
   settings: "Settings",
 };
 
@@ -85,6 +88,9 @@ export function App() {
   useKeyboardNavigation();
   const { state } = useAppState();
   const [route, navigate] = useRoute();
+  useEffect(() => {
+    if (new URLSearchParams(location.search).has("cloud") && route.page !== "team") navigate({ page: "team" }, true);
+  }, []);
   const theme = useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
   const nav = navOf(route);
@@ -275,6 +281,8 @@ export function App() {
               <Review state={state} />
             ) : route.page === "skills" ? (
               <Skills skills={state.skills} />
+            ) : route.page === "team" ? (
+              <Suspense fallback={<Empty title="Loading…" />}><Team state={state} /></Suspense>
             ) : route.page === "mcps" ? (
               <Mcps />
             ) : (
@@ -325,7 +333,7 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, settings: 0 };
+  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
@@ -336,6 +344,7 @@ function countsOf(state: AppState | null): Record<NavId, number> {
     accounts: Math.max(loginsOpen, authBad),
     skills: 0,
     mcps: 0,
+    team: 0,
     settings: 0,
   };
 }

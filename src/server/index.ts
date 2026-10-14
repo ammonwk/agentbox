@@ -31,7 +31,6 @@ import { diffOf } from "../core/diff";
 import { grepInWorker } from "../core/grep";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
-import { agentTimeline, sessionWork } from "../core/work";
 import { McpError, addServer, importServer, readRegistry, removeServer, setEnabled, updateServer } from "../core/mcp";
 import { checkServer, discover, foundDefinition, publicFound, reachAll, viewOf } from "../core/mcp-reach";
 import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
@@ -49,13 +48,15 @@ import { CARD_KINDS, Cards } from "../core/cards";
 import type { CardKind, CardState, McpServerInput, McpState } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
-import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr } from "../core/prclaims";
+import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
 import { repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
+import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
+import { authenticatedSession } from "../core/session-authority";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { VoiceHub } from "../voice/hub";
 import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
@@ -75,6 +76,8 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
+import { CloudBridge } from "../core/cloud/bridge";
+import { cloudHttpError, cloudRoutes } from "./cloud";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -160,6 +163,8 @@ setMetricsSource(() => fleet.sessions());
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
+/** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
+export const cloud = new CloudBridge(fleet, VERSION);
 function cardId(raw: string): number {
   if (!/^\d{1,9}$/.test(raw)) throw new HttpError(400, "a card's id is a number");
   return Number(raw);
@@ -654,6 +659,8 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
+  const c = cloudHttpError(e);
+  if (c) return c;
   if (e instanceof DesktopError) return new HttpError(e.status, e.message);
   if (e instanceof FleetError || e instanceof AccountError || e instanceof McpError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
@@ -768,6 +775,24 @@ const router = new Router(mapError)
     } catch (e) {
       if (e instanceof PrHeld) throw new HttpError(409, e.message);
       throw e;
+    }
+  })
+  .add("POST", "/api/prs/transfer", async ({ req }) => {
+    const b = await readBody(req);
+    // The caller's session capability (src/core/session-authority.ts), not a
+    // process ID or --for. It keeps a session from handing over another's PR
+    // by mistake; a process of the same user that sets out to can read it.
+    const actor = authenticatedSession(req);
+    if (!actor) throw new HttpError(403, "run pr transfer inside the session that currently holds the PR");
+    const expected = requireString(b, "expected");
+    const to = requireString(b, "to");
+    const pr = prNamed(b, actor);
+    try {
+      const claim = transferPr(prClaimsNow(), fleet.sessions(), pr.repo, pr.number, actor, expected, to, Date.now());
+      scheduleCold();
+      return json(claim);
+    } catch (e) {
+      throw new HttpError(409, (e as Error).message);
     }
   })
   .add("POST", "/api/prs/release", async ({ req }) => {
@@ -1431,8 +1456,8 @@ const router = new Router(mapError)
     const r = demoteSkill(requireString(b, "name"));
     void refreshSlow();
     return json(r);
-  })
-  .otherwise(({ req, url }) => {
+  });
+cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
     if (found.kind === "notBuilt") return notBuiltPage();
@@ -1654,6 +1679,8 @@ export async function startServer(): Promise<void> {
   scheduler.start();
   waits.start();
   cards.start();
+  // Local first: with no cloud.env this reads nothing and sends nothing.
+  cloud.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
   // sessions and in your own terminals alike, and Go's usage is asked through
   // it (accounts/usage.ts), so it is up from the start.
