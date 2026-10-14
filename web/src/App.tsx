@@ -434,7 +434,7 @@ function UpdateReady() {
     <button
       type="button"
       className="nav-item nav-update"
-      title="agentbox was rebuilt. Reload to run the new version (it reloads by itself next time you leave the page)"
+      title="Update ready. It loads automatically when editing, sending or recording is finished. Click to reload now."
       onClick={() => location.reload()}
     >
       <Icon.refresh />
