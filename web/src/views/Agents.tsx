@@ -13,14 +13,12 @@ import { cloudCall, type HumanCloud } from "../../../src/cloud/client";
 import type { Installation, Member } from "../../../src/cloud/protocol";
 import type { CloudStatus } from "../../../src/core/cloud/bridge";
 import type { AgentsRuntime } from "../../../src/core/agents/runtime";
-import type { ExpertSuggestion } from "../../../src/core/agents/expertise";
 import type { AppState } from "../../../src/core/types";
 import { parseWhen } from "../../../src/core/schedule";
 import { Button, Empty, Field } from "../components";
 import { request } from "../api";
 import {
   humanCloud,
-  signInRedirect,
   useCloudStatus,
   useCloudUser,
   useLoad,
@@ -29,6 +27,8 @@ import { go, selectScope } from "../route";
 import { useScope } from "../lib/projects";
 import "./agents.css";
 import { rememberAgent, landingForAgent, agentActivity } from "./AgentBrowser";
+import { pendingMoves } from "../lib/moveagents";
+import type { LocalAgent } from "../../../src/core/agents/conversation";
 import { LocalAgentSpace, SharedAgentSpace } from "./AgentSpace";
 
 const when = (s?: string | null) =>
@@ -143,14 +143,13 @@ function Directory({
   }, [me.data, workspace]);
   const data = useLoad(async () => {
     if (!workspace) return null;
-    const [board, members, hosts, actions, preferences] = await Promise.all([
+    const [board, members, hosts, actions] = await Promise.all([
       api.board(workspace),
       human.members(workspace),
       human.installations(workspace),
       api.actions(workspace),
-      api.preferences(workspace),
     ]);
-    return { board, members, hosts, actions, preferences };
+    return { board, members, hosts, actions };
   }, [api, workspace]);
   const local = useLoad(() => request<Local>("GET", "/api/agents/runtime"), []);
   useEffect(() => {
@@ -498,22 +497,61 @@ function Directory({
           />
         </>
       )}
-      <a href="#/agents/local-jupiter">Open local Jupiter</a>
-      {data.data && (
-        <details className="card agent-section">
-          <summary>My expertise and contact preferences</summary>
-          <Preferences
-            api={api}
-            human={human}
-            workspace={workspace}
-            user={user}
-            board={data.data.board}
-            preferences={data.data.preferences}
-            run={run}
-            busy={busy}
-          />
-        </details>
+      {data.data && !editing && (
+        <MoveLocalAgents
+          api={api}
+          user={user}
+          workspace={workspace}
+          shared={data.data.board.agents}
+          repos={state.repos}
+          run={run}
+          busy={busy}
+        />
       )}
+    </div>
+  );
+}
+/** Offers to copy this machine's local agents into the workspace, once. */
+function MoveLocalAgents({
+  api,
+  user,
+  workspace,
+  shared,
+  repos,
+  run,
+  busy,
+}: {
+  api: HumanAgents;
+  user: string;
+  workspace: string;
+  shared: SharedAgent[];
+  repos: AppState["repos"];
+  run: Task;
+  busy: boolean;
+}) {
+  const locals = useLoad(() => request<LocalAgent[]>("GET", "/api/agents/local"), []);
+  const moves = useMemo(() => pendingMoves(locals.data ?? [], repos, shared), [locals.data, repos, shared]);
+  if (!workspace || moves.length === 0) return null;
+  return (
+    <div className="card agent-section">
+      <h4>Local agents on this machine</h4>
+      <p className="hint">
+        {moves.length} local agent{moves.length === 1 ? "" : "s"} not in this
+        workspace yet: {moves.map((m) => `${m.name}${m.definition.repos[0] ? ` (${m.definition.repos[0]})` : ""}`).join(", ")}.
+        Each one becomes a paused team agent with you as maintainer. The local
+        agents keep running here.
+      </p>
+      <Button
+        disabled={busy}
+        onClick={() =>
+          void run(async () => {
+            for (const m of moves)
+              await api.save({ workspace, name: m.name, team: true, definition: m.definition, maintainers: [user] });
+          })
+        }
+      >
+        Move them to this workspace
+      </Button>
     </div>
   );
 }
@@ -1665,223 +1703,6 @@ function DefinitionHistory({
           Revision {r.revision} · {person(r.changed_by)} · {when(r.created_at)}
         </p>
       ))}
-    </>
-  );
-}
-function Preferences({
-  api,
-  human,
-  workspace,
-  user,
-  board,
-  preferences,
-  run,
-  busy,
-}: {
-  api: HumanAgents;
-  human: HumanCloud;
-  workspace: string;
-  user: string;
-  board: AgentBoard;
-  preferences: Awaited<ReturnType<HumanAgents["preferences"]>>;
-  run: Task;
-  busy: boolean;
-}) {
-  const own = board.expertise.find((e) => e.user_id === user);
-  const [areas, setAreas] = useState(own?.areas.join(", ") ?? ""),
-    [login, setLogin] = useState(own?.github_login ?? ""),
-    [emails, setEmails] = useState(own?.git_emails.join(", ") ?? ""),
-    [paths, setPaths] = useState(own?.paths.join(", ") ?? "");
-  const [repo, setRepo] = useState("*"),
-    [agent, setAgent] = useState("");
-  const [suggestions, setSuggestions] = useState<{
-    suggestions: ExpertSuggestion[];
-    missing: string[];
-  } | null>(null);
-  return (
-    <>
-      <p className="hint">
-        Expertise helps suggest the right person. It never grants contact
-        permission or reassigns work.
-      </p>
-      <div className="agent-fields">
-        <Field label="My expertise areas">
-          <input
-            className="input"
-            value={areas}
-            onChange={(e) => setAreas(e.target.value)}
-          />
-        </Field>
-        <Field label="GitHub login for history matching">
-          <input
-            className="input"
-            value={login}
-            onChange={(e) => setLogin(e.target.value)}
-          />
-        </Field>
-        <Field label="My commit emails">
-          <input
-            className="input"
-            value={emails}
-            onChange={(e) => setEmails(e.target.value)}
-          />
-        </Field>
-        <Field label="My repository paths">
-          <input
-            className="input"
-            value={paths}
-            onChange={(e) => setPaths(e.target.value)}
-          />
-        </Field>
-      </div>
-      <Button
-        disabled={busy}
-        onClick={() =>
-          void run(() =>
-            api.expertise(workspace, {
-              areas: words(areas),
-              login,
-              emails: words(emails),
-              paths: words(paths),
-            }),
-          )
-        }
-      >
-        Save my expertise
-      </Button>
-      <h4>Bot outreach · off unless you opt in</h4>
-      <p className="hint">
-        Only you can opt your verified GitHub identity in. A matching opt-out
-        overrides opt-in, including already queued actions. This controls
-        agent-initiated contact; GitHub controls its own subscriber
-        notifications.
-      </p>
-      <Button
-        disabled={busy}
-        onClick={() =>
-          void run(async () => {
-            const r = await human.sb.auth.linkIdentity({
-              provider: "github",
-              options: { redirectTo: signInRedirect() },
-            });
-            if (r.error) throw r.error;
-          })
-        }
-      >
-        Link my GitHub identity
-      </Button>
-      <div className="agent-fields">
-        <Field
-          label="Contact repository scope"
-          hint="owner/repo, or * for the workspace"
-        >
-          <input
-            className="input"
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-          />
-        </Field>
-        <Field label="Contact agent scope">
-          <select
-            className="input"
-            value={agent}
-            onChange={(e) => setAgent(e.target.value)}
-          >
-            <option value="">All agents in this workspace</option>
-            {board.agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <div className="agents-buttons">
-        <Button
-          disabled={busy}
-          onClick={() =>
-            void run(() => api.consent(workspace, repo, agent || null, true))
-          }
-        >
-          Allow contact in this scope
-        </Button>
-        <Button
-          disabled={busy}
-          onClick={() =>
-            void run(() => api.consent(workspace, repo, agent || null, false))
-          }
-        >
-          Opt out of this scope
-        </Button>
-      </div>
-      {preferences
-        .filter((p) => p.user_id === user)
-        .map((p) => (
-          <div key={p.id} className="agent-event">
-            <strong>{p.allowed ? "Opted in" : "Opted out"}</strong> ·{" "}
-            {p.github_login} · {p.repo} ·{" "}
-            {board.agents.find((a) => a.id === p.agent_id)?.name ??
-              "All agents"}
-            {p.allowed && (
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void run(() =>
-                    api.consent(workspace, p.repo, p.agent_id, false),
-                  )
-                }
-              >
-                Revoke
-              </Button>
-            )}
-          </div>
-        ))}
-      <details>
-        <summary>Find expertise suggestions with evidence</summary>
-        <p className="hint">
-          Uses the areas and paths entered above, plus this host's available git
-          history and CODEOWNERS. Explicit assignment still wins.
-        </p>
-        <Button
-          disabled={busy || !agent}
-          onClick={() =>
-            void run(async () => {
-              setSuggestions(
-                await request("POST", `/api/agents/${agent}/experts`, {
-                  areas: words(areas),
-                  paths: words(paths),
-                }),
-              );
-            })
-          }
-        >
-          Find suggestions for selected agent
-        </Button>
-        {suggestions?.missing.map((s) => (
-          <p key={s} className="hint">
-            {s}
-          </p>
-        ))}
-        {suggestions?.suggestions.map((s) => (
-          <div className="agent-event" key={s.userId}>
-            <strong>{s.login || s.userId.slice(0, 8)}</strong>
-            <ul>
-              {s.evidence.map((e) => (
-                <li key={e}>{e}</li>
-              ))}
-            </ul>
-            <span className="hint">
-              Contact requires a separate current verified opt-in at dispatch.
-            </span>
-            {s.contact?.map((c) => (
-              <p key={c.repo} className="hint">
-                {c.repo}: {c.allowed ? "Opted in" : "Skip outreach"} ·{" "}
-                {c.reason}
-              </p>
-            ))}
-          </div>
-        ))}
-      </details>
     </>
   );
 }
