@@ -3977,7 +3977,11 @@ const roots = new Map<string, string | null>();
 export function repoRootOf(cwd: string): string | null {
   if (!cwd) return null;
   if (roots.has(cwd)) return roots.get(cwd)!;
-  const root = existsSync(cwd) ? gitRootOf(cwd) : null;
+  let root = existsSync(cwd) ? gitRootOf(cwd) : null;
+  // A worktree's `.git` file holds physical paths, while the main checkout may
+  // have been registered through a symlink (macOS `/var` is `/private/var`).
+  // Without this, such a session's worktree maps to no repository at all.
+  if (root) { try { root = realpathSync(root); } catch { /* removed meanwhile */ } }
   roots.set(cwd, root);
   return root;
 }
