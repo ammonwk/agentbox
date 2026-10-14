@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import type { AppState } from "../../src/core/types";
 import type { LocalAgent } from "../../src/core/agents/conversation";
 import { Icon } from "./components";
-import { sessionProject } from "./lib/projects";
+import { scopedState, sessionProject } from "./lib/projects";
+import { needsYou } from "./lib/board";
 import { selectScope } from "./route";
 
 const KEY = "agentbox.projectTabs";
@@ -38,11 +39,27 @@ export function useProjectTabs(state: AppState | null, agents: LocalAgent[], sel
     setSaved(next);
     if (selected === id) selectScope("project", next[Math.min(ids.indexOf(id), next.length - 1)]!);
   };
-  return { tabs: ids.map((id) => repos.find((r) => r.id === id)!), close };
+  const tabs = ids.map((id) => repos.find((r) => r.id === id)!);
+  const attention = new Map<string, string>();
+  if (state) for (const project of tabs) {
+    const scoped = scopedState(state, project.id, agents);
+    const sessions = needsYou(scoped.sessions);
+    const cards = scoped.cards.filter((c) => c.state === "open").length;
+    const notice = [
+      sessions ? `${sessions} session${sessions === 1 ? "" : "s"} waiting on you` : "",
+      cards ? `${cards} card${cards === 1 ? "" : "s"} to review` : "",
+    ].filter(Boolean).join("; ");
+    if (notice) attention.set(project.id, notice);
+  }
+  return { tabs, attention, close };
 }
 
-export function ProjectTabs({ tabs, selected, onAdd, onClose }: {
-  tabs: AppState["repos"]; selected: string | null; onAdd: () => void; onClose: (id: string) => void;
+export function ProjectTabs({ tabs, attention, selected, onAdd, onClose }: {
+  tabs: AppState["repos"];
+  attention: ReadonlyMap<string, string>;
+  selected: string | null;
+  onAdd: () => void;
+  onClose: (id: string) => void;
 }) {
   return <nav className="project-bar" aria-label="Projects">
     <div className="project-tabs" role="tablist" aria-label="Open projects" onKeyDown={(e) => {
@@ -53,7 +70,13 @@ export function ProjectTabs({ tabs, selected, onAdd, onClose }: {
       e.preventDefault(); buttons[next]?.focus(); buttons[next]?.click();
     }}>
       {tabs.map((r) => <div className="project-tab" key={r.id} data-active={selected === r.id || undefined}>
-        <button type="button" role="tab" aria-selected={selected === r.id} aria-controls="content" tabIndex={selected === r.id || !selected && r === tabs[0] ? 0 : -1} onClick={() => selectScope("project", r.id)} title={r.fullName ?? r.ref}>{r.displayName}</button>
+        <button type="button" role="tab" aria-selected={selected === r.id} aria-controls="content" aria-describedby={attention.has(r.id) ? `project-attention-${r.id}` : undefined} tabIndex={selected === r.id || !selected && r === tabs[0] ? 0 : -1} onClick={() => selectScope("project", r.id)} title={[r.fullName ?? r.ref, attention.get(r.id)].filter(Boolean).join(" — ")}>
+          {r.displayName}
+          {attention.has(r.id) && <>
+            <span className="project-tab-dot" aria-hidden="true" />
+            <span className="sr-only" id={`project-attention-${r.id}`}>{attention.get(r.id)}</span>
+          </>}
+        </button>
         {tabs.length > 1 && <button type="button" className="project-tab-close" aria-label={`Close ${r.displayName} tab`} onClick={() => onClose(r.id)}><Icon.x size={12} /></button>}
       </div>)}
     </div>

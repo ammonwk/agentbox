@@ -2598,8 +2598,9 @@ kbd {
 .project-tab { display: flex; align-items: center; border-bottom: 2px solid transparent; flex: none; }
 .project-tab[data-active] { border-color: var(--accent); background: var(--hover); }
 .project-tab > button { border: 0; background: none; color: var(--muted); cursor: pointer; }
-.project-tab > [role="tab"] { padding: 12px 10px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.project-tab > [role="tab"] { display: flex; align-items: center; gap: 7px; padding: 12px 10px; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .project-tab[data-active] > [role="tab"] { color: var(--text); }
+.project-tab-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--warning); }
 .project-tab .project-tab-close { display: grid; place-items: center; width: 24px; height: 24px; margin-right: 4px; border-radius: 4px; opacity: .5; }
 .project-tab .project-tab-close:hover { opacity: 1; background: var(--hover); }
 .project-bar > .project-tab-add { align-self: center; flex: none; padding: 8px; border-radius: 5px; }

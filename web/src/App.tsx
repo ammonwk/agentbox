@@ -262,7 +262,7 @@ export function App() {
       </div>
 
       <div className="main">
-        <ProjectTabs tabs={projectTabs.tabs} selected={scope.project} onAdd={() => setSwitcherOpen(true)} onClose={projectTabs.close} />
+        <ProjectTabs tabs={projectTabs.tabs} attention={projectTabs.attention} selected={scope.project} onAdd={() => setSwitcherOpen(true)} onClose={projectTabs.close} />
         {/* The sessions pages carry their own header — the board's filter bar,
             the session's title — so a page title above them is a second one. */}
         {flush || route.page === "agents" || route.page === "profile" ? null : (
