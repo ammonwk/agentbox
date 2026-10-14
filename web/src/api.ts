@@ -38,6 +38,8 @@ import type {
   NightlyReclaim,
   ReclaimResult,
   Repo,
+  SuperagentInfo,
+  SuperagentView,
   Schedule,
   ServerMessage,
   Session,
@@ -115,6 +117,14 @@ async function request<T>(method: Method, path: string, body?: unknown, signal?:
 const get = <T,>(path: string) => request<T>("GET", path);
 const post = <T,>(path: string, body?: unknown) => request<T>("POST", path, body);
 const enc = encodeURIComponent;
+
+/** What a superagent's program answers an action with (docs/superagents.md). */
+export interface SuperagentActionReply {
+  message?: string;
+  view?: SuperagentView;
+  open?: string;
+  compose?: string;
+}
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 export type SettingsPatch = DeepPartial<AgentSettings>;
@@ -198,6 +208,19 @@ export function healthRows(h: Health): { name: string; state: DepState; detail: 
 }
 
 export const api = {
+  // ---- superagents (docs/superagents.md)
+  superagents: () => get<SuperagentInfo[]>("/api/superagents"),
+  superagentView: (name: string, tab: string | null) =>
+    get<SuperagentView | null>(`/api/superagents/${enc(name)}/view${tab ? `?tab=${enc(tab)}` : ""}`),
+  superagentAction: (name: string, body: { action: string; values: Record<string, unknown>; tab: string | null }) =>
+    post<SuperagentActionReply>(`/api/superagents/${enc(name)}/action`, body),
+  superagentChat: (name: string, text: string, sendId: string) =>
+    post<{ session: string; started: boolean }>(`/api/superagents/${enc(name)}/chat`, { text, sendId }),
+  superagentPatch: (name: string, patch: { enabled?: boolean; main?: string | null }) =>
+    request<SuperagentInfo>("PATCH", `/api/superagents/${enc(name)}`, patch),
+  superagentRestart: (name: string) => post<SuperagentInfo>(`/api/superagents/${enc(name)}/restart`),
+  superagentLog: (name: string) => get<{ text: string }>(`/api/superagents/${enc(name)}/log`),
+
   /** The board's open sessions and cold state; the closed ones page from `closed`. */
   state: () => get<AppState>("/api/state?open=1"),
   /** Opening prompts you wrote, newest first, for the new-session box's ↑. */

@@ -503,7 +503,7 @@ function AccountUsage({ accountId, accounts, cold }: { accountId: string | null;
   );
 }
 
-function Detail({
+export function Detail({
   session,
   state,
   tab,

@@ -2484,14 +2484,20 @@ kbd {
   .nav-new {
     order: 3;
   }
-  /* Sessions, Review, New, Voice, Accounts, Settings, then the bell; Skills
-     is a desk job. */
-  .sidebar nav > :nth-child(1) { order: 1; }
-  .sidebar nav > :nth-child(2) { order: 2; }
-  .sidebar nav > :nth-child(3) { order: 4; }
-  .sidebar nav > :nth-child(4) { order: 5; }
-  .sidebar nav > :nth-child(5) { display: none; }
-  .sidebar nav > :nth-child(6) { order: 6; }
+  /* Agents, Sessions, Review, New, Voice, Accounts, Settings, then the
+     bell. Skills, Team and MCPs are desk jobs, and a page without an order
+     here would jump to the front of the bar. */
+  .sidebar nav > [data-nav-id="agents"],
+  .sidebar nav > [data-nav-id="sessions"],
+  .sidebar nav > [data-nav-id="review"] { order: 1; }
+  .sidebar nav > [data-nav-id="voice"],
+  .sidebar nav > [data-nav-id="accounts"],
+  .sidebar nav > [data-nav-id="settings"] { order: 4; }
+  .sidebar nav > [data-nav-id]:not([data-nav-id="agents"], [data-nav-id="sessions"],
+      [data-nav-id="review"], [data-nav-id="voice"], [data-nav-id="accounts"],
+      [data-nav-id="settings"]) {
+    display: none;
+  }
   /* The bell is the bar's last tab, and its inbox a sheet above the bar. */
   .inbox-wrap {
     display: contents;

@@ -54,8 +54,8 @@ forgets it and leaves the directory and its state alone.
   "run": ["bun", "main.ts"],        // optional: its program, argv, run in the directory and kept running
   "url": "http://127.0.0.1:9000",   // optional instead of run: a program agentbox does not run
   "main": {                         // optional: its main conversation
-    "start": { "provider": "claude", "model": "…", "cwd": "." },  // a POST /api/sessions body
-    "instructions": "MAIN.md",       // said before the first message
+    "start": { "provider": "claude", "model": "…", "cwd": "." },  // a POST /api/sessions body; cwd is from the directory, ~ is home
+    "instructions": "MAIN.md",       // said before the first message; {{dir}}, {{home}}, {{agentbox}} (the checkout) and {{bin}} are filled in
     "schedule": "7w4wvcfm"           // instead of start: the session this schedule spoke to last
   }
   // Any other field is the superagent's own: agentbox ignores it.

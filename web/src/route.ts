@@ -7,6 +7,8 @@ export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "dif
 
 export type Route =
   | { page: "sessions" }
+  /** A superagent: its chat, a tab of its page, its sessions or about it. */
+  | { page: "agents"; name: string | null; tab: string | null }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
   /** One account's usage insights. */
@@ -21,7 +23,7 @@ export type Route =
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "sessions" | "review" | "voice" | "accounts" | "skills" | "mcps" | "team" | "settings";
+export type NavId = "agents" | "sessions" | "review" | "voice" | "accounts" | "skills" | "mcps" | "team" | "settings";
 
 export function navOf(route: Route): NavId {
   return route.page === "session" ? "sessions" : route.page;
@@ -47,6 +49,7 @@ export function parseHash(hash: string): Route {
     if (a === "insights" && b) return { page: "accounts", sub: "insights", account: b };
     return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
   }
+  if (head === "agents") return { page: "agents", name: a ?? null, tab: a && b ? b : null };
   if (head === "skills") return { page: "skills" };
   if (head === "mcps") return { page: "mcps" };
   if (head === "voice") return { page: "voice" };
@@ -60,6 +63,8 @@ export function hrefOf(route: Route): string {
   switch (route.page) {
     case "session":
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
+    case "agents":
+      return `#/agents${route.name ? `/${encodeURIComponent(route.name)}${route.tab ? `/${encodeURIComponent(route.tab)}` : ""}` : ""}`;
     case "accounts":
       if (route.sub === "insights") return `#/accounts/insights/${encodeURIComponent(route.account)}`;
       return route.sub === "calibration" ? "#/accounts/calibration" : "#/accounts";

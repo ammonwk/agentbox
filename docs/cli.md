@@ -146,6 +146,16 @@ why). Arming the same wait twice is one wait.
                                     # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has
 
+## Superagents (programs that run on agentbox: docs/superagents.md)
+
+    agentbox superagent ls          # each one: its program, its main conversation, its directory
+    agentbox superagent call <name> <action> --json <file>   # what a superagent's prompt tells you
+                                    # to run: its answer is JSON; it knows which session called
+    agentbox superagent view <name> [--tab t]   # its page, as JSON
+    agentbox superagent add <dir>   # register one (a person's call: do it only when asked)
+    agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
+                                    # waits go to <to>; messages to <from> reach <to>
+
 ## Across machines (when this machine is in an agentbox cloud workspace)
 
     agentbox cloud dir              # the workspace's machines, whether each takes your messages, listed agents

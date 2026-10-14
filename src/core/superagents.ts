@@ -16,7 +16,7 @@ import { z } from "zod";
 import type { Subprocess } from "bun";
 import { getDb, getSchedule } from "./db";
 import { FleetError, type Fleet, type SpawnRequest } from "./fleet";
-import { agentboxBin, agentboxHome } from "./paths";
+import { agentboxBin, agentboxHome, packageRoot, userHome } from "./paths";
 import { submitWithReceipt } from "./send-receipts";
 import type { ProviderId, SuperagentInfo } from "./types";
 
@@ -267,8 +267,9 @@ export class Superagents {
       const spec = m.main.start;
       const provider = spec.provider;
       if (typeof provider !== "string" || !PROVIDERS.includes(provider as ProviderId)) throw new FleetError(400, `${name}: main.start.provider must be one of ${PROVIDERS.join(", ")}`);
-      const instructions = m.main.instructions ? readFileSync(join(r.dir, m.main.instructions), "utf8").trim() : "";
-      const cwd = typeof spec.cwd === "string" ? resolve(r.dir, spec.cwd) : r.dir;
+      const instructions = m.main.instructions ? this.fill(readFileSync(join(r.dir, m.main.instructions), "utf8").trim(), r) : "";
+      const cwd = typeof spec.cwd === "string" ? resolve(r.dir, spec.cwd.replace(/^~(?=\/|$)/, userHome())) : r.dir;
+      mkdirSync(cwd, { recursive: true });
       const prompt = instructions ? `${instructions}\n\n---\n\n${text}` : text;
       const { session } = await this.fleet.spawn({ ...(spec as Partial<SpawnRequest>), provider: provider as ProviderId, cwd, prompt, parent: undefined, callerPid: undefined, id: undefined });
       getDb().run("UPDATE superagents SET main_send = ? WHERE name = ?", [sendId, name]);
@@ -281,6 +282,11 @@ export class Superagents {
   }
 
   // ------------------------------------------------------------- inside
+
+  /** What instructions may name: its directory and home, and the agentbox checkout (its docs, its examples). */
+  private fill(text: string, r: Row): string {
+    return text.replaceAll("{{dir}}", r.dir).replaceAll("{{home}}", superagentHome(r.name)).replaceAll("{{agentbox}}", packageRoot).replaceAll("{{bin}}", agentboxBin());
+  }
 
   private row(name: string): Row {
     if (!NAME.test(name)) throw new FleetError(400, "not a superagent name");
