@@ -29,7 +29,7 @@ import { AgentMemory } from "./AgentMemory";
 import { cloudCall, CloudError } from "../../../src/cloud/client";
 import type { AppState } from "../../../src/core/types";
 import { request, useNow } from "../api";
-import { Button, Empty } from "../components";
+import { Button, Confirm, Empty, Toggle } from "../components";
 import { useLoad } from "../lib/cloud";
 import { AgentComposer } from "./session/Composer";
 import { UI_REVISION } from "../build";
@@ -260,6 +260,7 @@ export function LocalAgentSpace({
       }
       transport={transport}
       disabled={!selected.enabled}
+      control={<EnabledToggle agent={selected} live={state.sessions.some((s) => s.host !== "none" && (s.agentOwner === selected.id || [selected.session, ...(selected.workSessions ?? [])].includes(s.id)))} onChange={agents.reload} />}
       mayDecide={() => true}
       about={
         <div className="agent-about">
@@ -363,6 +364,25 @@ export function LocalAgentSpace({
     />
   );
 }
+/** The header's switch: the About form's own configure request, with the
+ *  provider and repository it already has, so no conversation is replaced.
+ *  Pausing stops the agent's running sessions; it asks first when any runs. */
+function EnabledToggle({ agent, live, onChange }: { agent: LocalAgent; live: boolean; onChange: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState(false), [asking, setAsking] = useState(false), [error, setError] = useState<string | null>(null);
+  const set = (enabled: boolean) => {
+    setAsking(false); setBusy(true); setError(null);
+    void request("POST", `/api/agents/local/${agent.id}/configure`, { provider: agent.pinned ?? "auto", repo: agent.repo, enabled })
+      .then(onChange).catch((e) => setError(e.message)).finally(() => setBusy(false));
+  };
+  return (
+    <span className="agent-enabled">
+      <Toggle checked={agent.enabled} disabled={busy} label="Enabled" onChange={(on) => on || !live ? set(on) : setAsking(true)} />
+      {error && <span className="error" role="alert">{error}</span>}
+      {asking && <Confirm title={`Pause ${agentName(agent.name)}?`} confirmLabel="Pause" onCancel={() => setAsking(false)} onConfirm={() => set(false)}
+        body="Pausing stops its running sessions. Their conversations and transcripts stay; enable it again to continue." />}
+    </span>
+  );
+}
 function AgentSpace({
   footer,
   id,
@@ -375,6 +395,7 @@ function AgentSpace({
   disabled,
   mayDecide,
   about,
+  control,
   actions = [],
   conversationSession,
   options,
@@ -394,6 +415,8 @@ function AgentSpace({
   disabled: boolean;
   mayDecide: (p: Proposal) => boolean;
   about: ReactNode;
+  /** Agent-level controls beside the view tabs. */
+  control?: ReactNode;
   actions?: AgentAction[];
   conversationSession?: string | null;
   options: AgentOption[];
@@ -710,6 +733,7 @@ function AgentSpace({
         <nav aria-label="Agent views">
           {transport.sessionAction && selected?.kind === "work" && selected.status !== "closed" &&
             <Button variant="ghost" size="sm" loading={sessionBusy} onClick={() => void manageSession("close")}>Close session</Button>}
+          {control}
           {(["chat", "about", "feed"] as const).map((t) => (
             <button
               key={t}

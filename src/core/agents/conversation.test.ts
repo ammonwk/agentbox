@@ -337,7 +337,8 @@ test("selected history cannot read a foreign session or resurrect a replaced wri
   expect(reads).toBe(2); expect(sends).toBe(0); expect(spawns.length).toBe(0);
 });
 test("creator capability, project and revision bind an idempotent human creation", async () => {
-  insertRepo({id:"project",kind:"local",ref:home,displayName:"Project",fullName:null,defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
+  // Jupiter exists only in the Agentbox project: here, a clone of it.
+  insertRepo({id:"project",kind:"local",ref:home,displayName:"Project",fullName:"ammonwk/agentbox",defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
   const creator = conversations.local("project").find((a) => a.capability === "creator" && a.repo === "project")!;
   creator.session = "jupiter-session";
   store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(creator),creator.id]);
@@ -358,12 +359,13 @@ test("creator capability, project and revision bind an idempotent human creation
   expect(spawns[0].prompt).toContain(spec.instructions); expect(spawns[0].repoId).toBe("project");
 });
 test("a creation proposal from a replaced creator is read-only", async () => {
-  const creator = conversations.local().find((a) => a.capability === "creator")!; creator.session = "old";
+  insertRepo({id:"agentbox",kind:"local",ref:home,displayName:"agentbox",fullName:"ammonwk/agentbox",defaultBranch:"main",addedAt:Date.now(),setup:{copy:[],run:""},worktreeDefault:true});
+  const creator = conversations.local("agentbox").find((a) => a.capability === "creator" && a.repo === "agentbox")!; creator.session = "old";
   store.db.run("UPDATE local_agents SET body=? WHERE id=?",[JSON.stringify(creator),creator.id]);
   const d = await conversations.draft(creator.id,"old",crypto.randomUUID(),{name:"New",role:"Help",instructions:"Help with code",provider:"codex"});
   creator.previous = ["old"]; creator.session = "new";
   store.db.run("UPDATE local_agents SET body=? WHERE id=?",[JSON.stringify(creator),creator.id]);
-  expect(() => conversations.editCreation(creator.id,d.id,d.revision,null,d.spec,true)).toThrow("replaced");
+  expect(() => conversations.editCreation(creator.id,d.id,d.revision,"agentbox",d.spec,true)).toThrow("replaced");
 });
 
 // Descendant discovery is read-only and must never cross another agent's link.
