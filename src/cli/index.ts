@@ -12,7 +12,7 @@
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, webDist } from "../core/paths";
+import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, packageRoot, webDist } from "../core/paths";
 import { listRepos, listAccounts } from "../core/db";
 import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
@@ -495,10 +495,65 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
                         the bridge that runs other providers' models in devin
                         (docs/devin-bridge.md); check tests it end to end
   doctor                check that everything agentbox needs is present
+  serve-from-commit [on|off|status]
+                        on: a restart serves the checkout's HEAD commit from
+                        $AGENTBOX_HOME/live, never uncommitted edits
+  integrate <branch> [--into <checkout>] [--no-check] [--restart]
+                        put a branch's commits on the checkout's branch around
+                        other sessions' uncommitted edits; checks the commit
+                        first (typecheck, tests); --restart restarts the server
   onboard               derive who agentbox works for (git, gh, the system),
                         write user.env, and say what is still missing
   guide                 how an agent drives the fleet with this CLI
   version               print the version`;
+
+/** `agentbox serve-from-commit [on|off|status]`. */
+async function serveFromCommit(verb = "status"): Promise<number> {
+  const { servesFromCommit, setServesFromCommit, snapshotDir, sourceCheckout } = await import("../core/snapshot");
+  if (verb === "on" || verb === "off") setServesFromCommit(verb === "on");
+  else if (verb !== "status") throw new Error("serve-from-commit takes on, off or status");
+  console.log(servesFromCommit()
+    ? `on: a restart serves the HEAD commit of ${sourceCheckout(packageRoot)} from ${snapshotDir()}`
+    : `off: a restart serves the working tree of ${sourceCheckout(packageRoot)}, uncommitted edits included`);
+  if (verb !== "status") console.log("It takes effect at the next restart of the server.");
+  return 0;
+}
+
+/** Restart the server's service and wait until it answers on `commit`. */
+async function restartServer(commit: string): Promise<void> {
+  const mac = join(process.env.HOME ?? "", "Library", "LaunchAgents", "local.agentbox.server.plist");
+  if (existsSync(mac)) Bun.spawnSync(["launchctl", "kickstart", "-k", `gui/${process.getuid!()}/local.agentbox.server`], { stdout: "ignore", stderr: "inherit" });
+  else if (Bun.which("systemctl") && Bun.spawnSync(["systemctl", "--user", "cat", "agentbox.service"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0)
+    Bun.spawnSync(["systemctl", "--user", "restart", "agentbox.service"], { stdout: "ignore", stderr: "inherit" });
+  else throw new Error("no agentbox service is installed here; restart the server yourself");
+  for (let i = 0; i < 120; i++) {
+    await Bun.sleep(500);
+    const health = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) }).then((r) => r.json()).catch(() => null);
+    const running = (health?.data ?? health)?.revision?.commit as string | undefined;
+    if (running === commit) {
+      console.log(`the server is up on ${commit.slice(0, 8)}`);
+      return;
+    }
+  }
+  throw new Error(`the server did not come up on ${commit.slice(0, 8)} within a minute; see ${join(agentboxHome(), "logs", "server.log")}`);
+}
+
+/** `agentbox integrate <branch> [--into <checkout>] [--no-check] [--restart]` (src/core/integrate.ts). */
+async function integrateBranch(args: string[]): Promise<number> {
+  const { flags, rest } = verbs.parseArgs(args, ["into"], ["no-check", "restart"]);
+  if (rest.length !== 1) throw new Error("usage: agentbox integrate <branch> [--into <checkout>] [--no-check] [--restart]");
+  const { integrate } = await import("../core/integrate");
+  const { servesFromCommit, sourceCheckout } = await import("../core/snapshot");
+  // From the snapshot's own CLI too, the checkout is the one it was made from.
+  const into = typeof flags.get("into") === "string" ? (flags.get("into") as string) : sourceCheckout(packageRoot);
+  const r = integrate({ checkout: into, branch: rest[0]!, check: !flags.has("no-check"), log: (line) => console.log(line) });
+  console.log(`${r.branch}: ${r.from.slice(0, 8)} → ${r.to.slice(0, 8)}${r.fastForward ? " (fast-forward)" : ""}, ${r.files.length} file(s)`);
+  if (r.merged.length) console.log(`merged around uncommitted edits: ${r.merged.join(", ")}`);
+  if (!flags.has("restart")) return 0;
+  if (!servesFromCommit()) console.log("note: serve-from-commit is off, so the restart also loads every uncommitted edit in the checkout");
+  await restartServer(r.to);
+  return 0;
+}
 
 /** `agentbox devin-bridge [status|start|restart|check|run]`. */
 async function devinBridge(verb = "status"): Promise<number | null> {
@@ -561,6 +616,10 @@ export async function main(argv: string[]): Promise<number | null> {
   try {
     switch (cmd) {
       case "serve": {
+        // Run the checkout's HEAD commit, not its working tree (src/core/snapshot.ts).
+        const { prepareServe } = await import("../core/snapshot");
+        const snapshot = prepareServe(packageRoot, (line) => console.log(`agentbox: ${line}`));
+        if (snapshot) process.execve!(process.execPath, [process.execPath, join(snapshot, "bin", "agentbox"), ...argv], process.env);
         ensureDirs();
         const wrote = ensureUserEnv();
         if (wrote) console.log(`agentbox: ${wrote}`);
@@ -682,6 +741,10 @@ export async function main(argv: string[]): Promise<number | null> {
         return await devinBridge(argv[1]);
       case "doctor":
         return doctor();
+      case "serve-from-commit":
+        return serveFromCommit(argv[1]);
+      case "integrate":
+        return await integrateBranch(argv.slice(1));
       case "onboard":
         return onboard();
       case "guide":

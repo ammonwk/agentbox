@@ -1530,6 +1530,8 @@ export interface Health {
   /** Present while the server's first pass over the transcripts runs: it
    *  answers, but the board and every other route wait for that pass. */
   starting?: { read: number; of: number };
+  /** The commit the server runs, and whether its files differ from it. */
+  revision?: { commit: string; dirty: boolean } | null;
 }
 
 /** Server → client. */

@@ -83,6 +83,7 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
+import { RUNNING_REVISION } from "../revision";
 import { CloudBridge } from "../core/cloud/bridge";
 import { cloudHttpError, cloudRoutes } from "./cloud";
 import { AgentsRuntime } from "../core/agents/runtime";
@@ -712,7 +713,7 @@ const router = new Router(mapError)
       await detectProviders();
       scheduleCold();
     }
-    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh) };
+    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh), revision: RUNNING_REVISION };
     if (!booted) health.starting = startupProgress();
     return json(health);
   })

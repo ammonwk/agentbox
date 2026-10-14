@@ -58,6 +58,21 @@ The server runs from the checkout it was started in, so a change only
 reaches it once it is there. Several agents may be editing that checkout at
 once: commit your own files by path, never `git add -A`.
 
+With `agentbox serve-from-commit on`, the server runs that checkout's HEAD
+commit instead (`src/core/snapshot.ts`): `serve` moves a worktree of its own,
+`$AGENTBOX_HOME/live`, to HEAD, builds its UI when `web/` changed, and then
+becomes the server there. A restart puts only committed work live, so another
+session's unfinished edit cannot break it. Commit first, then restart;
+`/api/health` names the commit it runs (`revision`).
+
+To put a finished branch into a checkout that others are editing, use
+`agentbox integrate <branch> [--restart]` (`src/core/integrate.ts`), not
+cherry-pick or stash. It replays the branch onto HEAD in a scratch worktree,
+runs the typecheck and the tests on that exact commit, merges each changed
+file around the uncommitted edits in memory, and changes nothing on a
+conflict. It writes the files, then moves the branch, and leaves the others'
+edits unstaged.
+
 ## Rules that are easy to break
 
 - **The provider's transcript is the record.** Never write a copy of a
