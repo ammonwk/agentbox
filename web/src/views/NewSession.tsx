@@ -23,7 +23,6 @@ import {
   reposByRecency,
   savePrefs,
   skillsFor,
-  worktreeDefault,
   type NewSessionPrefs,
 } from "../lib/newsession";
 import { AccountPicker } from "./newsession/AccountPicker";
@@ -80,13 +79,11 @@ export function NewSession({
   const [repoId, setRepoId] = useState<string>(
     prefs.repoId && state.repos.some((r) => r.id === prefs.repoId) ? prefs.repoId : repos[0]?.id ?? "",
   );
-  // The repo's default from Settings, over whatever the last session did.
-  const [worktree, setWorktree] = useState(() => {
-    const r = knownRepos.find((x) => x.id === repoId);
-    return (r && worktreeDefault(r)) ?? prefs.worktree ?? true;
-  });
-  /** With "New worktree" off: blank (main checkout), `new`, or a PR. Not
-   *  remembered — a PR is a one-off. */
+  // A repo session always runs in a worktree: a new one, or the one that
+  // has the picked PR or branch checked out. The main checkout is not offered.
+  const [worktree, setWorktree] = useState(true);
+  /** With "New worktree" off: a PR or a branch. Not remembered — a PR is a
+   *  one-off. */
   const [wtText, setWtText] = useState("");
   const [devServer, setDevServer] = useState(prefs.devServer ?? false);
   const [path, setPath] = useState(prefs.path ?? "");
@@ -248,9 +245,7 @@ export function NewSession({
     if (repoId !== id || where !== "repo") setWtText("");
     const next = knownRepos.find((r) => r.id === id);
     if (!next || promptPrs(prompt, prsOf(state.prs, next), next.fullName).length > 0) return;
-    const def = worktreeDefault(next);
-    if (def === null) return;
-    setWorktree(def);
+    setWorktree(true);
     setWtText("");
   }
 
@@ -286,11 +281,8 @@ export function NewSession({
       setRepoId(r.id);
       setWhere("repo");
       if (promptPrs(prompt, prsOf(state.prs, r), r.fullName).length > 0) return;
-      const def = worktreeDefault(r);
-      if (def !== null) {
-        setWorktree(def);
-        setWtText("");
-      }
+      setWorktree(true);
+      setWtText("");
     } catch (e) {
       setOtherErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -367,11 +359,9 @@ export function NewSession({
       provider,
       ...(where === "path"
         ? { cwd: path.trim() }
-        : worktree || wt.kind === "new"
+        : worktree || wt.kind === "new" || wt.kind === "main"
           ? { repoId, worktree: true }
-          : wt.kind === "main"
-            ? { repoId, worktree: false }
-            : { repoId, branch: wt.branch, ...(wt.kind === "pr" ? { pr: wt.number } : {}) }),
+          : { repoId, branch: wt.branch, ...(wt.kind === "pr" ? { pr: wt.number } : {}) }),
       ...(withDev ? { devServer: true } : {}),
       ...(text ? { prompt: text } : {}),
       ...(model ? { model } : {}),
@@ -620,7 +610,7 @@ function worktreeHint(wt: ReturnType<typeof parseWorktreeRef>, repoPath: string 
   switch (wt.kind) {
     case "main":
     case "new":
-      return `Runs in the main checkout${repoPath ? `, ${repoPath}` : ""}, on whatever branch it has out.`;
+      return `Runs in a new worktree of ${repoPath ?? "the repo"}, on a fresh branch.`;
     case "pr":
       // `67` on the way to `6730` is not a claim about PR #67.
       if (!wt.pr && prs.some((p) => String(p.number).startsWith(String(wt.number)))) return "Pick a PR from the list, or type its whole number.";
