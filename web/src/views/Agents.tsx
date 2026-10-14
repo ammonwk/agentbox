@@ -27,7 +27,7 @@ import { go, selectScope } from "../route";
 import { useScope } from "../lib/projects";
 import "./agents.css";
 import { rememberAgent, landingForAgent, agentActivity } from "./AgentBrowser";
-import { chooseWhere, chosenWhere, hostConnected, localTwin, pendingMoves, rememberTwins } from "../lib/moveagents";
+import { chooseWhere, chosenWhere, hostConnected, isAgentboxRepo, localTwin, pendingMoves, rememberTwins } from "../lib/moveagents";
 import { WhereToggle } from "./AgentWhere";
 import type { LocalAgent } from "../../../src/core/agents/conversation";
 import { LocalAgentSpace, SharedAgentSpace } from "./AgentSpace";
@@ -192,7 +192,9 @@ function Directory({
     }
     rememberTwins(pairs);
   }, [data.data, locals.data, state.repos]);
-  const inProject = (a: SharedAgent) => !scope.project || !!project && a.definition.repos.some((slug) => slug.toLowerCase() === (project.fullName ?? (project.kind === "github" ? project.ref : "")).toLowerCase());
+  // Jupiter creates Agentbox agents, so only the Agentbox project shows it.
+  const jupiterHere = !scope.project || !!project && isAgentboxRepo(project);
+  const inProject = (a: SharedAgent) => (a.capability !== "creator" || jupiterHere) && (!scope.project || !!project && a.definition.repos.some((slug) => slug.toLowerCase() === (project.fullName ?? (project.kind === "github" ? project.ref : "")).toLowerCase()));
   const creating = useRef(false);
   const creator = useCallback(async () => {
     if (!data.data || creating.current) return;
@@ -206,16 +208,18 @@ function Directory({
       await data.reload(); go({ page: "agents", id: a.id, view: "chat", thread: "new" });
     } catch (e) { setError((e as Error).message); } finally { creating.current = false; }
   }, [data.data, project, user, workspace, status.installation?.id]);
+  const hiddenJupiter = selected?.capability === "creator" && !jupiterHere;
   useEffect(() => {
-    if (!id && data.data) {
+    if ((!id || hiddenJupiter) && data.data) {
       const scoped = data.data.board.agents.filter(inProject);
       const saved = scoped.find((a) => a.id === rememberAgent());
       const used = scoped.find((a) => data.data!.board.runs.some((r) => r.agent_id === a.id));
       const first = saved ?? used ?? scoped.find((a) => a.capability === "creator") ?? scoped.find((a) => a.name.toLowerCase() === "vulcan") ?? scoped[0];
       if (first) go(landingForAgent(first.id), true);
+      else if (!jupiterHere) go({ page: "agents", id: "manage" }, true);
       else if (!error) void creator();
     }
-  }, [id, data.data, error]);
+  }, [id, data.data, error, hiddenJupiter]);
   const person = (id: string | null) =>
     !id
       ? "Unassigned"
@@ -225,6 +229,7 @@ function Directory({
         id.slice(0, 8);
   if (me.error || data.error) return <Empty title="Workspace unavailable">{me.error ?? data.error}<Button onClick={() => { void me.reload(); void data.reload(); }}>Retry</Button></Empty>;
   if (!me.data) return <Empty title="Loading workspaces…" />;
+  if (hiddenJupiter) return <Empty title="Opening agents…" />;
   if (selected && !inProject(selected)) {
     const target = state.repos.find((repo) => selected.definition.repos.some((slug) => slug.toLowerCase() === (repo.fullName ?? (repo.kind === "github" ? repo.ref : "")).toLowerCase()));
     return <Empty title="This shared agent works in other projects">{target ? <Button onClick={() => selectScope("project", target.id, { page: "agents", id: selected.id })}>Open in {target.displayName}</Button> : <p>Register one of this agent's repositories in Settings to open it.</p>}</Empty>;
@@ -299,7 +304,7 @@ function Directory({
           key={selected.id}
           a={selected}
           options={data.data.board.agents.filter(inProject).map((a) => ({ id: a.id, name: a.name, role: a.definition.role, creator: a.capability === "creator", activity: agentActivity(a.enabled, data.data!.board.runs.filter((r) => r.agent_id === a.id).map((r) => r.state)), detail: `${a.definition.repos.join(", ") || "General"} · ${a.team ? "Team" : person(a.created_by)} · ${a.enabled ? "Shared" : "Needs setup"}` }))}
-          onCreate={() => void creator()}
+          onCreate={() => jupiterHere ? void creator() : go({ page: "agents", id: "manage" })}
           reload={data.reload}
           board={data.data.board}
           api={api}

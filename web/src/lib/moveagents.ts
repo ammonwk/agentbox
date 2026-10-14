@@ -102,3 +102,7 @@ export function sharedTwinOf(local: string): string | undefined {
     return undefined;
   }
 }
+
+/** The Agentbox project, where Jupiter lives (`FEEDBACK_REPO`, src/core/agents/feedback.ts). */
+export const isAgentboxRepo = (r: Pick<Repo, "fullName" | "kind" | "ref">): boolean =>
+  (r.fullName ?? (r.kind === "github" ? r.ref : "")).toLowerCase() === "ammonwk/agentbox";

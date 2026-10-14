@@ -181,7 +181,8 @@ export function LocalAgentSpace({
     const timer = setInterval(() => void agents.reload(), 10000);
     return () => clearInterval(timer);
   }, [agents.reload]);
-  const options = (agents.data ?? []).filter((a) => !project || a.repo === project).map((a): AgentOption => {
+  // A Jupiter kept as history outside the Agentbox project is not listed.
+  const options = (agents.data ?? []).filter((a) => (!project || a.repo === project) && !(a.capability === "creator" && a.unavailable)).map((a): AgentOption => {
     const linked = new Set([a.session, ...a.previous, ...(a.workSessions ?? [])]);
     return { id: a.id, name: a.name, role: a.role, creator: a.capability === "creator" && !a.unavailable, avatar: localAvatarUrl(a),
       activity: agentActivity(a.enabled && !a.unavailable, state.sessions.filter((s) => linked.has(s.id) || s.agentOwner === a.id).map(shownStatus)),
