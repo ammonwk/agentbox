@@ -80,3 +80,14 @@ controlled cloud fixture, not the user's private session history.
 - Real local integration and screenshots are checked separately from fixture
   images. Shared production hosting/GitHub App setup and upstream workflow approval
   remain the existing external dependencies; project switching requires neither.
+
+The authorized local-main integration retained all 147 session IDs through a managed
+launchd restart and preserved all 24 unrelated dirty/untracked paths in a recoverable
+snapshot. Live browser checks used the existing agentbox and harness repositories:
+six project definitions, distinct Vulcan IDs and drafts, zero provider starts, and
+the earlier general Vulcan conversation retained. Desktop/mobile screenshots were
+inspected on the actual running app. A discovered explicit-clear edge case was
+corrected with revision-checked draft replacement; the two-tab browser check proves
+clearing stale text cannot erase a newer draft from another tab.
+
+![Project switcher, controlled two-repository fixture](images/projects-switcher.png)

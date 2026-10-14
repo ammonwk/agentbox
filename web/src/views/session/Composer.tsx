@@ -573,13 +573,19 @@ export function AgentComposer({
     [error, setError] = useState<string | null>(null);
   const context = useRef(initial?.agentContext);
   const revision = useRef(initial?.revision ?? newRevision()),
+    lastQueuedRevision = useRef(initial?.revision),
     ref = useRef<HTMLTextAreaElement>(null);
   const edit = (s: string) => {
     revision.current = newRevision();
+    if (!s.trim()) context.current = undefined;
     setText(s);
   };
   useEffect(() => {
-    void saveDraft(key, text, [], revision.current, context.current);
+    // An explicit clear replaces our previous saved revision, never a newer
+    // draft written by another tab. The storage lock orders queued saves.
+    const previous = lastQueuedRevision.current;
+    lastQueuedRevision.current = revision.current;
+    void saveDraft(key, text, [], revision.current, context.current, previous);
   }, [key, text]);
   useEffect(() => {
     if (guidance) {

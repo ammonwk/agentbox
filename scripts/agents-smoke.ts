@@ -705,14 +705,16 @@ try {
       .waitFor();
     assert.equal((await alice.agents.revisions(created.id)).length, 2);
 
+    // Arm before navigation; wait for the committed request before the host tick.
+    const firstRead = page.waitForResponse(
+      (q: any) => q.url().endsWith("/agent_read_request"),
+      { timeout: 10000 },
+    );
     await page.goto(`http://127.0.0.1:${server.port}/#/agents/${a.id}`);
     await page.getByRole("heading", { name: "VULCAN", exact: true }).waitFor();
     // Exercise the real shared Chat/Feed UI. Only refusal below is injected,
     // so recovery can be checked without an actual network outage.
-    await page.waitForRequest(
-      (q: any) => q.url().endsWith("/agent_read_request"),
-      { timeout: 10000 },
-    );
+    await firstRead;
     await runtime.conversations.tick();
     await page
       .getByText(
