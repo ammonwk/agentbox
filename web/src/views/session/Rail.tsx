@@ -468,7 +468,7 @@ export function Rail({
           move(drag.s, null);
         }}
       >
-        <CloseFailure />
+        <CloseFeedback />
         {view === "active" && scheduled.length ? (
           <div className="rail-sec" data-kind="scheduled">
             <button type="button" className="rail-label rail-section-toggle" aria-expanded={sectionOpen("scheduled")} disabled={!!filter.query} onClick={() => toggleSection("scheduled")}>
@@ -831,15 +831,40 @@ function RowLoad({ id }: { id: string }) {
   );
 }
 
-/** A close the server refused: the row is back, and this says why. Or what a
- *  close left open: the sessions it started that hold work stay on the list. */
-function CloseFailure() {
-  const { failure, dismiss } = useClosing();
-  if (!failure) return null;
+/** Failed actions are alerts; successful closes get a compact work summary. */
+function CloseFeedback() {
+  const { feedback, dismiss } = useClosing();
+  if (!feedback) return null;
+  if (feedback.kind === "closed") {
+    const { closed, kept, dropped } = feedback.result;
+    const also = closed.filter((id) => id !== feedback.id);
+    return (
+      <div className="rail-notice">
+        <div role="status">
+          Closed “{feedback.title}”.
+          {kept.length ? ` ${kept.length} ${kept.length === 1 ? "session kept" : "sessions kept"} open for ongoing work.` : null}
+          {dropped.length ? ` ${dropped.length} work ${dropped.length === 1 ? "item" : "items"} released.` : null}
+        </div>
+        <details key={feedback.id}>
+          <summary>Details</summary>
+          {also.length ? <p>Also closed: {also.join(", ")}.</p> : null}
+          {kept.length ? <>
+            <p>Kept open with their sessions. Close each separately to stop its work:</p>
+            <ul>
+              {kept.map((k) => <li key={k.id}>
+                <a href={hrefOf({ page: "session", id: k.id, tab: "timeline" })}>{k.id}</a>: {k.holds.join(", ")}
+              </li>)}
+            </ul>
+          </> : null}
+          {dropped.length ? <p>No session now holds: {dropped.join(", ")}.</p> : null}
+        </details>
+        <button type="button" className="linkish" onClick={dismiss}>Dismiss</button>
+      </div>
+    );
+  }
   return (
     <p className="rail-err" role="alert">
-      {failure.left ? `Closed “${failure.title}”: ` : `Could not ${failure.verb ?? "close"} “${failure.title}”: `}
-      {failure.message}{" "}
+      Could not {feedback.verb ?? "close"} “{feedback.title}”: {feedback.message}{" "}
       <button type="button" className="linkish" onClick={dismiss}>
         dismiss
       </button>

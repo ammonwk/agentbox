@@ -4,18 +4,22 @@
  *  worth watching. */
 
 import { useSyncExternalStore } from "react";
+import type { Closed } from "../../../../src/core/types";
 import { api } from "../../api";
 
 /** Ids asked to close whose close the app state does not show yet. */
 let pending: ReadonlySet<string> = new Set();
-/** The last thing that could not be done, and to what: "close" unless said;
- *  or, `left`, a close that left sessions it started open for their work. */
-let failure: { id: string; title: string; message: string; verb?: string; left?: boolean } | null = null;
+/** Successful closes can leave work behind; they are notices, not failures. */
+type Feedback = { id: string; title: string } & (
+  | { kind: "closed"; result: Closed }
+  | { kind: "error"; message: string; verb?: string }
+);
+let feedback: Feedback | null = null;
 const listeners = new Set<() => void>();
 
-function set(next: ReadonlySet<string>, f = failure): void {
+function set(next: ReadonlySet<string>, f = feedback): void {
   pending = next;
-  failure = f;
+  feedback = f;
   for (const l of listeners) l();
 }
 
@@ -24,46 +28,46 @@ function subscribe(l: () => void): () => void {
   return () => listeners.delete(l);
 }
 
-export function useClosing(): { pending: ReadonlySet<string>; failure: typeof failure; dismiss: () => void } {
+export function useClosing(): { pending: ReadonlySet<string>; feedback: typeof feedback; dismiss: () => void } {
   const p = useSyncExternalStore(subscribe, () => pending);
-  const f = useSyncExternalStore(subscribe, () => failure);
-  return { pending: p, failure: f, dismiss: () => set(pending, null) };
+  const f = useSyncExternalStore(subscribe, () => feedback);
+  return { pending: p, feedback: f, dismiss: () => set(pending, null) };
 }
 
 /** Hide it and the sessions it started now; the server stops and closes them behind the scenes. */
 export function closeNow(id: string, title: string, family: readonly string[] = []): void {
   const ids = [id, ...family.filter((x) => x !== id)];
-  set(new Set([...pending, ...ids]), failure && ids.includes(failure.id) ? null : failure);
+  set(new Set([...pending, ...ids]), feedback && ids.includes(feedback.id) ? null : feedback);
   api.close(id, true).then(
     // Held a little past the answer: the state push that shows them closed can
     // land just after, and the rows should not blink back in between.
     (out) => {
       for (const k of out.kept) forget(k.id);
-      if (out.kept.length || out.dropped.length) set(pending, { id, title, message: out.said.replace(/^[,;] /, ""), left: true });
+      if (out.kept.length || out.dropped.length) set(pending, { id, title, kind: "closed", result: out });
       setTimeout(() => ids.forEach(forget), 5000);
     },
     (e: Error) => {
       ids.forEach(forget);
-      set(pending, { id, title, message: e.message });
+      set(pending, { id, title, kind: "error", message: e.message });
     },
   );
 }
 
 /** Hidden now, gone for good once `act` settles; back, with the reason said, if it fails. */
 export function hideWhile(id: string, title: string, verb: string, act: Promise<unknown>): void {
-  set(new Set(pending).add(id), failure?.id === id ? null : failure);
+  set(new Set(pending).add(id), feedback?.id === id ? null : feedback);
   act.then(
     () => setTimeout(() => forget(id), 5000),
     (e: Error) => {
       forget(id);
-      set(pending, { id, title, message: e.message, verb });
+      set(pending, { id, title, kind: "error", message: e.message, verb });
     },
   );
 }
 
 /** Say that `verb` could not be done to it, where a refused close is said. */
 export function reportFailure(id: string, title: string, verb: string, message: string): void {
-  set(pending, { id, title, message, verb });
+  set(pending, { id, title, kind: "error", message, verb });
 }
 
 /** No longer hidden: it closed, failed, or is being reopened. */
