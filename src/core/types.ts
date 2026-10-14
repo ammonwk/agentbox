@@ -633,12 +633,15 @@ export interface SenderView {
   /** agent: a registered agent; session: another agent session; system and
    *  schedule: agentbox's own notes; cloud: another installation, as the
    *  cloud vouches; peer: Claude's own delivery between its sessions;
-   *  unverified: a mark the server has no matching record of. */
+   *  unverified: a mark the server has no matching record of, or the
+   *  opening prompt of a session another started, with no record of who wrote it. */
   kind: "agent" | "session" | "system" | "schedule" | "cloud" | "peer" | "unverified";
   label: string;
   /** The sending session, when known and in scope. */
   session: string | null;
   agent?: { id: string; name: string; role: string; creator: boolean; avatar: string | null };
+  /** The session's opening prompt, which another session started it with. */
+  opening?: boolean;
 }
 
 export type TimelineEvent = { id: string; at: number } & (

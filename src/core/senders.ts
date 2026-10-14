@@ -9,6 +9,13 @@
  * a digest of the body: never the body itself. A timeline event is attributed
  * only when its mark names a record for this conversation (or one it took
  * over from), with the same digest, written near the time it arrived.
+ *
+ * A session's opening prompt carries no mark: it is the CLI's own argument.
+ * When an authenticated session starts another (`POST /api/sessions`), the
+ * spawn records that prompt's digest the same way (`recordOpening`), and the
+ * child's unmarked message with that digest is the starter's. A child the
+ * fleet linked to a parent, with no such record, has an opening of unknown
+ * authorship: never the person's, and never named after its text.
  */
 import type { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
@@ -28,12 +35,18 @@ export interface SenderDirectory {
 
 /** How far a message may arrive from its record: a queued one waits a while. */
 const ARRIVAL_MS = 24 * 3_600_000;
+/** How soon after its start a session's opening prompt reaches its transcript:
+ *  an argument at once, a typed one within `typeFirstPrompt`'s minute. The
+ *  same words typed later are the person's. */
+const OPENING_MS = 2 * 60_000;
 const ready = new WeakSet<Database>();
 function db(): Database {
   const d = getDb();
   if (!ready.has(d)) {
     d.exec(`CREATE TABLE IF NOT EXISTS sent_attributions (id TEXT PRIMARY KEY, to_session TEXT NOT NULL,
       from_session TEXT, verified INTEGER NOT NULL, agent TEXT, at INTEGER NOT NULL, digest TEXT NOT NULL)`);
+    d.exec(`CREATE TABLE IF NOT EXISTS opening_attributions (session TEXT PRIMARY KEY, from_session TEXT NOT NULL,
+      agent TEXT, at INTEGER NOT NULL, digest TEXT NOT NULL)`);
     ready.add(d);
   }
   return d;
@@ -49,12 +62,29 @@ export function recordSend(r: { to: string; from: string | null; verified: boole
   return id;
 }
 
+/** Record who wrote a new session's opening prompt, before the session starts:
+ *  only a session authenticated by its capability. */
+export function recordOpening(r: { session: string; from: string; agent: string | null; prompt: string }, now = Date.now()): void {
+  db().run("INSERT OR REPLACE INTO opening_attributions(session,from_session,agent,at,digest) VALUES (?,?,?,?,?)", [r.session, r.from, r.agent, now, digest(r.prompt)]);
+}
+
+type Opening = { from_session: string; agent: string | null; at: number; digest: string };
+
 type Row = { id: string; to_session: string; from_session: string | null; verified: number; agent: string | null; at: number; digest: string };
 
 function sessionLabel(id: string): string {
   const rec = getSessionRecord(id);
   const title = (rec?.facts as { title?: string } | null)?.title;
   return (rec?.label || title || id).slice(0, 120);
+}
+
+/** What is known of who opened `session`: its recorded opener, and its
+ *  start when another session started it. Null when neither applies. */
+function openingOf(session: string): { row: Opening | null; rec: { startedAt: number } | null } | null {
+  const row = (db().query("SELECT from_session,agent,at,digest FROM opening_attributions WHERE session = ?").get(session) as Opening | null) ?? null;
+  const r = getSessionRecord(session);
+  const rec = r && (row || (r.parent && !r.parentByHand)) ? { startedAt: r.startedAt } : null;
+  return row || rec ? { row, rec } : null;
 }
 
 /** `events` of `session` with each message's sender attached. `scoped`
@@ -65,11 +95,23 @@ export function attribute<T extends TimelineEvent>(session: string, events: T[],
   const rows = new Map<string, Row>();
   if (ids.length)
     for (const r of db().query(`SELECT * FROM sent_attributions WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Row[]) rows.set(r.id, r);
+  const opener = reads.some((r) => r && !r.agent) ? openingOf(session) : null;
   return events.map((e, i) => {
     const sent = reads[i];
-    if (!sent?.agent || e.kind !== "user") return e;
+    if (!sent || e.kind !== "user") return e;
     let sender: SenderView;
-    if (sent.via === null) sender = { kind: "system", label: "agentbox", session: null };
+    if (!sent.agent) {
+      if (!opener) return e;
+      const { row, rec } = opener;
+      if (row && row.digest === digest(sent.text) && e.at >= row.at - 5_000 && e.at - row.at <= OPENING_MS) {
+        const agent = row.agent ? dir.agent(row.agent) : null;
+        sender = agent
+          ? { kind: "agent", label: agent.name, session: row.from_session, agent, opening: true }
+          : { kind: "session", label: sessionLabel(row.from_session), session: row.from_session, opening: true };
+      } else if (rec && e.at >= rec.startedAt - 5_000 && e.at - rec.startedAt <= OPENING_MS) {
+        sender = { kind: "unverified", label: "Unknown sender", session: null, opening: true };
+      } else return e;
+    } else if (sent.via === null) sender = { kind: "system", label: "agentbox", session: null };
     else if (sent.via === "a schedule") sender = { kind: "schedule", label: "A schedule", session: null };
     else if (sent.via === "agentbox cloud") sender = { kind: "cloud", label: sent.from ?? "Another installation", session: null };
     else if (sent.via === "Claude") sender = { kind: "peer", label: sent.from ?? "A Claude session", session: null };
@@ -85,7 +127,7 @@ export function attribute<T extends TimelineEvent>(session: string, events: T[],
           ? { kind: "agent", label: agent.name, session: row!.from_session, agent }
           : { kind: "session", label: sessionLabel(row!.from_session!), session: row!.from_session };
     }
-    if (scoped && (sender.kind === "agent" || sender.kind === "session")) sender = { kind: sender.kind, label: sender.kind === "agent" ? "An agent" : "An agent session", session: null };
+    if (scoped && (sender.kind === "agent" || sender.kind === "session")) sender = { kind: sender.kind, label: sender.kind === "agent" ? "An agent" : "An agent session", session: null, ...(sender.opening ? { opening: true } : {}) };
     return { ...e, sender };
   });
 }

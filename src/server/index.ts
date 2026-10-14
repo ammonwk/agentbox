@@ -722,6 +722,7 @@ const router = new Router(mapError)
     // does not start, so two are never sent to the same one.
     const claim = b.claim !== undefined ? prNamed({ pr: b.claim, cwd: b.cwd }, null) : null;
     const key = claim ? `${claim.repo.toLowerCase()}#${claim.number}` : "";
+    const opener = authenticatedSession(req);
     if (claim) {
       const held = holderOf(prClaimsNow(), claim.repo, claim.number);
       if (held) throw new HttpError(409, new PrHeld(held, fleet.sessions().find((s) => s.id === held.sessionId)).message.replace(/^not claimed/, "not started"));
@@ -742,6 +743,8 @@ const router = new Router(mapError)
         accountId: optionalString(b, "accountId") ?? null,
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
+        // Only the caller's capability says which session wrote the prompt.
+        ...(opener ? { opener: { from: opener, agent: agents.conversations.registeredAgent(opener)?.id ?? null } } : {}),
       });
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
       scheduleHot();

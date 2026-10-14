@@ -549,7 +549,9 @@ function UserRow({ ev, queued, showTime = true, recommendations = [], delivery }
       <Markdown key={i} text={p.text} />
     ),
   );
-  if (!sent.agent) {
+  // Unmarked and with no sender the server proved: yours. A session's
+  // opening that another session started it with has a sender, and is not.
+  if (!sent.agent && !ev.sender) {
     const images = ev.images ? `${ev.images} image${ev.images === 1 ? "" : "s"}` : null;
     return (
       <Bubble id={ev.id} at={ev.at} showTime={showTime} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : delivery ?? null].filter(Boolean).join(" · ")}
@@ -584,7 +586,7 @@ function UserRow({ ev, queued, showTime = true, recommendations = [], delivery }
         </div>
         <div className="tl-agent-foot">
           <CopyIcon text={sent.text} />
-          <span>via agentbox send{queued ? " · queued" : ""}</span>
+          <span>{ev.sender?.opening ? "started this session" : "via agentbox send"}{queued ? " · queued" : ""}</span>
           {showTime && <time dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>}
         </div>
       </div>
@@ -638,7 +640,9 @@ function SenderBadge({ sender, claimed }: { sender: NonNullable<Extract<Timeline
       </span>
     );
   const title =
-    sender.kind === "unverified"
+    sender.kind === "unverified" && sender.opening
+      ? "Another session started this one with this message; agentbox has no record of who wrote it"
+      : sender.kind === "unverified"
       ? `agentbox has no record of this message being sent${claimed ? ` (it names ${claimed})` : ""}; its text is shown as written`
       : sender.kind === "agent" || sender.kind === "session"
         ? `Sent by ${sender.kind === "agent" ? agentName(sender.label) : sender.label}${sender.session ? ` (${sender.session})` : ""}`

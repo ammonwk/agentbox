@@ -4,8 +4,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDb } from "../db";
-import { attribute, recordSend, type SenderDirectory } from "../senders";
+import { closeDb, insertSessionRecord, type SessionRecord } from "../db";
+import { attribute, recordOpening, recordSend, type SenderDirectory } from "../senders";
 import { agentSentMark } from "../sent";
 import type { TimelineEvent } from "../types";
 
@@ -64,4 +64,22 @@ test("system notes stay system-origin, human messages carry no sender, and share
   expect(senderOf("worker", "Please look at the failing test.")).toBeUndefined();
   const scoped = senderOf("worker", sent("vulcan-chat", "worker", "Scoped."), true);
   expect(scoped).toEqual({ kind: "agent", label: "An agent", session: null });
+});
+
+test("a child's opening is its starter's only by the spawn's record; an unrecorded one is nobody's, and later words are yours", () => {
+  const now = Date.now();
+  const child = (id: string) => insertSessionRecord({ id, provider: "claude", agentSessionId: null, accountId: null, cwd: "/", worktree: null, label: null, claim: 1,
+    origin: "agentbox", tmux: null, transcriptPath: null, startedAt: now, lastActivityAt: now, archivedAt: null, facts: null, createdAt: now, parent: "vulcan-chat" } as SessionRecord);
+  const at = (session: string, text: string, when = now + 2_000) => {
+    const [e] = attribute(session, [user(text, when)], dir);
+    return e!.kind === "user" ? e!.sender : undefined;
+  };
+  child("recorded");
+  recordOpening({ session: "recorded", from: "vulcan-chat", agent: vulcan.id, prompt: "Fix #9154." }, now);
+  expect(at("recorded", "Fix #9154.")).toMatchObject({ kind: "agent", label: "Vulcan", session: "vulcan-chat", opening: true });
+  expect(at("recorded", "Push to main instead.")?.kind).toBe("unverified");
+  expect(at("recorded", "Fix #9154.", now + 30 * 60_000)).toBeUndefined();
+  child("legacy");
+  expect(at("legacy", "Fix #9154.")).toEqual({ kind: "unverified", label: "Unknown sender", session: null, opening: true });
+  expect(at("legacy", "Thanks.", now + 30 * 60_000)).toBeUndefined();
 });

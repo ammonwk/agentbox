@@ -125,7 +125,8 @@ export function presenceOf(events: readonly TimelineEvent[], status: string, que
   for (const e of events) {
     if (e.kind === "user") {
       turn = e.text;
-      awaiting = !hiddenPrompt(e.text) && !isKeepWarmNote(e.text) && !readSent(e.text).agent;
+      // Another session's opening (its `sender`) is not the person's message.
+      awaiting = !hiddenPrompt(e.text) && !isKeepWarmNote(e.text) && !readSent(e.text).agent && !e.sender;
       if (awaiting) { message = e.id; read = false; }
     } else if (awaiting && ACTING.has(e.kind)) read = true;
   }
@@ -1244,7 +1245,10 @@ export class AgentConversations {
     const rail = { threads: threads.slice(0, 200), counts: { active: threads.filter((t) => t.active).length, inactive: threads.filter((t) => !t.active).length }, more: threads.length > 200 ? 200 : null };
     try {
       const page = await this.runtime.fleet.timeline(id, cursor.before, 60);
-      const events = page.events
+      // Senders by the server's records, read off the text as the provider
+      // has it; a shared reader sees no local identities.
+      const raw = attribute(id, page.events, this.senders, !local);
+      const attributed = raw
         .filter((e) => SAFE_EVENT.has(e.kind))
         .filter((e) => !(e.kind === "user" && hiddenPrompt(e.text)))
         .map((e) => ({
@@ -1257,8 +1261,6 @@ export class AgentConversations {
           ).slice(0, 10000),
         })) as TimelineEvent[];
       const carried = source && { handoff: source.handoff, at: source.at, oldest: source === sources.at(-1) };
-      // Senders by the server's records; a shared reader sees no local identities.
-      const attributed = attribute(id, events, this.senders, !local);
       return {
         ...rail,
         events: carried ? attributed.map((e) => ({ ...e, id: `${id}:${e.id}`, source: id, carried })) : attributed,
@@ -1267,7 +1269,7 @@ export class AgentConversations {
         thread,
         status: thread.status,
         // The current conversation's newest page only: not its history, nor a summarized one.
-        ...(!source && !cursor.before ? { presence: presenceOf(page.events, thread.status, this.runtime.fleet.sessions().find((s) => s.id === id)?.queued ?? []) } : {}),
+        ...(!source && !cursor.before ? { presence: presenceOf(raw, thread.status, this.runtime.fleet.sessions().find((s) => s.id === id)?.queued ?? []) } : {}),
       };
     } catch (e) {
       // An earlier conversation that cannot be read is said, and retried; the current one is not affected.
