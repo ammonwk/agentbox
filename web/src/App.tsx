@@ -17,6 +17,7 @@ import { SessionView } from "./views/session/SessionView";
 import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
+import { SettingsNav } from "./SettingsNav";
 import { Skills } from "./views/Skills";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
@@ -24,6 +25,8 @@ import { Review } from "./views/Review";
 import { request } from "./api";
 import { useLoad } from "./lib/cloud";
 import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
+import { ProjectTabs, useProjectTabs } from "./ProjectTabs";
+import { Profile } from "./views/Profile";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { restoreScope, selectScope, scopeOf } from "./route";
 import type { LocalAgent } from "../../src/core/agents/conversation";
@@ -76,11 +79,7 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
   { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
-  { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
-  { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
   { id: "team", label: "Team", icon: Icon.link, to: { page: "team" } },
-  { id: "mcps", label: "MCPs", icon: Icon.plugs, to: { page: "mcps" } },
-  { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
 ];
 
 const PAGE_TITLE: Record<NavId, string> = {
@@ -93,6 +92,7 @@ const PAGE_TITLE: Record<NavId, string> = {
   mcps: "MCPs",
   team: "Team",
   settings: "Settings",
+  profile: "Profile",
 };
 
 export function App() {
@@ -119,7 +119,14 @@ export function App() {
     }
   }, [selectedSession?.id, localAgents.data]);
   const wrongSession = scope.project && selectedSession && sessionProject(state!.repos, agents, selectedSession) !== scope.project;
-  const projectName = project?.displayName ?? (staleProject ? "Unavailable project" : "All projects");
+  const projectTabs = useProjectTabs(state, agents, scope.project);
+  useEffect(() => {
+    if (!state || scope.project || !projectTabs.tabs.length || route.page === "session") return;
+    // Resolve old local-agent links before choosing a default project.
+    if (route.page === "agents" && route.id && !localAgents.data) return;
+    const linked = route.page === "agents" ? agents.find((a) => a.id === route.id)?.repo : null;
+    selectScope("project", linked ?? projectTabs.tabs[0]!.id, route, true);
+  }, [!!state, scope.project, route.page, route.page === "agents" ? route.id : null, projectTabs.tabs[0]?.id, localAgents.data]);
   const nav = navOf(route);
   // The start of the system bar, where an open session puts its facts.
   const [sysbarSlot, setSysbarSlot] = useState<HTMLElement | null>(null);
@@ -182,15 +189,15 @@ export function App() {
           itself widens over the page on hover, so nothing beside it reflows. */}
       <div className="sidebar-slot">
         <aside className="sidebar" data-nav-region="navigation" aria-label="Application navigation">
-          <button type="button" className="brand project-brand" aria-label={`Switch project: ${projectName}`} title={`Switch project · ${projectName}`} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
+          <a className="brand project-brand" href={hrefOf({ page: "agents" })} aria-label="agentbox home" title="agentbox">
             <BrandMark />
-            <span className="nav-label">{projectName}</span>
+            <span className="nav-label">agentbox</span>
             {MOCK ? (
               <span className="mock-tag" title="Opened with ?mock=1 — nothing here is real and nothing is sent anywhere">
                 mock
               </span>
             ) : null}
-          </button>
+          </a>
 
           {/* Blurring on a mouse click (e.detail > 0) keeps the Modal from
               handing focus back here on close: a script refocus outside the
@@ -239,19 +246,25 @@ export function App() {
             })}
           </nav>
 
-          <div className="spacer" />
-          <UpdateReady />
-          <InboxBell state={state} themeError={theme.error} />
-          <ConnectionChip />
-          <ThemeControl value={theme.pref} onChange={theme.set} />
+          <div className="sidebar-footer">
+            <UpdateReady />
+            <a className={`nav-item ${nav === "settings" ? "active" : ""}`} data-nav-item data-nav-id="settings" href={hrefOf({ page: "settings" })} aria-current={nav === "settings" ? "page" : undefined} title="Settings">
+              <Icon.settings size={20} weight="duotone" />
+              <span className="nav-label">Settings</span>
+              {counts.accounts > 0 ? <span className="count count-warn" title={countTitle("accounts", counts.accounts)}>{counts.accounts}</span> : null}
+            </a>
+            <InboxBell state={state} themeError={theme.error} />
+            <ThemeControl value={theme.pref} onChange={theme.set} />
+            <ProfileLink identity={state?.onboarding.identity} active={route.page === "profile"} />
+          </div>
         </aside>
       </div>
 
       <div className="main">
-        <div className="project-bar"><button type="button" aria-label={`Switch project: ${projectName}`} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}><BrandMark /><span>{projectName}</span><Icon.chevronDown size={12} /></button>{["accounts", "settings", "skills", "mcps", "team", "voice"].includes(route.page) && <span className="hint">{route.page === "team" ? "Workspace settings" : "Global settings and tools"}</span>}</div>
+        <ProjectTabs tabs={projectTabs.tabs} selected={scope.project} onAdd={() => setSwitcherOpen(true)} onClose={projectTabs.close} />
         {/* The sessions pages carry their own header — the board's filter bar,
             the session's title — so a page title above them is a second one. */}
-        {flush ? null : (
+        {flush || route.page === "agents" || route.page === "profile" ? null : (
           <header className="topbar">
             <h1>{PAGE_TITLE[nav]}</h1>
             {route.page === "accounts" ? (
@@ -275,6 +288,8 @@ export function App() {
           </header>
         )}
 
+        {nav === "settings" ? <SettingsNav route={route} accountAlerts={counts.accounts} /> : null}
+
         {/* The one banner left: the rest are in the inbox (Inbox.tsx). */}
         <StaleBanner />
 
@@ -284,7 +299,7 @@ export function App() {
             {!state ? (
               <Bootstrapping />
             ) : staleProject && ["agents", "session", "sessions", "review"].includes(route.page) ? (
-              <Empty title="This project is no longer registered"><p>Your conversations and work remain in All projects.</p><Button onClick={() => selectScope("project", null)}>All projects</Button></Empty>
+              <Empty title="This project is no longer registered"><Button onClick={() => setSwitcherOpen(true)}>Choose a project</Button></Empty>
             ) : wrongSession ? (
               <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", sessionProject(state.repos, agents, selectedSession!), route)}>Open in its project</Button></Empty>
             ) : route.page === "sessions" || route.page === "session" ? (
@@ -304,6 +319,8 @@ export function App() {
                 }
                 onNew={() => setNewOpen(true)}
               />
+            ) : route.page === "agents" && !project ? (
+              <Empty title="Choose a project to see its agents"><Button onClick={() => setSwitcherOpen(true)}>Choose a project</Button></Empty>
             ) : route.page === "agents" ? (
               <Suspense fallback={<Empty title="Loading…" />}><Agents key={`${scope.workspace}:${scope.project ?? "all"}`} state={state} id={route.id} /></Suspense>
             ) : route.page === "accounts" ? (
@@ -320,6 +337,8 @@ export function App() {
               <Skills skills={state.skills} />
             ) : route.page === "team" ? (
               <Suspense fallback={<Empty title="Loading…" />}><Team state={state} /></Suspense>
+            ) : route.page === "profile" ? (
+              <Profile identity={state.onboarding.identity} />
             ) : route.page === "mcps" ? (
               <Mcps />
             ) : (
@@ -373,7 +392,7 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0 };
+  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0, profile: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
@@ -387,6 +406,7 @@ function countsOf(state: AppState | null): Record<NavId, number> {
     mcps: 0,
     team: 0,
     settings: 0,
+    profile: 0,
   };
 }
 
@@ -423,26 +443,18 @@ function UpdateReady() {
   );
 }
 
-function ConnectionChip() {
-  const { connected, downSince, failing, restarting, starting } = useConnection();
-  const label = connected
-    ? starting
-      ? "Starting…"
-      : MOCK
-        ? "Mock data"
-        : "Live"
-    : restarting
-      ? "Restarting…"
-      : failing
-        ? "Offline"
-        : downSince
-          ? "Reconnecting…"
-          : "Connecting…";
+function ProfileLink({ identity, active }: { identity: AppState["onboarding"]["identity"] | undefined; active: boolean }) {
+  const name = identity?.name || "Your profile";
+  const github = identity?.github;
+  const [failedImage, setFailedImage] = useState<string | null>(null);
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase();
   return (
-    <div className={`conn ${connected ? "on" : failing ? "off" : ""}`} title={`Connection: ${label}`} role="status">
-      <span className="dot" aria-hidden="true" />
-      <span className="conn-label nav-label">{label}</span>
-    </div>
+    <a className={`nav-item nav-profile ${active ? "active" : ""}`} data-nav-item data-nav-id="profile" aria-current={active ? "page" : undefined} href={hrefOf({ page: "profile" })} aria-label={`${name} · Profile`} title={`${name} · Profile`}>
+      <span className="nav-avatar" aria-hidden="true">
+        {github && failedImage !== github ? <img src={`https://github.com/${encodeURIComponent(github)}.png?size=64`} alt="" referrerPolicy="no-referrer" onError={() => setFailedImage(github)} /> : initials}
+      </span>
+      <span className="nav-label">{name}</span>
+    </a>
   );
 }
 

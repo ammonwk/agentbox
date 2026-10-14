@@ -207,7 +207,10 @@ function Directory({
         id.slice(0, 8);
   if (me.error || data.error) return <Empty title="Workspace unavailable">{me.error ?? data.error}<Button onClick={() => { void me.reload(); void data.reload(); }}>Retry</Button></Empty>;
   if (!me.data) return <Empty title="Loading workspaces…" />;
-  if (selected && !inProject(selected)) return <Empty title="This shared agent works in other projects"><Button onClick={() => selectScope("project", null, { page: "agents", id: selected.id })}>Open in All projects</Button></Empty>;
+  if (selected && !inProject(selected)) {
+    const target = state.repos.find((repo) => selected.definition.repos.some((slug) => slug.toLowerCase() === (repo.fullName ?? (repo.kind === "github" ? repo.ref : "")).toLowerCase()));
+    return <Empty title="This shared agent works in other projects">{target ? <Button onClick={() => selectScope("project", target.id, { page: "agents", id: selected.id })}>Open in {target.displayName}</Button> : <p>Register one of this agent's repositories in Settings to open it.</p>}</Empty>;
+  }
   if (!me.data.memberships.length)
     return (
       <Empty title="Create or join a workspace first">

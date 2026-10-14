@@ -19,12 +19,14 @@ export type Route =
   | { page: "review" }
   | { page: "voice" }
   | { page: "team" }
+  | { page: "profile" }
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "agents" | "sessions" | "review" | "voice" | "accounts" | "skills" | "mcps" | "team" | "settings";
+export type NavId = "agents" | "sessions" | "review" | "voice" | "accounts" | "skills" | "mcps" | "team" | "profile" | "settings";
 
 export function navOf(route: Route): NavId {
+  if (["accounts", "skills", "mcps"].includes(route.page)) return "settings";
   return route.page === "session" ? "sessions" : route.page;
 }
 
@@ -53,7 +55,16 @@ export function parseHash(hash: string): Route {
   if (head === "mcps") return { page: "mcps" };
   if (head === "voice") return { page: "voice" };
   if (head === "review") return { page: "review" };
-  if (head === "settings") return { page: "settings" };
+  if (head === "settings") {
+    if (a === "accounts") {
+      if (b === "insights" && parts[3]) return { page: "accounts", sub: "insights", account: parts[3] };
+      return { page: "accounts", sub: b === "calibration" ? "calibration" : "accounts" };
+    }
+    if (a === "skills") return { page: "skills" };
+    if (a === "mcps") return { page: "mcps" };
+    return { page: "settings" };
+  }
+  if (head === "profile") return { page: "profile" };
   if (head === "team") return { page: "team" };
   return { page: "sessions" };
 }
@@ -64,8 +75,10 @@ function routePath(route: Route): string {
     case "session":
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
     case "accounts":
-      if (route.sub === "insights") return `#/accounts/insights/${encodeURIComponent(route.account)}`;
-      return route.sub === "calibration" ? "#/accounts/calibration" : "#/accounts";
+      if (route.sub === "insights") return `#/settings/accounts/insights/${encodeURIComponent(route.account)}`;
+      return route.sub === "calibration" ? "#/settings/accounts/calibration" : "#/settings/accounts";
+    case "skills": return "#/settings/skills";
+    case "mcps": return "#/settings/mcps";
     default:
       return `#/${route.page}`;
   }

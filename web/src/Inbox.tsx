@@ -97,7 +97,7 @@ export function InboxBell({ state, themeError }: { state: AppState | null; theme
         }}
       >
         <Icon.bell />
-        <span className="nav-label">Inbox</span>
+        <span className="nav-label">Notifications</span>
         {count > 0 ? <span className={`count${alerts ? " count-warn" : ""}`}>{count}</span> : null}
       </button>
       {open ? (

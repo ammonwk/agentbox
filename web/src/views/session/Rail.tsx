@@ -170,6 +170,31 @@ export function Rail({
   scheduled: Schedule[];
   onCancelSchedule: (sc: Schedule) => void;
 }) {
+  const { project } = useScope();
+  const foldKey = `agentbox.railSections:${project ?? "all"}:${list.view}:${list.sort}`;
+  const [folds, setFolds] = useState<Record<string, string[]>>(() => {
+    try {
+      const value = JSON.parse(localStorage.getItem("agentbox.railSections") ?? "{}");
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    } catch { return {}; }
+  });
+  const collapsed = new Set(Array.isArray(folds[foldKey]) ? folds[foldKey] : []);
+  const toggleSection = (key: string) => {
+    const next = new Set(collapsed);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    const value = { ...folds, [foldKey]: [...next] };
+    setFolds(value);
+    try { localStorage.setItem("agentbox.railSections", JSON.stringify(value)); } catch { /* this tab still remembers */ }
+  };
+  const sectionOpen = (key: string) => !!list.filter.query || !collapsed.has(key);
+  const revealed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!current || revealed.current === `${foldKey}:${current}`) return;
+    const section = sections.find((sec) => sec.rows.some((row) => row.id === current));
+    if (!section) return;
+    revealed.current = `${foldKey}:${current}`;
+    if (collapsed.has(section.key)) toggleSection(section.key);
+  }, [current, foldKey, sections]);
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const usual = useMemo(() => usualProvider(rows), [rows]);
   // A new map only when a repo's shape changes, so the rows do not draw again on every frame.
@@ -193,9 +218,11 @@ export function Rail({
   // A block body, not `() => el.scrollIntoView()`: newer browsers return a
   // Promise from scrollIntoView, and React calls whatever an effect returns as
   // its cleanup — `destroy is not a function` took the whole app down.
+  const currentSection = sections.find((sec) => sec.rows.some((s) => s.id === current));
+  const currentSectionOpen = !currentSection || sectionOpen(currentSection.key);
   useEffect(() => {
     cur.current?.scrollIntoView({ block: "nearest" });
-  }, [current]);
+  }, [current, currentSectionOpen]);
 
   // Dragging a row: onto another row puts it under that one; anywhere else in
   // the list, when it is under one now, takes it out to the top level. It
@@ -271,11 +298,18 @@ export function Rail({
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.nativeEvent.isComposing || !e.key.startsWith("Arrow")) return;
     const t = e.target as HTMLElement;
     const nav = e.currentTarget;
-    const all = [...nav.querySelectorAll<HTMLElement>(".rail-row, .rail-quiet")];
+    const all = [...nav.querySelectorAll<HTMLElement>(".rail-row, .rail-quiet, .rail-section-toggle:not(:disabled)")];
     const search = nav.querySelector<HTMLElement>("[data-search]");
     if (t === search) {
       if (e.key !== "ArrowDown") return;
       (nav.querySelector<HTMLElement>('.rail-row[aria-current="page"]') ?? all[0])?.focus();
+    } else if (t.classList.contains("rail-section-toggle")) {
+      const i = all.indexOf(t);
+      const open = t.getAttribute("aria-expanded") === "true";
+      if (e.key === "ArrowDown") all[i + 1]?.focus();
+      else if (e.key === "ArrowUp") (all[i - 1] ?? search)?.focus();
+      else if ((e.key === "ArrowRight" && !open) || (e.key === "ArrowLeft" && open)) t.click();
+      else return;
     } else if (t.classList.contains("rail-quiet")) {
       // The line over a row's inactive children: → and ← show and hide them.
       const i = all.indexOf(t);
@@ -355,10 +389,10 @@ export function Rail({
         <CloseFailure />
         {view === "active" && scheduled.length ? (
           <div className="rail-sec" data-kind="scheduled">
-            <div className="rail-label">
-              Scheduled <span>{scheduled.length}</span>
-            </div>
-            {scheduled.map((sc) => (
+            <button type="button" className="rail-label rail-section-toggle" aria-expanded={sectionOpen("scheduled")} disabled={!!filter.query} onClick={() => toggleSection("scheduled")}>
+              <Icon.chevronRight size={11} className="section-chevron" /> Scheduled <span>{scheduled.length}</span>
+            </button>
+            {sectionOpen("scheduled") && scheduled.map((sc) => (
               <ScheduledRow key={sc.id} sc={sc} current={sc.id === current} onCancel={onCancelSchedule} />
             ))}
           </div>
@@ -371,13 +405,14 @@ export function Rail({
         {sections.map((sec) => (
           <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
             {sec.label ? (
-              <div className="rail-label" title={sec.key === "pinned" ? "Drag a pinned session to reorder them" : sort === "repo" ? sec.key : undefined}>
+              <button type="button" className="rail-label rail-section-toggle" aria-expanded={sectionOpen(sec.key)} disabled={!!filter.query} onClick={() => toggleSection(sec.key)} title={sec.key === "pinned" ? "Drag a pinned session to reorder them" : sort === "repo" ? sec.key : undefined}>
+                <Icon.chevronRight size={11} className="section-chevron" />
                 {sec.key === "pinned" ? <Icon.pin size={11} /> : null}
                 {sort === "repo" && shapes.has(sec.key) ? <ShapeMark shape={shapes.get(sec.key)!} /> : null}
                 {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length}</span>
-              </div>
+              </button>
             ) : null}
-            {sec.rows.map((s, i) => (
+            {(sectionOpen(sec.key) || !sec.label) && sec.rows.map((s, i) => (
               <RowAndQuiet key={s.id} quiet={sec.quiet?.get(s.id)} onQuiet={list.toggleQuiet}>
                 <Row
                   s={s}

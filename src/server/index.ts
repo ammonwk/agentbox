@@ -17,6 +17,7 @@
  * session, bytes both ways. Closing it detaches; the agent keeps running.
  */
 
+import { githubProfile } from "../core/profile";
 import { ensureBridge } from "../bridge/service";
 import { ZodError } from "zod";
 import { statSync } from "node:fs";
@@ -1315,6 +1316,7 @@ const router = new Router(mapError)
   })
 
   // ---- settings, repos, worktrees, skills
+  .add("GET", "/api/profile", async ({ url }) => json(await githubProfile(url.searchParams.get("refresh") === "1")))
   .add("GET", "/api/settings", () => json(getSettings()))
   .add("PUT", "/api/settings", async ({ req }) => {
     const patch = parseSettingsPatch(await readBody(req));
