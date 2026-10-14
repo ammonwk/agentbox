@@ -2480,24 +2480,31 @@ kbd {
     height: 3px;
     border-radius: 0 0 3px 3px;
   }
-  /* New sits in the middle of the bar, where the thumb rests. */
+  /* Every destination stays reachable: the bar scrolls within itself, and
+     each entry is placed by name, so a page added later takes its place
+     without renumbering the rest. */
+  .sidebar { overflow-x: auto; }
+  .sidebar .nav-item, .sidebar .nav-new, .sidebar .nav-bell { flex: 0 0 56px; }
+  /* New sits where the thumb rests, after Sessions and Review. */
   .nav-new {
     order: 3;
   }
-  /* Sessions, Review, New, Voice, Accounts, Settings, then the bell; Skills
-     is a desk job. */
-  .sidebar nav > :nth-child(1) { order: 1; }
-  .sidebar nav > :nth-child(2) { order: 2; }
-  .sidebar nav > :nth-child(3) { order: 4; }
-  .sidebar nav > :nth-child(4) { order: 5; }
-  .sidebar nav > :nth-child(5) { display: none; }
-  .sidebar nav > :nth-child(6) { order: 6; }
+  .nav-new .nav-label { display: none; }
+  .nav-new::after { content: "New"; }
+  .sidebar [data-nav-id="sessions"] { order: 1; }
+  .sidebar [data-nav-id="review"] { order: 2; }
+  .sidebar [data-nav-id="voice"] { order: 4; }
+  .sidebar [data-nav-id="accounts"] { order: 5; }
+  .sidebar [data-nav-id="skills"] { order: 6; }
+  .sidebar [data-nav-id="team"] { order: 7; }
+  .sidebar [data-nav-id="mcps"] { order: 8; }
+  .sidebar [data-nav-id="settings"] { order: 9; }
   /* The bell is the bar's last tab, and its inbox a sheet above the bar. */
   .inbox-wrap {
     display: contents;
   }
   .nav-bell {
-    order: 7;
+    order: 10;
   }
   .nav-bell[aria-expanded="true"] {
     background: none;
@@ -2562,5 +2569,102 @@ kbd {
     max-height: calc(100dvh - var(--kbh, 0px) - env(safe-area-inset-top) - 12px);
     border-radius: var(--radius) var(--radius) 0 0;
     padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ---------------------------------------------------------------- projects
+   The logo (desktop) and the bar above the page (a narrow screen, whose tab
+   bar has no logo) name the selected project and open the same switcher
+   (ProjectSwitcher.tsx). */
+.project-brand {
+  border: 0;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.project-brand .nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-bar {
+  display: none;
+  align-items: center;
+  gap: 16px;
+  min-height: 36px;
+  padding: 3px 18px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.project-bar > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  color: var(--muted);
+  cursor: pointer;
+  min-width: 0;
+}
+.project-bar > button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-bar img {
+  display: none;
+  width: 20px;
+  height: 20px;
+}
+.project-options {
+  display: flex;
+  flex-direction: column;
+  max-height: min(52vh, 420px);
+  overflow: auto;
+  margin: 12px 0;
+  gap: 4px;
+}
+.project-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  padding: 12px;
+}
+.project-option:hover,
+.project-option[aria-pressed="true"] {
+  background: var(--hover);
+}
+.project-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.project-option small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.project-option svg {
+  flex: none;
+}
+@media (max-width: 900px) {
+  .project-bar {
+    display: flex;
+    padding: 4px 12px;
+  }
+  .project-bar img {
+    display: block;
+  }
+  .project-bar > .hint {
+    margin-left: auto;
+    font-size: 11px;
   }
 }

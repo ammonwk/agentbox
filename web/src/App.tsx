@@ -7,7 +7,7 @@ import { api, clockNow, MOCK, subscribeToClock, useAppState, useConnection } fro
 import type { AgentSettings, AppState } from "../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./components";
 import { needsYou, titleOf } from "./lib/board";
-import { go, hrefOf, navOf, onGo, parseHash, type NavId, type Route } from "./route";
+import { go, hrefOf, navOf, onGo, parseHash, restoreScope, scopeOf, selectScope, type NavId, type Route } from "./route";
 import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
 import { useUpdateReady } from "./lib/update";
 import { useKeyboardNavigation } from "./lib/keyboard";
@@ -21,6 +21,8 @@ import { Skills } from "./views/Skills";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
+import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -32,11 +34,16 @@ const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice
 // ----------------------------------------------------------------- routing
 
 function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
-  const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
+  // An unscoped link to a list opens in the project this browser last looked at.
+  const [route, setRoute] = useState<Route>(() => {
+    restoreScope();
+    return parseHash(location.hash);
+  });
 
   useEffect(() => {
     const onChange = () => setRoute(parseHash(location.hash));
     addEventListener("hashchange", onChange);
+    addEventListener("popstate", onChange);
     const off = onGo(onChange);
     // Normalise "" and anything unrecognised without adding a history entry.
     if (hrefOf(parseHash(location.hash)) !== location.hash) {
@@ -44,6 +51,7 @@ function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
     }
     return () => {
       removeEventListener("hashchange", onChange);
+      removeEventListener("popstate", onChange);
       off();
     };
   }, []);
@@ -73,6 +81,10 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
 ];
 
+/** Pages a project filters; the rest are the machine's, whatever is selected. */
+const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions", "review"]);
+const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "skills", "mcps", "team", "voice"]);
+
 const PAGE_TITLE: Record<NavId, string> = {
   sessions: "Sessions",
   review: "Review",
@@ -93,11 +105,27 @@ export function App() {
   }, []);
   const theme = useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  // The selected project (lib/projects.tsx): the lists, badges and the
+  // new-session dialog see the board through it. Accounts, MCPs, settings
+  // and the system bar are global.
+  const scope = useScope();
+  const project = state?.repos.find((r) => r.id === scope.project) ?? null;
+  const scoped = useMemo(() => (state ? scopedState(state, scope.project) : null), [state, scope.project]);
+  // A scope naming a repo that is registered no more (or on another machine).
+  const staleProject = !!state && !!scope.project && !project;
+  const selectedSession = route.page === "session" ? state?.sessions.find((s) => s.id === route.id) : null;
+  // An unscoped link straight to a session lands in that session's project.
+  useEffect(() => {
+    if (selectedSession && !scopeOf().has("project")) selectScope("project", sessionProject(state!.repos, selectedSession), route, true);
+  }, [selectedSession?.id]);
+  const wrongSession = !!scope.project && !!selectedSession && sessionProject(state!.repos, selectedSession) !== scope.project;
+  const projectName = project?.displayName ?? (staleProject ? "Unavailable project" : "All projects");
   const nav = navOf(route);
   // The start of the system bar, where an open session puts its facts.
   const [sysbarSlot, setSysbarSlot] = useState<HTMLElement | null>(null);
 
-  const counts = useMemo(() => countsOf(state), [state]);
+  const counts = useMemo(() => countsOf(scoped), [scoped]);
 
   const contentRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -146,6 +174,7 @@ export function App() {
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
+    <ProjectContext.Provider value={{ repos: state?.repos ?? [] }}>
     <div className="app" data-page={route.page}>
       <a className="skip" href="#content">
         Skip to content
@@ -155,15 +184,23 @@ export function App() {
           itself widens over the page on hover, so nothing beside it reflows. */}
       <div className="sidebar-slot">
         <aside className="sidebar" data-nav-region="navigation" aria-label="Application navigation">
-          <div className="brand">
+          {/* The logo is the project: it names the selected one and opens the switcher. */}
+          <button
+            type="button"
+            className="brand project-brand"
+            aria-label={`Switch project: ${projectName}`}
+            title={`Switch project · ${projectName}`}
+            aria-haspopup="dialog"
+            onClick={() => setSwitcherOpen(true)}
+          >
             <BrandMark />
-            <span className="nav-label">agentbox</span>
+            <span className="nav-label">{projectName}</span>
             {MOCK ? (
               <span className="mock-tag" title="Opened with ?mock=1 — nothing here is real and nothing is sent anywhere">
                 mock
               </span>
             ) : null}
-          </div>
+          </button>
 
           {/* Blurring on a mouse click (e.detail > 0) keeps the Modal from
               handing focus back here on close: a script refocus outside the
@@ -193,6 +230,7 @@ export function App() {
                 <a
                   key={id}
                   data-nav-item
+                  data-nav-id={id}
                   aria-keyshortcuts="ArrowUp ArrowDown ArrowRight"
                   className={`nav-item ${active ? "active" : ""}`}
                   href={hrefOf(to)}
@@ -220,6 +258,16 @@ export function App() {
       </div>
 
       <div className="main">
+        {/* On a phone the sidebar is a tab bar without the logo, so the
+            project is named — and switched — in a bar above the page. */}
+        <div className="project-bar">
+          <button type="button" aria-label={`Switch project: ${projectName}`} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
+            <BrandMark />
+            <span>{projectName}</span>
+            <Icon.chevronDown size={12} />
+          </button>
+          {GLOBAL_PAGES.has(route.page) ? <span className="hint">{route.page === "team" ? "Workspace settings" : "Global settings and tools"}</span> : null}
+        </div>
         {/* The sessions pages carry their own header — the board's filter bar,
             the session's title — so a page title above them is a second one. */}
         {flush ? null : (
@@ -254,9 +302,20 @@ export function App() {
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
+            ) : staleProject && SCOPED_PAGES.has(route.page) ? (
+              <Empty title="This project is no longer registered" action={<Button onClick={() => selectScope("project", null)}>All projects</Button>}>
+                <p>Your conversations and work remain in All projects.</p>
+              </Empty>
+            ) : wrongSession ? (
+              <Empty
+                title="This session belongs to another project"
+                action={<Button onClick={() => selectScope("project", sessionProject(state.repos, selectedSession), route)}>Open in its project</Button>}
+              />
             ) : route.page === "sessions" || route.page === "session" ? (
               <SessionView
+                key={scope.project ?? "all"}
                 state={state}
+                visible={scoped!}
                 id={route.page === "session" ? route.id : null}
                 tab={route.page === "session" ? route.tab : "timeline"}
                 onTab={(tab) => route.page === "session" && navigate({ page: "session", id: route.id, tab }, true)}
@@ -278,7 +337,7 @@ export function App() {
                 <Voice />
               </Suspense>
             ) : route.page === "review" ? (
-              <Review state={state} />
+              <Review key={scope.project ?? "all"} state={scoped!} />
             ) : route.page === "skills" ? (
               <Skills skills={state.skills} />
             ) : route.page === "team" ? (
@@ -297,9 +356,12 @@ export function App() {
         </ErrorBoundary>
       </div>
 
+      {switcherOpen && state ? <ProjectSwitcher repos={state.repos} selected={scope.project} onClose={() => setSwitcherOpen(false)} /> : null}
       {newOpen && state ? (
         <ErrorBoundary label="The new-session dialog">
           <NewSession
+            key={scope.project ?? "all"}
+            project={project?.id ?? null}
             state={state}
             onClose={() => setNewOpen(false)}
             onCreated={(id) => {
@@ -315,6 +377,7 @@ export function App() {
         </ErrorBoundary>
       ) : null}
     </div>
+    </ProjectContext.Provider>
   );
 }
 
