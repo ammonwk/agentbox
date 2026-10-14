@@ -181,11 +181,25 @@ export function App() {
       e.stopPropagation();
       if (!document.querySelector(".modal-backdrop")) setNewOpen(true);
     };
+    // Ctrl+Tab steps to the next project tab and Ctrl+Shift+Tab to the one
+    // before, from anywhere, as a browser's tabs do. A browser keeps the key
+    // for its own tabs; the installed app and the desktop app give it here.
+    const onCtrlTab = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || e.key !== "Tab") return;
+      const { ids, selected } = tabOrder.current;
+      if (ids.length < 2 || document.querySelector(".modal-backdrop")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const step = e.shiftKey ? ids.length - 1 : 1;
+      selectScope("project", ids[(ids.indexOf(selected ?? "") + step) % ids.length]!);
+    };
     addEventListener("keydown", onKey);
     addEventListener("keydown", onCtrlT, true);
+    addEventListener("keydown", onCtrlTab, true);
     return () => {
       removeEventListener("keydown", onKey);
       removeEventListener("keydown", onCtrlT, true);
+      removeEventListener("keydown", onCtrlTab, true);
     };
   }, []);
 

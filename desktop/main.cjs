@@ -12,7 +12,8 @@ const { join, resolve } = require("node:path");
 const PORT = Number(process.env.AGENTBOX_PORT ?? 4479);
 const ORIGIN = `http://localhost:${PORT}`;
 const HOME = process.env.AGENTBOX_HOME ?? join(homedir(), ".local", "share", "agentbox");
-const ICON = resolve(__dirname, "..", "web", "public", "icon-512.png");
+// The board's icon on the macOS grid: a rounded body with a margin, as the Dock expects.
+const ICON = join(__dirname, "icon.png");
 
 /** The checkout the server runs from: the deployed one when there is one, else this one. */
 function checkout() {

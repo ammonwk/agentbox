@@ -224,14 +224,8 @@ export function SessionView({
       }
       const app = e.ctrlKey && !e.altKey && isInstalledApp();
       if ((app || (e.altKey && !e.ctrlKey)) && !e.metaKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
-        if (app && e.key === "Tab") {
-          if (ordered.length === 0) return;
-          e.preventDefault();
-          e.stopPropagation();
-          const i = ordered.findIndex((s) => s.id === id);
-          const step = e.shiftKey ? -1 : 1;
-          onOpen(ordered[i === -1 ? (step === 1 ? 0 : ordered.length - 1) : (i + step + ordered.length) % ordered.length].id);
-        } else if (e.key.toLowerCase() === "w" && !e.shiftKey) {
+        // Ctrl+Tab is the project tabs' (App.tsx); j/k step through sessions.
+        if (e.key.toLowerCase() === "w" && !e.shiftKey) {
           const row = id ? state.sessions.find((s) => s.id === id) : null;
           if (!row || row.status === "closed") return;
           e.preventDefault();
