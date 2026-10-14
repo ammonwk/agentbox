@@ -38,17 +38,38 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       value = await api("POST", "/api/agents/work", file());
       break;
     case "work":
-      value = await api("GET", `/api/agents/work${id ? `/${encodeURIComponent(id)}` : ""}`);
+      value = await api(
+        "GET",
+        `/api/agents/work${id ? `/${encodeURIComponent(id)}` : ""}`,
+      );
       break;
     case "work-review":
     case "work-collect":
     case "work-publish":
     case "work-failure":
+    case "work-milestone":
     case "work-retry-review":
     case "work-reconcile":
     case "work-retry-start":
       if (!id) throw new Error(`${verb} requires a work family UUID`);
-      value = await api("POST", `/api/agents/work/${encodeURIComponent(id)}/${verb.slice(5)}`, ["work-collect", "work-reconcile", "work-retry-start"].includes(verb) ? {} : file());
+      value = await api(
+        "POST",
+        `/api/agents/work/${encodeURIComponent(id)}/${verb.slice(5)}`,
+        ["work-collect", "work-reconcile", "work-retry-start"].includes(verb)
+          ? {}
+          : file(),
+      );
+      break;
+    case "prepare":
+    case "review":
+    case "collect":
+    case "retry-review":
+      if (!id) throw new Error(`${verb} requires a run UUID`);
+      value = await api(
+        "POST",
+        `/api/agents/runs/${encodeURIComponent(id)}/${verb}`,
+        verb === "collect" ? {} : file(),
+      );
       break;
     case "intake":
       if (!id) throw new Error("agent intake <run UUID> --file <work.json>");
@@ -59,8 +80,15 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       );
       break;
     case "draft":
-      if (!id || !str("request")) throw new Error("agent draft <creator agent ID|run UUID> --request <stable UUID> --file <creation.json>");
-      value = await api("POST", `/api/agents/${encodeURIComponent(id)}/creation-drafts`, { request: str("request"), spec: file() });
+      if (!id || !str("request"))
+        throw new Error(
+          "agent draft <creator agent ID|run UUID> --request <stable UUID> --file <creation.json>",
+        );
+      value = await api(
+        "POST",
+        `/api/agents/${encodeURIComponent(id)}/creation-drafts`,
+        { request: str("request"), spec: file() },
+      );
       break;
     case "recommend":
       if (!id || !str("request"))
@@ -211,7 +239,7 @@ export async function agent(api: Api, args: string[]): Promise<number> {
       break;
     default:
       throw new Error(
-        "agent takes status, bind, sync, read, progress, action, experts, finish or rotate; author shared agents in the Agents page",
+        "agent takes status, bind, sync, read, progress, prepare, review, collect, retry-review, action, experts, finish, rotate; local work uses work-start, work, work-review, work-collect, work-retry-review, work-retry-start, work-publish, work-reconcile, work-failure; create agents through Jupiter",
       );
   }
   console.log(JSON.stringify(value, null, 2));

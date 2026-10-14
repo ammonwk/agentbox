@@ -13,6 +13,14 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox wait until -- agentbox agent check <run UUID> --repo owner/repo --number 123 --condition checks
     agentbox agent bind --file local-binding.json  # signed-in host owner token required
     agentbox agent progress <run UUID> --stage in_progress --next 'Validate the fix'
+    agentbox agent prepare <run UUID> --file preparation.json
+    agentbox agent review <run UUID> --file validation.json
+    agentbox agent collect <run UUID>
+    agentbox agent work-start --file family.json
+    agentbox agent work-review <work UUID> --file validation.json
+    agentbox agent work-collect <work UUID>
+    agentbox agent work-publish <work UUID> --file publication.json
+    agentbox agent work-milestone <work UUID> --file milestone.json
     agentbox agent action <run UUID> --request <UUID retained for retries> --file action.json
     agentbox agent recommend <run UUID or local agent ID> --request <stable UUID> --file proposal.json
     agentbox agent intake <run UUID> --file issue.json # {source,title,acceptance}; configured activation applies

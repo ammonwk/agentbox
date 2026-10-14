@@ -95,7 +95,11 @@ test("merge and issue closure preserve exact-head policy and reconcile without r
         body = { tree: { sha: "b".repeat(40) } };
       else if (path.includes("/git/") && init?.method === "POST") {
         effects.push({ path, body: JSON.parse(String(init.body)) });
-        body = { sha: head };
+        body = {
+          sha: path.endsWith("/git/trees")
+            ? git(["rev-parse", `${preparedHead}^{tree}`])
+            : head,
+        };
       } else if (path.endsWith("/pulls") && init?.method === "POST") {
         effects.push({ path, body: JSON.parse(String(init.body)) });
         body = pull;
@@ -177,6 +181,7 @@ test("merge and issue closure preserve exact-head policy and reconcile without r
         })),
     } as InstallationAgents;
     const binding = { appKeyPath: pem } as AgentBinding;
+    let mapping: unknown;
     const published = await github.dispatch(
       a,
       { id: crypto.randomUUID() } as AgentRun,
@@ -192,7 +197,16 @@ test("merge and issue closure preserve exact-head policy and reconcile without r
       dir,
       cloud,
       async () => {},
+      async (value) => {
+        mapping = value;
+      },
     );
+    expect(mapping).toEqual({
+      base,
+      head: preparedHead,
+      tree: git(["rev-parse", `${preparedHead}^{tree}`]),
+      remoteHead: head,
+    });
     expect(published.html_url).toBe(pull.html_url);
     expect(
       effects.find((e) => e.path.endsWith("/git/commits"))?.body.author,
@@ -241,6 +255,12 @@ test("merge and issue closure preserve exact-head policy and reconcile without r
     expect(effects).toHaveLength(0);
     pull.draft = true;
     await expect(dispatch(merge)).rejects.toThrow("must be ready");
+    pull.body = "Ask @reporter";
+    await expect(
+      dispatch({ kind: "ready_pr", repo, number: 2, head, base: "main" }),
+    ).rejects.toThrow("no verified opt-in");
+    expect(effects).toHaveLength(0);
+    pull.body = "Related to #1";
     await dispatch({ kind: "ready_pr", repo, number: 2, head, base: "main" });
     expect(pull.draft).toBe(false);
     const result = await dispatch(merge);

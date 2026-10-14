@@ -468,8 +468,28 @@ cause and files a deduplicated improvement issue in the explicitly granted repo.
 An uncertain issue POST is reconciled before any retry. Improvement issues never
 count as solved trial issues. No fourth review or automatic merge is available.
 
-The current shared App action path refuses new publication and ready actions
-until a shared independent-review journal is attached; human action approval alone
-cannot bypass this gate. Shared Chat/Feed, intake, status and configured read tools
-remain available. Local guarded publication uses its explicitly granted human gh
-actor and never pretends that actor is a separately provisioned bot.
+Shared repository writers use the same review engine: `agent prepare RUN --file`
+pins `{base,preparation:{problem,consumers,edges,nonGoals,design,validation}}` before
+editing; `agent review RUN --file` takes `{validation:[artifact references]}`.
+`agent collect RUN` reads the three actual reviewer transcripts. `retry-review`
+accepts `{focus}` only for an incomplete infrastructure retry. The cloud journal
+belongs to the work item and keeps its three-round budget across writer and host
+replacement. Completed verdicts cannot be rewritten. An explicit retry on the new authorized host can replace an unfinished read-only
+reviewer with a fresh locally reserved identity, preserving its candidate, round
+and completed peer verdicts. It requires the pinned commit to be available there;
+foreign short IDs never grant local transcript access or process authority.
+
+App publication derives `[Agent · Human]` from the real instance and the current
+work assignee's profile, then checks the exact clean review bundle before preparing
+and again at the credential boundary. The broker records the reviewed local head,
+base, complete tree and resulting App-authored remote commit in the shared action
+before publishing its branch. Ready/merge actions require that receipt and current review proof; a human
+action approval cannot replace them. No App is provisioned automatically. Local
+publication uses its explicitly granted human gh actor.
+
+`work-milestone ID --file` takes `{body}` and sends only from the current writer
+to its explicitly granted requester, subject to the normal message throttle/wake
+guard. It does not permit other session recipients, cloud messaging or outreach.
+After clean R3, `work-failure` can take `feedback:{kind:"review"|"check",id,title,remedy}`
+with its summary. The broker verifies a subsequent blocking review or failed check
+on that published R3 head before recording failure; no fourth round is allowed.

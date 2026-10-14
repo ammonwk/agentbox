@@ -41,39 +41,124 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
       );
   };
   router
-    .add("POST", "/api/agents/work-grants", async ({req}) => {
+    .add("POST", "/api/agents/work-grants", async ({ req }) => {
       requireOperator(req);
       return json(await agents.works.authorize(await readBody(req)));
     })
-    .add("DELETE", "/api/agents/work-grants/:id", async ({req,params}) => {
-      requireOperator(req); return json(await agents.works.revoke(params.id!));
+    .add("DELETE", "/api/agents/work-grants/:id", async ({ req, params }) => {
+      requireOperator(req);
+      return json(await agents.works.revoke(params.id!));
     })
     .add("GET", "/api/agents/work", () => json(agents.works.list()))
-    .add("GET", "/api/agents/work/:id", ({params}) => json(agents.works.get(params.id!)))
-    .add("POST", "/api/agents/work", async ({req}) => json(await agents.works.start(authenticatedSession(req), await readBody(req))))
-    .add("POST", "/api/agents/work/:id/review", async ({req,params}) => json(await agents.works.review(params.id!,authenticatedSession(req),await readBody(req))))
-    .add("POST", "/api/agents/work/:id/collect", ({req,params}) => agents.works.collect(params.id!,authenticatedSession(req)).then(json))
-    .add("POST", "/api/agents/work/:id/publish", async ({req,params}) => json(await agents.works.publish(params.id!,authenticatedSession(req),await readBody(req))))
-    .add("POST", "/api/agents/work/:id/retry-review", async ({req,params}) => json(await agents.works.retryReview(params.id!,authenticatedSession(req),await readBody(req))))
-    .add("POST", "/api/agents/work/:id/retry-start", ({req,params}) => agents.works.retryStart(params.id!,authenticatedSession(req)).then(json))
-    .add("POST", "/api/agents/work/:id/reconcile", ({req,params}) => agents.works.reconcile(params.id!,authenticatedSession(req)).then(json))
-    .add("POST", "/api/agents/work/:id/failure", async ({req,params}) => json(await agents.works.failure(params.id!,authenticatedSession(req),await readBody(req))))
-    .add("POST", "/api/agents/:id/creation-drafts", async ({req, params}) => {
+    .add("GET", "/api/agents/work/:id", ({ params }) =>
+      json(agents.works.get(params.id!)),
+    )
+    .add("POST", "/api/agents/work", async ({ req }) =>
+      json(
+        await agents.works.start(
+          authenticatedSession(req),
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/work/:id/review", async ({ req, params }) =>
+      json(
+        await agents.works.review(
+          params.id!,
+          authenticatedSession(req),
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/work/:id/collect", ({ req, params }) =>
+      agents.works.collect(params.id!, authenticatedSession(req)).then(json),
+    )
+    .add("POST", "/api/agents/work/:id/publish", async ({ req, params }) =>
+      json(
+        await agents.works.publish(
+          params.id!,
+          authenticatedSession(req),
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/work/:id/retry-review", async ({ req, params }) =>
+      json(
+        await agents.works.retryReview(
+          params.id!,
+          authenticatedSession(req),
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/work/:id/retry-start", ({ req, params }) =>
+      agents.works.retryStart(params.id!, authenticatedSession(req)).then(json),
+    )
+    .add("POST", "/api/agents/work/:id/reconcile", ({ req, params }) =>
+      agents.works.reconcile(params.id!, authenticatedSession(req)).then(json),
+    )
+    .add("POST", "/api/agents/work/:id/milestone", async ({ req, params }) =>
+      json(
+        await agents.works.milestone(
+          params.id!,
+          authenticatedSession(req),
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/work/:id/failure", async ({ req, params }) =>
+      json(
+        await agents.works.failure(
+          params.id!,
+          authenticatedSession(req),
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/:id/creation-drafts", async ({ req, params }) => {
       const b = await readBody(req);
-      return json(await agents.conversations.draft(params.id!, authenticatedSession(req), z.string().uuid().parse(b.request), b.spec));
+      return json(
+        await agents.conversations.draft(
+          params.id!,
+          authenticatedSession(req),
+          z.string().uuid().parse(b.request),
+          b.spec,
+        ),
+      );
     })
-    .add("GET", "/api/agents/local/:id/creations", ({params}) => json(agents.conversations.creations(params.id!)))
-    .add("POST", "/api/agents/local/:id/creations/:draft", async ({req, params}) => {
-      // Local UI is the trusted loopback operator. Scoped provider callers can
-      // propose only; editable callerPid/name cannot manufacture human authority.
-      if (authenticatedSession(req)) throw new HttpError(403, "Only the human operator may accept or edit a creation draft");
-      const b = await readBody(req);
-      return json(agents.conversations.editCreation(params.id!, z.string().uuid().parse(params.draft), z.number().int().parse(b.revision), z.string().nullable().parse(b.repo), b.spec, z.boolean().parse(b.create)));
-    })
+    .add("GET", "/api/agents/local/:id/creations", ({ params }) =>
+      json(agents.conversations.creations(params.id!)),
+    )
+    .add(
+      "POST",
+      "/api/agents/local/:id/creations/:draft",
+      async ({ req, params }) => {
+        // Local UI is the trusted loopback operator. Scoped provider callers can
+        // propose only; editable callerPid/name cannot manufacture human authority.
+        if (authenticatedSession(req))
+          throw new HttpError(
+            403,
+            "Only the human operator may accept or edit a creation draft",
+          );
+        const b = await readBody(req);
+        return json(
+          agents.conversations.editCreation(
+            params.id!,
+            z.string().uuid().parse(params.draft),
+            z.number().int().parse(b.revision),
+            z.string().nullable().parse(b.repo),
+            b.spec,
+            z.boolean().parse(b.create),
+          ),
+        );
+      },
+    )
     .add("GET", "/api/agents/local", () => json(agents.conversations.local()))
     .add("POST", "/api/agents/local/project", async ({ req }) => {
       const b = await readBody(req);
-      return json(agents.conversations.local(z.string().min(1).max(200).parse(b.repo)));
+      return json(
+        agents.conversations.local(z.string().min(1).max(200).parse(b.repo)),
+      );
     })
     .add("POST", "/api/agents/local/:id/configure", async ({ req, params }) => {
       const b = await readBody(req);
@@ -133,6 +218,46 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
         ),
       );
     })
+    .add("POST", "/api/agents/runs/:id/prepare", async ({ req, params }) =>
+      json(
+        await agents.reviews.operation(
+          params.id!,
+          authenticatedSession(req),
+          "prepare",
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/runs/:id/review", async ({ req, params }) =>
+      json(
+        await agents.reviews.operation(
+          params.id!,
+          authenticatedSession(req),
+          "review",
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/runs/:id/collect", async ({ req, params }) =>
+      json(
+        await agents.reviews.operation(
+          params.id!,
+          authenticatedSession(req),
+          "collect",
+          await readBody(req),
+        ),
+      ),
+    )
+    .add("POST", "/api/agents/runs/:id/retry-review", async ({ req, params }) =>
+      json(
+        await agents.reviews.operation(
+          params.id!,
+          authenticatedSession(req),
+          "retry-review",
+          await readBody(req),
+        ),
+      ),
+    )
     .add("POST", "/api/agents/runs/:id/intake", async ({ req, params }) => {
       const b = await readBody(req);
       return json(

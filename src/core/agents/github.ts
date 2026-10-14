@@ -333,6 +333,23 @@ export class AgentGitHub {
       "More than 2,000 matching issues. Narrow the source label so intake can cover the full source without dropping work.",
     );
   }
+  async reviewBase(
+    a: SharedAgent,
+    binding: AgentBinding,
+    repo: string,
+    branch: string,
+  ) {
+    const { token } = await this.credential(a, binding, repo, "read");
+    const ref = await this.request<{ object: { sha: string } }>(
+      token,
+      "GET",
+      `/repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+    );
+    return z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .parse(ref.object.sha);
+  }
   /** Read with the configured actor. The token stays here; issue content
    * goes to the provider, never into shared operational records. */
   async read(
@@ -405,6 +422,12 @@ export class AgentGitHub {
     cwd: string,
     cloud: InstallationAgents,
     guard: () => Promise<void>,
+    publication?: (mapping: {
+      base: string;
+      head: string;
+      tree: string;
+      remoteHead: string;
+    }) => Promise<void>,
   ): Promise<ManagedResult> {
     const permission =
       action.kind === "comment"
@@ -597,6 +620,21 @@ export class AgentGitHub {
         author: { name: c.login, email: c.email },
       },
     );
+    if (
+      built.sha !==
+      git(["rev-parse", `${action.head}^{tree}`])
+        .toString()
+        .trim()
+    )
+      throw new Error(
+        "GitHub tree does not match the independently reviewed candidate",
+      );
+    await publication?.({
+      base: base.object.sha,
+      head: action.head,
+      tree: built.sha,
+      remoteHead: commit.sha,
+    });
     // These are the externally visible steps: revalidate after preparation.
     await guard();
     await consent();
@@ -715,7 +753,15 @@ export class AgentGitHub {
       if (!p.draft) return { html_url: p.html_url };
       if (p.user.login.toLowerCase() !== c.login.toLowerCase())
         throw new Error("only this agent's own draft can be marked ready");
+      refuseAutomaticClosure(`${p.title}\n${p.body ?? ""}`);
       await guard();
+      await checkContactAtDispatch(
+        cloud,
+        a.id,
+        action.repo,
+        mentionedPeople(`${p.title}\n${p.body ?? ""}`),
+        (login) => get(`/users/${encodeURIComponent(login)}`),
+      );
       const result = await this.request<{
         errors?: unknown[];
         data?: {

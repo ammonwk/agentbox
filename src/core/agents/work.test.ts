@@ -130,6 +130,13 @@ test("family claims, independent exact-head rounds and revoked publication autho
     const github = async <T>(path: string, body?: unknown): Promise<T> => {
       requests.push(path);
       if (path.includes("/pulls?")) return (published ? [published] : []) as T;
+      if (path.includes("/check-runs/"))
+        return {
+          head_sha: published.head.sha,
+          status: "completed",
+          conclusion: "failure",
+          html_url: "https://github.com/fixture/work/actions/runs/123",
+        } as T;
       if (body) {
         if (!path.endsWith("/pulls"))
           throw Error("Unexpected external write in controlled transport");
@@ -271,6 +278,40 @@ test("family claims, independent exact-head rounds and revoked publication autho
       }
       expect(round.number).toBe(n);
       expect(new Set(round.reviewers.map((r) => r.session)).size).toBe(3);
+      if (n === 1) {
+        const reviewer = round.reviewers[0]!;
+        expect(() =>
+          runtime.store.adoptReviewer(
+            reviewer.session,
+            "foreign-run",
+            work.id,
+            reviewer.cwd,
+          ),
+        ).toThrow("reservation");
+        const reserved = "shared-reserved";
+        runtime.store.reserveReviewer(
+          reserved,
+          "old-run",
+          work.id,
+          reviewer.cwd,
+        );
+        expect(runtime.store.sessionRun(reserved)).toBeNull();
+        expect(() =>
+          runtime.store.adoptReviewer(
+            reserved,
+            "other-work-run",
+            "different-work",
+            reviewer.cwd,
+          ),
+        ).toThrow("reservation");
+        runtime.store.adoptReviewer(reserved, "new-run", work.id, reviewer.cwd);
+        expect(() =>
+          runtime.store.adoptReviewer(reserved, "other-run", work.id, "/wrong"),
+        ).toThrow("reservation");
+        await expect(
+          works.milestone(work.id, grant.requester, { body: "Not the writer" }),
+        ).rejects.toThrow("owner");
+      }
       expect(
         prompts
           .slice(-3)
@@ -311,6 +352,17 @@ test("family claims, independent exact-head rounds and revoked publication autho
       }
       await works.collect(work.id, work.session);
       if (n === 1) {
+        const saved = works.get(work.id),
+          verdict = saved.rounds[0]!.reviewers[0]!.verdict;
+        saved.rounds[0]!.reviewers[0]!.state = "uncertain";
+        (works as any).save(saved);
+        await works.collect(work.id, work.session);
+        expect(works.get(work.id).rounds[0]!.reviewers[0]!.state).toBe(
+          "started",
+        );
+        expect(works.get(work.id).rounds[0]!.reviewers[0]!.verdict).toEqual(
+          verdict,
+        );
         const candidate = {
           head: round.head,
           title: "Fix shared rule",
@@ -362,6 +414,37 @@ test("family claims, independent exact-head rounds and revoked publication autho
         })
       ).state,
     ).toBe("recorded");
+    const later = structuredClone(works.get(work.id));
+    later.id = crypto.randomUUID();
+    later.state = "working";
+    delete later.failure;
+    later.rounds[2]!.reviewers.forEach((r) => {
+      r.verdict!.verdict = "clean";
+      r.verdict!.findings = [];
+    });
+    later.publication!.head = later.rounds[2]!.head;
+    published.head.sha = later.publication!.head;
+    (works as any).save(later);
+    await expect(
+      works.failure(later.id, later.session, { summary: "A later failure" }),
+    ).rejects.toThrow("verified subsequent");
+    const failed = await works.failure(later.id, later.session, {
+      summary: "A later failure",
+      feedback: {
+        kind: "check",
+        id: 123,
+        title: "Missed CI consumer",
+        remedy: "Inspect the affected consumer before implementation",
+      },
+    });
+    expect(failed.state).toBe("recorded");
+    expect(works.get(later.id).state).toBe("quality_failed");
+    expect(works.get(later.id).failure!.findings![0]!.evidence).toContain(
+      "actions/runs/123",
+    );
+    await expect(
+      works.review(later.id, later.session, { validation: ["R4"] }),
+    ).rejects.toThrow();
     const restarted = new AgentWorks(runtime, github, gitTransport);
     expect(restarted.get(work.id).rounds.length).toBe(3);
     await works.revoke(grant.id);

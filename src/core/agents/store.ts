@@ -5,6 +5,8 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { agentboxHome } from "../paths";
+import { getSessionRecord } from "../db";
+import { FleetError } from "../fleet";
 import { AgentRun } from "../../cloud/agents";
 
 export const AgentBinding = z
@@ -34,13 +36,15 @@ export interface ActionRecord {
   fingerprint: string;
   body: unknown;
   state:
-    | "prepared"
-    | "attempting"
-    | "pending"
-    | "sent"
-    | "refused"
-    | "uncertain";
+    "prepared" | "attempting" | "pending" | "sent" | "refused" | "uncertain";
   receipt?: string;
+  publication?: {
+    work: string;
+    base: string;
+    head: string;
+    tree: string;
+    remoteHead: string;
+  };
   card: number | null;
   result: string;
 }
@@ -57,6 +61,7 @@ export class AgentStore {
       CREATE TABLE IF NOT EXISTS schedules (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, rule TEXT NOT NULL, next_at INTEGER);
       CREATE TABLE IF NOT EXISTS actions (id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, run TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS review_sessions (id TEXT PRIMARY KEY, run TEXT NOT NULL, work TEXT NOT NULL, cwd TEXT NOT NULL);
     `);
     this.db
       .query("SELECT id,body FROM actions")
@@ -94,7 +99,11 @@ export class AgentStore {
     })();
   }
   ownsSession(id: string) {
-    return !!this.db.query("SELECT 1 FROM sessions WHERE id=?").get(id);
+    return !!this.db
+      .query(
+        "SELECT 1 FROM sessions WHERE id=? UNION SELECT 1 FROM review_sessions WHERE id=?",
+      )
+      .get(id, id);
   }
   sessionRun(id: string): string | null {
     return (
@@ -104,6 +113,55 @@ export class AgentStore {
         } | null
       )?.run ?? null
     );
+  }
+  reserveReviewer(id: string, run: string, work: string, cwd: string) {
+    if (
+      getSessionRecord(id) ||
+      this.db.query("SELECT 1 FROM review_sessions WHERE id=?").get(id)
+    )
+      throw new FleetError(409, "Reviewer ID is already in use");
+    this.db.run(
+      "INSERT INTO review_sessions(id,run,work,cwd) VALUES (?,?,?,?)",
+      [id, run, work, cwd],
+    );
+  }
+  adoptReviewer(id: string, run: string, work: string, cwd: string) {
+    const known = this.db
+      .query("SELECT cwd,work FROM review_sessions WHERE id=?")
+      .get(id) as { cwd: string; work: string } | null;
+    const record = getSessionRecord(id);
+    if (
+      !known ||
+      known.cwd !== cwd ||
+      known.work !== work ||
+      (record &&
+        (record.cwd !== cwd ||
+          record.provider !== "codex" ||
+          record.origin !== "agentbox" ||
+          !record.launch?.args.includes("read-only")))
+    )
+      throw new FleetError(
+        409,
+        "Reviewer lacks a proven reservation on this installation",
+      );
+    this.db.run("UPDATE review_sessions SET run=? WHERE id=?", [run, id]);
+  }
+  reviewers(run: string) {
+    return (
+      this.db
+        .query("SELECT id,cwd FROM review_sessions WHERE run=?")
+        .all(run) as { id: string; cwd: string }[]
+    )
+      .filter((x) => {
+        const r = getSessionRecord(x.id);
+        return (
+          r?.cwd === x.cwd &&
+          r.provider === "codex" &&
+          r.origin === "agentbox" &&
+          r.launch?.args.includes("read-only")
+        );
+      })
+      .map((x) => x.id);
   }
   discardUnclaimed(id: string) {
     this.db.run("DELETE FROM runs WHERE id=?", [id]);

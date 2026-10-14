@@ -197,6 +197,177 @@ describe.skipIf(!url || !publishableKey || !key || !db)(
       expect(clone.maintainers).toEqual([bob.id]);
     });
 
+    test("review budgets survive writer rotation and reject reset, mutation and unauthorized hosts", async () => {
+      await alice.api.setDisplayName("Accountable human");
+      const work = await intake(90900),
+        queued = await alice.agents.run(work, crypto.randomUUID());
+      let run = await machine.report(
+        await machine.claim(queued.id),
+        "running",
+        { session: "review-owner" },
+      );
+      const load = () =>
+        raw.agentCall(
+          "inst_agent_review_load",
+          { p_run: run.id, p_fence: run.fence },
+          z.any(),
+        );
+      let journal = await load();
+      expect(journal.human).toEqual({
+        id: alice.id,
+        name: "Accountable human",
+      });
+      const saveBody = (body: unknown, revision = journal.revision) =>
+        raw.agentCall(
+          "inst_agent_review_save",
+          {
+            p_run: run.id,
+            p_fence: run.fence,
+            p_revision: revision,
+            p_body: body,
+          },
+          z.number(),
+        );
+      await expect(
+        other.installation.agentCall(
+          "inst_agent_review_load",
+          { p_run: run.id, p_fence: run.fence },
+          z.any(),
+        ),
+      ).rejects.toThrow();
+      expect(
+        (
+          await outsider.api.sb
+            .from("agent_review_journals")
+            .select("*")
+            .eq("workspace_id", ws)
+        ).data,
+      ).toEqual([]);
+      for (let n = 1; n <= 3; n++) {
+        const round = {
+          number: n,
+          base: "a".repeat(40),
+          head: String(n).repeat(40),
+          context: "pinned",
+          installation: host,
+          reviewers: ["architecture", "correctness", "deslop"].map((focus) => ({
+            focus,
+            session: `r${n}-${focus}`,
+          })),
+        };
+        journal.body.rounds.push(round);
+        journal.revision = await saveBody(journal.body);
+        await expect(
+          saveBody({ state: "working", rounds: [] }),
+        ).rejects.toThrow();
+        for (const reviewer of round.reviewers as any[])
+          reviewer.verdict = { verdict: "clean" };
+        journal.revision = await saveBody(journal.body);
+        const changed = structuredClone(journal.body);
+        changed.rounds[0].reviewers[0].verdict = { verdict: "changes" };
+        await expect(saveBody(changed)).rejects.toThrow();
+        if (n === 1) {
+          const old = run;
+          run = await machine.rotate(run, "replacement-review-owner");
+          await expect(
+            raw.agentCall(
+              "inst_agent_review_load",
+              { p_run: old.id, p_fence: old.fence },
+              z.any(),
+            ),
+          ).rejects.toThrow();
+          expect((await load()).body.rounds).toEqual(journal.body.rounds);
+        }
+      }
+      const fourth = structuredClone(journal.body);
+      fourth.rounds.push({ ...fourth.rounds[2], number: 4 });
+      await expect(saveBody(fourth)).rejects.toThrow();
+      const prepared = await machine.prepare(run, crypto.randomUUID(), {
+        kind: "open_pr",
+        repo: "fixture/repo",
+        title: "[VULCAN · Accountable human] Prepared fix",
+        body: "Related to issue 90900",
+        base: "main",
+        head: "3".repeat(40),
+      });
+      await alice.agents.decide(prepared.id, true);
+      await machine.dispatch(run, prepared.id);
+      const proof = {
+        base: "a".repeat(40),
+        head: "3".repeat(40),
+        tree: "b".repeat(40),
+        remoteHead: "c".repeat(40),
+      };
+      const record = (mapping: unknown) =>
+        raw.agentCall(
+          "inst_agent_publication_record",
+          {
+            p_run: run.id,
+            p_fence: run.fence,
+            p_action: prepared.id,
+            p_mapping: mapping,
+          },
+          z.unknown(),
+        );
+      await record(proof);
+      await expect(
+        record({ ...proof, remoteHead: "d".repeat(40) }),
+      ).rejects.toThrow();
+      await machine.actionResult(
+        prepared.id,
+        "sent",
+        "https://github.com/fixture/repo/pull/123",
+      );
+      await machine.report(run, "stopped");
+      await expect(load()).rejects.toThrow();
+      const nextHost = await alice.api.registerInstallation(
+        ws,
+        `handoff-${tag}`,
+        { scopes: ["agents:execute"] },
+      );
+      await alice.agents.authorize(a.id, nextHost.installation.id, true);
+      a = await save(a, { executor: nextHost.installation.id });
+      const nextRaw = new InstallationCloud(supabaseFor(cfg), nextHost.secret),
+        nextMachine = new InstallationAgents(nextRaw);
+      const queuedAgain = await alice.agents.run(
+        await fresh(work),
+        crypto.randomUUID(),
+      );
+      const nextRun = await nextMachine.report(
+        await nextMachine.claim(queuedAgain.id),
+        "running",
+        { session: "next-host-owner" },
+      );
+      const moved = await nextRaw.agentCall(
+        "inst_agent_review_load",
+        { p_run: nextRun.id, p_fence: nextRun.fence },
+        z.any(),
+      );
+      expect(moved.body.rounds).toEqual(journal.body.rounds);
+      const lookup = (number: number) =>
+        nextRaw.agentCall(
+          "inst_agent_publication_lookup",
+          {
+            p_run: nextRun.id,
+            p_fence: nextRun.fence,
+            p_head: proof.remoteHead,
+            p_number: number,
+          },
+          z.any(),
+        );
+      expect(await lookup(123)).toEqual(proof);
+      expect(await lookup(124)).toBeNull();
+      await expect(
+        raw.agentCall(
+          "inst_agent_review_load",
+          { p_run: nextRun.id, p_fence: nextRun.fence },
+          z.any(),
+        ),
+      ).rejects.toThrow();
+      await nextMachine.report(nextRun, "stopped");
+      a = await save(a, { executor: host });
+    });
+
     test("canonical sources deduplicate across different humans and agents", async () => {
       const one = await intake(1);
       const two = await bob.agents.intake(b.id, {

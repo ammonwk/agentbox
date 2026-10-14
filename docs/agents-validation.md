@@ -127,3 +127,18 @@ current grants, exact-head/title gates and branch-push/base-churn recovery. The
 positive publication transport is controlled; it is not a real trial PR or proof
 of an external App setup. Independent architecture, correctness and maintainability
 reviews identified the startup, pause, pagination and main-chat corrections.
+
+The shared work path reuses that same review engine and adds a cloud work-keyed
+journal. Local Supabase checks cover unauthorized hosts, stale fences, immutable
+verdicts, rejection of reset/R4, run rotation, execution-host transfer and an
+immutable App publication receipt scoped to the work, remote head and PR. Local
+security checks reject foreign reviewer IDs and cross-work adoption, preserve
+completed verdicts through interrupted launch recovery, and require verified
+blocking PR feedback before failing a previously clean R3. Read-only reviewer
+handoff never grants access to unrelated local transcripts or process targets.
+
+The final existing suite passes 280 tests (23 optional cloud skips), and the local
+cloud suite passes 26 tests. Typecheck and production build pass. These are
+controlled security/lifecycle validations, not real trial review rounds or a
+provisioned production GitHub App. The actual Plaibook trial writer is registered
+through the live work-family API and separately tracked by its persistent owner.
