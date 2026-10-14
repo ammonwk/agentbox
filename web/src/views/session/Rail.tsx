@@ -124,6 +124,7 @@ export function Rail({
   sections,
   counts,
   state,
+  visibleSessions,
   current,
   forcedOpen,
   list,
@@ -137,6 +138,7 @@ export function Rail({
   /** Top-level rows in each tab, after the search. */
   counts: Record<RailView, number>;
   state: AppState;
+  visibleSessions: readonly SessionRow[];
   current: string | null;
   /** Selected, hovered and focused sessions and their ancestors stay expanded. */
   forcedOpen: ReadonlySet<string>;
@@ -264,7 +266,7 @@ export function Rail({
           />
           <kbd aria-hidden="true">/</kbd>
         </label>
-        <BookmarksMenu sessions={state.sessions} current={current} shapes={shapes} />
+        <BookmarksMenu sessions={visibleSessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
       </div>
       <RailTabs view={view} counts={counts} onChange={list.setView} />

@@ -30,6 +30,7 @@ const store = new AgentStore(join(dir, "runtime.db"));
 const session = (id: string, cwd: string, repoRoot: string | null, title: string) => ({ ...base.sessions[0], id, cwd, repoRoot, title, label: title, parent: null, children: [], branch: "work", accountId: null, status: "waiting", host: "none", pid: null, attention: { kind: "waiting", since: Date.now() }, lastActivityAt: Date.now(), lastPromptAt: Date.now(), lastMessage: "Fixture conversation", firstPrompt: "Fixture", worktree: null, closedAt: null, agentSessionId: id });
 const sessions = repos.flatMap((r) => [session(`work-${r.id}`, join(dir, `${r.id}-work`), repoRootOf(join(dir, `${r.id}-work`)), `${r.displayName} worktree`), session(`chat-${r.id}`, join(dir, "private", r.id), null, `${r.displayName} conversation`)]);
 sessions.push(session("general", dir, null, "General work"));
+for (const s of sessions.filter(s => s.id.startsWith("work-"))) s.bookmarkedAt = Date.now();
 const runtime: any = { store, fleet: {
   sessions: () => sessions, spawn: async () => { starts++; throw Error("Navigation must not activate agents"); }, stopSession: async () => { stops++; },
   timeline: async (id: string) => ({ events: [{ id: `${id}-reply`, kind: "assistant", text: `Controlled ${id} conversation`, at: Date.now() }], before: null }),
@@ -78,6 +79,10 @@ try {
   await page.reload(); await page.getByText("Controlled chat-alpha conversation", { exact: true }).waitFor();
   assert.equal(await page.getByRole("textbox", { name: "Message VULCAN" }).inputValue(), "Alpha unsent guidance");
   await page.locator('[data-nav-id="sessions"]').click(); await page.locator(".rail-row").filter({ hasText: "Alpha worktree" }).waitFor(); assert.equal(await page.locator(".rail-row").filter({ hasText: "Beta worktree" }).count(), 0); await page.locator(".rail-row").filter({ hasText: "Alpha conversation" }).waitFor();
+  await page.getByRole("button", { name: "Bookmarks (1)", exact: true }).click();
+  await page.getByRole("menuitem", { name: /Alpha worktree/ }).waitFor();
+  assert.equal(await page.getByRole("menuitem", { name: /Beta worktree/ }).count(), 0);
+  await page.keyboard.press("Escape");
   await page.getByRole("tab", { name: /^Inactive/ }).click(); await page.getByRole("button", { name: /See closed/ }).click(); await page.locator(".rail-closed .rail-row").filter({ hasText: "Alpha worktree" }).waitFor(); assert.equal(await page.locator(".rail-closed .rail-row").count(), 2);
   await page.locator('[data-nav-id="review"]').click(); await page.getByText("alpha review", { exact: true }).waitFor(); assert.equal(await page.getByText("beta review", { exact: true }).count(), 0); assert.equal(await page.locator('[data-nav-id="review"] .count').innerText(), "1");
   await page.locator(".nav-new").click(); 
