@@ -860,6 +860,9 @@ export interface RepoSetup {
   copy: string[];
   /** A shell command run in the new worktree; empty for none. */
   run: string;
+  /** The command New session's "Dev server" toggle starts; empty to use the
+   *  package.json `dev` script (src/core/devserver.ts). */
+  dev?: string;
 }
 
 export interface PrInfo {

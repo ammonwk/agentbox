@@ -129,6 +129,8 @@ export interface NewSessionInput {
   /** An existing branch to run on — its worktree, or a new one. */
   branch?: string;
   pr?: number;
+  /** Start the repo's dev server too, with the checkout's deps linked in. */
+  devServer?: boolean;
   prompt?: string;
   model?: string;
   effort?: string;

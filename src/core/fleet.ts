@@ -56,6 +56,7 @@ import {
 } from "./db";
 import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
+import { startDevServer, stopDevServer } from "./devserver";
 import { prReleaseNotice, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
@@ -146,6 +147,7 @@ import type {
   TimelineEvent,
   TimelinePage,
   UsageWindow,
+  Repo,
 } from "./types";
 
 const DAY = 86_400_000;
@@ -279,6 +281,9 @@ export interface SpawnRequest {
   branch?: string;
   /** The PR `branch` belongs to, for fetching it when origin has no such branch. */
   pr?: number;
+  /** Start the repo's dev server in the session's directory, with the
+   *  checkout's deps linked in (src/core/devserver.ts). */
+  devServer?: boolean;
   prompt?: string;
   model?: string;
   /** One of the adapter's `efforts`. */
@@ -2693,6 +2698,7 @@ export class Fleet extends EventEmitter {
     const id = req.id ?? newSessionId();
     let cwd = req.cwd ? expandHome(req.cwd) : "";
     let worktree: string | null = null;
+    let devRepo: Repo | null = null;
     if (req.repoId) {
       const repo = getRepoById(req.repoId);
       if (!repo) throw new FleetError(404, `no repo ${req.repoId}`);
@@ -2710,10 +2716,14 @@ export class Fleet extends EventEmitter {
         throw new FleetError(400, "a GitHub repo needs a worktree (it has no checkout of its own to work in)");
       }
       // Only a checkout cut just now: an existing one was set up by whoever made it.
-      if (worktree) setUpWorktree(repo, worktree, id);
+      if (worktree) setUpWorktree(repo, worktree, id, { skipRun: req.devServer });
+      if (req.devServer) devRepo = repo;
     }
     if (!cwd) throw new FleetError(400, "say where the session should run: a repo or a directory");
     if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);
+    // Alongside the agent, as the setup command runs: the tab New session
+    // opened waits for it.
+    if (devRepo) void startDevServer(devRepo, cwd, id);
 
     const model = req.model || settings.models[req.provider] || undefined;
     const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
@@ -3688,6 +3698,7 @@ export class Fleet extends EventEmitter {
       }
       if (s.host === "subagent") continue;
       this.touched.set(sid, this.now());
+      stopDevServer(sid);
       if (s.host === "tmux" && s.tmux) this.killTmux(s.tmux);
       else if (s.host === "external" && s.pid) {
         try {
