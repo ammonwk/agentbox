@@ -25,6 +25,7 @@ import { voiceConfig } from "../voice/config";
 import { pwaInstalled } from "../core/pwa";
 import { identify } from "../core/accounts/identity";
 import { onboardingItems } from "../core/onboarding";
+import { interruptCheck } from "../core/smoke";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import * as waits from "./waits";
@@ -350,6 +351,11 @@ function doctor(): number {
     },
     { name: "repos", ok: true, detail: `${listRepos().length} registered`, fatal: false },
     { name: "pwa", ok: true, detail: pwaDetail(), fatal: false },
+    // Agent chat ends a running turn with Escape; a new CLI version can change that.
+    ...(["claude", "codex"] as const).flatMap((p) => {
+      const c = interruptCheck(p);
+      return c ? [{ name: `${p} escape`, ok: c.ok, detail: c.detail, fatal: false }] : [];
+    }),
     {
       name: "service",
       ok: serviceInstalled() !== false,
