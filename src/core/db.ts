@@ -1385,6 +1385,8 @@ export const DEFAULT_BALANCER: BalancerSettings = {
 
 export const DEFAULT_SETTINGS: AgentSettings = {
   theme: "system",
+  repoMark: "name",
+  hideSteps: "always",
   boardDays: 7,
   autoApprove: true,
   parkIdleMin: 60,

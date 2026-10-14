@@ -236,6 +236,32 @@ function General({ settings, save, saveStateOf }: SectionProps) {
       </Field>
       <SaveMark state={saveStateOf("theme")} />
 
+      <Field label="Repo in the session list" hint="Each session's repo or folder, as its name before the title or as the repo's shape, which takes less room. A shape's name is on its tooltip.">
+        {(id) => (
+          <div className="seg" role="group" aria-label="Repo in the session list" id={id}>
+            {(["name", "shape"] as const).map((m) => (
+              <button key={m} type="button" aria-pressed={settings.repoMark === m} onClick={() => save("repoMark", { repoMark: m })}>
+                {m === "name" ? "Name" : "Shape"}
+              </button>
+            ))}
+          </div>
+        )}
+      </Field>
+      <SaveMark state={saveStateOf("repoMark")} />
+
+      <Field label="Hide working steps" hint="The thinking and tool calls between the things an agent says, folded to one line you can open. When done shows them while the agent works, and folds them once its turn is over.">
+        {(id) => (
+          <div className="seg" role="group" aria-label="Hide working steps" id={id}>
+            {([["always", "Yes"], ["done", "When done"], ["never", "Never"]] as const).map(([v, label]) => (
+              <button key={v} type="button" aria-pressed={settings.hideSteps === v} onClick={() => save("hideSteps", { hideSteps: v })}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </Field>
+      <SaveMark state={saveStateOf("hideSteps")} />
+
       <Field label="Accent colour" hint="Buttons, links and the open tab. This browser keeps it; other devices keep their own.">
         {(id) => <AccentPicker id={id} />}
       </Field>
