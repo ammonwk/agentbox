@@ -132,6 +132,27 @@ export function claimPr(claims: readonly PrClaim[], sessions: readonly Session[]
   return { repo: held?.repo ?? repo, number, sessionId, how: "said", at: now };
 }
 
+/** An explicit handoff, including a hold inferred from a startup branch.
+ * The caller must be the expected holder. Read/check/write are synchronous
+ * in the server's single writer, so competing transfers cannot both win. The
+ * holder lets go as on `releasePr` (its PR waits cancelled, a notice on its
+ * next prompt) and the successor holds it as on `claimPr`. */
+export function transferPr(claims: readonly PrClaim[], sessions: readonly Session[], repo: string, number: number, actor: string, expected: string, to: string, now: number): PrClaim {
+  const held = holderOf(claims, repo, number);
+  if (!held || held.sessionId !== expected) throw new Error(`ownership changed: expected ${expected}, found ${held?.sessionId ?? "nobody"}; read pr who again`);
+  if (actor !== expected) throw new Error(`only the current holder ${expected} may hand this PR over`);
+  if (to === expected) throw new Error("the destination already holds this PR");
+  if (!holds(sessions.find((s) => s.id === to))) throw new Error(`destination ${to} must be a live, independent session`);
+  const db = getDb();
+  db.transaction(() => {
+    releasePr(expected, { repo: held.repo, number });
+    db.run("DELETE FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?", [repo, number]);
+    db.run("INSERT INTO pr_claims (repo, number, session_id, at) VALUES (?,?,?,?)", [held.repo, number, to, now]);
+    db.run("DELETE FROM pr_releases WHERE session_id = ? AND lower(repo) = lower(?) AND number = ?", [to, repo, number]);
+  })();
+  return { repo: held.repo, number, sessionId: to, how: "said", at: now };
+}
+
 /** Cancel both armed waits and results still waiting to be delivered, atomically with release. */
 export function releasePr(sessionId: string, pr: PrRef | null): number {
   const db = getDb();

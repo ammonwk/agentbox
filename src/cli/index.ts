@@ -29,6 +29,7 @@ import * as schedules from "./schedules";
 import * as waits from "./waits";
 import * as cards from "./cards";
 import * as prs from "./prs";
+import { cloud, CLOUD_USAGE } from "./cloud";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
@@ -428,6 +429,8 @@ timeout, each saying which; a parked session is resumed to hear it):
   waits [--session ID | --mine] [--all] [--json]   what is waited on, and how the rest ended
   unwait <id>...        cancel one; its session is not told
 
+${CLOUD_USAGE}
+
 pull requests (who has one: no two sessions work the same PR):
   pr claim <n|owner/repo#n|url> [--for ID]   this session has it, and it says "you hold"; refused, naming the other session, if another live one does
   pr release [<n|…>]                 let go of what this session claimed (one, or all)
@@ -588,6 +591,9 @@ export async function main(argv: string[]): Promise<number | null> {
       case "unschedule":
         await ensureServer();
         return await schedules.unschedule(api, argv.slice(1));
+      case "cloud":
+        await ensureServer();
+        return await cloud(api, argv.slice(1));
       case "wait":
         await ensureServer();
         return await waits.wait(api, argv.slice(1));
