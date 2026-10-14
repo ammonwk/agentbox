@@ -206,14 +206,17 @@ export interface PaneInfo {
 /** Every agentbox session on our tmux server. Empty when the server is not
  *  running, which is the normal state with nothing open. */
 export function listPanes(): PaneInfo[] {
+  // `|` and not a tab: under a non-UTF-8 locale tmux rewrites tabs in `-F`
+  // output, and every pane then failed to parse. Session names are `ab-<id>`,
+  // so a `|` in one is not possible.
   const r = tmux([
     "list-panes", "-a", "-F",
-    "#{session_name}\t#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}\t#{session_attached}\t#{pane_width}\t#{pane_height}\t#{pid}\t#{start_time}\t#{window_activity}",
+    "#{session_name}|#{pane_pid}|#{pane_dead}|#{pane_dead_status}|#{session_attached}|#{pane_width}|#{pane_height}|#{pid}|#{start_time}|#{window_activity}",
   ]);
   if (r.code !== 0) return [];
   const out: PaneInfo[] = [];
   for (const line of r.stdout.split("\n")) {
-    const [name, pid, dead, status, clients, w, h, serverPid, serverStart, activity] = line.split("\t");
+    const [name, pid, dead, status, clients, w, h, serverPid, serverStart, activity] = line.split("|");
     if (!name?.startsWith("ab-")) continue;
     out.push({
       name,
