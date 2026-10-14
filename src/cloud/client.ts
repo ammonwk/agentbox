@@ -150,8 +150,15 @@ export class HumanCloud {
     if (error) throw new CloudError(error.message, error.status ?? 400, error.code ?? null);
   }
 
+  /** The code, or the email's whole sign-in link: the default sender's email (no
+   *  custom SMTP) cannot carry the code, only a link with a hashed token. */
   async verifyCode(email: string, code: string): Promise<Me> {
-    const { error } = await this.sb.auth.verifyOtp({ email, token: code.trim(), type: "email" });
+    const link = /^https?:\/\//.test(code.trim()) ? new URL(code.trim()) : null;
+    const tokenHash = link?.searchParams.get("token");
+    if (link && !tokenHash) throw new CloudError("that link has no sign-in token", 400, null);
+    const { error } = tokenHash
+      ? await this.sb.auth.verifyOtp({ token_hash: tokenHash, type: link!.searchParams.get("type") === "signup" ? "signup" : "magiclink" })
+      : await this.sb.auth.verifyOtp({ email, token: code.trim(), type: "email" });
     if (error) throw new CloudError(error.message, error.status ?? 400, error.code ?? null);
     return this.me();
   }
