@@ -34,6 +34,10 @@ export async function agent(api: Api, args: string[]): Promise<number> {
   };
   let value: unknown;
   switch (verb) {
+    case "recommend":
+      if (!id || !str("request")) throw new Error("agent recommend <run UUID|local agent ID> --request <stable UUID> --file <proposal.json>");
+      value = await api("POST", `/api/agents/${encodeURIComponent(id)}/recommend`, {request: str("request"), proposal:file()});
+      break;
     case undefined:
     case "status":
       value = await api("GET", "/api/agents/runtime");

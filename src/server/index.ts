@@ -187,7 +187,7 @@ export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
 });
 export const agents = new AgentsRuntime(fleet, cloud, cards);
 cloud.outboundRefusal = id => agents.directContactRefusal(id);
-scheduler.onTick(() => agents.tick());
+scheduler.onTick(async () => { await agents.tick(); void agents.conversations.tick().catch((e) => { agents.lastError = (e as Error).message; }); });
 const turnIndex = new TurnIndex(fleet, {
   load: (id) => loadTurnState(fleet.get(id).provider, id),
   save: (id, state) => saveTurnState(fleet.get(id).provider, id, state),

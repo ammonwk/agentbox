@@ -283,3 +283,49 @@ the actual CLI/router, restarts the runtime journal, replaces the session and
 proves stop before takeover. It also checks shared read/edit boundaries and the
 create/edit, desktop/mobile/keyboard UI. It never provisions or logs into a real
 provider or GitHub bot. See [validation evidence](agents-validation.md).
+
+## Chat, About and Feed
+
+Agent detail opens **Chat**: one logical conversation across its managed run and
+predecessor-session references. About contains configuration, human and host
+accountability, work controls and history. Feed contains immutable recommendations
+created by the current agent writer with `agentbox agent recommend RUN --request
+UUID --file proposal.json`. The JSON fields are `title`, `finding`, `reason`,
+`next`, `evidence: [{url,label}]` and an optional `action` UUID. The same durable
+proposal appears inline in Chat and in Feed. Existing scheduled intake instructs
+the agent to curate evidence-backed recommendations; no fixture or activity-log
+entry is turned into one. Approving a linked action uses the existing exact-action
+approval and broker, including actual-dispatch consent. Guidance reaches the
+responsible run; dismissal never starts work.
+
+With no shared project configured, three local agents are available immediately.
+Their definitions and session references are local operational records. Sending
+the first message starts the selected existing provider via Fleet; later messages
+resume that same conversation. Choose a provider/repository in About before the
+first message. Local agents inherit the existing loopback operator trust boundary;
+this does not isolate malicious code running as the same Unix user. Local scope
+is explicit and never presented as workspace sharing. Creating a local agent does
+not authorize external outreach or repository scans.
+
+Shared transcript reads use **live encrypted Realtime Broadcast** (enable
+Supabase Realtime). A human JWT queues a bounded 45-second read request containing
+only an agent ID, cursor and ephemeral P-256 public key. The current authorized
+execution host reads only its verified managed-session references, records its
+own ephemeral public key via a scoped installation RPC, and sends AES-GCM encrypted
+chunks over HTTP/WebSocket broadcast. Bodies are never inserted into cloud tables
+or written to another conversation log. The browser obtains that host key through
+a human-only RPC which rechecks current membership, installation and grant; request
+ID authentication binds the ciphertext to that read. The host rechecks before
+every bounded chunk. Public relay observers cannot decrypt or forge replies.
+Expired or offline requests produce an unavailable state, while shared Feed and
+progress remain visible. Private standalone Sessions are never relay targets.
+Only user/assistant messages are shared; tool payloads, private images and known
+credential formats are excluded/redacted. Agents must still keep secrets out of
+human-facing prose.
+
+Shared guidance uses a short-lived delivery queue, not a chat history. The cloud
+rechecks current member, host grant, run revision/lease/control and the responsible
+session at dispatch; local durable send receipts guard the attempt boundary.
+Terminal outcomes purge the queued body. Uncertain attempts are reported and never
+replayed automatically. Browser drafts and pending sends reuse the Sessions model;
+reloading does not turn an uncertain submission back into an unsent draft.

@@ -8,7 +8,7 @@ import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
-import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend } from "./drafts";
+import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, beginSend, updatePending, forgetPending } from "./drafts";
 import { PendingSends, deliverPending } from "./submissions";
 import "../newsession.css";
 import { useAction } from "./useAction";
@@ -539,4 +539,30 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
       ) : null}
     </div>
   );
+}
+
+/** Agent chat shares the Sessions draft/receipt model and composer styling.
+ * Transport can be a local Fleet send or an authenticated shared command. */
+export function AgentComposer({id,name,send,receipt,disabled=false,guidance}:{id:string;name:string;send:(body:string,request:string)=>Promise<{state:string;result:string}>;receipt:(request:string)=>Promise<{state:string;result:string}|null>;disabled?:boolean;guidance?:{id:string;text:string}|null}) {
+ const key=`agent:${id}`,initial=useMemo(()=>loadDraft(key),[key]);
+ const [text,setText]=useState(initial?.text??""),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null);
+ const revision=useRef(initial?.revision??newRevision()),ref=useRef<HTMLTextAreaElement>(null);
+ const edit=(s:string)=>{revision.current=newRevision();setText(s);};
+ useEffect(()=>{void saveDraft(key,text,[],revision.current);},[key,text]);
+ useEffect(()=>{if(guidance){edit(guidance.text);ref.current?.focus();}},[guidance?.id]);
+ useEffect(()=>onDraftWork(()=>{if(draftTaken(key,revision.current)){revision.current=newRevision();setText("");}}),[key]);
+ const check=useCallback(async(p:PendingSend)=>{
+  const r=await receipt(p.id);if(r?.state==='sent')await forgetPending(key,p.id);
+  else await updatePending(p.id,{state:r?.state==='refused'?'failed':r?.state==='queued'||r?.state==='attempting'?'pending':'unconfirmed',error:r?.result||null});
+ },[receipt,key]);
+ async function submit(){if(!text.trim()||busy||disabled)return;setBusy(true);setError(null);
+  const p:PendingSend={id:newRevision(),sessionId:key,draft:{text,images:[],at:Date.now(),revision:revision.current},kind:'send',body:text,bodyHash:submissionHash(text),at:Date.now(),state:'pending',error:null};
+  try{await beginSend(p);revision.current=newRevision();setText("");const r=await send(p.body,p.id);if(r.state==='sent')await forgetPending(key,p.id);else await updatePending(p.id,{state:r.state==='refused'?'failed':r.state==='queued'?'pending':'unconfirmed',error:r.result||null});}
+  catch(e){const message=(e as Error).message;setError(message);await updatePending(p.id,{state:'unconfirmed',error:message});}finally{setBusy(false);}
+ }
+ return <div className="cmp agent-composer">
+  <PendingSends sessionId={key} reconcileSend={check} onRestore={async p=>{const previous=revision.current;const next={...p.draft,text:[text.trimEnd(),p.draft.text].filter(Boolean).join("\n\n"),revision:newRevision()};await restorePending(key,p.id,next,previous,()=>revision.current===previous);const restored=loadDraft(key);if(restored){revision.current=restored.revision;setText(restored.text);}}} />
+  {error&&<p className="error" role="alert">{error}</p>}
+  <form onSubmit={e=>{e.preventDefault();void submit();}}><textarea ref={ref} className="input" aria-label={`Message ${name}`} placeholder={`Message ${name}…`} value={text} rows={2} disabled={disabled} onChange={e=>edit(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void submit();}}}/><Button type="submit" variant="primary" disabled={!text.trim()||disabled} loading={busy}>Send</Button></form>
+ </div>;
 }

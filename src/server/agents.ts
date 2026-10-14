@@ -39,6 +39,52 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
       );
   };
   router
+    .add("GET", "/api/agents/local", () => json(agents.conversations.local()))
+    .add("POST", "/api/agents/local/:id/configure", async ({ req, params }) => {
+      const b = await readBody(req);
+      return json(await agents.conversations.configure(params.id!, b));
+    })
+    .add("POST", "/api/agents/local/:id/chat", async ({ req, params }) => {
+      const b = await readBody(req);
+      return json(
+        await agents.conversations.localSend(
+          params.id!,
+          z.string().uuid().parse(b.request),
+          z.string().parse(b.body),
+        ),
+      );
+    })
+    .add("GET", "/api/agents/local/:id/receipt/:request", ({ params }) =>
+      json(agents.conversations.localReceipt(params.id!, params.request!)),
+    )
+    .add("POST", "/api/agents/local/:id/read", async ({ req, params }) =>
+      json(await agents.conversations.page(params.id!, await readBody(req))),
+    )
+    .add("GET", "/api/agents/local/:id/proposals", ({ params }) =>
+      json(agents.conversations.localProposals(params.id!)),
+    )
+    .add("POST", "/api/agents/local/:id/decide", async ({ req, params }) => {
+      const b = await readBody(req);
+      return json(
+        await agents.conversations.localDecide(
+          params.id!,
+          z.string().uuid().parse(b.id),
+          z.string().parse(b.decision),
+          z.string().uuid().parse(b.request),
+        ),
+      );
+    })
+    .add("POST", "/api/agents/:id/recommend", async ({ req, params }) => {
+      const b = await readBody(req);
+      return json(
+        await agents.conversations.propose(
+          params.id!,
+          authenticatedSession(req),
+          z.string().uuid().parse(b.request),
+          b.proposal,
+        ),
+      );
+    })
     .add("GET", "/api/agents/runtime", () => json(agents.status()))
     .add("POST", "/api/agents/binding", async ({ req }) => {
       const b = await readBody(req);

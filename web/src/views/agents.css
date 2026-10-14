@@ -319,3 +319,229 @@
     padding: 12px;
   }
 }
+
+/* The conversation is the primary surface; configuration lives in About. */
+.agent-space {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: calc(100dvh - 100px);
+  width: 100%;
+}
+.agent-space-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  border-bottom: 1px solid var(--border);
+  padding: 4px 0 14px;
+}
+.agent-space-head > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex: 1;
+}
+.agent-space-head h2 {
+  font-size: 20px;
+  letter-spacing: -0.025em;
+  margin: 0;
+  font-weight: 600;
+}
+.agent-chat-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+.agent-space-head nav {
+  display: flex;
+  gap: 6px;
+}
+.agent-space-head nav button {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  padding: 9px 13px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.agent-space-head nav button.active {
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  font-weight: 600;
+}
+.agent-space-head nav span {
+  font-size: 10px;
+  margin-left: 6px;
+  background: var(--border);
+  padding: 2px 5px;
+  border-radius: 8px;
+}
+.agent-chat-scroll {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  overscroll-behavior: contain;
+  padding: 28px 12px;
+}
+.agent-conversation-width {
+  max-width: 780px;
+  width: 100%;
+  margin: 0 auto;
+}
+.agent-compose-wrap {
+  padding: 12px 10px 6px;
+  flex: none;
+}
+.agent-composer {
+  position: relative;
+}
+.agent-composer form {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  background: var(--surface);
+}
+.agent-composer textarea {
+  flex: 1;
+  resize: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  min-height: 56px;
+  max-height: 200px;
+}
+.agent-composer textarea:focus {
+  outline: none;
+  box-shadow: none;
+}
+.agent-composer form:focus-within {
+  outline: 1px solid var(--accent);
+}
+.agent-chat-empty {
+  padding: 60px 0;
+  text-align: center;
+  color: var(--muted);
+}
+.agent-chat-empty h3 {
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+.agent-chat-notice {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 16px 0;
+}
+.agent-feed {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 12px;
+  max-width: 800px;
+  width: 100%;
+  margin: 0 auto;
+}
+.agent-proposal {
+  padding: 24px;
+  margin: 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.agent-proposal h3 {
+  font-size: 17px;
+  margin: 0;
+  font-weight: 600;
+}
+.agent-proposal small {
+  color: var(--muted);
+  text-transform: capitalize;
+}
+.agent-proposal p {
+  margin: 0;
+  line-height: 1.6;
+}
+.agent-proposal .agents-buttons {
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+.agent-next {
+  font-weight: 500;
+}
+.agent-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+}
+.agent-about {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.agent-about .agent-detail-grid {
+  grid-template-columns: 1fr;
+}
+.agent-about .agent-aside {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.agent-about form {
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.agent-about label {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.agent-local-directory {
+  padding-top: 20px;
+}
+@media (max-width: 700px) {
+  .agent-space {
+    height: calc(100dvh - 142px);
+  }
+  .agent-space-head {
+    gap: 8px;
+    flex-wrap: wrap;
+    padding-bottom: 8px;
+  }
+  .agent-space-head > a {
+    display: none;
+  }
+  .agent-space-head > div {
+    gap: 8px;
+  }
+  .agent-space-head h2 {
+    font-size: 17px;
+  }
+  .agent-space-head nav {
+    gap: 0;
+  }
+  .agent-space-head nav button {
+    padding: 8px;
+  }
+  .agent-chat-scroll {
+    padding: 12px 0;
+  }
+  .agent-proposal {
+    padding: 18px;
+  }
+  .agent-compose-wrap {
+    padding: 8px 0;
+  }
+  .agent-about .agent-aside {
+    display: block;
+  }
+}

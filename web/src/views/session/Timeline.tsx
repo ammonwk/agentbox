@@ -1191,3 +1191,9 @@ function Field({ f }: { f: InputField }) {
     </>
   );
 }
+
+/** Read-through shared agent conversation: the same provider-neutral bubbles as
+ * Sessions, without remote terminal controls or unrelated local session links. */
+export function AgentConversationEvents({events}:{events:readonly TimelineEvent[]}) {
+ return <div className="tl-stream">{events.filter(e=>e.kind==='user'||e.kind==='assistant').map(e=><EventRow key={e.id} ev={e as Extract<TimelineEvent,{kind:'user'|'assistant'}>} />)}</div>;
+}

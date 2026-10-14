@@ -27,6 +27,7 @@ import {
 } from "../lib/cloud";
 import { go } from "../route";
 import "./agents.css";
+import { LocalAgentSpace, SharedAgentSpace } from "./AgentSpace";
 
 const when = (s?: string | null) =>
   s
@@ -64,30 +65,8 @@ export function Agents({ state, id }: { state: AppState; id?: string }) {
   const { status, error } = useCloudStatus();
   if (error) return <Empty title="Cloud connection unavailable">{error}</Empty>;
   if (!status) return <Empty title="Loading Agents…" />;
-  if (!status.configured)
-    return (
-      <div className="agents-page">
-        <div className="agents-intro">
-          <span className="agents-eyebrow">ONGOING RESPONSIBILITIES</span>
-          <h2>Agents your team can work with</h2>
-          <p>
-            Give an agent a role, a work queue and an execution host. Everyone
-            in its workspace can inspect progress, while each work item has an
-            accountable human.
-          </p>
-        </div>
-        <div className="card agent-setup">
-          <h3>Connect your workspace</h3>
-          <p>
-            Agents use the shared cloud for identity, work claims and safe
-            activity. Configure your Supabase project on the Team page to get
-            started.
-          </p>
-          <Button onClick={() => go({ page: "team" })}>Open Team setup</Button>
-        </div>
-        <Templates onChoose={() => go({ page: "team" })} />
-      </div>
-    );
+  if (!status.configured || id?.startsWith("local-"))
+    return <LocalAgentSpace state={state} id={id} />;
   return <Connected status={status} state={state} id={id} />;
 }
 function Connected({
@@ -207,35 +186,31 @@ function Directory({
     );
   return (
     <div className="agents-page">
-      <div className="agents-toolbar">
-        <div className="agents-crumb">
-          <a href="#/agents">Agents</a>
-          {selected && (
-            <>
-              <span>/</span>
-              <strong>{selected.name}</strong>
-            </>
-          )}
+      {!selected && (
+        <div className="agents-toolbar">
+          <div className="agents-crumb">
+            <a href="#/agents">Agents</a>
+          </div>
+          <label className="agents-workspace">
+            Workspace{" "}
+            <select
+              className="input"
+              aria-label="Workspace"
+              value={workspace}
+              onChange={(e) => {
+                setWorkspace(e.target.value);
+                go({ page: "agents" });
+              }}
+            >
+              {me.data.memberships.map((m) => (
+                <option key={m.workspace.id} value={m.workspace.id}>
+                  {m.workspace.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
-        <label className="agents-workspace">
-          Workspace{" "}
-          <select
-            className="input"
-            aria-label="Workspace"
-            value={workspace}
-            onChange={(e) => {
-              setWorkspace(e.target.value);
-              go({ page: "agents" });
-            }}
-          >
-            {me.data.memberships.map((m) => (
-              <option key={m.workspace.id} value={m.workspace.id}>
-                {m.workspace.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      )}
       {(error || data.error) && (
         <p role="alert" className="error">
           {error || data.error}
@@ -267,7 +242,14 @@ function Directory({
           }
         />
       ) : selected && data.data ? (
-        <>
+        <SharedAgentSpace
+          key={selected.id}
+          a={selected}
+          board={data.data.board}
+          api={api}
+          user={user}
+          actions={data.data.actions}
+        >
           <div className="agents-detail-head">
             <div>
               <span className="agents-eyebrow">
@@ -367,7 +349,7 @@ function Directory({
             <summary>Definition and revision history</summary>
             <DefinitionHistory a={selected} api={api} person={person} />
           </details>
-        </>
+        </SharedAgentSpace>
       ) : id && data.data ? (
         <Empty title="Agent not found in this workspace">
           <Button onClick={() => go({ page: "agents" })}>Back to Agents</Button>

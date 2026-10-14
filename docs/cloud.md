@@ -460,3 +460,13 @@ API is introduced. GitHub outreach preferences require linking the human's own
 GitHub OAuth identity; an editable login or contribution-history match is not
 consent. Enable the GitHub OAuth provider and manual identity linking in your
 hosted Supabase project before opting in. Unlinked users remain contact-denied.
+
+### Shared Agent Chat relay
+
+Enable Realtime for cross-installation Chat. Agentbox uses HTTP/WebSocket Broadcast
+only, not database broadcast, for encrypted provider-transcript pages. The
+`agent_reads` table holds expiring request/public-key metadata; no response bodies.
+The SQL migration `20261014010000_agent_conversation_feed.sql` binds read authority
+to current workspace membership, execution host and grant, and scopes pending
+human guidance and immutable recommendations. See [Agents](agents.md#chat-about-and-feed)
+for key authentication, revocation, delivery receipts and local-only behavior.
