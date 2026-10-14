@@ -9,7 +9,8 @@
  * not running, the CLI starts it.
  */
 
-import { existsSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, webDist } from "../core/paths";
 import { listRepos, listAccounts } from "../core/db";
@@ -19,7 +20,7 @@ import { ApiError, apiClient, serverBase } from "../client";
 import { CLI_GUIDE } from "../core/cli-guide";
 import { fixPwaDesktop } from "../core/pwa";
 import { deriveIdentity, ensureUserEnv, userEnvPath } from "../core/user";
-import { serviceInstalled, lingering } from "../core/service";
+import { installService, serviceInstalled, lingering, startService, stopService } from "../core/service";
 import { voiceConfig } from "../voice/config";
 import { pwaInstalled } from "../core/pwa";
 import { identify } from "../core/accounts/identity";
@@ -73,19 +74,18 @@ async function ensureServer(): Promise<void> {
   mkdirSync(logDir, { recursive: true });
   // The service (systemd/agentbox.service), where it is installed: started
   // there, the server has the environment it has at boot, not this shell's.
-  const service = Bun.which("systemctl") && Bun.spawnSync(["systemctl", "--user", "cat", "agentbox.service"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
-  if (service) Bun.spawnSync(["systemctl", "--user", "start", "agentbox.service"], { stdout: "ignore", stderr: "inherit" });
-  else {
+  if (!startService()) {
     const log = openSync(join(logDir, "server.log"), "a");
-    const serve = ["setsid", "bun", agentboxBin(), "serve"];
+    const serve = [process.execPath, agentboxBin(), "serve"];
     const scoped = Bun.which("systemd-run")
       ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-serve", ...SERVER_WEIGHT.flatMap((w) => ["-p", w])]
       : [];
-    const p = Bun.spawn([...scoped, ...serve], {
-      stdio: ["ignore", log, log],
-      env: process.env,
-    });
-    p.unref();
+    try {
+      const argv = [...scoped, ...serve];
+      const p = spawn(argv[0]!, argv.slice(1), { stdio: ["ignore", log, log], env: process.env, detached: true });
+      await new Promise<void>((resolve, reject) => { p.once("spawn", resolve); p.once("error", reject); });
+      p.unref();
+    } finally { closeSync(log); }
   }
   process.stderr.write("starting agentbox server…");
   for (let i = 0; i < 40; i++) {
@@ -97,6 +97,31 @@ async function ensureServer(): Promise<void> {
   }
   process.stderr.write("\n");
   throw new ApiError(`the server did not come up; see ${join(logDir, "server.log")}`);
+}
+
+/**
+ * Stop the server: its service where that is installed (a killed process
+ * would be seen as a clean exit and stay down), else whatever listens on the
+ * port. The agents live in tmux and keep running.
+ */
+async function killServer(): Promise<number> {
+  if (!(await reachable())) {
+    console.log("agentbox: the server is not running");
+    return 0;
+  }
+  if (!stopService()) {
+    const pids = Bun.spawnSync(["lsof", "-t", `-iTCP:${DEFAULT_PORT}`, "-sTCP:LISTEN"]).stdout.toString().split(/\s+/).filter(Boolean);
+    for (const pid of pids) process.kill(Number(pid), "SIGTERM");
+  }
+  for (let i = 0; i < 20; i++) {
+    await Bun.sleep(250);
+    if (!(await reachable())) {
+      console.log("agentbox: server stopped; sessions keep running in tmux");
+      return 0;
+    }
+  }
+  console.error("agentbox: the server is still up");
+  return 1;
 }
 
 /** Hand this terminal to tmux until you detach or the agent exits. */
@@ -328,7 +353,7 @@ function doctor(): number {
     {
       name: "service",
       ok: serviceInstalled() !== false,
-      detail: serviceInstalled() === null ? "systemd not available" : serviceInstalled() ? "installed" : "not installed — the board's first-run card can install it",
+      detail: serviceInstalled() === null ? "no supported service manager" : serviceInstalled() ? "installed" : "not installed — run `agentbox service install` or use the board's setup card",
       fatal: false,
     },
     { name: "linger", ok: lingering() !== false, detail: lingering() === null ? "no systemd" : lingering() ? "starts at boot" : "off — run `loginctl enable-linger`", fatal: false },
@@ -378,9 +403,12 @@ async function recover(args: string[]): Promise<number> {
 
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
+  start                 start the backend in the background, if needed
+  service install       keep the backend available at login (macOS) or boot (Linux)
   claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--detach] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d)
+  kill                  stop the server; sessions keep running in tmux
   usage                 each account's limits and what running sessions claim
   attach <id>           attach this terminal to a session in agentbox
 
@@ -546,6 +574,17 @@ export async function main(argv: string[]): Promise<number | null> {
         if (!argv[1]) throw new Error("usage: agentbox go-login <account home>");
         const { runGoLogin } = await import("../core/accounts/godevice");
         return await runGoLogin(argv[1]);
+      }
+      case "kill":
+        return await killServer();
+      case "start":
+        await ensureServer();
+        return 0;
+      case "service": {
+        if (argv[1] !== "install") throw new Error("usage: agentbox service install");
+        const done = installService();
+        console.log(`installed ${done.unit}; starts at ${done.lingering ? "boot" : "login"}`);
+        return 0;
       }
       case "claude":
       case "codex":
