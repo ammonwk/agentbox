@@ -10,6 +10,8 @@
  */
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { WaitSpec } from "./types";
 
 type PrSpec = Extract<WaitSpec, { kind: "pr" }>;
@@ -25,6 +27,8 @@ export class Held extends Error {
 
 export interface Check {
   name: string;
+  /** A stable identity for this run of this check, so a re-run counts as fresh. */
+  key?: string;
   done: boolean;
   /** Concluded without failing: success, neutral or skipped. */
   ok: boolean;
@@ -38,6 +42,10 @@ export interface PrRead {
   base: string;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   checks: Check[];
+  /** Every check could not be read: the rest of the read still stands. */
+  checksError?: Error;
+  /** A digest of this PR's reviews and comments, never their text; an error when they could not be read. */
+  feedback?: { fingerprint: string; count: number } | Error;
 }
 
 export interface RunRead {
@@ -83,6 +91,9 @@ const OK = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
 interface RawContext {
   __typename: string;
+  id?: string;
+  completedAt?: string;
+  createdAt?: string;
   name?: string;
   status?: string;
   conclusion?: string | null;
@@ -93,10 +104,10 @@ interface RawContext {
 function check(c: RawContext): Check {
   if (c.__typename === "CheckRun") {
     const done = c.status === "COMPLETED";
-    return { name: c.name ?? "?", done, ok: done && OK.has(c.conclusion ?? ""), how: (done ? (c.conclusion ?? "no conclusion") : (c.status ?? "queued")).toLowerCase() };
+    return { name: c.name ?? "?", key: `${c.id}:${c.completedAt ?? ""}:${c.conclusion ?? ""}`, done, ok: done && OK.has(c.conclusion ?? ""), how: (done ? (c.conclusion ?? "no conclusion") : (c.status ?? "queued")).toLowerCase() };
   }
   const done = c.state !== "PENDING" && c.state !== "EXPECTED";
-  return { name: c.context ?? "?", done, ok: c.state === "SUCCESS", how: (c.state ?? "pending").toLowerCase() };
+  return { name: c.context ?? "?", key: `${c.id}:${c.createdAt ?? ""}:${c.state ?? ""}`, done, ok: c.state === "SUCCESS", how: (c.state ?? "pending").toLowerCase() };
 }
 
 export const prKey = (s: Pick<PrSpec, "repo" | "number">): string => `${s.repo}#${s.number}`;
@@ -105,9 +116,9 @@ export const prKey = (s: Pick<PrSpec, "repo" | "number">): string => `${s.repo}#
  * Every pull request asked about, in one request: each one's read, or why it
  * could not be read. Throws when GitHub answered nothing usable at all.
  */
-export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<Map<string, PrRead | Error>> {
+export async function readPrs(prs: (Pick<PrSpec, "repo" | "number"> & { feedback?: boolean })[]): Promise<Map<string, PrRead | Error>> {
   const repos = [...new Set(prs.map((p) => p.repo))];
-  const fields = `state headRefOid baseRefName mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
+  const fields = `state headRefOid baseRefName mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{id name status conclusion completedAt} ... on StatusContext{id context state createdAt}}}}}}}`;
   const query = `{ ${repos
     .map((repo, i) => {
       const [owner, name] = repo.split("/");
@@ -138,14 +149,41 @@ export async function readPrs(prs: Pick<PrSpec, "repo" | "number">[]): Promise<M
         continue;
       }
       const contexts = commit?.statusCheckRollup?.contexts;
-      if (contexts && contexts.totalCount > contexts.nodes.length) {
-        out.set(prKey(p), new Error(`${prKey(p)} has ${contexts.totalCount} checks on its head, more than one look reads (${contexts.nodes.length})`));
-        continue;
-      }
-      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: node.baseRefName, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check) });
+      const checksError = contexts && contexts.totalCount > contexts.nodes.length
+        ? new Error(`${prKey(p)} has ${contexts.totalCount} checks on its head, more than one look reads (${contexts.nodes.length})`) : undefined;
+      // Incomplete checks cannot establish readiness, but must not hide a
+      // separately complete review-feedback read while a large CI matrix runs.
+      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: node.baseRefName, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check), ...(checksError ? { checksError } : {}) });
     }
   });
+  const feedback = [...new Map(prs.filter(p => p.feedback).map(p => [prKey(p), p])).values()];
+  await Promise.all(feedback.map(async p => {
+    const read = out.get(prKey(p));
+    if (!read || read instanceof Error) return;
+    try { read.feedback = await readPrFeedback(p.repo, p.number); }
+    catch (e) { read.feedback = e instanceof Error ? e : new Error(String(e)); }
+  }));
   return out;
+}
+
+/** Review text stays on GitHub. Persist only a digest so edits and new replies
+ * wake the owner once, including comments inside previously resolved threads. */
+export async function readPrFeedback(repo: string, number: number, request: (path: string) => Promise<Response> = github): Promise<{ fingerprint: string; count: number }> {
+  const surfaces = [`pulls/${number}/reviews`, `pulls/${number}/comments`, `issues/${number}/comments`];
+  const rows = await Promise.all(surfaces.map(async surface => {
+    const marks: string[] = [];
+    for (let page = 1; page <= 10; page++) {
+      const res = await request(`/repos/${repo}/${surface}?per_page=100&page=${page}`);
+      if (!res.ok) throw new Error(`GitHub answered ${res.status} reading PR feedback`);
+      const data = await res.json() as { id: number; state?: string; submitted_at?: string; updated_at?: string; body?: string }[];
+      if (!Array.isArray(data) || data.some(r => !Number.isSafeInteger(r?.id))) throw new Error("GitHub returned invalid PR feedback");
+      for (const r of data) if (r.state !== "PENDING") marks.push(createHash("sha256").update(JSON.stringify([surface, r.id, r.state, r.submitted_at, r.updated_at, r.body])).digest("hex"));
+      if (!res.headers.get("link")?.includes('rel="next"')) return marks;
+    }
+    throw new Error("PR feedback exceeds 1000 records on one surface; read it manually before rearming");
+  }));
+  const marks = rows.flat().sort();
+  return { fingerprint: createHash("sha256").update(JSON.stringify(marks)).digest("hex"), count: marks.length };
 }
 
 const runs = new Map<string, { etag: string | null; run: RunRead }>();
@@ -214,20 +252,48 @@ const UNTIL_MAX = 4_000;
  * the server's environment (not the session's), told which wait and session
  * it answers for.
  */
-export async function readUntil(spec: UntilSpec, wait: number, session: string): Promise<{ yes: boolean; said: string }> {
+export async function readUntil(spec: UntilSpec, wait: number, session: string, timeoutMs = UNTIL_TIMEOUT_S * 1000): Promise<{ yes: boolean; said: string }> {
   if (!existsSync(spec.cwd)) throw new Error(`its directory is gone: ${spec.cwd}`);
-  const p = Bun.spawn(["nice", "-n", "19", "timeout", "--kill-after=5", String(UNTIL_TIMEOUT_S), "sh", "-c", spec.cmd], {
-    cwd: spec.cwd,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, AGENTBOX_WAIT: String(wait), AGENTBOX_SESSION: session },
+  // A separate POSIX process group bounds the shell *and* its children on
+  // macOS/Linux. Killing only the shell leaves a blocked child holding pipes
+  // open; GNU timeout is not installed on a stock Mac. The shorter internal
+  // deadline is for exercising cleanup without a two-minute validation delay.
+  const { out, tail, err, stderrError, code, signal, timedOut } = await new Promise<{
+    out: string; tail: string; err: string; stderrError: boolean; code: number | null; signal: string | null; timedOut: boolean;
+  }>((resolve, reject) => {
+    const p = spawn("nice", ["-n", "19", "sh", "-c", spec.cmd], {
+      cwd: spec.cwd,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, AGENTBOX_WAIT: String(wait), AGENTBOX_SESSION: session },
+    });
+    let out = "", tail = "", err = "", stderrError = false, timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (p.pid) {
+        try { process.kill(-p.pid, "SIGKILL"); }
+        catch { p.kill("SIGKILL"); }
+      }
+      // Even a child which deliberately left the group cannot hold this
+      // probe open through an inherited pipe. This is not an OS sandbox.
+      p.stdout.destroy();
+      p.stderr.destroy();
+    }, Math.max(1, Math.min(timeoutMs, UNTIL_TIMEOUT_S * 1000)));
+    p.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      out += chunk.slice(0, Math.max(0, UNTIL_MAX + 1 - out.length));
+      tail = (tail + chunk).slice(-200);
+    });
+    p.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderrError ||= /\S/.test(chunk); err = (err + chunk).slice(-300); });
+    p.once("error", e => { clearTimeout(timer); reject(e); });
+    p.once("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ out, tail, err, stderrError, code, signal, timedOut });
+    });
   });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  if (timedOut) throw new Error(`the command did not finish in ${timeoutMs / 1000}s`);
   const said = out.trim();
   if (code === 0) return { yes: true, said: said.length > UNTIL_MAX ? `${said.slice(0, UNTIL_MAX)}\n(cut here, at ${UNTIL_MAX} characters)` : said };
-  const error = err.trim().split("\n").pop()!.slice(0, 300);
-  if (code === 1 && !error) return { yes: false, said: said.split("\n").pop()!.slice(0, 200) };
-  if (code === 124 || code === 137) throw new Error(`the command did not finish in ${UNTIL_TIMEOUT_S}s`);
-  throw new Error(`the command exited ${code}${error ? `: ${error}` : ""} (0 means it happened, 1 with nothing on stderr not yet)`);
+  const error = err.trim().split("\n").pop()! || (stderrError ? "stderr contained an error (diagnostic exceeded retained output)" : "");
+  if (code === 1 && !error) return { yes: false, said: tail.trim().split("\n").pop()! };
+  throw new Error(`the command ${signal ? `was killed by ${signal}` : `exited ${code}`}${error ? `: ${error}` : ""} (0 means it happened, 1 with nothing on stderr not yet)`);
 }

@@ -813,6 +813,10 @@ export interface SessionDiff {
 
 export interface Repo {
   id: string;
+  /** The repo's checkout on this machine, symlinks resolved, or its repoRoot
+   *  when that could not be read. Derived for the board: a session's worktree
+   *  is matched against this, not against `ref`, which may be a slug. */
+  checkoutRoot?: string;
   /** Local absolute path, or an `owner/name` GitHub slug. */
   ref: string;
   kind: "local" | "github";
@@ -1357,6 +1361,9 @@ export type WaitSpec =
       checks: string[];
       /** Only its merge, its closing, or a head named being replaced ends the wait. */
       merged: boolean;
+      /** New review/comment feedback or a newly failed check ends it, whether or
+       *  not the rest of the head's checks are still running. Needs `head`. */
+      feedback?: boolean;
     }
   /** A GitHub Actions run concluding. */
   | { kind: "run"; repo: string; run: number }
@@ -1399,7 +1406,7 @@ export interface Wait {
   /** Since when every look has failed; null while they answer. */
   failingSince: number | null;
   /** What one look hands the next. */
-  memo: { head?: string; readyAt?: number; headWrongAt?: number; goneAt?: number; idle?: Record<string, number>; absentAt?: number; failures?: number; error?: string };
+  memo: { feedback?: string; failedChecks?: string[]; head?: string; readyAt?: number; headWrongAt?: number; goneAt?: number; idle?: Record<string, number>; absentAt?: number; failures?: number; error?: string };
 }
 
 // ------------------------------------------------------------- schedules

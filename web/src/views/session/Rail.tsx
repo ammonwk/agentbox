@@ -326,21 +326,7 @@ export function Rail({
         <BookmarksMenu sessions={state.sessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
       </div>
-      <div className="rail-views" role="tablist" aria-label="Which sessions">
-        {(["active", "inactive"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            className="rail-view"
-            aria-selected={view === v}
-            title={v === "active" ? "Running, or did something in the last 3 hours" : "Nothing in the last 3 hours"}
-            onClick={() => list.setView(v)}
-          >
-            {v === "active" ? "Active" : "Inactive"} <span>{counts[v]}</span>
-          </button>
-        ))}
-      </div>
+      <RailTabs view={view} counts={counts} onChange={list.setView} />
 
       <div
         className="rail-scroll"
@@ -1085,6 +1071,28 @@ function ClosedList({
           <div ref={end} className="rail-closed-end" aria-hidden="true" />
         </>
       ) : null}
+    </div>
+  );
+}
+
+/** The Active/Inactive tablist, apart from the rail so another list can put
+ *  the same two tabs over it. */
+export function RailTabs({ view, counts, onChange }: { view: RailView; counts: Record<RailView, number>; onChange: (view: RailView) => void }) {
+  return (
+    <div className="rail-views" role="tablist" aria-label="Which sessions">
+      {(["active", "inactive"] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          role="tab"
+          className="rail-view"
+          aria-selected={view === v}
+          title={v === "active" ? "Running, or did something in the last 3 hours" : "Nothing in the last 3 hours"}
+          onClick={() => onChange(v)}
+        >
+          {v === "active" ? "Active" : "Inactive"} <span>{counts[v]}</span>
+        </button>
+      ))}
     </div>
   );
 }

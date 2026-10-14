@@ -23,6 +23,7 @@ const USAGE = `wait takes what to wait for:
                         its checks concluding on a head: every check, with --require
                         those among them (each must report), or with --only just those
                         (a name takes its shards too; Merge gate is excluded)
+  agentbox wait pr <n> --feedback --head <sha>     new/edited review feedback or failed checks, independent of readiness
   agentbox wait pr <n> --merged [--head <sha>]
                         its merge; with --head, also its head moving off that commit
                         (a PR yours is stacked on)
@@ -40,7 +41,7 @@ all take --timeout <3h> and --for <session id>.`;
 /** `agentbox wait <what> … [--timeout 3h] [--for ID]`: arm one and return at once. */
 export async function wait(api: Api, args: string[]): Promise<number> {
   const [kind, ...more] = args;
-  const { flags, rest } = parseArgs(more, ["require", "only", "head", "timeout", "for", "R", "repo", "name", "every"], ["merged"]);
+  const { flags, rest } = parseArgs(more, ["require", "only", "head", "timeout", "for", "R", "repo", "name", "every"], ["merged", "feedback"]);
   const timeout = str(flags.get("timeout"));
   const body: Record<string, unknown> = {
     session: str(flags.get("for")) ?? process.env.AGENTBOX_SESSION,
@@ -55,7 +56,7 @@ export async function wait(api: Api, args: string[]): Promise<number> {
       body.pr = rest[0];
       const names = (flag: string) => str(flags.get(flag))?.split(",").map((c) => c.trim()).filter(Boolean) ?? [];
       if (flags.has("require") && flags.has("only")) throw new Error("--require adds checks that must report to every check; --only waits for just those: take one");
-      spec = { kind: "pr", checks: [...names("require"), ...names("only")], all: !flags.has("only") && !flags.has("merged"), head: str(flags.get("head")) ?? null, merged: flags.has("merged") };
+      spec = { kind: "pr", checks: [...names("require"), ...names("only")], all: !flags.has("feedback") && !flags.has("only") && !flags.has("merged"), head: str(flags.get("head")) ?? null, merged: flags.has("merged"), ...(flags.has("feedback") ? { feedback: true } : {}) };
       break;
     }
     case "run": {

@@ -127,7 +127,9 @@ async function mutate(fn: () => void): Promise<void> {
     tx.onabort = () => reject(failure ?? tx.error);
   });
 }
-export async function saveDraft(id: string, text: string, images: SavedAttachment[], revision: string): Promise<void> {
+/** `previousRevision` is the one this tab last saved: an emptied box deletes a
+ *  draft still carrying it, and never a newer one another tab wrote since. */
+export async function saveDraft(id: string, text: string, images: SavedAttachment[], revision: string, previousRevision?: string): Promise<void> {
   try {
     await mutate(() => {
       const all = readAll();
@@ -135,7 +137,7 @@ export async function saveDraft(id: string, text: string, images: SavedAttachmen
       if (w.taken?.includes(revision)) return;
       if (text.trim() || images.length) w.draft = { text, images, at: Date.now(), revision };
       // An empty field in another tab must not erase somebody else's draft.
-      else if (w.draft?.revision === revision) delete w.draft;
+      else if (w.draft?.revision === revision || (previousRevision !== undefined && w.draft?.revision === previousRevision)) delete w.draft;
       write(all);
     });
   } catch { /* Ordinary draft saving remains best effort. Taking one does not. */ }

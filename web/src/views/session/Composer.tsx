@@ -105,8 +105,13 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   const savedImages = images.saved();
   const savedKey = JSON.stringify(savedImages);
   const editingRevision = revision.current;
+  /** The revision this tab last saved, so emptying the box deletes our own
+   *  draft and not a newer one written in another tab meanwhile. */
+  const lastQueuedRevision = useRef(draft?.revision);
   useEffect(() => {
-    void saveDraft(session.id, text, savedImages, editingRevision);
+    const previous = lastQueuedRevision.current;
+    lastQueuedRevision.current = editingRevision;
+    void saveDraft(session.id, text, savedImages, editingRevision, previous);
   }, [session.id, text, savedKey, editingRevision]);
   // Taking a revision clears every tab holding that revision, before delivery.
   // A newer edit has its own revision, even if its text is identical.

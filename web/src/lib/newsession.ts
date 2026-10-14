@@ -147,10 +147,17 @@ const SKILL_SOURCES: Record<ProviderId, readonly SkillSource[] | null> = {
   muse: null,
 };
 
-/** The registered repo a session runs in (a worktree's `repoRoot` is its main checkout). */
+/** The registered repo a session runs in (a worktree's `repoRoot` is its main
+ *  checkout, resolved by the server; `ref` may be a GitHub slug). The longest
+ *  path wins, so a registered repo inside another is the one a session in it
+ *  belongs to. A prefix only counts when the session has no `repoRoot`: a
+ *  worktree's root must equal its repo's checkout, not sit under it. */
 export function repoOfSession(repos: readonly Repo[], s: Pick<Session, "repoRoot" | "cwd">): Repo | null {
   const root = s.repoRoot ?? s.cwd;
-  return repos.find((r) => root === r.ref || root.startsWith(`${r.ref}/`)) ?? null;
+  return [...repos].sort((a, b) => (b.checkoutRoot ?? b.ref).length - (a.checkoutRoot ?? a.ref).length).find((r) => {
+    const path = r.checkoutRoot ?? r.ref;
+    return root === path || (!s.repoRoot && path.startsWith("/") && root.startsWith(`${path}/`));
+  }) ?? null;
 }
 
 /** The skills a session of `provider` in `repo` could run, first root wins. */

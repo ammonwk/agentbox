@@ -18,11 +18,12 @@
  */
 
 import { ensureBridge } from "../bridge/service";
+import { ZodError } from "zod";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { DEFAULT_PORT, webDist } from "../core/paths";
-import { Fleet, FleetError } from "../core/fleet";
+import { Fleet, FleetError, repoRootOf } from "../core/fleet";
 import * as tmux from "../core/tmux";
 import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
@@ -49,7 +50,7 @@ import type { CardKind, CardState, McpServerInput, McpState } from "../core/type
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
 import { claimPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
-import { repoFullNameOf } from "../core/git";
+import { repoCheckoutPath, repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { agentTimeline, sessionWork } from "../core/work";
@@ -379,7 +380,7 @@ function coldState(): ColdState {
   return {
     accounts: views,
     logins: accounts.loginFlows(),
-    repos: listRepos(),
+    repos: listRepos().map((r) => ({ ...r, checkoutRoot: repoRootOf(repoCheckoutPath(r)) ?? repoCheckoutPath(r) })),
     prs: slow.prs.map((p) => ({ ...p, owner: holderOf(prClaims, p.repo, p.number)?.sessionId ?? null })),
     prClaims,
     skills: slow.skills,
@@ -662,6 +663,8 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
+  // A schema refusal is the request's shape, not the server's fault.
+  if (e instanceof ZodError) return new HttpError(400, e.message);
   const c = cloudHttpError(e);
   if (c) return c;
   if (e instanceof DesktopError) return new HttpError(e.status, e.message);

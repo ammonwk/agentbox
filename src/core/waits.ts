@@ -70,7 +70,7 @@ export const DEFAULT_TIMEOUT_MS: Record<WaitSpec["kind"], number> = {
 
 type Ending = { how: Exclude<WaitEnd, "cancelled" | "timeout">; text: string };
 /** One look: how it ends the wait, or what it saw and hands the next look. */
-export type Look = { end: Ending } | { seen: string; memo?: Wait["memo"] };
+export type Look = { end: Ending; memo?: Wait["memo"] } | { seen: string; memo?: Wait["memo"] };
 
 // Merge authorization belongs to the steward, not the owner waiting for CI/review.
 const isMergeGate = (name: string): boolean => name.trim().toLowerCase() === "merge gate";
@@ -93,6 +93,7 @@ const oneLine = (s: string, max: number): string => {
 export function describe(spec: WaitSpec): string {
   switch (spec.kind) {
     case "pr": {
+      if (spec.feedback) return `PR #${spec.number}: new review feedback or failed checks on ${short(spec.head!)}`;
       if (spec.merged) return `PR #${spec.number} merging${spec.head ? ` from ${short(spec.head)}` : ""}`;
       const what = oneLine([...(spec.all ? ["every check"] : []), ...spec.checks].join(", "), 120);
       return `PR #${spec.number}: ${what}${spec.head ? ` on ${short(spec.head)}` : ""}`;
@@ -133,8 +134,10 @@ export function parseSpec(raw: unknown): WaitSpec {
       const head = typeof o.head === "string" && o.head.trim() ? o.head.trim().toLowerCase() : null;
       if (head && !/^[0-9a-f]{7,40}$/.test(head)) throw new FleetError(400, `--head takes a commit (7 to 40 hex), not "${head}"`);
       const merged = o.merged === true;
+      const feedback = o.feedback === true;
+      if (feedback && (!head || merged || checks.length || o.all === true)) throw new FleetError(400, "--feedback requires --head and is separate from --merged/--require/--only/every check");
       if (merged && (checks.length || o.all === true)) throw new FleetError(400, "a wait for the merge is its own wait: arm one for the checks and another with --merged");
-      return { kind: "pr", repo: repo(), number: whole("number", 1e9), head, all: !merged && (o.all === true || checks.length === 0), checks, merged };
+      return { kind: "pr", repo: repo(), number: whole("number", 1e9), head, all: !feedback && !merged && (o.all === true || checks.length === 0), checks, merged, ...(feedback ? { feedback: true } : {}) };
     }
     case "run":
       return { kind: "run", repo: repo(), run: whole("run", Number.MAX_SAFE_INTEGER) };
@@ -185,6 +188,22 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
   // Apply the policy here so already-armed waits and every diagnostic use the same scope.
   if (spec.checks.some(isMergeGate)) return { end: { how: "stuck", text: "This wait explicitly requires merge authorization. Arm a CI/review wait, or use --merged for the merge." } };
   const checks = pr.checks.filter((c) => !isMergeGate(c.name));
+  if (spec.feedback) {
+    const failed = checks.filter(c => c.done && !c.ok);
+    const keys = failed.map(c => c.key ?? `${c.name}:${c.how}`).sort();
+    const freshFailures = failed.filter(c => !memo.failedChecks?.includes(c.key ?? `${c.name}:${c.how}`));
+    const feedback = pr.feedback;
+    const readable = feedback && !(feedback instanceof Error) ? feedback : null;
+    const changed = readable && (memo.feedback ? memo.feedback !== readable.fingerprint : readable.count > 0);
+    const next = { ...base, failedChecks: keys, feedback: readable?.fingerprint ?? memo.feedback };
+    if (freshFailures.length || changed) return {
+      end: { how: "happened", text: `${name} has actionable updates on ${short(pr.head)}: ${[...(changed ? ["review/comment feedback changed"] : []), ...freshFailures.map(c => `${c.name} (${c.how})`)].join(", ")}. Read and disposition the actual review/comment/check evidence now; queued CI does not delay this notice. This is not a clean verdict or readiness. Keep the full-check wait. After disposition, rearm with agentbox wait pr ${spec.repo}#${spec.number} --feedback --head ${pr.head}; its durable cursor skips already observed feedback. Existing owner, consent and merge policy still apply.` }, memo: next,
+    };
+    if (!readable) throw feedback instanceof Error ? feedback : new Error("PR feedback was not read");
+    if (pr.checksError) throw pr.checksError;
+    return { seen: `no new review feedback or failed checks on ${short(pr.head)}`, memo: next };
+  }
+  if (pr.checksError) throw pr.checksError;
   const asked = spec.checks.map((n) => ({ n, found: checks.filter((c) => named(c.name, n)) }));
   const scope = spec.all ? checks : [...new Set(asked.flatMap((a) => a.found))];
   const failed = scope.filter((c) => c.done && !c.ok);
@@ -331,7 +350,15 @@ export class Waits {
     }
     if (going.length >= MAX_PER_SESSION) throw new FleetError(409, `${sessionId} already has ${going.length} waits going (\`agentbox waits\`): cancel some with \`agentbox unwait\``);
     const now = this.now();
-    const wait = insertWait({ sessionId, spec, createdAt: now, deadline: now + ms });
+    // A feedback wait rearmed for the same head carries its cursor: the
+    // feedback already dispositioned does not wake it again, across a restart
+    // of the server too. A released or cancelled one has nothing to carry.
+    let memo: Wait["memo"] = {};
+    if (spec.kind === "pr" && spec.feedback) {
+      const prior = listWaits(0, sessionId).reverse().find(w => w.ended && w.ended !== "cancelled" && w.spec.kind === "pr" && w.spec.feedback && w.spec.repo.toLowerCase() === spec.repo.toLowerCase() && w.spec.number === spec.number && (w.memo.head ? w.memo.head.startsWith(spec.head!) : w.spec.head === spec.head));
+      if (prior) memo = { head: prior.memo.head, feedback: prior.memo.feedback, failedChecks: prior.memo.failedChecks };
+    }
+    const wait = insertWait({ sessionId, spec, createdAt: now, deadline: now + ms, memo });
     console.log(`agentbox: wait ${wait.id} for ${sessionId}: ${describe(spec)}, until ${new Date(wait.deadline).toISOString()}`);
     // Not waited for: the first look may be a request to GitHub.
     void this.tick();
@@ -418,7 +445,12 @@ export class Waits {
       const spec = w.spec as Extract<WaitSpec, { kind: "pr" }>;
       const read = reads.get(prKey(spec)) ?? new Error("GitHub returned nothing for it");
       if (read instanceof Error) this.failed(w, read, now);
-      else this.looked(w, lookPr(spec, w.memo, read, w.createdAt, now), now);
+      else {
+        // `lookPr` throws what it could not read: the checks past 100, or the
+        // feedback read itself. That is a failed look, not a look that answers.
+        try { this.looked(w, lookPr(spec, w.memo, read, w.createdAt, now), now); }
+        catch (e) { this.failed(w, e, now); }
+      }
     }
   }
 
@@ -451,7 +483,7 @@ export class Waits {
 
   private looked(w: Wait, look: Look, now: number): void {
     if (getWait(w.id)?.ended) return;
-    if ("end" in look) return this.end(w, look.end.how, look.end.text);
+    if ("end" in look) return this.end(w, look.end.how, look.end.text, look.memo);
     updateWait(w.id, { checkedAt: now, seen: look.seen, failingSince: null, memo: { ...(look.memo ?? w.memo), failures: undefined } });
   }
 
@@ -471,8 +503,10 @@ export class Waits {
     updateWait(w.id, { checkedAt: now, seen: `could not look (${failures} in a row): ${why}`, failingSince: since, memo: { ...w.memo, failures } });
   }
 
-  private end(w: Wait, how: Exclude<WaitEnd, "cancelled">, text: string): void {
-    updateWait(w.id, { ended: how, outcome: text, endedAt: this.now() });
+  private end(w: Wait, how: Exclude<WaitEnd, "cancelled">, text: string, memo?: Wait["memo"]): void {
+    // The ending and the cursor it leaves commit together: a crash must never
+    // consume feedback without leaving the owner a durable notification.
+    updateWait(w.id, { ended: how, outcome: text, endedAt: this.now(), ...(memo ? { memo, checkedAt: this.now(), failingSince: null } : {}) });
     console.log(`agentbox: wait ${w.id} for ${w.sessionId} (${describe(w.spec)}) ended: ${how}`);
   }
 
