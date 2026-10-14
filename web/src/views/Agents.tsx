@@ -171,7 +171,7 @@ function Pane({ info, state, tab, reload, back }: { info: SuperagentInfo; state:
           beside && i === 0 ? null : (
             <TabButton key={t.id} on={current === t.id} onClick={() => to(t.id)}>
               {t.title}
-              {t.badge !== undefined && t.badge !== 0 && t.badge !== "" ? <span className="ag-badge">{t.badge}</span> : null}
+              {t.badge != null && t.badge !== 0 && t.badge !== "" ? <span className="ag-badge">{t.badge}</span> : null}
             </TabButton>
           ),
         )}
