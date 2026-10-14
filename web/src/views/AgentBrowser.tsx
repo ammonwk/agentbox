@@ -6,7 +6,7 @@ import { useIsNarrow } from "./session/useIsNarrow";
 import { AgentAvatar } from "./AgentAvatar";
 import { halfOf, placeIn, ranksOf, readOrder, saveOrder, stepIn } from "../lib/manualorder";
 import { useDismiss } from "./newsession/popover";
-import { firstActiveIn, resting, sidebarOrder, type AgentActivity, type AgentOption } from "../lib/agentorder";
+import { dropAgent, firstActiveIn, resting, sidebarOrder, type AgentActivity, type AgentOption } from "../lib/agentorder";
 /** Your order of the agents, by workspace and project, and of each agent's
  *  work sessions, by agent (lib/manualorder.ts). */
 const AGENT_ORDER_KEY = "agentbox.agentOrder";
@@ -82,8 +82,8 @@ export function AgentBrowser({ id, options, threads, more, loadMore, error, chil
   const ordered = work.filter((t) => t.status !== "closed" || showClosed)
     .sort((a, b) => Number(b.active) - Number(a.active) || (threadRanks.get(a.id) ?? -1) - (threadRanks.get(b.id) ?? -1) || b.at - a.at);
   const creator = options.find((a) => a.creator);
-  // The rows beside each other: the active agents and the paused ones, and
-  // each agent's active work and the rest.
+  // The rows beside each other, which Alt+↑/↓ and the menu move among: the
+  // active agents and the paused ones, and each agent's active work and the rest.
   const siblingsOf = (row: Row): string[] => row.kind === "agent"
     ? agents.filter((a) => resting(a) === resting(agents.find((x) => x.id === row.id)!)).map((a) => a.id)
     : ordered.filter((t) => t.active === ordered.find((x) => x.id === row.id)?.active).map((t) => t.id);
@@ -102,11 +102,19 @@ export function AgentBrowser({ id, options, threads, more, loadMore, error, chil
   };
   const step = (row: Row, by: -1 | 1) => place(row, stepIn(row.kind === "agent" ? agentIds : threadIds, siblingsOf(row), row.id, by));
   const canStep = (row: Row, by: -1 | 1) => { const sib = siblingsOf(row), i = sib.indexOf(row.id); return i !== -1 && sib[i + by] !== undefined; };
-  // Dragging a row to a new place among those beside it: before or after the
-  // row it is dropped on, by which half.
   const [drag, setDrag] = useState<Row | null>(null);
   const [over, setOver] = useState<{ id: string; at: "before" | "after" } | null>(null);
   const [menu, setMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
+  // Dragging a row to a new place: before or after the row it is dropped on,
+  // by which half. A work session goes among those beside it; an agent can be
+  // dropped on any agent, and the line shows where it will be drawn.
+  const dropOn = (row: Row, e: DragEvent<HTMLElement>) => {
+    if (!drag || drag.id === row.id || drag.kind !== row.kind) return null;
+    if (drag.kind === "agent") return dropAgent(options, agentIds, drag.id, row.id, halfOf(e));
+    if (!siblingsOf(drag).includes(row.id)) return null;
+    const at = halfOf(e);
+    return { ids: placeIn(threadIds, siblingsOf(drag), drag.id, row.id, at), line: { id: row.id, at } };
+  };
   const dnd = (row: Row) => ({
     draggable: true,
     "data-drop": over?.id === row.id ? over.at : undefined,
@@ -117,16 +125,16 @@ export function AgentBrowser({ id, options, threads, more, loadMore, error, chil
     },
     onDragEnd: () => { setDrag(null); setOver(null); },
     onDragOver: (e: DragEvent<HTMLElement>) => {
-      if (!drag || drag.id === row.id || drag.kind !== row.kind || !siblingsOf(drag).includes(row.id)) return setOver(null);
+      const drop = dropOn(row, e);
+      if (!drop) return setOver(null);
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      setOver({ id: row.id, at: halfOf(e) });
+      setOver(drop.line);
     },
     onDrop: (e: DragEvent<HTMLElement>) => {
       e.preventDefault();
-      if (drag && drag.id !== row.id && drag.kind === row.kind && siblingsOf(drag).includes(row.id)) {
-        place(drag, placeIn(drag.kind === "agent" ? agentIds : threadIds, siblingsOf(drag), drag.id, row.id, halfOf(e)));
-      }
+      const drop = dropOn(row, e);
+      if (drag && drop) place(drag, drop.ids);
       setDrag(null);
       setOver(null);
     },
