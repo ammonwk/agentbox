@@ -1,3 +1,6 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { agentboxHome } from "../paths";
 import { z } from "zod";
 import type { AgentsRuntime } from "./runtime";
 import {
@@ -12,7 +15,7 @@ import { AGENT_TEMPLATES } from "../../cloud/agents";
 import { FleetError, newSessionId } from "../fleet";
 import { submitWithReceipt, sendReceipt } from "../send-receipts";
 import type { TimelineEvent } from "../types";
-import { getRepoById } from "../db";
+import { getRepoById, getSessionRecord } from "../db";
 
 type LocalAgent = {
   id: string;
@@ -43,7 +46,7 @@ export class AgentConversations {
   private get db() {
     const db = this.runtime.store.db;
     db.exec(
-      "CREATE TABLE IF NOT EXISTS local_agents(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_proposals(id TEXT PRIMARY KEY,body TEXT NOT NULL);",
+      "CREATE TABLE IF NOT EXISTS local_agents(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_proposals(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_submissions(id TEXT PRIMARY KEY,agent TEXT NOT NULL,session TEXT NOT NULL);",
     );
     return db;
   }
@@ -119,12 +122,19 @@ export class AgentConversations {
       if (!a || !a.enabled) throw new FleetError(409, "Agent is paused");
       if (!body.trim() || body.length > 24000)
         throw new FleetError(400, "Write a message up to 24000 characters");
-      const fresh = !a.session;
+      const prior=this.db.query("SELECT agent,session FROM local_submissions WHERE id=?").get(request) as {agent:string;session:string}|null;
+      if(prior&&prior.agent!==id)throw new FleetError(409,"Submission belongs to another agent");
+      // Fleet records its identity before starting tmux. No record proves a
+      // previous preflight never spawned; an uncertain existing session stays.
+      if(a.session&&!getSessionRecord(a.session))a.session=null;
+      const fresh = !a.session&&!prior;
       if (fresh) {
         a.session = newSessionId();
         this.put(a);
       }
-      const sid = a.session!;
+      const sid = prior?.session??a.session!;
+      this.db.run("INSERT OR IGNORE INTO local_submissions(id,agent,session) VALUES (?,?,?)",[request,id,sid]);
+      const cwd=join(agentboxHome(),"agents","local",a.id);mkdirSync(cwd,{recursive:true,mode:0o700});
       const receipt = await submitWithReceipt(
         sid,
         request,
@@ -137,18 +147,20 @@ export class AgentConversations {
               id: sid,
               provider: a.provider,
               repoId: a.repo ?? undefined,
+              cwd,
               worktree: !!a.repo,
               prompt: `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\n\nUser: ${body}`,
             });
           } else await this.runtime.fleet.send(sid, body, attempt, true);
         },
       );
+      if(!getSessionRecord(sid)&&a.session===sid){a.session=null;this.put(a);}
       return {
         id: request,
         state:
           receipt.state === "sent"
             ? "sent"
-            : receipt.state === "failed"
+            : receipt.state === "failed" || !getSessionRecord(sid)
               ? "refused"
               : "uncertain",
         result: receipt.error ?? "",
@@ -159,14 +171,16 @@ export class AgentConversations {
   }
   localReceipt(id: string, request: string) {
     const a = this.local().find((x) => x.id === id),
-      r = a?.session ? sendReceipt(a.session, request) : null;
+      prior=this.db.query("SELECT session FROM local_submissions WHERE id=? AND agent=?").get(request,id) as {session:string}|null,
+      sid=prior?.session??a?.session,
+      r = sid ? sendReceipt(sid, request) : null;
     return r
       ? {
           id: request,
           state:
             r.state === "sent"
               ? "sent"
-              : r.state === "failed"
+              : r.state === "failed" || !getSessionRecord(sid!)
                 ? "refused"
                 : "uncertain",
           result: r.error ?? "",
