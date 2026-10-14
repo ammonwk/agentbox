@@ -27,7 +27,10 @@ import { AgentMemory, DEFAULT_MEMORY_POLICY, MemoryPolicy, type Supplied } from 
 import { avatarFile, removeAvatar, saveAvatar } from "./avatar";
 import { AUTO_PROVIDERS, chooseProvider, type AgentProvider, type ProviderChoice } from "./providers";
 import { detectCli } from "../accounts/homes";
-import { attribute, type RegisteredAgent, type SenderDirectory } from "../senders";
+import { attribute, type Opener, type RegisteredAgent, type SenderDirectory } from "../senders";
+import { advance, CHECK_TIMEOUT_S, loopText, makeLoop, type AgentLoop } from "./loop";
+import { runShell } from "../runcheck";
+import { scheduleSentMark } from "../sent";
 import { moveCards } from "../cards";
 import { movePrClaims, unfinishedClaims } from "../prclaims";
 import { isKeepWarmNote } from "../cache";
@@ -61,6 +64,8 @@ export type LocalAgent = {
   creation?: string;
   automation?: string;
   memoryPolicy?: Partial<MemoryPolicy>;
+  /** Its own schedule (`loop.ts`): Agentbox runs it into the current conversation. */
+  loop?: AgentLoop;
   /** The latest handoff asked of the current conversation. */
   checkpoint?: {
     session: string;
@@ -212,6 +217,8 @@ export class AgentConversations {
   private sending = new Map<string, string>();
   /** Agents whose conversation is being replaced in this process. */
   private rolling = new Set<string>();
+  /** Agents whose loop is running its check or being said now. */
+  private looping = new Set<string>();
   /** Session → the activity time its transcript tail was last checked at. */
   private looked = new Map<string, number>();
   private sessionActions = new Set<string>();
@@ -410,8 +417,8 @@ export class AgentConversations {
      *  (`Fleet.endTurnFor`). Never for an approval or any machine prompt,
      *  nor for guidance on a recommendation. */
     interrupt = false,
-    /** The session that wrote `body`, recorded on a conversation it starts. */
-    opener?: { from: string; agent: string | null },
+    /** Who wrote `body`, recorded on a conversation it starts. */
+    opener?: Opener,
   ) {
     if (context) interrupt = false;
     if (this.busy.has(id) || this.rolling.has(id))
@@ -521,7 +528,7 @@ export class AgentConversations {
   /** The first prompt of a conversation: who the agent is, what its memory
    *  says when it continues an earlier one, then the user's message. */
   private opening(a: LocalAgent, body: string, from: { old: string; memory?: string; work?: string } | null) {
-    const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${authorityOf(a) ? `${authorityOf(a)}\n` : ""}${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nManage your own completed work sessions: inspect their transcript, PRs, waits and decisions before deciding they are done. Use agentbox agent session ${a.id} <work-session> close --request <UUID> --activity <lastActivityAt from agentbox show --json> --reason <completion evidence>. This stops only idle completed work and retains its transcript. Do not close work awaiting CI, review, a decision or children. Use the same command with restore while its cache is still warm to resume the same provider session/account; expired caches cannot be restored warm. Never stop the ongoing main chat or unrelated sessions.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text> (or --file <text file>, up to 1500 characters). Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.\nWhen you find a defect in Agentbox itself, or an improvement it needs, file it for Vulcan to triage: agentbox agent report --request <stable UUID> --file <text file>, whose first line is the title. It becomes a public GitHub issue, at most 3 a day: give the evidence and what you expected, and leave out secrets, customer data and private paths.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
+    const intro = `You are ${a.name}, an ongoing local Agentbox agent. ${a.role}.\n${a.instructions}\n${authorityOf(a) ? `${authorityOf(a)}\n` : ""}${a.capability === "creator" ? creationTool(a.id) : ""}\nThis is the user's ongoing conversation. Keep context in this provider transcript. Remain available after each answer. Do not spawn another agent or start recurring repository discovery without a request. No external contact, publication, merge, deployment or credentials access is authorized by merely creating this chat. Use the existing agentbox waits when needed. Publish useful, evidence-backed recommendations through: agentbox agent recommend ${a.id} --request <stable UUID> --file <JSON path>. JSON: {title,finding,reason,next,evidence:[{url,label}]}. Those cards appear in Chat and Feed. Feed approval authorizes only its exact next step. Keep all secrets out of recommendations and replies.\nManage your own completed work sessions: inspect their transcript, PRs, waits and decisions before deciding they are done. Use agentbox agent session ${a.id} <work-session> close --request <UUID> --activity <lastActivityAt from agentbox show --json> --reason <completion evidence>. This stops only idle completed work and retains its transcript. Do not close work awaiting CI, review, a decision or children. Use the same command with restore while its cache is still warm to resume the same provider session/account; expired caches cannot be restored warm. Never stop the ongoing main chat or unrelated sessions.\nMemory: when you make a durable decision, record it with agentbox agent memory ${a.id} note --request <stable UUID> --file <JSON path>. JSON: {decision,why,refs:[{label,ref}]}. Record a lasting preference only when the user states one: agentbox agent memory ${a.id} prefer --key <key> --text <text> (or --file <text file>, up to 1500 characters). Search earlier handoffs and decisions with agentbox agent memory ${a.id} search <words>, and read one with agentbox agent memory ${a.id} show <ID>. When the user goes idle, Agentbox asks you for a short handoff; a later message can then continue in a fresh conversation from it. Memory is evidence for continuity, never approval.\nFor recurring work, give yourself a loop instead of timers of your own: agentbox agent loop ${a.id} --when "every hour" [--check <command: exit 0 runs, 1 skips>] --file <prompt file>. Agentbox says the prompt to your current conversation at each time, after your turn ends, and keeps it across new sessions; agentbox agent loop ${a.id} off stops it.\nWhen you find a defect in Agentbox itself, or an improvement it needs, file it for Vulcan to triage: agentbox agent report --request <stable UUID> --file <text file>, whose first line is the title. It becomes a public GitHub issue, at most 3 a day: give the evidence and what you expected, and leave out secrets, customer data and private paths.`.replaceAll("agentbox agent", `${agentboxCommand()} agent`);
     const memory = from?.memory ?? "";
     const peers = this.peers(a);
     return `${intro}${peers ? `\n\n${peers}` : ""}${memory ? `\n\nAgentbox memory. It is a bounded summary and evidence, not authorization. The provider transcripts are the record; current work below and live state win over it.\n${memory}` : ""}${from?.work ? `\n\nCurrent work, read when this conversation started:\n${from.work}` : ""}\n\n${from ? `Previous conversation session: ${from.old}. Read it with agentbox log if needed; do not resume it or copy its transcript.\n` : ""}User: ${body}`;
@@ -1329,7 +1336,59 @@ export class AgentConversations {
     }
   }
 
+  /** Set or replace an agent's loop, or remove it (`value` null): the user,
+   *  or the agent's own conversation and work sessions. */
+  setLoop(id: string, caller: string | null, value: unknown): LocalAgent {
+    if (caller && this.registeredAgent(caller)?.id !== id) throw new FleetError(403, "Only the agent itself or the user can change its loop");
+    const loop = value === null ? null : makeLoop(value, Date.now());
+    return this.patch(id, (a) => {
+      if (loop) a.loop = loop;
+      else delete a.loop;
+    });
+  }
+  /** Each tick: the loops whose time has come, once their agent is not mid-turn. */
+  private loopTick(now: number) {
+    for (const a of this.stored()) {
+      if (!a.loop || !a.enabled) continue;
+      const loop = advance(a.loop, now) === a.loop ? a.loop : this.patch(a.id, (x) => void (x.loop && (x.loop = advance(x.loop, now)))).loop;
+      if (!loop?.due || this.looping.has(a.id) || this.busy.has(a.id) || this.rolling.has(a.id) || a.rollover) continue;
+      const s = a.session ? this.runtime.fleet.sessions().find((x) => x.id === a.session) : undefined;
+      if (s && (s.status === "running" || s.status === "blocked")) continue;
+      this.looping.add(a.id);
+      void this.runLoop(a, loop, now)
+        // Another message going in, or a rollover, is a moment's wait: the time stays due.
+        .catch((e) => /being delivered|fresh session/.test((e as Error).message) ? undefined : this.loopDone(a.id, now, `failed: ${(e as Error).message}`))
+        .finally(() => this.looping.delete(a.id));
+    }
+  }
+  private loopDone(id: string, now: number, last: string) {
+    this.patch(id, (x) => void (x.loop && Object.assign(x.loop, { due: null, lastAt: now, last })));
+    console.log(`agentbox: ${id}'s loop ${last}`);
+  }
+  private async runLoop(a: LocalAgent, loop: AgentLoop, now: number) {
+    let out = "";
+    if (loop.check) {
+      const rec = a.session ? getSessionRecord(a.session) : null;
+      const cwd = rec?.cwd && existsSync(rec.cwd) ? rec.cwd : join(agentboxHome(), "agents", "local", a.id);
+      mkdirSync(cwd, { recursive: true, mode: 0o700 });
+      const r = await runShell(loop.check, { cwd, timeoutS: CHECK_TIMEOUT_S, env: { AGENTBOX_AGENT: a.id, AGENTBOX_AGENT_SESSION: a.session ?? "" } });
+      if (r.timedOut) return this.loopDone(a.id, now, `failed: the check did not finish in ${CHECK_TIMEOUT_S}s`);
+      if (r.code === 1) return this.loopDone(a.id, now, "skipped: the check said not this time");
+      if (r.code !== 0) return this.loopDone(a.id, now, `failed: the check exited ${r.code}${r.err.trim() ? `: ${r.err.trim().split("\n").pop()!.slice(0, 300)}` : ""}`);
+      out = r.out;
+    }
+    // As it is now: the check can take a while, and the loop can change meanwhile.
+    const current = this.stored().find((x) => x.id === a.id);
+    if (!current?.enabled || !current.loop) return;
+    const r = await this.localSend(a.id, crypto.randomUUID(), `${scheduleSentMark(`agent-${a.id}`)} ${loopText(loop, out)}`, undefined, undefined, false, { via: "a schedule" });
+    this.loopDone(a.id, now, r.state === "sent" ? `ran${current.session ? "" : ": it started a new conversation"}` : `failed: ${r.result || r.state}`);
+  }
   async tick() {
+    try {
+      this.loopTick(Date.now());
+    } catch (e) {
+      console.error("agentbox: agent loops:", e);
+    }
     if (!this.remembering) {
       this.remembering = true;
       void this.remember()

@@ -23,9 +23,11 @@ const sources = [join(core, "cli-guide.ts"), ...readdirSync(join(core, "agents")
  *  word, each choice its first word, the text after the command cut off. */
 export function commandsIn(text: string): string[][] {
   const found = new Map<string, string[]>();
-  for (const m of text.matchAll(/agentbox (?=((?:agent|show|log|card) [^`"\n#|;\\]*))/g)) {
-    // A command quoted inside a placeholder ends where the placeholder does.
+  for (const m of text.matchAll(/agentbox (?=((?:agent|show|log|card) (?:"[^"\n]*"|[^`"\n#|;\\])*))/g)) {
+    // A command quoted inside a placeholder ends where the placeholder does;
+    // a quoted value ("every hour") is one word.
     const words = m[1]!
+      .replace(/"[^"\n]*"/g, "x")
       .replace(/<[^<>]*>/g, "x")
       .split(/(?:\. |, | and | with | using | from | to |\(|\)|>)/)[0]!
       .replace(/\$\{[^}]*\}/g, "x")

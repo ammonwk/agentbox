@@ -35,6 +35,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox agent memory <ID> note --request <stable UUID> --file decision.json # {decision,why,refs:[{label,ref}]}
     agentbox agent memory <ID> handoff --request <checkpoint UUID> --file handoff.json
     agentbox agent report --request <UUID> --file <text file>   # an agent files an Agentbox issue itself: public, 3 a day
+    agentbox agent loop <agent> --when "every hour" [--check CMD] --prompt T | --file F   # its own schedule, into its current chat; off stops it
     agentbox agent ls [--project P]   # each agent: on or paused, project, its chat session now
     agentbox agent send <agent> [--project P] <text…|->   # into another agent's chat, by name; starts one if it has none
     agentbox agent memory <ID> prefer --key <key> --text <text>   # or --file <text file>; local agents; forget --key <key>

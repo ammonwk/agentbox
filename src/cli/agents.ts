@@ -36,16 +36,40 @@ async function agentList(api: Api, args: string[]): Promise<number> {
   const shown = agents.filter((a) => !a.unavailable && (!project || a.repo === project || projectName(board, a).toLowerCase() === project));
   const rows = shown.map((a) => {
     const s = a.session ? board.sessions.find((x) => x.id === a.session) : undefined;
-    return { id: a.id, name: a.name, role: a.role, project: projectName(board, a), enabled: a.enabled, session: a.session, status: s?.status ?? null };
+    return { id: a.id, name: a.name, role: a.role, project: projectName(board, a), enabled: a.enabled, session: a.session, status: s?.status ?? null, loop: a.loop ? { when: a.loop.when, nextAt: a.loop.nextAt, last: a.loop.last ?? null } : null };
   });
   if (flags.has("json")) {
     console.log(JSON.stringify(rows, null, 2));
     return 0;
   }
   for (const r of rows)
-    console.log([r.name.padEnd(10), (r.enabled ? "on" : "paused").padEnd(6), r.project.slice(0, 20).padEnd(20), (r.session ?? "no chat").padEnd(8), (r.status ?? "").padEnd(8), r.id].join("  "));
+    console.log([r.name.padEnd(10), (r.enabled ? "on" : "paused").padEnd(6), r.project.slice(0, 20).padEnd(20), (r.session ?? "no chat").padEnd(8), (r.status ?? "").padEnd(8), r.id, ...(r.loop ? [`loop ${r.loop.when}, next ${r.loop.nextAt ? clock(r.loop.nextAt) : "never"}`] : [])].join("  "));
   return 0;
 }
+
+/** `agentbox agent loop <agent> [--project P] [--when W --prompt T|--file F [--check CMD] | off]`:
+ *  the agent's own schedule, run by Agentbox into its current conversation (loop.ts). */
+async function agentLoop(api: Api, args: string[]): Promise<number> {
+  const [name, ...more] = args;
+  const off = more[0] === "off";
+  const { flags } = parseArgs(off ? more.slice(1) : more, ["project", "when", "check", "prompt", "file"], ["json"]);
+  const get = (k: string) => (typeof flags.get(k) === "string" ? (flags.get(k) as string) : "");
+  if (!name) throw new Error('agent loop <agent> --when "every hour" [--check <command: exit 0 runs, 1 skips>] --prompt <text> | --file <prompt file>; agent loop <agent> off');
+  const [agents, board] = await Promise.all([api<LocalAgent[]>("GET", "/api/agents/local"), api<Board>("GET", "/api/state")]);
+  const a = pickAgent(agents, board, name, get("project") || null, process.env.AGENTBOX_SESSION ?? null);
+  let loop = a.loop;
+  if (off || get("when") || get("prompt") || get("file") || get("check")) {
+    const prompt = get("file") ? readFileSync(get("file"), "utf8").trim() : get("prompt");
+    if (!off && (!get("when") || !prompt)) throw new Error("a loop needs --when and --prompt (or --file)");
+    loop = (await api<LocalAgent>("PUT", `/api/agents/local/${encodeURIComponent(a.id)}/loop`, { loop: off ? null : { when: get("when"), check: get("check") || null, prompt } })).loop;
+  }
+  if (flags.has("json")) console.log(JSON.stringify(loop ?? null, null, 2));
+  else console.log(loop ? loopLine(a.name, loop) : `${a.name} has no loop`);
+  return 0;
+}
+const clock = (t: number) => new Date(t).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+const loopLine = (name: string, l: NonNullable<LocalAgent["loop"]>) =>
+  `${name}: ${l.when}${l.check ? `, when \`${l.check}\` exits 0` : ""}; next ${l.nextAt ? clock(l.nextAt) : "never"}${l.due ? `, one due since ${clock(l.due)} (it waits for the turn to end)` : ""}${l.last ? `; last ${l.lastAt ? clock(l.lastAt) : ""}: ${l.last}` : ""}`;
 
 /** `agentbox agent send <agent> [--project P] <text…|->`: a message to
  *  another agent's chat. Its current chat takes it as a send from this
@@ -79,6 +103,7 @@ export async function agent(api: Api, args: string[]): Promise<number> {
   // These two print lines of their own, and send's text may hold any word.
   if (verb === "ls") return agentList(api, more);
   if (verb === "send") return agentSend(api, more);
+  if (verb === "loop") return agentLoop(api, more);
   if (verb === "report") {
     // --file for a report with lines; its first line is the issue's title.
     const { flags } = parseArgs(more, ["request", "text", "file"]);

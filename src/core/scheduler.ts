@@ -33,6 +33,7 @@
  * turn is over (`retire`).
  */
 
+import { runShell } from "./runcheck";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { moveCards } from "./cards";
@@ -514,15 +515,8 @@ function dirOf(spec: ScheduleSpec): string | null {
 async function runNote(s: Schedule): Promise<string> {
   const cwd = dirOf(s.spec);
   if (!cwd || !existsSync(cwd)) throw new Error(`its directory is gone: ${cwd}`);
-  const p = Bun.spawn(["nice", "-n", "19", "timeout", "--kill-after=5", String(NOTE_TIMEOUT_S), "sh", "-c", s.noteCmd!], {
-    cwd,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, AGENTBOX_SCHEDULE: s.id, AGENTBOX_SCHEDULE_SESSION: s.lastSessionId ?? "" },
-  });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  if (code === 124 || code === 137) throw new Error(`it did not finish in ${NOTE_TIMEOUT_S}s`);
+  const { out, err, code, timedOut } = await runShell(s.noteCmd!, { cwd, timeoutS: NOTE_TIMEOUT_S, env: { AGENTBOX_SCHEDULE: s.id, AGENTBOX_SCHEDULE_SESSION: s.lastSessionId ?? "" } });
+  if (timedOut) throw new Error(`it did not finish in ${NOTE_TIMEOUT_S}s`);
   if (code !== 0) throw new Error(`exit ${code}${err.trim() ? `: ${err.trim().split("\n").pop()!.slice(0, 300)}` : ""}`);
   const note = out.trim();
   return note.length > NOTE_MAX ? `${note.slice(0, NOTE_MAX)}\n[agentbox: the note was cut here, at ${NOTE_MAX} characters.]` : note;

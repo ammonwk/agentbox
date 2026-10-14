@@ -466,3 +466,46 @@ test("a new conversation names the other agents switched on in its project (#26)
   expect(prompt).not.toContain("off-chat");
   expect(prompt).not.toContain("- VULCAN:");
 });
+test("an agent's loop says its prompt to the current conversation once its turn ends, and its check can skip a time", async () => {
+  Object.assign(runtime, { cloud: { status: () => ({}) }, coordinators: () => [] });
+  link("loop-chat");
+  record("loop-chat", null);
+  const said: string[] = [];
+  fleet.send = async (_id: string, text: string) => { said.push(text); };
+  fleet.note = fleet.send;
+  conversations.setLoop("local-vulcan", null, { when: "every hour", prompt: "Hand ready PRs to Terminus." });
+  await expect(async () => conversations.setLoop("local-vulcan", "someone-else", null)).toThrow("agent itself or the user");
+  const due = () => {
+    const a = conversations.local().find((x) => x.id === "local-vulcan")!;
+    a.loop!.nextAt = Date.now() - 1000;
+    store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(a), a.id]);
+  };
+  const loopOf = () => conversations.local().find((x) => x.id === "local-vulcan")!.loop!;
+  const settle = async () => { for (let i = 0; i < 50 && loopOf().due; i++) await Bun.sleep(20); };
+  due();
+  sessions = [{ id: "loop-chat", status: "running", lastActivityAt: Date.now() }];
+  await conversations.tick();
+  expect(said).toHaveLength(0);
+  expect(loopOf().due).not.toBeNull();
+  sessions = [{ id: "loop-chat", status: "waiting", lastActivityAt: Date.now() }];
+  await conversations.tick();
+  await settle();
+  expect(said).toHaveLength(1);
+  expect(said[0]).toStartWith("[via agentbox schedule agent-local-vulcan] Your loop (every hour):");
+  expect(said[0]).toContain("Hand ready PRs to Terminus.");
+  expect(loopOf()).toMatchObject({ due: null, last: "ran" });
+  // A check that exits 1 skips the time; one that exits 0 puts what it printed first.
+  conversations.setLoop("local-vulcan", null, { when: "every hour", check: "exit 1", prompt: "p" });
+  due();
+  await conversations.tick();
+  await settle();
+  expect(said).toHaveLength(1);
+  expect(loopOf().last).toBe("skipped: the check said not this time");
+  conversations.setLoop("local-vulcan", null, { when: "every hour", check: "echo '#9220 ready'", prompt: "p" });
+  due();
+  await conversations.tick();
+  await settle();
+  expect(said[1]).toContain("Its check said:\n\n#9220 ready\n\np");
+  conversations.setLoop("local-vulcan", null, null);
+  expect(conversations.local().find((x) => x.id === "local-vulcan")!.loop).toBeUndefined();
+});

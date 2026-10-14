@@ -265,6 +265,14 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
     .add("POST", "/api/agents/local/:id/read", async ({ req, params }) =>
       json(await agents.conversations.page(params.id!, await readBody(req))),
     )
+    // An agent's loop: the user, or the agent's own sessions (setLoop).
+    .add("PUT", "/api/agents/local/:id/loop", async ({ req, params }) => {
+      const caller = authenticatedSession(req);
+      if (!caller && (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token")))
+        throw new HttpError(403, "Invalid session capability");
+      const b = await readBody(req);
+      return json(agents.conversations.setLoop(params.id!, caller, b.loop ?? null));
+    })
     .add("POST", "/api/agents/local/:id/sessions/:session", async ({ req, params }) => {
       const caller = authenticatedSession(req);
       if (!caller && (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token")))
