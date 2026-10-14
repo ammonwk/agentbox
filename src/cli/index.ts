@@ -469,6 +469,7 @@ ${CLOUD_USAGE}
 pull requests (who has one: no two sessions work the same PR):
   pr claim <n|owner/repo#n|url> [--for ID]   this session has it, and it says "you hold"; refused, naming the other session, if another live one does
   pr release [<n|…>]                 let go of what this session claimed (one, or all)
+  pr ready <n|…> --head <sha>        its owner verified it ready: the project's Terminus, when on, gets it once per head
   pr who <n|…> [--json]              the session that has it ("(you)" after your own id), or "nobody" (exit 1)
   pr claims [--json]                 every PR a live session has
   claude|codex|… --claim <n|…> …     start a session that has the PR from its first moment, or does not start

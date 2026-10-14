@@ -239,6 +239,7 @@ why). Arming the same wait twice is one wait.
     agentbox pr claim <n|…>         # it is yours, and says so ("you hold", "you already hold"); refused,
                                     # naming "another session", if another live session has it
     agentbox pr release [<n|…>]     # release ownership and its PR waits (one, or all)
+    agentbox pr ready <n|…> --head <sha>   # you verified it ready: the project's Terminus gets it, once per head
     agentbox pr transfer <repo#n> --expect <holder> --to <successor>
                                     # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has

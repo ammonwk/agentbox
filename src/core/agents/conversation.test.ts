@@ -509,3 +509,32 @@ test("an agent's loop says its prompt to the current conversation once its turn 
   conversations.setLoop("local-vulcan", null, null);
   expect(conversations.local().find((x) => x.id === "local-vulcan")!.loop).toBeUndefined();
 });
+test("a PR its owner reports ready goes once per head to the project's Terminus, when Terminus is on", async () => {
+  insertRepo({ id: "pb", kind: "local", ref: join(home, "pb"), displayName: "Plaibook", fullName: "fixture/plaibook", defaultBranch: "main", addedAt: Date.now(), worktreeDefault: true, setup: { copy: [], run: "" } });
+  const project = conversations.local("pb");
+  const vulcan = project.find((a) => a.id === "local-vulcan-project-pb")!;
+  // Terminus is an agent the user created, not a template.
+  const terminus = { ...vulcan, id: "local-terminus-project-pb", name: "TERMINUS", role: "PR review", session: null };
+  store.db.run("INSERT INTO local_agents(id,body) VALUES (?,?)", [terminus.id, JSON.stringify(terminus)]);
+  const save = (a: any) => store.db.run("UPDATE local_agents SET body=? WHERE id=?", [JSON.stringify(a), a.id]);
+  save({ ...vulcan, session: "owner-chat" });
+  record("owner-chat", null);
+  record("term-chat", null);
+  const pr = { repo: "fixture/plaibook", number: 9220, head: "6034b970aa" };
+  save({ ...terminus, enabled: false, session: "term-chat" });
+  expect((await conversations.prReady("owner-chat", pr)).state).toBe("skipped");
+  save({ ...terminus, enabled: true, session: "term-chat" });
+  const sent: { id: string; text: string }[] = [];
+  Object.assign(fleet, { get: (id: string) => ({ id, host: "tmux", status: "waiting", cold: false, cacheWarmUntil: Date.now() + 3_600_000, limitHit: null }), heir: (id: string) => id, send: async (id: string, text: string) => { sent.push({ id, text }); } });
+  const first = await conversations.prReady("owner-chat", pr);
+  expect(first).toMatchObject({ state: "sent", to: "term-chat" });
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text).toStartWith("[via agentbox send from owner-chat #");
+  expect(sent[0]!.text).toContain("https://github.com/fixture/plaibook/pull/9220 on head 6034b970aa");
+  expect(sent[0]!.text).toContain("VULCAN in session owner-chat");
+  expect((await conversations.prReady("owner-chat", pr)).state).toBe("already");
+  expect((await conversations.prReady("owner-chat", { ...pr, head: "77aa88bb99" })).state).toBe("sent");
+  expect(sent).toHaveLength(2);
+  expect((await conversations.prReady("owner-chat", { ...pr, repo: "fixture/elsewhere" })).state).toBe("skipped");
+  await expect(conversations.prReady("owner-chat", { ...pr, head: "not a sha" })).rejects.toThrow("--head");
+});

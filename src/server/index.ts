@@ -789,6 +789,14 @@ const router = new Router(mapError)
   // AGENTBOX_SESSION when it reached the command, else the walk up from it.
   .add("POST", "/api/whoami", async ({ req }) => json({ id: speaker(await readBody(req)) }))
   .add("GET", "/api/prs/claims", () => json(prClaimsNow()))
+  // Its owner found it ready: hand it to the project's Terminus once per head.
+  .add("POST", "/api/prs/ready", async ({ req }) => {
+    const b = await readBody(req);
+    const owner = authenticatedSession(req);
+    if (!owner) throw new HttpError(403, "the PR's owner session reports it ready: run this from inside it");
+    const pr = prNamed(b, owner);
+    return json(await agents.conversations.prReady(owner, { ...pr, head: requireString(b, "head") }));
+  })
   .add("POST", "/api/prs/who", async ({ req }) => {
     const b = await readBody(req);
     const pr = prNamed(b, speaker(b));
