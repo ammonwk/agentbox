@@ -129,9 +129,27 @@ export function superagentRoutes(router: Router, superagents: Superagents, hooks
     })
     .add("PUT", "/api/superagents/:name/avatar", async ({ req, params }) => {
       if (actorFor(req, superagents, superagents.canonical(params.name!), "set its picture").kind !== "person") throw new HttpError(403, "a person sets a superagent's picture");
-      const len = Number(req.headers.get("content-length") ?? 0);
+      // Read no more than the limit, whatever the request says its length is.
+      const len = Number(req.headers.get("content-length") ?? NaN);
+      if (!Number.isFinite(len)) throw new HttpError(411, "send the picture with its length");
       if (len > AVATAR_MAX_BYTES) throw new HttpError(413, `Choose an image of at most ${AVATAR_MAX_BYTES / 1024 / 1024} MB`);
-      const bytes = new Uint8Array(await req.arrayBuffer());
+      const parts: Uint8Array[] = [];
+      let size = 0;
+      const reader = req.body?.getReader();
+      for (let r = reader ? await reader.read() : null; r && !r.done; r = await reader!.read()) {
+        size += r.value.byteLength;
+        if (size > AVATAR_MAX_BYTES) {
+          void reader!.cancel();
+          throw new HttpError(413, `Choose an image of at most ${AVATAR_MAX_BYTES / 1024 / 1024} MB`);
+        }
+        parts.push(r.value);
+      }
+      const bytes = new Uint8Array(size);
+      let at = 0;
+      for (const p of parts) {
+        bytes.set(p, at);
+        at += p.byteLength;
+      }
       return json(superagents.setAvatar(superagents.canonical(params.name!), bytes, req.headers.get("content-type") ?? ""));
     })
     .add("DELETE", "/api/superagents/:name/avatar", ({ req, params }) => {

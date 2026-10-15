@@ -20,18 +20,28 @@
  *   --events <old name>=<event>[,…]     the generic events it takes ("pr.ready")
  * An agent with no template becomes a conversation agent with its old instructions.
  *
- * Each instance moves once (`superagent_imports`); a directory this script did
- * not write is never overwritten. `--dry-run` says what it would do.
+ * The old runtime's work in flight goes with them: its issue claims become
+ * work claims of the superagent that held them (so no second writer takes an
+ * issue its old writer still works on), the ready PRs already handed over are
+ * marked given (so `pr.ready` does not hand them over again), and the /help
+ * receipts are kept. The old work families themselves are listed, not moved:
+ * their sessions, PR claims and waits stay where they are.
+ *
+ * Run it after the server runs this version (integrate and restart first):
+ * it refuses a database the server has not brought up to date. Each instance
+ * moves once (`superagent_imports`); a directory this script did not write is
+ * never overwritten, and neither is one that is not empty. `--dry-run` says
+ * what it would do and writes nothing.
  *
  *   bun scripts/migrate-local-agents.ts --dry-run \
  *     --template vulcan=superagents/vulcan --events terminus=pr.ready
  */
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { getDb, getSessionRecord, listRepos } from "../src/core/db";
+import { getDb, getSessionRecord, listRepos, MIGRATIONS } from "../src/core/db";
 import { agentboxHome } from "../src/core/paths";
 import { soulSeed, MemoryFile } from "../src/core/superagent/files";
 import { closeJournals, journalOf } from "../src/core/superagent/memory";
@@ -67,15 +77,38 @@ const pairs = (k: string) => new Map(flag(k).map((p) => [p.slice(0, p.indexOf("=
 const templates = new Map([...pairs("--template")].map(([k, v]) => [k, resolve(v)]));
 const events = new Map([...pairs("--events")].map(([k, v]) => [k, v.split(",").map((e) => e.trim()).filter(Boolean)]));
 for (const [k, list] of events) for (const e of list) if (!(SUPERAGENT_EVENTS as readonly string[]).includes(e)) throw new Error(`--events ${k}=${e}: not an event agentbox knows (${SUPERAGENT_EVENTS.join(", ")})`);
-for (const [k, dir] of templates) readManifest(dir) && console.log(`template ${k}: ${dir}`);
+for (const [k, dir] of templates) {
+  // A worktree goes away; the programs a template's copies run must not.
+  if (dir.startsWith(join(agentboxHome(), "worktrees") + "/")) throw new Error(`--template ${k}=${dir}: that is a worktree, which is removed later; give the checkout the server runs from`);
+  readManifest(dir);
+  console.log(`template ${k}: ${dir}`);
+}
+
+// The server must have brought the database up to date: this script never migrates it.
+const boxFile = join(agentboxHome(), "box.db");
+if (existsSync(boxFile)) {
+  const box = new Database(boxFile, { readonly: true });
+  const version = (box.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+  box.close();
+  if (version < MIGRATIONS.length) {
+    console.error(`${boxFile} is at version ${version}, and this agentbox needs ${MIGRATIONS.length}: integrate this branch and restart the server first, then run this.`);
+    process.exit(1);
+  }
+}
 
 const source = join(agentboxHome(), "agents", "runtime.db");
 if (!existsSync(source)) {
   console.log(`nothing to move: ${source} does not exist`);
   process.exit(0);
 }
-// Read only; opened for writing so a WAL database without its -shm file opens. Nothing here writes it.
-const old = new Database(source);
+// Read only; a WAL database without its -shm file opens only for writing, and nothing here writes it.
+let old: Database;
+try {
+  old = new Database(source, { readonly: true });
+  old.query("SELECT 1").get();
+} catch {
+  old = new Database(source);
+}
 const rows = (old.query("SELECT id, body FROM local_agents").all() as { id: string; body: string }[]).map((r) => ({ ...(JSON.parse(r.body) as Old), id: r.id }));
 const has = (t: string) => !!old.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
 const records = new Map<string, number>();
@@ -130,7 +163,7 @@ function directory(o: Old, name: string): { manifest: Record<string, unknown>; f
     };
   }
   const t = JSON.parse(readFileSync(join(tdir, "superagent.json"), "utf8")) as Record<string, unknown> & { run?: string[]; main?: Record<string, unknown> };
-  const start = { ...((t.main?.start as Record<string, unknown>) ?? {}), provider, ...where };
+  const start: Record<string, unknown> = { ...((t.main?.start as Record<string, unknown>) ?? {}), provider, ...where };
   if (project) delete start.cwd;
   // The program is the template's code, run from the template's directory.
   const run = t.run?.map((a) => (existsSync(join(tdir, a)) ? join(tdir, a) : a));
@@ -142,6 +175,8 @@ function directory(o: Old, name: string): { manifest: Record<string, unknown>; f
 
 const MARK = ".migrated-from-local-agent.json";
 let moved = 0;
+/** The name each old agent gets in this run, for the work in flight below. */
+const planned = new Map<string, string>();
 for (const o of rows) {
   if (!worth(o)) continue;
   const done = db.query("SELECT name FROM superagent_imports WHERE source = ?").get(o.id) as { name: string } | null;
@@ -150,6 +185,7 @@ for (const o of rows) {
     continue;
   }
   const name = nameOf(o);
+  planned.set(o.id, name);
   const dir = join(into, name);
   const { manifest, files } = directory(o, name);
   const soul = soulOf(o);
@@ -157,8 +193,8 @@ for (const o of rows) {
   const main = o.session && getSessionRecord(o.session) ? o.session : null;
   const previous = (o.previous ?? []).filter((id) => getSessionRecord(id));
   const plan = `${o.id} → ${name} (${dir}): ${main ? `main ${main}` : "no main"}${previous.length ? `, ${previous.length} earlier` : ""}, ${memory} memory records${o.loop ? `, loop "${o.loop.when}"` : ""}${o.avatar ? ", picture" : ""}${soul ? ", SOUL.md" : ""}${templates.has(o.name.toLowerCase()) ? `, from ${templates.get(o.name.toLowerCase())}` : ", its own instructions"}${o.enabled ? "" : ", disabled"}`;
-  if (existsSync(join(dir, "superagent.json")) && !existsSync(join(dir, MARK))) {
-    console.log(`${plan}\n  SKIPPED: ${dir} holds a superagent.json this script did not write`);
+  if (existsSync(dir) && readdirSync(dir).length && !existsSync(join(dir, MARK))) {
+    console.log(`${plan}\n  SKIPPED: ${dir} is not empty, and this script did not write it`);
     continue;
   }
   const row = db.query("SELECT dir FROM superagents WHERE name = ?").get(name) as { dir: string } | null;
@@ -176,6 +212,18 @@ for (const o of rows) {
   writeFileSync(join(dir, MARK), `${JSON.stringify({ from: o.id, at: Date.now() }, null, 2)}\n`);
   readManifest(dir);
 
+  if (memory) {
+    const j = journalOf(name);
+    const insert = j.db.query("INSERT OR IGNORE INTO agent_memory (id, scope, kind, key, session, at, by, fingerprint, checkpoint, used_by, retired, body) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    const all = old.query("SELECT * FROM agent_memory WHERE scope = ?").all(o.id) as Record<string, string | number | null>[];
+    j.db.transaction(() => {
+      for (const r of all) {
+        const fingerprint = createHash("sha256").update(JSON.stringify([name, r.kind, r.key, r.body])).digest("hex");
+        insert.run(r.id as string, name, r.kind as string, r.key, r.session as string, r.at as number, r.by as string, fingerprint, r.checkpoint, r.used_by, r.retired, r.body as string);
+      }
+    })();
+    new MemoryFile(j).writeMemory({ name, title: String(manifest.title ?? name) });
+  }
   db.transaction(() => {
     if (!row) db.run("INSERT INTO superagents (name, dir, enabled, main, previous, created_at) VALUES (?, ?, ?, ?, ?, ?)", [name, dir, o.enabled ? 1 : 0, main, JSON.stringify(previous), Date.now()]);
     patchState(name, (s) => {
@@ -192,23 +240,83 @@ for (const o of rows) {
     db.run("INSERT INTO superagent_imports (source, name, at, report) VALUES (?, ?, ?, ?)", [o.id, name, Date.now(), plan]);
   })();
 
-  if (memory) {
-    const j = journalOf(name);
-    const insert = j.db.query("INSERT OR IGNORE INTO agent_memory (id, scope, kind, key, session, at, by, fingerprint, checkpoint, used_by, retired, body) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
-    const all = old.query("SELECT * FROM agent_memory WHERE scope = ?").all(o.id) as Record<string, string | number | null>[];
-    j.db.transaction(() => {
-      for (const r of all) {
-        const fingerprint = createHash("sha256").update(JSON.stringify([name, r.kind, r.key, r.body])).digest("hex");
-        insert.run(r.id as string, name, r.kind as string, r.key, r.session as string, r.at as number, r.by as string, fingerprint, r.checkpoint, r.used_by, r.retired, r.body as string);
-      }
-    })();
-    new MemoryFile(j).writeMemory({ name, title: String(manifest.title ?? name) });
-  }
   if (o.avatar) {
     const pic = join(agentboxHome(), "agents", "avatars", o.avatar.file);
     if (!existsSync(pic)) console.log(`  its picture ${pic} is gone`);
   }
   moved++;
 }
+// ---- the old runtime's work in flight, once each (`superagent_imports`)
+const nameOfOld = new Map((db.query("SELECT source, name FROM superagent_imports").all() as { source: string; name: string }[]).map((r) => [r.source, r.name]));
+for (const [id, name] of planned) if (!nameOfOld.has(id)) nameOfOld.set(id, name);
+const once = (source: string, name: string, report: string) => db.run("INSERT OR IGNORE INTO superagent_imports (source, name, at, report) VALUES (?, ?, ?, ?)", [source, name, Date.now(), report]).changes === 1;
+const doneBefore = (source: string) => !!db.query("SELECT 1 FROM superagent_imports WHERE source = ?").get(source);
+const works = new Map(has("agent_work") ? (old.query("SELECT id, body FROM agent_work").all() as { id: string; body: string }[]).map((r) => [r.id, JSON.parse(r.body) as { agent?: { id?: string }; state?: string; session?: string; input?: { issues?: { source: string }[] } }]) : []);
+
+// Issue claims: the superagent that took over the old agent holds them, with its old writer.
+if (has("agent_issue_claim"))
+  for (const c of old.query("SELECT source, work FROM agent_issue_claim").all() as { source: string; work: string }[]) {
+    const w = works.get(c.work), name = w?.agent?.id ? nameOfOld.get(w.agent.id) : undefined;
+    const src = `issue-claim:${c.source}`;
+    if (!name || doneBefore(src)) continue;
+    const session = w?.session && getSessionRecord(w.session) ? w.session : null;
+    console.log(`claim ${c.source} (old work ${c.work}) → held by ${name}${session ? ` with session ${session}` : ""}`);
+    if (dry) continue;
+    const now = Date.now();
+    const m = /^github:([^#]+)#(\d+)$/.exec(c.source);
+    db.transaction(() => {
+      const taken = db.query("SELECT 1 FROM work_claims WHERE scope = 'work' AND key = ? AND state != 'released'").get(c.source);
+      if (!taken)
+        db.run("INSERT OR REPLACE INTO work_claims (scope, key, source, fence, state, superagent, session, note, lease_until, claimed_at, updated_at) VALUES ('work', ?, ?, 1, 'active', ?, ?, ?, ?, ?, ?)", [
+          c.source, m ? `https://github.com/${m[1]}/issues/${m[2]}` : c.source, name, session, `old in-core work ${c.work}`, now + 90_000, now, now,
+        ]);
+      once(src, name, `claim ${c.source}${taken ? " (already held: left as it was)" : ""}`);
+    })();
+  }
+
+// Ready PRs already handed over: given, so the pr.ready event does not hand them over again.
+if (has("pr_ready")) {
+  const takers = (db.query("SELECT name, dir FROM superagents").all() as { name: string; dir: string }[]).filter((r) => {
+    try {
+      return !!readManifest(r.dir).events?.includes("pr.ready");
+    } catch {
+      return false;
+    }
+  });
+  for (const r of old.query("SELECT repo, number, head FROM pr_ready").all() as { repo: string; number: number; head: string }[]) {
+    const key = `pr.ready:${r.repo.toLowerCase()}#${r.number}@${r.head.toLowerCase()}`;
+    for (const t of takers) {
+      if (doneBefore(`${key}:${t.name}`)) continue;
+      console.log(`${r.repo}#${r.number} on ${r.head.slice(0, 10)} → already given to ${t.name}`);
+      if (dry) continue;
+      db.run("INSERT OR IGNORE INTO superagent_events (name, key, at) VALUES (?, ?, ?)", [t.name, key, Date.now()]);
+      once(`${key}:${t.name}`, t.name, `pr.ready ${r.repo}#${r.number}`);
+    }
+  }
+}
+
+// /help and report receipts: kept for the superagent, so a lost answer still reconciles and the daily limit counts.
+if (has("agent_feedback")) {
+  if (!dry) db.exec("CREATE TABLE IF NOT EXISTS agent_feedback (id TEXT PRIMARY KEY, agent TEXT NOT NULL, body TEXT NOT NULL)");
+  let kept = 0;
+  for (const f of old.query("SELECT id, agent, body FROM agent_feedback").all() as { id: string; agent: string; body: string }[]) {
+    const name = nameOfOld.get(f.agent);
+    if (!name || doneBefore(`feedback:${f.id}`)) continue;
+    kept++;
+    if (dry) continue;
+    const body = { ...(JSON.parse(f.body) as Record<string, unknown>), agent: name };
+    db.run("INSERT OR IGNORE INTO agent_feedback (id, agent, body) VALUES (?, ?, ?)", [f.id, name, JSON.stringify(body)]);
+    once(`feedback:${f.id}`, name, "report receipt");
+  }
+  if (kept) console.log(`${kept} report receipts → kept for their superagents`);
+}
+
+// The old work families are the old runtime's: listed, not moved.
+for (const [id, w] of works) {
+  if (w.state === "done" || w.state === "abandoned") continue;
+  const name = w.agent?.id ? (nameOfOld.get(w.agent.id) ?? w.agent.id) : "?";
+  console.log(`old work family ${id} (${w.state}) of ${name}, writer session ${w.session ?? "none"}: not moved; its sessions, PR claims and waits stay as they are, and its issues stay claimed`);
+}
+
 closeJournals();
 console.log(dry ? "dry run: nothing changed" : `${moved} moved; the server shows them at its next look (agentbox superagent ls)`);

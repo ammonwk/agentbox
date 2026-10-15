@@ -41,12 +41,15 @@ export type Policy = { idleMin: number; contextPct: number };
 export interface RolloverHost {
   /** Enabled superagents with rollover on, and their main now. */
   rolling(): { name: string; main: string | null; policy: Policy }[];
+  /** Every registered superagent: a journal left by a restart is finished
+   *  whatever its manifest says now. */
+  names(): string[];
   /** The superagent whose main (now, or before a rollover in progress) is `id`. */
   byMain(id: string): { name: string; main: string | null; policy: Policy | null; enabled: boolean } | null;
   /** How its fresh main is started: `main.start`, its cwd resolved. */
   startSpec(name: string): Partial<SpawnRequest> & { provider: ProviderId | "auto" };
   /** The first prompt of the fresh main that continues `old`. */
-  opening(name: string, text: string, from: { old: string; memory: string; work: string }): string;
+  opening(name: string, text: string, from: { old: string; memory: string; work: string }, session: string): string;
   /** The main changed (the board and the Agents page follow). */
   changed(): void;
 }
@@ -157,11 +160,12 @@ export class Rollover {
    */
   private async rollover(name: string, old: Session, handoff: string, why: "cold" | "context", text: string, attempt?: () => void): Promise<boolean> {
     const fleet = this.fleet, to = newSessionId();
-    const spec = this.host.startSpec(name);
     // Where the successor runs is chosen before anything is stopped; nothing
-    // available leaves the message to the old main.
+    // available, or no way to start one, leaves the message to the old main.
     let provider: ProviderId, accountId: string, model: string | undefined, selection: Selection | undefined;
+    let spec: ReturnType<RolloverHost["startSpec"]>;
     try {
+      spec = this.host.startSpec(name);
       if (spec.provider === "auto") {
         const c = await fleet.chooseAuto({ ...spec, provider: "auto", previous: old.provider });
         ({ provider, accountId } = c);
@@ -205,7 +209,7 @@ export class Rollover {
         ...(model ? { model } : {}),
         // Continue in the replaced main's directory when it is still there.
         ...(rec?.cwd && existsSync(rec.cwd) ? { cwd: rec.cwd, repoId: undefined, worktree: false, branch: undefined } : {}),
-        prompt: this.host.opening(name, text, { old: old.id, memory: boot.text, work }),
+        prompt: this.host.opening(name, text, { old: old.id, memory: boot.text, work }, to),
         parent: undefined,
         callerPid: undefined,
         opener: { via: "agentbox" },
@@ -275,7 +279,14 @@ export class Rollover {
     const r = stateOf(name).rollover;
     if (!r || r.phase !== "spawning") return;
     // The main follows the successor (`Fleet.heir`): the hub needs no word of its own.
-    await this.fleet.handOver(r.from, r.to);
+    // The successor has the message already: a failure here is finished by the
+    // next tick from the journal, never reported as a message not sent.
+    try {
+      await this.fleet.handOver(r.from, r.to);
+    } catch (e) {
+      console.error(`agentbox: ${name}: handing ${r.from} over to ${r.to}; the next pass finishes it:`, e);
+      return;
+    }
     moveCards(r.from, r.to);
     movePrClaims(r.from, r.to);
     journalOf(name).used(r.handoff, r.to);
@@ -320,23 +331,22 @@ export class Rollover {
   /** Finish or undo a rollover a restart interrupted, and ask idle mains for
    *  their handoff while they are still warm. */
   async tick(now = Date.now()): Promise<void> {
+    for (const name of this.host.names()) {
+      const r = stateOf(name).rollover;
+      if (!r || this.rollingNow.has(name)) continue;
+      try {
+        if (r.phase === "stopping") {
+          this.unstop(r.from);
+          patchState(name, (s) => void delete s.rollover);
+        } else if (this.started(r.to)) await this.completeRollover(name);
+        else if (now - r.at > (getSessionRecord(r.to) ? 5 * 60_000 : 60_000)) await this.undoSuccessor(name, r.to, "the fresh conversation never started");
+      } catch (e) {
+        console.error(`agentbox: ${name}: finishing its conversation rollover:`, e);
+      }
+    }
     const keep = new Set<string>();
     for (const a of this.host.rolling()) {
-      if (this.rollingNow.has(a.name)) continue;
-      const r = stateOf(a.name).rollover;
-      if (r) {
-        try {
-          if (r.phase === "stopping") {
-            this.unstop(r.from);
-            patchState(a.name, (s) => void delete s.rollover);
-          } else if (this.started(r.to)) await this.completeRollover(a.name);
-          else if (now - r.at > (getSessionRecord(r.to) ? 5 * 60_000 : 60_000)) await this.undoSuccessor(a.name, r.to, "the fresh conversation never started");
-        } catch (e) {
-          console.error(`agentbox: ${a.name}: finishing its conversation rollover:`, e);
-        }
-        continue;
-      }
-      if (!a.main) continue;
+      if (this.rollingNow.has(a.name) || stateOf(a.name).rollover || !a.main) continue;
       keep.add(a.main);
       try {
         await this.checkpointIfDue(a.name, a.main, a.policy, now);

@@ -60,8 +60,11 @@ export type MemoryRecord = {
   body: Handoff | Note | { text: string };
 };
 
+/** Credential-shaped text: refused in memory and reports, redacted from what
+ *  a teammate reads. GitHub, OpenAI and Anthropic, Stripe, Slack, AWS, Google
+ *  and Supabase keys, JWTs, private keys, and a URL with a password in it. */
 export const CREDENTIAL =
-  /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|-----BEGIN [^-]*PRIVATE KEY-----)/;
+  /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|xox[abeoprs]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{16,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|-----BEGIN [^-]*PRIVATE KEY-----|\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:[^\s@/]{3,}@)/;
 const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
 export function handoffWords(h: Handoff) {
   return words([h.intent, ...h.decisions.flatMap((d) => [d.decision, d.why]), ...h.open, ...h.commitments, ...h.refs.map((r) => r.label)].join(" "));

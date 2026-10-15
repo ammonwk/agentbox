@@ -139,8 +139,10 @@ export class Loops {
   /** Each tick: the loops whose time has come, once their main is not mid-turn. */
   tick(now: number): void {
     for (const a of this.host.looped()) {
+      // One loop of a superagent at a time: a second due on the same pass waits
+      // for the turn the first one starts to end.
+      let started = this.running.has(a.name);
       for (const l of a.loops) {
-        const key = `${a.name}/${l.id}`;
         let rule: ScheduleRule;
         try {
           rule = ruleOf(l.when, now);
@@ -148,12 +150,17 @@ export class Loops {
           continue;
         }
         const c = this.clock(a.name, l, rule, now);
-        if (!c.due || this.running.has(key) || this.host.busy(a.name)) continue;
-        this.running.add(key);
+        if (!c.due || started || this.host.busy(a.name)) continue;
+        started = true;
+        this.running.add(a.name);
         void this.run(a.name, a.dir, a.main, l, now)
-          // Another message going in, or a rollover, is a moment's wait: the time stays due.
-          .catch((e) => (/being delivered|being continued|being started/.test((e as Error).message) ? undefined : this.done(a.name, l.id, now, "failed", (e as Error).message)))
-          .finally(() => this.running.delete(key));
+          // Another message going in, or a rollover, is a moment's wait: the time is due again.
+          .catch((e) =>
+            /being delivered|being continued|being started/.test((e as Error).message)
+              ? patchState(a.name, (s) => void (s.loops?.[l.id] && (s.loops[l.id]!.due = c.due)))
+              : this.done(a.name, l.id, now, "failed", (e as Error).message),
+          )
+          .finally(() => this.running.delete(a.name));
       }
     }
   }
@@ -190,7 +197,12 @@ export class Loops {
       if (r.code !== 0) return this.done(name, l.id, now, "failed", `the check exited ${r.code}${r.err.trim() ? `: ${r.err.trim().split("\n").pop()!}` : ""}`);
       out = r.out;
     }
-    await this.host.tell(name, `${scheduleSentMark(`loop-${name}-${l.id}`)} ${loopText(l.when, l.prompt, out)}`, randomUUID());
+    // As it is now: the check can take a while, and the loop or the superagent can change meanwhile.
+    const now2 = this.host.looped().find((a) => a.name === name);
+    const still = now2?.loops.find((x) => x.id === l.id);
+    if (!still) return;
+    // Marked first: a restart in the middle sends it at most once.
     this.done(name, l.id, now, "sent", main ? "" : "it started a new main conversation");
+    await this.host.tell(name, `${scheduleSentMark(`loop-${name}-${l.id}`)} ${loopText(still.when, still.prompt, out)}`, randomUUID());
   }
 }

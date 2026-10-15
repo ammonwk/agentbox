@@ -19,6 +19,7 @@
 import { getDb, getSessionRecord, listOpenWaits, listSessionRecords } from "../db";
 import type { Fleet } from "../fleet";
 import { unfinishedClaims } from "../prclaims";
+import { localClaimsOf } from "../workclaims";
 import { describe as describeWait } from "../waits";
 import { patchState, stateOf, type SweepRecord } from "./state";
 
@@ -99,6 +100,8 @@ export class Sweeps {
     if (card) return `an open Review card (card ${card.id} “${card.title}”)`;
     const prs = unfinishedClaims().get(id);
     if (prs?.length) return `an open PR it owns (${prs.join(", ")})`;
+    const work = localClaimsOf(id);
+    if (work.length) return `work it claimed (${work.join(", ")})`;
     const child = this.workingChild(id, now);
     if (child) return `a child session still at work (${child})`;
     return null;

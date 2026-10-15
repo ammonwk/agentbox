@@ -12,13 +12,15 @@
  *
  * Neither holds a transcript or a credential. Nothing here is uploaded. */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome } from "../paths";
 import { CREDENTIAL, memoryCommand, type Handoff, type MemoryJournal, type Note } from "./memory";
 
 /** The part of SOUL.md a first prompt carries, at most. */
 export const SOUL_CHARS = 4000;
+/** A SOUL.md larger than this is not read at all. */
+const SOUL_READ_MAX = 256 * 1024;
 /** MEMORY.md, at most: OpenClaw's default limit for one injected file. */
 export const MEMORY_FILE_CHARS = 20_000;
 const MEMORY_ENTRIES = 20;
@@ -71,7 +73,17 @@ function soulPath(dir: string) {
 export function readSoul(o: Owner): Soul {
   const { path, both } = soulPath(o.dir);
   if (!path) return { path: join(o.dir, "SOUL.md"), text: "", hash: null, notes: [] };
-  const raw = readFileSync(path, "utf8"), hash = sha(raw), notes: string[] = [];
+  // A file error never stops a start: it becomes a note.
+  let raw: string;
+  try {
+    const st = statSync(path);
+    if (!st.isFile()) return { path, text: "", hash: null, notes: [`${path} is not a file; nothing was read.`] };
+    if (st.size > SOUL_READ_MAX) return { path, text: "", hash: null, notes: [`${path} is over ${SOUL_READ_MAX / 1024} KB; nothing was read. Keep it short.`] };
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    return { path, text: "", hash: null, notes: [`${path} could not be read: ${(e as Error).message}`] };
+  }
+  const hash = sha(raw), notes: string[] = [];
   if (both) notes.push("soul.md is ignored because SOUL.md exists.");
   if (!raw.trim() || raw === soulSeed(o.title) || raw === soulSeed(o.title.toUpperCase())) return { path, text: "", hash, notes: [...notes, "SOUL.md is still empty: no persona is written yet."] };
   if (CREDENTIAL.test(raw)) return { path, text: "", hash, notes: [...notes, `${path} was not loaded: it holds credential-shaped text. Remove it and refer to where the credential is kept.`] };

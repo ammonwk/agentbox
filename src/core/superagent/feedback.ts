@@ -9,6 +9,7 @@ import { z } from "zod";
 import { FleetError } from "../fleet";
 import { userHome } from "../paths";
 import { uploadFile } from "../uploads";
+import { CREDENTIAL } from "./memory";
 
 /** What the reports ask of the hub: a superagent's name, title and
  *  description, the superagent a session belongs to, and whether a session
@@ -153,7 +154,7 @@ export class AgentFeedback {
     if (!a) throw new FleetError(404,"Agent not found");
     if (p.target && this.host.ownerOf(p.target) !== agent)
       throw new FleetError(403,"This session does not belong to the reported agent");
-    if (/(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|-----BEGIN .*PRIVATE KEY-----|sk-(?:live-|proj-)?[A-Za-z0-9_-]{24,})/.test(p.text))
+    if (CREDENTIAL.test(p.text))
       return {state:"refused",result:"Remove credentials from the report before publishing it."};
     // Ticked images are found by their token's file name among this machine's
     // uploads, never by a path the client gave.

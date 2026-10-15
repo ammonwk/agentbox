@@ -317,6 +317,12 @@ function isHolder(c: ClaimCaller, h: ClaimHolder): boolean {
 }
 
 /** The claims service: who may do what, the stop and its proof, and the lease tick. The backends keep the state. */
+/** The keys a session holds in box.db, now: for checks that must not wait
+ *  (the daily sweep's, inside a close). Released ones are not held. */
+export function localClaimsOf(session: string): string[] {
+  return (getDb().query("SELECT key FROM work_claims WHERE session = ? AND state != 'released' ORDER BY key").all(session) as { key: string }[]).map((r) => r.key);
+}
+
 /** The scope a key is claimed in: an environment lock or a work item. */
 export const scopeOfKey = (key: string): ClaimScope => (key.startsWith("env:") ? "env" : "work");
 

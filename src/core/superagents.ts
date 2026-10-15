@@ -15,7 +15,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Subprocess } from "bun";
 import { getDb, getSchedule, getSessionRecord, getSettings, listRepos, listSessionRecords, type SessionRecord } from "./db";
-import { FleetError, type Fleet, type SpawnRequest } from "./fleet";
+import { FleetError, newSessionId, type Fleet, type SpawnRequest } from "./fleet";
 import { agentboxBin, agentboxHome, packageRoot, userHome } from "./paths";
 import { submitWithReceipt } from "./send-receipts";
 import { AGENT_ICONS, SUPERAGENT_EVENTS, type ProviderId, type Repo, type SuperagentInfo } from "./types";
@@ -23,6 +23,7 @@ import type { RegisteredAgent, SenderDirectory } from "./senders";
 import { patchState, stateOf } from "./superagent/state";
 import { journalOf } from "./superagent/memory";
 import { opening, type Opening } from "./superagent/opening";
+import { readSoul } from "./superagent/files";
 import { memoryFile, memoryRecord, memoryView, remember, type Actor, type MemoryView } from "./superagent/memory-view";
 import { Rollover, type Policy } from "./superagent/rollover";
 import { Loops, loopsOf, loopViews, removeLoop, setLoop, type Loop } from "./superagent/loops";
@@ -133,9 +134,26 @@ function rows(): Row[] {
   return getDb().query("SELECT * FROM superagents ORDER BY created_at").all() as Row[];
 }
 
+/** Parsed manifests by file, while the file's time and size stay the same:
+ *  the board asks who owns each session several times a second. */
+const manifests = new Map<string, { mtime: number; size: number; m: Manifest }>();
+
 export function readManifest(dir: string): Manifest {
   const file = join(dir, "superagent.json");
-  if (!existsSync(file)) throw new FleetError(400, `${file} does not exist`);
+  let st: { mtimeMs: number; size: number };
+  try {
+    st = statSync(file);
+  } catch {
+    throw new FleetError(400, `${file} does not exist`);
+  }
+  const cached = manifests.get(file);
+  if (cached && cached.mtime === st.mtimeMs && cached.size === st.size) return cached.m;
+  const m = parseManifest(file);
+  manifests.set(file, { mtime: st.mtimeMs, size: st.size, m });
+  return m;
+}
+
+function parseManifest(file: string): Manifest {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(file, "utf8"));
@@ -148,6 +166,7 @@ export function readManifest(dir: string): Manifest {
   if (m.data.main?.schedule && m.data.main.start) throw new FleetError(400, `${file}: main is a schedule's session or one agentbox starts, not both`);
   if (m.data.main?.rollover && !m.data.memory) throw new FleetError(400, `${file}: main.rollover keeps its handoffs in the memory journal: set "memory": true`);
   if (m.data.main?.rollover && m.data.main.schedule) throw new FleetError(400, `${file}: a schedule's session hands over by the schedule, not by rollover`);
+  if (m.data.main?.rollover && !m.data.main.start) throw new FleetError(400, `${file}: main.rollover starts a fresh main from main.start: give one`);
   const ids = (m.data.main?.loops ?? []).map((l, i) => l.id ?? `loop-${i + 1}`);
   if (new Set(ids).size !== ids.length) throw new FleetError(400, `${file}: two loops have the same id`);
   return m.data;
@@ -234,9 +253,10 @@ export class Superagents {
   ) {
     this.rollover = new Rollover(fleet, {
       rolling: () => this.withManifests().flatMap(({ r, m, main }) => (r.enabled === 1 && m && rolloverOf(m) ? [{ name: r.name, main, policy: rolloverOf(m)! }] : [])),
+      names: () => rows().map((r) => r.name),
       byMain: (id) => this.byMain(id),
       startSpec: (name) => this.startSpec(this.row(name), readManifest(this.row(name).dir)),
-      opening: (name, text, from) => this.openingFor(this.row(name), readManifest(this.row(name).dir), text, from),
+      opening: (name, text, from, session) => this.openingFor(this.row(name), readManifest(this.row(name).dir), text, from, session),
       changed: () => this.changed(),
     });
     // A main replaced by a rollover is never resumed beside its successor, and
@@ -364,9 +384,10 @@ export class Superagents {
    *  in exactly one; undefined when its checkout says (none, or several). */
   projectBinding(owner: (id: string) => string | null = this.ownership()): (id: string) => string | undefined {
     const one = new Map<string, string>();
+    const repos = listRepos();
     for (const r of rows()) {
       const { m } = this.manifestOrError(r);
-      const p = m ? projectsOf(m, listRepos()) : null;
+      const p = m ? projectsOf(m, repos) : null;
       if (p?.length === 1) one.set(r.name, p[0]!);
     }
     return (id) => {
@@ -408,7 +429,16 @@ export class Superagents {
     this.row(name);
     this.kill(name);
     this.procs.delete(name);
-    getDb().run("DELETE FROM superagents WHERE name = ?", [name]);
+    // What agentbox kept for it goes too (its loops' clocks, a rollover's
+    // journal, its picture): one added again later starts clean. Its home,
+    // with its memory journal, stays, like its directory.
+    const pic = stateOf(name).avatar?.file;
+    getDb().transaction(() => {
+      getDb().run("DELETE FROM superagents WHERE name = ?", [name]);
+      getDb().run("DELETE FROM superagent_state WHERE name = ?", [name]);
+      getDb().run("DELETE FROM superagent_events WHERE name = ?", [name]);
+    })();
+    if (pic) removeAvatar(pic);
     this.changed();
   }
 
@@ -482,12 +512,14 @@ export class Superagents {
   async chat(name: string, text: string, sendId: string): Promise<{ session: string; started: boolean }> {
     const r = this.row(name);
     if (r.enabled !== 1) throw new FleetError(409, `${name} is disabled: enable it before you talk to it`);
+    // A retry of the message that started the main is that start, not a second message.
+    if (r.main_send === sendId && r.main) return { session: this.fleet.heir(r.main), started: true };
     const main = this.mainOf(r);
     if (main) {
-      await submitWithReceipt(main, sendId, "send", text, (attempt) => this.fleet.send(main, text, attempt));
+      // A stopped main is resumed with the message, as the old agent chat did.
+      await submitWithReceipt(main, sendId, "send", text, (attempt) => this.fleet.send(main, text, attempt, true));
       return { session: main, started: false };
     }
-    if (r.main_send === sendId && r.main) return { session: r.main, started: true };
     const m = readManifest(r.dir);
     if (!m.main?.start) throw new FleetError(409, `${name} has no main conversation yet, and its manifest does not say how to start one`);
     if (this.starting.has(name)) throw new FleetError(409, `${name}'s main conversation is being started this moment`);
@@ -498,8 +530,9 @@ export class Superagents {
       const before = this.previousOf(r, m, null)[0] ?? null;
       const boot = m.memory ? journalOf(name).bootstrap(name, null, text) : null;
       const from = boot?.text ? { old: before, memory: boot.text, work: "" } : null;
-      const prompt = this.openingFor(r, m, text, from);
-      const { session, choice } = await this.fleet.spawn({ ...spec, previous: before ? (getSessionRecord(before)?.provider ?? null) : null, prompt, parent: undefined, callerPid: undefined, id: undefined });
+      const id = newSessionId();
+      const prompt = this.openingFor(r, m, text, from, id);
+      const { session, choice } = await this.fleet.spawn({ ...spec, previous: before ? (getSessionRecord(before)?.provider ?? null) : null, prompt, parent: undefined, callerPid: undefined, id });
       getDb().run("UPDATE superagents SET main_send = ? WHERE name = ?", [sendId, name]);
       this.setMain(this.row(name), session.id);
       patchState(name, (st) => {
@@ -599,7 +632,7 @@ export class Superagents {
   }
 
   /** The first prompt of a fresh main (src/core/superagent/opening.ts). */
-  private openingFor(r: Row, m: Manifest, text: string, from: { old: string | null; memory: string; work: string } | null): string {
+  private openingFor(r: Row, m: Manifest, text: string, from: { old: string | null; memory: string; work: string } | null, session: string): string {
     const instructions = m.main?.instructions ? this.fill(readFileSync(join(r.dir, m.main.instructions), "utf8").trim(), r) : "";
     const mine = new Set(projectsOf(m, listRepos()) ?? []);
     const all = this.withManifests();
@@ -628,8 +661,10 @@ export class Superagents {
       }
       const set = file.setAside(r.name);
       if (set && set.at > before) aside = set.path;
-      patchState(r.name, (st) => void (st.files = { session: from?.old ?? "", soul: null, at: Date.now() }));
     }
+    // Which SOUL.md this main starts with (its hash, never its text), for the Memory panel.
+    const soul = readSoul({ name: r.name, title: o.title, dir: r.dir }).hash;
+    patchState(r.name, (st) => void (st.files = { session, soul, at: Date.now() }));
     return opening(o, text, from, file, aside);
   }
 

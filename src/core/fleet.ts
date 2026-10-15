@@ -2750,14 +2750,26 @@ export class Fleet extends EventEmitter {
 
   /** The provider, account and model a `provider: "auto"` start runs on. */
   async chooseAuto(req: SpawnRequest): Promise<ProviderChoice> {
-    const candidates: AgentProvider[] = ["claude", "codex"];
+    // A model is one provider's: "auto" with one names no provider to give it to.
+    if (req.model) throw new FleetError(400, `provider "auto" picks the model too: name a provider to use ${req.model}`);
+    const account = req.accountId && req.accountId !== "auto" ? getAccount(req.accountId) : null;
+    if (req.accountId && req.accountId !== "auto" && !account) throw new FleetError(404, `no account ${req.accountId}`);
+    // Only a provider that can take what was asked: the account's own, an effort it has, read-only when asked.
+    const fits = (p: AgentProvider) => {
+      const a = this.adapter(p);
+      return (!account || account.provider === p) && (!req.effort || a.efforts.includes(req.effort)) && (!req.readOnly || !!a.readOnly);
+    };
+    const candidates: AgentProvider[] = (["claude", "codex"] as AgentProvider[]).filter(fits);
+    if (!candidates.length) throw new FleetError(400, "no provider \"auto\" picks from can take what was asked (its account, effort or read-only)");
     const present = new Map(await Promise.all(candidates.map(async (p) => [p, await this.installed(p).catch(() => false)] as const)));
     const models = getSettings().models;
     const previous = req.previous === "claude" || req.previous === "codex" ? req.previous : null;
-    const c = chooseProvider((p) => this.placement(p, req.model, null, req.effort || null), {
+    const c = chooseProvider((p) => this.placement(p, undefined, account?.id ?? null, req.effort || null), {
       previous,
       installed: (p) => present.get(p) ?? false,
-      model: (p) => req.model || models[p] || null,
+      // One that fits is the only candidate.
+      ...(candidates.length === 1 ? { pinned: candidates[0] } : {}),
+      model: (p) => models[p] || null,
       now: Date.now(),
       ...(req.writer ? { writer: { last: previous } } : {}),
     });
@@ -2768,7 +2780,7 @@ export class Fleet extends EventEmitter {
   async spawn(asked: SpawnRequest): Promise<{ session: Session; placement: Placement; choice?: ProviderChoice }> {
     this.requireActivity(asked.id);
     const choice = asked.provider === "auto" ? await this.chooseAuto(asked) : undefined;
-    const req = choice ? { ...asked, provider: choice.provider as ProviderId, accountId: asked.accountId ?? choice.accountId, model: asked.model ?? choice.model ?? undefined } : (asked as SpawnRequest & { provider: ProviderId });
+    const req = choice ? { ...asked, provider: choice.provider as ProviderId, accountId: choice.accountId, model: choice.model ?? undefined } : (asked as SpawnRequest & { provider: ProviderId });
     if (req.readOnly && req.provider !== "codex") throw new FleetError(400, "read-only reviews currently require Codex");
     const adapter = this.adapter(req.provider);
     if (req.readOnly && !adapter.readOnly) throw new FleetError(400, `${adapter.label} sessions cannot be started read-only`);
