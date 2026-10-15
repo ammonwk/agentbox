@@ -6,97 +6,6 @@ Everything goes through the `agentbox` CLI. It behaves like a Unix tool: plain
 text out, the session id in the first column, and every verb that takes ids
 also reads them from stdin with `-`, so pipes and xargs work.
 
-## Shared Agents
-
-    agentbox agent status
-    agentbox agent read <run UUID> --repo owner/repo --number 123 --kind issue
-    agentbox wait until -- agentbox agent check <run UUID> --repo owner/repo --number 123 --condition checks
-    agentbox agent bind --file local-binding.json  # signed-in host owner token required
-    agentbox agent progress <run UUID> --stage in_progress --next 'Validate the fix'
-    agentbox agent prepare <run UUID> --file preparation.json
-    agentbox agent review <run UUID> --file validation.json
-    agentbox agent collect <run UUID>
-    agentbox agent work-start --file family.json
-    agentbox agent work-validation <work UUID> --file execution.json
-    agentbox agent work-review <work UUID> --file validation.json
-    agentbox agent work-collect <work UUID>
-    agentbox agent work-publish <work UUID> --file publication.json
-    agentbox agent work-follow <work UUID>
-    agentbox agent work-milestone <work UUID> --file milestone.json
-    agentbox agent action <run UUID> --request <UUID retained for retries> --file action.json
-    agentbox agent recommend <run UUID or local agent ID> --request <stable UUID> --file proposal.json
-    agentbox agent intake <run UUID> --file issue.json # {source,title,acceptance}; configured activation applies
-    agentbox agent experts <agent UUID> --areas TypeScript --paths src/service.ts
-    agentbox agent finish <run UUID>
-    agentbox agent rotate <run UUID>              # signed-in host owner token required
-    agentbox agent memory <local agent ID or run UUID> search <words>
-    agentbox agent session <local agent ID> <session ID> close|restore --request <UUID> --activity <lastActivityAt> --reason <evidence>
-    agentbox agent memory <ID> show <record ID>
-    agentbox agent memory <ID> note --request <stable UUID> --file decision.json # {decision,why,refs:[{label,ref}]}
-    agentbox agent memory <ID> handoff --request <checkpoint UUID> --file handoff.json
-    agentbox agent report --request <UUID> --file <text file>   # an agent files an Agentbox issue itself: public, 3 a day
-    agentbox agent loop <agent> --when "every hour" [--check CMD] --prompt T | --file F   # its own schedule, into its current chat; off stops it
-    agentbox agent ls [--project P]   # each agent: on or paused, project, its chat session now
-    agentbox agent send <agent> [--project P] <text…|->   # into another agent's chat, by name; starts one if it has none
-    agentbox agent memory <ID> prefer --key <key> --text <text>   # or --file <text file>; local agents; forget --key <key>
-
-Chat, Feed and Settings share one agent identity. Recommendations are immutable
-{title,finding,reason,next,evidence:[{url,label}],action:<optional action UUID>}.
-Only the associated session can publish them. Chat coordinators queue scoped
-work and keep worker capacity available; they cannot publish repository actions.
-
-Agent memory is evidence for continuity, never approval. Record a durable
-decision when you make it. When Agentbox asks for a checkpoint, save one handoff
-{intent,decisions:[{decision,why}],open:[],commitments:[],refs:[{label,ref}]} of
-at most 500 words with the request UUID it gives, then reply with one line. A
-later message can continue in a fresh conversation from it. Only an agent's
-current conversation reads and writes its memory.
-
-Local coordinators may close their own finished work sessions after inspecting
-their result. Close refuses changed activity, a working/blocked session, live
-children, pending decisions, open PR claims or waits. It retains the transcript
-and working directory. Restore resumes the same session/account only while
-Session.cacheWarmUntil is still in the future and work authority remains valid.
-Closed work is under Show closed sessions in the Agents rail. Never label
-waiting for CI, human review, a merge decision, or external work as completion.
-
-New local work pins candidate-evidence-v1. Before formal review, its writer
-records exact {request:<UUID>,base:<SHA>,head:<SHA>,checks:[],acceptance:[]} with
-work-validation. Each check has kind (typecheck/acceptance/other), command,
-status (passed/failed/blocked/not_run), evidence references, and actual
-startedAt/completedAt epoch milliseconds and exitCode for executed commands.
-Unexecuted checks have a reason and no execution fields. Only a compiler
-genuinely absent from the repo may use typecheck/status:not_applicable with
-repo-specific reason/evidence and no command. Each acceptance entry names
-{issue,evidence,proof}: actual producer, pre-action state, action, and why the
-assertion cannot pass without it. Keep previously declared commands in later
-reports of that candidate. Reports are idempotent by request and append-only.
-Resolve failures or blocked checks with a later execution, never an older pass.
-Execution is writer-reported, never server-attested. Failed/unknown evidence
-cannot spend a review round or publish. A clean source review, reported
-execution pass, publication, and required CI/human readiness are separate.
-
-Author shared instances on the Agents page. A run has one accountable human and
-one fenced execution host. Only its associated session can report progress or
-propose actions. Use existing PR claims, Review cards and durable waits for
-follow-through. Work stages distinguish PR opened, merged, deployed and verified
-resolved; later stages need --evidence <url> --evidence-label <label>, and verified
-resolution needs --outcome <verification>. --decision <question> publishes a
-needs-human state. Finishing stops the run, not declares the work resolved.
-
-Managed GitHub actions keep App tokens inside the server and require current
-outreach opt-in, including mentions in PR bodies and review requests. Expertise
-is not consent. A proposed action is approved by its accountable human or an
-agent maintainer in the Agents page; a Review reply alone is not that approval.
-Never work around a declined contact through session messaging or another
-channel. No merge or deployment permission follows from creating an agent.
-Supported actions include open_pr/update_pr/ready_pr, comment/request_review, merge_pr and close_issue.
-Merge requires exact-head checks/reviews and GitHub rules without bypass. Pending
-merge requests are not merged; closure also needs the configured evidence and
-current issue-author consent. Deploy/rollback adapters are not provided. Managed
-HTTP routes use private session capabilities; process IDs are not credentials.
-See docs/agents.md for exact action JSON, host configuration and boundaries.
-
 ## Looking
 
     agentbox ls                     # one line each: id status idle host provider repo branch title
@@ -245,7 +154,7 @@ why). Arming the same wait twice is one wait.
     agentbox pr claim <n|…>         # it is yours, and says so ("you hold", "you already hold"); refused,
                                     # naming "another session", if another live session has it
     agentbox pr release [<n|…>]     # release ownership and its PR waits (one, or all)
-    agentbox pr ready <n|…> --head <sha>   # you verified it ready: the project's Terminus gets it, once per head
+    agentbox pr ready <n|…> --head <sha>   # you verified it ready: each agent that takes ready PRs gets it, once per head
     agentbox pr transfer <repo#n> --expect <holder> --to <successor>
                                     # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has
@@ -257,6 +166,7 @@ why). Arming the same wait twice is one wait.
                                     # to run: its answer is JSON; it knows which session called
     agentbox superagent view <name> [--tab t]   # its page, as JSON
     agentbox superagent add <dir>   # register one (a person's call: do it only when asked)
+    agentbox superagent send <name> <text…|->   # into its main conversation, as your message; starts one if it has none
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
     agentbox github request <file>  # in a superagent's session: one GitHub action as its App,
@@ -264,6 +174,25 @@ why). Arming the same wait twice is one wait.
     agentbox github actions [<request>]   # their states: prepared, sent, refused (why), uncertain…
     agentbox github read <owner/repo> <n> issue|pull|reviews|checks   # read as its App
     agentbox github pin|approve …   # the host owner's: never from a session (refused)
+
+A superagent's main conversation has more when its manifest turns it on
+(`agent` is the same verb as `superagent`):
+
+    agentbox superagent memory <name> note --request <stable UUID> --file decision.json   # {decision,why,refs:[{label,ref}]}
+    agentbox superagent memory <name> prefer --key <key> --text <text>   # or --file; forget --key <key> removes it
+    agentbox superagent memory <name> search <words>   # earlier handoffs and decisions; show <record ID> reads one
+    agentbox superagent memory <name> handoff --request <checkpoint UUID> --file handoff.json
+    agentbox superagent loop <name> set <id> --when "every hour" [--check CMD] --prompt T | --file F
+                                    # a prompt said to its main at each time, after its turn ends; rm <id> stops it
+    agentbox report --request <UUID> --file <text file>   # a superagent's session files an agentbox issue itself: public, 3 a day
+
+Memory is evidence for continuity, never approval. Record a durable decision
+when you make it. When agentbox asks for a checkpoint, save one handoff
+{intent,decisions:[{decision,why}],open:[],commitments:[],refs:[{label,ref}]} of
+at most 500 words with the request UUID it gives, then reply with one line. A
+later message can continue in a fresh conversation from it. Only a
+superagent's current main conversation, its program and the person read and
+write its memory.
 
 ## Across machines (when this machine is in an agentbox cloud workspace)
 
