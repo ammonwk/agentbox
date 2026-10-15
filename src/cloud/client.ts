@@ -66,6 +66,9 @@ export interface ClientOptions {
   /** Give up on a request after this long (20s): a network that takes the
    *  connection and never answers must not hold a caller forever. */
   timeoutMs?: number;
+  /** Act as the person whose JWT this gives, for one request on the local
+   *  server (src/server/team.ts). The token is never kept. */
+  accessToken?: () => Promise<string | null>;
 }
 
 function timedFetch(ms: number): typeof fetch {
@@ -80,6 +83,7 @@ export function supabaseFor(cfg: CloudConfig, opts: ClientOptions = {}): Supabas
   const c = checkConfig(cfg);
   const persist = opts.persistSession ?? false;
   return createClient(c.url, c.publishableKey, {
+    ...(opts.accessToken ? { accessToken: opts.accessToken } : {}),
     auth: {
       persistSession: persist,
       autoRefreshToken: persist,
@@ -109,7 +113,7 @@ function statusOf(r: Raw): number {
 function unwrap<T>(schema: z.ZodType<T>, r: Raw): T {
   if (r.error) {
     const status = statusOf(r);
-    throw new CloudError(status === 0 ? `could not reach the cloud (${r.error.message})` : r.error.message, status, r.error.code ?? null);
+    throw new CloudError(status === 0 ? `could not reach the cloud (${r.error.message})` : r.error.message, status, r.error.code ?? null, r.error.details ?? null);
   }
   const parsed = schema.safeParse(r.data);
   if (!parsed.success) {
@@ -395,9 +399,10 @@ export class InstallationCloud {
     return cloudCall(this.sb, fn, { p_secret: this.#secret, ...args }, schema);
   }
 
-  /** Agent RPCs keep the credential private and retain the installation binding. */
-  agentCall<T>(fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
-    if (!/^inst_agents?_/.test(fn)) throw new CloudError("not an agent RPC", 400);
+  /** The shared superagents' RPCs (src/cloud/superagents.ts), with this
+   *  machine's secret, which stays private to this class. */
+  superagentCall<T>(fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
+    if (!/^inst_superagent_[a-z_]+$/.test(fn)) throw new CloudError("not a shared-superagent RPC", 400);
     return this.#call(fn, args, schema);
   }
 
