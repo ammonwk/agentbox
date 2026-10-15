@@ -162,7 +162,8 @@ Agentbox once had its agents in its own code. `scripts/migrate-local-agents.ts`
 moves each of them that has something to keep — a conversation, memory
 records, a loop, a picture, a SOUL.md with text — into a directory in
 `~/.agents/superagents/`, named after the agent and its project
-(`vulcan-plaibook-dev`). It keeps the conversation as the agent's main, the
+(`vulcan-plaibook-dev`); an agent of no project shows only under All
+projects, as before. It keeps the conversation as the agent's main, the
 earlier ones, the loop, the picture and the provider choice, and copies the
 memory journal record by record. It moves each agent once and never writes
 over a directory it did not write. The script names no agent; you say what

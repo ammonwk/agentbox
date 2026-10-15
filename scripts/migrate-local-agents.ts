@@ -150,7 +150,8 @@ function directory(o: Old, name: string): { manifest: Record<string, unknown>; f
   const provider = o.pinned ?? "auto";
   const where = project ? { repoId: project, worktree: true } : {};
   const common = {
-    ...(project ? { projects: [project] } : {}),
+    // A general instance showed in no project tab: it stays in All projects only.
+    projects: project ? [project] : [],
     memory: true,
     sweep: true,
     ...(events.get(o.name.toLowerCase()) ? { events: events.get(o.name.toLowerCase()) } : {}),

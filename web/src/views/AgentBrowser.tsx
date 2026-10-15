@@ -238,7 +238,9 @@ export function AgentBrowser({
         </div>
         <div className="rail-scroll">
           <ul className="agent-tree-list">
-            {agents.map((a) => {
+            {agents.map((a, _, all) => {
+              // Two agents with one title (copies of one directory) are told apart by their names.
+              const twin = all.some((b) => b.id !== a.id && b.name === a.name);
               const open = a.id === id && expanded;
               const hasThreads = a.id === id && threads.length > 0;
               return (
@@ -258,7 +260,10 @@ export function AgentBrowser({
                     <span className="agent-role-icon">
                       <AgentAvatar role={a.role} icon={a.icon} src={a.avatar} size={22} />
                     </span>
-                    <span className="rail-title agent-tree-name">{a.name}</span>
+                    <span className="rail-title agent-tree-name">
+                      {a.name}
+                      {twin ? <span className="faint"> {a.id}</span> : null}
+                    </span>
                     {a.id === id && activeCount > 0 && (
                       <span className="agent-tree-count" aria-label={`${activeCount} active work session${activeCount === 1 ? "" : "s"}`}>
                         {activeCount}
