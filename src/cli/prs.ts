@@ -37,7 +37,7 @@ export async function pr(api: Api, args: string[]): Promise<number> {
       return 0;
     }
     case "ready": {
-      // The owner's readiness event: the project's Terminus gets the PR once per head.
+      // The owner's readiness event: each superagent that takes pr.ready gets the PR once per head.
       const head = str(flags.get("head"));
       if (!rest[0] || !head) throw new Error("pr ready <PR> --head <SHA it was verified ready on>, run by the PR's owner session");
       const r = await api<{ state: string; result: string }>("POST", "/api/prs/ready", { ...body, head });

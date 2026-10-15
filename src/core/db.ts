@@ -421,7 +421,7 @@ export const MIGRATIONS: readonly string[] = [
   // (src/core/superagent/state.ts): its rollover, loops, sweeps, picture and
   // provider choice, as JSON; each generic event it was given, once
   // (src/core/superagent/events.ts); and each local agent of the old Agents
-  // runtime that became a superagent (src/core/superagent/migrate.ts).
+  // runtime that became a superagent (scripts/migrate-local-agents.ts).
   `
   CREATE TABLE superagent_state (
     name TEXT PRIMARY KEY,

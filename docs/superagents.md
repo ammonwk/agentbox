@@ -61,7 +61,8 @@ forgets it and leaves the directory and its state alone.
   "url": "http://127.0.0.1:9000",   // optional instead of run: a program agentbox does not run
   "icon": "fix",                    // optional: its picture until one is set on the page (brain, sparkle, fix, release, health)
   "projects": ["owner/repo"],       // optional: the projects it shows in (repo ids, owner/repo or checkout paths);
-                                    // default main.start.repoId; none: every project. Navigation only
+                                    // default main.start.repoId; none: every project. It places it on the page,
+                                    // decides which ready PRs it gets and which agents its main hears of
   "memory": true,                   // optional: its memory journal and MEMORY.md (below)
   "sweep": "23:00",                 // optional: close its idle work sessions daily; true is the time in Settings
   "events": ["pr.ready"],           // optional: generic events it takes (below)
@@ -93,7 +94,7 @@ steward becomes a superagent without changing how it runs.
 ## What agentbox does for it
 
 **Its program.** With `run`, agentbox starts it in its directory when the
-server starts, and again whenever it exits: at once if it ran a minute,
+server starts, and again whenever it exits: within seconds if it ran a minute,
 otherwise after a backoff doubling to a minute. Its output is in
 `<agentbox home>/superagents/<name>/process.log` (`agentbox superagent log`).
 A restart of agentbox stops and starts it, so a program keeps what matters in
@@ -219,7 +220,7 @@ main) that have been idle for two hours, and keeps, with the reason, one that
 holds a wait, an open card, a claimed PR or a child at work
 (`GET /api/superagents/:name/sweeps`).
 
-**Events** (`"events"`). `pr.ready`: a pull request's owner session verified
+**Events** (`"events"`). `pr.ready`: a session reports a pull request it owns, verified
 it ready on a head (`agentbox pr ready`); each superagent that takes the event
 and shows in the PR's project gets it once per head. With a program, it is the
 action `pr.ready` with `{repo, number, head, owner}` and the owner as the
@@ -289,8 +290,11 @@ headers, `x-agentbox-superagent: <name>` and `x-agentbox-superagent-token:
   `{key, holder, state}`. The holder itself gets 409 too: read your claims back
   with `GET /api/claims` when an answer was lost.
 - The fence is an integer. It increases on each change of holder: the claim,
-  an attach, a takeover and a handover. Each later call must give the current
-  fence. A stale fence gets 409.
+  an attach, a takeover and a handover. An attach and a release must give the
+  current fence; a stale fence gets 409. A takeover gives none: it is a
+  person's or the holder's program's, and it proves the stop itself.
+- The scope is the key's: an `env:` key is held in `env`, every other key in
+  `work`. A call that mixes them is refused.
 - Agentbox renews the lease while the holder session runs. A program never
   renews. A lease past its end makes the claim `uncertain`, and an uncertain
   claim still excludes all others: expiry never frees work.
@@ -346,7 +350,9 @@ The pin records the policy's digest and the path of the App's private key.
 The key path is host config: it is never in a manifest, it must be absolute,
 and the file must be mode 0600. A session or a program cannot pin, approve,
 decline or answer an action's card: a request with their headers is
-refused. When the manifest's `github` field changes, every action is refused
+refused, and so is one without them whose client process runs inside an
+agentbox session (agentbox reads the connection's process with `lsof`;
+without `lsof`, only the headers decide). When the manifest's `github` field changes, every action is refused
 until the owner pins again.
 `agentbox github unpin <superagent>` stops them all.
 

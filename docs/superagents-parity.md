@@ -84,7 +84,7 @@ added after the merge base (Part 4) to where it is now. A verdict is one of:
 
 | # | Item | Verdict |
 |---|---|---|
-| 31 | Jupiter instances | **Different**: one per directory. The migration made `jupiter-agentbox` and `jupiter-plaibook-dev` from Nate's two, each a copy that runs `superagents/jupiter`. |
+| 31 | Jupiter instances | **Different**: one per directory. The migration script makes `jupiter-agentbox` and `jupiter-plaibook-dev` from Nate's two, each a copy that runs `superagents/jupiter`. |
 | 32–36 | Jupiter only creates; `propose`; the creation form; accepting a draft; what a created agent inherits | **Carried**: `superagents/jupiter/` (its MAIN.md says `{{name}}`, so a copy calls itself). |
 | 37 | Shared creator auto-binding | **Not carried**: an agent is a directory; a teammate copies it from git. |
 
@@ -92,7 +92,7 @@ added after the merge base (Part 4) to where it is now. A verdict is one of:
 
 | # | Item | Verdict |
 |---|---|---|
-| 38 | Custom agents are first-class | **Carried**: any directory is a superagent. Nate's Terminus became `terminus-plaibook-dev`. |
+| 38 | Custom agents are first-class | **Carried**: any directory is a superagent. The migration script makes Nate's Terminus `terminus-plaibook-dev`. |
 | 39 | Shared editor and "Clone for me" | **Different**: the git source in the registry is the template; copy the directory and add it. |
 
 ### F. Vulcan work family
@@ -253,7 +253,7 @@ What Nate's local main added after 498aee8, and where each is now.
 | Loops (`agentbox agent loop`) | **Carried**: `main.loops` in the manifest, or `agentbox superagent loop <name> set <id>`; the old `agent loop <name> --when …` form still parses. |
 | `agentbox agent ls` and `agent send` | **Carried**: `agent` is `superagent`; `send` records the sender and starts a main when there is none; `--project` picks the copy for that project. |
 | `agentbox agent report` | **Carried**: `agentbox report` (and `agent report`) from a superagent's session, at most three a day. |
-| `pr ready` hands a verified PR to the project's Terminus | **Different**: the generic `pr.ready` event goes to each superagent with `"events": ["pr.ready"]` that shows in the PR's project. The migration gave Terminus that event. |
+| `pr ready` hands a verified PR to the project's Terminus | **Different**: the generic `pr.ready` event goes to each superagent with `"events": ["pr.ready"]` that shows in the PR's project. The migration script gives Terminus that event (`--events terminus=pr.ready`). |
 | A session's waits move to the session that takes over | **Carried**: `Fleet.handOver`, with work claims too. |
 | Sender attribution of agent messages | **Carried**: the sender is the superagent the sending session belongs to, by durable records. |
 | Picture of an agent | **Carried**: Settings → Picture (`/api/superagents/:name/avatar`); the old pictures stay where they were. |

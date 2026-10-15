@@ -49,6 +49,10 @@ own conversations, memory and state.
   Enabled switch, the program's state, Restart and its output, the provider
   of its main and why, its loops, its sweep time, its picture, and its memory.
 
+A session of an agent that stops on a question, or asks you to decide, is
+pushed to your phone like any session, unless its program started it with
+`notify: false`.
+
 The sessions an agent starts under its main (a Vulcan writer, a Steward
 owner) are its work sessions. They show under the agent, not on the Sessions
 page. Opening the page starts and stops nothing.
@@ -118,12 +122,13 @@ conversation is never closed this way.
 `"provider": "auto"` in `main.start` (or on any `POST /api/sessions`) starts
 the conversation on Claude or Codex, whichever has room, by Codex's weekly
 limit: Codex first above 50% left, Claude first below 10%. A warm
-conversation never moves. Settings says which provider the main runs on and
+conversation keeps its account; a rollover past `contextPct` chooses again for
+the fresh one. Settings says which provider the main runs on and
 why.
 
 ## Ready pull requests
 
-An agent with `"events": ["pr.ready"]` gets each pull request that its owner
+An agent with `"events": ["pr.ready"]` gets each pull request that a session
 reports ready (`agentbox pr ready <PR> --head <SHA>`), once per PR and head,
 when it shows in the PR's project. An agent with a program gets it as the
 action `pr.ready`; one without gets it in its main conversation.

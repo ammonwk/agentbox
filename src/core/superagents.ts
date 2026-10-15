@@ -886,10 +886,13 @@ export class Superagents {
     }
     if (!Number.isInteger(pid) || pid <= 1 || this.procs.get(name)?.pid === pid) return;
     try {
-      const env = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
+      // Linux reads its environment from /proc; macOS has none, and `ps eww` prints it after the command.
+      const env = existsSync(`/proc/${pid}/environ`)
+        ? readFileSync(`/proc/${pid}/environ`, "utf8").split("\0")
+        : (Bun.spawnSync(["ps", "eww", "-o", "command=", "-p", String(pid)]).stdout.toString().split(/\s+/) ?? []);
       if (env.includes(`AGENTBOX_SUPERAGENT=${name}`)) process.kill(pid, "SIGTERM");
     } catch {
-      // Gone, or not ours to read (macOS has no /proc): nothing to stop.
+      // Gone, or not ours to read: nothing to stop.
     }
   }
 
