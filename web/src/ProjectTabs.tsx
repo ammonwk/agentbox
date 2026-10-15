@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { AppState } from "../../src/core/types";
-import type { LocalAgent } from "../../src/core/agents/conversation";
 import { Icon } from "./components";
 import { scopedState, projectOfSession } from "./lib/projects";
 import { needsYou } from "./lib/board";
@@ -14,7 +13,7 @@ function storedTabs(): string[] {
   } catch { return []; }
 }
 
-export function useProjectTabs(state: AppState | null, agents: LocalAgent[], selected: string | null) {
+export function useProjectTabs(state: AppState | null, selected: string | null) {
   const [saved, setSaved] = useState(storedTabs);
   const repos = state?.repos ?? [];
   const valid = saved.filter((id) => repos.some((r) => r.id === id));
@@ -22,7 +21,7 @@ export function useProjectTabs(state: AppState | null, agents: LocalAgent[], sel
   // or personal paths belong in the application source.
   const counts = new Map<string, number>();
   if (state && !valid.length) for (const s of state.sessions) {
-    const id = projectOfSession(repos, agents, s);
+    const id = projectOfSession(repos, s);
     if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
   }
   const ids = valid.length ? valid : [...repos].sort((a, b) => (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0)).slice(0, 2).map((r) => r.id);
@@ -42,7 +41,7 @@ export function useProjectTabs(state: AppState | null, agents: LocalAgent[], sel
   const tabs = ids.map((id) => repos.find((r) => r.id === id)!);
   const attention = new Map<string, string>();
   if (state) for (const project of tabs) {
-    const scoped = scopedState(state, project.id, agents);
+    const scoped = scopedState(state, project.id);
     const sessions = needsYou(scoped.sessions);
     const cards = scoped.cards.filter((c) => c.state === "open").length;
     const notice = [

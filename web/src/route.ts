@@ -8,7 +8,8 @@ export type SessionTab = "terminal" | "timeline" | "diff" | "load";
 export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "diff", "load"];
 
 export type Route =
-  | { page: "agents"; id?: string; thread?: string; view?: AgentView }
+  /** An agent (a superagent's name): its Chat, Feed (`tab`: one of its program's page tabs), Settings, or the session list a phone shows first. */
+  | { page: "agents"; id?: string; thread?: string; view?: AgentView; tab?: string }
   | { page: "sessions" }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
@@ -44,7 +45,10 @@ function decode(p: string): string {
 export function parseHash(hash: string): Route {
   const parts = hash.split("?")[0]!.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
-  if (head === "agents") return { page: "agents", ...(a ? { id: a } : {}), ...(b ? { view: agentViewOf(b), ...(parts[3] ? { thread: parts[3] } : {}) } : {}) };
+  if (head === "agents") {
+    const view = b ? agentViewOf(b) : undefined;
+    return { page: "agents", ...(a ? { id: a } : {}), ...(view ? { view } : {}), ...(parts[3] ? (view === "feed" ? { tab: parts[3] } : { thread: parts[3] }) : {}) };
+  }
   if (head === "s" && a) {
     const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
     return { page: "session", id: a, tab };
@@ -73,7 +77,10 @@ export function parseHash(hash: string): Route {
 
 function routePath(route: Route): string {
   switch (route.page) {
-    case "agents": return `#/agents${route.id ? `/${encodeURIComponent(route.id)}` : ""}${route.view || route.thread ? `/${route.view ?? "chat"}${route.thread ? `/${encodeURIComponent(route.thread)}` : ""}` : ""}`;
+    case "agents": {
+      const sub = route.view === "feed" ? route.tab : route.thread;
+      return `#/agents${route.id ? `/${encodeURIComponent(route.id)}` : ""}${route.view || sub ? `/${route.view ?? "chat"}${sub ? `/${encodeURIComponent(sub)}` : ""}` : ""}`;
+    }
     case "session":
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
     case "accounts":

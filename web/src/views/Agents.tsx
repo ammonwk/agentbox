@@ -1,1751 +1,744 @@
-import { useRef, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { HumanAgents } from "../../../src/cloud/agent-client";
-import {
-  AGENT_TEMPLATES,
-  AgentDefinition,
-  WorkStage,
-  type AgentBoard,
-  SharedAgent,
-  type WorkItem,
-  type AgentAction,
-} from "../../../src/cloud/agents";
-import { cloudCall, type HumanCloud } from "../../../src/cloud/client";
-import type { Installation, Member } from "../../../src/cloud/protocol";
-import type { CloudStatus } from "../../../src/core/cloud/bridge";
-import type { AgentsRuntime } from "../../../src/core/agents/runtime";
-import type { AppState } from "../../../src/core/types";
-import { parseWhen } from "../../../src/core/schedule";
-import { Button, Empty, Field } from "../components";
-import { request } from "../api";
-import {
-  humanCloud,
-  useCloudStatus,
-  useCloudUser,
-  useLoad,
-} from "../lib/cloud";
-import { go, selectScope } from "../route";
-import { useScope } from "../lib/projects";
+/** The Agents page: each superagent with its main conversation, its own page
+ *  (blocks its program answers with), its sessions, and what it is
+ *  (docs/superagents.md). Opening any of it starts nothing; only sending does. */
+
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { api, type SuperagentActionReply } from "../api";
+import type { AppState, SuperagentAction, SuperagentBlock, SuperagentField, SuperagentInfo, SuperagentView } from "../../../src/core/types";
+import { Button, Empty, ErrorBoundary, Icon, RelativeTime } from "../components";
+import { go as goTo, hrefOf as hrefTo, SESSION_TABS, type Route, type SessionTab } from "../route";
+import { titleOf } from "../lib/board";
+import { Detail } from "./session/SessionView";
+import { Markdown } from "./session/Markdown";
+import { loadDraft, newRevision, saveDraft } from "./session/drafts";
+import { useIsNarrow } from "./session/useIsNarrow";
 import "./agents.css";
-import { firstActive, landingForAgent, agentActivity, type AgentOption } from "./AgentBrowser";
-import { chooseWhere, chosenWhere, hostConnected, isAgentboxRepo, localTwin, pendingMoves, rememberTwins } from "../lib/moveagents";
-import { WhereToggle } from "./AgentWhere";
-import type { LocalAgent } from "../../../src/core/agents/conversation";
-import { LocalAgentSpace, SharedAgentSpace, localAgentOption } from "./AgentSpace";
 
-const when = (s?: string | null) =>
-  s
-    ? new Date(s).toLocaleString([], {
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      })
-    : "Never";
-const active = (s: string) =>
-  ["queued", "starting", "running", "waiting", "uncertain"].includes(s);
-const words = (s: string) =>
-  s
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-type Task = (work: () => Promise<unknown>) => Promise<void>;
-type Local = ReturnType<AgentsRuntime["status"]>;
-async function hostRequest(
-  api: HumanAgents,
-  path: string,
-  body: Record<string, unknown>,
-) {
-  const session = await api.human.sb.auth.getSession();
-  if (!session.data.session)
-    throw new Error("Sign in to change execution settings");
-  return request("POST", path, {
-    ...body,
-    humanToken: session.data.session.access_token,
-  });
+const REMEMBER = "agentbox.agent";
+const LIST_MS = 4_000;
+
+function useSuperagents(): { list: SuperagentInfo[] | null; error: string | null; reload: () => void } {
+  const [list, setList] = useState<SuperagentInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      api.superagents().then(
+        (l) => live && (setList(l), setError(null)),
+        (e: Error) => live && setError(e.message),
+      );
+    void load();
+    const t = setInterval(load, LIST_MS);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [n]);
+  return { list, error, reload: useCallback(() => setN((x) => x + 1), []) };
 }
 
-export function Agents({ state, id }: { state: AppState; id?: string }) {
-  const { status, error } = useCloudStatus();
-  if (error) return <Empty title="Cloud connection unavailable">{error}</Empty>;
-  if (!status) return <Empty title="Loading Agents…" />;
-  if (!status.configured || id?.startsWith("local-"))
-    return <LocalAgentSpace state={state} id={id === "manage" ? undefined : id} />;
-  return <Connected status={status} state={state} id={id} />;
+/** This page's own `{name, tab}` as the app's route: Chat, a page tab under
+ *  Feed, Sessions, or About (Settings). */
+type Place = { page: "agents"; name: string | null; tab: string | null };
+function routeOf(p: Place): Route {
+  if (!p.name) return { page: "agents" };
+  if (p.tab === null) return { page: "agents", id: p.name };
+  if (p.tab === "sessions") return { page: "agents", id: p.name, view: "sessions" };
+  if (p.tab === "about") return { page: "agents", id: p.name, view: "settings" };
+  return { page: "agents", id: p.name, view: "feed", tab: p.tab };
 }
-function Connected({
-  status,
-  state,
-  id,
-}: {
-  status: CloudStatus;
-  state: AppState;
-  id?: string;
-}) {
-  const human = useMemo(
-    () => humanCloud(status),
-    [status.url, status.publishableKey],
-  ); // eslint-disable-line react-hooks/exhaustive-deps
-  const user = useCloudUser(human);
-  if (!human || !user.ready) return <Empty title="Loading your workspace…" />;
-  if (!user.userId)
+const go = (p: Place | Route, replace?: boolean) => goTo("name" in p ? routeOf(p) : p, replace);
+const hrefOf = (p: Place | Route) => hrefTo("name" in p ? routeOf(p) : p);
+
+export function Agents({ state, route }: { state: AppState; route: Extract<Route, { page: "agents" }> }) {
+  const name = route.id ?? null;
+  const tab = route.view === "sessions" ? "sessions" : route.view === "settings" ? "about" : route.view === "feed" ? (route.tab ?? "page") : null;
+  const { list, error, reload } = useSuperagents();
+  const narrow = useIsNarrow();
+  const [q, setQ] = useState("");
+  const selected = list?.find((a) => a.name === name) ?? null;
+
+  // A computer opens straight onto the one last looked at; a phone shows the list first.
+  useEffect(() => {
+    if (name || narrow || !list?.length) return;
+    const last = localStorage.getItem(REMEMBER);
+    const pick = list.find((a) => a.name === last) ?? list[0]!;
+    go({ page: "agents", name: pick.name, tab: null }, true);
+  }, [name, narrow, list]);
+  useEffect(() => {
+    if (selected) localStorage.setItem(REMEMBER, selected.name);
+  }, [selected?.name]);
+
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return (list ?? []).filter((a) => !needle || [a.name, a.title, a.description].some((x) => x.toLowerCase().includes(needle)));
+  }, [list, q]);
+
+  const showList = !narrow || !name;
+  const showPane = !narrow || !!name;
+  return (
+    <div className="ag" data-detail={name ? "on" : "off"}>
+      {showList ? (
+        <aside className="ag-list" aria-label="Agents" data-nav-region="list">
+          <div className="ag-search">
+            <Icon.search size={14} />
+            <input data-search placeholder="Find an agent" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Find an agent" />
+          </div>
+          {error && !list ? <p className="ag-note bad">Could not load the agents: {error}</p> : null}
+          <ul>
+            {shown.map((a) => (
+              <li key={a.name}>
+                <a className={`ag-row${a.name === name ? " on" : ""}`} href={hrefOf({ page: "agents", name: a.name, tab: null })}>
+                  <span className={`ag-dot ${dotOf(a, state)}`} aria-hidden />
+                  <span className="ag-row-text">
+                    <span className="ag-row-title">{a.title}</span>
+                    <span className="ag-row-sub">{a.error ? "Its manifest cannot be read" : a.description || a.name}</span>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+          {list && !list.length ? (
+            <div className="ag-note">
+              <p>No superagents yet.</p>
+              <p>
+                Add one from its directory with <code>agentbox superagent add &lt;dir&gt;</code>. The examples are in the agentbox checkout under{" "}
+                <code>superagents/</code>; Jupiter writes new ones.
+              </p>
+            </div>
+          ) : null}
+        </aside>
+      ) : null}
+      {showPane ? (
+        <section className="ag-pane" data-nav-region="detail">
+          {!list ? (
+            <Empty title="Loading…" />
+          ) : selected ? (
+            <ErrorBoundary resetKey={selected.name} label="This agent">
+              <Pane key={selected.name} info={selected} state={state} tab={tab} reload={reload} back={narrow} />
+            </ErrorBoundary>
+          ) : name ? (
+            <Empty title="No such agent" action={<a className="btn" href={hrefOf({ page: "agents", name: null, tab: null })}>All agents</a>}>
+              <p>
+                Nothing here is called <code>{name}</code>. It may live on another machine, or it was removed.
+              </p>
+            </Empty>
+          ) : (
+            <Empty title="Pick an agent" />
+          )}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function dotOf(a: SuperagentInfo, state: AppState): string {
+  if (a.error) return "bad";
+  if (!a.enabled) return "idle";
+  if (a.process?.state === "backoff") return "warn";
+  const main = a.main ? state.sessions.find((s) => s.id === a.main) : null;
+  if (main?.status === "running") return "busy";
+  if (main?.status === "blocked") return "warn";
+  return a.process?.state === "running" || main ? "ok" : "idle";
+}
+
+// ------------------------------------------------------------------- pane
+
+function Pane({ info, state, tab, reload, back }: { info: SuperagentInfo; state: AppState; tab: string | null; reload: () => void; back: boolean }) {
+  const wide = useWide();
+  // The page's first tab, also what says which tabs it has.
+  const page = usePage(info, null);
+  const tabs = page.view?.tabs ?? (info.hasPage ? [{ id: "page", title: "Page" }] : []);
+  const current = tab ?? "chat";
+  // On a wide screen the page sits beside the chat, so its first tab is not a tab of its own.
+  const beside = wide && info.hasPage && current === "chat";
+  const [composeKey, setComposeKey] = useState(0);
+  const compose = async (text: string) => {
+    const main = info.main;
+    const key = main ?? `superagent:${info.name}`;
+    const cur = loadDraft(key);
+    await saveDraft(key, cur?.text ? `${cur.text}\n\n${text}` : text, cur?.images ?? [], newRevision());
+    setComposeKey((k) => k + 1);
+    if (current !== "chat" && !beside) go({ page: "agents", name: info.name, tab: null });
+  };
+  const to = (t: string | null) => go({ page: "agents", name: info.name, tab: t }, true);
+
+  return (
+    <div className="ag-agent">
+      <header className="ag-head">
+        {back ? (
+          <a className="ag-back" href={hrefOf({ page: "agents", name: null, tab: null })} aria-label="All agents">
+            <Icon.chevronLeft size={16} />
+          </a>
+        ) : null}
+        <div className="ag-head-text">
+          <h2>{info.title}</h2>
+          {info.description ? <p className="ag-desc">{info.description}</p> : null}
+        </div>
+        <ProcessPill info={info} />
+      </header>
+      <nav className="ag-tabs" role="tablist" aria-label={`${info.title} views`}>
+        <TabButton on={current === "chat"} onClick={() => to(null)}>
+          Chat
+        </TabButton>
+        {tabs.map((t, i) =>
+          beside && i === 0 ? null : (
+            <TabButton key={t.id} on={current === t.id} onClick={() => to(t.id)}>
+              {t.title}
+              {t.badge != null && t.badge !== 0 && t.badge !== "" ? <span className="ag-badge">{t.badge}</span> : null}
+            </TabButton>
+          ),
+        )}
+        <TabButton on={current === "sessions"} onClick={() => to("sessions")}>
+          Sessions
+        </TabButton>
+        <TabButton on={current === "about"} onClick={() => to("about")}>
+          About
+        </TabButton>
+      </nav>
+      <div className={`ag-body${beside ? " split" : ""}`}>
+        {current === "chat" ? (
+          <>
+            <Chat key={composeKey} info={info} state={state} reload={reload} />
+            {beside ? <PagePanel info={info} page={page} tab={null} onCompose={compose} side /> : null}
+          </>
+        ) : current === "sessions" ? (
+          <SessionsList info={info} state={state} />
+        ) : current === "about" ? (
+          <About info={info} reload={reload} />
+        ) : (
+          <TabPage info={info} tab={current === "page" ? null : current} onCompose={compose} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TabButton({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" role="tab" aria-selected={on} className="sx-tab" onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+function useWide(): boolean {
+  const q = "(min-width: 1280px)";
+  const [wide, setWide] = useState(() => matchMedia(q).matches);
+  useEffect(() => {
+    const m = matchMedia(q);
+    const on = () => setWide(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
+function ProcessPill({ info }: { info: SuperagentInfo }) {
+  if (info.error) return <span className="ag-pill bad">Manifest error</span>;
+  if (!info.enabled) return <span className="ag-pill idle">Disabled</span>;
+  const p = info.process;
+  if (!p) return null;
+  const label = p.state === "running" ? "Running" : p.state === "backoff" ? `Restarting${p.restarts ? ` (${p.restarts})` : ""}` : p.state === "starting" ? "Starting" : "Stopped";
+  return <span className={`ag-pill ${p.state === "running" ? "ok" : p.state === "backoff" ? "warn" : "idle"}`}>{label}</span>;
+}
+
+// ------------------------------------------------------------------- chat
+
+function Chat({ info, state, reload }: { info: SuperagentInfo; state: AppState; reload: () => void }) {
+  const [sessTab, setSessTab] = useState<SessionTab>(SESSION_TABS[0]!);
+  const main = info.main ? state.sessions.find((s) => s.id === info.main) ?? null : null;
+  const earlier = info.previous.length ? (
+    <div className="ag-earlier">
+      Earlier conversations:{" "}
+      {info.previous.slice(0, 6).map((id, i) => (
+        <span key={id}>
+          {i ? ", " : null}
+          <a href={hrefOf({ page: "session", id, tab: "timeline" })}>{sessionName(state, id)}</a>
+        </span>
+      ))}
+      {info.previous.length > 6 ? <span className="muted"> and {info.previous.length - 6} more on the Sessions tab</span> : null}
+    </div>
+  ) : null;
+  if (main)
     return (
-      <><Empty title="Sign in to see your shared agents">
+      <div className="ag-chat">
+        {earlier}
+        <Detail
+          key={main.id}
+          session={main}
+          state={state}
+          tab={sessTab}
+          onTab={setSessTab}
+          onClose={(s) => void api.close(s.id, true)}
+        />
+      </div>
+    );
+  if (info.main)
+    return (
+      <div className="ag-chat">
+        {earlier}
+        <Empty title="Its conversation is not on the board" action={<a className="btn" href={hrefOf({ page: "session", id: info.main, tab: "timeline" })}>Open {info.main}</a>}>
+          <p>The main conversation is closed or older than the board&apos;s window.</p>
+        </Empty>
+      </div>
+    );
+  if (info.canStart) return <StartChat info={info} onStarted={reload} />;
+  return (
+    <div className="ag-chat">
+      <Empty title="No conversation yet">
         <p>
-          Your workspace identity controls authoring, execution requests and
-          outreach preferences.
+          {info.process
+            ? "Its program starts its main conversation when it has something to talk about."
+            : "Its manifest says neither how to start a main conversation nor which schedule's session it is."}
         </p>
-        <Button onClick={() => go({ page: "team" })}>Sign in on Team</Button>
-        <a href="#/agents/local-jupiter">Open local agents on this machine</a>
-      </Empty></>
+      </Empty>
+    </div>
+  );
+}
+
+/** The first message: agentbox starts the main conversation from the manifest. One send id per attempt, kept across a reload, so a retry never starts two. */
+function StartChat({ info, onStarted }: { info: SuperagentInfo; onStarted: () => void }) {
+  const key = `superagent:${info.name}`;
+  const pendingKey = `agentbox.superagentStart.${info.name}`;
+  const [text, setText] = useState(() => loadDraft(key)?.text ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => ref.current?.focus({ preventScroll: true }), []);
+  const save = (t: string) => {
+    setText(t);
+    void saveDraft(key, t, [], newRevision());
+  };
+  const send = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    const sendId = localStorage.getItem(pendingKey) ?? newRevision();
+    localStorage.setItem(pendingKey, sendId);
+    try {
+      await api.superagentChat(info.name, text, sendId);
+      localStorage.removeItem(pendingKey);
+      void saveDraft(key, "", [], newRevision());
+      onStarted();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="ag-start" onSubmit={send}>
+      <Empty title={`Talk with ${info.title}`}>
+        <p>Your first message starts its conversation{info.description ? `: ${info.description}` : "."}</p>
+      </Empty>
+      <div className="ag-start-box">
+        <textarea
+          ref={ref}
+          value={text}
+          rows={3}
+          placeholder={`Message ${info.title}`}
+          onChange={(e) => save(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <Button variant="primary" icon={Icon.send} loading={busy} disabled={!text.trim()} type="submit">
+          Send
+        </Button>
+      </div>
+      {error ? <p className="ag-note bad" role="alert">That did not send: {error}</p> : null}
+    </form>
+  );
+}
+
+function sessionName(state: AppState, id: string): string {
+  const s = state.sessions.find((x) => x.id === id);
+  return s ? titleOf(s) : id;
+}
+
+// ------------------------------------------------------------------- page
+
+function usePage(info: SuperagentInfo, tab: string | null) {
+  const [view, setView] = useState<SuperagentView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [n, setN] = useState(0);
+  const running = info.hasPage && (!info.process || info.process.state === "running");
+  useEffect(() => {
+    if (!running) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const load = () =>
+      api.superagentView(info.name, tab).then(
+        (v) => {
+          if (!live) return;
+          setView(v);
+          setError(null);
+          timer = setTimeout(load, Math.max(2, v?.refresh ?? 15) * 1000);
+        },
+        (e: Error) => {
+          if (!live) return;
+          setError(e.message);
+          timer = setTimeout(load, 15_000);
+        },
+      );
+    void load();
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [info.name, tab, running, n]);
+  return { view, setView, error, running, reload: () => setN((x) => x + 1) };
+}
+
+type Page = ReturnType<typeof usePage>;
+
+function TabPage({ info, tab, onCompose }: { info: SuperagentInfo; tab: string | null; onCompose: (text: string) => void }) {
+  const page = usePage(info, tab);
+  return <PagePanel info={info} page={page} tab={tab} onCompose={onCompose} />;
+}
+
+function PagePanel({ info, page, tab, onCompose, side }: { info: SuperagentInfo; page: Page; tab: string | null; onCompose: (text: string) => void; side?: boolean }) {
+  const { view, setView, error, running, reload } = page;
+  const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null);
+  const act = async (a: SuperagentAction, values: Record<string, unknown>) => {
+    if (a.confirm && !confirm(a.confirm)) return;
+    setMessage(null);
+    try {
+      const reply: SuperagentActionReply = (await api.superagentAction(info.name, { action: a.id, values: { ...a.values, ...values }, tab })) ?? {};
+      if (reply.view) setView(reply.view);
+      else reload();
+      if (reply.message) setMessage({ text: reply.message, bad: false });
+      if (reply.compose) onCompose(reply.compose);
+      if (reply.open) location.hash = reply.open.replace(/^#?/, "#");
+    } catch (e) {
+      setMessage({ text: (e as Error).message, bad: true });
+    }
+  };
+  return (
+    <div className={`ag-page${side ? " side" : ""}`}>
+      {!running ? (
+        <Empty title="Its program is not running">
+          <p>The About tab shows its state and the end of its output.</p>
+        </Empty>
+      ) : error && !view ? (
+        <p className="ag-note bad">Its page did not load: {error}</p>
+      ) : !view ? (
+        <Empty title="Loading…" />
+      ) : (
+        <>
+          {view.title ? <h3 className="ag-page-title">{view.title}</h3> : null}
+          {message ? (
+            <p className={`ag-note ${message.bad ? "bad" : "ok"}`} role={message.bad ? "alert" : "status"}>
+              {message.text}
+            </p>
+          ) : null}
+          {error ? <p className="ag-note bad">The last refresh failed: {error}</p> : null}
+          <Blocks blocks={view.blocks} act={act} />
+        </>
+      )}
+    </div>
+  );
+}
+
+type Act = (a: SuperagentAction, values: Record<string, unknown>) => Promise<void>;
+
+function Blocks({ blocks, act }: { blocks: SuperagentBlock[]; act: Act }) {
+  return (
+    <>
+      {(blocks ?? []).map((b, i) => (
+        <BlockView key={("id" in b && b.id) || i} block={b} act={act} />
+      ))}
+    </>
+  );
+}
+
+function BlockView({ block: b, act }: { block: SuperagentBlock; act: Act }) {
+  switch (b.type) {
+    case "heading":
+      return <h4 className="ag-h">{b.text}</h4>;
+    case "markdown":
+      return (
+        <div className="ag-md">
+          <Markdown text={b.text} />
+        </div>
+      );
+    case "divider":
+      return <hr className="ag-hr" />;
+    case "fields":
+      return (
+        <dl className="ag-fields">
+          {b.items.map((f, i) => (
+            <div key={i}>
+              <dt>{f.label}</dt>
+              <dd>
+                <Markdown text={f.value} inline />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      );
+    case "actions":
+      return <Actions actions={b.actions} act={act} values={() => ({})} />;
+    case "form":
+      return <FormBlock form={b} act={act} />;
+    case "item":
+      return (
+        <article className={`ag-item ${b.status ?? ""}`}>
+          <header>
+            {b.status ? <span className={`ag-dot ${b.status}`} aria-label={b.status} /> : null}
+            <span className="ag-item-title">{b.title}</span>
+            {b.subtitle ? <span className="ag-item-sub">{b.subtitle}</span> : null}
+          </header>
+          {b.body ? (
+            <div className="ag-md">
+              <Markdown text={b.body} />
+            </div>
+          ) : null}
+          {b.sessions?.length || b.links?.length ? (
+            <div className="ag-item-links">
+              {b.sessions?.map((id) => (
+                <a key={id} href={hrefOf({ page: "session", id, tab: "timeline" })}>
+                  <Icon.terminal size={12} /> {id}
+                </a>
+              ))}
+              {b.links?.map((l, i) =>
+                /^https?:/.test(l.url) || l.url.startsWith("#") ? (
+                  <a key={i} href={l.url} target={l.url.startsWith("#") ? undefined : "_blank"} rel="noreferrer">
+                    {l.url.startsWith("#") ? null : <Icon.external size={12} />} {l.label}
+                  </a>
+                ) : null,
+              )}
+            </div>
+          ) : null}
+          {b.children?.length ? (
+            <div className="ag-item-children">
+              <Blocks blocks={b.children} act={act} />
+            </div>
+          ) : null}
+          {b.actions?.length ? <Actions actions={b.actions} act={act} values={() => ({})} /> : null}
+        </article>
+      );
+    default:
+      return null;
+  }
+}
+
+function Actions({ actions, act, values }: { actions: SuperagentAction[]; act: Act; values: () => Record<string, unknown> }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  return (
+    <div className="ag-actions">
+      {actions.map((a) => (
+        <Button
+          key={a.id}
+          size="sm"
+          type="button"
+          variant={a.style === "primary" ? "primary" : a.style === "danger" ? "danger" : "default"}
+          loading={busy === a.id}
+          disabled={!!busy}
+          onClick={async () => {
+            setBusy(a.id);
+            try {
+              await act(a, values());
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          {a.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+function FormBlock({ form, act }: { form: Extract<SuperagentBlock, { type: "form" }>; act: Act }) {
+  const initial = () => Object.fromEntries(form.fields.map((f) => [f.name, f.value ?? (f.kind === "checkbox" ? false : "")]));
+  const [values, setValues] = useState<Record<string, unknown>>(initial);
+  // A page that changed what the form holds (after an action) shows it; what you are typing is kept otherwise.
+  const shape = JSON.stringify(form.fields.map((f) => [f.name, f.value]));
+  const last = useRef(shape);
+  useEffect(() => {
+    if (last.current !== shape) {
+      last.current = shape;
+      setValues(initial());
+    }
+  }, [shape]);
+  const set = (name: string, v: unknown) => setValues((x) => ({ ...x, [name]: v }));
+  return (
+    <form className="ag-form" onSubmit={(e) => e.preventDefault()}>
+      {form.fields.map((f) => (
+        <FieldView key={f.name} field={f} value={values[f.name]} onChange={(v) => set(f.name, v)} />
+      ))}
+      <Actions actions={form.actions} act={act} values={() => values} />
+    </form>
+  );
+}
+
+function FieldView({ field: f, value, onChange }: { field: SuperagentField; value: unknown; onChange: (v: unknown) => void }) {
+  const id = `ag-f-${f.name}`;
+  if (f.kind === "checkbox")
+    return (
+      <label className="ag-check">
+        <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} /> {f.label}
+      </label>
     );
   return (
-    <Directory
-      key={user.userId}
-      human={human}
-      user={user.userId}
-      status={status}
-      state={state}
-      id={id}
-    />
+    <label className="ag-field" htmlFor={id}>
+      <span>{f.label}</span>
+      {f.kind === "textarea" ? (
+        <textarea id={id} rows={f.rows ?? 5} value={String(value ?? "")} placeholder={f.placeholder} onChange={(e) => onChange(e.target.value)} />
+      ) : f.kind === "select" ? (
+        <select id={id} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
+          {f.options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input id={id} value={String(value ?? "")} placeholder={f.placeholder} onChange={(e) => onChange(e.target.value)} />
+      )}
+    </label>
   );
 }
-function Directory({
-  human,
-  user,
-  status,
-  state,
-  id,
-}: {
-  human: HumanCloud;
-  user: string;
-  status: CloudStatus;
-  state: AppState;
-  id?: string;
-}) {
-  const api = useMemo(() => new HumanAgents(human), [human]);
-  const me = useLoad(() => human.me(), [human]);
-  const scope = useScope();
-  const project = state.repos.find((r) => r.id === scope.project);
-  const workspace = scope.workspace || status.installation?.workspaceId || "";
-  const setWorkspace = (id: string) => selectScope("workspace", id);
-  const [filter, setFilter] = useState("team");
-  const [editing, setEditing] = useState<SharedAgent | AgentDefinition | null>(
-    null,
+
+// --------------------------------------------------------------- sessions
+
+/** Its main conversations, and what each started, at any depth: newest activity first. */
+function SessionsList({ info, state }: { info: SuperagentInfo; state: AppState }) {
+  const rows = useMemo(() => {
+    const roots = new Set([info.main, ...info.previous].filter((x): x is string => !!x));
+    const kids = new Map<string, string[]>();
+    for (const s of state.sessions) if (s.parent) kids.set(s.parent, [...(kids.get(s.parent) ?? []), s.id]);
+    const all = new Set<string>();
+    const walk = (id: string) => {
+      if (all.has(id)) return;
+      all.add(id);
+      for (const k of kids.get(id) ?? []) walk(k);
+    };
+    roots.forEach(walk);
+    return state.sessions.filter((s) => all.has(s.id)).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  }, [info.main, info.previous, state.sessions]);
+  if (!rows.length)
+    return (
+      <Empty title="No sessions yet">
+        <p>Its main conversation and every session it starts under it are listed here.</p>
+      </Empty>
+    );
+  return (
+    <ul className="ag-sessions">
+      {rows.map((s) => (
+        <li key={s.id}>
+          <a href={hrefOf({ page: "session", id: s.id, tab: "timeline" })}>
+            <span className={`ag-dot ${s.status === "running" ? "busy" : s.status === "blocked" ? "warn" : s.status === "closed" || s.status === "stopped" ? "idle" : "ok"}`} aria-hidden />
+            <span className="ag-row-text">
+              <span className="ag-row-title">
+                {titleOf(s)}
+                {s.id === info.main ? <span className="ag-tag">main</span> : info.previous.includes(s.id) ? <span className="ag-tag">earlier main</span> : null}
+              </span>
+              <span className="ag-row-sub">
+                {s.provider} · {s.status} · <RelativeTime ts={s.lastActivityAt} />
+              </span>
+            </span>
+          </a>
+        </li>
+      ))}
+    </ul>
   );
-  const [name, setName] = useState("New agent");
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState<string | null>(null);
+}
+
+// ------------------------------------------------------------------ about
+
+function About({ info, reload }: { info: SuperagentInfo; reload: () => void }) {
+  const [log, setLog] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (
-      me.data &&
-      !me.data.memberships.some((m) => m.workspace.id === workspace)
-    )
-      setWorkspace(me.data.memberships[0]?.workspace.id ?? "");
-  }, [me.data, workspace]);
-  const data = useLoad(async () => {
-    if (!workspace) return null;
-    const [board, members, hosts, actions] = await Promise.all([
-      api.board(workspace),
-      human.members(workspace),
-      human.installations(workspace),
-      api.actions(workspace),
-    ]);
-    return { board, members, hosts, actions };
-  }, [api, workspace]);
-  const local = useLoad(() => request<Local>("GET", "/api/agents/runtime"), []);
-  useEffect(() => {
-    const t = setInterval(() => {
-      void data.reload();
-      void local.reload();
-    }, 10000);
-    return () => clearInterval(t);
-  }, [data.reload, local.reload]);
-  const run: Task = async (fn) => {
+    let live = true;
+    const load = () => api.superagentLog(info.name).then((l) => live && setLog(l.text), () => undefined);
+    void load();
+    const t = setInterval(load, 5_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [info.name]);
+  const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
       await fn();
-      await data.reload();
-      await local.reload();
+      reload();
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   };
-  const selected = data.data?.board.agents.find((a) => a.id === id);
-  const locals = useLoad(() => request<LocalAgent[]>("GET", "/api/agents/local"), []);
-  const connected = !!selected && !!data.data && hostConnected(selected, data.data.hosts);
-  const selectedTwin = selected ? localTwin(selected, locals.data ?? [], state.repos) : undefined;
-  // Local unless chosen otherwise while the execution host is offline: open this machine's copy.
-  const where = selected ? chosenWhere(selected.id) ?? (connected ? "hosted" : "local") : "hosted";
-  const twin = data.data && where === "local" ? selectedTwin : undefined;
-  useEffect(() => {
-    if (twin) go({ page: "agents", id: twin.id }, true);
-  }, [twin?.id]);
-  useEffect(() => {
-    if (!data.data || !locals.data) return;
-    const pairs: Record<string, string> = {};
-    for (const a of data.data.board.agents) {
-      const l = localTwin(a, locals.data, state.repos);
-      if (l) pairs[l.id] = a.id;
-    }
-    rememberTwins(pairs);
-  }, [data.data, locals.data, state.repos]);
-  // Jupiter creates Agentbox agents, so only the Agentbox project shows it.
-  const jupiterHere = !scope.project || !!project && isAgentboxRepo(project);
-  const inProject = (a: SharedAgent) => (a.capability !== "creator" || jupiterHere) && (!scope.project || !!project && a.definition.repos.some((slug) => slug.toLowerCase() === (project.fullName ?? (project.kind === "github" ? project.ref : "")).toLowerCase()));
-  const creating = useRef(false);
-  const creator = useCallback(async () => {
-    if (!data.data || creating.current) return;
-    creating.current = true;
-    try {
-      const repos = project ? [project.fullName ?? (project.kind === "github" ? project.ref : "")].filter(Boolean) : [];
-      if (project && !repos.length) throw Error("Shared agents need a GitHub-linked project. Choose a linked project or use its local Jupiter.");
-      const current = data.data.board.agents.find((a) => a.capability === "creator" && a.created_by === user && JSON.stringify(a.definition.repos) === JSON.stringify(repos));
-      const host = data.data.hosts.find((h) => h.id === status.installation?.id && h.owner_user_id === user && h.scopes.includes("agents:execute"));
-      const a = current ?? await cloudCall(human.sb, "agent_creator", { p_workspace: workspace, p_repos: repos, p_host: host?.id ?? null }, SharedAgent);
-      await data.reload(); go({ page: "agents", id: a.id, view: "chat", thread: "new" });
-    } catch (e) { setError((e as Error).message); } finally { creating.current = false; }
-  }, [data.data, project, user, workspace, status.installation?.id]);
-  const hiddenJupiter = selected?.capability === "creator" && !jupiterHere;
-  useEffect(() => {
-    if ((!id || hiddenJupiter) && data.data && (locals.data || locals.error)) {
-      // Each agent as it opens: its copy on this machine where that is the
-      // one shown (the twin effect above), so the choice matches the sidebar.
-      const first = firstActive(data.data.board.agents.filter(inProject).map((a) => {
-        const twin = localTwin(a, locals.data ?? [], state.repos);
-        const local = twin && (chosenWhere(a.id) ?? (hostConnected(a, data.data!.hosts) ? "hosted" : "local")) === "local";
-        return local ? localAgentOption(twin, state) : optionOf(a);
-      }));
-      if (first) go(landingForAgent(first.id), true);
-      else if (!jupiterHere) go({ page: "agents", id: "manage" }, true);
-      else if (!error) void creator();
-    }
-  }, [id, data.data, locals.data, locals.error, error, hiddenJupiter]);
-  const person = (id: string | null) =>
-    !id
-      ? "Unassigned"
-      : data.data?.members.find((m) => m.user_id === id)?.person
-          ?.display_name ||
-        data.data?.members.find((m) => m.user_id === id)?.person?.email ||
-        id.slice(0, 8);
-  // A function declaration: the landing effect above uses it too.
-  function optionOf(a: SharedAgent): AgentOption {
-    return { id: a.id, name: a.name, role: a.definition.role, creator: a.capability === "creator", activity: agentActivity(a.enabled, data.data!.board.runs.filter((r) => r.agent_id === a.id).map((r) => r.state)), detail: `${a.definition.repos.join(", ") || "General"} · ${a.team ? "Team" : person(a.created_by)} · ${a.enabled ? "Shared" : "Needs setup"}` };
-  }
-  if (me.error || data.error) return <Empty title="Workspace unavailable">{me.error ?? data.error}<Button onClick={() => { void me.reload(); void data.reload(); }}>Retry</Button></Empty>;
-  if (!me.data) return <Empty title="Loading workspaces…" />;
-  if (hiddenJupiter) return <Empty title="Opening agents…" />;
-  if (selected && !inProject(selected)) {
-    const target = state.repos.find((repo) => selected.definition.repos.some((slug) => slug.toLowerCase() === (repo.fullName ?? (repo.kind === "github" ? repo.ref : "")).toLowerCase()));
-    return <Empty title="This shared agent works in other projects">{target ? <Button onClick={() => selectScope("project", target.id, { page: "agents", id: selected.id })}>Open in {target.displayName}</Button> : <p>Register one of this agent's repositories in Settings to open it.</p>}</Empty>;
-  }
-  if (!me.data.memberships.length)
-    return (
-      <Empty title="Create or join a workspace first">
-        <Button onClick={() => go({ page: "team" })}>Open Team</Button>
-      </Empty>
-    );
-  if (!id) return <Empty title={error ? "Could not open Jupiter" : "Opening agents…"}>{error}{error && <Button onClick={() => { setError(null); void creator(); }}>Retry</Button>}</Empty>;
-  if (id !== "manage" && !selected && data.data) return <Empty title="Agent not available in this workspace"><Button onClick={() => go({page: "agents"})}>Choose an agent</Button></Empty>;
+  const p = info.process;
   return (
-    <div className="agents-page">
-      {!selected && (
-        <div className="agents-toolbar">
-          <div className="agents-crumb">
-            <a href="#/agents">Agents</a>
-          </div>
-          <label className="agents-workspace">
-            Workspace{" "}
-            <select
-              className="input"
-              aria-label="Workspace"
-              value={workspace}
-              onChange={(e) => {
-                setWorkspace(e.target.value);
-                go({ page: "agents" });
-              }}
-            >
-              {me.data.memberships.map((m) => (
-                <option key={m.workspace.id} value={m.workspace.id}>
-                  {m.workspace.name}
-                </option>
-              ))}
-            </select>
-          </label>
+    <div className="ag-about">
+      {info.description ? (
+        <div className="ag-md">
+          <Markdown text={info.description} />
         </div>
-      )}
-      {(error || data.error) && (
-        <p role="alert" className="error">
-          {error || data.error}
-        </p>
-      )}
-      {data.error && data.data && (
-        <p className="hint">
-          Showing the last received workspace state. Changes are unavailable
-          until the cloud reconnects.
-        </p>
-      )}
-      {editing ? (
-        <Editor
-          key={"id" in editing ? editing.id : name}
-          initial={editing}
-          name={name}
-          user={user}
-          workspace={workspace}
-          members={data.data?.members ?? []}
-          hosts={data.data?.hosts ?? []}
-          busy={busy}
-          onCancel={() => setEditing(null)}
-          onSave={(input) =>
-            run(async () => {
-              const a = await api.save(input);
-              setEditing(null);
-              go({ page: "agents", id: a.id });
-            })
-          }
-        />
-      ) : selected && data.data ? (
-        <SharedAgentSpace
-          key={selected.id}
-          a={selected}
-          options={data.data.board.agents.filter(inProject).map(optionOf)}
-          onCreate={() => jupiterHere ? void creator() : go({ page: "agents", id: "manage" })}
-          reload={data.reload}
-          board={data.data.board}
-          api={api}
-          user={user}
-          actions={data.data.actions}
-          control={selectedTwin && (
-            <WhereToggle
-              where="hosted"
-              hostOk={connected}
-              onChange={() => {
-                chooseWhere(selected.id, "local");
-                go({ page: "agents", id: selectedTwin.id });
-              }}
-            />
-          )}
-        >
-          <div className="agents-detail-head">
-            <div>
-              <span className="agents-eyebrow">
-                {selected.team
-                  ? "SHARED TEAM AGENT"
-                  : "PERSONAL AGENT · SHARED VISIBILITY"}
-              </span>
-              <h2>{selected.name}</h2>
-              <p>{selected.definition.role}</p>
-              <p className="hint">Repositories: {selected.definition.repos.join(", ") || "None configured"}. One shared conversation across this agent’s scope.</p>
-            </div>
-            <div className="agents-buttons">
-              <span className={`agent-pill ${selected.enabled ? "on" : ""}`}>
-                {selected.enabled ? "Enabled" : "Paused"}
-              </span>
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    const copy = await api.clone(selected, user);
-                    go({ page: "agents", id: copy.id });
-                  })
-                }
-              >
-                Clone for me
-              </Button>
-              {selected.maintainers.includes(user) && (
-                <Button onClick={() => setEditing(selected)}>
-                  Edit definition
-                </Button>
-              )}
-            </div>
-          </div>
-          <div className="agent-summary">
-            <div>
-              <span>Maintainers</span>
-              <strong>{selected.maintainers.map(person).join(", ")}</strong>
-            </div>
-            <div>
-              <span>Execution host</span>
-              <strong>
-                {data.data.hosts.find(
-                  (h) => h.id === selected.execution_installation_id,
-                )?.name ?? "Not connected"}
-              </strong>
-              <small>
-                Host seen{" "}
-                {when(
-                  data.data.hosts.find(
-                    (h) => h.id === selected.execution_installation_id,
-                  )?.last_seen_at,
-                )}
-              </small>
-            </div>
-            <div>
-              <span>GitHub actor</span>
-              <strong>
-                {selected.definition.github.kind === "app"
-                  ? selected.definition.github.login || "App not connected"
-                  : "Local work · no managed publisher"}
-              </strong>
-            </div>
-            <div>
-              <span>Configuration</span>
-              <strong>
-                Revision {selected.revision} ·{" "}
-                {selected.definition.approval === "prepare"
-                  ? "Human approval"
-                  : "Automatic within scope"}
-              </strong>
-            </div>
-          </div>
-          <AgentDetail
-            a={selected}
-            board={data.data.board}
-            actions={data.data.actions}
-            api={api}
-            user={user}
-            run={run}
-            busy={busy}
-            person={person}
-            hosts={data.data.hosts}
-            members={data.data.members}
-            localHost={status.installation?.id ?? null}
-          />
-          <Execution
-            a={selected}
-            status={status}
-            state={state}
-            hosts={data.data.hosts}
-            user={user}
-            api={api}
-            local={local.data}
-            run={run}
-            busy={busy}
-          />
-          <details className="card agent-section">
-            <summary>Definition and revision history</summary>
-            <DefinitionHistory a={selected} api={api} person={person} />
-          </details>
-        </SharedAgentSpace>
-      ) : id && id !== "manage" && data.data ? (
-        <Empty title="Agent not found in this workspace">
-          <Button onClick={() => go({ page: "agents" })}>Back to Agents</Button>
-        </Empty>
-      ) : (
+      ) : null}
+      {info.error ? <p className="ag-note bad">{info.error}</p> : null}
+      <dl className="ag-fields">
+        <div>
+          <dt>Name</dt>
+          <dd className="mono">{info.name}</dd>
+        </div>
+        <div>
+          <dt>Directory</dt>
+          <dd className="mono">{info.dir}</dd>
+        </div>
+        <div>
+          <dt>Main conversation</dt>
+          <dd>{info.main ? <a href={hrefOf({ page: "session", id: info.main, tab: "timeline" })}>{info.main}</a> : info.canStart ? "Started by your first message" : "None yet"}</dd>
+        </div>
+        <div>
+          <dt>Program</dt>
+          <dd>
+            {p
+              ? `${p.state}${p.pid ? `, pid ${p.pid}` : ""}${p.restarts ? `, ${p.restarts} restart${p.restarts === 1 ? "" : "s"}` : ""}${p.lastExit ? `; last exit ${p.lastExit.code ?? "signal"}` : ""}`
+              : "None: it is a conversation, or runs elsewhere"}
+            {p?.since ? (
+              <>
+                {" "}
+                · since <RelativeTime ts={p.since} />
+              </>
+            ) : null}
+          </dd>
+        </div>
+      </dl>
+      <div className="ag-actions">
+        {p ? (
+          <Button size="sm" icon={Icon.refresh} loading={busy} onClick={() => void run(() => api.superagentRestart(info.name))}>
+            Restart its program
+          </Button>
+        ) : null}
+        <Button size="sm" variant={info.enabled ? "default" : "primary"} disabled={busy} onClick={() => void run(() => api.superagentPatch(info.name, { enabled: !info.enabled }))}>
+          {info.enabled ? "Disable" : "Enable"}
+        </Button>
+      </div>
+      {error ? <p className="ag-note bad">{error}</p> : null}
+      <p className="ag-note">
+        Change it by changing its directory (ask your coding agent, or Jupiter), then <code>agentbox superagent add {info.dir}</code> to read the manifest
+        again. <code>agentbox superagent rm {info.name}</code> forgets it and leaves the directory.
+      </p>
+      {p ? (
         <>
-          <div className="agents-intro">
-            <span className="agents-eyebrow">ONGOING RESPONSIBILITIES</span>
-            <h2>A shared view of the work</h2>
-            <p>
-              Stable agents, accountable humans. Follow the work wherever its
-              execution host runs.
-            </p>
-          </div>
-          <div className="agents-toolbar">
-            <div className="segmented" aria-label="Agent filter">
-              <Button
-                variant={filter === "team" ? "primary" : "ghost"}
-                onClick={() => setFilter("team")}
-              >
-                Workspace
-              </Button>
-              <Button
-                variant={filter === "mine" ? "primary" : "ghost"}
-                onClick={() => setFilter("mine")}
-              >
-                Mine
-              </Button>
-            </div>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setName("New agent");
-                setEditing(
-                  AgentDefinition.parse({
-                    role: "Custom responsibility",
-                    instructions: "",
-                    repos: project?.fullName ? [project.fullName] : project?.kind === "github" ? [project.ref] : [],
-                  }),
-                );
-              }}
-            >
-              Create agent
-            </Button>
-          </div>
-          <div className="agent-directory">
-            {data.data?.board.agents
-              .filter((a) => inProject(a) && (filter !== "mine" || a.maintainers.includes(user)))
-              .map((a) => {
-                const runs = data.data!.board.runs.filter(
-                    (r) => r.agent_id === a.id && active(r.state),
-                  ),
-                  items = data.data!.board.work.filter(
-                    (w) =>
-                      w.agent_id === a.id && w.stage !== "verified_resolved",
-                  );
-                return (
-                  <a
-                    key={a.id}
-                    href={`#/agents/${a.id}`}
-                    className="card agent-directory-card"
-                  >
-                    <div className="agents-toolbar">
-                      <span className="agent-monogram">
-                        {a.name.slice(0, 1)}
-                      </span>
-                      <span className={`agent-pill ${a.enabled ? "on" : ""}`}>
-                        {a.enabled
-                          ? runs.length
-                            ? runs[0]!.state
-                            : "Enabled"
-                          : "Paused"}
-                      </span>
-                    </div>
-                    <h3>{a.name}</h3>
-                    <p>{a.definition.role}</p>
-                    <small>{a.definition.repos.join(", ") || "No repositories configured"}</small>
-                    <div className="agent-directory-meta">
-                      <span>
-                        {a.team
-                          ? "Team instance"
-                          : `Maintained by ${person(a.created_by)}`}
-                      </span>
-                      <span>
-                        {items.length} open work · {runs.length} active runs
-                      </span>
-                      <span>
-                        {data.data!.hosts.find(
-                          (h) => h.id === a.execution_installation_id,
-                        )?.name ?? "Choose an execution host"}
-                      </span>
-                    </div>
-                  </a>
-                );
-              })}
-          </div>
-          {data.data && data.data.board.agents.length === 0 && (
-            <p className="hint">
-              No agents yet. Start with Vulcan, or define a role of your own.
-            </p>
-          )}
-          <Templates
-            onChoose={(template) => {
-              setName(template.name);
-              setEditing({ ...template.definition, repos: project?.fullName ? [project.fullName] : project?.kind === "github" ? [project.ref] : template.definition.repos });
-            }}
-          />
+          <h4 className="ag-h">Its output</h4>
+          <pre className="ag-log">{log === null ? "…" : log.slice(-20_000) || "(nothing yet)"}</pre>
         </>
-      )}
-      {data.data && !editing && (
-        <MoveLocalAgents
-          api={api}
-          user={user}
-          workspace={workspace}
-          shared={data.data.board.agents}
-          locals={locals.data ?? []}
-          repos={state.repos}
-          run={run}
-          busy={busy}
-        />
-      )}
+      ) : null}
     </div>
-  );
-}
-/** Offers to copy this machine's local agents into the workspace, once. */
-function MoveLocalAgents({
-  api,
-  user,
-  workspace,
-  shared,
-  locals,
-  repos,
-  run,
-  busy,
-}: {
-  api: HumanAgents;
-  user: string;
-  workspace: string;
-  shared: SharedAgent[];
-  locals: LocalAgent[];
-  repos: AppState["repos"];
-  run: Task;
-  busy: boolean;
-}) {
-  const moves = useMemo(() => pendingMoves(locals, repos, shared), [locals, repos, shared]);
-  if (!workspace || moves.length === 0) return null;
-  return (
-    <div className="card agent-section">
-      <h4>Local agents on this machine</h4>
-      <p className="hint">
-        {moves.length} local agent{moves.length === 1 ? "" : "s"} not in this
-        workspace yet: {moves.map((m) => `${m.name}${m.definition.repos[0] ? ` (${m.definition.repos[0]})` : ""}`).join(", ")}.
-        Each one becomes a paused team agent with you as maintainer. The local
-        agents keep running here.
-      </p>
-      <Button
-        disabled={busy}
-        onClick={() =>
-          void run(async () => {
-            for (const m of moves)
-              await api.save({ workspace, name: m.name, team: true, definition: m.definition, maintainers: [user] });
-          })
-        }
-      >
-        Move them to this workspace
-      </Button>
-    </div>
-  );
-}
-function Templates({
-  onChoose,
-}: {
-  onChoose: (t: (typeof AGENT_TEMPLATES)[number]) => void;
-}) {
-  return (
-    <section className="agent-templates">
-      <div className="agents-toolbar">
-        <h3>Start with a responsibility</h3>
-        <span className="hint">
-          Created paused. Connect only what you intend to use.
-        </span>
-      </div>
-      <div className="agent-template-grid">
-        {AGENT_TEMPLATES.map((t) => (
-          <div key={t.id} className="card">
-            <span className="agents-eyebrow">
-              {t.id === "vulcan"
-                ? "ISSUES → VERIFIED FIXES"
-                : t.id === "caelus"
-                  ? "CHECKS → RELEASE HEALTH"
-                  : "SIGNALS → RESOLUTION"}
-            </span>
-            <h3>{t.name}</h3>
-            <p>{t.description}</p>
-            <Button onClick={() => onChoose(t)}>Use {t.name}</Button>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-function ListInput({
-  values,
-  change,
-}: {
-  values: string[];
-  change: (values: string[]) => void;
-}) {
-  const [value, setValue] = useState(values.join(", "));
-  return (
-    <input
-      className="input"
-      value={value}
-      onChange={(e) => {
-        setValue(e.target.value);
-        change(words(e.target.value));
-      }}
-    />
-  );
-}
-type Save = Parameters<HumanAgents["save"]>[0];
-function Editor({
-  initial,
-  name: initialName,
-  user,
-  workspace,
-  members,
-  hosts,
-  busy,
-  onSave,
-  onCancel,
-}: {
-  initial: SharedAgent | AgentDefinition;
-  name: string;
-  user: string;
-  workspace: string;
-  members: Member[];
-  hosts: Installation[];
-  busy: boolean;
-  onSave: (s: Save) => Promise<void>;
-  onCancel: () => void;
-}) {
-  const existing = "id" in initial ? initial : null;
-  const [d, setD] = useState(
-    existing?.definition ?? (initial as AgentDefinition),
-  );
-  const [name, setName] = useState(existing?.name ?? initialName),
-    [team, setTeam] = useState(existing?.team ?? true);
-  const [maintainers, setMaintainers] = useState(
-    existing?.maintainers ?? [user],
-  );
-  const [enabled, setEnabled] = useState(existing?.enabled ?? false),
-    [executor, setExecutor] = useState(
-      existing?.execution_installation_id ?? "",
-    );
-  const [advanced, setAdvanced] = useState<string | null>(null),
-    [error, setError] = useState<string | null>(null);
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    try {
-      const definition = AgentDefinition.parse(
-        advanced === null ? d : JSON.parse(advanced),
-      );
-      if (definition.activation.mode === "schedule") {
-        const p = parseWhen(definition.activation.when);
-        if ("error" in p) throw new Error(p.error);
-        if (["merge", "red"].includes(p.rule.kind))
-          throw new Error(
-            "Choose a timed source schedule here; merge/workflow event sessions remain in Sessions.",
-          );
-      }
-      void onSave({
-        workspace,
-        ...(existing ? { id: existing.id, base: existing.revision } : {}),
-        name,
-        team,
-        definition,
-        maintainers,
-        enabled,
-        executor: executor || null,
-      });
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-  return (
-    <form className="card agent-editor" onSubmit={submit}>
-      <div className="agents-toolbar">
-        <h2>{existing ? `Edit ${existing.name}` : "Create an agent"}</h2>
-        <span className="hint">
-          {existing
-            ? `Editing revision ${existing.revision}`
-            : "Starts paused with you as maintainer"}
-        </span>
-      </div>
-      <div className="agent-fields">
-        <Field label="Name">
-          <input
-            className="input"
-            required
-            maxLength={80}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </Field>
-        <Field label="Instance">
-          <select
-            className="input"
-            value={team ? "team" : "personal"}
-            onChange={(e) => {
-              setTeam(e.target.value === "team");
-              if (e.target.value === "personal") setMaintainers([user]);
-            }}
-          >
-            <option value="team">Shared team agent</option>
-            <option value="personal">
-              Personal agent, visible to workspace
-            </option>
-          </select>
-        </Field>
-      </div>
-      <Field label="Role">
-        <input
-          className="input"
-          required
-          value={d.role}
-          onChange={(e) => setD({ ...d, role: e.target.value })}
-        />
-      </Field>
-      <Field label="Instructions">
-        {(id) => (
-          <textarea
-            id={id}
-            className="input"
-            rows={7}
-            value={d.instructions}
-            onChange={(e) => setD({ ...d, instructions: e.target.value })}
-          />
-        )}
-      </Field>
-      <div className="agent-fields">
-        <Field
-          label="Allowed repositories"
-          hint="owner/repository, comma separated"
-        >
-          <ListInput
-            values={d.repos}
-            change={(repos) => setD({ ...d, repos })}
-          />
-        </Field>
-        <Field label="Expertise areas">
-          <ListInput
-            values={d.expertise}
-            change={(expertise) => setD({ ...d, expertise })}
-          />
-        </Field>
-        <Field label="Activation">
-          <select
-            className="input"
-            value={d.activation.mode}
-            onChange={(e) =>
-              setD({
-                ...d,
-                activation: {
-                  ...d.activation,
-                  mode: e.target.value as AgentDefinition["activation"]["mode"],
-                },
-              })
-            }
-          >
-            <option value="manual">Manual work intake and run now</option>
-            <option value="schedule">Scheduled source intake</option>
-            <option value="event">
-              Watch connected sources every 5 minutes
-            </option>
-          </select>
-        </Field>
-        <Field
-          label="Schedule"
-          hint="Execution host's local time; e.g. every 15 minutes"
-        >
-          <input
-            className="input"
-            disabled={d.activation.mode !== "schedule"}
-            value={d.activation.when}
-            onChange={(e) =>
-              setD({
-                ...d,
-                activation: { ...d.activation, when: e.target.value },
-              })
-            }
-          />
-        </Field>
-        <Field label="Approval policy">
-          <select
-            className="input"
-            value={d.approval}
-            onChange={(e) =>
-              setD({
-                ...d,
-                approval: e.target.value as "prepare" | "automatic",
-              })
-            }
-          >
-            <option value="prepare">
-              Prepare each outbound action for human approval
-            </option>
-            <option value="automatic">
-              Automatic supported actions within allowed scope
-            </option>
-          </select>
-        </Field>
-        <Field label="Concurrent work limit">
-          <input
-            className="input"
-            type="number"
-            min={1}
-            max={4}
-            value={d.maxConcurrent}
-            onChange={(e) =>
-              setD({ ...d, maxConcurrent: Number(e.target.value) })
-            }
-          />
-        </Field>
-      </div>
-      <fieldset className="agent-checks">
-        <legend>Allowed work</legend>
-        {(
-          ["investigate", "edit", "open_pr", "merge", "close_issue"] as const
-        ).map((action) => (
-          <label key={action}>
-            <input
-              type="checkbox"
-              checked={d.actions.includes(action)}
-              onChange={(e) =>
-                setD({
-                  ...d,
-                  actions: e.target.checked
-                    ? [...d.actions, action]
-                    : d.actions.filter((x) => x !== action),
-                })
-              }
-            />
-            {action.replaceAll("_", " ")}
-          </label>
-        ))}
-      </fieldset>
-      <p className="hint">
-        Publication starts with a draft PR. Merges require current-head checks,
-        human reviews and repository rules. Issue closure requires the
-        configured resolution evidence. Deployment and rollback are unavailable
-        until a repository-specific adapter is connected. Scheduled intake
-        assigns new work to the creator until explicitly handed off.
-      </p>
-      <div className="agent-fields">
-        <Field
-          label="Required check names"
-          hint="In addition to GitHub's branch and repository rules"
-        >
-          <ListInput
-            values={d.mergePolicy.requiredChecks}
-            change={(requiredChecks) =>
-              setD({ ...d, mergePolicy: { ...d.mergePolicy, requiredChecks } })
-            }
-          />
-        </Field>
-        <Field label="Current-head human approvals">
-          <input
-            className="input"
-            type="number"
-            min={1}
-            max={10}
-            value={d.mergePolicy.minApprovals}
-            onChange={(e) =>
-              setD({
-                ...d,
-                mergePolicy: {
-                  ...d.mergePolicy,
-                  minApprovals: Number(e.target.value),
-                },
-              })
-            }
-          />
-        </Field>
-        <Field label="Evidence required before issue closure">
-          <select
-            className="input"
-            value={d.mergePolicy.resolution}
-            onChange={(e) =>
-              setD({
-                ...d,
-                mergePolicy: {
-                  ...d.mergePolicy,
-                  resolution: e.target.value as typeof d.mergePolicy.resolution,
-                },
-              })
-            }
-          >
-            <option value="verified_resolved">
-              Original symptom verified resolved
-            </option>
-            <option value="deployed">Fix confirmed deployed</option>
-            <option value="merged">Fix confirmed merged</option>
-          </select>
-        </Field>
-      </div>
-      <Field label="Escalation">
-        {(id) => (
-          <textarea
-            id={id}
-            className="input"
-            rows={2}
-            value={d.escalation}
-            onChange={(e) => setD({ ...d, escalation: e.target.value })}
-          />
-        )}
-      </Field>
-      {existing && (
-        <div className="agent-fields">
-          <Field
-            label="Maintainers"
-            hint="Visibility does not grant edit or execution rights."
-          >
-            <select
-              className="input"
-              multiple
-              disabled={!team}
-              value={maintainers}
-              onChange={(e) =>
-                setMaintainers([
-                  ...new Set([
-                    user,
-                    ...Array.from(e.target.selectedOptions, (o) => o.value),
-                  ]),
-                ])
-              }
-            >
-              {members.map((m) => (
-                <option key={m.user_id} value={m.user_id}>
-                  {m.person?.display_name || m.person?.email || m.user_id}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label="Execution host"
-            hint="Its owner must first grant this agent access below."
-          >
-            <select
-              className="input"
-              value={executor}
-              onChange={(e) => setExecutor(e.target.value)}
-            >
-              <option value="">Not connected</option>
-              {hosts
-                .filter((h) => !h.revoked_at)
-                .map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {h.name}
-                  </option>
-                ))}
-            </select>
-          </Field>
-          <label className="agent-check">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            Enabled · may start assigned work
-          </label>
-        </div>
-      )}
-      <details className="agent-advanced">
-        <summary>
-          Sources, pinned skills, GitHub actor and release scope
-        </summary>
-        <p className="hint">
-          Edit the full definition. GitHub sources use kind “github_issues”,
-          repo and optional label. Each named bot needs its own GitHub App; put
-          only public appId, installationId and login here. Keep the private key
-          on its execution host. Release scope names the actual repository,
-          environment and artifact.
-        </p>
-        <textarea
-          className="input mono"
-          rows={22}
-          aria-label="Full agent definition JSON"
-          value={advanced ?? JSON.stringify(d, null, 2)}
-          onChange={(e) => setAdvanced(e.target.value)}
-          onBlur={() => {
-            if (advanced !== null) {
-              try {
-                setD(AgentDefinition.parse(JSON.parse(advanced)));
-                setAdvanced(null);
-                setError(null);
-              } catch (e) {
-                setError((e as Error).message);
-              }
-            }
-          }}
-        />
-      </details>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <div className="agents-buttons">
-        <Button variant="primary" type="submit" loading={busy}>
-          {existing ? "Save revision" : "Create paused agent"}
-        </Button>
-        <Button onClick={onCancel}>Cancel</Button>
-      </div>
-    </form>
-  );
-}
-function AgentDetail({
-  a,
-  board,
-  actions,
-  api,
-  user,
-  run,
-  busy,
-  person,
-  hosts,
-  members,
-  localHost,
-}: {
-  a: SharedAgent;
-  board: AgentBoard;
-  actions: AgentAction[];
-  api: HumanAgents;
-  user: string;
-  run: Task;
-  busy: boolean;
-  person: (id: string | null) => string;
-  hosts: Installation[];
-  members: Member[];
-  localHost: string | null;
-}) {
-  const [source, setSource] = useState(""),
-    [title, setTitle] = useState(""),
-    [acceptance, setAcceptance] = useState("");
-  const editable = a.maintainers.includes(user),
-    work = board.work.filter((w) => w.agent_id === a.id);
-  return (
-    <div className="agent-detail-grid">
-      <div className="agent-main">
-        <section className="card agent-section">
-          <div className="agents-toolbar">
-            <h3>Work queue</h3>
-            <span className="hint">
-              {work.length} {work.length === 1 ? "item" : "items"}
-            </span>
-          </div>
-          {editable && (
-            <details>
-              <summary>Add an issue or source</summary>
-              <form
-                className="agent-intake"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void run(async () => {
-                    const item = await api.intake(a.id, {
-                      source,
-                      title,
-                      acceptance,
-                    });
-                    if (item.agent_id !== a.id)
-                      go({ page: "agents", id: item.agent_id });
-                    setSource("");
-                    setTitle("");
-                    setAcceptance("");
-                  });
-                }}
-              >
-                <Field label="Source URL">
-                  <input
-                    className="input"
-                    type="url"
-                    required
-                    placeholder="https://github.com/owner/repo/issues/123"
-                    value={source}
-                    onChange={(e) => setSource(e.target.value)}
-                  />
-                </Field>
-                <Field label="Work item title">
-                  <input
-                    className="input"
-                    required
-                    maxLength={200}
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                  />
-                </Field>
-                <Field label="Acceptance criteria">
-                  {(id) => (
-                    <textarea
-                      id={id}
-                      className="input"
-                      rows={2}
-                      value={acceptance}
-                      onChange={(e) => setAcceptance(e.target.value)}
-                    />
-                  )}
-                </Field>
-                <Button type="submit" loading={busy}>
-                  Add to shared queue
-                </Button>
-              </form>
-            </details>
-          )}
-          {!work.length && (
-            <div className="agent-empty">
-              <h4>Ready for its first work item</h4>
-              <p>
-                Add an issue, define what a successful fix looks like, then
-                assign a human and run it.
-              </p>
-            </div>
-          )}
-          {work.map((w) => (
-            <Work
-              key={w.id}
-              work={w}
-              board={board}
-              api={api}
-              editable={editable}
-              user={user}
-              run={run}
-              busy={busy}
-              members={members}
-              person={person}
-              enabled={a.enabled}
-              localHost={localHost}
-            />
-          ))}
-        </section>
-        <section className="card agent-section">
-          <h3>Actions & decisions</h3>
-          <p className="hint">
-            Approval applies only to the exact action below. Opt-out overrides
-            approval at dispatch. Open Review to find pending decisions.
-          </p>
-          {actions
-            .filter((x) => x.agent_id === a.id)
-            .map((x) => (
-              <div key={x.id} className="agent-action">
-                <div className="agents-toolbar">
-                  <strong>
-                    {String(x.specification.kind).replaceAll("_", " ")}
-                  </strong>
-                  <span className="agent-pill">{x.state}</span>
-                </div>
-                <p>{String(x.specification.repo ?? "")}</p>
-                <details>
-                  <summary>Inspect exact action {x.id.slice(0, 8)}</summary>
-                  <pre>{JSON.stringify(x.specification, null, 2)}</pre>
-                </details>
-                {x.result && (
-                  <p>
-                    {x.result.startsWith("https://") ? (
-                      <a href={x.result} target="_blank" rel="noreferrer">
-                        External result
-                      </a>
-                    ) : (
-                      x.result
-                    )}
-                  </p>
-                )}
-                {["prepared", "approved"].includes(x.state) &&
-                  (editable ||
-                    board.work.find(
-                      (w) =>
-                        w.id ===
-                        board.runs.find((r) => r.id === x.run_id)?.work_id,
-                    )?.assignee === user) && (
-                    <div className="agents-buttons">
-                      <Button
-                        disabled={busy}
-                        variant="primary"
-                        onClick={() => void run(() => api.decide(x.id, true))}
-                      >
-                        Approve this action
-                      </Button>
-                      <Button
-                        disabled={busy}
-                        onClick={() => void run(() => api.decide(x.id, false))}
-                      >
-                        Decline / revoke
-                      </Button>
-                    </div>
-                  )}
-              </div>
-            ))}
-          {!actions.some((x) => x.agent_id === a.id) && (
-            <p className="hint">No proposed outbound actions.</p>
-          )}
-        </section>
-      </div>
-      <aside className="agent-aside">
-        <section className="card agent-section">
-          <h3>Execution & progress</h3>
-          {board.runs
-            .filter((r) => r.agent_id === a.id)
-            .map((r) => {
-              const stale =
-                active(r.state) &&
-                r.state !== "queued" &&
-                Date.parse(r.lease_until ?? "") < Date.now();
-              return (
-                <div key={r.id} className="agent-run">
-                  <div className="agents-toolbar">
-                    <strong>
-                      {stale ? "Uncertain · heartbeat expired" : r.state}
-                    </strong>
-                    <span className="mono">{r.id.slice(0, 8)}</span>
-                  </div>
-                  <p>
-                    {hosts.find((h) => h.id === r.installation_id)?.name ??
-                      "Execution host"}{" "}
-                    ·{" "}
-                    {person(
-                      board.work.find((w) => w.id === r.work_id)?.assignee ??
-                        null,
-                    )}
-                  </p>
-                  <p>
-                    {r.next_action ||
-                      (r.state === "queued"
-                        ? "Waiting for an authorized host and an available slot"
-                        : "No next action reported")}
-                  </p>
-                  {r.pending_decision && (
-                    <div className="agent-decision">
-                      <strong>Needs human</strong>
-                      <p>{r.pending_decision}</p>
-                    </div>
-                  )}
-                  {r.error && <p className="error">{r.error}</p>}
-                  <small>
-                    Last heartbeat {when(r.heartbeat_at)} · definition r
-                    {r.config_revision}
-                  </small>
-                  {r.session_id &&
-                    (r.installation_id === localHost ? (
-                      <a href={`#/s/${r.session_id}`}>
-                        Open session {r.session_id}
-                      </a>
-                    ) : (
-                      <span className="hint">
-                        Session {r.session_id} on its execution host
-                      </span>
-                    ))}
-                  {r.previous_session_id && (
-                    <small>Replaced session {r.previous_session_id}</small>
-                  )}
-                  {r.installation_id === localHost &&
-                    hosts.find((h) => h.id === localHost)?.owner_user_id ===
-                      user &&
-                    ["running", "waiting"].includes(r.state) && (
-                      <Button
-                        disabled={busy}
-                        onClick={() =>
-                          void run(() =>
-                            hostRequest(
-                              api,
-                              `/api/agents/runs/${r.id}/rotate`,
-                              {},
-                            ),
-                          )
-                        }
-                      >
-                        Start a fresh session
-                      </Button>
-                    )}
-                </div>
-              );
-            })}
-          {!board.runs.some((r) => r.agent_id === a.id) && (
-            <p className="hint">
-              No runs yet. Run now creates a durable request for the configured
-              host.
-            </p>
-          )}
-        </section>
-        <section className="card agent-section">
-          <h3>Activity</h3>
-          {board.events
-            .filter((e) => e.agent_id === a.id)
-            .slice(0, 20)
-            .map((e) => (
-              <div key={e.id} className="agent-event">
-                <strong>{e.kind.replaceAll("_", " ")}</strong>
-                <p>{e.detail}</p>
-                <small>
-                  {person(e.actor)} · {when(e.at)}
-                </small>
-              </div>
-            ))}
-        </section>
-      </aside>
-    </div>
-  );
-}
-function Work({
-  work: w,
-  board,
-  api,
-  editable,
-  user,
-  run,
-  busy,
-  members,
-  person,
-  enabled,
-  localHost,
-}: {
-  work: WorkItem;
-  board: AgentBoard;
-  api: HumanAgents;
-  editable: boolean;
-  user: string;
-  run: Task;
-  busy: boolean;
-  members: Member[];
-  person: (id: string | null) => string;
-  enabled: boolean;
-  localHost: string | null;
-}) {
-  const writer = board.runs.find((r) => r.work_id === w.id && active(r.state));
-  const canManage = editable || w.assignee === user;
-  const [to, setTo] = useState(w.assignee ?? user),
-    [target, setTarget] = useState(w.agent_id);
-  const [stage, setStage] = useState(w.stage),
-    [outcome, setOutcome] = useState(w.outcome),
-    [evidence, setEvidence] = useState(w.evidence[0]?.url ?? "");
-  const [draftRevision, setDraftRevision] = useState(w.revision);
-  const staleDraft = draftRevision !== w.revision;
-  return (
-    <article className="agent-work">
-      <div className="agents-toolbar">
-        <a href={w.source_url} target="_blank" rel="noreferrer">
-          <strong>{w.title}</strong>
-        </a>
-        <span className="agent-pill">{w.stage.replaceAll("_", " ")}</span>
-      </div>
-      <p>{w.acceptance || "Acceptance criteria not provided"}</p>
-      <div className="agents-toolbar">
-        <span className="hint">
-          Accountable: {person(w.assignee)} · {w.control.replaceAll("_", " ")}
-        </span>
-        {writer?.session_id && writer.installation_id === localHost && (
-          <a href={`#/s/${writer.session_id}`}>Session</a>
-        )}
-      </div>
-      {w.next_action && <p>Next: {w.next_action}</p>}
-      {w.outcome && <p>{w.outcome}</p>}
-      <div className="agents-buttons">
-        {w.evidence.map((e) => (
-          <a key={e.url} href={e.url} target="_blank" rel="noreferrer">
-            {e.label}
-          </a>
-        ))}
-      </div>
-      {canManage && (
-        <div className="agents-buttons">
-          {editable && (
-            <Button
-              disabled={
-                busy ||
-                !enabled ||
-                !!writer ||
-                w.control === "takeover_requested"
-              }
-              onClick={() => void run(() => api.run(w, crypto.randomUUID()))}
-            >
-              Run now
-            </Button>
-          )}
-          <Button
-            disabled={
-              busy ||
-              w.control === "human" ||
-              w.control === "takeover_requested"
-            }
-            onClick={() => void run(() => api.takeover(w))}
-          >
-            {w.control === "takeover_requested"
-              ? "Waiting for writer to stop…"
-              : "Take over"}
-          </Button>
-        </div>
-      )}
-      {canManage && (
-        <details>
-          <summary>Assignment, handoff and outcome</summary>
-          {staleDraft && (
-            <p className="hint">
-              This item changed while the form was open.{" "}
-              <Button
-                onClick={() => {
-                  setTo(w.assignee ?? user);
-                  setTarget(w.agent_id);
-                  setStage(w.stage);
-                  setOutcome(w.outcome);
-                  setEvidence(w.evidence[0]?.url ?? "");
-                  setDraftRevision(w.revision);
-                }}
-              >
-                Load current values
-              </Button>
-            </p>
-          )}
-          <div className="agent-fields">
-            <Field label="Accountable human">
-              <select
-                className="input"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-              >
-                {members.map((m) => (
-                  <option key={m.user_id} value={m.user_id}>
-                    {person(m.user_id)}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Agent instance">
-              <select
-                className="input"
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-              >
-                {board.agents
-                  .filter((a) => a.maintainers.includes(user))
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-              </select>
-            </Field>
-          </div>
-          <Button
-            disabled={busy || !!writer || staleDraft}
-            onClick={() => void run(() => api.assign(w, to, target))}
-          >
-            Save handoff
-          </Button>
-          {writer && (
-            <p className="hint">
-              A human handoff waits for the current writer to stop and
-              acknowledge.
-            </p>
-          )}
-          {w.control === "human" && (
-            <div className="agent-intake">
-              <Field label="Stage">
-                <select
-                  className="input"
-                  value={stage}
-                  onChange={(e) =>
-                    setStage(e.target.value as WorkItem["stage"])
-                  }
-                >
-                  {WorkStage.options.map((s) => (
-                    <option key={s}>{s}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Outcome / verification">
-                {(id) => (
-                  <textarea
-                    id={id}
-                    className="input"
-                    value={outcome}
-                    onChange={(e) => setOutcome(e.target.value)}
-                  />
-                )}
-              </Field>
-              <Field label="Evidence URL">
-                <input
-                  className="input"
-                  type="url"
-                  value={evidence}
-                  onChange={(e) => setEvidence(e.target.value)}
-                />
-              </Field>
-              <Button
-                disabled={busy || staleDraft}
-                onClick={() =>
-                  void run(() =>
-                    api.progress(w, {
-                      stage,
-                      outcome,
-                      next: "",
-                      evidence: evidence
-                        ? [{ url: evidence, label: "Outcome evidence" }]
-                        : [],
-                    }),
-                  )
-                }
-              >
-                Record outcome
-              </Button>
-            </div>
-          )}
-        </details>
-      )}
-    </article>
-  );
-}
-function Execution({
-  a,
-  status,
-  state,
-  hosts,
-  user,
-  api,
-  local,
-  run,
-  busy,
-}: {
-  a: SharedAgent;
-  status: CloudStatus;
-  state: AppState;
-  hosts: Installation[];
-  user: string;
-  api: HumanAgents;
-  local: Local | null;
-  run: Task;
-  busy: boolean;
-}) {
-  const [host, setHost] = useState(status.installation?.id ?? ""),
-    [provider, setProvider] = useState("codex"),
-    [model, setModel] = useState("");
-  const [repos, setRepos] = useState<Record<string, string>>({}),
-    [keyPath, setKeyPath] = useState(""),
-    [noteCmd, setNoteCmd] = useState("");
-  const binding = local?.bindings.find((b) => b.agent === a.id);
-  const ownHost =
-    hosts.find((h) => h.id === status.installation?.id)?.owner_user_id === user;
-  return (
-    <details className="card agent-section">
-      <summary>Execution host setup</summary>
-      <p className="hint">
-        An agent's identity stays with the workspace when its host changes. Host
-        grants are separate from maintainer permissions. Register a server on
-        Team with the agents:execute scope, then authorize this instance.
-      </p>
-      <div className="agents-buttons">
-        <select
-          aria-label="Host to authorize"
-          className="input"
-          value={host}
-          onChange={(e) => setHost(e.target.value)}
-        >
-          <option value="">Select your host</option>
-          {hosts
-            .filter((h) => h.owner_user_id === user && !h.revoked_at)
-            .map((h) => (
-              <option key={h.id} value={h.id}>
-                {h.name}
-              </option>
-            ))}
-        </select>
-        <Button
-          disabled={busy || !host}
-          onClick={() => void run(() => api.authorize(a.id, host, true))}
-        >
-          Grant host access
-        </Button>
-        <Button
-          disabled={busy || !host}
-          onClick={() => void run(() => api.authorize(a.id, host, false))}
-        >
-          Revoke access
-        </Button>
-      </div>
-      {a.execution_installation_id === status.installation?.id && ownHost ? (
-        <form
-          className="agent-intake"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void run(() =>
-              hostRequest(api, "/api/agents/binding", {
-                binding: {
-                  agent: a.id,
-                  url: status.url,
-                  workspace: a.workspace_id,
-                  provider,
-                  model,
-                  repos,
-                  appKeyPath: keyPath,
-                  noteCmd,
-                },
-              }),
-            );
-          }}
-        >
-          <h4>Configure this execution host</h4>
-          <p className="hint">
-            {binding
-              ? `Configured with ${binding.provider}${binding.appConnected ? " and a local App key" : " for local work"}. Saving replaces local settings.`
-              : "Not configured yet."}{" "}
-            Local paths, provider accounts and credentials stay on this host.
-          </p>
-          <div className="agent-fields">
-            <Field label="Provider">
-              <select
-                className="input"
-                value={provider}
-                onChange={(e) => setProvider(e.target.value)}
-              >
-                {["codex", "claude", "devin", "omp", "opencode", "muse"].map(
-                  (p) => (
-                    <option key={p}>{p}</option>
-                  ),
-                )}
-              </select>
-            </Field>
-            <Field label="Model (optional)">
-              <input
-                className="input"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-              />
-            </Field>
-            {a.definition.repos.map((slug) => (
-              <Field key={slug} label={`Checkout for ${slug}`}>
-                <select
-                  className="input"
-                  required
-                  value={repos[slug] ?? ""}
-                  onChange={(e) =>
-                    setRepos({ ...repos, [slug]: e.target.value })
-                  }
-                >
-                  <option value="">Select registered repository</option>
-                  {state.repos
-                    .filter(
-                      (r) => r.fullName?.toLowerCase() === slug.toLowerCase(),
-                    )
-                    .map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.displayName}
-                      </option>
-                    ))}
-                </select>
-              </Field>
-            ))}
-            <Field
-              label="GitHub App PEM path"
-              hint="Absolute path to a private 0600 file on this host. Never paste a key."
-            >
-              <input
-                className="input"
-                value={keyPath}
-                onChange={(e) => setKeyPath(e.target.value)}
-              />
-            </Field>
-          </div>
-          <Field
-            label="Optional local intake note command"
-            hint="For connected observability/event adapters: outputs a JSON array of source, title and acceptance. Runs on this host at the configured schedule."
-          >
-            {(id) => (
-              <textarea
-                id={id}
-                className="input mono"
-                rows={2}
-                value={noteCmd}
-                onChange={(e) => setNoteCmd(e.target.value)}
-              />
-            )}
-          </Field>
-          <p className="hint">
-            Shared policies guard managed actions. Provider shells run as the
-            host's Unix user; use an isolated service account for server
-            execution when you need operating-system credential isolation.
-          </p>
-          <Button type="submit" disabled={busy}>
-            Save host settings
-          </Button>
-          {local?.lastError && <p className="error">{local.lastError}</p>}
-        </form>
-      ) : (
-        <p className="hint">
-          Choose the authorized installation in Edit definition, then open this
-          page on that host as its owner to configure execution.
-        </p>
-      )}
-    </details>
-  );
-}
-function DefinitionHistory({
-  a,
-  api,
-  person,
-}: {
-  a: SharedAgent;
-  api: HumanAgents;
-  person: (id: string | null) => string;
-}) {
-  const history = useLoad(() => api.revisions(a.id), [a.id, a.revision]);
-  return (
-    <>
-      <pre>{JSON.stringify(a.definition, null, 2)}</pre>
-      {history.data?.map((r) => (
-        <p key={r.revision}>
-          Revision {r.revision} · {person(r.changed_by)} · {when(r.created_at)}
-        </p>
-      ))}
-    </>
   );
 }

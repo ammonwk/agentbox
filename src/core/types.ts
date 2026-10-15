@@ -450,6 +450,9 @@ export interface Session {
   id: string;
   /** Registered agent ownership for navigation; not a messaging capability. */
   agentOwner?: string | null;
+  /** The project its superagent shows in, when that is exactly one: the
+   *  board puts the session there whatever its checkout (`Superagents.projectBinding`). */
+  agentProject?: string | null;
   provider: ProviderId;
   /** The provider's own session id — what `--resume` takes. Null for the few
    *  seconds between spawning a provider that cannot be told its id up front
@@ -648,7 +651,8 @@ export interface SenderView {
   label: string;
   /** The sending session, when known and in scope. */
   session: string | null;
-  agent?: { id: string; name: string; role: string; creator: boolean; avatar: string | null };
+  /** The superagent the sending session belongs to (`Superagents.ownership`). */
+  agent?: { id: string; name: string; role: string; icon: AgentIcon | null; avatar: string | null };
   /** The session's opening prompt, which another session started it with. */
   opening?: boolean;
 }
@@ -1585,6 +1589,37 @@ export type ClientMessage =
   | { type: "watch"; sessionId: string | null }
   | { type: "ping" };
 
+/** The pictures a superagent can name in its manifest (`icon`), for when none was set on the page. */
+export const AGENT_ICONS = ["brain", "sparkle", "fix", "release", "health"] as const;
+export type AgentIcon = (typeof AGENT_ICONS)[number];
+
+/** The generic events agentbox brings a superagent that names them in its manifest (src/core/superagent/events.ts). */
+export const SUPERAGENT_EVENTS = ["pr.ready"] as const;
+export type SuperagentEvent = (typeof SUPERAGENT_EVENTS)[number];
+
+/** A prompt agentbox says to a superagent's main conversation on a schedule (src/core/superagent/loops.ts). */
+export interface SuperagentLoop {
+  id: string;
+  /** The manifest's, or set with `PUT /api/superagents/:name/loops/:id` (by a person, its main or its program). */
+  source: "manifest" | "set";
+  when: string;
+  check: string | null;
+  prompt: string;
+  /** The next time it is said, or null when it no longer repeats. */
+  nextAt: number | null;
+  /** A time came while the main was busy: it is said when the turn ends. */
+  due: number | null;
+  last: { at: number; result: "sent" | "skipped" | "failed"; detail: string } | null;
+}
+
+/** A superagent this machine runs and shares with a cloud workspace (src/cloud/superagents.ts). */
+export interface SuperagentTeam {
+  workspace: string;
+  instance: string;
+  visibility: "private" | "workspace";
+  maintainers: string[];
+}
+
 /** A superagent as the Agents page shows it (`GET /api/superagents`, src/core/superagents.ts). */
 export interface SuperagentInfo {
   name: string;
@@ -1612,6 +1647,24 @@ export interface SuperagentInfo {
     lastExit: { code: number | null; at: number } | null;
   } | null;
   createdAt: number;
+  /** The manifest's picture, for when none was set on the page. */
+  icon: AgentIcon | null;
+  /** A picture set on the page (`/api/superagents/:name/avatar`). */
+  avatar: { at: number } | null;
+  /** The registered repos it shows in; null: every project. Navigation only. */
+  projects: string[] | null;
+  /** It has a memory journal and a read-only MEMORY.md. */
+  memory: boolean;
+  /** When a fresh main takes over from a handoff; null: never. */
+  rollover: { idleMin: number; contextPct: number } | null;
+  loops: SuperagentLoop[];
+  /** When its idle work sessions are closed each day ("HH:MM"); null: never. */
+  sweep: string | null;
+  /** Where its current main runs and why, when agentbox chose (`provider: "auto"`). */
+  selection: { provider: ProviderId; why: string; at: number } | null;
+  events: SuperagentEvent[];
+  /** It is shared with a cloud workspace from this machine. */
+  team: SuperagentTeam | null;
 }
 
 /** What a superagent's page is made of: its program answers `GET /agentbox/view` with this (docs/superagents.md). */

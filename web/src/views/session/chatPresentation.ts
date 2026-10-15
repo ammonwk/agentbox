@@ -1,5 +1,11 @@
 import type { TimelineEvent } from "../../../../src/core/types";
 /** Presentation only: the provider transcript and approval text stay intact. */
+
+/** What the viewed conversation's transcript and session say now:
+ *  `message` is the newest message a person sent, `read` whether the agent
+ *  has written anything after it, `working` whether a turn shown in Chat is
+ *  open, and `queued` what it holds until its current step yields (claude). */
+export type ChatPresence = { message: string | null; read: boolean; working: boolean; queued: string[] };
 export type ReplyRecommendation = { id: string; title: string; next_step: string };
 const GUIDANCE = /^\[Guidance on recommendation ([0-9a-f-]{36})\]\s*\n([\s\S]*)$/i;
 const SCOPE = " Only this next step is authorized; other actions and outreach keep their existing requirements.";

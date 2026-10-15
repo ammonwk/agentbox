@@ -23,12 +23,10 @@ import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
 import { Dictation } from "./Dictation";
 import { request } from "./api";
-import { useLoad } from "./lib/cloud";
 import { ProjectContext, scopedState, projectOfSession, useScope } from "./lib/projects";
 import { ProjectTabs, useProjectTabs } from "./ProjectTabs";
 import { Profile } from "./views/Profile";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import type { LocalAgent } from "../../src/core/agents/conversation";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -106,29 +104,21 @@ export function App() {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const scope = useScope();
   const project = state?.repos.find((r) => r.id === scope.project) ?? null;
-  const localAgents = useLoad(() => request<LocalAgent[]>("GET", "/api/agents/local"), []);
-  useEffect(() => { const t = setInterval(() => void localAgents.reload(), 10000); return () => clearInterval(t); }, [localAgents.reload]);
-  const agents = localAgents.data ?? [];
-  const scoped = useMemo(() => state ? scopedState(state, scope.project, agents) : null, [state, scope.project, localAgents.data]);
+  const scoped = useMemo(() => (state ? scopedState(state, scope.project) : null), [state, scope.project]);
   const staleProject = !!state && !!scope.project && !project;
   const selectedSession = route.page === "session" ? state?.sessions.find((s) => s.id === route.id) : null;
   useEffect(() => {
-    if (selectedSession && !scopeOf().has("project") && localAgents.data) {
-      selectScope("project", projectOfSession(state!.repos, agents, selectedSession), route, true);
-    }
-  }, [selectedSession?.id, localAgents.data]);
-  const wrongSession = scope.project && selectedSession && projectOfSession(state!.repos, agents, selectedSession) !== scope.project;
-  const projectTabs = useProjectTabs(state, agents, scope.project);
+    if (selectedSession && !scopeOf().has("project")) selectScope("project", projectOfSession(state!.repos, selectedSession), route, true);
+  }, [selectedSession?.id]);
+  const wrongSession = scope.project && selectedSession && projectOfSession(state!.repos, selectedSession) !== scope.project;
+  const projectTabs = useProjectTabs(state, scope.project);
   // For the key handler below, which is added once.
   const tabOrder = useRef<{ ids: string[]; selected: string | null }>({ ids: [], selected: null });
   tabOrder.current = { ids: projectTabs.tabs.map((t) => t.id), selected: scope.project };
   useEffect(() => {
     if (!state || scope.project || !projectTabs.tabs.length || route.page === "session") return;
-    // Resolve old local-agent links before choosing a default project.
-    if (route.page === "agents" && route.id && !localAgents.data) return;
-    const linked = route.page === "agents" ? agents.find((a) => a.id === route.id)?.repo : null;
-    selectScope("project", linked ?? projectTabs.tabs[0]!.id, route, true);
-  }, [!!state, scope.project, route.page, route.page === "agents" ? route.id : null, projectTabs.tabs[0]?.id, localAgents.data]);
+    selectScope("project", projectTabs.tabs[0]!.id, route, true);
+  }, [!!state, scope.project, route.page, projectTabs.tabs[0]?.id]);
   const nav = navOf(route);
   // The start of the system bar, where an open session puts its facts.
 
@@ -204,7 +194,7 @@ export function App() {
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
-    <ProjectContext.Provider value={{ repos: state?.repos ?? [], agents }}><div className="app" data-page={route.page}>
+    <ProjectContext.Provider value={{ repos: state?.repos ?? [] }}><div className="app" data-page={route.page}>
       <Dictation />
       <a className="skip" href="#content">
         Skip to content
@@ -304,7 +294,7 @@ export function App() {
             ) : staleProject && ["agents", "session", "sessions", "review"].includes(route.page) ? (
               <Empty title="This project is no longer registered"><Button onClick={() => setSwitcherOpen(true)}>Choose a project</Button></Empty>
             ) : wrongSession ? (
-              <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", projectOfSession(state.repos, agents, selectedSession!), route)}>Open in its project</Button></Empty>
+              <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", projectOfSession(state.repos, selectedSession!), route)}>Open in its project</Button></Empty>
             ) : route.page === "sessions" || route.page === "session" ? (
               <SessionView
                 key={scope.project ?? "all"}
@@ -325,7 +315,7 @@ export function App() {
             ) : route.page === "agents" && !project ? (
               <Empty title="Choose a project to see its agents"><Button onClick={() => setSwitcherOpen(true)}>Choose a project</Button></Empty>
             ) : route.page === "agents" ? (
-              <Suspense fallback={<Empty title="Loading…" />}><Agents key={`${scope.workspace}:${scope.project ?? "all"}`} state={state} id={route.id} /></Suspense>
+              <Suspense fallback={<Empty title="Loading…" />}><Agents key={`${scope.workspace}:${scope.project ?? "all"}`} state={state} route={route} /></Suspense>
             ) : route.page === "accounts" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
                 <Accounts state={state} route={route} />

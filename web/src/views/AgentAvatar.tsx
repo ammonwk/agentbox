@@ -5,23 +5,24 @@ import { Heartbeat } from "@phosphor-icons/react/dist/csr/Heartbeat";
 import { Sparkle } from "@phosphor-icons/react/dist/csr/Sparkle";
 import { Brain } from "@phosphor-icons/react/dist/csr/Brain";
 import { Robot } from "@phosphor-icons/react/dist/csr/Robot";
+import type { AgentIcon } from "../../../src/core/types";
 
-/** Each agent's own icon, from what it does: Jupiter creates, Caelus
- *  releases, Salus watches health, Vulcan fixes; anything else thinks.
- *  The Agents rail draws the same mapping. */
-export function agentIcon(role: string, creator?: boolean) {
-  if (creator) return Sparkle;
+/** A superagent's own icon: the one its manifest names (`icon`), else one
+ *  from what its description says it does; anything else thinks. */
+export function agentIcon(role: string, icon?: AgentIcon | null) {
+  if (icon) return ICONS[icon];
   if (/deploy|release|ci\/cd/i.test(role)) return Cloud;
   if (/health|performance|monitor|observab/i.test(role)) return Heartbeat;
   if (/fix|triage|bug|repair/i.test(role)) return Wrench;
   return Brain;
 }
+const ICONS: Record<AgentIcon, typeof Brain> = { brain: Brain, sparkle: Sparkle, fix: Wrench, release: Cloud, health: Heartbeat };
 
 /** An agent's picture, or its own icon when it has none or the picture
  *  fails to load. Decorative: the agent's name is always said beside it. */
-export function AgentAvatar({ role, creator, src, size = 34, className }: { role: string; creator?: boolean; src?: string | null; size?: number; className?: string }) {
+export function AgentAvatar({ role, icon, src, size = 34, className }: { role: string; icon?: AgentIcon | null; src?: string | null; size?: number; className?: string }) {
   const [failed, setFailed] = useState<string | null>(null);
-  const Glyph = agentIcon(role, creator);
+  const Glyph = agentIcon(role, icon);
   const style = { width: size, height: size };
   return src && failed !== src ? (
     <img className={`agent-avatar${className ? ` ${className}` : ""}`} style={style} src={src} alt="" onError={() => setFailed(src)} />
@@ -32,19 +33,22 @@ export function AgentAvatar({ role, creator, src, size = 34, className }: { role
   );
 }
 
+/** How a name reads beside its picture: VULCAN and vulcan both as Vulcan. */
+export const agentName = (name: string) => name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+
 /** An agent that is not a registered one, or not proven to be: never anyone's picture. */
 export function NeutralAgent({ size = 12 }: { size?: number }) {
   return <Robot size={size} aria-hidden="true" focusable="false" />;
 }
 
-export const localAvatarUrl = (agent: { id: string; avatar?: { at: number } }) =>
-  agent.avatar ? `/api/agents/local/${encodeURIComponent(agent.id)}/avatar?v=${agent.avatar.at}` : null;
+export const avatarUrl = (a: { name: string; avatar: { at: number } | null }) =>
+  a.avatar ? `/api/superagents/${encodeURIComponent(a.name)}/avatar?v=${a.avatar.at}` : null;
 
-/** Settings → Picture for a local agent: preview, replace and remove. The
- *  picture belongs to the agent, so every conversation it has shows it. */
-export function AgentPictureEditor({ agent, onChange }: { agent: { id: string; name: string; role: string; capability?: string; avatar?: { at: number } }; onChange: () => Promise<unknown> }) {
+/** Settings → Picture: preview, replace and remove. The picture belongs to
+ *  the superagent, so every conversation it has shows it. */
+export function AgentPictureEditor({ agent, onChange }: { agent: { name: string; title: string; description: string; icon: AgentIcon | null; avatar: { at: number } | null }; onChange: () => Promise<unknown> | void }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
-  const url = `/api/agents/local/${encodeURIComponent(agent.id)}/avatar`;
+  const url = `/api/superagents/${encodeURIComponent(agent.name)}/avatar`;
   const change = async (init: RequestInit) => {
     setBusy(true);
     setError(null);
@@ -60,10 +64,10 @@ export function AgentPictureEditor({ agent, onChange }: { agent: { id: string; n
     }
   };
   return (
-    <section className="agent-picture" aria-labelledby={`picture-${agent.id}`}>
-      <h3 id={`picture-${agent.id}`}>Picture</h3>
+    <section className="agent-picture" aria-labelledby={`picture-${agent.name}`}>
+      <h3 id={`picture-${agent.name}`}>Picture</h3>
       <div className="agent-picture-row">
-        <AgentAvatar role={agent.role} creator={agent.capability === "creator"} src={localAvatarUrl(agent)} size={72} />
+        <AgentAvatar role={agent.description} icon={agent.icon} src={avatarUrl(agent)} size={72} />
         <div className="agent-picture-actions">
           <label className="btn btn-default btn-md">
             {agent.avatar ? "Replace picture" : "Upload picture"}
@@ -87,7 +91,7 @@ export function AgentPictureEditor({ agent, onChange }: { agent: { id: string; n
           )}
         </div>
       </div>
-      <p className="hint">PNG, JPEG, GIF or WebP, up to 2 MB. Shown beside {agent.name.charAt(0).toUpperCase() + agent.name.slice(1).toLowerCase()}'s replies; without one, its own icon is used.</p>
+      <p className="hint">PNG, JPEG, GIF or WebP, up to 2 MB. Shown beside {agent.title}'s replies; without one, its own icon is used.</p>
       {error && <p className="error" role="alert">{error}</p>}
     </section>
   );

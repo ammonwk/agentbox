@@ -417,6 +417,29 @@ export const MIGRATIONS: readonly string[] = [
   // 29 — a session whose stops are not pushed to your phone: one a program
   // started, whose own page shows what it waits on.
   `ALTER TABLE sessions ADD COLUMN quiet INTEGER;`,
+  // 30 — what agentbox keeps for a superagent beside its row
+  // (src/core/superagent/state.ts): its rollover, loops, sweeps, picture and
+  // provider choice, as JSON; each generic event it was given, once
+  // (src/core/superagent/events.ts); and each local agent of the old Agents
+  // runtime that became a superagent (src/core/superagent/migrate.ts).
+  `
+  CREATE TABLE superagent_state (
+    name TEXT PRIMARY KEY,
+    body TEXT NOT NULL
+  );
+  CREATE TABLE superagent_events (
+    name TEXT NOT NULL,
+    key  TEXT NOT NULL,
+    at   INTEGER NOT NULL,
+    PRIMARY KEY (name, key)
+  );
+  CREATE TABLE superagent_imports (
+    source TEXT PRIMARY KEY,
+    name   TEXT NOT NULL,
+    at     INTEGER NOT NULL,
+    report TEXT NOT NULL
+  );
+  `,
 ];
 
 function migrate(d: Database) {

@@ -284,7 +284,7 @@ export function SessionView({
   const [railW, setRailW] = useRailWidth();
   const showRail = !narrow || !id;
   const showMain = !narrow || !!id;
-  if (session && scope.project && projectOfSession(projectData.repos, projectData.agents, session) !== scope.project) return <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", projectOfSession(projectData.repos, projectData.agents, session), { page: "session", id: session.id, tab })}>Open in its project</Button></Empty>;
+  if (session && scope.project && projectOfSession(projectData.repos, session) !== scope.project) return <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", projectOfSession(projectData.repos, session), { page: "session", id: session.id, tab })}>Open in its project</Button></Empty>;
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}

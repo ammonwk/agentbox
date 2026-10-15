@@ -1,7 +1,7 @@
 /**
- * Every CLI command an agent prompt or the CLI guide names must parse. The
- * agent prompt told every agent to read `agentbox show --json`, which `show`
- * did not take, so each close an agent tried started with a failed command.
+ * Every CLI command a superagent's prompt or the CLI guide names must parse.
+ * An agent prompt once told every agent to read `agentbox show --json`, which
+ * `show` did not take, so each close an agent tried started with a failed command.
  * Each command here runs through the real CLI against a server that answers
  * everything with nothing; the test checks only that the CLI accepts its words.
  */
@@ -17,13 +17,13 @@ beforeAll(() => {
 afterAll(() => server.stop(true));
 
 const core = join(import.meta.dir, "../../core");
-const sources = [join(core, "cli-guide.ts"), ...readdirSync(join(core, "agents")).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).map((f) => join(core, "agents", f))];
+const sources = [join(core, "cli-guide.ts"), ...readdirSync(join(core, "superagent")).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).map((f) => join(core, "superagent", f))];
 
 /** "agentbox show <id> --json" → ["show", "x", "--json"]: each placeholder a
  *  word, each choice its first word, the text after the command cut off. */
 export function commandsIn(text: string): string[][] {
   const found = new Map<string, string[]>();
-  for (const m of text.matchAll(/agentbox (?=((?:agent|show|log|card) (?:"[^"\n]*"|[^`"\n#|;\\])*))/g)) {
+  for (const m of text.matchAll(/agentbox (?=((?:superagent|agent|report|show|log|card) (?:"[^"\n]*"|[^`"\n#|;\\])*))/g)) {
     // A command quoted inside a placeholder ends where the placeholder does;
     // a quoted value ("every hour") is one word.
     const words = m[1]!

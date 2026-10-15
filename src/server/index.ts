@@ -30,7 +30,6 @@ import { sourceCheckout } from "../core/snapshot";
 import { Fleet, FleetError, repoRootOf } from "../core/fleet";
 import { ResourceCleanup } from "../core/cleanup";
 import { sessionProject } from "../core/projects";
-import { agentBindings } from "../core/agents/bindings";
 import * as tmux from "../core/tmux";
 import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
@@ -91,8 +90,8 @@ import { RUNNING_REVISION } from "../revision";
 import { CloudBridge } from "../core/cloud/bridge";
 import { Superagents } from "../core/superagents";
 import { cloudHttpError, cloudRoutes } from "./cloud";
-import { AgentsRuntime } from "../core/agents/runtime";
-import { agentRoutes } from "./agents";
+import { superagentRoutes } from "./superagents";
+import { prReady } from "../core/superagent/events";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -202,13 +201,6 @@ export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
     for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
   });
 });
-export const agents = new AgentsRuntime(fleet, cloud, cards, undefined, waits);
-cloud.outboundRefusal = id => agents.directContactRefusal(id);
-scheduler.onTick(async () => {
-  await agents.tick();
-  void agents.conversations.tick().catch((e) => { agents.lastError = (e as Error).message; });
-  void agents.sweeps.tick().catch((e) => console.error("agentbox: daily sweep:", e));
-});
 const turnIndex = new TurnIndex(fleet, {
   load: (id) => loadTurnState(fleet.get(id).provider, id),
   save: (id, state) => saveTurnState(fleet.get(id).provider, id, state),
@@ -237,9 +229,13 @@ let voice: VoiceHub;
 /** The sessions on the board — with the closed ones too unless `open`, and
  *  the closed ones you pinned or bookmarked either way, since the list keeps
  *  those at hand — for `GET /api/state` and the sockets' frames. */
+/** A session's `agentProject`, only when its superagent pins one. */
+const withProject = (p: string | undefined) => (p === undefined ? {} : { agentProject: p });
+
 function hotState(open = false): HotState {
   let closedStamp = 0;
-  const owner = agents.sessionOwnership();
+  const owner = superagents.ownership();
+  const project = superagents.projectBinding(owner);
   const sessions = fleet
     .sessions()
     .filter((s) => {
@@ -247,7 +243,7 @@ function hotState(open = false): HotState {
       closedStamp += 1 + (s.closedAt ?? 0);
       return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
-    .map((s) => ({ ...s, paused: !!s.pid && !cleanup.allows(s.id), agentOwner: owner(s.id), attention: attentionOf(s, fleet.blockedReason(s.id)) }))
+    .map((s) => ({ ...s, paused: !!s.pid && !cleanup.allows(s.id), agentOwner: owner(s.id), ...withProject(project(s.id)), attention: attentionOf(s, fleet.blockedReason(s.id)) }))
     .sort(byAttention);
   return { sessions, serverTime: Date.now(), closedStamp };
 }
@@ -571,13 +567,13 @@ async function pumpTimeline(ws: Socket): Promise<void> {
         const page = await fleet.timeline(id, null, TIMELINE_PAGE);
         if (d.watching !== id) continue;
         d.cursor = page.cursor;
-        send(ws, { type: "timeline", sessionId: id, events: attribute(id, page.events, agents.conversations.senders), cursor: page.cursor, reset: true, before: page.before });
+        send(ws, { type: "timeline", sessionId: id, events: attribute(id, page.events, superagents.senders), cursor: page.cursor, reset: true, before: page.before });
       } else {
         const next = await fleet.since(id, d.cursor);
         if (d.watching !== id) continue;
         d.cursor = next.cursor;
         if (next.events.length > 0 || next.reset) {
-          send(ws, { type: "timeline", sessionId: id, events: attribute(id, next.events, agents.conversations.senders), cursor: next.cursor, reset: next.reset });
+          send(ws, { type: "timeline", sessionId: id, events: attribute(id, next.events, superagents.senders), cursor: next.cursor, reset: next.reset });
         }
       }
     } while (d.again);
@@ -770,7 +766,10 @@ const router = new Router(mapError)
     }
     try {
       const out = await fleet.spawn({
-        provider: provider(b.provider),
+        // "auto": the provider with room (src/core/providers/auto.ts); the answer's `choice` says why.
+        provider: b.provider === "auto" ? "auto" : provider(b.provider),
+        previous: b.previous === undefined ? undefined : provider(b.previous),
+        writer: b.writer === true,
         readOnly: b.readOnly === true,
         notify: b.notify === false ? false : undefined,
         cwd: optionalString(b, "cwd"),
@@ -786,7 +785,7 @@ const router = new Router(mapError)
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
         // Only the caller's capability says which session wrote the prompt.
-        ...(opener ? { opener: { from: opener, agent: agents.conversations.registeredAgent(opener)?.id ?? null } } : {}),
+        ...(opener ? { opener: { from: opener, agent: superagents.ownerOf(opener) } } : {}),
       });
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
       scheduleHot();
@@ -817,13 +816,15 @@ const router = new Router(mapError)
   // AGENTBOX_SESSION when it reached the command, else the walk up from it.
   .add("POST", "/api/whoami", async ({ req }) => json({ id: speaker(await readBody(req)) }))
   .add("GET", "/api/prs/claims", () => json(prClaimsNow()))
-  // Its owner found it ready: hand it to the project's Terminus once per head.
+  // Its owner found it ready: each superagent that takes the pr.ready event gets it once per head.
   .add("POST", "/api/prs/ready", async ({ req }) => {
     const b = await readBody(req);
     const owner = authenticatedSession(req);
     if (!owner) throw new HttpError(403, "the PR's owner session reports it ready: run this from inside it");
     const pr = prNamed(b, owner);
-    return json(await agents.conversations.prReady(owner, { ...pr, head: requireString(b, "head") }));
+    const out = await prReady(superagents, fleet, owner, { ...pr, head: requireString(b, "head") });
+    scheduleHot();
+    return json(out);
   })
   .add("POST", "/api/prs/who", async ({ req }) => {
     const b = await readBody(req);
@@ -910,7 +911,7 @@ const router = new Router(mapError)
     if (b.from === "agent") {
       // Only the sending session's capability proves who wrote it; a named or
       // inferred session is recorded, unproven.
-      const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true, verified: !!authenticated, agent: authenticated ? agents.conversations.registeredAgent(authenticated)?.id ?? null : null }, Date.now());
+      const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true, verified: !!authenticated, agent: authenticated ? superagents.ownerOf(authenticated) : null }, Date.now());
       if ("refused" in sent) throw new HttpError(409, sent.refused);
       return json(sent);
     }
@@ -1107,44 +1108,6 @@ const router = new Router(mapError)
     return json({ to, children: moved, cards: cardsMoved, claims: claimsMoved, closed: b.close === true });
   })
 
-  // ----- superagents (src/core/superagents.ts, docs/superagents.md)
-  .add("GET", "/api/superagents", () => json(superagents.list()))
-  .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))
-  .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(params.name!)))
-  .add("PATCH", "/api/superagents/:name", async ({ req, params }) => {
-    const b = await readBody(req);
-    const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
-    const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
-    return json(await superagents.patch(params.name!, { main, enabled }));
-  })
-  .add("DELETE", "/api/superagents/:name", ({ params }) => {
-    superagents.remove(params.name!);
-    return json(null);
-  })
-  .add("POST", "/api/superagents/:name/restart", async ({ params }) => json(await superagents.restart(params.name!)))
-  .add("GET", "/api/superagents/:name/log", ({ params, url }) => {
-    const bytes = Number(url.searchParams.get("bytes")) || undefined;
-    return json({ text: superagents.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
-  })
-  .add("GET", "/api/superagents/:name/view", async ({ params, url }) => json(await superagents.view(params.name!, url.searchParams.get("tab"))))
-  .add("POST", "/api/superagents/:name/action", async ({ req, params }) => {
-    const b = await readBody(req);
-    requireString(b, "action");
-    // Who asked: a session proves itself with its capability; a page in a browser sends an Origin.
-    const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const) };
-    return json(await superagents.action(params.name!, b, caller));
-  })
-  .add("POST", "/api/superagents/:name/chat", async ({ req, params }) => {
-    const b = await readBody(req);
-    const text = requireString(b, "text");
-    if (!text.trim()) throw new HttpError(400, "the message is empty");
-    const sendId = requireString(b, "sendId");
-    if (!/^[\w-]{1,64}$/.test(sendId)) throw new HttpError(400, "invalid send ID");
-    const out = await superagents.chat(params.name!, text, sendId);
-    scheduleHot();
-    return json(out);
-  })
-
   // ----- scheduled sessions (src/core/scheduler.ts)
   .add("POST", "/api/schedules", async ({ req }) => {
     const b = await readBody(req);
@@ -1242,7 +1205,7 @@ const router = new Router(mapError)
         sessionId: id(b.session) ?? (callerPid ? fleet.callerOf(callerPid) : null),
         about: id(b.about),
         at: typeof b.at === "number" && b.at > 0 ? b.at : null,
-        notify: b.notify !== false && !agents.ownsSession(authenticatedSession(req)),
+        notify: b.notify !== false,
       }),
       201,
     );
@@ -1280,16 +1243,15 @@ const router = new Router(mapError)
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 30));
     const project = url.searchParams.get("project");
     const repos = project ? reposWithRoots() : [];
-    const bound = project ? agentBindings(agents.conversations.local()) : undefined;
-    const owner = agents.sessionOwnership(), human = url.searchParams.get("human") === "1";
+    const owner = superagents.ownership(), bound = superagents.projectBinding(owner), human = url.searchParams.get("human") === "1";
     const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit,
-      (s) => (!human || !owner(s.id)) && (!project || sessionProject(repos, s, bound) === project));
-    return json({ sessions: page.sessions.map((s) => ({ ...s, agentOwner: owner(s.id), attention: attentionOf(s, null) })), total: page.total });
+      (s) => (!human || !owner(s.id)) && (!project || (bound(s.id) ?? sessionProject(repos, s)) === project));
+    return json({ sessions: page.sessions.map((s) => ({ ...s, agentOwner: owner(s.id), ...withProject(bound(s.id)), attention: attentionOf(s, null) })), total: page.total });
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));
     const page = await fleet.timeline(params.id!, url.searchParams.get("before"), limit);
-    return json({ ...page, events: attribute(params.id!, page.events, agents.conversations.senders) });
+    return json({ ...page, events: attribute(params.id!, page.events, superagents.senders) });
   })
   .add("GET", "/api/sessions/:id/turns", async ({ params }) => {
     fleet.get(params.id!);
@@ -1609,7 +1571,7 @@ const router = new Router(mapError)
     void refreshSlow();
     return json(r);
   });
-agentRoutes(router, agents);
+superagentRoutes(router, superagents, { scheduleHot });
 cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
@@ -1873,7 +1835,7 @@ export async function startServer(): Promise<void> {
 
   fleet.on("sessions", () => {
     notifyBlocked(
-      () => fleet.sessions().filter((s) => !agents.ownsSession(s.id)),
+      () => fleet.sessions(),
       (id) => fleet.blockedReason(id),
       (id) => typedAt.get(id) ?? 0,
     );

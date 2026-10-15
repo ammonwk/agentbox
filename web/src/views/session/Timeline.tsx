@@ -1,7 +1,6 @@
-import { chatShown, chatTimestamps, placeCards, recommendationReply, type ReplyRecommendation } from "./chatPresentation";
+import { chatShown, chatTimestamps, placeCards, recommendationReply, type ChatPresence, type ReplyRecommendation } from "./chatPresentation";
 import { createContext, Fragment, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
-import type { ChatPresence } from "../../../../src/cloud/agent-conversation";
+import type { AgentIcon, Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
@@ -21,8 +20,7 @@ import { hrefOf } from "../../route";
 import { readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
-import { AgentAvatar, NeutralAgent } from "../AgentAvatar";
-import { agentName } from "../AgentBrowser";
+import { AgentAvatar, agentName, NeutralAgent } from "../AgentAvatar";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -511,7 +509,7 @@ function useThinkDur(events: readonly TimelineEvent[]): ReadonlyMap<string, numb
   }, [events]);
 }
 
-type ChatAgent = { name: string; role: string; creator: boolean; avatar: string | null };
+type ChatAgent = { name: string; role: string; icon: AgentIcon | null; avatar: string | null };
 const EventRow = memo(function EventRow({ ev, dur, agent, showTime, recommendations = [], delivery }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent; showTime?: boolean; recommendations?: readonly ReplyRecommendation[]; delivery?: "Sent" | "Read" }) {
   switch (ev.kind) {
     case "user":
@@ -584,7 +582,7 @@ function UserRow({ ev, queued, showTime = true, recommendations = [], delivery }
     return (
       <div className="tl-agent-reply tl-from-agent" data-ev={ev.id} title={`Sent by ${agentName(from.name)}${ev.sender?.session ? ` (${ev.sender.session})` : ""}`}>
         <div className="tl-agent-row">
-          <AgentAvatar role={from.role} creator={from.creator} src={from.avatar} />
+          <AgentAvatar role={from.role} icon={from.icon} src={from.avatar} />
           <div className="tl-bubble tl-agent-bubble">
             <div className="tl-agent-name">{agentName(from.name)}</div>
             {body}
@@ -639,7 +637,7 @@ function UserRow({ ev, queued, showTime = true, recommendations = [], delivery }
 function SenderBadge({ sender, claimed }: { sender: NonNullable<Extract<TimelineEvent, { kind: "user" }>["sender"]>; claimed: string | null }) {
   const face =
     sender.kind === "agent" && sender.agent ? (
-      <AgentAvatar role={sender.agent.role} creator={sender.agent.creator} src={sender.agent.avatar} size={20} />
+      <AgentAvatar role={sender.agent.role} icon={sender.agent.icon} src={sender.agent.avatar} size={20} />
     ) : (
       <span className={`tl-sender-face tl-sender-${sender.kind}`} aria-hidden="true">
         {sender.kind === "system" || sender.kind === "schedule" ? <Icon.send size={11} /> : <NeutralAgent size={12} />}
@@ -928,7 +926,7 @@ function AssistantRow({ ev, agent, showTime = !!agent }: { ev: Extract<TimelineE
   if (!agent) return <div data-ev={ev.id}>{content}{showTime && <time className="tl-assistant-time" dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>}</div>;
   return <div className="tl-agent-reply" data-ev={ev.id}>
     <div className="tl-agent-row">
-      <AgentAvatar role={agent.role} creator={agent.creator} src={agent.avatar} />
+      <AgentAvatar role={agent.role} icon={agent.icon} src={agent.avatar} />
       <div className="tl-bubble tl-agent-bubble">
         <div className="tl-agent-name">{agent.name}</div>
         {content}
@@ -1372,7 +1370,7 @@ export function AgentConversationEvents({ events, me, agent, echoes = [], recomm
         {presence?.working && (
           <div className="tl-agent-reply tl-typing" role="status" aria-label={`${agent?.name ?? "The agent"} is working`}>
             <div className="tl-agent-row">
-              {agent && <AgentAvatar role={agent.role} creator={agent.creator} src={agent.avatar} />}
+              {agent && <AgentAvatar role={agent.role} icon={agent.icon} src={agent.avatar} />}
               <div className="tl-bubble tl-agent-bubble" title="Its turn is open: it is working">
                 <span className="tl-typing-dots" aria-hidden="true"><i /><i /><i /></span>
               </div>

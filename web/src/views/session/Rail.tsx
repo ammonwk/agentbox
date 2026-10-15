@@ -888,10 +888,9 @@ function CloseFeedback() {
 
 /** The session's name, after the project it works on, in quieter type. */
 function RowTitle({ s }: { s: SessionRow }) {
-  const { repos, agents } = useProjectData();
-  const agent = agents.find((a) => a.session === s.id || (a.previous.includes(s.id) || a.workSessions?.includes(s.id)));
-  const registered = repos.find((r) => r.id === projectOfSession(repos, agents, s));
-  const project = agent ? [registered?.displayName, agent.name].filter(Boolean).join(" · ") : registered?.displayName ?? projectOf(s);
+  const { repos } = useProjectData();
+  const registered = repos.find((r) => r.id === projectOfSession(repos, s));
+  const project = s.agentOwner ? [registered?.displayName, s.agentOwner].filter(Boolean).join(" · ") : registered?.displayName ?? projectOf(s);
   const marks = useContext(RepoMarks);
   const shape = marks.shape ? marks.shapes.get(repoKey(s)) : undefined;
   return (
@@ -903,7 +902,7 @@ function RowTitle({ s }: { s: SessionRow }) {
       ) : project ? (
         <span className="rail-proj">{project}</span>
       ) : null}
-      {shape && agent ? <span className="rail-proj">{agent.name}</span> : null}
+      {shape && s.agentOwner ? <span className="rail-proj">{s.agentOwner}</span> : null}
       {titleOf(s)}
     </span>
   );

@@ -10,7 +10,7 @@ import { agentSentMark } from "../sent";
 import type { TimelineEvent } from "../types";
 
 let home: string, previous: string | undefined;
-const vulcan = { id: "local-vulcan", name: "Vulcan", role: "Issue triage and fixing", creator: false, avatar: "/api/agents/local/local-vulcan/avatar?v=1" };
+const vulcan = { id: "vulcan", name: "Vulcan", role: "Issue triage and fixing", icon: null, avatar: "/api/superagents/vulcan/avatar?v=1" };
 const dir: SenderDirectory = {
   agentOfSession: (s) => (s === "vulcan-chat" ? vulcan : null),
   agent: (id) => (id === vulcan.id ? vulcan : null),

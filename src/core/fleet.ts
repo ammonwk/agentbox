@@ -22,7 +22,8 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { owners } from "./accounts/homes";
+import { detectCli, owners } from "./accounts/homes";
+import { chooseProvider, type AgentProvider, type ProviderChoice } from "./providers/auto";
 import { elsewhere, place, type AccountState } from "./balancer";
 import { claimFor, listedClaim } from "./claim";
 import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
@@ -273,7 +274,12 @@ interface Tracked {
 }
 
 export interface SpawnRequest {
-  provider: ProviderId;
+  /** "auto": the provider with room, by Codex's weekly left (src/core/providers/auto.ts). */
+  provider: ProviderId | "auto";
+  /** With "auto": the provider of the conversation this one continues, first when the weekly is not known. */
+  previous?: ProviderId | null;
+  /** With "auto": an implementation session, which alternates with `previous` in the middle band. */
+  writer?: boolean;
   /** Reads, never writes: for a reviewer. Only a provider whose CLI can be
    *  held to it (`ProviderAdapter.readOnly`); it gets no global MCP servers. */
   readOnly?: boolean;
@@ -2733,8 +2739,30 @@ export class Fleet extends EventEmitter {
 
   // --------------------------------------------------------------- actions
 
-  async spawn(req: SpawnRequest): Promise<{ session: Session; placement: Placement }> {
-    this.requireActivity(req.id);
+  /** Is a provider's CLI installed here: its cached detection; tests replace it. */
+  installed = async (p: ProviderId) => (await detectCli(p)).installed;
+
+  /** The provider, account and model a `provider: "auto"` start runs on. */
+  async chooseAuto(req: SpawnRequest): Promise<ProviderChoice> {
+    const candidates: AgentProvider[] = ["claude", "codex"];
+    const present = new Map(await Promise.all(candidates.map(async (p) => [p, await this.installed(p).catch(() => false)] as const)));
+    const models = getSettings().models;
+    const previous = req.previous === "claude" || req.previous === "codex" ? req.previous : null;
+    const c = chooseProvider((p) => this.placement(p, req.model, null, req.effort || null), {
+      previous,
+      installed: (p) => present.get(p) ?? false,
+      model: (p) => req.model || models[p] || null,
+      now: Date.now(),
+      ...(req.writer ? { writer: { last: previous } } : {}),
+    });
+    if ("none" in c) throw new FleetError(409, c.none);
+    return c;
+  }
+
+  async spawn(asked: SpawnRequest): Promise<{ session: Session; placement: Placement; choice?: ProviderChoice }> {
+    this.requireActivity(asked.id);
+    const choice = asked.provider === "auto" ? await this.chooseAuto(asked) : undefined;
+    const req = choice ? { ...asked, provider: choice.provider as ProviderId, accountId: asked.accountId ?? choice.accountId, model: asked.model ?? choice.model ?? undefined } : (asked as SpawnRequest & { provider: ProviderId });
     if (req.readOnly && req.provider !== "codex") throw new FleetError(400, "read-only reviews currently require Codex");
     const adapter = this.adapter(req.provider);
     if (req.readOnly && !adapter.readOnly) throw new FleetError(400, `${adapter.label} sessions cannot be started read-only`);
@@ -2837,7 +2865,7 @@ export class Fleet extends EventEmitter {
     this.watches.set(id, { since: now, flagged: false, repaired: false, recovery: null });
     if (typed) this.typeFirstPrompt(id, name, typed);
     await this.tick();
-    return { session: this.get(id), placement };
+    return { session: this.get(id), placement, ...(choice ? { choice } : {}) };
   }
 
   /** Where a session can be resumed from, proven — or why not. */
