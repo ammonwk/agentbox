@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Handoff, MemoryPolicy, MemoryRecord, Note } from "../../../src/core/agents/memory";
 import type { Checkpoint, LocalAgent } from "../../../src/core/agents/conversation";
+import type { FilesStatus } from "../../../src/core/agents/files";
 import { request } from "../api";
 import { Button } from "../components";
 import { useLoad } from "../lib/cloud";
@@ -13,6 +14,8 @@ type View = {
   handoffs: MemoryRecord[];
   notes: MemoryRecord[];
   results: { id: string; kind: string; at: number; session: string; summary: string }[];
+  /** Local agents only. */
+  files?: { dir: string; soul: FilesStatus["soul"] | null; memory: FilesStatus["memory"] | null; soulChanged: boolean; error: string | null };
 };
 const when = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 const checkpointWords: Record<Checkpoint["state"], string> = {
@@ -54,6 +57,7 @@ export function AgentMemory({ agent }: { agent: LocalAgent }) {
         </p>
       )}
       {(error || memory.error) && <p className="error" role="alert">{error ?? memory.error}</p>}
+      {m?.files && <AgentFilesPanel files={m.files} />}
       <h4>Preferences</h4>
       {m?.preferences.length ? (
         <ul className="agent-memory-list">
@@ -136,5 +140,35 @@ export function AgentMemory({ agent }: { agent: LocalAgent }) {
         </>
       ) : null}
     </section>
+  );
+}
+
+/** SOUL.md (edited by the user and the agent) and MEMORY.md (rebuilt from
+ *  the journal below), with anything a fresh conversation would not use. */
+function AgentFilesPanel({ files: f }: { files: NonNullable<View["files"]> }) {
+  return (
+    <>
+      <h4>Files</h4>
+      <ul className="agent-memory-list">
+        <li>
+          <span>
+            <b>SOUL.md</b> Persona, voice and boundaries. You and the agent edit it; a fresh conversation reads it. It gives no authority.
+            <br /><code>{f.soul?.path ?? `${f.dir}/SOUL.md`}</code>
+            {f.soulChanged && <><br />Changed since the current conversation started; the next fresh conversation reads the new text.</>}
+            {f.soul?.notes.map((n) => <span key={n} className="error"><br />{n}</span>)}
+          </span>
+        </li>
+        <li>
+          <span>
+            <b>MEMORY.md</b> A read-only view of this memory, rebuilt after each change. Edit memory here, not in the file.
+            <br /><code>{f.memory?.path ?? `${f.dir}/MEMORY.md`}</code>
+            {f.memory?.setAside && (
+              <span className="error"><br />An edit was set aside, unused, on {when(f.memory.setAside.at)}: <code>{f.memory.setAside.path}</code></span>
+            )}
+          </span>
+        </li>
+      </ul>
+      {f.error && <p className="error" role="alert">{f.error}</p>}
+    </>
   );
 }

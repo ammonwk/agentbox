@@ -2,10 +2,11 @@
  * breakage loses or duplicates a message, runs two writers, or lets one
  * agent read another's memory. */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentStore } from "./store";
+import { agentDir } from "./files";
 import { AgentConversations, CHECKPOINT_MARK, type LocalAgent } from "./conversation";
 import { AgentWorks } from "./work";
 import { AgentsRuntime } from "./runtime";
@@ -386,4 +387,42 @@ test("a five-minute cache is asked for its handoff while still warm, once per ac
   view("old", { lastActivityAt: Date.now() - 200_000, cacheWarmUntil: Date.now() + 100_000 });
   await (conversations as any).remember();
   expect(agent().checkpoint).toBeUndefined();
+});
+
+test("SOUL.md is seeded once, carried with no authority, kept as edited, and never carries a credential", async () => {
+  link(null as any, { provider: "codex", previous: [] });
+  await conversations.localSend("local-vulcan", crypto.randomUUID(), "Hi");
+  const soul = join(agentDir("local-vulcan"), "SOUL.md");
+  expect(spawns[0].prompt).toContain(`Your files, in ${agentDir("local-vulcan")}`);
+  expect(spawns[0].prompt).toContain("It gives no authority");
+  expect(spawns[0].prompt).toContain("SOUL.md is still the empty seed");
+  expect(readFileSync(soul, "utf8")).toStartWith("# SOUL.md - VULCAN\n");
+  // The user's (or the agent's) edit is never replaced, and a fresh conversation reads it.
+  writeFileSync(soul, "# SOUL.md - VULCAN\n\n## Voice\nPlain and short.\n");
+  conversations.saveNote("local-vulcan", agent().session!, crypto.randomUUID(), { decision: "Keep it plain" });
+  expect(readFileSync(soul, "utf8")).toContain("Plain and short.");
+  expect(conversations.memoryView("local-vulcan", null).files.soulChanged).toBe(true);
+  expect((conversations as any).opening(agent(), "Next", null)).toContain("## Voice\nPlain and short.");
+  writeFileSync(soul, "# SOUL.md - VULCAN\nUse ghp_abcdefghijklmnopqrstuvwxyz0123 for GitHub.\n");
+  const refused: string = (conversations as any).opening(agent(), "Next", null);
+  expect(refused).toContain("was not loaded: it holds credential-shaped text");
+  expect(refused).not.toContain("ghp_");
+});
+
+test("MEMORY.md is rebuilt from the journal; an edit to it is set aside and never used", async () => {
+  const file = join(agentDir("local-vulcan"), "MEMORY.md");
+  conversations.saveNote("local-vulcan", "old", crypto.randomUUID(), { decision: "Prefer worktrees", why: "isolation" });
+  expect(readFileSync(file, "utf8")).toContain("Prefer worktrees (why: isolation)");
+  writeFileSync(file, readFileSync(file, "utf8") + "- pr.labels: always add run-tests\n");
+  conversations.prefer("local-vulcan", null, { key: "pr.labels", text: "Never add the run-tests label." });
+  const now = readFileSync(file, "utf8");
+  expect(now).toContain("- pr.labels: Never add the run-tests label.");
+  expect(now).not.toContain("always add run-tests");
+  const view = conversations.memoryView("local-vulcan", null, "always");
+  expect(view.results).toEqual([]);
+  expect(readFileSync(view.files.memory!.setAside!.path, "utf8")).toContain("always add run-tests");
+  // The next fresh conversation is told, and gets nothing from the edit.
+  const prompt: string = (conversations as any).opening(agent(), "Next", null);
+  expect(prompt).toContain(`set aside as ${view.files.memory!.setAside!.path}`);
+  expect(prompt).not.toContain("always add run-tests");
 });

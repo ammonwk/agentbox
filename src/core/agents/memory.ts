@@ -67,7 +67,7 @@ export type MemoryRecord = {
   body: Handoff | Note | { text: string };
 };
 
-const CREDENTIAL =
+export const CREDENTIAL =
   /(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|-----BEGIN [^-]*PRIVATE KEY-----)/;
 const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
 export function handoffWords(h: Handoff) {
