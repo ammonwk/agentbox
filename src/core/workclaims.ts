@@ -338,10 +338,14 @@ export class WorkClaims {
 
   private async held(caller: ClaimCaller, scope: ClaimScope, source: string, now: number): Promise<{ backend: ClaimsBackend; claim: WorkClaim }> {
     const { key } = canonicalSource(source);
-    const backend = this.backendOf(caller.superagent);
-    const claim = await backend.get(scope, key, now);
-    if (!claim || claim.state === "released") throw new ClaimError(404, `nobody holds ${key}`);
-    return { backend, claim };
+    const first = this.backendOf(caller.superagent);
+    // Its own backend first; then the others, for a claim made before it was
+    // shared or after it was unshared, which stays where it was made.
+    for (const backend of [first, ...this.backends.filter((b) => b !== first)]) {
+      const claim = await backend.get(scope, key, now);
+      if (claim && claim.state !== "released") return { backend, claim };
+    }
+    throw new ClaimError(404, `nobody holds ${key}`);
   }
 
   async claim(caller: ClaimCaller, req: { sources: readonly string[]; scope?: ClaimScope; session?: string | null; note?: string | null }, now = Date.now()): Promise<WorkClaim[]> {

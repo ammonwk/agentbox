@@ -29,6 +29,7 @@ import { Loops, loopsOf, loopViews, removeLoop, setLoop, type Loop } from "./sup
 import { Sweeps } from "./superagent/sweep";
 import { AgentFeedback } from "./superagent/feedback";
 import { avatarFile, removeAvatar, saveAvatar } from "./superagent/avatar";
+import { teamOf } from "./superagent/shares";
 
 /** A loop in the manifest: `prompt` inline, or `file` in the directory. */
 export const LoopSpec = z
@@ -111,7 +112,16 @@ type Proc = {
   stopping: boolean;
 };
 
-export type Caller = { session: string | null; via: "app" | "api" };
+/**
+ * Who asked for an action (`POST /agentbox/action`'s `caller`):
+ * - `app`: a browser on this machine (the Agents page);
+ * - `api`: a program, a terminal or a session (`session` set when it proved itself);
+ * - `team`: a teammate on another machine, through the cloud's relay
+ *   (src/core/superagent/team.ts). `user` is who the cloud says they are and
+ *   `session` is null. A program must treat it as a remote person: not the
+ *   owner of this machine, and not one of its own sessions.
+ */
+export type Caller = { session: string | null; via: "app" | "api" | "team"; user?: { id: string; name: string } };
 
 export const superagentHome = (name: string): string => join(agentboxHome(), "superagents", name);
 
@@ -733,7 +743,7 @@ export class Superagents {
       sweep: sweepOf(m),
       selection: st.selection ?? null,
       events: m?.events ?? [],
-      team: null,
+      team: teamOf(r.name),
     };
   }
 

@@ -506,6 +506,22 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX github_actions_state ON github_actions(state);
   `,
+  // 33 — superagents this machine shares with its cloud workspace
+  // (src/core/superagent/shares.ts): the instance the cloud gave each, as
+  // the share route wrote it and the team tick reads it back from the cloud.
+  // The cloud is the record; this is what the hub shows and claims route by.
+  `
+  CREATE TABLE superagent_shares (
+    name         TEXT PRIMARY KEY,
+    instance     TEXT NOT NULL UNIQUE,
+    workspace    TEXT NOT NULL,
+    installation TEXT NOT NULL,
+    visibility   TEXT NOT NULL,
+    maintainers  TEXT NOT NULL,
+    source       TEXT,
+    updated_at   INTEGER NOT NULL
+  );
+  `,
 ];
 
 function migrate(d: Database) {

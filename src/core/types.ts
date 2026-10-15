@@ -1617,7 +1617,10 @@ export interface SuperagentTeam {
   workspace: string;
   instance: string;
   visibility: "private" | "workspace";
+  /** Cloud user ids; the host owner is always one. */
   maintainers: string[];
+  /** Where a teammate copies its directory from as a template; null outside a git checkout with a remote. */
+  source: { repo: string; path: string; commit: string } | null;
 }
 
 /** A superagent as the Agents page shows it (`GET /api/superagents`, src/core/superagents.ts). */

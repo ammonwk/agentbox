@@ -97,6 +97,10 @@ import { prReady } from "../core/superagent/events";
 import { githubRoutes, requirePersonForCard } from "./github";
 import { GitHubActions } from "../core/github/actions";
 import { GitHubBroker } from "../core/github/broker";
+import { CloudConsent } from "../core/github/consent";
+import { cloudConfig } from "../core/cloud/config";
+import { TeamHost } from "../core/superagent/team";
+import { teamRoutes } from "./team";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -1596,6 +1600,11 @@ github.claims = {
     return c ? { fence: c.fence, holder: c.holder } : null;
   },
 };
+/** Shared superagents: answers teammates through the cloud, and keeps a shared one's claims there (src/core/superagent/team.ts). */
+export const team = new TeamHost({ fleet, superagents, cloud, claims: workClaims });
+teamRoutes(router, { superagents, cloud, team, claims: workClaims });
+// Contact consent is the cloud's: without it, an action that contacts a person is refused.
+if (cloudConfig().config) github.consent = new CloudConsent(() => team.api(), (name) => team.instanceOf(name));
 cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
@@ -1715,6 +1724,7 @@ export async function startServer(): Promise<void> {
     waits.stop();
     superagents.stopAll();
     github.stop();
+    team.stop();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -1841,6 +1851,7 @@ export async function startServer(): Promise<void> {
   github.start();
   // Local first: with no cloud.env this reads nothing and sends nothing.
   cloud.start();
+  team.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
   // sessions and in your own terminals alike, and Go's usage is asked through
   // it (accounts/usage.ts), so it is up from the start.
