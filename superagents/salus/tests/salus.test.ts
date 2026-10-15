@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { action } from "../lib/actions";
+import { deploy, UNDEPLOYED_MS } from "../lib/deploy";
 import { fix, follow, needHours } from "../lib/fix";
 import { tick } from "../lib/tick";
 import { verdictIn } from "../lib/triage";
@@ -142,13 +143,89 @@ test("the fix is followed: family started, its PR, its merge, and the rate befor
   expect(m.verify!.needHours).toBe(needHours(5, 168));
 });
 
+/** A crash whose fix merged to staging `ago` ms ago, as the merge commit `m1`. */
+async function merged(ago: number): Promise<{ id: string; mergedAt: number }> {
+  const id = await triaged();
+  const c = await fix(w.ctx, id, APP);
+  w.box.works.set(c.family!.id, { state: "working", publication: { url: `https://github.com/${REPO}/pull/7`, number: 7 } });
+  const mergedAt = Date.now() - ago;
+  w.gh.pulls.set(7, { merged_at: new Date(mergedAt).toISOString(), closed_at: null, state: "closed", merge_commit_sha: "m1", base: { ref: "staging" } });
+  await follow(w.ctx, id);
+  const m = await follow(w.ctx, id);
+  expect(m.state).toBe("merged");
+  expect(m.pr).toMatchObject({ mergeSha: "m1", base: "staging" });
+  return { id, mergedAt };
+}
+
+const run = (sha: string, at: number) => ({ head_sha: sha, created_at: new Date(at - 20 * 60_000).toISOString(), updated_at: new Date(at).toISOString(), html_url: `https://github.com/${REPO}/actions/runs/${sha}` });
+
+test("merged is not deployed: the clock starts when the first production deploy containing the merge finished", async () => {
+  // triaged() places five events an hour ago: after this merge, before the deploy below.
+  const { id, mergedAt } = await merged(2 * H);
+  // A deploy since the merge that does not carry it, and none that does: still waiting, and the page says so.
+  w.gh.runs = [run("d1", mergedAt + H / 4)];
+  expect((await deploy(w.ctx, id)).state).toBe("merged");
+  expect(w.gh.asked.some((a) => a.includes(`actions/workflows/cd.yml/runs?branch=master&status=success`))).toBe(true);
+  const page = JSON.stringify((await (await import("../lib/view")).view(w.ctx, "work")).blocks);
+  expect(page).toContain("Merged to staging 2h ago; not in production (master) yet.");
+  // Two deploys carry it: the earlier one is when it reached production. Rechecks wait half an hour.
+  const at = mergedAt + 1.5 * H;
+  w.gh.runs = [run("d3", mergedAt + 1.75 * H), run("d2", at), run("d1", mergedAt + H / 4)];
+  w.gh.contains.set("d2", ["m1"]).set("d3", ["m1"]);
+  expect((await deploy(w.ctx, id)).state).toBe("merged");
+  const d = await deploy(w.ctx, id, Date.now() + 31 * 60_000);
+  expect(d.state).toBe("deployed");
+  expect(d.pr!.deploy).toEqual({ at, url: `https://github.com/${REPO}/actions/runs/d2`, sha: "d2" });
+  // The five events fell between the merge and the deploy, on old code: not counted against the fix. With none
+  // in the week before the merge, it takes the longest quiet (two weeks) from the deploy's finish.
+  const v = await verify(w.ctx, id, at + 24 * H);
+  expect(v.verify!.after).toBe(0);
+  expect(v.state).toBe("deployed");
+  expect((await verify(w.ctx, id, at + 14 * 24 * H)).state).toBe("verified");
+});
+
+test("still happening after the merge but before the deploy is not recurred", async () => {
+  w = (w.box.stop(), world({ deployLagHours: 1 }));
+  // The five events an hour ago are two hours after this merge, past the lag counted from it, and before the deploy.
+  const { id, mergedAt } = await merged(3 * H);
+  w.gh.runs = [run("d1", mergedAt + 2.5 * H)];
+  w.gh.contains.set("d1", ["m1"]);
+  expect((await deploy(w.ctx, id)).state).toBe("deployed");
+  expect((await verify(w.ctx, id)).state).toBe("deployed");
+});
+
+test("not in production 14 days after the merge: one decision card that pushes", async () => {
+  const { id, mergedAt } = await merged(H);
+  expect((await deploy(w.ctx, id)).state).toBe("merged");
+  expect(w.box.cards).toHaveLength(0);
+  const c = await deploy(w.ctx, id, mergedAt + UNDEPLOYED_MS + H);
+  expect(c.state).toBe("merged");
+  expect(w.box.cards.at(-1)).toMatchObject({ kind: "decision", notify: true });
+  expect(w.box.cards.at(-1)!.title).toContain("not in production");
+  await deploy(w.ctx, id, mergedAt + UNDEPLOYED_MS + 2 * H);
+  expect(w.box.cards.filter((x) => x.title.includes("not in production"))).toHaveLength(1);
+});
+
+test("with no production branch the merge is the deploy", async () => {
+  w = (w.box.stop(), world({ prodBranch: "" }));
+  const id = await triaged();
+  const c = await fix(w.ctx, id, APP);
+  w.box.works.set(c.family!.id, { state: "working", publication: { url: `https://github.com/${REPO}/pull/7`, number: 7 } });
+  const mergedAt = Date.now() - H;
+  w.gh.pulls.set(7, { merged_at: new Date(mergedAt).toISOString(), closed_at: null, state: "closed", merge_commit_sha: "m1" });
+  await follow(w.ctx, id);
+  const m = await follow(w.ctx, id);
+  expect(m.state).toBe("deployed");
+  expect(m.pr!.deploy).toEqual({ at: mergedAt, url: null, sha: "m1" });
+});
+
 test("verified only after quiet long enough at its old rate; a quiet card does not push", async () => {
   const id = await triaged();
   const mergedAt = Date.now() - 30 * H;
-  w.ctx.store.save({ ...w.ctx.store.crash(id), state: "merged", pr: { url: "u", number: 7, mergedAt }, verify: { before: 168, beforeHours: 168, after: 0, lastAfter: null, needHours: needHours(168, 168), checkedAt: 0 } });
+  w.ctx.store.save({ ...w.ctx.store.crash(id), state: "deployed", pr: { url: "u", number: 7, mergedAt, deploy: { at: mergedAt, url: null, sha: null } }, verify: { before: 168, beforeHours: 168, after: 0, lastAfter: null, needHours: needHours(168, 168), checkedAt: 0 } });
   // One an hour before the merge: 24 quiet hours are needed. The five triaged() placed an hour ago, after the
-  // merge (before it was deployed), start the clock there.
-  expect((await verify(w.ctx, id, Date.now() + 20 * H)).state).toBe("merged");
+  // deploy, start the clock there.
+  expect((await verify(w.ctx, id, Date.now() + 20 * H)).state).toBe("deployed");
   const v = await verify(w.ctx, id, Date.now() + 24 * H);
   expect(v.state).toBe("verified");
   expect(w.box.cards.at(-1)).toMatchObject({ kind: "note", notify: false });
@@ -158,7 +235,7 @@ test("still happening past the deploy lag is recurred, with a card that asks", a
   w = (w.box.stop(), world({ deployLagHours: 24 }));
   const id = await triaged();
   const mergedAt = Date.now() - 48 * H;
-  w.ctx.store.save({ ...w.ctx.store.crash(id), state: "merged", pr: { url: "u", number: 7, mergedAt }, verify: { before: 50, beforeHours: 168, after: 0, lastAfter: null, needHours: 24, checkedAt: 0 } });
+  w.ctx.store.save({ ...w.ctx.store.crash(id), state: "deployed", pr: { url: "u", number: 7, mergedAt, deploy: { at: mergedAt, url: null, sha: null } }, verify: { before: 50, beforeHours: 168, after: 0, lastAfter: null, needHours: 24, checkedAt: 0 } });
   w.src.add(id, Date.now() - H);
   const c = await verify(w.ctx, id);
   expect(c.state).toBe("recurred");
@@ -180,4 +257,6 @@ test("settings are a person's and are checked", async () => {
   await action(w.ctx, { action: "settings-save", values: { minCount: "9", enabled: true }, tab: null, caller: APP });
   expect(w.ctx.settings().minCount).toBe(9);
   await expect(action(w.ctx, { action: "settings-save", values: { projectId: "abc" }, tab: null, caller: APP })).rejects.toThrow("projectId");
+  await expect(action(w.ctx, { action: "settings-save", values: { envProperty: "x) OR (1" , envValue: "p" }, tab: null, caller: APP })).rejects.toThrow("envProperty");
+  await expect(action(w.ctx, { action: "settings-save", values: { envProperty: "environment" }, tab: null, caller: APP })).rejects.toThrow("envValue");
 });

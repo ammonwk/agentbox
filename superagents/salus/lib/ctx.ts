@@ -42,7 +42,7 @@ export class Ctx {
 
 function postHogFor(s: Settings, home: string): Source | null {
   const key = readKey(home);
-  return key && s.projectId ? new PostHog(s.posthogHost, s.projectId, key) : null;
+  return key && s.projectId ? new PostHog(s.posthogHost, s.projectId, key, fetch, s.envProperty ? { property: s.envProperty, value: s.envValue } : null) : null;
 }
 
 async function command(args: string[], cwd?: string, input?: unknown): Promise<string> {

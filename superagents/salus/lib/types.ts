@@ -37,10 +37,11 @@ export const TriageVerdict = z
 export type TriageVerdict = z.infer<typeof TriageVerdict>;
 
 /**
- * new → triaging → triaged → (person) filing → handed → fixing → merged → verified | recurred.
+ * new → triaging → triaged → (person) filing → handed → fixing → merged → deployed → verified | recurred.
+ * merged: in its base (staging), not yet in production; deployed: a production deploy carries it, and the verify clock runs from there.
  * dismissed: a person said no; a triage of ignore waits for the person like any other.
  */
-export type State = "new" | "triaging" | "triaged" | "dismissed" | "filing" | "handed" | "fixing" | "merged" | "verified" | "recurred";
+export type State = "new" | "triaging" | "triaged" | "dismissed" | "filing" | "handed" | "fixing" | "merged" | "deployed" | "verified" | "recurred";
 
 export type Crash = {
   /** The source's key for it (PostHog's issue id, else its fingerprint). */
@@ -65,8 +66,23 @@ export type Crash = {
   issue?: { url: string; number: number };
   /** The Vulcan family Salus prepared; `sendId` makes the hand-off to its main conversation at most once. */
   family?: { id: string; file: string; sendId: string; sentAt?: number };
-  pr?: { url: string; number: number; mergedAt?: number; closedAt?: number };
-  /** Events before the merge (per `beforeHours`) and after it, as last counted. */
+  pr?: {
+    url: string;
+    number: number;
+    mergedAt?: number;
+    closedAt?: number;
+    /** The commit the merge made on its base, which a deploy must contain. */
+    mergeSha?: string;
+    /** The branch it merged into. */
+    base?: string;
+    /** The first production deploy that contains it: when that run finished, and the run. Null url: the merge was the deploy. */
+    deploy?: { at: number; url: string | null; sha: string | null };
+    /** When production deploys were last looked through for it. */
+    deployCheckedAt?: number;
+    /** Set once a person was told no deploy carries it. */
+    undeployedCard?: number;
+  };
+  /** Events before the merge (per `beforeHours`) and after the deploy, as last counted. */
   verify?: { before: number; beforeHours: number; after: number; lastAfter: number | null; needHours: number; checkedAt: number };
   /** What the page should say about where it stands, when the state alone does not. */
   note?: string;

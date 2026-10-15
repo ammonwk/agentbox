@@ -1,9 +1,11 @@
 /** Each minute: read the source when its poll is due, start the triages the
- *  budget allows, read finished ones, follow fixes and verify merged ones. A
+ *  budget allows, read finished ones, follow fixes to their merge and deploy,
+ *  and verify deployed ones. A
  *  failure on one crash is noted on it and never stops the others. */
 import { ActionError } from "../../lib/sdk";
 import type { Ctx } from "./ctx";
 import { follow } from "./fix";
+import { deploy } from "./deploy";
 import { collectTriage, startTriage } from "./triage";
 import type { Crash, Seen } from "./types";
 import { verify } from "./verify";
@@ -40,7 +42,8 @@ export async function tick(ctx: Ctx, now = Date.now(), force = false): Promise<v
 
   for (const c of ctx.store.crashes()) {
     if (c.state === "handed" || c.state === "fixing") await guard(ctx, c, () => follow(ctx, c.id, now));
-    else if (c.state === "merged") await guard(ctx, c, () => verify(ctx, c.id, now));
+    else if (c.state === "merged") await guard(ctx, c, () => deploy(ctx, c.id, now));
+    else if (c.state === "deployed") await guard(ctx, c, () => verify(ctx, c.id, now));
   }
 }
 

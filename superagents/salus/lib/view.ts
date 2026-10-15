@@ -6,7 +6,7 @@ import type { Status } from "./tick";
 import type { Crash, State } from "./types";
 
 const DECIDE: State[] = ["triaged", "recurred"];
-const WORK: State[] = ["new", "triaging", "filing", "handed", "fixing", "merged"];
+const WORK: State[] = ["new", "triaging", "filing", "handed", "fixing", "merged", "deployed"];
 const DONE: State[] = ["verified", "dismissed"];
 
 export async function view(ctx: Ctx, tab: string | null): Promise<SuperagentView> {
@@ -39,15 +39,18 @@ function item(ctx: Ctx, c: Crash): SuperagentBlock {
   if (v) body.push(`**${v.verdict}** · ${v.severity} · ${md(v.summary)}`, v.rootCause ? `\n**Root cause.** ${md(v.rootCause)}` : "", v.reason ? `\n${md(v.reason)}` : "");
   if (v?.fix) body.push(`\n**Proposed:** ${md(v.fix.title)}\n\n**Acceptance.** ${md(v.fix.acceptance)}`);
   if (c.triage?.error) body.push(`The triage gave no verdict: ${md(c.triage.error)}`);
-  if (c.state === "merged" && c.verify) {
-    const quiet = (Date.now() - Math.max(c.verify.lastAfter ?? 0, c.pr!.mergedAt!)) / 3_600_000;
-    body.push(`Merged ${ago(c.pr!.mergedAt!)}: ${c.verify.after} since (before: ${c.verify.before} in ${c.verify.beforeHours} hours). Quiet ${Math.floor(quiet)} of the ${Math.ceil(c.verify.needHours)} hours that make it verified.`);
+  if (c.state === "merged" && c.pr?.mergedAt) body.push(`Merged to ${c.pr.base ?? "its base"} ${ago(c.pr.mergedAt)}; not in production (${s.prodBranch}) yet.`);
+  if (c.state === "deployed" && c.verify && c.pr?.deploy) {
+    const d = c.pr.deploy;
+    const quiet = (Date.now() - Math.max(c.verify.lastAfter ?? 0, d.at)) / 3_600_000;
+    body.push(`In production ${ago(d.at)}: ${c.verify.after} since (before the merge: ${c.verify.before} in ${c.verify.beforeHours} hours). Quiet ${Math.floor(quiet)} of the ${Math.ceil(c.verify.needHours)} hours that make it verified.`);
   }
   if (c.note) body.push(`\n_${md(c.note)}_`);
   const links = [
     ...(src ? [{ label: "PostHog", url: src.link(c.id) }] : []),
     ...(c.issue ? [{ label: `Issue #${c.issue.number}`, url: c.issue.url }] : []),
     ...(c.pr ? [{ label: `PR #${c.pr.number}`, url: c.pr.url }] : []),
+    ...(c.pr?.deploy?.url ? [{ label: "Deploy", url: c.pr.deploy.url }] : []),
   ];
   return {
     type: "item",
@@ -120,7 +123,11 @@ async function settingsBlocks(ctx: Ctx): Promise<SuperagentBlock[]> {
         num("pollMinutes", "Poll every (minutes)"),
         num("triagePerDay", "Triages a day at most"),
         num("triageAtOnce", "Triages at once at most"),
-        num("deployLagHours", "Still happening this long after the merge means not fixed (hours)"),
+        { name: "prodBranch", label: "Production branch (empty: the merge is the deploy)", kind: "text", value: s.prodBranch },
+        { name: "deployWorkflow", label: "Deploy workflow (its successful run on the production branch is a deploy)", kind: "text", value: s.deployWorkflow },
+        num("deployLagHours", "Still happening this long after it reached production means not fixed (hours)"),
+        { name: "envProperty", label: "Only events whose property… (empty: every event)", kind: "text", value: s.envProperty },
+        { name: "envValue", label: "…has this value (e.g. production)", kind: "text", value: s.envValue },
       ],
       actions: [
         { id: "settings-save", label: "Save", style: "primary" },

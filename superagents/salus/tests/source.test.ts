@@ -21,6 +21,27 @@ test("PostHog: one HogQL query per read, values passed as values, rows read into
   expect(ph.link("issue-1")).toBe("https://us.posthog.com/project/42/error_tracking/issue-1");
 });
 
+test("PostHog: an environment filter is a checked property name and a placeholder value, in both queries", async () => {
+  const asked: { query: string; values: Record<string, unknown> }[] = [];
+  const fetcher = (async (_url: string, init: RequestInit) => {
+    asked.push(JSON.parse(String(init.body)).query);
+    return new Response(JSON.stringify({ results: [] }));
+  }) as unknown as typeof fetch;
+  const ph = new PostHog("https://us.posthog.com", "42", "k", fetcher, { property: "$environment", value: "prod'uction" });
+  await ph.recent(24, 10);
+  await ph.count("k1", 1, 2);
+  for (const q of asked) {
+    expect(q.query).toContain("toString(properties.$environment) = {env}");
+    expect(q.query).not.toContain("prod'uction");
+    expect(q.values.env).toBe("prod'uction");
+  }
+  expect(() => new PostHog("h", "1", "k", fetcher, { property: "x = 1 OR y", value: "v" })).toThrow("Not a property name");
+  // No filter: no condition.
+  asked.length = 0;
+  await new PostHog("https://us.posthog.com", "42", "k", fetcher).recent(24, 10);
+  expect(asked[0]!.query).not.toContain("{env}");
+});
+
 test("PostHog: a refusal is an error with PostHog's reason", async () => {
   const fetcher = (async () => new Response(JSON.stringify({ detail: "API key missing required scope 'query:read'" }), { status: 403 })) as unknown as typeof fetch;
   await expect(new PostHog("https://us.posthog.com", "42", "k", fetcher).recent(24, 10)).rejects.toThrow("PostHog answered 403: API key missing required scope 'query:read'");

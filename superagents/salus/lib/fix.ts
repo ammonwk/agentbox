@@ -116,13 +116,26 @@ export async function follow(ctx: Ctx, id: string, now = Date.now()): Promise<Cr
     if (n && !c.pr) c = ctx.store.save({ ...c, pr: { url: work.publication!.url!, number: n } }, now);
     if (!c.pr) return c;
     const p = await project(ctx);
-    const pr = await ctx.tools.gh<{ merged_at: string | null; closed_at: string | null; state: string }>(`repos/${p.slug}/pulls/${c.pr.number}`, undefined, "GET");
+    const pr = await ctx.tools.gh<{ merged_at: string | null; closed_at: string | null; state: string; merge_commit_sha?: string | null; base?: { ref?: string } }>(
+      `repos/${p.slug}/pulls/${c.pr.number}`,
+      undefined,
+      "GET",
+    );
     if (pr.merged_at) {
       const mergedAt = Date.parse(pr.merged_at);
       const src = ctx.source();
       const before = src ? await src.count(c.id, mergedAt - 7 * 86_400_000, mergedAt) : { count: 0, last: null };
+      const mergeSha = pr.merge_commit_sha ?? undefined;
+      // With no production branch set, the merge is the deploy.
+      const atOnce = !ctx.settings().prodBranch;
       return ctx.store.save(
-        { ...c, state: "merged", pr: { ...c.pr, mergedAt }, verify: { before: before.count, beforeHours: 168, after: 0, lastAfter: null, needHours: needHours(before.count, 168), checkedAt: 0 }, note: undefined },
+        {
+          ...c,
+          state: atOnce ? "deployed" : "merged",
+          pr: { ...c.pr, mergedAt, mergeSha, base: pr.base?.ref, ...(atOnce ? { deploy: { at: mergedAt, url: null, sha: mergeSha ?? null } } : {}) },
+          verify: { before: before.count, beforeHours: 168, after: 0, lastAfter: null, needHours: needHours(before.count, 168), checkedAt: 0 },
+          note: undefined,
+        },
         now,
       );
     }

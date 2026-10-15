@@ -15,13 +15,25 @@ export interface Source {
 /** A crash's key: PostHog's issue when it grouped one, else the event's fingerprint. */
 const KEY = "coalesce(properties.$exception_issue_id, properties.$exception_fingerprint)";
 
+/** Only the events of one environment: a property (a checked name) and the value it must have (always a placeholder). */
+export type EnvFilter = { property: string; value: string };
+const PROPERTY = /^\$?[A-Za-z_][A-Za-z0-9_]*$/;
+
 export class PostHog implements Source {
   constructor(
     private host: string,
     private project: string,
     private key: string,
     private fetcher: typeof fetch = fetch,
-  ) {}
+    private env: EnvFilter | null = null,
+  ) {
+    if (env && !PROPERTY.test(env.property)) throw new Error(`Not a property name: ${env.property}`);
+  }
+
+  /** The environment condition and its value, or nothing. */
+  private where(): { sql: string; values: Record<string, unknown> } {
+    return this.env ? { sql: ` AND toString(properties.${this.env.property}) = {env}`, values: { env: this.env.value } } : { sql: "", values: {} };
+  }
 
   private async query(sql: string, values: Record<string, unknown>): Promise<unknown[][]> {
     const res = await this.fetcher(`${this.host.replace(/\/$/, "")}/api/projects/${this.project}/query/`, {
@@ -36,14 +48,15 @@ export class PostHog implements Source {
   }
 
   async recent(hours: number, limit: number): Promise<Seen[]> {
+    const env = this.where();
     const rows = await this.query(
       `SELECT ${KEY} AS key, count() AS n, min(timestamp), max(timestamp),
          argMax(properties.$exception_list, timestamp), argMax(properties.$current_url, timestamp), argMax(properties.$lib, timestamp)
        FROM events
-       WHERE event = '$exception' AND timestamp > now() - toIntervalHour({hours})
+       WHERE event = '$exception' AND timestamp > now() - toIntervalHour({hours})${env.sql}
        GROUP BY key HAVING notEmpty(ifNull(key, ''))
        ORDER BY n DESC LIMIT {limit}`,
-      { hours, limit },
+      { hours, limit, ...env.values },
     );
     return rows.map(([key, n, first, last, list, url, lib]) => ({
       key: String(key),
@@ -55,11 +68,12 @@ export class PostHog implements Source {
   }
 
   async count(key: string, since: number, until: number): Promise<{ count: number; last: number | null }> {
+    const env = this.where();
     const [row] = await this.query(
       `SELECT count(), max(timestamp) FROM events
        WHERE event = '$exception' AND ${KEY} = {key}
-         AND timestamp >= fromUnixTimestamp64Milli({since}) AND timestamp < fromUnixTimestamp64Milli({until})`,
-      { key, since, until },
+         AND timestamp >= fromUnixTimestamp64Milli({since}) AND timestamp < fromUnixTimestamp64Milli({until})${env.sql}`,
+      { key, since, until, ...env.values },
     );
     const n = Number(row?.[0] ?? 0);
     return { count: n, last: n ? Date.parse(String(row![1])) : null };

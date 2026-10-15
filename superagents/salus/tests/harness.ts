@@ -98,11 +98,23 @@ export class FakeGit {
 
 export class FakeGh {
   issues: { title: string; body: string }[] = [];
-  pulls = new Map<number, { merged_at: string | null; closed_at: string | null; state: string }>();
+  pulls = new Map<number, { merged_at: string | null; closed_at: string | null; state: string; merge_commit_sha?: string; base?: { ref: string } }>();
+  /** Successful deploy runs on the production branch, newest first as GitHub lists them. */
+  runs: { head_sha: string; updated_at: string; created_at: string; html_url: string }[] = [];
+  /** Which commits contain which: `contains[head]` lists the merge commits a head has. */
+  contains = new Map<string, string[]>();
+  asked: string[] = [];
   /** What a search finds: the issues filed so far, unless the test says the index has not caught up. */
   searchLags = false;
   run = async <T>(path: string, body?: unknown, method = "POST"): Promise<T> => {
     let m: RegExpExecArray | null;
+    this.asked.push(`${method === "GET" ? "GET" : method} ${path}`);
+    if ((m = /^repos\/acme\/app\/actions\/workflows\/([^/]+)\/runs\?(.*)$/.exec(path))) {
+      const q = new URLSearchParams(m[2]);
+      const since = Date.parse(q.get("created")!.replace(/^>=/, ""));
+      return { workflow_runs: this.runs.filter((r) => Date.parse(r.created_at) >= since) } as T;
+    }
+    if ((m = /^repos\/acme\/app\/compare\/(\w+)\.\.\.(\w+)/.exec(path))) return { status: this.contains.get(m[2]!)?.includes(m[1]!) ? "ahead" : "diverged" } as T;
     if (path.startsWith("search/issues")) return { items: this.searchLags ? [] : this.issues.map((i, n) => ({ html_url: `https://github.com/${REPO}/issues/${n + 1}`, number: n + 1, body: i.body })) } as T;
     if (path === `repos/${REPO}/issues` && method === "POST") {
       this.issues.push(body as { title: string; body: string });

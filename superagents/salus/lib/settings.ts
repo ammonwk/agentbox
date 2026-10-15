@@ -23,10 +23,18 @@ export const Settings = z
     pollMinutes: z.number().int().min(1).max(1440).default(10),
     triagePerDay: z.number().int().min(0).max(200).default(12),
     triageAtOnce: z.number().int().min(1).max(10).default(2),
-    /** Still happening this long after its fix merged: not fixed (or not deployed). */
+    /** Still happening this long after its fix reached production: not fixed. */
     deployLagHours: z.number().int().min(1).max(720).default(72),
+    /** The branch production runs. Empty: the merge itself is the deploy. */
+    prodBranch: z.string().regex(/^[\w./-]{0,200}$/).default("master"),
+    /** The workflow file whose successful run on `prodBranch` is a deploy. */
+    deployWorkflow: z.string().regex(/^[\w.-]{0,200}$/).default("cd.yml"),
+    /** Count only events whose property `envProperty` is `envValue` (production's, not staging's). Both empty: every event. */
+    envProperty: z.string().regex(/^(\$?[A-Za-z_][A-Za-z0-9_]*)?$/, "a property name: letters, digits and _, optionally starting with $").default(""),
+    envValue: z.string().max(200).default(""),
   })
-  .strict();
+  .strict()
+  .refine((s) => !s.envProperty === !s.envValue, { message: "set both the environment property and its value, or neither", path: ["envValue"] });
 export type Settings = z.infer<typeof Settings>;
 
 const file = (home: string) => join(home, "settings.json");
