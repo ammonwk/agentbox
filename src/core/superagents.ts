@@ -479,6 +479,7 @@ export class Superagents {
    */
   async chat(name: string, text: string, sendId: string): Promise<{ session: string; started: boolean }> {
     const r = this.row(name);
+    if (r.enabled !== 1) throw new FleetError(409, `${name} is disabled: enable it before you talk to it`);
     const main = this.mainOf(r);
     if (main) {
       await submitWithReceipt(main, sendId, "send", text, (attempt) => this.fleet.send(main, text, attempt));
