@@ -28,10 +28,11 @@ function cardInProject(state: AppState, agents: LocalAgent[], c: Card, project: 
     if (slug) return state.repos.some((r) => r.id === project && (r.fullName ?? (r.kind === "github" ? r.ref : "")).toLowerCase() === slug);
   }
   for (const id of [c.about, c.sessionId]) {
+    if (!id) continue; // no `about`: an idle agent has no session either, and must not match
     const s = state.sessions.find((s) => s.id === id);
     if (s) return sessionProject(state.repos, agents, s) === project;
-    const a = agents.find((a) => a.session === id || a.previous.includes(id ?? ""));
-    if (a) return (a.session === id ? a.repo : a.sessionProjects?.[id!] ?? a.project ?? null) === project;
+    const a = agents.find((a) => a.session === id || a.previous.includes(id));
+    if (a) return (a.session === id ? a.repo : a.sessionProjects?.[id] ?? a.project ?? null) === project;
   }
   return false;
 }
