@@ -24,6 +24,14 @@
  *   share(human, name, {visibility, maintainers})  → SuperagentInfo   through this machine's server, which
  *   unshare(human, name)                           → SuperagentInfo   passes your session token to the cloud
  *
+ * The page's own handles (UI state, no network of its own):
+ *   useTeamAccess()                                → TeamAccess       the cloud client, the person and the workspace;
+ *                                                                     one per page, shared through `TeamAccessContext`
+ *   teamMembers(human, workspace)                  → the workspace's members, for the maintainers list
+ *
+ * With `?mock=1` every call answers from web/src/mock.ts (`mockTeam`) and
+ * nothing reaches the network.
+ *
  * Pages cross the cloud end-to-end encrypted (ECDH P-256 + AES-GCM, with
  * WebCrypto), so reading and acting need a secure context: https, localhost
  * or 127.0.0.1. `relayUnavailable()` says why not, or null. A host that is
@@ -31,8 +39,9 @@
  * says so. A teammate never gets a terminal or any other session.
  */
 
-import { useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo } from "react";
 import type { HumanCloud } from "../../../src/cloud/client";
+import type { Member, Person } from "../../../src/cloud/protocol";
 import {
   HumanSuperagents,
   relayUnavailable,
@@ -45,7 +54,9 @@ import {
   type TeamViewPage,
 } from "../../../src/cloud/superagents";
 import type { SuperagentInfo } from "../../../src/core/types";
-import { useLoad, type Loaded } from "./cloud";
+import { MOCK } from "../api";
+import { humanCloud, useCloudStatus, useCloudUser, useLoad, type Loaded } from "./cloud";
+import { useScope } from "./projects";
 
 export { relayUnavailable };
 export type { ChatCursor, CommandReceipt, SuperagentInstance, TeamActionAnswer, TeamChatEvent, TeamChatPage, TeamViewPage };
@@ -60,6 +71,9 @@ export function teamAgents(human: HumanCloud): HumanSuperagents {
   if (!c) clients.set(human, (c = new HumanSuperagents(human.sb)));
   return c;
 }
+
+/** The mock's answers (`?mock=1`), loaded only then. */
+const mock = () => import("../mock").then((m) => m.mockTeam);
 
 async function token(human: HumanCloud): Promise<string> {
   const { data } = await human.sb.auth.getSession();
@@ -87,46 +101,61 @@ async function asPerson<T>(human: HumanCloud, method: "GET" | "POST" | "DELETE",
 
 /** The instances of `workspace` you can see, from this machine's server (it marks what it hosts). */
 export async function teamDirectory(human: HumanCloud, workspace: string): Promise<TeamInstance[]> {
+  if (MOCK) return (await mock()).directory();
   const r = await asPerson<{ instances: TeamInstance[] }>(human, "GET", `/api/team/superagents?workspace=${encodeURIComponent(workspace)}`);
   return r.instances;
 }
 
+/** The directory, read again every 30 seconds: a host goes off and on, a teammate shares or unshares. */
 export function useTeamDirectory(human: HumanCloud | null, workspace: string | null): Loaded<TeamInstance[]> {
-  return useLoad(() => (human && workspace ? teamDirectory(human, workspace) : Promise.resolve([])), [human, workspace]);
+  const dir = useLoad(() => (human && workspace ? teamDirectory(human, workspace) : Promise.resolve([])), [human, workspace]);
+  useEffect(() => {
+    if (!human || !workspace) return;
+    const t = setInterval(() => void dir.reload(), 30_000);
+    return () => clearInterval(t);
+  }, [human, workspace, dir.reload]);
+  return dir;
 }
 
-export function readChat(human: HumanCloud, instance: string, cursor: Partial<ChatCursor> = {}, signal?: AbortSignal): Promise<TeamChatPage> {
+export async function readChat(human: HumanCloud, instance: string, cursor: Partial<ChatCursor> = {}, signal?: AbortSignal): Promise<TeamChatPage> {
+  if (MOCK) return (await mock()).readChat(instance, cursor);
   return teamAgents(human).readChat(instance, cursor, signal);
 }
 
-export function readView(human: HumanCloud, instance: string, tab: string | null = null, signal?: AbortSignal): Promise<TeamViewPage> {
+export async function readView(human: HumanCloud, instance: string, tab: string | null = null, signal?: AbortSignal): Promise<TeamViewPage> {
+  if (MOCK) return (await mock()).readView(instance, tab);
   return teamAgents(human).readView(instance, tab, signal);
 }
 
-export function guide(human: HumanCloud, instance: string, text: string, sendId: string, expectedSession: string): Promise<CommandReceipt> {
+export async function guide(human: HumanCloud, instance: string, text: string, sendId: string, expectedSession: string): Promise<CommandReceipt> {
+  if (MOCK) return (await mock()).guide(instance, text, sendId, expectedSession);
   return teamAgents(human).guide(instance, text, sendId, expectedSession);
 }
 
-export function act(
+export async function act(
   human: HumanCloud,
   instance: string,
   action: string,
   values: Record<string, unknown> = {},
   tab: string | null = null,
 ): Promise<{ receipt: CommandReceipt; answer: TeamActionAnswer | null }> {
+  if (MOCK) return (await mock()).act(instance, action, values, tab);
   return teamAgents(human).act(instance, action, values, { tab });
 }
 
-export function receipt(human: HumanCloud, id: string): Promise<CommandReceipt> {
+export async function receipt(human: HumanCloud, id: string): Promise<CommandReceipt> {
+  if (MOCK) return (await mock()).receipt(id);
   return teamAgents(human).receipt(id);
 }
 
 /** Share a superagent this machine runs. Only its host owner: the cloud checks your session. */
-export function share(human: HumanCloud, name: string, opts: { visibility: "private" | "workspace"; maintainers?: string[]; workspace?: string }): Promise<SuperagentInfo> {
+export async function share(human: HumanCloud, name: string, opts: { visibility: "private" | "workspace"; maintainers?: string[]; workspace?: string }): Promise<SuperagentInfo> {
+  if (MOCK) return (await mock()).share(name, opts);
   return asPerson<SuperagentInfo>(human, "POST", `/api/superagents/${encodeURIComponent(name)}/share`, opts);
 }
 
-export function unshare(human: HumanCloud, name: string): Promise<SuperagentInfo> {
+export async function unshare(human: HumanCloud, name: string): Promise<SuperagentInfo> {
+  if (MOCK) return (await mock()).unshare(name);
   return asPerson<SuperagentInfo>(human, "DELETE", `/api/superagents/${encodeURIComponent(name)}/share`);
 }
 
@@ -134,3 +163,51 @@ export function unshare(human: HumanCloud, name: string): Promise<SuperagentInfo
 export function useRelayUnavailable(): string | null {
   return useMemo(() => relayUnavailable(), []);
 }
+
+/** The members of a workspace, with their names. */
+export async function teamMembers(human: HumanCloud, workspace: string): Promise<(Member & { person: Person })[]> {
+  if (MOCK) return (await mock()).members();
+  return human.members(workspace);
+}
+
+/** What a page needs to show shared superagents: the cloud is set up here,
+ *  the person signed in to it, and the workspace (the URL's scope, else the
+ *  one this machine is registered in). `human` is null until all of that holds. */
+export interface TeamAccess {
+  /** The cloud is set up on this machine (cloud.env). */
+  configured: boolean;
+  /** The sign-in check finished. */
+  ready: boolean;
+  human: HumanCloud | null;
+  userId: string | null;
+  /** The workspace whose instances the rail lists. */
+  workspace: string | null;
+  /** The workspace this machine is registered in: a superagent is shared there. */
+  hostWorkspace: string | null;
+}
+
+const NO_ACCESS: TeamAccess = { configured: false, ready: true, human: null, userId: null, workspace: null, hostWorkspace: null };
+/** In the mock: a stand-in client that no call reads, since every call answers from the mock first. */
+const MOCK_ACCESS: TeamAccess = { configured: true, ready: true, human: {} as HumanCloud, userId: "u-mock-you", workspace: "w-mock", hostWorkspace: "w-mock" };
+
+export function useTeamAccess(): TeamAccess {
+  const { status } = useCloudStatus(30_000);
+  const human = useMemo(() => (!MOCK && status?.configured ? humanCloud(status) : null), [status?.configured, status?.url, status?.publishableKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const user = useCloudUser(human);
+  const scope = useScope();
+  if (MOCK) return MOCK_ACCESS;
+  if (!status?.configured) return NO_ACCESS;
+  const hostWorkspace = status.installation?.workspaceId ?? null;
+  return {
+    configured: true,
+    ready: !!human && user.ready,
+    human: user.userId ? human : null,
+    userId: user.userId,
+    workspace: scope.workspace || hostWorkspace,
+    hostWorkspace,
+  };
+}
+
+/** The page's one `useTeamAccess`, for the panes below it. */
+export const TeamAccessContext = createContext<TeamAccess>(NO_ACCESS);
+export const useTeam = () => useContext(TeamAccessContext);

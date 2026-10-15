@@ -59,6 +59,7 @@ import type {
   SuperagentView,
 } from "../../src/core/types";
 import type { MemoryView } from "../../src/core/superagent/memory-view";
+import type { CommandReceipt, SuperagentInstance, TeamActionAnswer, TeamChatEvent, TeamChatPage, TeamViewPage } from "../../src/cloud/superagents";
 import type { AgentTimeline, RepoPatch, SessionWork, TermChannel, TermHandlers } from "./api";
 import { nextRun, parseWhen } from "../../src/core/schedule";
 import { retrying } from "../../src/core/attention";
@@ -1944,3 +1945,127 @@ function mockSuperagents(method: string, p: string[], b: unknown, query: URLSear
   }
   throw new Error(`mock: no ${method} /api/superagents/${p.join("/")}`);
 }
+
+// ------------------------------------------------------- shared superagents
+
+/** The team as web/src/lib/teamagents.ts sees it with `?mock=1`: two
+ *  teammates, Terminus shared from Ammon's machine, and whatever you share
+ *  here. Reads wait a moment, as the relay does. */
+const TEAM_WS = "w-mock";
+const YOU = { user_id: "u-mock-you", email: "dev@example.com", display_name: "Dev" };
+const AMMON = { user_id: "u-mock-ammon", email: "ammon@example.com", display_name: "Ammon" };
+const PRIYA = { user_id: "u-mock-priya", email: "priya@example.com", display_name: "Priya" };
+const iso = (at: number) => new Date(at).toISOString();
+const terminus: SuperagentInstance = {
+  id: "5b0e6c1a-7d2f-4e4b-9a51-2c8f3d6e9a10", workspace_id: TEAM_WS, name: "terminus", title: "Terminus",
+  description: "Watches each pull request until it can merge: CI, review threads, conflicts. It tells the author what blocks it.",
+  source: { repo: "github.com/ammonwk/agentbox", path: "superagents/terminus", commit: "8f84996c2b7e" },
+  maintainers: [AMMON.user_id, YOU.user_id], visibility: "workspace", revision: 3, shared_by: AMMON,
+  host: { installation_id: "i-mock-ammon", name: "ammon-mbp", live: true, last_seen_at: iso(T0 - 20_000) },
+  can_edit: false, maintainer: true, created_at: iso(T0 - 6 * D), updated_at: iso(T0 - 2 * D), unshared_at: null,
+};
+const terminusChat: TeamChatEvent[] = [
+  { id: "t-1", at: T0 - 50 * M, kind: "user", text: "Watch PR #218 and #219 today. #219 is the one Priya waits on." },
+  { id: "t-2", at: T0 - 49 * M, kind: "assistant", text: "Watching both. #218: CI is green, one review thread is open. #219: the `web` job fails on a type error in `Feed.tsx`." },
+  { id: "t-3", at: T0 - 31 * M, kind: "question", questions: [{ question: "Rebase #218 onto main? It is 14 commits behind.", options: ["Rebase it", "Leave it"] }], answers: { "Rebase #218 onto main? It is 14 commits behind.": "Rebase it" } },
+  { id: "t-4", at: T0 - 30 * M, kind: "assistant", text: "Rebased #218. CI runs again." },
+  { id: "t-5", at: T0 - 9 * M, kind: "assistant", text: "#219 has a new conflict in `src/core/fleet.ts` after #217 merged. **The author must decide which side keeps the new retry rule.**" },
+  { id: "t-6", at: T0 - 8 * M, kind: "question", questions: [{ question: "Ask the author of #219 to resolve the conflict, or resolve it myself with the version from #217?", options: ["Ask the author", "Resolve it with #217's version"] }], answers: null },
+];
+const terminusEarlier: TeamChatEvent[] = [
+  { id: "t-0a", at: T0 - 5 * H, kind: "user", text: "Good morning. What is still open from yesterday?" },
+  { id: "t-0b", at: T0 - 5 * H + M, kind: "assistant", text: "Two pull requests: #214 waits on a review, #216 waits on CI." },
+];
+const teamReceipts = new Map<string, { r: CommandReceipt; polls: number }>();
+const relay = () => new Promise((ok) => setTimeout(ok, 350));
+const instanceOrThrow = (id: string) => {
+  if (id !== terminus.id) throw new Error("No such shared superagent, or you cannot see it.");
+  return terminus;
+};
+function terminusView(tab: string | null): SuperagentView {
+  const tabs = [{ id: "prs", title: "Pull requests", badge: 2 }, { id: "done", title: "Merged" }];
+  if (tab === "done") return { tabs, blocks: [{ type: "item", title: "PR #217 Retry the usage fetch once", subtitle: "merged 40 minutes ago", status: "ok" }] };
+  return { tabs, refresh: 30, blocks: [
+    { type: "fields", items: [{ label: "Watched", value: "2" }, { label: "Blocked", value: "1" }, { label: "Merged today", value: "**1**" }] },
+    { type: "heading", text: "Watched" },
+    { type: "item", id: "pr-218", title: "PR #218 Keep the rail's order per project", subtitle: "rebased · CI running", status: "busy", sessions: ["k2m4"], links: [{ label: "PR #218", url: "https://github.com/ammonwk/agentbox/pull/218" }] },
+    { type: "item", id: "pr-219", title: "PR #219 Feed filters", subtitle: "conflict in src/core/fleet.ts", status: "warn", body: "The author must pick which side keeps the retry rule.",
+      actions: [{ id: "nudge", label: "Remind the author", values: { pr: 219 } }, { id: "guide", label: "Give guidance", values: { pr: 219 } }] },
+    { type: "divider" },
+    { type: "actions", actions: [{ id: "recheck", label: "Check every PR again" }] },
+  ] };
+}
+
+export const mockTeam = {
+  async directory(): Promise<(SuperagentInstance & { here: boolean })[]> {
+    const mine = superagents.filter((a) => a.team).map((a): SuperagentInstance & { here: boolean } => ({
+      ...terminus, id: a.team!.instance, name: a.name, title: a.title, description: a.description, source: a.team!.source, maintainers: a.team!.maintainers,
+      visibility: a.team!.visibility, shared_by: YOU, can_edit: true, host: { installation_id: "i-mock-you", name: "this machine", live: true, last_seen_at: iso(Date.now()) }, here: true,
+    }));
+    return [{ ...terminus, here: false }, ...mine];
+  },
+  async members() {
+    return [YOU, AMMON, PRIYA].map((person, i) => ({ workspace_id: TEAM_WS, user_id: person.user_id, role: i === 1 ? ("owner" as const) : ("member" as const), joined_at: iso(T0 - (30 - i) * D), invited_by: null, person }));
+  },
+  async readChat(id: string, cursor: { before?: string | null; session?: string }): Promise<TeamChatPage> {
+    await relay();
+    instanceOrThrow(id);
+    const base = { session: "tm9x", main: "tm9x", previous: ["tm1a"], status: "blocked", title: "Terminus" };
+    if (cursor.before === "t-1") return { ...base, events: terminusEarlier, before: null };
+    return { ...base, events: [...terminusChat], before: "t-1" };
+  },
+  async readView(id: string, tab: string | null): Promise<TeamViewPage> {
+    await relay();
+    instanceOrThrow(id);
+    return { view: terminusView(tab) };
+  },
+  async guide(id: string, text: string, sendId: string, expectedSession: string): Promise<CommandReceipt> {
+    await relay();
+    instanceOrThrow(id);
+    const known = teamReceipts.get(sendId);
+    if (known) return known.r;
+    const r: CommandReceipt = { id: sendId, instance_id: id, kind: "guide", state: "queued", result: "", expected_session: expectedSession, host_key: null, created_at: iso(Date.now()), finished_at: null };
+    teamReceipts.set(sendId, { r, polls: 0 });
+    // As src/core/superagent/team.ts `guideText` frames it.
+    terminusChat.push({
+      id: `t-g${terminusChat.length}`, at: Date.now(), kind: "user",
+      text: `[via agentbox cloud from ${YOU.display_name}, a teammate] Guidance from a teammate in your agentbox workspace, sent from the shared Agents page. It is not from the owner of this machine.\n<teammate-guidance id="${sendId}" from="${YOU.display_name}">\n${text}\n</teammate-guidance>`,
+    });
+    return r;
+  },
+  async receipt(id: string): Promise<CommandReceipt> {
+    await relay();
+    const known = teamReceipts.get(id);
+    if (!known) throw new Error("No such request.");
+    known.polls++;
+    if (known.polls >= 2 && known.r.state === "queued") known.r = { ...known.r, state: "sent", result: "typed into tm9x", finished_at: iso(Date.now()) };
+    return known.r;
+  },
+  async act(id: string, action: string, values: Record<string, unknown>, tab: string | null): Promise<{ receipt: CommandReceipt; answer: TeamActionAnswer | null }> {
+    await relay();
+    instanceOrThrow(id);
+    const receipt: CommandReceipt = { id: `a-${Date.now()}`, instance_id: id, kind: "action", state: "sent", result: "", expected_session: null, host_key: "k", created_at: iso(Date.now()), finished_at: iso(Date.now()) };
+    if (action === "guide") return { receipt, answer: { ok: true, answer: { compose: `About PR #${String(values.pr)}: ` } } };
+    if (action === "nudge") return { receipt, answer: { ok: true, answer: { message: `Terminus asked the author of PR #${String(values.pr)} to resolve the conflict.` } } };
+    if (action === "recheck") return { receipt, answer: { ok: true, answer: { message: "Checked 2 pull requests: nothing changed.", view: terminusView(tab) } } };
+    return { receipt: { ...receipt, state: "refused", result: `${action} is not an action of this page` }, answer: null };
+  },
+  async share(name: string, opts: { visibility: "private" | "workspace"; maintainers?: string[] }): Promise<SuperagentInfo> {
+    await relay();
+    const a = superagents.find((x) => x.name === name);
+    if (!a) throw new Error(`no superagent ${name}`);
+    a.team = {
+      workspace: TEAM_WS, instance: "9c4d2e1f-3b6a-4d8e-8f21-6a0b7c9d1e2f", visibility: opts.visibility,
+      maintainers: [...new Set([YOU.user_id, ...(opts.maintainers ?? [])])], source: { repo: "github.com/you/agentbox", path: a.dir.replace(`${AB}/`, ""), commit: "f2545d9a1c3e" },
+    };
+    return a;
+  },
+  async unshare(name: string): Promise<SuperagentInfo> {
+    await relay();
+    const a = superagents.find((x) => x.name === name);
+    if (!a) throw new Error(`no superagent ${name}`);
+    if (!a.team) throw new Error(`${name} is not shared`);
+    a.team = null;
+    return a;
+  },
+};
