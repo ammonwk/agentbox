@@ -51,6 +51,10 @@ export class Store {
   saveWork(w: Work): void {
     this.put("works", w.id, w);
   }
+  /** A family that never was: its claim was refused before it started anything. */
+  dropWork(id: string): void {
+    this.db.run("DELETE FROM works WHERE id = ?", [id]);
+  }
   /** Issue claims kept here before agentbox kept them, by family. */
   legacyClaims(): Map<string, string[]> {
     const out = new Map<string, string[]>();

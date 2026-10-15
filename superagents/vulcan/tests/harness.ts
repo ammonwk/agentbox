@@ -181,7 +181,10 @@ export class FakeAgentbox {
       const c = this.workClaims.get(keyOf(k).key);
       return c && c.state !== "released" ? c : null;
     };
-    if (req.method === "GET") return this.json([...this.workClaims.values()].filter((c) => c.state !== "released" && (!url.searchParams.get("superagent") || c.holder.superagent === url.searchParams.get("superagent"))));
+    if (req.method === "GET") {
+      const q = (k: string) => url.searchParams.get(k);
+      return this.json([...this.workClaims.values()].filter((c) => c.state !== "released" && (!q("superagent") || c.holder.superagent === q("superagent")) && (!q("key") || c.key === keyOf(q("key")!).key)));
+    }
     if (url.pathname === "/api/claims") {
       const items = (body.sources as string[]).map(keyOf);
       for (const i of items) {
@@ -203,6 +206,13 @@ export class FakeAgentbox {
     else if (url.pathname === "/api/claims/release") c.state = "released";
     else return this.json(`no ${req.method} ${url.pathname}`, 404);
     return this.json(c);
+  }
+
+  /** A handover or a takeover, as core does it: the fence grows by one and the holder changes. */
+  moveClaim(key: string, holder: { superagent: string | null; session: string | null }) {
+    const c = this.workClaims.get(key);
+    if (!c) throw new Error(`no fake claim ${key}`);
+    Object.assign(c, { fence: c.fence + 1, holder });
   }
 }
 

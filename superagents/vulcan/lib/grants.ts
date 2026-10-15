@@ -82,7 +82,7 @@ export async function enforceAuthority(ctx: Ctx, now = Date.now()): Promise<stri
     }
     // Its issues are free once what ran on them has stopped.
     const after = ctx.store.work(w.id);
-    if (!after.stoppedAt || after.claims?.length) ctx.store.saveWork({ ...after, stoppedAt: after.stoppedAt ?? now, claims: await releaseClaims(after) });
+    if (!after.stoppedAt || after.claims?.length || after.claiming) ctx.store.saveWork({ ...after, stoppedAt: after.stoppedAt ?? now, ...(await releaseClaims(after)) });
   }
   return stopped;
 }

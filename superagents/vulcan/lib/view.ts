@@ -25,6 +25,7 @@ export async function view(ctx: Ctx, tab: string | null): Promise<SuperagentView
 function status(w: Work): { status: "ok" | "warn" | "bad" | "busy" | "idle"; stage: string } {
   if (w.stoppedAt) return { status: "bad", stage: `stopped ${when(w.stoppedAt)}` };
   if (w.state === "quality_failed") return { status: "bad", stage: `quality failed${w.failure?.issue ? ", improvement issue filed" : ""}` };
+  if (w.claiming) return { status: "busy", stage: "claiming its issues: retry start if it stays here" };
   if (w.state === "starting") return { status: "busy", stage: "starting the writer" };
   if (w.state === "uncertain") return { status: "warn", stage: "start uncertain: retry start" };
   const p = w.publication;
@@ -65,6 +66,7 @@ function work(ctx: Ctx, works: Work[]): SuperagentBlock[] {
         `Base \`${w.input.base}\` at ${short(w.base)}, branch \`${w.branch}\`, writer ${w.provider}, prompt revision \`${w.promptRevision}\`. Accountable: ${md(w.grant.human.name)} (${w.grant.human.github}); publishes as ${w.grant.actor}.`,
         rounds(w),
         p ? `**Publication:** ${p.state}${p.stage ? ` (${p.stage})` : ""} of ${short(p.head)}${p.url ? ` — [#${p.number}](${p.url})` : ""}${p.follow?.note ? `\n\n_${md(p.follow.note)}_` : ""}` : "",
+        w.notes?.length ? w.notes.map((n) => `_${md(n)}_`).join("\n\n") : "",
         w.failure ? `**Failure:** ${md(w.failure.summary)} (${w.failure.state}${w.failure.issue ? `, [issue](${w.failure.issue})` : ""})` : "",
         grant,
       ]

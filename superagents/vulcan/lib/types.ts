@@ -133,6 +133,11 @@ export type Work = {
   launch?: { at: number };
   /** Its issues, claimed in agentbox (docs/superagents.md, Claims) with the fence each has now. */
   claims?: { key: string; fence: number }[];
+  /** The claim was asked and its answer has not come back yet: agentbox can hold
+   *  the issues for this family. Its claims are read back by their note. */
+  claiming?: boolean;
+  /** What happened to the family that its other fields do not show, such as a claim another holder took. */
+  notes?: string[];
   rounds: Round[];
   publication?: Publication;
   failure?: Failure;
