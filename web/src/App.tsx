@@ -312,8 +312,6 @@ export function App() {
                 }
                 onNew={() => setNewOpen(true)}
               />
-            ) : route.page === "agents" && !project ? (
-              <Empty title="Choose a project to see its agents"><Button onClick={() => setSwitcherOpen(true)}>Choose a project</Button></Empty>
             ) : route.page === "agents" ? (
               <Suspense fallback={<Empty title="Loading…" />}><Agents key={`${scope.workspace}:${scope.project ?? "all"}`} state={state} route={route} /></Suspense>
             ) : route.page === "accounts" ? (

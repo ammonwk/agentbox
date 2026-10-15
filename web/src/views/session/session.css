@@ -3616,42 +3616,6 @@ a.wk-item:hover {
 .rail-section-toggle:disabled { cursor: default; }
 .rail-section-toggle .section-chevron { transition: transform .12s; }
 .rail-section-toggle[aria-expanded="true"] .section-chevron { transform: rotate(90deg); }
-/* Agent chat history carried only as a summary: both sides muted, the
- * pictures and links still readable; a divider says where each began. */
-.tl-carried .tl-bubble,
-.tl-carried > .tl-assistant {
-  opacity: 0.62;
-}
-.tl-carried .tl-me-foot {
-  opacity: 0.75;
-}
-.tl-carried-divider {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  margin: 18px 0 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border-strong, var(--border));
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-.tl-carried-divider strong {
-  color: var(--text);
-  font-size: 12px;
-}
-.tl-carried-divider small {
-  color: var(--faint);
-}
-.tl-current-divider {
-  border-top-style: solid;
-}
-
-/* A recommendation reply reads as quoted context; transport IDs stay out of the bubble. */
-.tl-reply-preview { border-left: 3px solid var(--accent); padding: 6px 10px; margin-bottom: 10px; border-radius: 4px; background: color-mix(in srgb, var(--text) 4%, transparent); font-size: 12px; }
-.tl-reply-preview strong { display: block; font-weight: 600; }
-.tl-reply-preview blockquote { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; max-height: 4.5em; overflow: hidden; }
 .tl-assistant-time { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
 /* Who sent a message that came in through the user role. */
 .tl-sender-badge {

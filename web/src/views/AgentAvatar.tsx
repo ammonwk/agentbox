@@ -6,6 +6,7 @@ import { Sparkle } from "@phosphor-icons/react/dist/csr/Sparkle";
 import { Brain } from "@phosphor-icons/react/dist/csr/Brain";
 import { Robot } from "@phosphor-icons/react/dist/csr/Robot";
 import type { AgentIcon } from "../../../src/core/types";
+import { api } from "../api";
 
 /** A superagent's own icon: the one its manifest names (`icon`), else one
  *  from what its description says it does; anything else thinks. */
@@ -48,14 +49,11 @@ export const avatarUrl = (a: { name: string; avatar: { at: number } | null }) =>
  *  the superagent, so every conversation it has shows it. */
 export function AgentPictureEditor({ agent, onChange }: { agent: { name: string; title: string; description: string; icon: AgentIcon | null; avatar: { at: number } | null }; onChange: () => Promise<unknown> | void }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
-  const url = `/api/superagents/${encodeURIComponent(agent.name)}/avatar`;
-  const change = async (init: RequestInit) => {
+  const change = async (file: Blob | null) => {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(url, { ...init, headers: { "x-agentbox": "1", ...(init.headers as Record<string, string>) } });
-      const env = (await res.json().catch(() => ({ ok: false, error: `${res.status} ${res.statusText}` }))) as { ok?: boolean; error?: string };
-      if (!env.ok) throw new Error(env.error || `failed: ${res.status}`);
+      await api.superagentAvatar(agent.name, file);
       await onChange();
     } catch (e) {
       setError((e as Error).message);
@@ -80,12 +78,12 @@ export function AgentPictureEditor({ agent, onChange }: { agent: { name: string;
                 e.currentTarget.value = "";
                 if (!file) return;
                 if (file.size > 2 * 1024 * 1024) return setError("Choose an image of at most 2 MB");
-                void change({ method: "PUT", headers: { "content-type": file.type }, body: file });
+                void change(file);
               }}
             />
           </label>
           {agent.avatar && (
-            <button type="button" className="btn btn-default btn-md" disabled={busy} onClick={() => void change({ method: "DELETE" })}>
+            <button type="button" className="btn btn-default btn-md" disabled={busy} onClick={() => void change(null)}>
               Remove
             </button>
           )}

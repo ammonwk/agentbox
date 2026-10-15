@@ -3,9 +3,7 @@
 import type { SavedAttachment } from "../../attachments";
 import type { SendReceipt } from "../../../../src/core/types";
 
-export type AgentDraftContext = { proposal: string; run: string };
 export interface Draft {
-  agentContext?: AgentDraftContext;
   text: string;
   images: SavedAttachment[];
   at: number;
@@ -129,13 +127,13 @@ async function mutate(fn: () => void): Promise<void> {
     tx.onabort = () => reject(failure ?? tx.error);
   });
 }
-export async function saveDraft(id: string, text: string, images: SavedAttachment[], revision: string, agentContext?: AgentDraftContext, previousRevision?: string): Promise<void> {
+export async function saveDraft(id: string, text: string, images: SavedAttachment[], revision: string, previousRevision?: string): Promise<void> {
   try {
     await mutate(() => {
       const all = readAll();
       const w = all[id] ??= {};
       if (w.taken?.includes(revision)) return;
-      if (text.trim() || images.length) w.draft = { text, images, at: Date.now(), revision, ...(agentContext ? { agentContext } : {}) };
+      if (text.trim() || images.length) w.draft = { text, images, at: Date.now(), revision };
       // An empty field in another tab must not erase somebody else's draft.
       else if (w.draft?.revision === revision || (previousRevision !== undefined && w.draft?.revision === previousRevision)) delete w.draft;
       write(all);
@@ -190,8 +188,6 @@ export async function forgetPending(sessionId: string, id: string): Promise<void
 
 /** Preserve the current draft while appending recovered text and renumbering images. */
 export function appendDraft(current: Draft | null, recovered: Draft): { draft: Draft; addedImages: SavedAttachment[] } {
-  if (current?.agentContext && recovered.agentContext && (current.agentContext.proposal !== recovered.agentContext.proposal || current.agentContext.run !== recovered.agentContext.run))
-    throw Error("Finish or clear the current recommendation reply before restoring another one.");
   const numbersIn = (text: string) => [...text.matchAll(/\[Image #(\d+)\]/g)].map((match) => Number(match[1]));
   let number = Math.max(0, ...(current?.images ?? []).map((image) => image.n), ...numbersIn(current?.text ?? ""));
   // An unfinished upload must not take an unrelated image already attached
@@ -199,7 +195,7 @@ export function appendDraft(current: Draft | null, recovered: Draft): { draft: D
   const numbers = new Map([...new Set([...numbersIn(recovered.text), ...recovered.images.map((image) => image.n)])].map((old) => [old, ++number]));
   const addedImages = recovered.images.map(image=>({...image,n:numbers.get(image.n)!}));
   const text = recovered.text.replace(/\[Image #(\d+)\]/g,(token,old:string)=>numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
-  return {addedImages,draft:{text:[current?.text.trimEnd(),text].filter(Boolean).join("\n\n"),images:[...(current?.images ?? []),...addedImages],agentContext:current?.agentContext ?? recovered.agentContext,revision:newRevision(),at:Date.now()}};
+  return {addedImages,draft:{text:[current?.text.trimEnd(),text].filter(Boolean).join("\n\n"),images:[...(current?.images ?? []),...addedImages],revision:newRevision(),at:Date.now()}};
 }
 
 /** Restoring a known failure is an explicit edit, saved with the removal of
@@ -214,20 +210,4 @@ export async function restorePending(sessionId: string, id: string, draft: Draft
     w.pending = w.pending.filter((p) => p.id !== id);
     write(all);
   });
-}
-
-/** Explicit human recovery of an old agent-level draft into a chosen thread.
- * Moves under the existing cross-tab lock; never silently retargets a proposal. */
-export async function recoverAgentDraft(from: string, to: string, run: string | undefined): Promise<Draft | null> {
-  let result: Draft | null = null;
-  await mutate(() => {
-    const all = readAll(), source = all[from], draft = source?.draft;
-    if (!source || !draft) return;
-    if (draft.agentContext && draft.agentContext.run !== run) throw Error("This guidance belongs to another conversation; open that conversation to recover it.");
-    const target = all[to] ??= {};
-    result = appendDraft(target.draft ?? null,draft).draft;
-    source.taken = [...(source.taken ?? []), draft.revision]; delete source.draft;
-    target.draft = result; write(all);
-  });
-  return result;
 }

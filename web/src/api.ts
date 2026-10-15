@@ -54,6 +54,8 @@ import type {
   McpServerInput,
   McpState,
 } from "../../src/core/types";
+import type { MemoryView } from "../../src/core/superagent/memory-view";
+import type { SweepRecord } from "../../src/core/superagent/state";
 import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
 import type { CloudStatus, OutboundResult } from "../../src/core/cloud/bridge";
@@ -124,6 +126,15 @@ export interface SuperagentActionReply {
   view?: SuperagentView;
   open?: string;
   compose?: string;
+}
+
+/** A `/help` report's receipt (src/core/superagent/feedback.ts): `issue` is
+ *  the GitHub issue it made, `note` what the person must know of it. */
+export interface HelpReceipt {
+  state: "sent" | "refused" | "uncertain" | "attempting";
+  result: string;
+  issue?: string;
+  note?: string;
 }
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -224,6 +235,22 @@ export const api = {
     request<SuperagentInfo>("PATCH", `/api/superagents/${enc(name)}`, patch),
   superagentRestart: (name: string) => post<SuperagentInfo>(`/api/superagents/${enc(name)}/restart`),
   superagentLog: (name: string) => get<{ text: string }>(`/api/superagents/${enc(name)}/log`),
+  superagentMemory: (name: string, q: string) => get<MemoryView>(`/api/superagents/${enc(name)}/memory${q.trim() ? `?q=${enc(q)}` : ""}`),
+  /** An empty `text` forgets the preference. */
+  superagentPrefer: (name: string, key: string, text: string) => post<unknown>(`/api/superagents/${enc(name)}/memory/prefer`, { key, text }),
+  superagentSweeps: (name: string) => get<SweepRecord[]>(`/api/superagents/${enc(name)}/sweeps`),
+  superagentRemoveLoop: (name: string, id: string) => request<unknown>("DELETE", `/api/superagents/${enc(name)}/loops/${enc(id)}`),
+  /** Set (the image's own bytes) or remove (null) its picture. */
+  superagentAvatar: async (name: string, file: Blob | null): Promise<void> => {
+    const path = `/api/superagents/${enc(name)}/avatar`;
+    if (MOCK) return void (await request(file ? "PUT" : "DELETE", path));
+    const res = await fetch(path, { method: file ? "PUT" : "DELETE", headers: { "x-agentbox": "1", ...(file ? { "content-type": file.type } : {}) }, body: file ?? undefined });
+    const env = (await res.json().catch(() => ({ ok: false, error: `${res.status} ${res.statusText}` }))) as { ok?: boolean; error?: string };
+    if (!env.ok) throw new Error(env.error || `${path}: ${res.status} ${res.statusText}`);
+  },
+  superagentHelp: (name: string, body: { request: string; text: string; target: string | null; uiRevision: unknown; publish?: number[] }) =>
+    post<HelpReceipt>(`/api/superagents/${enc(name)}/help`, body),
+  superagentHelpReceipt: (name: string, request: string) => get<HelpReceipt | null>(`/api/superagents/${enc(name)}/help/${enc(request)}`),
 
   /** The board's open sessions and cold state; the closed ones page from `closed`. */
   state: () => get<AppState>("/api/state?open=1"),
@@ -265,8 +292,9 @@ export const api = {
   patchSession: (id: string, patch: { label?: string | null; parent?: string | null; pinOrder?: number | null; bookmarked?: boolean }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
-  submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string) =>
-    request<SendReceipt>("POST", `/api/sessions/${enc(id)}/submissions`, { sendId, kind, text }, AbortSignal.timeout(30_000)),
+  /** `interrupt`: end a running turn first (an agent's Chat, #25); only for a send. */
+  submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string, interrupt = false) =>
+    request<SendReceipt>("POST", `/api/sessions/${enc(id)}/submissions`, { sendId, kind, text, ...(interrupt && kind === "send" ? { interrupt: true } : {}) }, AbortSignal.timeout(30_000)),
   submission: (id: string, sendId: string) => request<SendReceipt | null>("GET", `/api/sessions/${enc(id)}/submissions/${enc(sendId)}`, undefined, AbortSignal.timeout(10_000)),
   /** `background` leaves a browser tab behind the window in front (Ctrl-click). */
   openFile: (id: string, path: string, background = false) =>

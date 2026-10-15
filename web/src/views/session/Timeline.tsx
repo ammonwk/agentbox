@@ -1,5 +1,5 @@
-import { chatShown, chatTimestamps, placeCards, recommendationReply, type ChatPresence, type ReplyRecommendation } from "./chatPresentation";
-import { createContext, Fragment, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { chatShown, chatTimestamps, type ChatPresence } from "./chatPresentation";
+import { createContext, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentIcon, Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
@@ -510,10 +510,10 @@ function useThinkDur(events: readonly TimelineEvent[]): ReadonlyMap<string, numb
 }
 
 type ChatAgent = { name: string; role: string; icon: AgentIcon | null; avatar: string | null };
-const EventRow = memo(function EventRow({ ev, dur, agent, showTime, recommendations = [], delivery }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent; showTime?: boolean; recommendations?: readonly ReplyRecommendation[]; delivery?: "Sent" | "Read" }) {
+const EventRow = memo(function EventRow({ ev, dur, agent, showTime, delivery }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent; showTime?: boolean; delivery?: "Sent" | "Read" }) {
   switch (ev.kind) {
     case "user":
-      return <UserRow ev={ev} showTime={showTime} recommendations={recommendations} delivery={delivery} />;
+      return <UserRow ev={ev} showTime={showTime} delivery={delivery} />;
     case "assistant":
       return <AssistantRow ev={ev} agent={agent} showTime={showTime} />;
     case "thinking":
@@ -536,11 +536,9 @@ const EventRow = memo(function EventRow({ ev, dur, agent, showTime, recommendati
  * "agentbox", that opens on a click to who sent it (linked) and all of it.
  * Pastes are shown as pastes: Claude records one wrapped in `<pasted_content>`.
  */
-function UserRow({ ev, queued, showTime = true, recommendations = [], delivery }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean; showTime?: boolean; recommendations?: readonly ReplyRecommendation[]; delivery?: "Sent" | "Read" }) {
+function UserRow({ ev, queued, showTime = true, delivery }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean; showTime?: boolean; delivery?: "Sent" | "Read" }) {
   const sent = useMemo(() => readSent(ev.text), [ev.text]);
-  const reply = recommendationReply(sent.text, recommendations);
-  const displayText = reply?.body ?? sent.text;
-  const parts = useMemo(() => splitPastes(displayText), [displayText]);
+  const parts = useMemo(() => splitPastes(sent.text), [sent.text]);
   const [open, setOpen] = useState(false);
   const bodyId = useId();
   const body = parts.map((p, i) =>
@@ -559,11 +557,6 @@ function UserRow({ ev, queued, showTime = true, recommendations = [], delivery }
     return (
       <Bubble id={ev.id} at={ev.at} showTime={showTime} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : delivery ?? null].filter(Boolean).join(" · ")}
         title={delivery === "Read" ? "The agent has started on this message" : delivery === "Sent" ? "Delivered; waiting for activity from the agent" : undefined} copy={sent.text}>
-        {reply && <div className="tl-reply-preview" aria-label="Reply to recommendation">
-          <span className="faint">Replied to</span>
-          <strong>{reply.title}</strong>
-          {reply.quote && <blockquote>{reply.quote}</blockquote>}
-        </div>}
         {/* A long brief is its first lines; the rest on a click. */}
         <Clamp lines={14}>{body}</Clamp>
       </Bubble>
@@ -1302,11 +1295,8 @@ function Field({ f }: { f: InputField }) {
   );
 }
 
-/** Read-through shared agent conversation: the same provider-neutral bubbles as
- * Sessions, without remote terminal controls or unrelated local session links. */
 /** Who is on each side of an agent chat. `me` is the viewer, for their own
- *  messages only: a shared chat whose transcript does not say which human
- *  wrote a message passes none, so no one else's message wears your picture. */
+ *  messages only: with no `me`, no message wears your picture. */
 export type ChatSides = {
   me?: { name: string; github: string };
   agent?: ChatAgent;
@@ -1314,58 +1304,33 @@ export type ChatSides = {
 /** Sent from here and not yet in the transcript. */
 export type ChatEcho = { id: string; text: string; at: number; note: string };
 
-/** A message of an earlier conversation, carried into this one only as a
- *  summary (`ChatEvent` in src/cloud/agent-conversation.ts). */
-type Carried = { source?: string; carried?: { handoff: string; at: number; oldest: boolean } };
-
-/** A card that sits in the chat at its time (`placeCards`). */
-export type ChatCard = { id: string; at: number; node: React.ReactNode };
-
 /** The question an agent's session is showing now, answerable from Chat
  *  as from its Timeline (`Session.question`). */
 export type ChatQuestion = { sessionId: string; ask: NonNullable<Session["question"]> };
 
-/** Agent chat, with what the transcript and session say now (`ChatPresence`):
+/** Agent chat (the Agents page): the same provider-neutral bubbles as
+ *  Sessions, with what the transcript and session say now (`ChatPresence`):
  *  Sent or Read under the person's newest message, and the agent typing
- *  while a turn shown here is open. `earlier`: older messages are not loaded yet.
- *  `question`: the one it is asking now, as a card at the tail. */
-export function AgentConversationEvents({ events, me, agent, echoes = [], recommendations = [], presence, cards = [], earlier = false, question = null }: { events: readonly (TimelineEvent & Carried)[]; echoes?: readonly ChatEcho[]; recommendations?: readonly ReplyRecommendation[]; presence?: ChatPresence | null; cards?: readonly ChatCard[]; earlier?: boolean; question?: ChatQuestion | null } & ChatSides) {
+ *  while a turn shown here is open. `question`: the one it is asking now,
+ *  as a card at the tail. */
+export function AgentConversationEvents({ events, me, agent, echoes = [], presence, question = null }: { events: readonly TimelineEvent[]; echoes?: readonly ChatEcho[]; presence?: ChatPresence | null; question?: ChatQuestion | null } & ChatSides) {
   const shown = chatShown(events, question?.ask.id ?? null);
   const times = chatTimestamps([...shown, ...echoes]);
-  const placed = placeCards(shown, cards, earlier);
-  const card = (c: ChatCard) => <Fragment key={`card-${c.id}`}>{c.node}</Fragment>;
   return (
     <Me.Provider value={me ?? NOBODY}>
       <div className="tl-stream">
-        {shown.map((e, i) => {
-          const prev = shown[i - 1];
-          const row = e.kind === "tool" ? <AskRow key={e.id} ev={e} /> : <EventRow key={e.id} ev={e} agent={agent} showTime={times.has(e.id)} recommendations={recommendations}
-            delivery={presence && e.id === presence.message ? (presence.read ? "Read" : "Sent") : undefined} />;
-          // Where one conversation ends and the next begins, say which was carried how.
-          const divider =
-            prev?.source !== e.source ? (
-              e.carried ? (
-                <div key={`d-${e.id}`} className="tl-carried-divider" role="separator">
-                  {e.carried.oldest && <strong>Start of the history carried into this conversation</strong>}
-                  <span>
-                    Summarized conversation · {new Date(e.carried.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
-                  </span>
-                  <small>Only its summary was carried forward; the full messages are shown here for reference.</small>
-                </div>
-              ) : prev?.carried ? (
-                <div key={`d-${e.id}`} className="tl-carried-divider tl-current-divider" role="separator">
-                  <span>This conversation</span>
-                </div>
-              ) : null
-            ) : null;
-          const own = placed.before.get(e.id)?.map(card) ?? [];
-          return e.carried ? [...own, divider, <div key={`c-${e.id}`} className="tl-carried">{row}</div>] : [...own, divider, row];
-        })}
-        {[...placed.after.map((c) => ({ at: c.at, node: card(c) })), ...echoes.map((e) => ({ at: e.at, node: (
+        {shown.map((e) =>
+          e.kind === "tool" ? (
+            <AskRow key={e.id} ev={e} />
+          ) : (
+            <EventRow key={e.id} ev={e} agent={agent} showTime={times.has(e.id)} delivery={presence && e.id === presence.message ? (presence.read ? "Read" : "Sent") : undefined} />
+          ),
+        )}
+        {echoes.map((e) => (
           <Bubble key={e.id} at={e.at} showTime={times.has(e.id)} className="tl-echo" note={e.note} copy={e.text}>
             <Markdown text={e.text} />
           </Bubble>
-        ) }))].sort((a, b) => a.at - b.at).map((x) => x.node)}
+        ))}
         {question && <QuestionCard key={question.ask.id} sessionId={question.sessionId} ask={question.ask} />}
         {presence?.working && (
           <div className="tl-agent-reply tl-typing" role="status" aria-label={`${agent?.name ?? "The agent"} is working`}>

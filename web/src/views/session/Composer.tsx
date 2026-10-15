@@ -8,7 +8,7 @@ import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
-import { appendDraft, recoverAgentDraft, draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, type AgentDraftContext, updatePending, forgetPending } from "./drafts";
+import { appendDraft, draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, updatePending, forgetPending } from "./drafts";
 import { PendingSends, deliverPending, submitPending } from "./submissions";
 import "../newsession.css";
 import { useAction } from "./useAction";
@@ -106,7 +106,7 @@ export function Composer({ session, accounts, skills, textareaRef, footer }: {
   useEffect(() => {
     const previous = lastQueuedRevision.current;
     lastQueuedRevision.current = editingRevision;
-    void saveDraft(session.id, text, savedImages, editingRevision, undefined, previous);
+    void saveDraft(session.id, text, savedImages, editingRevision, previous);
   }, [session.id, text, savedKey, editingRevision]);
   // Taking a revision clears every tab holding that revision, before delivery.
   // A newer edit has its own revision, even if its text is identical.
@@ -535,31 +535,23 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
   );
 }
 
-/** Agent chat shares the Sessions draft/receipt model and composer styling.
- * Transport can be a local Fleet send or an authenticated shared command. */
+/** An agent's Chat box (the Agents page): the Sessions draft and receipt
+ * model and composer styling, over the agent's own `send`. */
 export function AgentComposer({
   id,
   name,
   send,
   receipt,
   disabled = false,
-  guidance,
-  onGuidanceApplied,
-  recoverFrom = [],
-  run,
   attachments = false,
 }: {
   id: string;
-  recoverFrom?: string[];
-  run?: string;
-  /** Images, uploaded to this machine and named by path: only for an agent
-   *  that runs here. A shared agent's host could not read the path. */
+  /** Images, uploaded to this machine and named by path. */
   attachments?: boolean;
   name: string;
   send: (
     body: string,
     request: string,
-    context?: AgentDraftContext,
     /** /help: the image numbers ticked to publish on the public issue. */
     publish?: number[],
   ) => Promise<{ state: string; result: string }>;
@@ -567,24 +559,17 @@ export function AgentComposer({
     request: string,
   ) => Promise<{ state: string; result: string } | null>;
   disabled?: boolean;
-  guidance?: { id: string; text: string; context?: AgentDraftContext } | null;
-  onGuidanceApplied?: () => void;
 }) {
   const key = `agent:${id}`,
     initial = useMemo(() => loadDraft(key), [key]);
   const [text, setText] = useState(initial?.text ?? ""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
-  const [recoveryStamp, setRecoveryStamp] = useState(0);
-  useEffect(() => onDraftWork(() => setRecoveryStamp((n) => n + 1)), []);
-  const recoverable = useMemo(() => recoverFrom.filter((from) => loadDraft(`agent:${from}`)), [recoverFrom.join(","), recoveryStamp]);
-  const context = useRef(initial?.agentContext);
   const revision = useRef(initial?.revision ?? newRevision()),
     lastQueuedRevision = useRef(initial?.revision),
     ref = useRef<HTMLTextAreaElement>(null);
   const edit = (s: string) => {
     revision.current = newRevision();
-    if (!s.trim()) context.current = undefined;
     setText(s);
   };
   const images = useAttachments({ text, setText: edit, textareaRef: ref, initial: attachments ? initial?.images : [] });
@@ -598,21 +583,12 @@ export function AgentComposer({
     // draft written by another tab. The storage lock orders queued saves.
     const previous = lastQueuedRevision.current;
     lastQueuedRevision.current = revision.current;
-    void saveDraft(key, text, savedImages, revision.current, context.current, previous);
+    void saveDraft(key, text, savedImages, revision.current, previous);
   }, [key, text, savedKey]);
-  useEffect(() => {
-    if (guidance) {
-      context.current = guidance.context;
-      edit([text.trimEnd(), guidance.text].filter(Boolean).join("\n\n"));
-      ref.current?.focus();
-      onGuidanceApplied?.();
-    }
-  }, [guidance?.id]);
   useEffect(
     () =>
       onDraftWork(() => {
         if (draftTaken(key, revision.current)) {
-          context.current = undefined;
           revision.current = newRevision();
           setText("");
           images.clear();
@@ -658,7 +634,6 @@ export function AgentComposer({
         images: shots,
         at: Date.now(),
         revision: revision.current,
-        agentContext: context.current,
       },
       kind: "send",
       body,
@@ -669,9 +644,9 @@ export function AgentComposer({
     };
     try {
       // onDraftWork clears only the revision taken by this send. Any newer
-      // typing (including its guidance context) remains a separate draft.
+      // typing remains a separate draft.
       await submitPending(p, async () => {
-        const r = await send(p.body, p.id, p.draft.agentContext, published);
+        const r = await send(p.body, p.id, published);
         if (r.state === "sent") { await forgetPending(key, p.id); setPublish(new Set()); }
         else
           await updatePending(p.id, {
@@ -722,17 +697,14 @@ export function AgentComposer({
   );
   return (
     <div className="cmp agent-composer" data-attachments={attachments || undefined} data-multi={text.includes("\n") || text.length > 90 || undefined}>
-      {recoverable.map((from) => <Button key={from} variant="ghost" onClick={() => { void recoverAgentDraft(`agent:${from}`, key, run).then((d) => { if (d) { context.current = d.agentContext; revision.current = d.revision; setText(d.text); images.clear(); images.restore(d.images); } }).catch((e) => setError(e.message)); }}>Recover earlier agent draft here</Button>)}
-      {recoverFrom.map((from) => <PendingSends key={from} sessionId={`agent:${from}`} reconcileSend={check} />)}
       <PendingSends
         sessionId={key}
         reconcileSend={check}
         onRestore={async (p) => {
           const previous = revision.current;
-          const {draft:next,addedImages} = appendDraft({text,images:images.saved(),agentContext:context.current,revision:previous,at:Date.now()},p.draft);
+          const {draft:next,addedImages} = appendDraft({text,images:images.saved(),revision:previous,at:Date.now()},p.draft);
           await restorePending(key,p.id,next,previous,()=>revision.current===previous);
           images.restore(addedImages);
-          context.current = next.agentContext;
           revision.current = next.revision;
           setText(next.text);
         }}

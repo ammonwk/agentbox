@@ -55,7 +55,10 @@ import type {
   Schedule,
   Card,
   ScheduleSpec,
+  SuperagentInfo,
+  SuperagentView,
 } from "../../src/core/types";
+import type { MemoryView } from "../../src/core/superagent/memory-view";
 import type { AgentTimeline, RepoPatch, SessionWork, TermChannel, TermHandlers } from "./api";
 import { nextRun, parseWhen } from "../../src/core/schedule";
 import { retrying } from "../../src/core/attention";
@@ -1333,7 +1336,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   }
 
   if (head === "mcp") return mockMcp(method, p.slice(2), b);
-  if (head === "agents") return mockAgents(method, p.slice(2), b);
+  if (head === "superagents") return mockSuperagents(method, p.slice(2), b, url.searchParams);
   if (head === "cloud" && !id && method === "GET") return { configured: false };
   if (method === "GET") {
     if (head === "sessions" && action === "submissions") return submissions.get(p[4]!) ?? null;
@@ -1776,45 +1779,168 @@ export const mockServer = {
   term,
 };
 
-// ------------------------------------------------------------------ agents
+// ------------------------------------------------------------- superagents
 
-/** One local agent: its Feed shows a daily sweep (src/core/agents/sweep.ts),
- *  and its Chat is the session asking a question, paged as the server pages
- *  it (src/core/agents/conversation.ts). */
-function mockAgents(method: string, p: string[], b: unknown): unknown {
-  const [scope, id, action] = p;
-  const chat = mustSession("q7k2");
-  const agent = {
-    id: "local-vulcan", name: "Vulcan", role: "Issue triage and fixing", instructions: "", provider: "claude", repo: null,
-    session: chat.id, previous: [], enabled: true,
+/** Vulcan's main asks a question (the #40 card); two work sessions and an
+ *  earlier main are its own on the board. */
+const OWNED: Record<string, string> = { q7k2: "vulcan", "3mq9": "vulcan", a81c: "vulcan", p0o9: "vulcan" };
+for (const s of sessions) if (OWNED[s.id]) s.agentOwner = OWNED[s.id];
+
+const superagents: SuperagentInfo[] = [
+  {
+    name: "vulcan", title: "Vulcan", description: "Turns reported issues into a reviewed pull request: one writer per family of issues, three reviewers a round.",
+    dir: `${AB}/superagents/vulcan`, enabled: true, error: null, main: "q7k2", previous: ["p0o9"], canStart: false, hasPage: true,
+    process: { state: "running", pid: 48211, since: T0 - 5 * H, restarts: 1, lastExit: { code: 1, at: T0 - 5 * H - M } }, createdAt: T0 - 20 * D,
+    icon: "fix", avatar: null, projects: null, memory: false, rollover: null, sweep: "23:00",
+    loops: [
+      { id: "issues", source: "manifest", when: "every 30 minutes", check: "bun check-issues.ts", prompt: "Read the new issues and start a writer for each new family.", nextAt: T0 + 12 * M, due: null, last: { at: T0 - 18 * M, result: "skipped", detail: "no new issues" } },
+      { id: "standup", source: "set", when: "weekdays at 9:00", check: null, prompt: "Post a short summary of open work.", nextAt: T0 + 14 * H, due: null, last: null },
+    ],
+    selection: { provider: "claude", why: "Claude has the most weekly use left per hour until its reset.", at: T0 - 2 * H },
+    events: ["pr.ready"], team: null,
+  },
+  {
+    name: "salus", title: "Salus", description: "Production health: reads the dashboards and the error tracker, and tells you what needs attention.",
+    dir: `${HOME}/.agents/superagents/salus`, enabled: true, error: null, main: null, previous: [], canStart: true, hasPage: false, process: null, createdAt: T0 - 9 * D,
+    icon: "health", avatar: null, projects: ["r-agentbox", "r-web"], memory: true, rollover: { idleMin: 10, contextPct: 60 }, sweep: null, loops: [],
+    selection: null, events: [], team: null,
+  },
+  {
+    name: "caelus", title: "Caelus", description: "Release follow-through: watches deploys after a merge and reports what shipped.",
+    dir: `${HOME}/.agents/superagents/caelus`, enabled: false, error: null, main: null, previous: [], canStart: true, hasPage: false, process: null, createdAt: T0 - 30 * D,
+    icon: "release", avatar: null, projects: null, memory: false, rollover: null, sweep: null, loops: [], selection: null, events: [], team: null,
+  },
+];
+
+const preferences: Record<string, { key: string; text: string; at: number }[]> = {
+  salus: [{ key: "alert-style", text: "Lead with the user impact, then the evidence. One message per incident.", at: T0 - 3 * D }],
+};
+
+/** A program's page (docs/superagents.md, Its page): Work, Feed and Rules. */
+function vulcanView(tab: string | null): SuperagentView {
+  const tabs = [{ id: "work", title: "Work", badge: 2 }, { id: "feed", title: "Feed", badge: 1 }, { id: "rules", title: "Rules" }];
+  if (tab === "feed")
+    return { tabs, refresh: 30, blocks: [
+      { type: "heading", text: "Ready for you" },
+      { type: "item", id: "pr-214", title: "PR #214 Ship the Feed filters", subtitle: "round 3 of 3 · reviews clean", status: "ok", body: "All three reviewers approved. CI is green.", links: [{ label: "PR #214", url: "https://github.com/you/agentbox/pull/214" }],
+        actions: [{ id: "guide", label: "Give guidance", values: { pr: 214 } }, { id: "publish", label: "Mark ready", style: "primary", confirm: "Mark PR #214 ready for review?" }] },
+    ] };
+  if (tab === "rules")
+    return { tabs, blocks: [
+      { type: "markdown", text: "Vulcan holds each writer to these rules. Change them here; the next round reads them." },
+      { type: "form", id: "rules", fields: [
+        { name: "rounds", label: "Rounds at most", kind: "select", value: "3", options: [{ value: "2", label: "2" }, { value: "3", label: "3" }, { value: "4", label: "4" }] },
+        { name: "notes", label: "Standing notes for writers", kind: "textarea", rows: 4, value: "Keep each PR to one family of issues." },
+        { name: "draft", label: "Open every PR as a draft", kind: "checkbox", value: true },
+      ], actions: [{ id: "save-rules", label: "Save", style: "primary" }] },
+    ] };
+  return { tabs, refresh: 20, blocks: [
+    { type: "fields", items: [{ label: "Open families", value: "2" }, { label: "Rounds today", value: "5" }, { label: "Merged this week", value: "**3**" }] },
+    { type: "heading", text: "Open work" },
+    { type: "item", id: "fam-1", title: "#231 Usage samples lose their window", subtitle: "round 2 · writing", status: "busy", sessions: ["3mq9"], body: "The writer migrates `usage_samples` and waits for permission to clear the test database.",
+      children: [{ type: "item", title: "Reviewer 1", subtitle: "waiting for the round", status: "idle" }], actions: [{ id: "stop", label: "Stop", style: "danger", confirm: "Stop this work? The writer's session closes." }] },
+    { type: "item", id: "fam-2", title: "#228 Idle Codex accounts show no usage", subtitle: "round 1 · review asked", status: "warn", sessions: ["a81c"], links: [{ label: "Issue #228", url: "https://github.com/you/agentbox/issues/228" }] },
+    { type: "divider" },
+    { type: "actions", actions: [{ id: "refresh", label: "Look for new issues" }] },
+  ] };
+}
+
+function memoryOf(name: string): MemoryView {
+  const at = T0 - 26 * H;
+  return {
+    enabled: true, rollover: { idleMin: 10, contextPct: 60 },
+    checkpoint: null, supplied: [],
+    preferences: (preferences[name] ?? []).map((p, i) => ({ id: `pref-${i}`, scope: name, kind: "preference", key: p.key, session: "operator", at: p.at, by: "operator", checkpoint: null, usedBy: null, retired: null, body: { text: p.text } })),
+    handoffs: [{ id: "h-1", scope: name, kind: "handoff", key: null, session: "e1w2", at, by: "agent", checkpoint: "c-1", usedBy: null, retired: null,
+      body: { intent: "Watch the error rate on the export endpoint after the cache change.", decisions: [{ decision: "Page only on a sustained 5xx rate over 2%", why: "Single spikes were deploy noise." }], open: ["Is the nightly job's latency alert still useful?"], commitments: ["Check the export dashboard each morning"], refs: [{ label: "Dashboard", ref: "https://grafana.example/d/export" }] } }],
+    notes: [{ id: "n-1", scope: name, kind: "note", key: null, session: "e1w2", at: at - 2 * H, by: "agent", checkpoint: null, usedBy: null, retired: null, body: { decision: "Treat the staging error tracker as noise", why: "It mirrors load tests.", refs: [] } }],
+    results: null,
+    files: { soul: { path: `${HOME}/.agents/superagents/${name}/SOUL.md`, hash: "3f1c", chars: 612, notes: [] }, memory: { path: `${HOME}/.agents/superagents/${name}/MEMORY.md`, setAside: { path: `${HOME}/.agents/superagents/${name}/MEMORY.md.set-aside-1`, at: T0 - 4 * D } } },
   };
-  if (scope !== "local") return method === "GET" && scope === "runtime" ? { lastError: null, lastOkAt: null, bindings: [], runs: [], actions: [], work: [] } : [];
-  if (!id) return [agent];
-  // A project tab lists the agents of that project.
-  if (id === "project") return [{ ...agent, repo: (b as { repo?: string } | null)?.repo ?? null }];
-  if (action === "read") {
-    const thread = { id: chat.id, run: chat.id, title: chat.title, status: chat.status, at: chat.lastActivityAt, kind: "conversation", active: true, writable: true, successor: null };
-    const events = timelineOf(chat.id).filter((e) => e.kind === "user" || e.kind === "assistant" || (e.kind === "tool" && e.ask))
-      .map((e) => (e.kind === "tool" ? { id: e.id, at: e.at, kind: e.kind, name: e.name, summary: e.summary, status: e.status, ask: e.ask } : e));
-    return { threads: [thread], counts: { active: 1, inactive: 0 }, more: null, thread, events, next: null, session: chat.id, status: chat.status,
-      presence: { message: null, read: false, working: chat.status === "running", queued: [] } };
+}
+
+function mockSuperagents(method: string, p: string[], b: unknown, query: URLSearchParams): unknown {
+  const [name, action, sub] = p;
+  if (!name) return method === "GET" ? superagents : null;
+  const a = superagents.find((x) => x.name === name);
+  if (!a) throw new Error(`no superagent ${name}`);
+  if (!action) {
+    if (method === "PATCH") {
+      const x = body<{ enabled?: boolean }>(b);
+      if (typeof x.enabled === "boolean") {
+        a.enabled = x.enabled;
+        if (a.process) a.process = { ...a.process, state: x.enabled ? "running" : "stopped", since: Date.now() };
+      }
+    }
+    return a;
   }
-  if (action === "sweeps") {
-    const at = new Date(T0);
-    at.setHours(23, 0, 0, 0);
-    if (at.getTime() > T0) at.setDate(at.getDate() - 1);
-    return [{
-      id: "sweep-1", agent: agent.id, at: at.getTime(),
-      closed: [
-        { id: "w8k2pq4d", title: "Fix the stale PR badge on the board" },
-        { id: "m3z7rt1x", title: "Investigate the slow /api/state response" },
-        { id: "c9v1hn6e", title: "Reviewer: PR #212", why: "Closed with “Investigate the slow /api/state response”, which started it." },
-      ],
-      kept: [
-        { id: "q4t8ws2b", title: "Ship the Feed filters", why: "It has an armed wait (PR #214: every check)." },
-        { id: "r2d6yu9k", title: "Card scope fix", why: "It has an open Review card (card 31 “PR #210 ready”)." },
-      ],
-    }];
+  switch (action) {
+    case "view":
+      if (!a.hasPage) throw new Error(`${name} has no page`);
+      return vulcanView(query.get("tab"));
+    case "action": {
+      const x = body<{ action: string; values: Record<string, unknown> }>(b);
+      if (x.action === "guide") return { compose: `About PR #${String(x.values?.pr)}: ` };
+      if (x.action === "publish") return { message: "PR #214 is ready for review." };
+      if (x.action === "save-rules") return { message: `Saved: at most ${String(x.values?.rounds)} rounds.` };
+      return { message: `${x.action}: done` };
+    }
+    case "chat": {
+      // The first message starts its main: here, a waiting session of the mock.
+      const x = body<{ text: string }>(b);
+      a.main = "x4p0";
+      a.canStart = false;
+      mustSession("x4p0").agentOwner = a.name;
+      const tl = timelineOf("x4p0");
+      tl.push({ id: `x4p0-u${tl.length}`, at: Date.now(), kind: "user", text: x.text ?? "" });
+      pushHot();
+      return { session: "x4p0", started: true };
+    }
+    case "restart":
+      if (a.process) a.process = { ...a.process, state: "running", since: Date.now(), restarts: a.process.restarts + 1 };
+      return a;
+    case "log":
+      return { text: a.process ? `vulcan: listening on 127.0.0.1:9311\nvulcan: 2 families open\nvulcan: round 2 of #231 started (writer 3mq9)\nvulcan: no new issues\n` : "" };
+    case "memory": {
+      if (!a.memory) throw new Error(`${name} has no memory journal: its manifest does not say "memory": true`);
+      if (method === "POST" && sub === "prefer") {
+        const x = body<{ key: string; text: string }>(b);
+        const list = (preferences[name] ??= []).filter((q) => q.key !== x.key);
+        const key = x.key ?? "", text = x.text?.trim() ?? "";
+        preferences[name] = text ? [...list, { key, text, at: Date.now() }] : list;
+        return null;
+      }
+      const view = memoryOf(name);
+      const q = query.get("q")?.trim().toLowerCase();
+      if (q) view.results = [...view.handoffs, ...view.notes].filter((r) => JSON.stringify(r.body).toLowerCase().includes(q)).map((r) => ({ id: r.id, kind: r.kind, at: r.at, session: r.session, summary: "intent" in r.body ? r.body.intent : "decision" in r.body ? r.body.decision : r.body.text }));
+      return view;
+    }
+    case "sweeps": {
+      if (!a.sweep) return [];
+      const at = new Date(T0);
+      at.setHours(23, 0, 0, 0);
+      if (at.getTime() > T0) at.setDate(at.getDate() - 1);
+      return [
+        { id: "sweep-2", at: at.getTime(), closed: [
+          { id: "w8k2pq4d", title: "Fix the stale PR badge on the board" },
+          { id: "m3z7rt1x", title: "Investigate the slow /api/state response" },
+        ], kept: [
+          { id: "q4t8ws2b", title: "Ship the Feed filters", why: "It has an armed wait (PR #214: every check)." },
+          { id: "r2d6yu9k", title: "Card scope fix", why: "It has an open Review card (card 31 “PR #210 ready”)." },
+        ] },
+        { id: "sweep-1", at: at.getTime() - D, closed: [{ id: "c9v1hn6e", title: "Reviewer: PR #212" }], kept: [] },
+      ];
+    }
+    case "loops":
+      if (method === "DELETE") a.loops = a.loops.filter((l) => l.id !== sub || l.source !== "set");
+      return null;
+    case "avatar":
+      if (method === "GET") throw new Error(`${name} has no picture`);
+      a.avatar = method === "PUT" ? { at: Date.now() } : null;
+      return a;
+    case "help":
+      if (method === "GET") return { state: "sent", result: "Created", issue: "https://github.com/ammonwk/agentbox/issues/412" };
+      return { state: "sent", result: "Created", issue: "https://github.com/ammonwk/agentbox/issues/412", note: "The images stayed on this machine." };
   }
-  return [];
+  throw new Error(`mock: no ${method} /api/superagents/${p.join("/")}`);
 }
