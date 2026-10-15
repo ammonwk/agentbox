@@ -27,6 +27,8 @@ own conversations, memory and state.
 
 ## The Agents page
 
+![The Agents page: the rail with each agent and its conversations, and an agent's Chat with the question it asks](images/agents-chat.png)
+
 - **The rail** lists the agents of the selected project tab: each agent whose
   manifest names that project (`projects`, or `main.start.repoId`), and each
   agent that names none. With no project selected, it lists all. Each row has
@@ -134,6 +136,8 @@ when it shows in the PR's project. An agent with a program gets it as the
 action `pr.ready`; one without gets it in its main conversation.
 
 ## Team agents
+
+![A teammate's view of a shared agent: its Chat through the relay, and a box for guidance](images/agents-team-chat.png)
 
 A team agent runs on one machine, the host, and its team sees it from theirs.
 The host's owner shares it with a cloud workspace from its Settings. The
