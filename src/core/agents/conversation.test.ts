@@ -538,3 +538,27 @@ test("a PR its owner reports ready goes once per head to the project's Terminus,
   expect((await conversations.prReady("owner-chat", { ...pr, repo: "fixture/elsewhere" })).state).toBe("skipped");
   await expect(conversations.prReady("owner-chat", { ...pr, head: "not a sha" })).rejects.toThrow("--head");
 });
+test("an agent's question reaches its Chat, with what was answered, and no other tool call does (#40)", async () => {
+  link("current");
+  record("current", null);
+  sessions = [{ id: "current", title: "Current", status: "blocked", lastActivityAt: Date.now(), queued: [] }];
+  const questions = [{ question: "Which branch?", header: "Branch", multiSelect: false, options: [{ label: "main", description: "The default" }, { label: "dev" }] }];
+  fleet.timeline = async () => ({
+    before: null,
+    events: [
+      { id: "u1", at: 1, kind: "user", text: "Fix the bug" },
+      { id: "t1", at: 2, kind: "tool", name: "Bash", summary: "cat ~/.ssh/id_rsa", input: "{}", output: "secret", status: "ok" },
+      { id: "t2", at: 3, kind: "tool", name: "AskUserQuestion", summary: "Which branch?", input: "{\"questions\":[]}", output: "User has answered", status: "ok",
+        ask: { id: "toolu_1", questions, answers: { "Which branch?": "main" } } },
+      { id: "t3", at: 4, kind: "tool", name: "AskUserQuestion", summary: "Which branch?", input: "{}", status: "running", ask: { id: "toolu_2", questions } },
+    ],
+  });
+  const page = await conversations.page("local-vulcan", { target: "current" });
+  expect(page.events.map((e) => e.id)).toEqual(["u1", "t2", "t3"]);
+  const [answered, live] = page.events.slice(1) as any[];
+  expect(answered).toEqual({ id: "t2", at: 3, kind: "tool", name: "AskUserQuestion", summary: "Which branch?", status: "ok",
+    ask: { id: "toolu_1", questions, answers: { "Which branch?": "main" } } });
+  expect(live.ask).toEqual({ id: "toolu_2", questions });
+  expect(live.input).toBeUndefined();
+  expect(live.output).toBeUndefined();
+});

@@ -299,6 +299,15 @@ entry is turned into one. Approving a linked action uses the existing exact-acti
 approval and broker, including actual-dispatch consent. Guidance reaches the
 responsible run; dismissal never starts work.
 
+Chat shows the messages of the conversation and each question the agent asked
+with a question tool (Claude's AskUserQuestion), with what was answered. The
+call's raw input and output stay out. The question a local agent's session is
+asking now is a card at the end of Chat: pick the options or type your own
+answer, and Agentbox answers the dialog in the session's terminal, as the
+session's Timeline does (`POST /api/sessions/:id/answer`). Codex has no such
+tool in its Default mode, so a Codex agent asks in its reply text, and you answer
+with a message.
+
 With no shared project configured, three local agents are available immediately.
 Their definitions and session references are local operational records. Sending
 the first message starts the selected existing provider via Fleet; later messages

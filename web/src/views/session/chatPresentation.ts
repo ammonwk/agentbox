@@ -1,3 +1,4 @@
+import type { TimelineEvent } from "../../../../src/core/types";
 /** Presentation only: the provider transcript and approval text stay intact. */
 export type ReplyRecommendation = { id: string; title: string; next_step: string };
 const GUIDANCE = /^\[Guidance on recommendation ([0-9a-f-]{36})\]\s*\n([\s\S]*)$/i;
@@ -39,4 +40,14 @@ export function placeCards<C extends { at: number }>(messages: readonly { id: st
     else after.push(card);
   }
   return { before, after };
+}
+
+type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
+export type AskEvent = ToolEvent & { ask: NonNullable<ToolEvent["ask"]> };
+/** What an agent's Chat shows of its conversation: the messages, and each
+ *  question the agent asked with what was answered. The question being asked
+ *  now (`live`, its call's id) is the answerable card at the tail instead. */
+export function chatShown<E extends TimelineEvent>(events: readonly E[], live: string | null) {
+  return events.filter((e): e is E & (Extract<TimelineEvent, { kind: "user" | "assistant" }> | AskEvent) =>
+    e.kind === "user" || e.kind === "assistant" || (e.kind === "tool" && !!e.ask && e.ask.id !== live));
 }

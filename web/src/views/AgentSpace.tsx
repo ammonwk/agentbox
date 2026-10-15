@@ -36,7 +36,7 @@ import { useLoad } from "../lib/cloud";
 import { AgentComposer } from "./session/Composer";
 import { UI_REVISION } from "../build";
 import { SessionFacts } from "./session/SessionFacts";
-import { AgentConversationEvents, type ChatEcho } from "./session/Timeline";
+import { AgentConversationEvents, type ChatEcho, type ChatQuestion } from "./session/Timeline";
 import { followsAfterScroll, onChatSubmitted, followChatSize } from "./session/scroll";
 import { AgentAvatar, AgentPictureEditor, localAvatarUrl } from "./AgentAvatar";
 import { Markdown } from "./session/Markdown";
@@ -256,6 +256,7 @@ export function LocalAgentSpace({
       footer={(!route.view || route.view === "chat" || route.view === "sessions") && viewed ? <SessionFacts session={viewed} state={state} /> : null}
       id={selected.id}
       attachments
+      question={viewed?.question ? { sessionId: viewed.id, ask: viewed.question } : null}
       identity={{ role: selected.role, creator: selected.capability === "creator", avatar: localAvatarUrl(selected) }}
       me={state.onboarding.identity ? { name: state.onboarding.identity.name ?? "", github: state.onboarding.identity.github ?? "" } : undefined}
       options={options}
@@ -266,6 +267,8 @@ export function LocalAgentSpace({
           ? "History"
           : !selected.enabled
           ? "Paused"
+          : session?.question
+            ? "Asking you a question"
           : session?.status === "running"
             ? "Working"
             : selected.session
@@ -396,6 +399,7 @@ function AgentSpace({
   footer,
   id,
   attachments = false,
+  question = null,
   identity,
   me,
   name,
@@ -414,6 +418,9 @@ function AgentSpace({
   footer?: ReactNode;
   /** Images in the composer: a local agent reads them from this machine. */
   attachments?: boolean;
+  /** The question the viewed session is asking now: a local agent's, which
+   *  this machine can answer. */
+  question?: ChatQuestion | null;
   /** The agent's picture and the role its default icon comes from. */
   identity: { role: string; creator: boolean; avatar: string | null };
   /** The viewer, for their own messages; shared chats pass none. */
@@ -498,10 +505,20 @@ function AgentSpace({
     pinned = useRef(true);
   const [submitted, setSubmitted] = useState(0);
   const scrolledSubmission = useRef(0);
+  // A question the agent asks shows from its top, as in a session's Timeline:
+  // following the chat's size would scroll a card taller than the view past it.
+  const asking = useRef(question); asking.current = question;
   useEffect(() => {
     const el = scroller.current;
-    if (el) return followChatSize(el, () => pinned.current);
+    if (el) return followChatSize(el, () => pinned.current && !asking.current);
   }, [tab, target]);
+  useLayoutEffect(() => {
+    const el = scroller.current, card = el?.querySelector<HTMLElement>(".ask-live");
+    if (!el || !card || !pinned.current) return;
+    el.scrollTop = el.scrollHeight;
+    const over = el.getBoundingClientRect().top + 8 - card.getBoundingClientRect().top;
+    if (over > 0) el.scrollTop -= over;
+  }, [question?.ask.id, ready, tab]);
   useEffect(() => {
     pinned.current = true;
     setEvents([]); setNext(null); setReady(false); setError(null); setPresence(null);
@@ -561,7 +578,7 @@ function AgentSpace({
     const el = scroller.current;
     if (el) {
       if (scrolledSubmission.current !== submitted) pinned.current = true;
-      if (pinned.current) el.scrollTop = el.scrollHeight;
+      if (pinned.current && !asking.current) el.scrollTop = el.scrollHeight;
       else if (anchor.current !== null) el.scrollTop = el.scrollHeight - anchor.current;
       scrolledSubmission.current = submitted;
       lastTop.current = el.scrollTop;
@@ -862,6 +879,7 @@ function AgentSpace({
                   // Delivered mid-turn and held by the agent: its queue says so, not a guess.
                   .map((x, _, pending) => x.note === "Sent" && presence?.queued.filter((q) => q.trim() === x.text.trim()).length === 1 && pending.filter((p) => p.text.trim() === x.text.trim()).length === 1 ? { ...x, note: "Queued" } : x)}
                 earlier={!!next}
+                question={tab === "chat" ? question : null}
                 cards={[
                   // A draft from before drafts recorded their time comes last, as it did.
                   ...(creations.data?.filter((d) => d.run === selected?.run).map((d) => ({ id: `creation-${d.id}`, at: d.at ?? Infinity,

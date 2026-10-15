@@ -121,6 +121,20 @@ export type Keeper = {
   update(change: (c: Checkpoint | undefined) => Checkpoint | undefined): void;
 };
 const SAFE_EVENT = new Set(["user", "assistant"]);
+/** A question the agent asked (its `ask`), as Chat shows it: what was asked
+ *  and answered, never the call's raw input or output. */
+function chatAsk(e: Extract<TimelineEvent, { kind: "tool" }>): TimelineEvent | null {
+  if (!e.ask) return null;
+  const { id, at, name, status, ask } = e;
+  const questions = ask.questions.map((q) => ({
+    ...q,
+    question: safeText(q.question),
+    header: safeText(q.header),
+    options: q.options.map((o) => ({ label: safeText(o.label), ...(o.description !== undefined ? { description: safeText(o.description) } : {}) })),
+  }));
+  const answers = ask.answers && Object.fromEntries(Object.entries(ask.answers).map(([q, a]) => [safeText(q), safeText(a).slice(0, 10000)]));
+  return { id, at, kind: "tool", name, summary: safeText(e.summary).slice(0, 300), status, ask: { id: ask.id, questions, ...(answers ? { answers } : {}) } };
+}
 /** A prompt Chat never shows: the fleet's handoff request, or a shared run's bootstrap. */
 const hiddenPrompt = (text: string) =>
   text.includes(CHECKPOINT_MARK) || /^You are [^\n]+, a shared Agentbox agent\. Run [a-f0-9-]{36}; work /.test(text);
@@ -1364,9 +1378,9 @@ export class AgentConversations {
       // has it; a shared reader sees no local identities.
       const raw = attribute(id, page.events, this.senders, !local);
       const attributed = raw
-        .filter((e) => SAFE_EVENT.has(e.kind))
+        .flatMap((e) => (e.kind === "tool" ? chatAsk(e) : SAFE_EVENT.has(e.kind) ? e : null) ?? [])
         .filter((e) => !(e.kind === "user" && hiddenPrompt(e.text)))
-        .map((e) => ({
+        .map((e) => e.kind === "tool" ? e : ({
           ...e,
           text: safeText(
             ("text" in e ? String(e.text) : "").replace(

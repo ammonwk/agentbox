@@ -1778,18 +1778,27 @@ export const mockServer = {
 
 // ------------------------------------------------------------------ agents
 
-/** One local agent with a Feed that shows a daily sweep (src/core/agents/sweep.ts). */
+/** One local agent: its Feed shows a daily sweep (src/core/agents/sweep.ts),
+ *  and its Chat is the session asking a question, paged as the server pages
+ *  it (src/core/agents/conversation.ts). */
 function mockAgents(method: string, p: string[], b: unknown): unknown {
   const [scope, id, action] = p;
+  const chat = mustSession("q7k2");
   const agent = {
     id: "local-vulcan", name: "Vulcan", role: "Issue triage and fixing", instructions: "", provider: "claude", repo: null,
-    session: "vk-chat", previous: [], enabled: true,
+    session: chat.id, previous: [], enabled: true,
   };
   if (scope !== "local") return method === "GET" && scope === "runtime" ? { lastError: null, lastOkAt: null, bindings: [], runs: [], actions: [], work: [] } : [];
   if (!id) return [agent];
   // A project tab lists the agents of that project.
   if (id === "project") return [{ ...agent, repo: (b as { repo?: string } | null)?.repo ?? null }];
-  if (action === "read") return { events: [], next: null, session: null, status: "idle", threads: [], counts: { active: 0, inactive: 0 }, more: null };
+  if (action === "read") {
+    const thread = { id: chat.id, run: chat.id, title: chat.title, status: chat.status, at: chat.lastActivityAt, kind: "conversation", active: true, writable: true, successor: null };
+    const events = timelineOf(chat.id).filter((e) => e.kind === "user" || e.kind === "assistant" || (e.kind === "tool" && e.ask))
+      .map((e) => (e.kind === "tool" ? { id: e.id, at: e.at, kind: e.kind, name: e.name, summary: e.summary, status: e.status, ask: e.ask } : e));
+    return { threads: [thread], counts: { active: 1, inactive: 0 }, more: null, thread, events, next: null, session: chat.id, status: chat.status,
+      presence: { message: null, read: false, working: chat.status === "running", queued: [] } };
+  }
   if (action === "sweeps") {
     const at = new Date(T0);
     at.setHours(23, 0, 0, 0);
