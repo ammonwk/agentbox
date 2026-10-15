@@ -45,10 +45,10 @@ import { shownStatus } from "../lib/board";
 import { go, hrefOf } from "../route";
 import { AGENT_TABS, type AgentTab } from "../lib/agentviews";
 
-type Receipt = { state: string; result: string; issue?: string };
+type Receipt = { state: string; result: string; issue?: string; note?: string };
 const providerName = { codex: "Codex", claude: "Claude", muse: "Muse" } as const;
 type Transport = {
-  help?: (text: string, request: string, target: string | null) => Promise<Receipt>;
+  help?: (text: string, request: string, target: string | null, publish: number[]) => Promise<Receipt>;
   sessionAction?: (thread: AgentThread, action: "close" | "restore") => Promise<{state: string; result: string}>;
   creations: () => Promise<CreationDraft[]>;
   editCreation: (draft: CreationDraft, spec: CreationSpec, create: boolean) => Promise<CreationDraft>;
@@ -203,7 +203,7 @@ export function LocalAgentSpace({
   const transport = useMemo<Transport>(
     () => ({
       read: (cursor) => request("POST", `/api/agents/local/${id}/read`, cursor),
-      help: (text, requestId, target) => request("POST", `/api/agents/local/${id}/help`, {text, request:requestId, target, uiRevision:UI_REVISION}),
+      help: (text, requestId, target, publish) => request("POST", `/api/agents/local/${id}/help`, {text, request:requestId, target, uiRevision:UI_REVISION, ...(publish.length ? { publish } : {})}),
       creations: () => request("GET", `/api/agents/local/${id}/creations`),
       editCreation: async (draft, spec, create) => { const d = await request<CreationDraft>("POST", `/api/agents/local/${id}/creations/${draft.id}`, { revision: draft.revision, spec, create, repo: selected?.repo ?? null }); await agents.reload(); return d; },
       proposals: () => request("GET", `/api/agents/local/${id}/proposals`),
@@ -588,12 +588,13 @@ function AgentSpace({
       body: string,
       requestId: string,
       context?: { proposal: string; run: string },
+      publish: number[] = [],
     ) => {
       const help = /^\/help(?:\s+([\s\S]*))?$/.exec(body.trim());
       if (help) {
         if (!transport.help) return {state:"refused",result:"Feedback reports are currently available in local agent chats."};
         const text = help[1]?.trim();
-        const r = text ? await transport.help(text,requestId,selected?.id ?? null) : {
+        const r = text ? await transport.help(text,requestId,selected?.id ?? null,publish) : {
           state:"sent", result:"Use /help followed by an issue or improvement. For example: /help Vulcan asks for permission after I already approved the work. Your feedback and agent/session identifiers go to a GitHub issue in ammonwk/agentbox; the conversation is not uploaded.",
         };
         setHelpResult(r);
@@ -832,7 +833,7 @@ function AgentSpace({
           </div>
           <div className="agent-conversation-width agent-compose-wrap">
             {helpResult && <p className="agent-help-result" role="status">
-              {helpResult.issue ? <>Created <a href={helpResult.issue} target="_blank" rel="noreferrer">Agentbox issue #{helpResult.issue.split("/").at(-1)}</a> for Vulcan to triage.</> : helpResult.result}
+              {helpResult.issue ? <>Created <a href={helpResult.issue} target="_blank" rel="noreferrer">Agentbox issue #{helpResult.issue.split("/").at(-1)}</a> for Vulcan to triage.{helpResult.note && <> {helpResult.note}</>}</> : helpResult.result}
             </p>}
             {target === "new" || selected?.writable ? <AgentComposer
               key={`${id}:${target}`}

@@ -1,14 +1,17 @@
 /** Human-authored /help reports. GitHub owns the report; this journal keeps
  * only identity, hashes and delivery outcomes, never a conversation copy. */
 import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import { RUNNING_REVISION } from "../../revision";
 import { z } from "zod";
 import { FleetError } from "../fleet";
 import { userHome } from "../paths";
+import { uploadFile } from "../uploads";
 import type { AgentsRuntime } from "./runtime";
 
 export const FEEDBACK_REPO = "ammonwk/agentbox";
-type Receipt = { state: "sent" | "refused" | "uncertain" | "attempting"; result: string; issue?: string };
+/** `note`: what the person should know of a created issue, such as images that were not uploaded. */
+type Receipt = { state: "sent" | "refused" | "uncertain" | "attempting"; result: string; issue?: string; note?: string };
 /** `by`: the agent session that filed it (`agentbox agent report`); absent for the person's /help. */
 type Record = Receipt & { id: string; agent: string; fingerprint: string; at: number; by?: string };
 /** Reports one agent may file in a day: the repository is public. */
@@ -24,7 +27,45 @@ const github: GitHub = async (path, body) => {
   if (code) throw Error("GitHub could not complete the request. Check your gh login and repository access.");
   return JSON.parse(out);
 };
-const input = z.object({request:z.string().uuid(), text:z.string().trim().min(1).max(10000), target:z.string().max(200).nullable(), uiRevision:z.object({commit:z.string().regex(/^[0-9a-f]{40}$/),dirty:z.boolean()}).strict().nullable().optional()}).strict();
+/** Attaching images to an issue: the GitHub CLI's `--attach` (v2.99.0 and
+ *  later, write access to the repository). GitHub's REST API has no upload. */
+export interface IssueCli {
+  /** `gh --version`'s version, or null when gh does not answer. */
+  version(): Promise<string | null>;
+  /** `gh issue create --attach`: its URL when gh printed one (also when some
+   *  images failed: `partial`), or null when it printed none. */
+  createIssue(issue: { title: string; body: string; attach: { path: string; alt: string }[] }): Promise<{ url: string | null; partial: boolean }>;
+}
+const ATTACH_SINCE = [2, 99, 0];
+/** GitHub's limit for an attached image. */
+export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
+const ghCli: IssueCli = {
+  async version() {
+    try {
+      const p = Bun.spawn(["gh", "--version"], { stdout: "pipe", stderr: "ignore", timeout: 10000 });
+      const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+      return code ? null : (/gh version (\d+\.\d+\.\d+)/.exec(out)?.[1] ?? null);
+    } catch { return null; }
+  },
+  async createIssue({ title, body, attach }) {
+    const p = Bun.spawn(["gh", "issue", "create", "--repo", FEEDBACK_REPO, "--title", title, "--body-file", "-", ...attach.flatMap((a) => ["--attach", `${a.path}#${a.alt}`])], {
+      env: {...process.env, GH_PROMPT_DISABLED: "1"},
+      stdin: new Blob([body]), stdout: "pipe", stderr: "pipe", timeout: 120000,
+    });
+    const [out, , code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    // Some images may fail while the issue is still created: gh prints its URL and exits non-zero.
+    const url = out.trim().split(/\s+/).reverse().find(issueUrl) ?? null;
+    return { url, partial: code !== 0 };
+  },
+};
+const newer = (v: string) => {
+  const a = v.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if (a[i] !== ATTACH_SINCE[i]) return (a[i] ?? 0) > ATTACH_SINCE[i]!;
+  return true;
+};
+const input = z.object({request:z.string().uuid(), text:z.string().trim().min(1).max(10000), target:z.string().max(200).nullable(), uiRevision:z.object({commit:z.string().regex(/^[0-9a-f]{40}$/),dirty:z.boolean()}).strict().nullable().optional(),
+  /** Image numbers the person ticked "Publish publicly" for; the rest stay on this machine. */
+  publish:z.array(z.number().int().min(1).max(99)).max(10).optional()}).strict();
 const marker = (id: string) => `agentbox-help:${id}`;
 /** The issue is public. An image token's path names the person's account, so
  * only its file name is published: enough for triage on this Mac to find the
@@ -44,7 +85,7 @@ const issueUrl = (url: unknown): url is string => typeof url === "string" && /^h
 
 export class AgentFeedback {
   private active = new Map<string, Promise<Receipt>>();
-  constructor(private runtime: AgentsRuntime, private gh: GitHub = github) {
+  constructor(private runtime: AgentsRuntime, private gh: GitHub = github, private cli: IssueCli = ghCli) {
     runtime.store.db.exec("CREATE TABLE IF NOT EXISTS agent_feedback (id TEXT PRIMARY KEY, agent TEXT NOT NULL, body TEXT NOT NULL)");
   }
   private record(id: string): Record | null {
@@ -66,7 +107,21 @@ export class AgentFeedback {
       } catch { /* Keep the uncertain outcome; no automatic retry. */ }
       if (r.state === "attempting") { r.state="uncertain";r.result="Issue creation was interrupted. Check GitHub before submitting it again.";this.save(r); }
     }
-    return {state:r.state,result:r.result,...(r.issue ? {issue:r.issue} : {})};
+    return {state:r.state,result:r.result,...(r.issue ? {issue:r.issue} : {}),...(r.note ? {note:r.note} : {})};
+  }
+  /** Why images cannot be attached here, or null when they can: gh must be
+   *  new enough and the account must be able to write to the repository. */
+  private async attachRefusal(): Promise<string | null> {
+    const v = await this.cli.version();
+    if (!v) return "the GitHub CLI did not report its version";
+    if (!newer(v)) return `the GitHub CLI here is ${v}; attaching images needs ${ATTACH_SINCE.join(".")} or later`;
+    try {
+      const p = (await this.gh(`repos/${FEEDBACK_REPO}`))?.permissions;
+      if (!(p?.push || p?.maintain || p?.admin)) return `this GitHub account has no write access to ${FEEDBACK_REPO}`;
+    } catch {
+      return `GitHub did not say whether this account can write to ${FEEDBACK_REPO}`;
+    }
+    return null;
   }
   /** An agent's own report, from its chat or work session `by`: filed as the
    *  agent's, never the person's, and at most AGENT_REPORTS_PER_DAY a day. */
@@ -90,7 +145,17 @@ export class AgentFeedback {
       throw new FleetError(403,"This session does not belong to the reported agent");
     if (/(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|-----BEGIN .*PRIVATE KEY-----|sk-(?:live-|proj-)?[A-Za-z0-9_-]{24,})/.test(p.text))
       return {state:"refused",result:"Remove credentials from the report before publishing it."};
-    const fingerprint = createHash("sha256").update(JSON.stringify([agent,p.target,p.text])).digest("hex");
+    // Ticked images are found by their token's file name among this machine's
+    // uploads, never by a path the client gave.
+    const images: { n: number; path: string; digest: string }[] = [];
+    for (const n of [...new Set(p.publish ?? [])].sort((a, b) => a - b)) {
+      const token = new RegExp(`\\[Image #${n}: ([^\\]\\n]*)\\]`).exec(p.text);
+      const file = token ? uploadFile(token[1]!.split("/").pop()!.trim()) : null;
+      if (!file) return {state:"refused",result:`Image #${n} is not an image uploaded on this machine. Untick it or attach it again.`};
+      if (statSync(file.path).size > MAX_ATTACH_BYTES) return {state:"refused",result:`Image #${n} is over 10 MB, GitHub's limit for an attached image. Untick it or attach a smaller one.`};
+      images.push({ n, path: file.path, digest: createHash("sha256").update(readFileSync(file.path)).digest("hex") });
+    }
+    const fingerprint = createHash("sha256").update(JSON.stringify([agent,p.target,p.text,...(images.length ? [images.map((i) => [i.n, i.digest])] : [])])).digest("hex");
     const old = this.record(p.request);
     if (old && (old.agent !== agent || old.fingerprint !== fingerprint)) throw new FleetError(409,"Report request ID was already used for different feedback");
     if (old) return this.active.get(p.request) ?? (await this.receipt(agent,p.request))!;
@@ -100,18 +165,28 @@ export class AgentFeedback {
     const pending = (async (): Promise<Receipt> => {
       try {
         const name = a.name.charAt(0).toUpperCase()+a.name.slice(1).toLowerCase();
-        const text = publicText(p.text);
+        // Images not uploaded keep only their file names (publicText).
+        const refusal = images.length ? await this.attachRefusal() : null;
+        let text = publicText(p.text);
+        if (images.length && !refusal)
+          for (const i of images) text = text.replace(new RegExp(`\\[Image #${i.n}: [^\\]\\n]*\\]`), `[Image #${i.n}: attached below]`);
+        const list = images.map((i) => `#${i.n}`).join(", ");
+        const unsent = refusal ? `Images ${list} were chosen for publication but not uploaded: ${refusal}.` : null;
         const title = `[${by ? "Agent report" : "Agent feedback"}] ${name}: ${text.split(/\r?\n/)[0]}`.slice(0,200);
         const revision = (r: {commit:string;dirty:boolean}|null|undefined) => r ? `${r.commit}${r.dirty ? " (local changes)" : ""}` : "Unavailable";
-        const body = `<!-- ${marker(p.request)} -->\n\n## Feedback\n\n${text}\n\n## Agent context\n\n- Agent: ${name}\n- Role: ${a.role}\n- Agent ID: ${a.id}\n- Session: ${p.target ?? "Not started"}\n- Server revision: ${revision(RUNNING_REVISION)}\n- UI revision: ${revision(p.uiRevision)}\n\n${by ? `Filed by the agent ${name} itself, from session ${by}, for Vulcan to triage. No person reviewed it before it was filed.` : "Submitted by the user through Agentbox /help for Vulcan to triage."} No conversation transcript was uploaded.`;
-        const issue = await this.gh(`repos/${FEEDBACK_REPO}/issues`,{title,body});
-        if (!issueUrl(issue.html_url)) throw Error("GitHub did not return a verified issue link");
-        r.state="sent";r.issue=issue.html_url;r.result=`Issue created: ${r.issue}`;
+        const body = `<!-- ${marker(p.request)} -->\n\n## Feedback\n\n${text}\n\n${unsent ? `${unsent}\n\n` : ""}## Agent context\n\n- Agent: ${name}\n- Role: ${a.role}\n- Agent ID: ${a.id}\n- Session: ${p.target ?? "Not started"}\n- Server revision: ${revision(RUNNING_REVISION)}\n- UI revision: ${revision(p.uiRevision)}\n\n${by ? `Filed by the agent ${name} itself, from session ${by}, for Vulcan to triage. No person reviewed it before it was filed.` : "Submitted by the user through Agentbox /help for Vulcan to triage."} No conversation transcript was uploaded.`;
+        let url: unknown, partial = false;
+        if (images.length && !refusal) ({ url, partial } = await this.cli.createIssue({ title, body, attach: images.map((i) => ({ path: i.path, alt: `Image ${i.n}` })) }));
+        else url = (await this.gh(`repos/${FEEDBACK_REPO}/issues`,{title,body})).html_url;
+        if (!issueUrl(url)) throw Error("GitHub did not return a verified issue link");
+        r.state="sent";r.issue=url;r.result=`Issue created: ${r.issue}`;
+        const note = unsent ?? (partial ? `Some of images ${list} did not upload; check the issue.` : null);
+        if (note) r.note = note;
       } catch {
         r.state="uncertain";r.result="Could not confirm issue creation. Check GitHub before submitting it again; this request will not be posted twice.";
       }
       this.save(r);
-      return {state:r.state,result:r.result,...(r.issue ? {issue:r.issue} : {})};
+      return {state:r.state,result:r.result,...(r.issue ? {issue:r.issue} : {}),...(r.note ? {note:r.note} : {})};
     })();
     this.active.set(p.request,pending);
     try { return await pending; } finally { this.active.delete(p.request); }

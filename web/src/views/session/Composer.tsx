@@ -555,6 +555,8 @@ export function AgentComposer({
     body: string,
     request: string,
     context?: AgentDraftContext,
+    /** /help: the image numbers ticked to publish on the public issue. */
+    publish?: number[],
   ) => Promise<{ state: string; result: string }>;
   receipt: (
     request: string,
@@ -582,6 +584,10 @@ export function AgentComposer({
   };
   const images = useAttachments({ text, setText: edit, textareaRef: ref, initial: attachments ? initial?.images : [] });
   const savedImages = images.saved(), savedKey = JSON.stringify(savedImages);
+  // A /help report's images stay on this machine unless each is ticked: the
+  // issue is public. Not kept in the draft, so a restored one starts unticked.
+  const [publish, setPublish] = useState<ReadonlySet<number>>(new Set());
+  const helpImages = attachments && /^\s*\/help\s/.test(text) ? savedImages.map((i) => i.n).filter((n) => tokensIn(text).has(n)).sort((a, b) => a - b) : [];
   useEffect(() => {
     // An explicit clear replaces our previous saved revision, never a newer
     // draft written by another tab. The storage lock orders queued saves.
@@ -636,6 +642,7 @@ export function AgentComposer({
       return;
     }
     const body = attachments && shots.length ? expandImages(text, paths).trim() : text;
+    const published = helpImages.filter((n) => publish.has(n));
     setBusy(true);
     setError(null);
     const p: PendingSend = {
@@ -659,8 +666,8 @@ export function AgentComposer({
       // onDraftWork clears only the revision taken by this send. Any newer
       // typing (including its guidance context) remains a separate draft.
       await submitPending(p, async () => {
-        const r = await send(p.body, p.id, p.draft.agentContext);
-        if (r.state === "sent") await forgetPending(key, p.id);
+        const r = await send(p.body, p.id, p.draft.agentContext, published);
+        if (r.state === "sent") { await forgetPending(key, p.id); setPublish(new Set()); }
         else
           await updatePending(p.id, {
             state:
@@ -729,6 +736,18 @@ export function AgentComposer({
         <p className="error" role="alert">
           {error}
         </p>
+      )}
+      {helpImages.length > 0 && (
+        <fieldset className="agent-help-publish">
+          <legend>ammonwk/agentbox is public. Unticked images stay on this machine.</legend>
+          {helpImages.map((n) => (
+            <label key={n}>
+              <input type="checkbox" checked={publish.has(n)} disabled={busy}
+                onChange={(e) => setPublish((xs) => { const next = new Set(xs); if (e.target.checked) next.add(n); else next.delete(n); return next; })} />
+              Publish Image #{n} publicly
+            </label>
+          ))}
+        </fieldset>
       )}
       <form className="cmp-row"
         onSubmit={(e) => {

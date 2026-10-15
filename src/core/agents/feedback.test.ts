@@ -73,3 +73,67 @@ test("an agent files its own report as the agent's, at most three a day; another
     expect(bodies[3].title).toStartWith("[Agent feedback]");
   } finally {f.db.close();}
 });
+
+/** Ticked /help images go to the public issue through `gh issue create --attach`;
+ *  unticked ones, and all of them where gh cannot attach, stay on this machine. */
+async function withUploads(run:(shot:(n:number)=>string)=>Promise<void>) {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const previous=process.env.AGENTBOX_HOME, home=mkdtempSync(join(tmpdir(),"feedback-"));
+  process.env.AGENTBOX_HOME=home; mkdirSync(join(home,"uploads"));
+  const shot=(n:number)=>{const name=`20261015-${String(n).padStart(12,"0")}.png`,path=join(home,"uploads",name);writeFileSync(path,`png ${n}`);return path;};
+  try { await run(shot); } finally { if(previous===undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME=previous; rmSync(home,{recursive:true,force:true}); }
+}
+function attaching(opts:{version?:string|null;push?:boolean;created?:{url:string|null;partial:boolean}}) {
+  const db=new Database(":memory:"), posts:any[]=[], creates:any[]=[];
+  const runtime:any={store:{db},conversations:{threads:()=>[{id:"main"}],local:()=>[{id:"vulcan",name:"VULCAN",role:"Issue triage"}]}};
+  const gh=async(path:string,payload?:any)=>{
+    if(path==="repos/ammonwk/agentbox") return {permissions:{pull:true,push:opts.push??true}};
+    posts.push(payload);return {html_url:"https://github.com/ammonwk/agentbox/issues/300"};
+  };
+  const cli={version:async()=>opts.version===undefined?"2.102.0":opts.version,createIssue:async(issue:any)=>{creates.push(issue);return opts.created??{url:"https://github.com/ammonwk/agentbox/issues/301",partial:false};}};
+  return {db,posts,creates,feedback:new AgentFeedback(runtime,gh,cli)};
+}
+test("only the images ticked for publication are attached, and no local path reaches the issue",async()=>{
+  await withUploads(async(shot)=>{
+    const one=shot(1),two=shot(2),f=attaching({});
+    const r=await f.feedback.submit("vulcan",{request:crypto.randomUUID(),text:`Switch is off [Image #1: ${one}] and [Image #2: ${two}]`,target:"main",publish:[1]});
+    expect(r).toMatchObject({state:"sent",issue:"https://github.com/ammonwk/agentbox/issues/301"});expect(r.note).toBeUndefined();
+    expect(f.posts).toHaveLength(0);expect(f.creates).toHaveLength(1);
+    expect(f.creates[0].attach).toEqual([{path:one,alt:"Image 1"}]);
+    expect(f.creates[0].body).toContain("[Image #1: attached below]");
+    expect(f.creates[0].body).toContain("[Image #2: 20261015-000000000002.png, kept on the reporter's machine, not uploaded]");
+    expect(f.creates[0].body).not.toContain(process.env.AGENTBOX_HOME!);
+    f.db.close();
+  });
+});
+test("where gh is older than 2.99 or the account cannot write, images stay local and the issue says why",async()=>{
+  await withUploads(async(shot)=>{
+    const one=shot(1);
+    for (const [opts,why] of [[{version:"2.85.0"},"the GitHub CLI here is 2.85.0; attaching images needs 2.99.0 or later"],[{push:false},"this GitHub account has no write access to ammonwk/agentbox"],[{version:null},"the GitHub CLI did not report its version"]] as const) {
+      const f=attaching(opts);
+      const r=await f.feedback.submit("vulcan",{request:crypto.randomUUID(),text:`Look [Image #1: ${one}]`,target:"main",publish:[1]});
+      expect(r.state).toBe("sent");expect(r.note).toBe(`Images #1 were chosen for publication but not uploaded: ${why}.`);
+      expect(f.creates).toHaveLength(0);expect(f.posts).toHaveLength(1);
+      expect(f.posts[0].body).toContain("[Image #1: 20261015-000000000001.png, kept on the reporter's machine, not uploaded]");
+      expect(f.posts[0].body).toContain(`not uploaded: ${why}.`);
+      f.db.close();
+    }
+  });
+});
+test("a ticked image must be this machine's upload; a partial upload still files the issue once",async()=>{
+  await withUploads(async(shot)=>{
+    const one=shot(1),f=attaching({created:{url:"https://github.com/ammonwk/agentbox/issues/302",partial:true}});
+    for (const text of ["No image here","[Image #1: /etc/passwd]","[Image #1: /tmp/../20261015-999999999999.png]"])
+      expect((await f.feedback.submit("vulcan",{request:crypto.randomUUID(),text,target:"main",publish:[1]})).state).toBe("refused");
+    expect(f.creates).toHaveLength(0);
+    const p={request:crypto.randomUUID(),text:`Look [Image #1: ${one}]`,target:"main",publish:[1]};
+    const r=await f.feedback.submit("vulcan",p);
+    expect(r).toMatchObject({state:"sent",issue:"https://github.com/ammonwk/agentbox/issues/302",note:"Some of images #1 did not upload; check the issue."});
+    expect((await f.feedback.submit("vulcan",p)).issue).toEndWith("/302");
+    await expect(f.feedback.submit("vulcan",{...p,publish:[]})).rejects.toThrow("already used");
+    expect(f.creates).toHaveLength(1);
+    f.db.close();
+  });
+});
