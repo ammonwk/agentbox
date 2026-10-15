@@ -11,7 +11,9 @@
  *   key and broadcast in chunks (src/cloud/relay.ts). The chat is its main
  *   conversation's timeline, or an earlier main's: what was said and the
  *   questions it asked, with no tool call or output, and credentials
- *   redacted. Never a terminal, never another session.
+ *   redacted. The private part of a main's first prompt, agentbox's notes
+ *   and messages from other sessions stay here. Never a terminal, never
+ *   another session.
  * - `guide` types a teammate's message into the main conversation the
  *   teammate saw, framed as a colleague's, through the composer's receipts:
  *   at most once, and never into a newer conversation.
@@ -28,12 +30,14 @@ import type { Person } from "../../cloud/protocol";
 import { relayIdentity } from "../../cloud/relay";
 import { ChatCursor, InstallationSuperagents, ViewRequest, type ClaimedCommand, type PendingCommand, type PendingRead, type SuperagentInstance, type TeamActionAnswer, type TeamChatEvent, type TeamChatPage } from "../../cloud/superagents";
 import { terminalSafe } from "../cloud/deliver";
+import { getKv, setKv } from "../db";
 import type { Fleet } from "../fleet";
 import { sendReceipt, submitWithReceipt } from "../send-receipts";
 import { cloudSentMark } from "../sent";
 import type { Superagents } from "../superagents";
 import type { TimelineEvent } from "../types";
 import type { WorkClaims } from "../workclaims";
+import { isCheckpointPrompt } from "./marks";
 import { CREDENTIAL } from "./memory";
 import { dropShare, saveShare, shareOf, shares } from "./shares";
 import { CloudClaims } from "./teamclaims";
@@ -43,6 +47,8 @@ const TICK_MS = 2_000;
 const SYNC_SHARING_MS = 60_000;
 const SYNC_IDLE_MS = 10 * 60_000;
 const PAGE_EVENTS = 60;
+/** The installations of this machine that have shared a superagent (box.db's kv). */
+const HOSTED_KV = "superagent-team.hosted";
 const MAX_EVENT_TEXT = 8_000;
 
 export const REDACTED = "[redacted]";
@@ -55,12 +61,29 @@ export function redact(text: string): string {
 
 const clip = (s: string) => (s.length > MAX_EVENT_TEXT ? `${s.slice(0, MAX_EVENT_TEXT)}…` : s);
 
+/** The separator agentbox puts between a fresh main's first prompt (its
+ *  instructions, SOUL.md, memory) and the person's message (opening.ts).
+ *  The same rule as `personsOpening` in web/src/views/session/chatPresentation.ts. */
+const OPENING = "\n\n---\n\n";
+
 /** What a teammate sees of a timeline: what was said and the questions it
- *  asked. Tool calls, their input and output, thinking and notes stay here. */
-export function teamChatEvents(events: readonly TimelineEvent[]): TeamChatEvent[] {
+ *  asked. Tool calls, their input and output, thinking and notes stay here,
+ *  and so do:
+ *  - agentbox's checkpoint request (marks.ts);
+ *  - a message with a sender: another session's, a program's, agentbox's;
+ *  - the first prompt of a main up to its last separator. `start` says the
+ *    page reaches the conversation's start, so its first message is that
+ *    prompt. */
+export function teamChatEvents(events: readonly TimelineEvent[], start = false): TeamChatEvent[] {
   const out: TeamChatEvent[] = [];
+  const opening = start ? events.find((e) => e.kind === "user") : undefined;
   for (const e of events) {
-    if (e.kind === "user" || e.kind === "assistant") out.push({ id: e.id, at: e.at, kind: e.kind, text: clip(redact(e.text)) });
+    if (e.kind === "user") {
+      if (e.sender || isCheckpointPrompt(e.text)) continue;
+      const cut = e === opening ? e.text.lastIndexOf(OPENING) : -1;
+      const text = cut < 0 ? e.text : e.text.slice(cut + OPENING.length);
+      out.push({ id: e.id, at: e.at, kind: "user", text: clip(redact(text)) });
+    } else if (e.kind === "assistant") out.push({ id: e.id, at: e.at, kind: e.kind, text: clip(redact(e.text)) });
     else if (e.kind === "tool" && e.ask)
       out.push({
         id: e.id,
@@ -132,17 +155,23 @@ export type TeamDeps = {
 export class TeamHost {
   readonly claims: CloudClaims;
   lastError: { at: number; message: string } | null = null;
+  /** Shares the cloud says are unshared, kept here because the cloud still
+   *  lists claims of theirs: the name, and how many claims. */
+  readonly kept = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private syncedAt = 0;
   private client: { inst: InstallationCloud; api: InstallationSuperagents } | null = null;
+  private hostedCache: string[] | null = null;
+  /** The `lastError` that reports `kept`, cleared when they end. */
+  private keptError: { at: number; message: string } | null = null;
 
   constructor(private readonly deps: TeamDeps) {
     this.claims = new CloudClaims({
       api: () => this.api(),
       installation: () => this.installation(),
       instanceOf: (name) => this.instanceOf(name),
-      anyShared: () => shares().some((s) => s.installation === this.installation()),
+      inUse: () => this.hostsOrHosted(),
     });
     // A shared superagent's claims are kept in the cloud; the rest in box.db.
     const local = deps.claims.local;
@@ -186,6 +215,30 @@ export class TeamHost {
     return s && s.installation === this.installation() ? s.instance : null;
   }
 
+  /** This installation shares a superagent now, or did once: its claims can
+   *  still be in the cloud, so CloudClaims asks there. Remembered in box.db. */
+  hostsOrHosted(): boolean {
+    const me = this.installation();
+    if (!me) return false;
+    this.hostedCache ??= getKv<string[]>(HOSTED_KV) ?? [];
+    if (this.hostedCache.includes(me)) return true;
+    if (!shares().some((s) => s.installation === me)) return false;
+    this.markHosted(me);
+    return true;
+  }
+
+  private markHosted(me: string): void {
+    this.hostedCache ??= getKv<string[]>(HOSTED_KV) ?? [];
+    if (this.hostedCache.includes(me)) return;
+    this.hostedCache = [...this.hostedCache, me];
+    setKv(HOSTED_KV, this.hostedCache);
+  }
+
+  /** The shares this machine answers teammates for: not the kept ones. */
+  private live(me: string) {
+    return shares().filter((s) => s.installation === me && !this.kept.has(s.name));
+  }
+
   /** One pass: read the shares back now and then, then answer what teammates asked. */
   async tick(now = Date.now()): Promise<void> {
     if (this.ticking) return;
@@ -196,7 +249,7 @@ export class TeamHost {
       if (!api || !me) return;
       const sharing = shares().some((s) => s.installation === me);
       if (now - this.syncedAt > (sharing ? SYNC_SHARING_MS : SYNC_IDLE_MS)) await this.sync(api, me, now);
-      if (!shares().some((s) => s.installation === me)) return;
+      if (!this.live(me).length) return;
       const pending = await api.pending();
       for (const c of pending.commands) await this.command(api, c).catch((e: unknown) => this.fail(`a teammate's ${c.kind} for ${c.name}`, e));
       for (const r of pending.reads) await this.read(api, r).catch((e: unknown) => this.fail(`a teammate's read of ${r.name}`, e));
@@ -207,7 +260,13 @@ export class TeamHost {
     }
   }
 
-  /** The cloud's list of what this machine shares becomes the local one. */
+  /**
+   * The cloud's list of what this machine shares becomes the local one. A
+   * share the cloud no longer lists is dropped only when the cloud lists no
+   * claim of its instance: else it is kept (`kept`), so its claims are still
+   * renewed and released from here, and `lastError` says so until they end.
+   * Nothing changes when either list cannot be read.
+   */
   async sync(api: InstallationSuperagents, me: string, now = Date.now()): Promise<void> {
     this.syncedAt = now;
     let list: SuperagentInstance[];
@@ -218,10 +277,26 @@ export class TeamHost {
       if (e instanceof CloudError && e.status === 403) list = [];
       else throw e;
     }
+    // Claims need no scope to read: a machine that lost superagents:host still sees its own.
+    const claims = await api.claims();
+    const held = new Map<string, number>();
+    for (const c of claims) held.set(c.instance_id, (held.get(c.instance_id) ?? 0) + 1);
+    if (list.length || claims.some((c) => c.host_installation_id === me)) this.markHosted(me);
     const live = new Set(list.map((i) => i.name));
-    for (const s of shares()) if (s.installation !== me || !live.has(s.name)) dropShare(s.name);
+    this.kept.clear();
+    for (const s of shares()) {
+      if (s.installation === me && live.has(s.name)) continue;
+      const n = held.get(s.instance) ?? 0;
+      if (n) this.kept.set(s.name, n);
+      else dropShare(s.name);
+    }
     for (const i of list)
       saveShare({ name: i.name, instance: i.id, workspace: i.workspace_id, installation: me, visibility: i.visibility, maintainers: i.maintainers, source: i.source }, now);
+    if (this.kept.size) {
+      const names = [...this.kept].map(([name, n]) => `${name} (${n} claim${n === 1 ? "" : "s"})`).join(", ");
+      this.fail("shared superagents", new Error(`${names}: not shared in the cloud any more, and the cloud still lists its claims. They stay with this machine until they are released.`));
+      this.keptError = this.lastError;
+    } else if (this.keptError && this.lastError === this.keptError) this.lastError = this.keptError = null;
   }
 
   private fail(what: string, e: unknown): void {
@@ -232,7 +307,7 @@ export class TeamHost {
 
   /** Shared from here as this instance, and on: else why not. */
   private refusal(name: string, instance: string): string | null {
-    if (this.instanceOf(name) !== instance || !this.deps.superagents.has(name)) return `${name} is not shared from this machine any more.`;
+    if (this.instanceOf(name) !== instance || this.kept.has(name) || !this.deps.superagents.has(name)) return `${name} is not shared from this machine any more.`;
     if (!this.deps.superagents.get(name).enabled) return `${name} is turned off on its host.`;
     return null;
   }
@@ -262,7 +337,7 @@ export class TeamHost {
       return { ...base, session: null, status: null, events: [], before: null, error: "That conversation is not this superagent's." };
     const page = await this.deps.fleet.timeline(session, cursor.before, PAGE_EVENTS);
     const status = this.deps.fleet.sessions().find((s) => s.id === session)?.status ?? null;
-    return { ...base, session, status, events: teamChatEvents(page.events), before: page.before };
+    return { ...base, session, status, events: teamChatEvents(page.events, page.before === null), before: page.before };
   }
 
   private async viewPage(name: string, request: unknown): Promise<{ view: unknown; error?: string }> {

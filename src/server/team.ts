@@ -17,7 +17,7 @@ import { authenticatedSession } from "../core/session-authority";
 import type { Superagents } from "../core/superagents";
 import { dropShare, saveShare, shareOf } from "../core/superagent/shares";
 import { sourceOf, type TeamHost } from "../core/superagent/team";
-import type { WorkClaims } from "../core/workclaims";
+import { ClaimError, type WorkClaims } from "../core/workclaims";
 import { HttpError, json, readBody, type Router } from "./router";
 import { superagentCaller } from "./superagents";
 
@@ -83,7 +83,13 @@ export function teamRoutes(router: Router, deps: { superagents: Superagents; clo
       superagents.get(name);
       const share = shareOf(name);
       if (!share) throw new HttpError(404, `${name} is not shared`);
-      const held = (await team.claims.list({ superagent: name })).filter((c) => c.state !== "released");
+      // A first answer for the person. The cloud checks again in the same
+      // transaction as the unshare, so a claim made meanwhile refuses it too.
+      const held = (
+        await team.claims.list({ superagent: name }).catch((e: unknown) => {
+          throw e instanceof ClaimError ? new HttpError(e.status, `cannot tell whether ${name} holds claims in the cloud: ${e.message}`) : e;
+        })
+      ).filter((c) => c.state !== "released");
       if (held.length) throw new HttpError(409, `${name} holds ${held.length} claim(s) in the cloud: release them before you unshare it`);
       try {
         await personOf(req).unshare(share.instance);

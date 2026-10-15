@@ -194,6 +194,18 @@ language sql stable security definer set search_path = '' as $$
     and (s.visibility = 'workspace' or uid = any (s.maintainers) or uid = s.shared_by);
 $$;
 
+-- `uid` sees the claims of `p_instance`: a member now, and a maintainer or
+-- the host owner unless its visibility is `workspace`. Shared or not: the
+-- claims of an unshared instance are as private as the instance was.
+create function private.superagent_claims_visible(p_instance uuid, uid uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select uid is not null and exists (
+    select 1 from public.superagent_instances s
+    join public.workspace_members m on m.workspace_id = s.workspace_id and m.user_id = uid
+    where s.id = p_instance and (s.visibility = 'workspace' or uid = any (s.maintainers) or uid = s.shared_by)
+  );
+$$;
+
 -- The maintainers as stored: distinct, the host owner among them, each a member now.
 create function private.superagent_maintainers(ws uuid, owner uuid, p uuid[]) returns uuid[]
 language plpgsql stable security definer set search_path = '' as $$
@@ -253,13 +265,19 @@ $$;
 -- The installation calling, as the host of `p_instance`. With `p_live`, the
 -- instance must be shared and the machine must hold `superagents:host`;
 -- without it (giving work back, renewing, a handover), being its host is enough.
+-- A live call holds the instance's row (FOR SHARE) until it commits, so an
+-- unshare waits for a claim it makes and then sees it, or the claim sees the unshare.
 create function private.superagent_hosted(p_secret text, p_instance uuid, p_live boolean) returns public.superagent_instances
 language plpgsql security definer set search_path = '' as $$
 declare
   i public.installations := private.inst(p_secret, case when p_live then 'superagents:host' else null end);
   s public.superagent_instances;
 begin
-  select * into s from public.superagent_instances where id = p_instance;
+  if p_live then
+    select * into s from public.superagent_instances where id = p_instance for share;
+  else
+    select * into s from public.superagent_instances where id = p_instance;
+  end if;
   if not found or s.host_installation_id <> i.id or s.workspace_id <> i.workspace_id or s.shared_by <> i.owner_user_id then
     raise exception 'this installation does not host that superagent' using errcode = 'PT403';
   end if;
@@ -357,14 +375,24 @@ begin
 end;
 $$;
 
--- Stop sharing. Reads and queued commands end now; its claims stay with it
--- (expiry never frees work) until its host gives them back.
+-- Stop sharing. Reads and queued commands end now. Refused while it holds a
+-- claim that is not released: its host gives the claims back first, so no
+-- claim stays with an instance that nobody keeps (expiry never frees work).
+-- The instance's row is locked (superagent_owned) and its claims too, so a
+-- claim made at the same time is either seen here or refused as unshared.
 create function public.superagent_unshare(p_instance uuid) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
   uid uuid := private.human();
   s public.superagent_instances := private.superagent_owned(p_instance, uid);
+  held int;
 begin
+  select count(*) into held from (
+    select 1 from public.superagent_claims c where c.instance_id = s.id and c.state <> 'released' for update
+  ) x;
+  if held > 0 then
+    raise exception 'it holds % claim(s): its host releases them before you unshare it', held using errcode = 'PT409';
+  end if;
   update public.superagent_instances set unshared_at = coalesce(unshared_at, now()), updated_at = now()
    where id = s.id returning * into s;
   delete from public.superagent_reads where instance_id = s.id;
@@ -822,6 +850,11 @@ begin
     if k is null or src is null or char_length(k) not between 1 and 2048 or char_length(src) not between 1 and 2048 then
       raise exception 'each item is {key, source}' using errcode = 'PT400';
     end if;
+    -- An environment is claimed in scope env, and anything else in scope
+    -- work: one key never has two holders, one in each scope.
+    if (p_scope = 'env') <> (k like 'env:%') then
+      raise exception '% is claimed in scope %', k, case when k like 'env:%' then 'env' else 'work' end using errcode = 'PT400';
+    end if;
     canon := private.claim_key(src);
     if (canon is not null and canon <> k) or (canon is null and (k like 'github:%' or k like 'env:%')) then
       raise exception '% is not the key of %', k, src using errcode = 'PT400';
@@ -1007,10 +1040,12 @@ $$;
 -- `p_repo` for `p_instance` (null: a superagent that is not shared)? Only a
 -- member who verified that GitHub id and said yes for a scope that covers
 -- this one, with no row that says no. Unknown, unlinked or silent: no.
+-- Only a host (`superagents:host`) asks: another machine of the workspace
+-- learns nothing of who said yes.
 create function public.inst_superagent_contact_check(p_secret text, p_instance uuid, p_repo text, p_github_ids bigint[]) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
-  i public.installations := private.inst(p_secret, null);
+  i public.installations := private.inst(p_secret, 'superagents:host');
   gid bigint;
   person uuid;
   permits boolean;
@@ -1060,10 +1095,12 @@ alter table public.contact_preferences enable row level security;
 
 create policy "instances you can see" on public.superagent_instances for select to authenticated
   using (private.superagent_can_read(superagent_instances, (select auth.uid())));
-create policy "members see claims" on public.superagent_claims for select to authenticated
-  using (private.is_member(workspace_id));
-create policy "members see claim events" on public.superagent_claim_events for select to authenticated
-  using (private.is_member(workspace_id));
+-- A claim's note, source and session are its instance's: only a member who
+-- can see that instance reads them.
+create policy "who sees the instance sees its claims" on public.superagent_claims for select to authenticated
+  using (private.superagent_claims_visible(instance_id, (select auth.uid())));
+create policy "who sees the instance sees its claim events" on public.superagent_claim_events for select to authenticated
+  using (private.superagent_claims_visible(instance_id, (select auth.uid())));
 create policy "your own contact preferences" on public.contact_preferences for select to authenticated
   using (user_id = (select auth.uid()));
 -- superagent_reads and superagent_commands: no policy, no grant. Only the RPCs touch them.
@@ -1099,5 +1136,6 @@ begin
   end loop;
 end;
 $$;
--- The RLS policy on superagent_instances calls this helper as the reader.
+-- The RLS policies call these helpers as the reader.
 grant execute on function private.superagent_can_read(public.superagent_instances, uuid) to authenticated;
+grant execute on function private.superagent_claims_visible(uuid, uuid) to authenticated;

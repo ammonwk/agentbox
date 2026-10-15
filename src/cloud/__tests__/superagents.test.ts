@@ -54,7 +54,7 @@ const GH_KEY = "github:acme/widget#7";
 describe.skipIf(!enabled)("shared superagents", () => {
   let alice: Awaited<ReturnType<typeof human>>, bob: Awaited<ReturnType<typeof human>>, carol: Awaited<ReturnType<typeof human>>, dave: Awaited<ReturnType<typeof human>>;
   let ws: string;
-  let a1: InstallationSuperagents, b1: InstallationSuperagents, c1: InstallationSuperagents;
+  let a1: InstallationSuperagents, a2: InstallationSuperagents, b1: InstallationSuperagents, c1: InstallationSuperagents;
   let a1Id: string, a2Id: string, b1Id: string;
   let instA: string, instB: string;
 
@@ -68,7 +68,7 @@ describe.skipIf(!enabled)("shared superagents", () => {
     const ra2 = await alice.api.registerInstallation(ws, `alice-plain-${run}`);
     const rb = await bob.api.registerInstallation(ws, `bob-host-${run}`, { scopes: [...HOST_SCOPES] });
     const rc = await carol.api.registerInstallation(wsC, `carol-host-${run}`, { scopes: [...HOST_SCOPES] });
-    [a1, b1, c1] = [machine(ra.secret), machine(rb.secret), machine(rc.secret)];
+    [a1, a2, b1, c1] = [machine(ra.secret), machine(ra2.secret), machine(rb.secret), machine(rc.secret)];
     [a1Id, a2Id, b1Id] = [ra.installation.id, ra2.installation.id, rb.installation.id];
   });
 
@@ -175,6 +175,37 @@ describe.skipIf(!enabled)("shared superagents", () => {
     await b1.claimRelease(instB, "work", GH_KEY, 5);
   });
 
+  test("claims: a key only in its own scope, only who sees the instance reads them, and no unshare while they are held", async () => {
+    const ENV = "env:acme/widget:staging";
+    // An environment only in scope env, anything else only in scope work.
+    expect(await status(a1.claimAcquire(instA, "work", [{ key: ENV, source: ENV }], null, null))).toBe(400);
+    expect(await status(a1.claimAcquire(instA, "env", [{ key: GH_KEY, source: GH }], null, null))).toBe(400);
+    expect(await status(a1.claimAcquire(instA, "env", [{ key: "x:thing", source: "x:thing" }], null, null))).toBe(400);
+
+    // A private instance's claims: its maintainers read them, another member does not.
+    const p = await alice.team.share({ installation: a1Id, name: "quiet", title: "Quiet", visibility: "private", maintainers: [bob.id] });
+    const [c] = await a1.claimAcquire(p.id, "env", [{ key: ENV, source: ENV }], "s-q", "deploy notes");
+    const rows = async (who: typeof dave, table: string) => (await who.api.sb.from(table).select("key, note").eq("instance_id", p.id)).data;
+    expect(await rows(dave, "superagent_claims")).toEqual([]);
+    expect(await rows(dave, "superagent_claim_events")).toEqual([]);
+    expect(await rows(bob, "superagent_claims")).toEqual([{ key: ENV, note: "deploy notes" }]);
+    expect((await rows(bob, "superagent_claim_events"))!.length).toBeGreaterThan(0);
+    expect(await rows(alice, "superagent_claims")).toHaveLength(1);
+    // A workspace instance's claims are every member's to read.
+    const [w] = await a1.claimAcquire(instA, "work", [{ key: "x:open", source: "x:open" }], null, "open work");
+    expect((await dave.api.sb.from("superagent_claims").select("note").eq("key", "x:open")).data).toEqual([{ note: "open work" }]);
+    await a1.claimRelease(instA, "work", "x:open", w!.fence);
+
+    // An unshare is refused while it holds a claim, and nothing about it changes.
+    expect(await status(alice.team.unshare(p.id))).toBe(409);
+    expect((await alice.team.directory(ws)).find((i) => i.id === p.id)!.unshared_at).toBeNull();
+    await a1.claimRelease(p.id, "env", ENV, c!.fence);
+    expect((await alice.team.unshare(p.id)).unshared_at).not.toBeNull();
+    // Its host still lists what it held, and it stays private.
+    expect((await a1.claims({ instance: p.id, released: true })).map((x) => x.state)).toEqual(["released"]);
+    expect(await rows(dave, "superagent_claims")).toEqual([]);
+  });
+
   test("relay: the host key goes only to a current reader, and commands are checked again when they run", async () => {
     const reader = await relayIdentity();
     const host = await relayIdentity();
@@ -264,6 +295,8 @@ describe.skipIf(!enabled)("shared superagents", () => {
     expect(await check(a1, null, "acme/widget", [1001])).toEqual({ 1001: true });
     // A machine of another workspace learns nothing of her.
     expect(await check(c1, null, "acme/widget", [1001])).toEqual({ 1001: false });
+    // A machine of the workspace that does not host superagents cannot ask.
+    expect(await status(a2.contactCheck(null, "acme/widget", [1001]))).toBe(403);
     // An instance on another machine cannot be asked about.
     expect(await status(b1.contactCheck(instA, "acme/widget", [1001]))).toBe(403);
     // Bob cannot read her choices.

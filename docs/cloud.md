@@ -523,6 +523,12 @@ capability or a program's token cannot share.
 The chat page is the main conversation's timeline, or an earlier main's:
 what was said and the questions it asked. It has no tool call and no tool
 output, and the memory journal's `CREDENTIAL` pattern redacts credentials.
+These stay on the host too:
+
+- the first prompt of a main up to its last `---` separator (its
+  instructions, SOUL.md and memory), on the page that reaches the start;
+- agentbox's checkpoint request;
+- a message that has a sender: another session's, a program's or agentbox's.
 
 ### Commands
 
@@ -550,9 +556,26 @@ the rules of `src/core/workclaims.ts` in the same statement as each change:
   proved the stop.
 
 The database also makes the key of a GitHub issue or an environment from
-its source, so a raw call cannot make a second key for the same issue. On
-the host, `WorkClaims.backendOf` sends a shared superagent's calls to
-`CloudClaims` (`src/core/superagent/teamclaims.ts`).
+its source, so a raw call cannot make a second key for the same issue. An
+`env:` key is claimed only in scope `env`, and every other key only in scope
+`work`. On the host, `WorkClaims.backendOf` sends a shared superagent's
+calls to `CloudClaims` (`src/core/superagent/teamclaims.ts`).
+
+A claim never outlives the host's hold on it:
+
+- `superagent_unshare` refuses while the instance holds a claim that is not
+  released. It locks the instance and its claims in the same transaction,
+  and a claim call holds the instance's row until it commits, so a claim made
+  at the same time is seen or refused.
+- The host's sync never drops a local share while the cloud lists claims of
+  its instance (unshared, or `superagents:host` turned off). It keeps the
+  share, answers no teammate for it, and reports it in the Team page's
+  `lastError` until the claims are released.
+- `CloudClaims` asks the cloud while the cloud is set up and this
+  installation shares a superagent now or did before (box.db remembers it).
+  It still lists, renews and releases the claims of an instance it no
+  longer shares. Each call gives up after 10 seconds with a 503 that says the
+  change is unknown, so an outage never hangs a caller.
 
 ### Contact preferences
 
@@ -560,7 +583,9 @@ the host, `WorkClaims.backendOf` sends a shared superagent's calls to
 (`*`: all) and instance (null: all). A yes needs a GitHub identity that the
 person verified: a linked GitHub OAuth identity, or the id that the
 `github-session` function wrote after GitHub confirmed a token. A no never
-needs one. For each numeric GitHub id, `inst_superagent_contact_check` says
+needs one. Only a host asks (`superagents:host`), so another machine of the
+workspace learns nothing. For each numeric GitHub id,
+`inst_superagent_contact_check` says
 yes only for a member who verified that id and said yes for a scope that
 covers this one, with no row that says no. The default is no. The GitHub
 broker asks it at dispatch (`CloudConsent`, `src/core/github/consent.ts`)
@@ -575,12 +600,15 @@ that contacts a person.
   no edit or host right;
 - a non-member reads nothing;
 - the claims' exclusion, fences, expiry and takeover;
+- a key only in its own scope, a private instance's claims only for who sees
+  it, and no unshare while it holds a claim;
 - the relay's key and commands are checked again, and a page crosses
   Realtime and opens for its reader;
-- consent is off by default, and a no wins.
+- consent is off by default, a no wins, and only a host asks.
 
-`src/core/superagent/team.test.ts` checks the redaction, and that guidance
-goes only to the conversation the teammate saw.
+`src/core/superagent/team.test.ts` checks the redaction, what the chat page
+leaves out, that guidance goes only to the conversation the teammate saw,
+and that the sync keeps a share while the cloud lists claims of it.
 
 ### Not done yet
 

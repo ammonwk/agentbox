@@ -10,6 +10,11 @@
  *
  * The holder of a claim of this machine's instance is its superagent's
  * name here; another machine's is `<name>@<host>`, which no local caller is.
+ *
+ * It asks the cloud while this machine shares a superagent, and after it
+ * stopped too: the claims of an instance it no longer shares are still
+ * listed, renewed and released from here. Each call gives up after
+ * `RPC_TIMEOUT_MS` with a clear error, so an outage never hangs a caller.
  */
 import { CloudError } from "../../cloud/client";
 import type { CloudClaim, InstallationSuperagents } from "../../cloud/superagents";
@@ -22,9 +27,14 @@ export type CloudClaimsDeps = {
   installation: () => string | null;
   /** The cloud instance of a superagent this machine shares; null when it is not shared. */
   instanceOf: (superagent: string) => string | null;
-  /** Whether this machine shares any superagent: none, and nothing here touches the network. */
-  anyShared: () => boolean;
+  /** Whether this machine shares a superagent now or did before: never, and
+   *  nothing here touches the network. */
+  inUse: () => boolean;
+  /** How long one call to the cloud can take; RPC_TIMEOUT_MS by default. */
+  timeoutMs?: number;
 };
+
+export const RPC_TIMEOUT_MS = 10_000;
 
 export class CloudClaims implements ClaimsBackend {
   constructor(private readonly deps: CloudClaimsDeps) {}
@@ -44,10 +54,19 @@ export class CloudClaims implements ClaimsBackend {
     return { key: c.key, source: c.source, scope: c.scope, fence: c.fence, leaseUntil: c.lease_until, state: c.state, holder: this.holderOf(c), note: c.note };
   }
 
-  /** The cloud's refusal as the claims service's: a conflict keeps its holder. */
+  /** The cloud's refusal as the claims service's: a conflict keeps its
+   *  holder, and no answer in time is a 503 that says the change is unknown. */
   private async run<T>(f: () => Promise<T>): Promise<T> {
+    const ms = this.deps.timeoutMs ?? RPC_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new ClaimError(503, `the cloud keeps this claim and did not answer in ${Math.round(ms / 1000)} s: a change asked for can still have happened, so read the claim again before you retry`)),
+        ms,
+      );
+    });
     try {
-      return await f();
+      return await Promise.race([f(), late]);
     } catch (e) {
       if (!(e instanceof CloudError)) throw e;
       let detail: { key: string; holder: ClaimHolder; state: ClaimState } | null = null;
@@ -61,13 +80,15 @@ export class CloudClaims implements ClaimsBackend {
       }
       const status = [400, 403, 404, 409].includes(e.status) ? e.status : 503;
       throw new ClaimError(status, status === 503 ? `the cloud keeps this claim and did not answer: ${e.message}` : e.message, detail);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   /** The claim as the cloud has it, with the instance that holds it. */
   private async raw(scope: ClaimScope, key: string): Promise<CloudClaim | null> {
     const api = this.deps.api();
-    if (!api || !this.deps.anyShared()) return null;
+    if (!api || !this.deps.inUse()) return null;
     return (await this.run(() => api.claims({ key, scope, released: true })))[0] ?? null;
   }
 
@@ -83,15 +104,15 @@ export class CloudClaims implements ClaimsBackend {
   }
 
   async list(f: ClaimFilter): Promise<WorkClaim[]> {
-    if (!this.deps.anyShared()) return [];
-    let instance: string | undefined;
-    if (f.superagent !== undefined) {
-      const i = this.deps.instanceOf(f.superagent);
-      if (!i) return [];
-      instance = i;
-    }
+    if (!this.deps.api() || !this.deps.inUse()) return [];
+    // A superagent shared now names its instance. One shared before is
+    // found by its name among this machine's instances: its claims stay here
+    // until they are released.
+    const instance = f.superagent !== undefined ? (this.deps.instanceOf(f.superagent) ?? undefined) : undefined;
     const rows = await this.run(() => this.api().claims({ instance, session: f.session, key: f.key, scope: f.scope, released: f.released }));
-    return rows.map((c) => this.toClaim(c));
+    const me = this.deps.installation();
+    const mine = f.superagent === undefined || instance ? rows : rows.filter((c) => c.host_installation_id === me && c.instance_name === f.superagent);
+    return mine.map((c) => this.toClaim(c));
   }
 
   async claim(items: readonly { key: string; source: string }[], scope: ClaimScope, holder: ClaimHolder, note: string | null): Promise<WorkClaim[]> {
@@ -122,12 +143,12 @@ export class CloudClaims implements ClaimsBackend {
   }
 
   async renew(live: ReadonlySet<string>): Promise<void> {
-    if (!this.deps.anyShared()) return;
+    if (!this.deps.api() || !this.deps.inUse()) return;
     await this.run(() => this.api().claimRenew([...live]));
   }
 
   async handOver(from: string, to: string): Promise<number> {
-    if (!this.deps.anyShared()) return 0;
+    if (!this.deps.api() || !this.deps.inUse()) return 0;
     return this.run(() => this.api().claimHandover(from, to));
   }
 }
