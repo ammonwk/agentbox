@@ -473,6 +473,39 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX work_claim_events_key ON work_claim_events(scope, key, id);
   `,
+  // 32 — the GitHub App broker (src/core/github/): the policy the host owner
+  // pinned for each superagent, with its App key's path, and the journal of
+  // the actions superagents request. An action marked attempting is never
+  // sent again: the next server marks it uncertain.
+  `
+  CREATE TABLE github_pins (
+    superagent   TEXT PRIMARY KEY,
+    digest       TEXT NOT NULL,
+    policy       TEXT NOT NULL,
+    app_key_path TEXT NOT NULL,
+    pinned_at    INTEGER NOT NULL
+  );
+  CREATE TABLE github_actions (
+    request     TEXT PRIMARY KEY,
+    superagent  TEXT NOT NULL,
+    session     TEXT,
+    action      TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    claim       TEXT,
+    cwd         TEXT,
+    branch      TEXT NOT NULL,
+    digest      TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    result      TEXT,
+    receipt     TEXT,
+    card        INTEGER,
+    approved_by TEXT,
+    approved_at INTEGER,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  );
+  CREATE INDEX github_actions_state ON github_actions(state);
+  `,
 ];
 
 function migrate(d: Database) {

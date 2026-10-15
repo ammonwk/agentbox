@@ -1,0 +1,160 @@
+/**
+ * `/api/github/…`: the GitHub App broker (src/core/github/, docs/superagents.md
+ * "GitHub actions").
+ *
+ * Three kinds of caller:
+ *   - a superagent's program: `x-agentbox-superagent` and
+ *     `x-agentbox-superagent-token`, its own token;
+ *   - one of its sessions: the session capability, from a session whose
+ *     parent chain reaches the superagent's main or an earlier main;
+ *   - a person: loopback (the CSRF guard) with neither. Only a person pins a
+ *     policy, approves or declines an action. A request that carries either
+ *     kind of header is not a person's, valid or not.
+ */
+import { timingSafeEqual } from "node:crypto";
+import type { GitHubActions, ActionCaller, GitHubActionView } from "../core/github/actions";
+import { effectivePin, pin, pinOf, proposedPolicy, unpin } from "../core/github/policy";
+import { authenticatedSession } from "../core/session-authority";
+import { superagentToken } from "../core/superagents";
+import type { Session, SuperagentInfo } from "../core/types";
+import { HttpError, json, readBody, type Router } from "./router";
+
+export type GitHubRouteDeps = {
+  superagents: { list(): Pick<SuperagentInfo, "name" | "main" | "previous" | "dir">[] };
+  sessions: () => Pick<Session, "id" | "parent" | "parentByHand">[];
+};
+
+/**
+ * The superagent a session belongs to: its main, an earlier main, or a
+ * session one of those started, at any depth. A parent you set by dragging
+ * on the board is a grouping, not a start, so it grants nothing.
+ */
+export function ownerOf(session: string, deps: GitHubRouteDeps): string | null {
+  const roots = new Map<string, string>();
+  for (const s of deps.superagents.list()) for (const id of [s.main, ...s.previous]) if (id) roots.set(id, s.name);
+  const byId = new Map(deps.sessions().map((s) => [s.id, s]));
+  const seen = new Set<string>();
+  for (let at: string | null = session; at && !seen.has(at) && seen.size < 64; ) {
+    const owner = roots.get(at);
+    if (owner) return owner;
+    seen.add(at);
+    const s = byId.get(at);
+    at = s && !s.parentByHand ? s.parent : null;
+  }
+  return null;
+}
+
+/** Headers that make a request a session's or a program's, valid or not. */
+const AGENT_HEADERS = ["x-agentbox-superagent", "x-agentbox-superagent-token", "x-agentbox-session", "x-agentbox-session-token"];
+
+/** A person at this machine: neither a program's headers nor a session's. */
+export function requirePerson(req: Request): void {
+  if (AGENT_HEADERS.some((h) => req.headers.has(h))) throw new HttpError(403, "only a person can do this, from the app or their own terminal: not a session or a superagent's program");
+}
+
+/** An answer on a GitHub action's card approves it: only a person gives one. */
+export function requirePersonForCard(req: Request, key: string | null): void {
+  if (key?.startsWith("github-action:")) requirePerson(req);
+}
+
+function sameSecret(a: string, b: string): boolean {
+  return a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+export function githubRoutes(router: Router, actions: GitHubActions, deps: GitHubRouteDeps): Router {
+  const registered = (name: string) => deps.superagents.list().find((s) => s.name === name) ?? null;
+
+  /** A superagent's program or one of its sessions; null for a request with neither header. */
+  const superagentCaller = (req: Request): ActionCaller | null => {
+    const name = req.headers.get("x-agentbox-superagent");
+    if (name !== null) {
+      const token = req.headers.get("x-agentbox-superagent-token") ?? "";
+      // Only a registered name: superagentToken makes a token for any name it is given.
+      if (!registered(name) || !sameSecret(token, superagentToken(name))) throw new HttpError(403, "the superagent token does not match");
+      return { superagent: name, session: null };
+    }
+    const session = authenticatedSession(req);
+    if (!session) return null;
+    const owner = ownerOf(session, deps);
+    return owner ? { superagent: owner, session } : null;
+  };
+
+  const requireSuperagent = (req: Request): ActionCaller => {
+    const c = superagentCaller(req);
+    if (!c) throw new HttpError(403, "only a superagent's program, or a session of that superagent, can request GitHub actions");
+    return c;
+  };
+
+  /** A superagent sees only its own actions; anyone else here sees all. */
+  const visibleTo = (req: Request, v: GitHubActionView): GitHubActionView => {
+    const c = superagentCaller(req);
+    if (c && c.superagent !== v.superagent) throw new HttpError(404, `no GitHub action ${v.request}`);
+    return v;
+  };
+
+  const dirOf = (name: string): string => {
+    const s = registered(name);
+    if (!s) throw new HttpError(404, `no superagent ${name}`);
+    return s.dir;
+  };
+
+  const policyView = (name: string) => {
+    const dir = dirOf(name);
+    let proposed: ReturnType<typeof proposedPolicy> = null;
+    let proposalError: string | null = null;
+    try {
+      proposed = proposedPolicy(dir);
+    } catch (e) {
+      proposalError = (e as Error).message;
+    }
+    const pinned = pinOf(name);
+    let current = false;
+    try {
+      current = !!effectivePin(name, dir);
+    } catch {
+      current = false;
+    }
+    return { superagent: name, proposed, proposalError, pinned, current };
+  };
+
+  return router
+    .add("POST", "/api/github/actions", async ({ req }) => {
+      const caller = requireSuperagent(req);
+      const v = await actions.request(caller, await readBody(req));
+      return json({ request: v.request, state: v.state, result: v.result, ...(v.card ? { card: v.card } : {}) });
+    })
+    .add("GET", "/api/github/actions", ({ req }) => {
+      const c = superagentCaller(req);
+      return json(actions.list(c?.superagent));
+    })
+    .add("GET", "/api/github/actions/:request", async ({ req, params }) => {
+      visibleTo(req, actions.get(params.request!));
+      return json(await actions.reconcile(params.request!));
+    })
+    .add("POST", "/api/github/actions/:request/approve", async ({ req, params }) => {
+      requirePerson(req);
+      return json(await actions.approve(params.request!, "a person (API)"));
+    })
+    .add("POST", "/api/github/actions/:request/decline", ({ req, params }) => {
+      requirePerson(req);
+      return json(actions.decline(params.request!, "a person (API)"));
+    })
+    .add("POST", "/api/github/read", async ({ req }) => json(await actions.read(requireSuperagent(req), await readBody(req))))
+    .add("GET", "/api/github/policies/:superagent", ({ params }) => json(policyView(params.superagent!)))
+    .add("POST", "/api/github/policies/:superagent", async ({ req, params }) => {
+      requirePerson(req);
+      const b = await readBody(req);
+      if (typeof b.digest !== "string") throw new HttpError(400, "give the digest of the policy you read (GET this path first)");
+      if (b.appKeyPath !== undefined && typeof b.appKeyPath !== "string") throw new HttpError(400, "appKeyPath is a path");
+      const name = params.superagent!;
+      pin(name, dirOf(name), b.digest, (b.appKeyPath as string | undefined) ?? null);
+      return json(policyView(name));
+    })
+    .add("DELETE", "/api/github/policies/:superagent", ({ req, params }) => {
+      requirePerson(req);
+      const name = params.superagent!;
+      unpin(name);
+      // A superagent that was removed can still be unpinned.
+      return json(registered(name) ? policyView(name) : { superagent: name, proposed: null, proposalError: null, pinned: null, current: false });
+    });
+}

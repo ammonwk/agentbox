@@ -94,6 +94,9 @@ import { claimRoutes } from "./claims";
 import { cloudHttpError, cloudRoutes } from "./cloud";
 import { superagentRoutes } from "./superagents";
 import { prReady } from "../core/superagent/events";
+import { githubRoutes, requirePersonForCard } from "./github";
+import { GitHubActions } from "../core/github/actions";
+import { GitHubBroker } from "../core/github/broker";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -1220,6 +1223,7 @@ const router = new Router(mapError)
   .add("POST", "/api/cards/:id/answer", async ({ req, params }) => {
     const b = await readBody(req);
     if (typeof b.text !== "string") throw new HttpError(400, "text must be a string");
+    requirePersonForCard(req, cards.get(cardId(params.id!)).key);
     return json(cards.answer(cardId(params.id!), b.text));
   })
   .add("POST", "/api/cards/:id/later", ({ params }) => json(cards.later(cardId(params.id!))))
@@ -1579,6 +1583,9 @@ const router = new Router(mapError)
   });
 superagentRoutes(router, superagents, { scheduleHot });
 claimRoutes(router, workClaims);
+/** The GitHub App broker: superagents request actions; tokens stay in it (src/core/github/). */
+export const github = new GitHubActions({ broker: new GitHubBroker(), cards, dirOf: (n) => superagents.get(n).dir, cwdOf: (id) => fleet.sessions().find((s) => s.id === id)?.cwd ?? null });
+githubRoutes(router, github, { superagents, sessions: () => fleet.sessions() });
 cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
@@ -1697,6 +1704,7 @@ export async function startServer(): Promise<void> {
     scheduler.stop();
     waits.stop();
     superagents.stopAll();
+    github.stop();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -1820,6 +1828,7 @@ export async function startServer(): Promise<void> {
   waits.start();
   superagents.start();
   cards.start();
+  github.start();
   // Local first: with no cloud.env this reads nothing and sends nothing.
   cloud.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
