@@ -6,7 +6,8 @@ import { closeDb, getDb } from "../db";
 import { superagentToken } from "../superagents";
 import type { Session } from "../types";
 import { canonicalSource, LEASE_MS, WorkClaims, type SessionControl } from "../workclaims";
-import { superagentCaller } from "../../server/claims";
+import { claimCaller } from "../../server/claims";
+import type { Superagents } from "../superagents";
 
 const dir = mkdtempSync(join(tmpdir(), "agentbox-workclaims-"));
 const old = process.env.AGENTBOX_HOME;
@@ -149,12 +150,13 @@ test("a handover moves the session's claims to its successor with a new fence", 
 
 test("a program is its superagent only with its own token", () => {
   getDb().run("INSERT OR IGNORE INTO superagents (name, dir, created_at) VALUES ('vulcan', '/x', 1)");
+  const hub = { has: (n: string) => n === "vulcan" } as unknown as Superagents;
   const req = (h: Record<string, string>) => new Request("http://127.0.0.1/api/claims", { headers: h });
   const token = superagentToken("vulcan");
-  expect(superagentCaller(req({ "x-agentbox-superagent": "vulcan", "x-agentbox-superagent-token": token }))).toEqual({ superagent: "vulcan", session: null });
-  expect(() => superagentCaller(req({ "x-agentbox-superagent": "vulcan", "x-agentbox-superagent-token": "0".repeat(64) }))).toThrow("token does not match");
-  expect(() => superagentCaller(req({ "x-agentbox-superagent": "vulcan" }))).toThrow("token does not match");
-  expect(() => superagentCaller(req({ "x-agentbox-superagent": "steward", "x-agentbox-superagent-token": token }))).toThrow("token does not match");
-  expect(() => superagentCaller(req({ "x-agentbox-superagent": "../vulcan", "x-agentbox-superagent-token": token }))).toThrow("token does not match");
-  expect(superagentCaller(req({}))).toEqual({ superagent: null, session: null });
+  expect(claimCaller(req({ "x-agentbox-superagent": "vulcan", "x-agentbox-superagent-token": token }), hub)).toEqual({ superagent: "vulcan", session: null });
+  expect(() => claimCaller(req({ "x-agentbox-superagent": "vulcan", "x-agentbox-superagent-token": "0".repeat(64) }), hub)).toThrow("does not prove vulcan");
+  expect(() => claimCaller(req({ "x-agentbox-superagent": "vulcan" }), hub)).toThrow("does not prove vulcan");
+  expect(() => claimCaller(req({ "x-agentbox-superagent": "steward", "x-agentbox-superagent-token": token }), hub)).toThrow("no superagent steward");
+  expect(() => claimCaller(req({ "x-agentbox-superagent": "../vulcan", "x-agentbox-superagent-token": token }), hub)).toThrow("no superagent");
+  expect(claimCaller(req({}), hub)).toEqual({ superagent: null, session: null });
 });

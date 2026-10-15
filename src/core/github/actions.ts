@@ -37,10 +37,11 @@ export type ActionCaller = { superagent: string; session: string | null };
  * that fence; with no ClaimCheck wired, such an action is refused.
  */
 export interface ClaimCheck {
-  current(scope: string, key: string): { fence: number; holder: { superagent: string; session: string | null } } | null;
+  /** The claim on `key` (canonicalised by the claims service) as it is now; null when nobody holds it. */
+  current(scope: string, key: string): Promise<{ fence: number; holder: { superagent: string | null; session: string | null } } | null>;
 }
-/** The scope a claim is in when the request does not name one. */
-export const DEFAULT_CLAIM_SCOPE = "default";
+/** The scope a claim is in when the request does not name one (src/core/workclaims.ts). */
+export const DEFAULT_CLAIM_SCOPE = "work";
 
 export type ActionResult = { url?: string; status?: string; message?: string };
 export type GitHubActionView = {
@@ -182,7 +183,7 @@ export class GitHubActions {
     }
     const pin = effectivePin(caller.superagent, this.deps.dirOf(caller.superagent));
     this.allowed(pin, action);
-    this.checkClaim(caller.superagent, claim);
+    await this.checkClaim(caller.superagent, claim);
     const branch = this.branchFor(caller.superagent, request, action, claim);
     let cwd: string | null = null;
     if (action.kind === "open_pr" || action.kind === "update_pr") {
@@ -297,10 +298,10 @@ export class GitHubActions {
     if (!pin.policy.actions.includes(action.kind)) throw new FleetError(403, `${action.kind} is outside ${pin.superagent}'s pinned actions`);
   }
 
-  private checkClaim(superagent: string, claim: GitHubActionView["claim"]): void {
+  private async checkClaim(superagent: string, claim: GitHubActionView["claim"]): Promise<void> {
     if (!claim) return;
     if (!this.claims) throw new FleetError(409, "this action names a claim, and no claims service is wired to check it");
-    const now = this.claims.current(claim.scope, claim.key);
+    const now = await this.claims.current(claim.scope, claim.key);
     if (!now) throw new FleetError(409, `nobody holds ${claim.key} now`);
     if (now.holder.superagent !== superagent) throw new FleetError(409, `${now.holder.superagent}, not ${superagent}, holds ${claim.key}`);
     if (now.fence !== claim.fence) throw new FleetError(409, `the claim on ${claim.key} is at fence ${now.fence}, not ${claim.fence}: it moved since`);
@@ -340,16 +341,16 @@ export class GitHubActions {
       if (r.state !== "approved") return;
       const action = GitHubAction.parse(JSON.parse(r.action));
       const claim = r.claim ? (JSON.parse(r.claim) as GitHubActionView["claim"]) : null;
-      const recheck = () => {
+      const recheck = async () => {
         const pin = effectivePin(r.superagent, this.deps.dirOf(r.superagent));
         if (pin.digest !== r.digest) throw new FleetError(403, `${r.superagent}'s pinned GitHub policy changed since this action was requested; request it again`);
         this.allowed(pin, action);
-        this.checkClaim(r.superagent, claim);
+        await this.checkClaim(r.superagent, claim);
         return pin;
       };
       let pin: Pin;
       try {
-        pin = recheck();
+        pin = await recheck();
       } catch (e) {
         this.move(request, "approved", "refused", { message: (e as Error).message });
         return;
@@ -358,7 +359,7 @@ export class GitHubActions {
       const visible = { sent: false };
       try {
         const result: ManagedResult = await this.deps.broker.dispatch(
-          { superagent: r.superagent, pin, branch: r.branch, cwd: r.cwd, consent: this.consent, visible, guard: async () => void recheck() },
+          { superagent: r.superagent, pin, branch: r.branch, cwd: r.cwd, consent: this.consent, visible, guard: async () => void (await recheck()) },
           action,
         );
         this.move(request, "attempting", "sent", { url: result.url, ...(result.status ? { status: result.status } : {}) }, result.receipt);

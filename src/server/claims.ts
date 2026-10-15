@@ -1,26 +1,18 @@
 /** The work claims API (src/core/workclaims.ts, docs/superagents.md "Claims"). */
-import { timingSafeEqual } from "node:crypto";
-import { getDb } from "../core/db";
 import { authenticatedSession } from "../core/session-authority";
-import { superagentToken } from "../core/superagents";
+import type { Superagents } from "../core/superagents";
+import { superagentCaller } from "./superagents";
 import { ClaimError, type ClaimCaller, type ClaimScope, type WorkClaims } from "../core/workclaims";
 import { HttpError, json, readBody, type RouteHandler, type Router } from "./router";
 
 /**
- * Who asks. A program sends its name and its token (`x-agentbox-superagent`,
- * `x-agentbox-superagent-token`, which the SDK's `call` sends); a wrong token
- * is 403. A session proves itself with its capability, and is then the holder
- * session. Neither: a person on this machine.
+ * Who asks. A program sends its name and its token (`superagentCaller`); a
+ * session proves itself with its capability, and is then the holder session.
+ * Neither: a person on this machine.
  */
-export function superagentCaller(req: Request): ClaimCaller {
-  const name = req.headers.get("x-agentbox-superagent");
-  if (name === null) return { superagent: null, session: authenticatedSession(req) };
-  const token = req.headers.get("x-agentbox-superagent-token") ?? "";
-  // The name is checked before it becomes a path, and only a registered one has a token.
-  const registered = /^[a-z][a-z0-9-]{0,39}$/.test(name) && !!getDb().query("SELECT 1 FROM superagents WHERE name = ?").get(name);
-  const expected = registered ? Buffer.from(superagentToken(name)) : null;
-  if (!expected || expected.length !== Buffer.byteLength(token) || !timingSafeEqual(expected, Buffer.from(token))) throw new HttpError(403, `not superagent ${name}: its token does not match`);
-  return { superagent: name, session: null };
+export function claimCaller(req: Request, superagents: Superagents): ClaimCaller {
+  const name = superagentCaller(req, superagents);
+  return name ? { superagent: name, session: null } : { superagent: null, session: authenticatedSession(req) };
 }
 
 const scopeOf = (v: unknown): ClaimScope | undefined => {
@@ -51,7 +43,7 @@ const answering =
     }
   };
 
-export function claimRoutes(router: Router, claims: WorkClaims): Router {
+export function claimRoutes(router: Router, claims: WorkClaims, superagents: Superagents): Router {
   return router
     .add(
       "GET",
@@ -65,7 +57,7 @@ export function claimRoutes(router: Router, claims: WorkClaims): Router {
       "POST",
       "/api/claims",
       answering(async ({ req }) => {
-        const caller = superagentCaller(req);
+        const caller = claimCaller(req, superagents);
         const b = await readBody(req);
         if (!Array.isArray(b.sources) || b.sources.some((s) => typeof s !== "string")) throw new HttpError(400, "sources is a list of links or keys");
         const out = await claims.claim(caller, { sources: b.sources as string[], scope: scopeOf(b.scope), session: optText(b, "session"), note: optText(b, "note") });
@@ -76,7 +68,7 @@ export function claimRoutes(router: Router, claims: WorkClaims): Router {
       "POST",
       "/api/claims/attach",
       answering(async ({ req }) => {
-        const caller = superagentCaller(req);
+        const caller = claimCaller(req, superagents);
         const b = await readBody(req);
         return json(await claims.attach(caller, { key: text(b, "key"), scope: scopeOf(b.scope), fence: fenceOf(b), session: text(b, "session") }));
       }),
@@ -85,7 +77,7 @@ export function claimRoutes(router: Router, claims: WorkClaims): Router {
       "POST",
       "/api/claims/release",
       answering(async ({ req }) => {
-        const caller = superagentCaller(req);
+        const caller = claimCaller(req, superagents);
         const b = await readBody(req);
         return json(await claims.release(caller, { key: text(b, "key"), scope: scopeOf(b.scope), fence: fenceOf(b) }));
       }),
@@ -94,7 +86,7 @@ export function claimRoutes(router: Router, claims: WorkClaims): Router {
       "POST",
       "/api/claims/takeover",
       answering(async ({ req }) => {
-        const caller = superagentCaller(req);
+        const caller = claimCaller(req, superagents);
         const b = await readBody(req);
         return json(await claims.takeover(caller, { key: text(b, "key"), scope: scopeOf(b.scope), to: optText(b, "to") }));
       }),

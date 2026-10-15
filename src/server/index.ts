@@ -1582,10 +1582,17 @@ const router = new Router(mapError)
     return json(r);
   });
 superagentRoutes(router, superagents, { scheduleHot });
-claimRoutes(router, workClaims);
+claimRoutes(router, workClaims, superagents);
 /** The GitHub App broker: superagents request actions; tokens stay in it (src/core/github/). */
 export const github = new GitHubActions({ broker: new GitHubBroker(), cards, dirOf: (n) => superagents.get(n).dir, cwdOf: (id) => fleet.sessions().find((s) => s.id === id)?.cwd ?? null });
-githubRoutes(router, github, { superagents, sessions: () => fleet.sessions() });
+githubRoutes(router, github, superagents);
+// An action may name a work claim: it must still be its superagent's, at its fence, when it is sent.
+github.claims = {
+  current: async (scope, key) => {
+    const c = (await workClaims.list({ key, scope: scope === "env" ? "env" : "work" }))[0];
+    return c ? { fence: c.fence, holder: c.holder } : null;
+  },
+};
 cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);

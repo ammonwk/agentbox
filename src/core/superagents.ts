@@ -14,7 +14,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Subprocess } from "bun";
-import { getDb, getSchedule, getSessionRecord, getSettings, listRepos, listSessionRecords } from "./db";
+import { getDb, getSchedule, getSessionRecord, getSettings, listRepos, listSessionRecords, type SessionRecord } from "./db";
 import { FleetError, type Fleet, type SpawnRequest } from "./fleet";
 import { agentboxBin, agentboxHome, packageRoot, userHome } from "./paths";
 import { submitWithReceipt } from "./send-receipts";
@@ -256,7 +256,7 @@ export class Superagents {
         const { m } = this.manifestOrError(r);
         return { title: m?.title ?? name, description: m?.description ?? "" };
       },
-      ownerOf: (session) => this.ownerOf(session),
+      ownerOf: (session) => this.ownerOf(session, { authority: true }),
     });
   }
 
@@ -308,27 +308,32 @@ export class Superagents {
    * record, never a title: what proves a sender (senders.ts) and what keeps a
    * superagent's sessions off the Sessions page.
    */
-  ownership(): (id: string) => string | null {
+  ownership(opts: { authority?: boolean } = {}): (id: string) => string | null {
     const owners = new Map<string, string>();
     for (const r of rows()) {
       const { m } = this.manifestOrError(r);
       const main = this.mainOf(r, m);
       for (const id of [main, ...this.previousOf(r, m, main)]) if (id) owners.set(id, r.name);
     }
-    const parents = new Map(listSessionRecords(0).map((x) => [x.id, x.parent]));
+    const records = new Map(listSessionRecords(0).map((x) => [x.id, x]));
     return (id) => {
       const path = new Set<string>();
-      for (let at: string | null | undefined = id; at && !path.has(at); at = parents.get(at) ?? getSessionRecord(at)?.parent) {
+      for (let at: string | null | undefined = id; at && !path.has(at); ) {
         const owner = owners.get(at);
         if (owner) return owner;
         path.add(at);
+        const rec: SessionRecord | null | undefined = records.get(at) ?? getSessionRecord(at);
+        // A parent set by hand (a drag on the board) groups; it is no start, so it grants nothing.
+        at = opts.authority && rec?.parentByHand ? null : rec?.parent;
       }
       return null;
     };
   }
 
-  ownerOf(id: string): string | null {
-    return this.ownership()(id);
+  /** The superagent `id` belongs to. With `authority`, only by sessions it
+   *  started itself: what may act as the superagent (claims, GitHub actions, reports). */
+  ownerOf(id: string, opts: { authority?: boolean } = {}): string | null {
+    return this.ownership(opts)(id);
   }
 
   /** The project each superagent's session is in, when its superagent shows

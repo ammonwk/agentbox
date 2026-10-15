@@ -13,6 +13,7 @@ import { FleetError, type Fleet } from "../fleet";
 import { GitHubActions, type ClaimCheck } from "../github/actions";
 import { GitHubBroker } from "../github/broker";
 import { superagentToken } from "../superagents";
+import type { Superagents } from "../superagents";
 import { githubRoutes } from "../../server/github";
 import { HttpError, Router, toHttpError } from "../../server/router";
 
@@ -55,7 +56,7 @@ const writeManifest = (github: unknown) => writeFileSync(join(saDir, "superagent
 let actions: GitHubActions;
 let router: Router;
 let fence = 1;
-const claims: ClaimCheck = { current: () => ({ fence, holder: { superagent: "sa", session: null } }) };
+const claims: ClaimCheck = { current: async () => ({ fence, holder: { superagent: "sa", session: null } }) };
 
 const newActions = () => {
   const a = new GitHubActions({ broker: new GitHubBroker(transport), cards: new Cards({} as Fleet, () => {}), dirOf: () => saDir, cwdOf: () => null });
@@ -109,13 +110,13 @@ beforeEach(() => {
   writeManifest(basePolicy);
   actions = newActions();
   router = new Router((e) => (e instanceof FleetError ? new HttpError(e.status, e.message) : toHttpError(e)));
-  githubRoutes(router, actions, {
-    superagents: { list: () => [{ name: "sa", main: "main1", previous: [], dir: saDir }] },
-    sessions: () => [
-      { id: "main1", parent: null, parentByHand: false },
-      { id: "child", parent: "main1", parentByHand: false },
-    ],
-  });
+  // The hub as these routes use it: one superagent "sa", whose main started "child".
+  const hub = {
+    has: (n: string) => n === "sa",
+    get: (n: string) => ({ name: n, dir: saDir }),
+    ownerOf: (id: string) => (id === "main1" || id === "child" ? "sa" : null),
+  } as unknown as Superagents;
+  githubRoutes(router, actions, hub);
 });
 
 test("a token never appears in any route answer, the journal or a log line", async () => {
