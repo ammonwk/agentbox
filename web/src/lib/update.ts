@@ -111,3 +111,25 @@ export function reloadForMissingChunk(): boolean {
   location.reload();
   return true;
 }
+
+// ------------------------------------------------------- newer commits
+
+/** Commits on the checkout's branch that the server does not run yet
+ *  (`{type:"behind"}`). Never acted on by itself: a restart is a click. */
+type Behind = { running: string; head: string; commits: number } | null;
+let behind: Behind = null;
+const behindListeners = new Set<() => void>();
+export function noteServerBehind(next: Behind): void {
+  if (JSON.stringify(next) === JSON.stringify(behind)) return;
+  behind = next;
+  for (const fn of behindListeners) fn();
+}
+export function useServerBehind(): Behind {
+  return useSyncExternalStore(
+    (fn) => {
+      behindListeners.add(fn);
+      return () => behindListeners.delete(fn);
+    },
+    () => behind,
+  );
+}

@@ -57,7 +57,7 @@ import { byAttention } from "../../src/core/attention";
 import type { CloudStatus, OutboundResult } from "../../src/core/cloud/bridge";
 import type { AgentIdentity, Directory, InstallationSettings, PublishedSkill } from "../../src/cloud/protocol";
 import type { InstallResult, SkillManifest } from "../../src/cloud/skillbundle";
-import { noteServerBuild } from "./lib/update";
+import { noteServerBehind, noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
@@ -513,6 +513,7 @@ class Wire {
       }
       if (msg.type === "error") this.setStatus({ lastError: msg.message });
       else if (msg.type === "build") noteServerBuild(msg.entry);
+      else if (msg.type === "behind") noteServerBehind(msg.behind);
       else if (msg.type === "restarting") this.restartUntil = Date.now() + RESTART_WINDOW_MS;
       else if (msg.type === "starting") this.setStatus({ starting: { read: msg.read, of: msg.of } });
       else if (msg.type === "hot" && this.status.starting) this.setStatus({ starting: null });

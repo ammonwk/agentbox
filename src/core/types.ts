@@ -1560,6 +1560,8 @@ export type ServerMessage =
   | { type: "btw"; sessionId: string; items: Btw[] }
   /** The UI build on disk (its entry script's name); a page on another reloads. */
   | { type: "build"; entry: string | null }
+  /** The checkout's branch has commits the server does not run (core/behind.ts). */
+  | { type: "behind"; behind: { running: string; head: string; commits: number } | null }
   /** The server is up but its first pass over the transcripts is still
    *  running: the board and timelines follow when it is done. Sent on connect
    *  and as it goes; `read` of `of` transcripts so far. */

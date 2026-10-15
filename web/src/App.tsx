@@ -9,7 +9,7 @@ import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./compon
 import { needsYou, titleOf } from "./lib/board";
 import { go, hrefOf, navOf, onGo, parseHash, type NavId, type Route } from "./route";
 import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
-import { useUpdateReady } from "./lib/update";
+import { useServerBehind, useUpdateReady } from "./lib/update";
 import { useKeyboardNavigation } from "./lib/keyboard";
 import { SystemBar } from "./SystemBar";
 import { SysbarSlot } from "./sysbarslot";
@@ -433,19 +433,32 @@ function useCountdown(to: number | null): number | null {
   );
 }
 
-/** A rebuild this page is not running yet; it reloads by itself when that is safe (lib/update.ts). */
+/** A rebuild this page is not running yet, which reloads by itself when that
+ *  is safe, or newer commits the server is not running, which wait for a
+ *  click to restart it on them (lib/update.ts). */
 function UpdateReady() {
   const ready = useUpdateReady();
-  if (!ready) return null;
+  const behind = useServerBehind();
+  const [restarting, setRestarting] = useState(false);
+  useEffect(() => setRestarting(false), [behind?.running]);
+  if (!ready && !behind) return null;
+  const n = behind?.commits ?? 0;
   return (
     <button
       type="button"
       className="nav-item nav-update"
-      title="Update ready. It loads automatically when editing, sending or recording is finished. Click to reload now."
-      onClick={() => location.reload()}
+      disabled={restarting}
+      title={behind
+        ? `${n} newer commit${n === 1 ? "" : "s"} in the checkout than the server runs. Click to restart the server on ${n === 1 ? "it" : "them"}; sessions keep running.`
+        : "Update ready. It loads automatically when editing, sending or recording is finished. Click to reload now."}
+      onClick={() => {
+        if (!behind) return location.reload();
+        setRestarting(true);
+        request("POST", "/api/server/restart").catch(() => setRestarting(false));
+      }}
     >
       <Icon.refresh />
-      <span className="nav-label">Update</span>
+      <span className="nav-label">{restarting ? "Restarting…" : "Update"}</span>
     </button>
   );
 }
