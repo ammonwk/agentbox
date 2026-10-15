@@ -1,6 +1,6 @@
 /** Vulcan's state: one SQLite file in its home (`store()` from the SDK), four
- *  tables of JSON bodies plus the issue claims, whose primary key is what makes
- *  "one writer per issue" hold. */
+ *  tables of JSON bodies. "One writer per issue" is agentbox's claims now
+ *  (work.ts); `issue_claims` is what held it before, read once to move it. */
 import type { Database } from "bun:sqlite";
 import { ActionError } from "../../lib/sdk";
 import type { Grant, Proposal, Work } from "./types";
@@ -51,13 +51,14 @@ export class Store {
   saveWork(w: Work): void {
     this.put("works", w.id, w);
   }
-  /** The family holding an issue, by its canonical key. */
-  claimOf(source: string): string | null {
-    const row = this.db.query("SELECT work FROM issue_claims WHERE source = ?").get(source) as { work: string } | null;
-    return row?.work ?? null;
+  /** Issue claims kept here before agentbox kept them, by family. */
+  legacyClaims(): Map<string, string[]> {
+    const out = new Map<string, string[]>();
+    for (const r of this.db.query("SELECT source, work FROM issue_claims ORDER BY source").all() as { source: string; work: string }[]) out.set(r.work, [...(out.get(r.work) ?? []), r.source]);
+    return out;
   }
-  claim(source: string, work: string): void {
-    this.db.run("INSERT INTO issue_claims (source, work) VALUES (?, ?)", [source, work]);
+  dropLegacyClaims(work: string): void {
+    this.db.run("DELETE FROM issue_claims WHERE work = ?", [work]);
   }
 
   proposals(): Proposal[] {

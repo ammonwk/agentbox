@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { action } from "../lib/actions";
 import { startWork } from "../lib/work";
 import { family, MAIN, world, type World } from "./harness";
 
@@ -13,17 +14,31 @@ test("one writer per issue: a second family on a claimed issue is told to extend
   expect(w.box.starts).toHaveLength(1);
   expect(w.box.starts[0]).toMatchObject({ provider: "codex", branch: a.branch, parent: MAIN });
   expect(String(w.box.starts[0]!.prompt)).toContain("superagent call vulcan review");
+  // Both issues are claimed in agentbox, in one call, and the writer holds them from its start.
+  expect(w.box.workClaims.get("github:acme/app#1")).toMatchObject({ fence: 2, holder: { superagent: "vulcan", session: "s2" } });
+  expect(a.claims).toEqual([{ key: "github:acme/app#1", fence: 2 }, { key: "github:acme/app#2", fence: 2 }]);
 
   const b = family(w.grant.id, [3, 2]);
   await expect(startWork(w.ctx, MAIN, b)).rejects.toThrow(`Issue already belongs to work family ${a.id}; extend that family`);
   // Every issue or none: #3 was not claimed on the way to the refusal, and no writer was started.
-  expect(w.ctx.store.claimOf("github:acme/app#3")).toBeNull();
+  expect(w.box.workClaims.has("github:acme/app#3")).toBe(false);
   expect(w.ctx.store.works()).toHaveLength(1);
   expect(w.box.starts).toHaveLength(1);
 
   const c = await startWork(w.ctx, MAIN, family(w.grant.id, [3]));
   expect(c.id).not.toBe(a.id);
   expect(w.box.starts).toHaveLength(2);
+});
+
+test("a stopped family frees its issues for another family", async () => {
+  const a = await startWork(w.ctx, MAIN, family(w.grant.id, [1]));
+  const caller = { session: null, via: "app" as const };
+  await action(w.ctx, { action: "work-stop", values: { id: a.id }, tab: null, caller });
+  expect(w.box.stops).toEqual(["s2"]);
+  expect(w.box.workClaims.get("github:acme/app#1")!.state).toBe("released");
+  expect(w.ctx.store.work(a.id).claims).toEqual([]);
+  const b = await startWork(w.ctx, MAIN, family(w.grant.id, [1]));
+  expect(w.box.workClaims.get("github:acme/app#1")).toMatchObject({ state: "active", holder: { session: b.session } });
 });
 
 test("a family is idempotent by id and its id is never reused for another input", async () => {
@@ -72,4 +87,6 @@ test("a start whose answer was lost is found again, never asked twice", async ()
   expect(fixed.state).toBe("working");
   expect(fixed.session).toBe("s2");
   expect(w.box.starts).toHaveLength(1);
+  // The writer it found holds the issue now.
+  expect(w.box.workClaims.get("github:acme/app#1")!.holder.session).toBe("s2");
 });

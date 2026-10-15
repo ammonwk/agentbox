@@ -131,6 +131,8 @@ export type Work = {
   state: "starting" | "working" | "uncertain" | "quality_failed";
   /** A start was asked of agentbox: never asked again without proof of what it did. */
   launch?: { at: number };
+  /** Its issues, claimed in agentbox (docs/superagents.md, Claims) with the fence each has now. */
+  claims?: { key: string; fence: number }[];
   rounds: Round[];
   publication?: Publication;
   failure?: Failure;

@@ -96,7 +96,7 @@ what it needed from core is `superagents/vulcan/CORE-NEEDS.md`.
 | # | Item | Verdict |
 |---|---|---|
 | 40 | Work grant | **Different**: a person creates it on the Grants tab (`caller.via === "app"`); immutable id, revoke keeps the row and enforces at once. The operator token is gone (the page's `via` is the proof), and so is `worktreeRoot` (agentbox cuts the worktree). |
-| 41 | `work-start` | **Different**: same checks (requester only, repo identity, canonical open issues, base pinned, per-issue claims in one transaction, idempotent by id); the writer is started with `POST /api/sessions {repoId, branch, parent, notify: false}`, so its worktree is agentbox's own. |
+| 41 | `work-start` | **Different**: same checks (requester only, repo identity, canonical open issues, base pinned, per-issue claims in one agentbox claim (`POST /api/claims`), idempotent by id); the writer is started with `POST /api/sessions {repoId, branch, parent, notify: false}`, so its worktree is agentbox's own. |
 | 42 | Writer prompt | **Carried**: `lib/prompts.ts`, with `agentbox superagent call vulcan …` for each verb. |
 | 43 | `work-retry-start` | **Different**: a lost start is proven by the session in the branch's worktree under Vulcan's main, not by a reserved id (`POST /api/sessions` takes none). |
 | 44 | Work history under the agent | **Different**: the writer's `parent` is Vulcan's main and each reviewer's is the writer, so the board nests them; the Work tab lists them. No "Project · Agent" row titles (see 122). |

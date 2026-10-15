@@ -11,8 +11,10 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AppState, Card, Session, SuperagentBlock, SuperagentView, TimelinePage, Wait } from "../../src/core/types";
+import type { ClaimScope, WorkClaim } from "../../src/core/workclaims";
 
 export type { SuperagentAction, SuperagentBlock, SuperagentField, SuperagentView } from "../../src/core/types";
+export type { ClaimHolder, ClaimScope, ClaimState, WorkClaim } from "../../src/core/workclaims";
 
 const env = (k: string): string => {
   const v = process.env[k];
@@ -49,12 +51,15 @@ export class AgentboxError extends Error {
   }
 }
 
-/** One call of agentbox's HTTP API (docs/v2.md, HTTP API). */
+/** One call of agentbox's HTTP API (docs/v2.md, HTTP API). A program agentbox
+ *  runs says who it is with its name and token, so that what it claims is its own. */
 export async function call<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   const base = process.env.AGENTBOX_URL ?? "http://127.0.0.1:4479";
+  const name = process.env.AGENTBOX_SUPERAGENT;
+  const token = process.env.AGENTBOX_SUPERAGENT_TOKEN;
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: { "content-type": "application/json", "x-agentbox": "1" },
+    headers: { "content-type": "application/json", "x-agentbox": "1", ...(name && token ? { "x-agentbox-superagent": name, "x-agentbox-superagent-token": token } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const out = (await res.json().catch(() => null)) as { ok: boolean; data: T; error: string | null } | null;
@@ -102,6 +107,18 @@ export const agentbox = {
     call<{ wait: Wait; already: boolean }>("POST", "/api/waits", { spec, session, ...opts }),
   claimPr: (pr: string, session: string, cwd?: string) => call("POST", "/api/prs/claim", { pr, session, cwd }),
   prWho: (pr: string, cwd?: string) => call<{ repo: string; number: number; claim: { sessionId: string } | null }>("POST", "/api/prs/who", { pr, cwd }),
+  /** Claim work by its sources (docs/superagents.md, Claims): every one or none.
+   *  A held source is refused with 409, and the error's `data` is `{key, holder, state}`. */
+  claim: (sources: string[], opts: { scope?: ClaimScope; session?: string; note?: string } = {}) =>
+    call<{ claims: WorkClaim[] }>("POST", "/api/claims", { sources, ...opts }).then((r) => r.claims),
+  /** The session that does the claimed work, once started: the fence grows by one. */
+  attachClaim: (key: string, fence: number, session: string, scope?: ClaimScope) => call<WorkClaim>("POST", "/api/claims/attach", { key, fence, session, scope }),
+  releaseClaim: (key: string, fence: number, scope?: ClaimScope) => call<WorkClaim>("POST", "/api/claims/release", { key, fence, scope }),
+  /** Agentbox stops the holder session and moves the key only once the stop is proven; 409 while it is not. */
+  takeoverClaim: (key: string, to?: string, scope?: ClaimScope) => call<WorkClaim>("POST", "/api/claims/takeover", { key, to, scope }),
+  /** Claims held now: this superagent's unless the query says otherwise. */
+  claims: (q: { superagent?: string; session?: string; key?: string } = { superagent: me.name }) =>
+    call<WorkClaim[]>("GET", `/api/claims?${new URLSearchParams(Object.entries(q).filter((e): e is [string, string] => !!e[1]))}`),
   /** This superagent, as the Agents page shows it. */
   self: () => call<{ main: string | null; previous: string[] }>("GET", `/api/superagents/${me.name}`),
   /** Say which session is this superagent's main conversation. */

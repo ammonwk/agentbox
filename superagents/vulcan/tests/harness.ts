@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { Ctx } from "../lib/ctx";
 import type { Tools } from "../lib/shell";
 import { Store } from "../lib/store";
+import { canonicalSource } from "../lib/text";
 import type { Grant } from "../lib/types";
 
 export const BASE = "a".repeat(40);
@@ -20,6 +21,11 @@ export const REPO_ID = "repo1";
 export const MAIN = "mainsess";
 export const ACTOR = "octocat";
 
+export const TOKEN = "vulcan-token";
+
+/** A work claim as agentbox keeps it (src/core/workclaims.ts), without the lease clock. */
+type FakeClaim = { key: string; source: string; scope: string; fence: number; leaseUntil: number; state: string; holder: { superagent: string | null; session: string | null }; note: string | null };
+
 type FakeSession = { id: string; provider: string; cwd: string; worktree: string | null; parent: string | null; status: string; host: string; origin: string; agentSessionId: string | null; branch: string | null };
 
 export class FakeAgentbox {
@@ -28,6 +34,8 @@ export class FakeAgentbox {
   waits: { id: number; sessionId: string; spec: Record<string, unknown>; ended: string | null }[] = [];
   cards: { id: number; key: string | null; state: string; notify: boolean; kind: string; session: string | null; title: string }[] = [];
   claims = new Map<string, string>();
+  /** Work claims by key: one holder each, all or none, fenced. */
+  workClaims = new Map<string, FakeClaim>();
   receipts = new Map<string, { id: string; sessionId: string; state: string; error: string | null }>();
   sends: { id: string; text: string; sendId?: string; from?: string }[] = [];
   starts: Record<string, unknown>[] = [];
@@ -90,6 +98,7 @@ export class FakeAgentbox {
       this.onStart(s);
       return this.json({ session: s }, 201);
     }
+    if (path === "/api/claims" || path.startsWith("/api/claims/")) return this.claim(req, url, body);
     if ((m = /^\/api\/sessions\/([^/]+)\/timeline$/.exec(path)) && req.method === "GET") {
       if (!this.sessions.some((s) => s.id === m![1])) return this.json(`no session ${m[1]}`, 404);
       this.timelineReads.push(m[1]!);
@@ -160,6 +169,40 @@ export class FakeAgentbox {
       return this.json({ repo, number: Number(n), sessionId: body.session, how: "said" });
     }
     return this.json(`no ${req.method} ${path}`, 404);
+  }
+
+  /** The claims routes, as core answers them: the program is its superagent by its token. */
+  private claim(req: Request, url: URL, body: Record<string, unknown>): Response {
+    const name = req.headers.get("x-agentbox-superagent");
+    if (name && req.headers.get("x-agentbox-superagent-token") !== TOKEN) return this.json("token does not match", 403);
+    const keyOf = (s: string) => (s.startsWith("http") ? canonicalSource(s) : { key: s, url: s });
+    const conflict = (c: FakeClaim) => new Response(JSON.stringify({ ok: false, data: { key: c.key, holder: c.holder, state: c.state }, error: `${c.key} is held` }), { status: 409 });
+    const live = (k: string) => {
+      const c = this.workClaims.get(keyOf(k).key);
+      return c && c.state !== "released" ? c : null;
+    };
+    if (req.method === "GET") return this.json([...this.workClaims.values()].filter((c) => c.state !== "released" && (!url.searchParams.get("superagent") || c.holder.superagent === url.searchParams.get("superagent"))));
+    if (url.pathname === "/api/claims") {
+      const items = (body.sources as string[]).map(keyOf);
+      for (const i of items) {
+        const held = live(i.key);
+        if (held) return conflict(held);
+      }
+      const out = items.map((i) => {
+        const c: FakeClaim = { key: i.key, source: i.url, scope: "work", fence: (this.workClaims.get(i.key)?.fence ?? 0) + 1, leaseUntil: Date.now() + 90_000, state: "active", holder: { superagent: name, session: (body.session as string) ?? null }, note: (body.note as string) ?? null };
+        this.workClaims.set(i.key, c);
+        return c;
+      });
+      return this.json({ claims: out }, 201);
+    }
+    const c = live(String(body.key));
+    if (!c) return this.json("nobody holds it", 404);
+    if (c.holder.superagent !== name) return this.json("not the holder", 403);
+    if (c.fence !== body.fence) return conflict(c);
+    if (url.pathname === "/api/claims/attach") Object.assign(c, { fence: c.fence + 1, holder: { ...c.holder, session: String(body.session) } });
+    else if (url.pathname === "/api/claims/release") c.state = "released";
+    else return this.json(`no ${req.method} ${url.pathname}`, 404);
+    return this.json(c);
   }
 }
 
@@ -310,6 +353,7 @@ export function world(): World {
   };
   process.env.AGENTBOX_URL = box.url;
   process.env.AGENTBOX_SUPERAGENT = "vulcan";
+  process.env.AGENTBOX_SUPERAGENT_TOKEN = TOKEN;
   process.env.AGENTBOX_SUPERAGENT_HOME = join(dir, "home");
   process.env.AGENTBOX_SUPERAGENT_DIR = join(import.meta.dir, "..");
   const tools: Tools = { git: git.run, gh: gh.run };
