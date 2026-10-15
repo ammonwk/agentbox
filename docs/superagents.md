@@ -234,7 +234,12 @@ it beside its messages.
 main, an earlier main, or a session either started (`agentOwner` on the
 board, and the sender the Timeline names). For what may act as the
 superagent — claims, GitHub actions, reports — only sessions it started count:
-a parent set by dragging on the board grants nothing.
+a session started by its program, its main or another of its sessions (as
+`POST /api/sessions` proves from the caller), or one under those by the
+process tree. A parent set by dragging on the board, a session another
+caller started under its main (a person's too), and a session handed over
+into it from another superagent's session group under it and grant nothing.
+A handover keeps what a moved session had, within the same superagent.
 
 ## What it uses that every session has
 
