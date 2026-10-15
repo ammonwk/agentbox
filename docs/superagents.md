@@ -11,7 +11,12 @@ That is the whole design, and it is a rule for agentbox's own code: a
 behaviour one superagent needs is that superagent's to write. Core changes
 only when no superagent could do the thing from its own process with the
 public API — and then the change is generic (a read-only session, a handover,
-a card that does not push), never shaped after one agent.
+a card that does not push, a memory journal its manifest turns on), never
+shaped after one agent.
+
+Every agent on the Agents page is a superagent. Each person keeps theirs in
+their own directories or git repositories and adds them with `agentbox
+superagent add`; [agents.md](agents.md) is how to use them on the page.
 
 The people who set superagents up are expected to have their coding agent do
 it, so the bar is flexibility, not a form: a superagent is a directory of
@@ -36,6 +41,7 @@ it, or ask Jupiter for a new one.
 my-agent/
   superagent.json     the manifest (below)
   MAIN.md             optional: what its main conversation is told first
+  SOUL.md             optional: its persona, read after MAIN.md by each fresh main
   main.ts             optional: its program
   …                   anything else it wants
 ```
@@ -53,14 +59,30 @@ forgets it and leaves the directory and its state alone.
   "description": "Issues to reviewed pull requests",
   "run": ["bun", "main.ts"],        // optional: its program, argv, run in the directory and kept running
   "url": "http://127.0.0.1:9000",   // optional instead of run: a program agentbox does not run
+  "icon": "fix",                    // optional: its picture until one is set on the page (brain, sparkle, fix, release, health)
+  "projects": ["owner/repo"],       // optional: the projects it shows in (repo ids, owner/repo or checkout paths);
+                                    // default main.start.repoId; none: every project. Navigation only
+  "memory": true,                   // optional: its memory journal and MEMORY.md (below)
+  "sweep": "23:00",                 // optional: close its idle work sessions daily; true is the time in Settings
+  "events": ["pr.ready"],           // optional: generic events it takes (below)
   "main": {                         // optional: its main conversation
-    "start": { "provider": "claude", "model": "…", "cwd": "." },  // a POST /api/sessions body; cwd is from the directory, ~ is home
-    "instructions": "MAIN.md",       // said before the first message; {{dir}}, {{home}}, {{agentbox}} (the checkout) and {{bin}} are filled in
-    "schedule": "7w4wvcfm"           // instead of start: the session this schedule spoke to last
-  }
+    "start": { "provider": "claude", "model": "…", "cwd": "." },  // a POST /api/sessions body; cwd is from the directory, ~ is home;
+                                    // "provider": "auto" picks Claude or Codex by room
+    "instructions": "MAIN.md",       // said before the first message; {{name}}, {{dir}}, {{home}}, {{agentbox}} (the checkout)
+                                    // and {{bin}} are filled in
+    "schedule": "7w4wvcfm",          // instead of start: the session this schedule spoke to last
+    "rollover": { "idleMin": 10, "contextPct": 60 },  // optional, needs memory: a fresh main from a handoff (below)
+    "loops": [{ "id": "hourly", "when": "every hour", "check": "./ready.sh", "prompt": "…" }]  // or "file": "LOOP.md"
+  },
+  "github": { … }                   // optional: the GitHub App policy it proposes (GitHub actions, below)
   // Any other field is the superagent's own: agentbox ignores it.
 }
 ```
+
+A directory can be a copy that runs another directory's code: its `run`
+names that code by its full path, and the program reads `superagent.json`
+from `AGENTBOX_SUPERAGENT_DIR`, not from beside its code. With `{{name}}` in
+its instructions, a copy needs no edit to call itself.
 
 Each part is optional. A manifest with only `main.start` and `instructions`
 is a conversation agent with standing instructions and no code. One with
@@ -87,7 +109,7 @@ must not be cut in half runs as a session, or in a unit of its own
 | `AGENTBOX_SUPERAGENT` | its name |
 | `AGENTBOX_SUPERAGENT_DIR` | its directory |
 | `AGENTBOX_SUPERAGENT_HOME` | `<agentbox home>/superagents/<name>/`: its own state, which agentbox never reads |
-| `AGENTBOX_SUPERAGENT_TOKEN` | the secret every request from agentbox carries; the program sends it back to claim work ([Claims](#claims)) |
+| `AGENTBOX_SUPERAGENT_TOKEN` | the secret every request from agentbox carries, and what proves the program to agentbox: it sends it back as `x-agentbox-superagent-token`, with `x-agentbox-superagent: <name>` (the SDK's `call` does), to claim work, write its memory or ask for a GitHub action |
 | `PORT` | where to answer agentbox, on 127.0.0.1 |
 
 **Its main conversation.** The Agents page shows it as the superagent's chat:
@@ -148,6 +170,69 @@ it needs no CLI of its own.
 **Every request** from agentbox to the program carries
 `x-agentbox-superagent-token`; refuse any other (`serve` in `lib/sdk.ts`
 does), so a page on another site cannot drive it.
+
+## What its manifest turns on
+
+These are generic: agentbox gives each to any superagent whose manifest asks,
+and none of them knows what the superagent is for.
+
+**Memory** (`"memory": true`). A journal in its home (`memory.db`) of
+handoffs, decisions and preferences, each naming the conversation it came
+from. Its current main conversation and its program write handoffs and
+decisions; they, and a person, set preferences:
+
+    agentbox superagent memory <name> note --request <uuid> --file decision.json   # {decision, why, refs}
+    agentbox superagent memory <name> prefer --key <key> --text <text>             # forget --key <key>
+    agentbox superagent memory <name> search <words>                               # show <id> reads one
+    GET/POST /api/superagents/:name/memory[/handoff|note|prefer|<id>]
+
+Any other session is refused. Credential-shaped text is refused, and a
+handoff has at most about 500 words. `MEMORY.md` in its home is a read-only
+view that agentbox rebuilds after each write; agentbox sets an edited copy
+aside, uses nothing in it, and tells the next fresh main. A fresh main starts
+with the preferences, the latest handoff and the decisions since, in at most
+12,000 characters, and the commands to read the rest.
+
+**SOUL.md.** When its directory holds `SOUL.md`, each fresh main reads it
+after MAIN.md: whole lines up to 4,000 characters, and nothing when it holds
+credential-shaped text. It gives no authority. Agentbox never writes it: it
+is part of the directory, which is the person's config.
+
+**Rollover** (`main.rollover`, with memory). While the main is idle and its
+prompt cache is still warm, agentbox asks it for a handoff. A later message
+that finds it cold, or past `contextPct` full, starts a fresh main from that
+handoff and hands the main over to it (`POST /api/sessions/:id/handover`:
+waits, cards, PRs, work claims and the sessions it started go with it). A
+missing or stale handoff leaves the message with the old main. Each step is
+journaled; the old process is proven stopped before the fresh one starts, and
+the fresh one proven started before anything moves.
+
+**Loops** (`main.loops`, or `PUT /api/superagents/:name/loops/:id` from a
+person, its main or its program). At each time of a recurring rule, an
+optional check runs in the main's directory (exit 0 says the prompt with what
+it printed, exit 1 skips), and the prompt goes to the main once its turn ends.
+
+**The sweep** (`"sweep"`). Each day at its time, agentbox closes the
+superagent's work sessions (every open session under its main or an earlier
+main) that have been idle for two hours, and keeps, with the reason, one that
+holds a wait, an open card, a claimed PR or a child at work
+(`GET /api/superagents/:name/sweeps`).
+
+**Events** (`"events"`). `pr.ready`: a pull request's owner session verified
+it ready on a head (`agentbox pr ready`); each superagent that takes the event
+and shows in the PR's project gets it once per head. With a program, it is the
+action `pr.ready` with `{repo, number, head, owner}` and the owner as the
+caller; without, a message to its main.
+
+**Its picture.** A person sets one on the Agents page
+(`PUT /api/superagents/:name/avatar`); agentbox keeps it in its home and shows
+it beside its messages.
+
+**Who a session belongs to.** A session is the superagent's when it is its
+main, an earlier main, or a session either started (`agentOwner` on the
+board, and the sender the Timeline names). For what may act as the
+superagent — claims, GitHub actions, reports — only sessions it started count:
+a parent set by dragging on the board grants nothing.
 
 ## What it uses that every session has
 
