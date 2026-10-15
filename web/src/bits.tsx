@@ -157,10 +157,10 @@ const SHAPE_PATH: Record<Shape, string> = {
   cross: "M3.6.8h2.8v2.8h2.8v2.8H6.4v2.8H3.6V6.4H.8V3.6h2.8z",
 };
 
-/** A repo's shape on its own, for a heading. */
-export function ShapeMark({ shape }: { shape: Shape }) {
+/** A repo's shape on its own, for a heading; given a `provider`, tinted with its colour. */
+export function ShapeMark({ shape, provider }: { shape: Shape; provider?: ProviderId }) {
   return (
-    <svg className="st-shape" viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+    <svg className={provider ? `st-shape st-prov prov-${provider}` : "st-shape"} viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
       <path d={SHAPE_PATH[shape]} />
     </svg>
   );

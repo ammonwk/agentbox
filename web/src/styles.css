@@ -963,6 +963,12 @@ code {
   stroke: currentColor;
   stroke-width: 1.3;
 }
+/* A session's repo shape in its provider's colour, mostly the grey it would
+ * otherwise be: a column of them reads as a hint of hue rather than confetti,
+ * and the badge colour it echoes is the one that names the provider. */
+.st-shape.st-prov {
+  color: color-mix(in oklab, var(--prov) 55%, var(--faint));
+}
 
 /* empty ------------------------------------------------------------------- */
 

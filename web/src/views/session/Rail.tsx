@@ -5,7 +5,7 @@
 
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
-import { ProviderBadge, ShapeMark, StatusDot } from "../../bits";
+import { PROVIDER_LABEL, ProviderBadge, ShapeMark, StatusDot } from "../../bits";
 import { Icon, RelativeTime, Spinner } from "../../components";
 import {
   descendantsOf,
@@ -753,8 +753,8 @@ function RowTitle({ s }: { s: SessionRow }) {
   return (
     <span className="rail-title">
       {shape ? (
-        <span className="rail-proj-shape" title={project}>
-          <ShapeMark shape={shape} />
+        <span className="rail-proj-shape" title={`${project} · ${PROVIDER_LABEL[s.provider]}`}>
+          <ShapeMark shape={shape} provider={s.provider} />
         </span>
       ) : project ? (
         <span className="rail-proj">{project}</span>
