@@ -123,6 +123,17 @@ export const agentbox = {
   self: () => call<{ main: string | null; previous: string[] }>("GET", `/api/superagents/${me.name}`),
   /** Say which session is this superagent's main conversation. */
   setMain: (id: string | null) => call("PATCH", `/api/superagents/${me.name}`, { main: id }),
+  /** Its memory journal (manifest `"memory": true`; docs/superagents.md): the
+   *  view the Memory panel shows, with search results for `q`. */
+  memory: (q?: string) => call<{ preferences: unknown[]; handoffs: unknown[]; notes: unknown[]; results: unknown[] | null }>("GET", `/api/superagents/${me.name}/memory${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  /** Record a decision in its journal; `request` makes a retry the same record. */
+  note: (body: { decision: string; why?: string; refs?: { label: string; ref: string }[] }, request?: string) =>
+    call("POST", `/api/superagents/${me.name}/memory/note`, { body, ...(request ? { request } : {}) }),
+  /** Set a durable preference; empty text forgets it. */
+  prefer: (key: string, text: string) => call("POST", `/api/superagents/${me.name}/memory/prefer`, { key, text }),
+  /** A prompt said to its main conversation on a schedule (removed with `unloop`). */
+  loop: (id: string, spec: { when: string; prompt: string; check?: string }) => call("PUT", `/api/superagents/${me.name}/loops/${id}`, spec),
+  unloop: (id: string) => call("DELETE", `/api/superagents/${me.name}/loops/${id}`),
 };
 
 /** Everything a session said, oldest first: the provider's transcript, read through agentbox. */
@@ -157,7 +168,7 @@ export function store(file = "state.db"): Database {
 }
 
 /** Who an action came from, as agentbox saw it. */
-export type Caller = { session: string | null; via: "app" | "api" };
+export type Caller = { session: string | null; via: "app" | "api" | "team"; user?: { id: string; name: string } };
 export type ActionRequest = { action: string; values: Record<string, unknown>; tab: string | null; caller: Caller };
 /** What an action answers: words for the page, a page to show, or where to go. */
 export type ActionReply = { message?: string; view?: SuperagentView; open?: string } & Record<string, unknown>;
