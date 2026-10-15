@@ -23,6 +23,7 @@ import { loadDraft, newRevision, saveDraft } from "./session/drafts";
 import { followChatSize, followsAfterScroll, onChatSubmitted } from "./session/scroll";
 import { SessionFacts } from "./session/SessionFacts";
 import { AgentConversationEvents, type ChatEcho } from "./session/Timeline";
+import { personsOpening } from "./session/chatPresentation";
 
 /** What the header says the agent is doing: Nate's words for its main
  *  conversation, and the program's own states when they matter more. */
@@ -187,7 +188,9 @@ const asReceipt = (r: { state: string; error: string | null }) => ({
  */
 function ThreadChat({ info, state, sessionId, session, kind }: { info: SuperagentInfo; state: AppState; sessionId: string; session: Session | null; kind: AgentThread["kind"] }) {
   const tl = useTimeline(sessionId);
-  const events = tl.events;
+  // A main's first message is shown as the person wrote it, not with what agentbox put before it.
+  const isMain = sessionId === info.main || info.previous.includes(sessionId);
+  const events = useMemo(() => personsOpening(tl.events, isMain && tl.exhausted), [tl.events, isMain, tl.exhausted]);
   const composerId = `${info.name}:${sessionId}`;
   const [echoes, setEchoes] = useState<ChatEcho[]>([]);
   const [help, setHelp] = useState<HelpReceipt | null>(null);

@@ -29,3 +29,18 @@ export function chatShown<E extends TimelineEvent>(events: readonly E[], live: s
     // Agentbox's request for a handoff is its own note, not the person's message.
     (e.kind === "user" && !isCheckpointPrompt(e.text)) || e.kind === "assistant" || (e.kind === "tool" && !!e.ask && e.ask.id !== live));
 }
+
+/** The separator agentbox puts between a fresh main's first prompt and the
+ *  person's message (`opening`, src/core/superagent/opening.ts). */
+const OPENING = "\n\n---\n\n";
+
+/** A main conversation's first message as the person wrote it: the
+ *  instructions, SOUL.md and memory agentbox put before it stay in the
+ *  transcript, out of Chat. Only for the event that starts the conversation. */
+export function personsOpening<E extends TimelineEvent>(events: readonly E[], start: boolean): readonly E[] {
+  const first = events[0];
+  if (!start || first?.kind !== "user") return events;
+  const at = first.text.lastIndexOf(OPENING);
+  if (at < 0) return events;
+  return [{ ...first, text: first.text.slice(at + OPENING.length) }, ...events.slice(1)];
+}

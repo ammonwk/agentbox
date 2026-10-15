@@ -1,7 +1,7 @@
 /** An agent's question is answered from its Chat: the one it asks now is only
  *  the live card, never also an answered row (#40). */
 import { expect, test } from "bun:test";
-import { chatShown } from "./chatPresentation";
+import { chatShown, personsOpening } from "./chatPresentation";
 import type { TimelineEvent } from "../../../../src/core/types";
 
 test("an agent's Chat shows its questions, and the one asked now only as the card (#40)", () => {
@@ -16,4 +16,13 @@ test("an agent's Chat shows its questions, and the one asked now only as the car
   ];
   expect(chatShown(events, "q2").map((e) => e.id)).toEqual(["u", "asked", "a"]);
   expect(chatShown(events, null).map((e) => e.id)).toEqual(["u", "asked", "a", "asking"]);
+});
+
+test("a main's first message shows what the person wrote, not the instructions before it", () => {
+  const events: TimelineEvent[] = [
+    { id: "u", at: 1, kind: "user", text: "You keep notes.\n\n---\n\nSOUL\n\n---\n\nWhat is due today?" },
+    { id: "a", at: 2, kind: "assistant", text: "Nothing." },
+  ];
+  expect(personsOpening(events, true)[0]).toMatchObject({ text: "What is due today?" });
+  expect(personsOpening(events, false)[0]).toMatchObject({ text: events[0]!.kind === "user" ? events[0]!.text : "" });
 });

@@ -35,7 +35,15 @@ export function AgentSettings({ info, state, reload }: { info: SuperagentInfo; s
         <span className="agent-enabled">
           <Toggle checked={info.enabled} disabled={busy} label="Enabled" onChange={(on) => void run(() => api.superagentPatch(info.name, { enabled: on }))} />
         </span>
-        <span className="hint">{info.enabled ? "Agentbox keeps its program running." : "Its program is stopped. Its sessions keep running."}</span>
+        <span className="hint">
+          {info.process
+            ? info.enabled
+              ? "Agentbox keeps its program running."
+              : "Its program is stopped. Its sessions keep running."
+            : info.enabled
+              ? "It takes messages, and its loops and sweep run."
+              : "It takes no messages, and its loops and sweep do not run. Its sessions keep running."}
+        </span>
       </div>
       {error && (
         <p className="error" role="alert">
