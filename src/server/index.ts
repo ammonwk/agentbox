@@ -200,7 +200,11 @@ export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
 });
 export const agents = new AgentsRuntime(fleet, cloud, cards, undefined, waits);
 cloud.outboundRefusal = id => agents.directContactRefusal(id);
-scheduler.onTick(async () => { await agents.tick(); void agents.conversations.tick().catch((e) => { agents.lastError = (e as Error).message; }); });
+scheduler.onTick(async () => {
+  await agents.tick();
+  void agents.conversations.tick().catch((e) => { agents.lastError = (e as Error).message; });
+  void agents.sweeps.tick().catch((e) => console.error("agentbox: daily sweep:", e));
+});
 const turnIndex = new TurnIndex(fleet, {
   load: (id) => loadTurnState(fleet.get(id).provider, id),
   save: (id, state) => saveTurnState(fleet.get(id).provider, id, state),

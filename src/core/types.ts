@@ -809,6 +809,9 @@ export interface AgentSettings {
   /** Remove the worktrees with nothing to lose every night at 3am
    *  (src/core/nightly.ts). */
   reclaimNightly: boolean;
+  /** When each local agent closes its work sessions idle for two hours, as
+   *  "HH:MM" on this machine's clock; "" never does (src/core/agents/sweep.ts). */
+  agentSweepAt: string;
   /** Default model per provider; empty means the provider's own default. */
   models: Record<ProviderId, string>;
   balancer: BalancerSettings;

@@ -29,6 +29,7 @@ import { AgentCreationCard } from "./AgentCreationCard";
 import { AgentMemory } from "./AgentMemory";
 import { cloudCall, CloudError } from "../../../src/cloud/client";
 import type { AppState } from "../../../src/core/types";
+import type { AgentSweep } from "../../../src/core/agents/sweep";
 import { request, useNow } from "../api";
 import { Button, Confirm, Empty, Toggle } from "../components";
 import { useLoad } from "../lib/cloud";
@@ -61,6 +62,8 @@ type Transport = {
   ) => Promise<Receipt>;
   receipt: (id: string) => Promise<Receipt | null>;
   proposals: () => Promise<Proposal[]>;
+  /** The daily sweep's closes (src/core/agents/sweep.ts); local agents only. */
+  sweeps?: () => Promise<AgentSweep[]>;
   decide: (
     p: Proposal,
     choice: "approved" | "dismissed",
@@ -207,6 +210,7 @@ export function LocalAgentSpace({
       creations: () => request("GET", `/api/agents/local/${id}/creations`),
       editCreation: async (draft, spec, create) => { const d = await request<CreationDraft>("POST", `/api/agents/local/${id}/creations/${draft.id}`, { revision: draft.revision, spec, create, repo: selected?.repo ?? null }); await agents.reload(); return d; },
       proposals: () => request("GET", `/api/agents/local/${id}/proposals`),
+      sweeps: () => request("GET", `/api/agents/local/${id}/sweeps`),
       decide: (p, decision, requestId) =>
         request("POST", `/api/agents/local/${id}/decide`, {
           id: p.id,
@@ -489,6 +493,7 @@ function AgentSpace({
   useEffect(() => { generation.current++; }, [target, tab, transport]);
   const creations = useLoad(transport.creations, [transport]);
   const feed = useLoad(transport.proposals, [transport]),
+    sweeps = useLoad(transport.sweeps ?? (async () => []), [transport]),
     scroller = useRef<HTMLDivElement>(null),
     pinned = useRef(true);
   const [submitted, setSubmitted] = useState(0);
@@ -543,7 +548,7 @@ function AgentSpace({
     };
   }, [id, transport, tab, target]);
   useEffect(() => {
-    const t = setInterval(() => { void feed.reload(); void creations.reload(); }, 5000);
+    const t = setInterval(() => { void feed.reload(); void sweeps.reload(); void creations.reload(); }, 5000);
     return () => clearInterval(t);
   }, [feed.reload]);
   useEffect(() => onChatSubmitted(`agent:${id}:${target}`, () => {
@@ -638,6 +643,41 @@ function AgentSpace({
     } finally {
       setBusy(false);
     }
+  }
+  function sweepCard(s: AgentSweep) {
+    const when = new Date(s.at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    const entry = (e: AgentSweep["closed"][number]) => (
+      <li key={e.id}>
+        <a href={hrefOf({ page: "session", id: e.id, tab: "timeline" })}>{e.title}</a>
+        {e.why && <span className="hint"> {e.why}</span>}
+      </li>
+    );
+    return (
+      <article className="agent-proposal agent-sweep card" key={s.id}>
+        <div className="agents-toolbar">
+          <h3>
+            {s.closed.length
+              ? `Closed ${s.closed.length} idle session${s.closed.length === 1 ? "" : "s"}`
+              : `Kept ${s.kept.length} idle session${s.kept.length === 1 ? "" : "s"} open`}
+          </h3>
+          <small>Daily close · {when}</small>
+        </div>
+        {s.closed.length > 0 && (
+          <>
+            <p className="hint">
+              Each was idle for at least two hours. A closed session keeps its transcript: open it to read it or resume it.
+            </p>
+            <ul>{s.closed.map(entry)}</ul>
+          </>
+        )}
+        {s.kept.length > 0 && (
+          <>
+            <h4>Kept open</h4>
+            <ul>{s.kept.map(entry)}</ul>
+          </>
+        )}
+      </article>
+    );
   }
   function card(p: Proposal) {
     return (
@@ -769,8 +809,13 @@ function AgentSpace({
               {error}
             </p>
           )}
-          {feed.data?.length ? (
-            feed.data.map(card)
+          {feed.data?.length || sweeps.data?.length ? (
+            [
+              ...(feed.data ?? []).map((p) => ({ at: Date.parse(p.created_at), node: card(p) })),
+              ...(sweeps.data ?? []).map((s) => ({ at: s.at, node: sweepCard(s) })),
+            ]
+              .sort((a, b) => b.at - a.at)
+              .map((x) => x.node)
           ) : (
             <Empty title="Nothing to recommend yet">
               {name} will bring useful findings and next steps here as it works.

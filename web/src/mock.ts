@@ -77,6 +77,7 @@ const settings: AgentSettings = {
   autoApprove: false,
   parkIdleMin: 60,
   reclaimNightly: false,
+  agentSweepAt: "23:00",
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "" },
   balancer: {
     claimNormal: 1.5,
@@ -1332,6 +1333,8 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   }
 
   if (head === "mcp") return mockMcp(method, p.slice(2), b);
+  if (head === "agents") return mockAgents(method, p.slice(2), b);
+  if (head === "cloud" && !id && method === "GET") return { configured: false };
   if (method === "GET") {
     if (head === "sessions" && action === "submissions") return submissions.get(p[4]!) ?? null;
     if (head === "state") return appState();
@@ -1772,3 +1775,37 @@ export const mockServer = {
 
   term,
 };
+
+// ------------------------------------------------------------------ agents
+
+/** One local agent with a Feed that shows a daily sweep (src/core/agents/sweep.ts). */
+function mockAgents(method: string, p: string[], b: unknown): unknown {
+  const [scope, id, action] = p;
+  const agent = {
+    id: "local-vulcan", name: "Vulcan", role: "Issue triage and fixing", instructions: "", provider: "claude", repo: null,
+    session: "vk-chat", previous: [], enabled: true,
+  };
+  if (scope !== "local") return method === "GET" && scope === "runtime" ? { lastError: null, lastOkAt: null, bindings: [], runs: [], actions: [], work: [] } : [];
+  if (!id) return [agent];
+  // A project tab lists the agents of that project.
+  if (id === "project") return [{ ...agent, repo: (b as { repo?: string } | null)?.repo ?? null }];
+  if (action === "read") return { events: [], next: null, session: null, status: "idle", threads: [], counts: { active: 0, inactive: 0 }, more: null };
+  if (action === "sweeps") {
+    const at = new Date(T0);
+    at.setHours(23, 0, 0, 0);
+    if (at.getTime() > T0) at.setDate(at.getDate() - 1);
+    return [{
+      id: "sweep-1", agent: agent.id, at: at.getTime(),
+      closed: [
+        { id: "w8k2pq4d", title: "Fix the stale PR badge on the board" },
+        { id: "m3z7rt1x", title: "Investigate the slow /api/state response" },
+        { id: "c9v1hn6e", title: "Reviewer: PR #212", why: "Closed with “Investigate the slow /api/state response”, which started it." },
+      ],
+      kept: [
+        { id: "q4t8ws2b", title: "Ship the Feed filters", why: "It has an armed wait (PR #214: every check)." },
+        { id: "r2d6yu9k", title: "Card scope fix", why: "It has an open Review card (card 31 “PR #210 ready”)." },
+      ],
+    }];
+  }
+  return [];
+}

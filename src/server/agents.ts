@@ -279,6 +279,9 @@ export function agentRoutes(router: Router, agents: AgentsRuntime) {
         throw new HttpError(403, "Invalid session capability");
       return json(await agents.conversations.sessionAction(params.id!, params.session!, caller, await readBody(req)));
     })
+    .add("GET", "/api/agents/local/:id/sweeps", ({ params }) =>
+      json(agents.sweeps.list(params.id!)),
+    )
     .add("GET", "/api/agents/local/:id/proposals", ({ params }) =>
       json(agents.conversations.localProposals(params.id!)),
     )

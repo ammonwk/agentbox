@@ -285,6 +285,24 @@ function General({ settings, save, saveStateOf }: SectionProps) {
       </Field>
       <SaveMark state={saveStateOf("boardDays")} />
 
+      <Field label="Close idle agent work" hint="Each day at this time (24-hour, this machine's clock), every agent closes its work sessions that have been idle for two hours. A closed session keeps its transcript and can be resumed. An agent's main chat is never closed, and a session with an armed wait, an open Review card, an open PR or a child still at work is kept. The agent's Feed shows what it closed and kept. Leave empty to turn it off.">
+        {(id) => (
+          <div className="input-row">
+            <CommitInput
+              id={id}
+              value={settings.agentSweepAt}
+              placeholder="HH:MM"
+              onCommit={(v) => {
+                const at = v.trim();
+                if (at === "" || /^([01]\d|2[0-3]):[0-5]\d$/.test(at)) save("agentSweepAt", { agentSweepAt: at });
+              }}
+            />
+            <span className="suffix">{settings.agentSweepAt ? "each day" : "off"}</span>
+          </div>
+        )}
+      </Field>
+      <SaveMark state={saveStateOf("agentSweepAt")} />
+
       <ToggleRow
         label="Auto-approve tool calls"
         hint="Starts new sessions with each provider's own bypass flag (--dangerously-skip-permissions, --full-auto, …), so they never park on a permission prompt."

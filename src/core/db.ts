@@ -1397,6 +1397,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   autoApprove: true,
   parkIdleMin: 60,
   reclaimNightly: false,
+  agentSweepAt: "23:00",
   models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "" },
   balancer: DEFAULT_BALANCER,
 };

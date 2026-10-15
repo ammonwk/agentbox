@@ -2882,8 +2882,11 @@ export class Fleet extends EventEmitter {
     });
   }
 
-  /** Agent-initiated completion must not kill a new turn or abandon work. */
-  closeIfIdle(id: string, expectedActivity: number, authorize: () => void): Promise<Closed> {
+  /** Agent-initiated completion must not kill a new turn or abandon work.
+   *  `family`: close what it started with it, as a plain close does (the
+   *  daily sweep, `src/core/agents/sweep.ts`, whose `authorize` refuses a
+   *  child still at work); otherwise any open child refuses. */
+  closeIfIdle(id: string, expectedActivity: number, authorize: () => void, family = false): Promise<Closed> {
     return this.serial(id, async () => {
       await this.tick();
       authorize();
@@ -2893,14 +2896,14 @@ export class Fleet extends EventEmitter {
         throw new FleetError(409, "The session is still working or needs attention");
       if ((this.workHeld().get(id) ?? []).length || listOpenWaits(0).some((w) => w.sessionId === id))
         throw new FleetError(409, "The session still owns unfinished PRs or waits");
-      if (listSessionRecords(0).some((r) => r.parent === id && !r.archivedAt))
+      if (!family && listSessionRecords(0).some((r) => r.parent === id && !r.archivedAt))
         throw new FleetError(409, "Finish this session's child sessions first");
       if (!this.hasTranscript(id)) throw new FleetError(409, "The provider transcript must be available before closing");
       const rec = getSessionRecord(id);
       if (!rec?.agentSessionId || !rec.transcriptPath || !existsSync(rec.transcriptPath) || !this.accountFor(rec, s))
         throw new FleetError(409, "Verify this session's transcript and account before closing");
       if (!existsSync(this.resumeCwd(rec))) throw new FleetError(409, "The session's resume directory is missing");
-      return this.close(id, true, true);
+      return this.close(id, true, !family);
     });
   }
 

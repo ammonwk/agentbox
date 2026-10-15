@@ -41,6 +41,7 @@ import {
   ContactRefused,
 } from "./github";
 import { suggestExperts } from "./expertise";
+import { AgentSweeps } from "./sweep";
 
 const terminal = (s: string) => ["finished", "failed", "stopped"].includes(s);
 const intakeSchema = z
@@ -61,6 +62,7 @@ export class AgentsRuntime {
   readonly works = new AgentWorks(this);
   readonly reviews = new SharedReviews(this);
   readonly conversations = new AgentConversations(this);
+  readonly sweeps = new AgentSweeps(this);
   #store: AgentStore | null = null;
   #ticking = false;
   #intaking = new Set<string>();
