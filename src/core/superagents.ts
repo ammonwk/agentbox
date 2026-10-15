@@ -10,7 +10,7 @@
  * one superagent needs is that superagent's to write.
  */
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Subprocess } from "bun";
@@ -167,6 +167,7 @@ function parseManifest(file: string): Manifest {
   if (m.data.main?.rollover && !m.data.memory) throw new FleetError(400, `${file}: main.rollover keeps its handoffs in the memory journal: set "memory": true`);
   if (m.data.main?.rollover && m.data.main.schedule) throw new FleetError(400, `${file}: a schedule's session hands over by the schedule, not by rollover`);
   if (m.data.main?.rollover && !m.data.main.start) throw new FleetError(400, `${file}: main.rollover starts a fresh main from main.start: give one`);
+  if (m.data.main?.start?.provider === "auto" && m.data.main.start.model) throw new FleetError(400, `${file}: main.start with provider "auto" picks the model too: drop model, or name the provider`);
   const ids = (m.data.main?.loops ?? []).map((l, i) => l.id ?? `loop-${i + 1}`);
   if (new Set(ids).size !== ids.length) throw new FleetError(400, `${file}: two loops have the same id`);
   return m.data;
@@ -439,6 +440,8 @@ export class Superagents {
       getDb().run("DELETE FROM superagent_events WHERE name = ?", [name]);
     })();
     if (pic) removeAvatar(pic);
+    // A new token for whatever is added under this name later.
+    rmSync(join(superagentHome(name), "token"), { force: true });
     this.changed();
   }
 

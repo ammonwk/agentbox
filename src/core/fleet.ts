@@ -1354,19 +1354,32 @@ export class Fleet extends EventEmitter {
       const agent = this.poolAgentOf(rec);
       if (agent) {
         const owner = this.sessionOfOwner(agent.owner);
-        if (owner && owner !== rec.id) updateSessionRecord(rec.id, { parent: owner });
+        // The record names its owner; the process tree did not prove it: it groups, it grants nothing.
+        if (owner && owner !== rec.id) updateSessionRecord(rec.id, { parent: owner, parentProof: "unproven" });
         continue;
       }
       const team = rec.transcriptPath ? this.tracked.get(rec.transcriptPath)?.facts?.team : null;
       let parent = team ? leads.get(team) ?? null : null;
+      // A team's name comes from transcripts, not from the process tree.
+      const byTeam = !!parent;
       const proc = rec.agentSessionId ? this.live.get(`${rec.provider}:${rec.agentSessionId}`) : undefined;
       if (!parent && proc && !this.ancestryChecked.has(`${rec.id}:${proc.pid}`)) {
         this.ancestryChecked.add(`${rec.id}:${proc.pid}`);
         if (rec.startedAt >= proc.startedAt - 5_000) parent = this.sessionAbove(proc.pid);
       }
-      if (parent && parent !== rec.id) updateSessionRecord(rec.id, { parent });
+      if (parent && parent !== rec.id) updateSessionRecord(rec.id, { parent, ...(byTeam ? { parentProof: "unproven" as const } : {}) });
     }
   }
+
+  /** The session a process runs under by the live process tree alone: no
+   *  environment variable, which any process can carry (peer.ts). */
+  liveSessionAbove(pid: number): string | null {
+    return this.sessionAbove(pid);
+  }
+
+  /** The superagent a session acts for, set by the server: a handover passes
+   *  authority only between sessions of the same one (`handOver`). */
+  authorityOf: ((id: string) => string | null) | null = null;
 
   /** The session whose process `pid` runs under: the nearest ancestor that is
    *  a live session's own process. */
@@ -3868,10 +3881,14 @@ export class Fleet extends EventEmitter {
     if (!getSessionRecord(to)) throw new FleetError(404, `no session ${to}`);
     if (getSessionRecord(from)?.successor !== to) updateSessionRecord(from, { successor: to });
     const moved = this.startedBy(from).filter((id) => id !== to);
-    // A moved session keeps the authority its old parent gave it, no more.
+    // A moved session keeps the authority its old parent gave it, no more, and
+    // only into the same superagent's: a handover to another's session gives
+    // none (`to` with no superagent yet is a successor that takes `from`'s place).
+    const owner = this.authorityOf?.(from) ?? null, theirs = this.authorityOf?.(to) ?? null;
+    const same = theirs === null || theirs === owner;
     for (const id of moved) {
       const r = getSessionRecord(id);
-      const proven = r?.parentProof === "handover" || (r?.parentProof !== "unproven" && !r?.parentByHand);
+      const proven = same && (r?.parentProof === "handover" || (r?.parentProof !== "unproven" && !r?.parentByHand));
       updateSessionRecord(id, { parent: to, parentByHand: true, parentProof: proven ? "handover" : "unproven" });
     }
     // Its waits too: told through `heir` either way, but the successor's own
@@ -3940,6 +3957,8 @@ export class Fleet extends EventEmitter {
       }
       patch.parent = p.parent;
       patch.parentByHand = true;
+      // A parent set by hand groups; it gives no superagent's authority, whatever the old one gave.
+      patch.parentProof = null;
     }
     updateSessionRecord(id, patch);
     await this.tick();

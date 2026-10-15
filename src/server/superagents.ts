@@ -6,6 +6,7 @@ import { timingSafeEqual } from "node:crypto";
 import { authenticatedSession } from "../core/session-authority";
 import { superagentToken, type Superagents } from "../core/superagents";
 import { AVATAR_MAX_BYTES } from "../core/superagent/avatar";
+import { unpin } from "../core/github/policy";
 import { HttpError, json, readBody, type Router } from "./router";
 import { requireString } from "./validate";
 import { requireNoSessionPeer } from "./peer";
@@ -52,7 +53,14 @@ export function actorFor(req: Request, superagents: Superagents, name: string, w
 export function superagentRoutes(router: Router, superagents: Superagents, hooks: { scheduleHot: () => void }): Router {
   return router
     .add("GET", "/api/superagents", () => json(superagents.list()))
-    .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))
+    .add("POST", "/api/superagents", async ({ req }) => {
+      // A person adds one, or a program that makes agents (Jupiter); a session asks one of them.
+      if (!superagentCaller(req, superagents)) {
+        if (authenticatedSession(req)) throw new HttpError(403, "a person or a superagent's program adds a superagent, not a session");
+        requireNoSessionPeer(req, "adding a superagent");
+      }
+      return json(await superagents.register(requireString(await readBody(req), "dir")), 201);
+    })
     .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(superagents.canonical(params.name!))))
     .add("PATCH", "/api/superagents/:name", async ({ req, params }) => {
       // Its main gives its authority to the sessions it starts: only a person,
@@ -63,8 +71,13 @@ export function superagentRoutes(router: Router, superagents: Superagents, hooks
       const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
       return json(await superagents.patch(superagents.canonical(params.name!), { main, enabled }));
     })
-    .add("DELETE", "/api/superagents/:name", ({ params }) => {
-      superagents.remove(superagents.canonical(params.name!));
+    .add("DELETE", "/api/superagents/:name", ({ req, params }) => {
+      // A person's: what is pinned to the name, and its token, go with it, so one added later under the name starts with neither.
+      if (superagentCaller(req, superagents) || authenticatedSession(req)) throw new HttpError(403, "a person removes a superagent");
+      requireNoSessionPeer(req, "removing a superagent");
+      const name = superagents.canonical(params.name!);
+      superagents.remove(name);
+      unpin(name);
       return json(null);
     })
     .add("POST", "/api/superagents/:name/restart", async ({ params }) => json(await superagents.restart(superagents.canonical(params.name!))))

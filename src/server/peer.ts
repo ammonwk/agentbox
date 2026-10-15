@@ -22,7 +22,8 @@ function processOn(port: number, server: number): number | null {
   if (lsof === false) return null;
   const r = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:ESTABLISHED", "-Fpn"], { encoding: "utf8", timeout: 3_000 });
   if (r.error) {
-    lsof = false;
+    // No lsof here: the headers decide from now on. A slow lsof only misses this once.
+    if ((r.error as NodeJS.ErrnoException).code === "ENOENT") lsof = false;
     return null;
   }
   lsof = true;
@@ -30,7 +31,7 @@ function processOn(port: number, server: number): number | null {
   for (const line of r.stdout.split("\n")) {
     if (line.startsWith("p")) pid = Number(line.slice(1));
     // The client's end: its own port first, the server's after the arrow.
-    else if (line.startsWith("n") && new RegExp(`:${port}->[^:]+:${server}$`).test(line) && pid && pid !== process.pid) return pid;
+    else if (line.startsWith("n") && new RegExp(`:${port}->.+:${server}$`).test(line) && pid && pid !== process.pid) return pid;
   }
   return null;
 }

@@ -93,7 +93,7 @@ import { WorkClaims } from "../core/workclaims";
 import { claimRoutes } from "./claims";
 import { cloudHttpError, cloudRoutes } from "./cloud";
 import { superagentCaller, superagentRoutes } from "./superagents";
-import { configurePeers, peerPorts } from "./peer";
+import { configurePeers, peerPorts, requireNoSessionPeer } from "./peer";
 import { prReady } from "../core/superagent/events";
 import { githubRoutes, requirePersonForCard } from "./github";
 import { GitHubActions } from "../core/github/actions";
@@ -190,13 +190,15 @@ export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
-configurePeers({ server: PORT, sessionAbove: (pid) => fleet.callerOf(pid) });
+configurePeers({ server: PORT, sessionAbove: (pid) => fleet.liveSessionAbove(pid) });
 export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`, () => scheduleHot());
 /** Who has which work, by source: renewed on the scheduler's tick, moved on a handover (src/core/workclaims.ts). */
 export const workClaims = new WorkClaims(fleet);
 fleet.onHandOver = (from, to) => workClaims.handOver(from, to);
 // A session's claims are kept where the superagent it acts for keeps its own.
 workClaims.ownerOf = (session) => superagents.ownerOf(session, { authority: true });
+// A handover passes a superagent's authority only between its own sessions.
+fleet.authorityOf = (id) => superagents.ownerOf(id, { authority: true });
 scheduler.onTick(() => workClaims.tick());
 /** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
 export const cloud = new CloudBridge(fleet, VERSION);
@@ -1134,6 +1136,7 @@ const router = new Router(mapError)
     const program = superagentCaller(req, superagents), caller = authenticatedSession(req);
     if (program ? program !== superagents.ownerOf(params.id!, { authority: true }) : caller && caller !== params.id)
       throw new HttpError(403, `only session ${params.id} itself, its superagent's program or a person hands over what it holds`);
+    if (!program && !caller) requireNoSessionPeer(req, "a handover");
     const moved = await fleet.handOver(params.id!, to);
     const cardsMoved = moveCards(params.id!, to);
     const claimsMoved = movePrClaims(params.id!, to);
@@ -1805,7 +1808,8 @@ export async function startServer(): Promise<void> {
     // The loopback listener, or the tailnet one reached at this machine's own address.
     if (!hosts || srv.requestIP(req)?.address === hosts[0]) fromThisMachine.add(req);
     // The client's port, so a person-only act can see which process sent it (peer.ts).
-    if (!hosts) {
+    // The tailnet listener too, for a request this machine sent to its own address.
+    if (!hosts || srv.requestIP(req)?.address === hosts[0]) {
       const port = srv.requestIP(req)?.port;
       if (port) peerPorts.set(req, port);
     }

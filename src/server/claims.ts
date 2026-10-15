@@ -2,6 +2,7 @@
 import { authenticatedSession } from "../core/session-authority";
 import type { Superagents } from "../core/superagents";
 import { superagentCaller } from "./superagents";
+import { requireNoSessionPeer } from "./peer";
 import { ClaimError, type ClaimCaller, type ClaimScope, type WorkClaims } from "../core/workclaims";
 import { HttpError, json, readBody, type RouteHandler, type Router } from "./router";
 
@@ -87,6 +88,7 @@ export function claimRoutes(router: Router, claims: WorkClaims, superagents: Sup
       "/api/claims/takeover",
       answering(async ({ req }) => {
         const caller = claimCaller(req, superagents);
+        if (!caller.superagent && !caller.session) requireNoSessionPeer(req, "a takeover");
         const b = await readBody(req);
         return json(await claims.takeover(caller, { key: text(b, "key"), scope: scopeOf(b.scope), to: optText(b, "to") }));
       }),

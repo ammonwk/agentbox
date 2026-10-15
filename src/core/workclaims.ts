@@ -94,6 +94,9 @@ export function canonicalSource(raw: string): { key: string; source: string } {
     u.searchParams.sort();
     return { key: u.href, source: u.href };
   }
+  // `github:owner/repo#n` is the key itself: made canonical like the rest.
+  const gk = /^github:([\w.-]+\/[\w.-]+)#([1-9]\d*)$/i.exec(t);
+  if (gk) return github(gk[1]!, gk[2]!);
   // A scheme is one key whatever its case: `GitHub:x` is `github:x`.
   const scheme = /^([a-z][a-z0-9+.-]*):(\S+)$/i.exec(t);
   if (scheme) return { key: `${scheme[1]!.toLowerCase()}:${scheme[2]}`, source: t };
@@ -362,6 +365,13 @@ export class WorkClaims {
     throw new ClaimError(404, `nobody holds ${key}`);
   }
 
+  private queue: Promise<unknown> = Promise.resolve();
+  private serially<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn, fn);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
   /** Where the caller's claims go: its superagent's backend, a session's by the superagent it acts for. */
   private backendFor(caller: ClaimCaller): ClaimsBackend {
     return this.backendOf(caller.superagent ?? (caller.session ? this.ownerOf(caller.session) : null));
@@ -383,14 +393,19 @@ export class WorkClaims {
     } else if (session) this.known(session);
     const note = req.note?.trim().slice(0, MAX_NOTE) || null;
     // One holder for each key across every backend: a key held in box.db is not
-    // claimed again in the cloud, nor the other way.
+    // claimed again in the cloud, nor the other way. Claims run one at a time
+    // here, so the look and the claim are one step on this machine.
     const target = this.backendFor(caller);
-    for (const other of this.backends.filter((b) => b !== target))
-      for (const i of items) {
-        const held = await other.get(scope, i.key, now);
-        if (held && held.state !== "released") throw new ClaimError(409, `${i.key} is held (${held.holder.superagent ?? held.holder.session ?? "a person"})`, { key: i.key, holder: held.holder, state: held.state });
-      }
-    return target.claim(items, scope, { superagent: caller.superagent, session }, note, now);
+    // A session's claim names the superagent it acts for, so the cloud keeps it for that one.
+    const holder = { superagent: caller.superagent ?? (caller.session ? this.ownerOf(caller.session) : null), session };
+    return this.serially(async () => {
+      for (const other of this.backends.filter((b) => b !== target))
+        for (const i of items) {
+          const held = await other.get(scope, i.key, now);
+          if (held && held.state !== "released") throw new ClaimError(409, `${i.key} is held (${held.holder.superagent ?? held.holder.session ?? "a person"})`, { key: i.key, holder: held.holder, state: held.state });
+        }
+      return target.claim(items, scope, holder, note, now);
+    });
   }
 
   /** The session that does the work, once the program has started it. The one before must have stopped: a running one is replaced by a handover or a takeover. */

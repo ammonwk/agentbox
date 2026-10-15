@@ -47,6 +47,7 @@ import { soulSeed, MemoryFile } from "../src/core/superagent/files";
 import { closeJournals, journalOf } from "../src/core/superagent/memory";
 import { patchState } from "../src/core/superagent/state";
 import { readManifest } from "../src/core/superagents";
+import { canonicalSource } from "../src/core/workclaims";
 import { SUPERAGENT_EVENTS } from "../src/core/types";
 
 type Old = {
@@ -263,12 +264,12 @@ if (has("agent_issue_claim"))
     console.log(`claim ${c.source} (old work ${c.work}) → held by ${name}${session ? ` with session ${session}` : ""}`);
     if (dry) continue;
     const now = Date.now();
-    const m = /^github:([^#]+)#(\d+)$/.exec(c.source);
+    const canon = canonicalSource(c.source);
     db.transaction(() => {
-      const taken = db.query("SELECT 1 FROM work_claims WHERE scope = 'work' AND key = ? AND state != 'released'").get(c.source);
+      const taken = db.query("SELECT 1 FROM work_claims WHERE scope = 'work' AND key = ? AND state != 'released'").get(canon.key);
       if (!taken)
         db.run("INSERT OR REPLACE INTO work_claims (scope, key, source, fence, state, superagent, session, note, lease_until, claimed_at, updated_at) VALUES ('work', ?, ?, 1, 'active', ?, ?, ?, ?, ?, ?)", [
-          c.source, m ? `https://github.com/${m[1]}/issues/${m[2]}` : c.source, name, session, `old in-core work ${c.work}`, now + 90_000, now, now,
+          canon.key, canon.source, name, session, `old in-core work ${c.work}`, now + 90_000, now, now,
         ]);
       once(src, name, `claim ${c.source}${taken ? " (already held: left as it was)" : ""}`);
     })();
