@@ -24,7 +24,7 @@ import { UNDO_MS, type Cards } from "../cards";
 import { getDb } from "../db";
 import { FleetError } from "../fleet";
 import { BrokerRefused, ContactRefused, GitHubAction, GitHubRead, brokerBranch, type ConsentSource, type GitHubBroker, type ManagedResult } from "./broker";
-import { effectivePin, pinOf, type Pin } from "./policy";
+import { effectivePin, pinOf, type ManifestSource, type Pin } from "./policy";
 
 export type ActionState = "prepared" | "approved" | "attempting" | "sent" | "uncertain" | "refused" | "failed";
 
@@ -98,7 +98,8 @@ export type GitHubActionsDeps = {
   broker: GitHubBroker;
   cards: Pick<Cards, "add" | "get" | "close">;
   /** A registered superagent's directory (its manifest proposes the policy). */
-  dirOf: (superagent: string) => string;
+  /** Where its policy is read: its effective manifest (`Superagents.manifest`). */
+  dirOf: (superagent: string) => ManifestSource;
   /** A session's working directory, for a publication it requests. */
   cwdOf: (session: string) => string | null;
   now?: () => number;

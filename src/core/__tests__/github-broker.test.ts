@@ -4,7 +4,7 @@
  *  interrupted action is never sent again. GitHub is a fake transport. */
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Cards } from "../cards";
@@ -114,6 +114,7 @@ beforeEach(() => {
   const hub = {
     has: (n: string) => n === "sa",
     get: (n: string) => ({ name: n, dir: saDir }),
+    manifest: () => JSON.parse(readFileSync(join(saDir, "superagent.json"), "utf8")),
     ownerOf: (id: string) => (id === "main1" || id === "child" ? "sa" : null),
   } as unknown as Superagents;
   githubRoutes(router, actions, hub);

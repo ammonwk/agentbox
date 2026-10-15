@@ -530,6 +530,16 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE sessions ADD COLUMN parent_proof TEXT;
   CREATE INDEX sessions_successor ON sessions(successor);
   `,
+  // 35 — generic superagents and their instances (src/core/superagent/layers.ts):
+  // a row with a base is that generic agent's instance in one project. The
+  // gates are in the layer files now; gate_moved is 0 for a row whose
+  // `enabled` from before still has to be written to its person's layer.
+  `
+  ALTER TABLE superagents ADD COLUMN base TEXT;
+  ALTER TABLE superagents ADD COLUMN project TEXT;
+  ALTER TABLE superagents ADD COLUMN gate_moved INTEGER NOT NULL DEFAULT 0;
+  CREATE UNIQUE INDEX superagents_instance ON superagents(base, project) WHERE base IS NOT NULL;
+  `,
 ];
 
 function migrate(d: Database) {

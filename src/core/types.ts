@@ -1624,13 +1624,42 @@ export interface SuperagentTeam {
 }
 
 /** A superagent as the Agents page shows it (`GET /api/superagents`, src/core/superagents.ts). */
+/** Who decided a superagent's gate: one of its layers, or its manifest's default (src/core/superagent/layers.ts). */
+export type SuperagentGateSource = "user" | "project" | "local" | "manifest";
+
+/** A layer over a superagent's directory, as Settings shows it. */
+export interface SuperagentLayer {
+  kind: "user" | "project" | "local";
+  path: string;
+  exists: boolean;
+  enabled: boolean | null;
+  /** The top-level fields its patch sets. */
+  fields: string[];
+  instructions: boolean;
+  soul: boolean;
+  error: string | null;
+  /** A project layer's fields that need the person's approval; null when it has none. */
+  restricted: { fields: string[]; digest: string; approved: boolean } | null;
+}
+
 export interface SuperagentInfo {
   name: string;
   title: string;
   description: string;
-  /** Where its `superagent.json` and code are. */
+  /** Where its `superagent.json` and code are: its generic agent's directory for an instance. */
   dir: string;
+  /** Its gate, as `gate.enabled`. */
   enabled: boolean;
+  /** The generic agent it is an instance of; null: it is a generic agent, and its instance for you. */
+  base: string | null;
+  /** An instance's project (a repo id); null for a generic agent. */
+  project: string | null;
+  /** Whether it is on, which layer decided, and a layer that cannot be read. */
+  gate: { enabled: boolean; by: SuperagentGateSource; error: string | null };
+  /** The layers over its directory, the least specific first. */
+  layers: SuperagentLayer[];
+  /** A generic agent's instances, and the projects whose layers name it. */
+  instances: { project: string; name: string | null; enabled: boolean; by: SuperagentGateSource }[];
   /** Why its manifest cannot be read, when it cannot. */
   error: string | null;
   /** Its main conversation now, following handovers. */

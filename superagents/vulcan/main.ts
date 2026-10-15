@@ -23,7 +23,7 @@ function cli(): string {
   return env.length ? `env ${env.join(" ")} ${me.bin}` : me.bin;
 }
 
-const ctx = new Ctx(new Store(store()), tools, readConfig(me.dir, cli()));
+const ctx = new Ctx(new Store(store()), tools, readConfig(me.dir, cli(), process.env.AGENTBOX_SUPERAGENT_MANIFEST || undefined));
 
 serve({
   view: (tab) => view(ctx, tab),

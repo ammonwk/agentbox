@@ -11,27 +11,44 @@ written against; this page is how you use them.
 
 ## Add an agent
 
-1. Copy an example (`superagents/<name>/`) or write a directory of your own.
-   Jupiter writes one from a conversation.
-2. Run `agentbox superagent add <dir>`. Run it again after you change the
-   manifest.
-3. Open **Agents**. The agent is in the rail. Nothing starts until you send
-   its first message.
+1. Use an example (`superagents/<name>/`) as it is, or write a directory of
+   your own. Jupiter writes one from a conversation.
+2. Run `agentbox superagent add <dir>`, from your own terminal. The agent is
+   off: adding it starts nothing.
+3. Turn it on where you want it: for yourself (`agentbox superagent enable
+   <name> --user`), or in one project (`agentbox superagent enable <name>
+   --project <project>`), or from its Settings.
+4. Open **Agents**. Nothing starts until you send its first message, except
+   its program and its loops.
 
-A directory can be a copy that runs an example's code: its manifest's `run`
-names the example's `main.ts` by its full path, and the program reads the
-manifest in its own directory. Instructions say `{{name}}` where they need
-the agent's name, so a copy needs no edit. Two copies of one agent under two
-names (`vulcan-agentbox`, `vulcan-plaibook-dev`) are two agents with their
-own conversations, memory and state.
+Do not copy an agent to change it. Write a layer over it instead
+([superagents.md, Overrides and gates](superagents.md#overrides-and-gates)):
+
+- `~/.agents/overrides/<name>.json` changes it for you, in every project;
+- `.agentbox/superagents/<name>.json` in a project's repository changes it for
+  everyone in that project (commit it);
+- `.agentbox/superagents/<name>.local.json` beside it changes it for you in
+  that project only (git ignores it on your machine).
+
+Each is a JSON merge patch over its `superagent.json`, with `enabled`,
+`instructions` (said after MAIN.md) and `soul` of its own:
+
+    { "enabled": true, "instructions": "Use the staging stack.", "steward": { "repos": ["acme/web"] } }
+
+An agent turned on in a project runs there as an instance of its own,
+`<name>-<project>` (`vulcan-plaibook-dev`): its own conversations, memory and
+state, from the one directory. The project's gate wins over yours, and your
+local one wins over the project's shared one. A project's file cannot change
+what runs, where, or on which credentials until you approve it on Settings.
 
 ## The Agents page
 
 ![The Agents page: the rail with each agent and its conversations, and an agent's Chat with the question it asks](images/agents-chat.png)
 
-- **The rail** lists the agents of the selected project tab: each agent whose
-  manifest names that project (`projects`, or `main.start.repoId`), and each
-  agent that names none. With no project selected, it lists all. Each row has
+- **The rail** lists the agents of the selected project tab: each agent's
+  instance in that project, each agent whose manifest names that project
+  (`projects`, or `main.start.repoId`), and each agent that names none and
+  has no instance there. Each row has
   the agent's picture, its activity, and its conversations under it when it is
   selected. Drag a row to put it where you want it, or use Alt+↑/↓. A
   disabled agent is always last.
@@ -47,8 +64,11 @@ own conversations, memory and state.
 - **Feed** is the agent's own page: the blocks its program answers with
   (lists, forms, buttons, its tabs and their badges), and what each daily sweep
   closed and kept. An agent without a program has only the sweeps.
-- **Settings** says what the agent is and where its directory is. It has the
-  Enabled switch, the program's state, Restart and its output, the provider
+- **Settings** says what the agent is and where its directory is. **On or
+  off** has your gates (yours in this project, yours everywhere) and says
+  which layer decided; for an agent itself it lists its instances and turns
+  it on in another project. **Layers** lists each layer file, what it sets,
+  and a project file's fields that need your approval. Settings also has the program's state, Restart and its output, the provider
   of its main and why, its loops, its sweep time, its picture, and its memory.
 
 A session of an agent that stops on a question, or asks you to decide, is
@@ -155,6 +175,27 @@ manifest proposes; the broker checks the policy, the App's identity, the
 repository, a claim's fence and each person's consent before it acts, and
 its tokens never reach the program ([superagents.md](superagents.md), GitHub
 actions).
+
+## From copies to instances
+
+The move from the old in-core agents (below) made one directory for each old
+instance: `vulcan`, `vulcan-agentbox`, `vulcan-plaibook-dev`. Copies drift
+apart. `scripts/migrate-instances.ts` makes each copy an instance of one
+generic agent, and writes what made it different into a layer. Each keeps
+its name, so its main, earlier mains, memory, store, loops, picture, claims
+and events stay its own. A copy's directory is not deleted. A copy whose
+MAIN.md or files differ from the generic agent's is left alone and listed.
+Before it writes, the script checks that each instance's manifest, from the
+generic directory and its layers, is the copy's own. It is safe to run
+again. Run it after the server runs this version; `--dry-run` first:
+
+    bun scripts/migrate-instances.ts --dry-run \
+      --generic vulcan=superagents/vulcan --generic jupiter=superagents/jupiter \
+      --make terminus=terminus-plaibook-dev
+
+`--generic <name>=<dir>` names a generic agent's directory; `--make
+<name>=<copy>` makes one from a copy, without its project, in
+`~/.agents/superagents/<name>`.
 
 ## From the old in-core agents
 

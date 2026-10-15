@@ -10,6 +10,7 @@ import { unpin } from "../core/github/policy";
 import { HttpError, json, readBody, type Router } from "./router";
 import { requireString } from "./validate";
 import { requireNoSessionPeer } from "./peer";
+import { requirePerson } from "./github";
 
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
 
@@ -69,7 +70,25 @@ export function superagentRoutes(router: Router, superagents: Superagents, hooks
       const b = await readBody(req);
       const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
       const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
+      // A gate is the person's config (a layer file): a program or a session never turns an agent on.
+      if (enabled !== undefined) requirePerson(req);
       return json(await superagents.patch(superagents.canonical(params.name!), { main, enabled }));
+    })
+    // ----- its gates and layers (src/core/superagent/layers.ts): a person's only
+    .add("PUT", "/api/superagents/:name/gate", async ({ req, params }) => {
+      requirePerson(req);
+      const b = await readBody(req);
+      if (b.layer !== "user" && b.layer !== "local") throw new HttpError(400, 'layer is "user" (yours, everywhere) or "local" (yours, in one project)');
+      if (b.enabled !== null && typeof b.enabled !== "boolean") throw new HttpError(400, "enabled is true, false or null (no gate in this layer)");
+      if (b.project !== undefined && typeof b.project !== "string") throw new HttpError(400, "project is a project's id or name");
+      return json(await superagents.setGate(superagents.canonical(params.name!), b.layer, b.enabled, b.project as string | undefined));
+    })
+    .add("POST", "/api/superagents/:name/approve", async ({ req, params }) => {
+      requirePerson(req);
+      const b = await readBody(req);
+      if (b.layer !== "project" && b.layer !== "local") throw new HttpError(400, 'layer is "project" or "local"');
+      if (b.digest !== null && typeof b.digest !== "string") throw new HttpError(400, "give the digest of the fields you read (null takes the approval back)");
+      return json(superagents.approve(superagents.canonical(params.name!), b.layer, b.digest as string | null));
     })
     .add("DELETE", "/api/superagents/:name", ({ req, params }) => {
       // A person's: what is pinned to the name, and its token, go with it, so one added later under the name starts with neither.

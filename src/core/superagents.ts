@@ -14,7 +14,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Subprocess } from "bun";
-import { getDb, getSchedule, getSessionRecord, getSettings, listRepos, listSessionRecords, type SessionRecord } from "./db";
+import { getDb, getRepoById, getSchedule, getSessionRecord, getSettings, listRepos, listSessionRecords, type SessionRecord } from "./db";
+import { repoCheckoutPath } from "./git";
 import { FleetError, newSessionId, type Fleet, type SpawnRequest } from "./fleet";
 import { agentboxBin, agentboxHome, packageRoot, userHome } from "./paths";
 import { submitWithReceipt } from "./send-receipts";
@@ -31,6 +32,7 @@ import { Sweeps } from "./superagent/sweep";
 import { AgentFeedback } from "./superagent/feedback";
 import { avatarFile, removeAvatar, saveAvatar } from "./superagent/avatar";
 import { teamOf } from "./superagent/shares";
+import { excludeLocalLayers, isObject, layerPath, readLayer, resolveLayers, stable, writeLayerKey, type GateSource, type Layer, type LayerKind, type Resolution } from "./superagent/layers";
 
 /** A loop in the manifest: `prompt` inline, or `file` in the directory. */
 export const LoopSpec = z
@@ -65,6 +67,8 @@ export const Manifest = z
     run: z.array(z.string().min(1)).min(1).optional(),
     /** Where a program agentbox does not run answers (`/agentbox/view`, `/agentbox/action`). */
     url: z.string().url().optional(),
+    /** Whether it is on when no layer says (src/core/superagent/layers.ts). Off by default: adding one starts nothing. */
+    enabled: z.boolean().optional(),
     /** The picture the Agents page shows when none was set on the page: one of AGENT_ICONS. */
     icon: z.enum(AGENT_ICONS).optional(),
     /** The projects it shows in, for navigation only: repo ids, owner/repo, or checkout paths. None: every project. */
@@ -99,7 +103,23 @@ export const Manifest = z
   .passthrough();
 export type Manifest = z.infer<typeof Manifest>;
 
-type Row = { name: string; dir: string; enabled: number; main: string | null; previous: string; main_send: string | null; created_at: number };
+/** A registered superagent. `base` null: a generic agent, defined by `dir`, and its instance for
+ *  the person; else that generic agent's instance in the project `project` (a repo id). */
+type Row = {
+  name: string;
+  dir: string;
+  enabled: number;
+  main: string | null;
+  previous: string;
+  main_send: string | null;
+  created_at: number;
+  base: string | null;
+  project: string | null;
+  gate_moved: number;
+};
+
+/** Its effective manifest, the layers it came from, and its gate. */
+type Resolved = { m: Manifest | null; raw: Record<string, unknown> | null; error: string | null; res: Resolution | null; dir: string };
 
 type Proc = {
   child: Subprocess | null;
@@ -111,6 +131,8 @@ type Proc = {
   backoffUntil: number;
   lastExit: { code: number | null; at: number } | null;
   stopping: boolean;
+  /** The effective manifest it was started with: a change starts it again. */
+  digest: string;
 };
 
 /**
@@ -160,6 +182,11 @@ function parseManifest(file: string): Manifest {
   } catch (e) {
     throw new FleetError(400, `${file} is not JSON: ${(e as Error).message}`);
   }
+  return checkManifest(raw, file);
+}
+
+/** A manifest, checked: `file` names where it came from in each error. */
+export function checkManifest(raw: unknown, file: string): Manifest {
   const m = Manifest.safeParse(raw);
   if (!m.success) throw new FleetError(400, `${file}: ${m.error.issues.map((i) => `${i.path.join(".") || "(top)"}: ${i.message}`).join("; ")}`);
   if (m.data.run && m.data.url) throw new FleetError(400, `${file}: give run or url, not both`);
@@ -218,6 +245,38 @@ export function projectsOf(m: Manifest, repos: readonly Repo[]): string[] | null
   return [...found];
 }
 
+/**
+ * Make a merged manifest an instance's, in place: its own name, and in a
+ * project that project only, with a main conversation that runs there (in a
+ * worktree of its own unless the manifest says not). Returns why it cannot be
+ * one, else null.
+ */
+export function asInstance(raw: Record<string, unknown>, name: string, project: string | null): string | null {
+  raw.name = name;
+  if (!project) return null;
+  raw.projects = [project];
+  const main = isObject(raw.main) ? raw.main : null;
+  if (main?.schedule) return "its main conversation is a schedule's session: it has no instance in a project";
+  if (main && isObject(main.start)) {
+    const { cwd: _cwd, ...start } = main.start;
+    main.start = { ...start, repoId: project, worktree: start.worktree ?? true };
+  }
+  return null;
+}
+
+const digestOf = (raw: unknown): string => JSON.stringify(stable(raw));
+
+/** The name of a generic agent's instance in a project: `<agent>-<project>`, made once and kept.
+ *  A name already taken gets a number. */
+export function instanceName(generic: string, project: string): string {
+  const slug = project.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+  const stem = `${generic}-${slug}`.slice(0, 40).replace(/-+$/, "");
+  for (let i = 1; ; i++) {
+    const name = i === 1 ? stem : `${stem.slice(0, 40 - String(i).length - 1).replace(/-+$/, "")}-${i}`;
+    if (!rowOf(name)) return name;
+  }
+}
+
 export const DEFAULT_ROLLOVER = { idleMin: 10, contextPct: 60 };
 
 export function rolloverOf(m: Manifest | null): { idleMin: number; contextPct: number } | null {
@@ -253,18 +312,18 @@ export class Superagents {
     private readonly changed: () => void = () => {},
   ) {
     this.rollover = new Rollover(fleet, {
-      rolling: () => this.withManifests().flatMap(({ r, m, main }) => (r.enabled === 1 && m && rolloverOf(m) ? [{ name: r.name, main, policy: rolloverOf(m)! }] : [])),
+      rolling: () => this.withManifests().flatMap(({ r, m, main }) => (this.enabledOf(r) && m && rolloverOf(m) ? [{ name: r.name, main, policy: rolloverOf(m)! }] : [])),
       names: () => rows().map((r) => r.name),
       byMain: (id) => this.byMain(id),
-      startSpec: (name) => this.startSpec(this.row(name), readManifest(this.row(name).dir)),
-      opening: (name, text, from, session) => this.openingFor(this.row(name), readManifest(this.row(name).dir), text, from, session),
+      startSpec: (name) => this.startSpec(this.row(name), this.manifestOf(this.row(name))),
+      opening: (name, text, from, session) => this.openingFor(this.row(name), this.manifestOf(this.row(name)), text, from, session),
       changed: () => this.changed(),
     });
     // A main replaced by a rollover is never resumed beside its successor, and
     // a message to a main that is cold and handed off starts its successor.
     fleet.conversations = { deliver: (id, text, attempt) => this.rollover.deliver(id, text, attempt), replacedBy: (id) => this.rollover.replacedBy(id) };
     this.loops = new Loops({
-      looped: () => this.withManifests().flatMap(({ r, m, main }) => (r.enabled === 1 && m ? [{ name: r.name, dir: r.dir, main, loops: this.loopsOf(r, m) }] : [])).filter((a) => a.loops.length),
+      looped: () => this.withManifests().flatMap(({ r, m, main }) => (this.enabledOf(r) && m ? [{ name: r.name, dir: this.dirOf(r), main, loops: this.loopsOf(r, m) }] : [])).filter((a) => a.loops.length),
       busy: (name) => {
         if (this.rollover.busy(name) || this.starting.has(name)) return true;
         const main = this.mainOf(this.row(name));
@@ -277,7 +336,7 @@ export class Superagents {
       swept: () =>
         this.withManifests().flatMap(({ r, m, main }) => {
           const at = sweepOf(m);
-          return r.enabled === 1 && at ? [{ name: r.name, at, mains: [main, ...this.previousOf(r, m, main)].filter((x): x is string => !!x) }] : [];
+          return this.enabledOf(r) && at ? [{ name: r.name, at, mains: [main, ...this.previousOf(r, m, main)].filter((x): x is string => !!x) }] : [];
         }),
     });
     this.feedback = new AgentFeedback(getDb(), {
@@ -292,6 +351,7 @@ export class Superagents {
   }
 
   start(): void {
+    this.moveGates();
     void this.tick();
     this.timer = setInterval(() => void this.tick(), 3_000);
     this.serviceTimer = setInterval(() => void this.services(), 15_000);
@@ -409,25 +469,40 @@ export class Superagents {
     return { agentOfSession: (s) => { const n = this.ownerOf(s); return n ? profile(n) : null; }, agent: profile, heir: (id) => this.fleet.heir(id) };
   }
 
-  /** Add the superagent in `dir`, or read its manifest again. */
+  /**
+   * Add the generic agent in `dir`, or read its manifest again. It is off
+   * until a gate turns it on (src/core/superagent/layers.ts), so adding one
+   * never starts work by itself.
+   */
   async register(dir: string): Promise<SuperagentInfo> {
     if (!isAbsolute(dir)) throw new FleetError(400, "give the superagent's directory as an absolute path");
     const m = readManifest(dir);
     const old = rowOf(m.name);
+    if (old?.base) throw new FleetError(409, `${m.name} is ${old.base}'s instance in a project, not a directory of its own: give the directory another name`);
     if (old && resolve(old.dir) !== resolve(dir))
       throw new FleetError(409, `a superagent named ${m.name} is already registered from ${old.dir}; remove it first`);
-    if (!old) getDb().run("INSERT INTO superagents (name, dir, enabled, previous, created_at) VALUES (?, ?, 1, '[]', ?)", [m.name, resolve(dir), Date.now()]);
+    if (!old) getDb().run("INSERT INTO superagents (name, dir, enabled, previous, created_at, gate_moved) VALUES (?, ?, 0, '[]', ?, 1)", [m.name, resolve(dir), Date.now()]);
     superagentToken(m.name);
-    // A changed program is started again with the manifest it has now.
-    if (old) this.kill(m.name);
+    // A changed program is started again with the manifest it has now, its instances' too.
+    if (old) for (const x of [old, ...this.instancesOf(m.name)]) this.kill(x.name);
     await this.tick();
     this.changed();
     return this.get(m.name);
   }
 
-  /** Forget it. Its directory and its home stay where they are. */
+  /**
+   * Forget a generic agent and its instances. Their directories and homes
+   * stay where they are. An instance is not removed on its own: the gate of
+   * its project would start it again, so it is turned off there instead.
+   */
   remove(name: string): void {
-    this.row(name);
+    const r = this.row(name);
+    if (r.base) throw new FleetError(409, `${name} is ${r.base}'s instance in a project: turn it off there (agentbox superagent disable ${name}), or remove ${r.base}`);
+    for (const x of [...this.instancesOf(name), r]) this.forget(x.name);
+    this.changed();
+  }
+
+  private forget(name: string): void {
     this.kill(name);
     this.procs.delete(name);
     // What agentbox kept for it goes too (its loops' clocks, a rollover's
@@ -442,15 +517,67 @@ export class Superagents {
     if (pic) removeAvatar(pic);
     // A new token for whatever is added under this name later.
     rmSync(join(superagentHome(name), "token"), { force: true });
+  }
+
+  /**
+   * Set a gate: the person's (`user`, for the agent everywhere) or the
+   * person's in one project (`local`). `null` takes the gate away, and the
+   * next layer decides. For a generic agent, `project` names the project of
+   * a local gate; an instance's is its own.
+   */
+  async setGate(name: string, layer: "user" | "local", enabled: boolean | null, project?: string): Promise<SuperagentInfo> {
+    const r = this.row(name);
+    const generic = r.base ?? r.name;
+    if (layer === "user") writeLayerKey(layerPath("user", generic, null)!, "enabled", enabled);
+    else {
+      const id = r.project ?? project;
+      if (!id) throw new FleetError(400, `say which project: ${name} is in none`);
+      const repo = getRepoById(id) ?? listRepos().find((x) => x.displayName.toLowerCase() === id.toLowerCase() || x.fullName?.toLowerCase() === id.toLowerCase());
+      if (!repo) throw new FleetError(404, `no project ${id}`);
+      const checkout = repoCheckoutPath(repo);
+      if (!existsSync(checkout)) throw new FleetError(409, `${repo.displayName} has no checkout on this machine (${checkout}) to keep the gate in`);
+      writeLayerKey(layerPath("local", generic, checkout)!, "enabled", enabled);
+      excludeLocalLayers(checkout);
+      await this.tick();
+      this.changed();
+      const inst = getDb().query("SELECT name FROM superagents WHERE base = ? AND project = ?").get(generic, repo.id) as { name: string } | null;
+      return this.get(inst?.name ?? name);
+    }
+    await this.tick();
     this.changed();
+    return this.get(name);
+  }
+
+  /**
+   * The person approves the restricted fields of a project layer (layers.ts
+   * `restrictedOf`), as they are now: `digest` is the one they read, so a
+   * file that changed between the look and the approval is refused. `null`
+   * takes an approval back.
+   */
+  approve(name: string, layer: "project" | "local", digest: string | null): SuperagentInfo {
+    const r = this.row(name);
+    if (!r.base) throw new FleetError(400, `${name} is not an instance in a project: it has no project layer to approve`);
+    if (digest !== null) {
+      const view = this.resolved(r).res?.layers.find((l) => l.kind === layer);
+      if (!view?.restricted) throw new FleetError(409, `${name}'s ${layer} layer asks for nothing that needs your approval`);
+      if (view.restricted.digest !== digest) throw new FleetError(409, `${view.path} changed since you read it: read it again before you approve it`);
+    }
+    patchState(name, (st) => {
+      const next = { ...st.approved };
+      if (digest === null) delete next[layer];
+      else next[layer] = digest;
+      st.approved = next;
+    });
+    this.memo.delete(name);
+    this.changed();
+    void this.tick();
+    return this.get(name);
   }
 
   async patch(name: string, p: { enabled?: boolean; main?: string | null }): Promise<SuperagentInfo> {
     const r = this.row(name);
-    if (p.enabled !== undefined) {
-      getDb().run("UPDATE superagents SET enabled = ? WHERE name = ?", [p.enabled ? 1 : 0, name]);
-      if (!p.enabled) this.kill(name);
-    }
+    // A person's switch is the most specific gate that is theirs: their own in an instance's project, else their own everywhere.
+    if (p.enabled !== undefined) await this.setGate(name, r.base ? "local" : "user", p.enabled);
     if (p.main !== undefined) {
       if (p.main !== null && !this.fleet.sessions().some((s) => s.id === p.main)) throw new FleetError(404, `no session ${p.main}`);
       this.setMain(r, p.main);
@@ -514,7 +641,7 @@ export class Superagents {
    */
   async chat(name: string, text: string, sendId: string): Promise<{ session: string; started: boolean }> {
     const r = this.row(name);
-    if (r.enabled !== 1) throw new FleetError(409, `${name} is disabled: enable it before you talk to it`);
+    if (!this.enabledOf(r)) throw new FleetError(409, `${name} is disabled: enable it before you talk to it`);
     // A retry of the message that started the main is that start, not a second message.
     if (r.main_send === sendId && r.main) return { session: this.fleet.heir(r.main), started: true };
     const main = this.mainOf(r);
@@ -523,7 +650,7 @@ export class Superagents {
       await submitWithReceipt(main, sendId, "send", text, (attempt) => this.fleet.send(main, text, attempt, true));
       return { session: main, started: false };
     }
-    const m = readManifest(r.dir);
+    const m = this.manifestOf(r);
     if (!m.main?.start) throw new FleetError(409, `${name} has no main conversation yet, and its manifest does not say how to start one`);
     if (this.starting.has(name)) throw new FleetError(409, `${name}'s main conversation is being started this moment`);
     this.starting.add(name);
@@ -617,7 +744,7 @@ export class Superagents {
     for (const { r, m, main } of this.withManifests()) {
       const st = stateOf(r.name);
       if (main === id || st.rollover?.from === id || st.rolled?.[id] || (main && this.fleet.heir(id) === main && this.previousOf(r, m, main).includes(id)))
-        return { name: r.name, main, policy: rolloverOf(m), enabled: r.enabled === 1 };
+        return { name: r.name, main, policy: rolloverOf(m), enabled: this.enabledOf(r) };
     }
     return null;
   }
@@ -629,29 +756,36 @@ export class Superagents {
     const provider = spec.provider;
     if (provider !== "auto" && (typeof provider !== "string" || !PROVIDERS.includes(provider as ProviderId)))
       throw new FleetError(400, `${r.name}: main.start.provider must be "auto" or one of ${PROVIDERS.join(", ")}`);
-    const cwd = typeof spec.cwd === "string" ? resolve(r.dir, spec.cwd.replace(/^~(?=\/|$)/, userHome())) : r.dir;
+    // An instance in a project runs in that project (`repoId`, which wins over a cwd).
+    if (typeof spec.repoId === "string") return { ...(spec as Partial<SpawnRequest>), provider: provider as ProviderId | "auto" };
+    const dir = this.dirOf(r);
+    const cwd = typeof spec.cwd === "string" ? resolve(dir, spec.cwd.replace(/^~(?=\/|$)/, userHome())) : dir;
     mkdirSync(cwd, { recursive: true });
     return { ...(spec as Partial<SpawnRequest>), provider: provider as ProviderId | "auto", cwd };
   }
 
   /** The first prompt of a fresh main (src/core/superagent/opening.ts). */
   private openingFor(r: Row, m: Manifest, text: string, from: { old: string | null; memory: string; work: string } | null, session: string): string {
-    const instructions = m.main?.instructions ? this.fill(readFileSync(join(r.dir, m.main.instructions), "utf8").trim(), r) : "";
+    const res = this.resolved(r).res;
+    const own = m.main?.instructions ? this.fill(readFileSync(join(this.dirOf(r), m.main.instructions), "utf8").trim(), r) : "";
+    // Each layer's instructions after MAIN.md, the least specific first (layers.ts).
+    const instructions = [own, ...(res?.instructions ?? []).map((x) => `Instructions from ${x.from}:\n${this.fill(x.text, r)}`)].filter(Boolean).join("\n\n");
     const mine = new Set(projectsOf(m, listRepos()) ?? []);
     const all = this.withManifests();
     const peers = all
-      .filter(({ r: x, m: xm }) => x.name !== r.name && x.enabled === 1 && xm && (mine.size === 0 || (projectsOf(xm, listRepos()) ?? [...mine]).some((p) => mine.has(p))))
+      .filter(({ r: x, m: xm }) => x.name !== r.name && this.enabledOf(x) && xm && (mine.size === 0 || (projectsOf(xm, listRepos()) ?? [...mine]).some((p) => mine.has(p))))
       .map(({ r: x, m: xm, main }) => ({ name: x.name, title: xm!.title ?? x.name, description: xm!.description, main }));
     const o: Opening = {
       name: r.name,
       title: m.title ?? r.name,
-      dir: r.dir,
+      dir: this.dirOf(r),
       instructions,
+      soul: res?.soul ?? null,
       memory: !!m.memory,
       rollover: !!rolloverOf(m),
       loops: this.loopsOf(r, m).length > 0,
       peers,
-      prReady: all.some(({ r: x, m: xm }) => x.enabled === 1 && !!xm?.events?.includes("pr.ready")),
+      prReady: all.some(({ r: x, m: xm }) => this.enabledOf(x) && !!xm?.events?.includes("pr.ready")),
     };
     const file = m.memory ? memoryFile(r.name) : null;
     let aside: string | null = null;
@@ -666,14 +800,14 @@ export class Superagents {
       if (set && set.at > before) aside = set.path;
     }
     // Which SOUL.md this main starts with (its hash, never its text), for the Memory panel.
-    const soul = readSoul({ name: r.name, title: o.title, dir: r.dir }).hash;
+    const soul = readSoul({ name: r.name, title: o.title, dir: o.dir, soul: o.soul }).hash;
     patchState(r.name, (st) => void (st.files = { session, soul, at: Date.now() }));
     return opening(o, text, from, file, aside);
   }
 
   /** Its loops: the manifest's, then the ones set by API. */
   private loopsOf(r: Row, m: Manifest | null): Loop[] {
-    return m ? loopsOf(r.dir, m.main?.loops ?? [], stateOf(r.name).loops ?? {}) : [];
+    return m ? loopsOf(this.dirOf(r), m.main?.loops ?? [], stateOf(r.name).loops ?? {}) : [];
   }
 
   private manifestLoopIds(r: Row): string[] {
@@ -685,13 +819,13 @@ export class Superagents {
   private who(name: string) {
     const r = this.row(name);
     const { m } = this.manifestOrError(r);
-    return { name, title: m?.title ?? name, dir: r.dir, memory: !!m?.memory, rollover: rolloverOf(m), main: this.mainOf(r, m) };
+    return { name, title: m?.title ?? name, dir: this.dirOf(r), memory: !!m?.memory, rollover: rolloverOf(m), main: this.mainOf(r, m) };
   }
 
   /** What instructions may name: its name (so a copied directory needs no
    *  edit), its directory and home, and the agentbox checkout (its docs, its examples). */
   private fill(text: string, r: Row): string {
-    return text.replaceAll("{{name}}", r.name).replaceAll("{{dir}}", r.dir).replaceAll("{{home}}", superagentHome(r.name)).replaceAll("{{agentbox}}", packageRoot).replaceAll("{{bin}}", agentboxBin());
+    return text.replaceAll("{{name}}", r.name).replaceAll("{{dir}}", this.dirOf(r)).replaceAll("{{home}}", superagentHome(r.name)).replaceAll("{{agentbox}}", packageRoot).replaceAll("{{bin}}", agentboxBin());
   }
 
   private row(name: string): Row {
@@ -702,11 +836,88 @@ export class Superagents {
   }
 
   private manifestOrError(r: Row): { m: Manifest | null; error: string | null } {
+    const { m, error } = this.resolved(r);
+    return { m, error };
+  }
+
+  /** Its effective manifest, or the error that says why there is none. */
+  private manifestOf(r: Row): Manifest {
+    const { m, error } = this.resolved(r);
+    if (!m) throw new FleetError(400, error ?? `${r.name}: no manifest`);
+    return m;
+  }
+
+  /** The effective manifest as JSON, for what reads fields agentbox does not know (the GitHub policy). */
+  manifest(name: string): Record<string, unknown> {
+    const r = this.row(name);
+    this.manifestOf(r);
+    return this.resolved(r).raw!;
+  }
+
+  /** Where its code and files are: its own directory, or its generic agent's. */
+  private dirOf(r: Row): string {
+    return r.base ? (rowOf(r.base)?.dir ?? r.dir) : r.dir;
+  }
+
+  /** Whether its gate is on (layers.ts): the project's, else the person's, else the manifest's. */
+  private enabledOf(r: Row): boolean {
+    return this.resolved(r).res?.enabled ?? false;
+  }
+
+  /** The instances of a generic agent, one for each project it was turned on in. */
+  private instancesOf(generic: string): Row[] {
+    return getDb().query("SELECT * FROM superagents WHERE base = ? ORDER BY created_at").all(generic) as Row[];
+  }
+
+  /** The layers that apply to it: the person's, and for an instance its project's two. */
+  private layersOf(generic: string, checkout: string | null): Layer[] {
+    const kinds: LayerKind[] = checkout ? ["user", "project", "local"] : ["user"];
+    return kinds.map((k) => readLayer(k, layerPath(k, generic, checkout)!));
+  }
+
+  /** The last resolution of each row, while what it came from is the same objects (both readers cache by file). */
+  private memo = new Map<string, { key: unknown[]; out: Resolved }>();
+
+  /**
+   * Its effective manifest: its generic agent's directory, then the layers
+   * (layers.ts), then what makes an instance one: its name, its project, and
+   * a main conversation that runs in that project.
+   */
+  private resolved(r: Row): Resolved {
+    const generic = r.base ? rowOf(r.base) : r;
+    const dir = generic?.dir ?? r.dir;
+    if (!generic) return { m: null, raw: null, error: `${r.name} is an instance of ${r.base}, which is not registered`, res: null, dir };
+    let base: Manifest;
     try {
-      return { m: readManifest(r.dir), error: null };
+      base = readManifest(dir);
     } catch (e) {
-      return { m: null, error: (e as Error).message };
+      return { m: null, raw: null, error: (e as Error).message, res: null, dir };
     }
+    const repo = r.project ? getRepoById(r.project) : null;
+    if (r.project && !repo) return { m: null, raw: null, error: `${r.name}'s project (${r.project}) is not registered here`, res: null, dir };
+    const checkout = repo ? repoCheckoutPath(repo) : null;
+    const layers = this.layersOf(generic.name, checkout);
+    const approved = r.base ? (stateOf(r.name).approved ?? {}) : {};
+    const key = [base, ...layers, approved.project, approved.local, checkout, dir];
+    const hit = this.memo.get(r.name);
+    if (hit && hit.key.length === key.length && hit.key.every((k, i) => k === key[i])) return hit.out;
+    const res = resolveLayers(base as Record<string, unknown>, layers, approved);
+    const raw = res.raw;
+    const wrong = asInstance(raw, r.name, repo?.id ?? null);
+    if (wrong) return this.keep(r.name, key, { m: null, raw: null, error: `${generic.name}: ${wrong}`, res, dir });
+    let m: Manifest | null = null;
+    let error = res.error;
+    try {
+      m = checkManifest(raw, res.layers.some((l) => l.exists) ? `${join(dir, "superagent.json")} with its layers` : join(dir, "superagent.json"));
+    } catch (e) {
+      error ??= (e as Error).message;
+    }
+    return this.keep(r.name, key, { m, raw: m ? raw : null, error, res, dir });
+  }
+
+  private keep(name: string, key: unknown[], out: Resolved): Resolved {
+    this.memo.set(name, { key, out });
+    return out;
   }
 
   /**
@@ -750,7 +961,7 @@ export class Superagents {
   }
 
   private info(r: Row): SuperagentInfo {
-    const { m, error } = this.manifestOrError(r);
+    const { m, error, res } = this.resolved(r);
     const st = stateOf(r.name);
     const main = this.mainOf(r, m);
     const p = this.procs.get(r.name);
@@ -758,16 +969,21 @@ export class Superagents {
       name: r.name,
       title: m?.title ?? r.name,
       description: m?.description ?? "",
-      dir: r.dir,
-      enabled: r.enabled === 1,
+      dir: this.dirOf(r),
+      enabled: this.enabledOf(r),
       error,
+      base: r.base,
+      project: r.project,
+      gate: { enabled: this.enabledOf(r), by: res?.by ?? "manifest", error: res?.error ?? null },
+      layers: res?.layers ?? [],
+      instances: r.base ? [] : this.instanceViews(r),
       main,
       previous: this.previousOf(r, m, main),
       canStart: !main && !!m?.main?.start,
       hasPage: !!(m?.url || m?.run),
       process: m?.run
         ? {
-            state: p?.child ? "running" : r.enabled !== 1 ? "stopped" : p && p.backoffUntil > Date.now() ? "backoff" : "starting",
+            state: p?.child ? "running" : !this.enabledOf(r) ? "stopped" : p && p.backoffUntil > Date.now() ? "backoff" : "starting",
             pid: p?.pid ?? null,
             since: p?.since ?? null,
             restarts: p?.restarts ?? 0,
@@ -790,7 +1006,7 @@ export class Superagents {
 
   private endpoint(name: string): string | null {
     const r = this.row(name);
-    const m = readManifest(r.dir);
+    const m = this.manifestOf(r);
     if (m.url) return m.url.replace(/\/$/, "");
     const p = this.procs.get(name);
     return m.run && p?.child ? `http://127.0.0.1:${p.port}` : null;
@@ -809,16 +1025,95 @@ export class Superagents {
     }
   }
 
-  /** Start what should run and is not, each after its backoff. */
+  /**
+   * Make an instance for each project a gate turned a generic agent on in,
+   * stop what a gate turned off or whose manifest changed, and start what
+   * should run and is not, each after its backoff.
+   */
   private async tick(): Promise<void> {
+    if (this.reconcile()) this.changed();
     const now = Date.now();
     for (const r of rows()) {
-      if (r.enabled !== 1) continue;
-      const { m } = this.manifestOrError(r);
-      if (!m?.run) continue;
       const p = this.procs.get(r.name);
+      const { m, raw } = this.resolved(r);
+      if (!this.enabledOf(r) || !m?.run) {
+        if (p?.child) this.kill(r.name);
+        continue;
+      }
+      // A program reads its manifest when it starts: a changed one (its directory or a layer) starts it again.
+      if (p?.child && p.digest !== digestOf(raw)) this.kill(r.name);
       if (p?.child || (p && p.backoffUntil > now)) continue;
       await this.spawn(r, m, p);
+    }
+  }
+
+  /** The projects whose layers name a generic agent, with its gate in each (layers.ts). */
+  private projectGates(g: Row): { repo: Repo; enabled: boolean; by: GateSource }[] {
+    let base: Manifest;
+    try {
+      base = readManifest(g.dir);
+    } catch {
+      return [];
+    }
+    const out: { repo: Repo; enabled: boolean; by: GateSource }[] = [];
+    for (const repo of listRepos()) {
+      const checkout = repoCheckoutPath(repo);
+      const layers = this.layersOf(g.name, checkout);
+      if (!layers.some((l) => l.kind !== "user" && l.exists)) continue;
+      const res = resolveLayers(base as Record<string, unknown>, layers, {});
+      out.push({ repo, enabled: res.enabled, by: res.by });
+    }
+    return out;
+  }
+
+  /** An instance for each project a generic agent is on in and has none. True when it made one. */
+  private reconcile(): boolean {
+    let made = false;
+    for (const g of rows()) {
+      if (g.base) continue;
+      for (const { repo, enabled } of this.projectGates(g)) {
+        if (!enabled || getDb().query("SELECT 1 FROM superagents WHERE base = ? AND project = ?").get(g.name, repo.id)) continue;
+        const name = instanceName(g.name, repo.displayName);
+        getDb().run("INSERT INTO superagents (name, dir, enabled, previous, created_at, base, project, gate_moved) VALUES (?, ?, 0, '[]', ?, ?, ?, 1)", [
+          name,
+          g.dir,
+          Date.now(),
+          g.name,
+          repo.id,
+        ]);
+        made = true;
+      }
+    }
+    return made;
+  }
+
+  /** A generic agent's instances and the projects that name it, for its Settings. */
+  private instanceViews(g: Row): SuperagentInfo["instances"] {
+    const rowsOf = new Map(this.instancesOf(g.name).map((x) => [x.project, x]));
+    const out: SuperagentInfo["instances"] = [];
+    for (const { repo, enabled, by } of this.projectGates(g)) {
+      const x = rowsOf.get(repo.id);
+      rowsOf.delete(repo.id);
+      out.push({ project: repo.id, name: x?.name ?? null, enabled: x ? this.enabledOf(x) : enabled, by: x ? (this.resolved(x).res?.by ?? by) : by });
+    }
+    for (const x of rowsOf.values()) out.push({ project: x.project!, name: x.name, enabled: this.enabledOf(x), by: this.resolved(x).res?.by ?? "manifest" });
+    return out;
+  }
+
+  /**
+   * Before gates were layers, each row kept its own `enabled`. Once, write
+   * that to the person's layer of a generic agent that no layer turns on or
+   * off yet, so what ran before runs after.
+   */
+  private moveGates(): void {
+    for (const r of getDb().query("SELECT * FROM superagents WHERE gate_moved = 0").all() as Row[]) {
+      try {
+        const path = layerPath("user", r.base ?? r.name, null)!;
+        if (!r.base && readLayer("user", path).enabled === null && !readLayer("user", path).error) writeLayerKey(path, "enabled", r.enabled === 1);
+        getDb().run("UPDATE superagents SET gate_moved = 1 WHERE name = ?", [r.name]);
+      } catch (e) {
+        console.error(`agentbox: superagent ${r.name}: its gate was not moved to its layer: ${(e as Error).message}`);
+      }
     }
   }
 
@@ -829,9 +1124,14 @@ export class Superagents {
     const pidFile = join(home, "pid");
     this.reap(r.name, pidFile);
     const port = await freePort();
-    const p: Proc = old ?? { child: null, port, pid: null, since: 0, restarts: 0, backoffUntil: 0, lastExit: null, stopping: false };
+    const p: Proc = old ?? { child: null, port, pid: null, since: 0, restarts: 0, backoffUntil: 0, lastExit: null, stopping: false, digest: "" };
     p.port = port;
     p.stopping = false;
+    // Its effective manifest, for a program to read instead of its directory's (layers.ts).
+    const raw = this.resolved(r).raw;
+    p.digest = digestOf(raw);
+    const manifestFile = join(home, "superagent.json");
+    writeFileSync(manifestFile, `${JSON.stringify(raw, null, 2)}\n`);
     this.procs.set(r.name, p);
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
     // The server's own environment may carry a session's id; the program is not that session.
@@ -840,7 +1140,10 @@ export class Superagents {
       AGENTBOX_URL: this.serverUrl,
       AGENTBOX_BIN: agentboxBin(),
       AGENTBOX_SUPERAGENT: r.name,
-      AGENTBOX_SUPERAGENT_DIR: r.dir,
+      AGENTBOX_SUPERAGENT_DIR: this.dirOf(r),
+      AGENTBOX_SUPERAGENT_MANIFEST: manifestFile,
+      AGENTBOX_SUPERAGENT_PROJECT: r.project ?? "",
+      AGENTBOX_SUPERAGENT_BASE: r.base ?? r.name,
       AGENTBOX_SUPERAGENT_HOME: home,
       AGENTBOX_SUPERAGENT_TOKEN: superagentToken(r.name),
       PORT: String(port),
@@ -848,7 +1151,7 @@ export class Superagents {
     const note = (line: string) => this.append(logFile, `[agentbox ${new Date().toISOString()}] ${line}\n`);
     let child: Subprocess<"ignore", "pipe", "pipe">;
     try {
-      child = Bun.spawn(m.run!, { cwd: r.dir, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      child = Bun.spawn(m.run!, { cwd: this.dirOf(r), env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     } catch (e) {
       note(`could not start ${JSON.stringify(m.run)}: ${(e as Error).message}`);
       p.lastExit = { code: null, at: Date.now() };

@@ -60,9 +60,13 @@ export function policyDigest(p: BrokerPolicy): string {
   return createHash("sha256").update(JSON.stringify(stable(canon))).digest("hex");
 }
 
-/** What the manifest in `dir` proposes now, or null when it proposes nothing. */
-export function proposedPolicy(dir: string): { policy: BrokerPolicy; digest: string } | null {
-  const raw = (readManifest(dir) as Record<string, unknown>).github;
+/** Where a superagent's policy is read: the manifest in a directory, or its
+ *  effective manifest with its layers (`Superagents.manifest`). */
+export type ManifestSource = string | (() => Record<string, unknown>);
+
+/** What the manifest proposes now, or null when it proposes nothing. */
+export function proposedPolicy(source: ManifestSource): { policy: BrokerPolicy; digest: string } | null {
+  const raw = (typeof source === "string" ? (readManifest(source) as Record<string, unknown>) : source()).github;
   if (raw === undefined) return null;
   const p = BrokerPolicy.safeParse(raw);
   if (!p.success) throw new FleetError(400, `superagent.json github: ${p.error.issues.map((i) => `${i.path.join(".") || "(top)"}: ${i.message}`).join("; ")}`);
@@ -93,7 +97,7 @@ export function checkAppKey(path: string): void {
  * manifest that changed between the look and the pin is refused, so the pin
  * is always of what the owner read.
  */
-export function pin(superagent: string, dir: string, digest: string, appKeyPath: string | null, now = Date.now()): Pin {
+export function pin(superagent: string, dir: ManifestSource, digest: string, appKeyPath: string | null, now = Date.now()): Pin {
   const proposed = proposedPolicy(dir);
   if (!proposed) throw new FleetError(409, `${superagent}'s superagent.json proposes no github policy`);
   if (proposed.digest !== digest) throw new FleetError(409, `${superagent}'s github policy is now ${proposed.digest.slice(0, 12)}, not ${digest.slice(0, 12)}: read it again before you pin it`);
@@ -116,7 +120,7 @@ export function unpin(superagent: string): boolean {
  * The pin an action runs under, if the manifest still proposes exactly what
  * was pinned. Every refusal says what the owner must do.
  */
-export function effectivePin(superagent: string, dir: string): Pin {
+export function effectivePin(superagent: string, dir: ManifestSource): Pin {
   const pinned = pinOf(superagent);
   if (!pinned) throw new FleetError(403, `${superagent} has no pinned GitHub policy: the host owner must run \`agentbox github pin ${superagent} --key <pem>\``);
   let now: string | null;

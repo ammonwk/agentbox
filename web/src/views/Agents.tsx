@@ -43,9 +43,22 @@ function useSuperagents(): { list: SuperagentInfo[] | null; error: string | null
 /** The sessions that say what an agent is doing: its main, and each session it started (`agentOwner`). */
 const sessionsOf = (a: SuperagentInfo, state: AppState) => state.sessions.filter((s) => s.id === a.main || s.agentOwner === a.name);
 
+/**
+ * Whether the project's page lists it: an instance in its own project; an
+ * agent that names projects in those; any other one in every project where it
+ * has no instance of its own (its instance there takes its place). One that is
+ * off is listed last, paused: its Settings turn it on in a project.
+ */
+export function shownIn(a: SuperagentInfo, project: string | null, all: readonly SuperagentInfo[]): boolean {
+  if (!project) return true;
+  if (a.base) return a.project === project;
+  if (a.projects !== null) return a.projects.includes(project);
+  return !all.some((x) => x.base === a.name && x.project === project);
+}
+
 /** A superagent as the rail shows it. A disabled one is paused, whatever its sessions do: it is listed last. */
 function agentOption(a: SuperagentInfo, state: AppState): AgentOption {
-  const where = a.projects === null ? "Every project" : a.projects.map((id) => state.repos.find((r) => r.id === id)?.displayName ?? id).join(", ") || "No project";
+  const where = a.base ? (state.repos.find((r) => r.id === a.project)?.displayName ?? "its project") : a.projects === null ? "Every project" : a.projects.map((id) => state.repos.find((r) => r.id === id)?.displayName ?? id).join(", ") || "No project";
   const activity = !a.enabled ? "paused" : a.error || a.process?.state === "backoff" ? "approval" : agentActivity(true, sessionsOf(a, state).map(shownStatus));
   return {
     id: a.name,
@@ -99,7 +112,7 @@ function AgentsPage({ state, route }: { state: AppState; route: Extract<Route, {
   const teamRail = useTeamRail();
   const { list, error, reload } = useSuperagents();
   const name = route.id ?? null;
-  const inProject = (a: SuperagentInfo) => !project || a.projects === null || a.projects.includes(project);
+  const inProject = (a: SuperagentInfo) => shownIn(a, project, list ?? []);
   const shown = useMemo(() => (list ?? []).filter(inProject), [list, project]);
   const options = useMemo(() => shown.map((a) => agentOption(a, state)), [shown, state]);
   const selected = list?.find((a) => a.name === name) ?? null;
@@ -187,7 +200,9 @@ function AgentsPage({ state, route }: { state: AppState; route: Extract<Route, {
         </p>
       </Empty>
     );
-  if (selected && !inProject(selected))
+  // A generic agent whose instance takes its place in this project still opens by its link (its instance's Settings link to it).
+  const here = selected && project ? list.find((x) => x.base === selected.name && x.project === project) : undefined;
+  if (selected && !inProject(selected) && !here)
     return (
       <Empty title={`${selected.title} is not in this project`}>
         {selected.projects?.length ? (
@@ -203,7 +218,7 @@ function AgentsPage({ state, route }: { state: AppState; route: Extract<Route, {
     return (
       <Empty title="No agents in this project">
         <p>
-          An agent shows in the projects its manifest names (<code>"projects"</code>), or in every project when it names none.
+          An agent shows in the projects its manifest names (<code>"projects"</code>), or in every project when it names none. Its instance in a project takes its place there.
         </p>
       </Empty>
     );

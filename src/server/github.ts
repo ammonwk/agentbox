@@ -12,7 +12,7 @@
  *     kind of header is not a person's, valid or not.
  */
 import type { GitHubActions, ActionCaller, GitHubActionView } from "../core/github/actions";
-import { effectivePin, pin, pinOf, proposedPolicy, unpin } from "../core/github/policy";
+import { effectivePin, pin, pinOf, proposedPolicy, unpin, type ManifestSource } from "../core/github/policy";
 import { authenticatedSession } from "../core/session-authority";
 import type { Superagents } from "../core/superagents";
 import { HttpError, json, readBody, type Router } from "./router";
@@ -59,10 +59,10 @@ export function githubRoutes(router: Router, actions: GitHubActions, superagents
     return v;
   };
 
-  const dirOf = (name: string): string => {
-    const s = registered(name);
-    if (!s) throw new HttpError(404, `no superagent ${name}`);
-    return s.dir;
+  /** Its effective manifest, with its layers: a policy is proposed there, read when it is used. */
+  const dirOf = (name: string): ManifestSource => {
+    if (!registered(name)) throw new HttpError(404, `no superagent ${name}`);
+    return () => superagents.manifest(name);
   };
 
   const policyView = (name: string) => {

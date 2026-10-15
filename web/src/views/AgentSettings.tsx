@@ -1,15 +1,17 @@
-/** Settings: what a superagent is, and how it runs. Its directory is the
- *  source of truth: the page changes only what agentbox keeps for it (on or
- *  off, its picture, preferences, a loop set by API). */
+/** Settings: what a superagent is, and how it runs. Its directory and the
+ *  layers over it are the source of truth: the page changes only what
+ *  agentbox keeps for it (its picture, preferences, a loop set by API) and the
+ *  person's own gates. */
 
 import { useEffect, useState } from "react";
 import type { AppState, SuperagentInfo } from "../../../src/core/types";
 import { api } from "../api";
 import { PROVIDER_LABEL } from "../bits";
-import { Button, Confirm, Icon, RelativeTime, Toggle } from "../components";
+import { Button, Confirm, Icon, RelativeTime } from "../components";
 import { hrefOf } from "../route";
 import { AgentPictureEditor } from "./AgentAvatar";
 import { AgentMemory } from "./AgentMemory";
+import { AgentGates, AgentLayers } from "./AgentGates";
 import { TeamShare } from "./AgentTeam";
 import { Markdown } from "./session/Markdown";
 
@@ -29,13 +31,11 @@ export function AgentSettings({ info, state, reload }: { info: SuperagentInfo; s
     }
   };
   const main = info.main ? state.sessions.find((s) => s.id === info.main) : null;
-  const where = info.projects === null ? "Every project" : info.projects.map((id) => state.repos.find((r) => r.id === id)?.displayName ?? id).join(", ") || "No project";
+  const where = info.base ? (state.repos.find((r) => r.id === info.project)?.displayName ?? info.project) : info.projects === null ? "Every project" : info.projects.map((id) => state.repos.find((r) => r.id === id)?.displayName ?? id).join(", ") || "No project";
   return (
     <>
+      <AgentGates info={info} state={state} reload={reload} />
       <div className="agent-settings-controls">
-        <span className="agent-enabled">
-          <Toggle checked={info.enabled} disabled={busy} label="Enabled" onChange={(on) => void run(() => api.superagentPatch(info.name, { enabled: on }))} />
-        </span>
         <span className="hint">
           {info.process
             ? info.enabled
@@ -69,6 +69,14 @@ export function AgentSettings({ info, state, reload }: { info: SuperagentInfo; s
             <dt>Name</dt>
             <dd className="mono">{info.name}</dd>
           </div>
+          {info.base && (
+            <div>
+              <dt>Instance of</dt>
+              <dd>
+                <a href={hrefOf({ page: "agents", id: info.base })}>{info.base}</a>
+              </dd>
+            </div>
+          )}
           <div>
             <dt>Directory</dt>
             <dd className="mono">{info.dir}</dd>
@@ -106,10 +114,21 @@ export function AgentSettings({ info, state, reload }: { info: SuperagentInfo; s
           </div>
         </dl>
         <p className="hint">
-          To change it, change its directory (ask your coding agent), then run <code>agentbox superagent add {info.dir}</code> to read the manifest again.{" "}
-          <code>agentbox superagent rm {info.name}</code> forgets it and keeps the directory.
+          To change it for every person and project, change its directory (ask your coding agent). To change it for you or for a project, write a layer (below): agentbox reads
+          each file again when it changes, and starts its program again with the result.{" "}
+          {info.base ? (
+            <>
+              <code>agentbox superagent disable {info.name}</code> turns it off in this project.
+            </>
+          ) : (
+            <>
+              <code>agentbox superagent rm {info.name}</code> forgets it and its instances, and keeps the directory.
+            </>
+          )}
         </p>
       </section>
+
+      <AgentLayers info={info} reload={reload} />
 
       <Program info={info} busy={busy} restart={() => void run(() => api.superagentRestart(info.name))} />
       <Loops info={info} reload={reload} />

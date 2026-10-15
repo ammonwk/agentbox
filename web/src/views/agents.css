@@ -208,6 +208,10 @@
 .agent-settings-section { display: flex; flex-direction: column; gap: 10px; }
 .agent-settings-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .agent-enabled { display: inline-flex; align-items: center; gap: 6px; }
+.agent-gates { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.agent-gate { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; max-width: 520px; }
+.agent-gate select { width: auto; min-width: 120px; }
+.agent-gates-head { margin: 8px 0 0; font-size: 13px; }
 .agent-settings-controls .agent-enabled .toggle { align-self: center; padding: 0 4px; font-size: 13px; }
 .agent-team-choice { display: flex; flex-direction: column; gap: 6px; border: 0; margin: 0; padding: 0; }
 .agent-team-choice legend { padding: 0; margin-bottom: 4px; font-size: 12.5px; color: var(--muted); }

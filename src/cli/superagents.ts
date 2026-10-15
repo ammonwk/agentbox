@@ -14,7 +14,14 @@ const str = (v: string | true | undefined): string | undefined => (typeof v === 
 export const SUPERAGENT_USAGE = `agentbox superagent [ls] [--project P] [--json]  the superagents, their programs and main conversations
 agentbox superagent add <dir>                add the one in <dir> (its superagent.json), or read it again
 agentbox superagent rm <name>                forget it; its directory and state stay
-agentbox superagent restart|enable|disable <name>
+agentbox superagent restart <name>
+agentbox superagent enable|disable <name> [--project P | --user]
+                                             your gate: in an instance's project; with --project, a generic agent's
+                                             in that project; with --user, everywhere (docs/superagents.md)
+agentbox superagent gate <name> on|off|unset [--project P | --user]   the same, and unset leaves it to the next layer
+agentbox superagent layers <name>            its layers over its directory, its gate and which layer decided it
+agentbox superagent approve <name> project|local [--revoke]
+                                             let a project layer change what needs you (run, main.start, …)
 agentbox superagent log <name>               the end of its program's output
 agentbox superagent main <name> <id|none>    say which session is its main conversation
 agentbox superagent chat <name> <text…>      say it to its main conversation (started from its manifest if there is none)
@@ -47,7 +54,7 @@ export async function superagent(api: Api, args: string[]): Promise<number> {
         const repos = (await api<AppState>("GET", "/api/state")).repos;
         const id = repos.find((r) => r.id === project || r.displayName.toLowerCase() === project.toLowerCase() || r.fullName?.toLowerCase() === project.toLowerCase())?.id;
         if (!id) throw new Error(`no project "${project}"`);
-        all = all.filter((s) => s.projects === null || s.projects.includes(id));
+        all = all.filter((s) => (s.base ? s.project === id : s.projects === null || s.projects.includes(id)));
       }
       if (flags.has("json")) console.log(JSON.stringify(all, null, 2));
       else if (!all.length) console.log("no superagents: add one with `agentbox superagent add <dir>`");
@@ -70,8 +77,49 @@ export async function superagent(api: Api, args: string[]): Promise<number> {
       return 0;
     case "enable":
     case "disable":
-      console.log(line(await api<SuperagentInfo>("PATCH", `/api/superagents/${encodeURIComponent(name())}`, { enabled: verb === "enable" })));
+    case "gate": {
+      const { flags, rest: more } = parseArgs(rest.slice(1), ["project"], ["user"]);
+      const word = verb === "gate" ? more[0] : verb === "enable" ? "on" : "off";
+      if (word !== "on" && word !== "off" && word !== "unset") throw new Error("superagent gate <name> on|off|unset [--project P | --user]");
+      const enabled = word === "unset" ? null : word === "on";
+      const project = str(flags.get("project"));
+      if (project && flags.has("user")) throw new Error("give --project or --user, not both");
+      const path = `/api/superagents/${encodeURIComponent(name())}`;
+      // With neither flag: your most specific gate, the one in an instance's project, else yours everywhere.
+      const layer = flags.has("user") ? "user" : project || (await api<SuperagentInfo>("GET", path)).base ? "local" : "user";
+      console.log(line(await api<SuperagentInfo>("PUT", `${path}/gate`, { layer, enabled, ...(project ? { project } : {}) })));
       return 0;
+    }
+    case "layers": {
+      const s = await api<SuperagentInfo>("GET", `/api/superagents/${encodeURIComponent(name())}`);
+      console.log(`${s.name}  ${s.gate.enabled ? "on" : "off"}, decided by ${s.gate.by === "manifest" ? "its manifest's default" : `the ${s.gate.by} layer`}${s.gate.error ? `  ERROR ${s.gate.error}` : ""}`);
+      console.log(`base     ${s.dir}/superagent.json`);
+      for (const l of s.layers) {
+        const what = l.exists
+          ? [l.enabled === null ? null : `enabled ${l.enabled}`, l.fields.length ? `sets ${l.fields.join(", ")}` : null, l.instructions ? "instructions" : null, l.soul ? "soul" : null].filter(Boolean).join("; ") || "empty"
+          : "none";
+        console.log(`${l.kind.padEnd(8)} ${l.path}  ${what}${l.error ? `  ERROR ${l.error}` : ""}`);
+        if (l.restricted) console.log(`         needs your approval: ${l.restricted.fields.join(", ")} (${l.restricted.approved ? "approved" : `not approved: agentbox superagent approve ${s.name} ${l.kind}`})`);
+      }
+      for (const i of s.instances) console.log(`instance ${i.name ?? "(none yet)"} in project ${i.project}: ${i.enabled ? "on" : "off"} by ${i.by}`);
+      return 0;
+    }
+    case "approve": {
+      const { flags, rest: more } = parseArgs(rest.slice(1), [], ["revoke"]);
+      const layer = more[0];
+      if (layer !== "project" && layer !== "local") throw new Error("superagent approve <name> project|local [--revoke]");
+      const path = `/api/superagents/${encodeURIComponent(name())}`;
+      let digest: string | null = null;
+      if (!flags.has("revoke")) {
+        const s = await api<SuperagentInfo>("GET", path);
+        const l = s.layers.find((x) => x.kind === layer);
+        if (!l?.restricted) throw new Error(`${s.name}'s ${layer} layer asks for nothing that needs your approval`);
+        console.log(`approving ${l.restricted.fields.join(", ")} from ${l.path}`);
+        digest = l.restricted.digest;
+      }
+      console.log(line(await api<SuperagentInfo>("POST", `${path}/approve`, { layer, digest })));
+      return 0;
+    }
     case "log": {
       const { text } = await api<{ text: string }>("GET", `/api/superagents/${encodeURIComponent(name())}/log`);
       process.stdout.write(text);
@@ -172,7 +220,7 @@ const clock = (t: number) => new Date(t).toLocaleString([], { weekday: "short", 
 function line(s: SuperagentInfo): string {
   const proc = s.process ? `${s.process.state}${s.process.pid ? ` pid ${s.process.pid}` : ""}${s.process.restarts ? ` restarts ${s.process.restarts}` : ""}` : "no program";
   const loops = s.loops.map((l) => `loop ${l.id} ${l.when}, next ${l.nextAt ? clock(l.nextAt) : "never"}`);
-  return [s.name, s.enabled ? proc : "disabled", `main ${s.main ?? (s.canStart ? "(on first message)" : "none")}`, s.dir, ...loops, ...(s.error ? [`ERROR ${s.error}`] : [])].join("  ");
+  return [s.name, ...(s.base ? [`${s.base} in ${s.project}`] : []), s.enabled ? proc : "disabled", `main ${s.main ?? (s.canStart ? "(on first message)" : "none")}`, s.dir, ...loops, ...(s.error ? [`ERROR ${s.error}`] : [])].join("  ");
 }
 
 /** `agentbox superagent memory <name> …`: its journal (src/core/superagent/memory-view.ts). */

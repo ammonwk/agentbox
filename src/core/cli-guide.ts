@@ -165,7 +165,9 @@ why). Arming the same wait twice is one wait.
     agentbox superagent call <name> <action> --json <file>   # what a superagent's prompt tells you
                                     # to run: its answer is JSON; it knows which session called
     agentbox superagent view <name> [--tab t]   # its page, as JSON
-    agentbox superagent add <dir>   # register one (a person's call: do it only when asked)
+    agentbox superagent add <dir>   # register one (a person's call: do it only when asked); it is off until a gate turns it on
+    agentbox superagent layers <name>   # its layers over its directory, its gate and which layer decided
+                                    # (gates and approvals are a person's: enable|disable|gate|approve refuse a session)
     agentbox superagent send <name> <text…|->   # into its main conversation, as your message; starts one if it has none
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>

@@ -70,6 +70,8 @@ export interface SuperagentState {
   sweeps?: SweepRecord[];
   /** The last daily sweep slot that ran. */
   sweptAt?: number;
+  /** The restricted fields of each project layer the person approved, by digest (layers.ts). */
+  approved?: { project?: string; local?: string };
 }
 
 export function stateOf(name: string): SuperagentState {

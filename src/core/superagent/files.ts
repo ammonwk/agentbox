@@ -28,8 +28,9 @@ const MEMORY_ENTRIES = 20;
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const day = (at: number) => new Date(at).toISOString().slice(0, 10);
 
-/** Whose files: its name (the journal's), its title, and its directory. */
-export type Owner = { name: string; title: string; dir: string };
+/** Whose files: its name (the journal's), its title, and its directory.
+ *  `soul` is a SOUL.md a layer gives instead of the directory's (layers.ts). */
+export type Owner = { name: string; title: string; dir: string; soul?: { path: string; text: string } | null };
 export type Soul = { path: string; text: string; hash: string | null; notes: string[] };
 export type FilesStatus = {
   soul: { path: string; hash: string | null; chars: number; notes: string[] };
@@ -71,6 +72,7 @@ function soulPath(dir: string) {
 /** What a fresh main conversation's first prompt gets: whole lines within
  *  `SOUL_CHARS`, nothing when it holds credential-shaped text. */
 export function readSoul(o: Owner): Soul {
+  if (o.soul) return soulOf(o, o.soul.path, o.soul.text, []);
   const { path, both } = soulPath(o.dir);
   if (!path) return { path: join(o.dir, "SOUL.md"), text: "", hash: null, notes: [] };
   // A file error never stops a start: it becomes a note.
@@ -83,8 +85,11 @@ export function readSoul(o: Owner): Soul {
   } catch (e) {
     return { path, text: "", hash: null, notes: [`${path} could not be read: ${(e as Error).message}`] };
   }
-  const hash = sha(raw), notes: string[] = [];
-  if (both) notes.push("soul.md is ignored because SOUL.md exists.");
+  return soulOf(o, path, raw, both ? ["soul.md is ignored because SOUL.md exists."] : []);
+}
+
+function soulOf(o: Owner, path: string, raw: string, notes: string[]): Soul {
+  const hash = sha(raw);
   if (!raw.trim() || raw === soulSeed(o.title) || raw === soulSeed(o.title.toUpperCase())) return { path, text: "", hash, notes: [...notes, "SOUL.md is still empty: no persona is written yet."] };
   if (CREDENTIAL.test(raw)) return { path, text: "", hash, notes: [...notes, `${path} was not loaded: it holds credential-shaped text. Remove it and refer to where the credential is kept.`] };
   const lines = raw.trimEnd().split("\n"), kept: string[] = [];

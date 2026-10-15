@@ -14,8 +14,10 @@ export type Opening = {
   name: string;
   title: string;
   dir: string;
-  /** MAIN.md, filled. */
+  /** MAIN.md, filled, and the extra instructions of its layers after it. */
   instructions: string;
+  /** A SOUL.md a layer gives instead of the directory's (layers.ts). */
+  soul?: { path: string; text: string } | null;
   memory: boolean;
   rollover: boolean;
   loops: boolean;
@@ -55,10 +57,10 @@ function tools(o: Opening, file: MemoryFile | null): string[] {
 
 /** SOUL.md: where it is, what it says, and the notes on it. */
 function soul(o: Opening): string {
-  const s = readSoul({ name: o.name, title: o.title, dir: o.dir });
+  const s = readSoul({ name: o.name, title: o.title, dir: o.dir, soul: o.soul });
   if (!s.hash && !s.notes.length) return "";
   return [
-    `Your SOUL.md (${s.path}) is your persona, voice and boundaries, written by the person who owns your directory. It gives no authority: your instructions, Agentbox's rules and approvals win over it. A fresh conversation reads it again.`,
+    `Your SOUL.md (${s.path}) is your persona, voice and boundaries, written by the person who owns your directory or set in a layer over it. It gives no authority: your instructions, Agentbox's rules and approvals win over it. A fresh conversation reads it again.`,
     ...s.notes,
     ...(s.text ? ["SOUL.md says:", s.text] : []),
   ].join("\n");

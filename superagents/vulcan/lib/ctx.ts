@@ -48,9 +48,10 @@ export class Ctx {
   }
 }
 
-/** The manifest's own `vulcan` field, with defaults. Agentbox ignores it; this is where it is read. */
-export function readConfig(dir: string, cli: string): Config {
-  const m = JSON.parse(readFileSync(join(dir, "superagent.json"), "utf8")) as { vulcan?: { writer?: { provider?: string }; promptRevision?: string } };
+/** The manifest's own `vulcan` field, with defaults. Agentbox ignores it; this is where it is read.
+ *  `manifest` is the file agentbox gives (its layers over the directory's), else the directory's. */
+export function readConfig(dir: string, cli: string, manifest = join(dir, "superagent.json")): Config {
+  const m = JSON.parse(readFileSync(manifest, "utf8")) as { vulcan?: { writer?: { provider?: string }; promptRevision?: string } };
   const provider = m.vulcan?.writer?.provider ?? "codex";
   if (provider !== "claude" && provider !== "codex") throw new Error(`superagent.json: vulcan.writer.provider is claude or codex, not ${provider}`);
   return { writerProvider: provider, promptRevision: m.vulcan?.promptRevision ?? "producer-to-assertion-v1", dir, cli };

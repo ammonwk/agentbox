@@ -56,6 +56,7 @@ import type {
   Card,
   ScheduleSpec,
   SuperagentInfo,
+  SuperagentLayer,
   SuperagentView,
 } from "../../src/core/types";
 import type { MemoryView } from "../../src/core/superagent/memory-view";
@@ -1787,8 +1788,19 @@ export const mockServer = {
 const OWNED: Record<string, string> = { q7k2: "vulcan", "3mq9": "vulcan", a81c: "vulcan", p0o9: "vulcan" };
 for (const s of sessions) if (OWNED[s.id]) s.agentOwner = OWNED[s.id];
 
+/** The layers a generic agent and an instance show (docs/superagents.md, Overrides and gates). */
+const layerOf = (kind: SuperagentLayer["kind"], path: string, x: Partial<SuperagentLayer> = {}): SuperagentLayer => ({
+  kind, path, exists: false, enabled: null, fields: [], instructions: false, soul: false, error: null, restricted: null, ...x,
+});
+const userLayer = (name: string, x: Partial<SuperagentLayer> = {}) => layerOf("user", `${HOME}/.agents/overrides/${name}.json`, x);
+const AGENTBOX_LAYERS = `${HOME}/Documents/agentbox/.agentbox/superagents`;
+/** What every superagent has before its gates and layers. */
+const generic = (x: Omit<SuperagentInfo, "base" | "project" | "gate" | "layers" | "instances"> & Partial<SuperagentInfo>): SuperagentInfo => ({
+  base: null, project: null, gate: { enabled: x.enabled, by: x.enabled ? "user" : "manifest", error: null }, layers: [userLayer(x.name, x.enabled ? { exists: true, enabled: true } : {})], instances: [], ...x,
+});
+
 const superagents: SuperagentInfo[] = [
-  {
+  generic({
     name: "vulcan", title: "Vulcan", description: "Turns reported issues into a reviewed pull request: one writer per family of issues, three reviewers a round.",
     dir: `${AB}/superagents/vulcan`, enabled: true, error: null, main: "q7k2", previous: ["p0o9"], canStart: false, hasPage: true,
     process: { state: "running", pid: 48211, since: T0 - 5 * H, restarts: 1, lastExit: { code: 1, at: T0 - 5 * H - M } }, createdAt: T0 - 20 * D,
@@ -1799,18 +1811,36 @@ const superagents: SuperagentInfo[] = [
     ],
     selection: { provider: "claude", why: "Claude has the most weekly use left per hour until its reset.", at: T0 - 2 * H },
     events: ["pr.ready"], team: null,
-  },
-  {
+    layers: [userLayer("vulcan", { exists: true, enabled: true, fields: ["main", "memory", "sweep"] })],
+    instances: [
+      { project: "r-agentbox", name: "vulcan-agentbox", enabled: true, by: "local" },
+      { project: "r-web", name: null, enabled: false, by: "project" },
+    ],
+  }),
+  generic({
+    name: "vulcan-agentbox", title: "Vulcan", description: "Turns reported issues into a reviewed pull request: one writer per family of issues, three reviewers a round.",
+    dir: `${AB}/superagents/vulcan`, enabled: true, error: null, main: null, previous: [], canStart: true, hasPage: true,
+    process: { state: "running", pid: 48377, since: T0 - 3 * H, restarts: 0, lastExit: null }, createdAt: T0 - 2 * D,
+    icon: "fix", avatar: null, projects: ["r-agentbox"], memory: true, rollover: { idleMin: 10, contextPct: 60 }, sweep: "23:00", loops: [],
+    selection: null, events: [], team: null,
+    base: "vulcan", project: "r-agentbox", gate: { enabled: true, by: "local", error: null },
+    layers: [
+      userLayer("vulcan", { exists: true, enabled: true, fields: ["main", "memory", "sweep"] }),
+      layerOf("project", `${AGENTBOX_LAYERS}/vulcan.json`, { exists: true, fields: ["vulcan", "main"], instructions: true, restricted: { fields: ["main.start"], digest: "9a1f0c", approved: false } }),
+      layerOf("local", `${AGENTBOX_LAYERS}/vulcan.local.json`, { exists: true, enabled: true }),
+    ],
+  }),
+  generic({
     name: "salus", title: "Salus", description: "Production health: reads the dashboards and the error tracker, and tells you what needs attention.",
     dir: `${HOME}/.agents/superagents/salus`, enabled: true, error: null, main: null, previous: [], canStart: true, hasPage: false, process: null, createdAt: T0 - 9 * D,
     icon: "health", avatar: null, projects: ["r-agentbox", "r-web"], memory: true, rollover: { idleMin: 10, contextPct: 60 }, sweep: null, loops: [],
     selection: null, events: [], team: null,
-  },
-  {
+  }),
+  generic({
     name: "caelus", title: "Caelus", description: "Release follow-through: watches deploys after a merge and reports what shipped.",
     dir: `${HOME}/.agents/superagents/caelus`, enabled: false, error: null, main: null, previous: [], canStart: true, hasPage: false, process: null, createdAt: T0 - 30 * D,
     icon: "release", avatar: null, projects: null, memory: false, rollover: null, sweep: null, loops: [], selection: null, events: [], team: null,
-  },
+  }),
 ];
 
 const preferences: Record<string, { key: string; text: string; at: number }[]> = {
@@ -1860,6 +1890,17 @@ function memoryOf(name: string): MemoryView {
   };
 }
 
+/** A person's gate, as the server resolves it: the most specific one that is set decides. */
+function gateMock(a: SuperagentInfo, layer: "user" | "local", enabled: boolean | null): void {
+  const l = a.layers.find((y) => y.kind === layer);
+  if (l) Object.assign(l, { exists: true, enabled });
+  let on = false, by: SuperagentInfo["gate"]["by"] = "manifest";
+  for (const y of a.layers) if (y.exists && y.enabled !== null) (on = y.enabled), (by = y.kind);
+  a.enabled = on;
+  a.gate = { enabled: on, by, error: null };
+  if (a.process) a.process = { ...a.process, state: on ? "running" : "stopped", since: Date.now() };
+}
+
 function mockSuperagents(method: string, p: string[], b: unknown, query: URLSearchParams): unknown {
   const [name, action, sub] = p;
   if (!name) return method === "GET" ? superagents : null;
@@ -1869,14 +1910,28 @@ function mockSuperagents(method: string, p: string[], b: unknown, query: URLSear
   if (!action) {
     if (method === "PATCH") {
       const x = body<{ enabled?: boolean }>(b);
-      if (typeof x.enabled === "boolean") {
-        a.enabled = x.enabled;
-        if (a.process) a.process = { ...a.process, state: x.enabled ? "running" : "stopped", since: Date.now() };
-      }
+      if (typeof x.enabled === "boolean") gateMock(a, a.base ? "local" : "user", x.enabled);
     }
     return a;
   }
   switch (action) {
+    case "gate": {
+      const x = body<{ layer: "user" | "local"; enabled: boolean | null; project?: string }>(b);
+      if (x.layer === "local" && !a.base && x.project) {
+        const i = a.instances.find((y) => y.project === x.project);
+        if (i) Object.assign(i, { enabled: !!x.enabled, by: x.enabled === null ? "manifest" : "local" });
+        else a.instances.push({ project: x.project, name: null, enabled: !!x.enabled, by: "local" });
+        return a;
+      }
+      gateMock(a, x.layer ?? "user", x.enabled ?? null);
+      return a;
+    }
+    case "approve": {
+      const x = body<{ layer: "project" | "local"; digest: string | null }>(b);
+      const l = a.layers.find((y) => y.kind === x.layer);
+      if (l?.restricted) l.restricted = { ...l.restricted, approved: x.digest !== null };
+      return a;
+    }
     case "view":
       if (!a.hasPage) throw new Error(`${name} has no page`);
       return vulcanView(query.get("tab"));

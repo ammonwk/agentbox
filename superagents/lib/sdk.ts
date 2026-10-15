@@ -8,7 +8,7 @@
  *   import { agentbox, serve } from "/path/to/agentbox/superagents/lib/sdk.ts";
  */
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AppState, Card, Session, SuperagentBlock, SuperagentView, TimelinePage, Wait } from "../../src/core/types";
 import type { ClaimScope, WorkClaim } from "../../src/core/workclaims";
@@ -27,9 +27,27 @@ export const me = {
   get name() {
     return env("AGENTBOX_SUPERAGENT");
   },
-  /** Its code: where superagent.json is. */
+  /** Its code and files: the generic agent's directory, shared by each of its instances. */
   get dir() {
     return env("AGENTBOX_SUPERAGENT_DIR");
+  },
+  /** The generic agent it is: its own name, or the one it is an instance of. */
+  get base() {
+    return process.env.AGENTBOX_SUPERAGENT_BASE || env("AGENTBOX_SUPERAGENT");
+  },
+  /** The project it is an instance in (a repo id), or null for the person's own one. */
+  get project(): string | null {
+    return process.env.AGENTBOX_SUPERAGENT_PROJECT || null;
+  },
+  /**
+   * Its manifest as it runs: superagent.json with the person's and the
+   * project's layers over it (docs/superagents.md, "Overrides and gates").
+   * Read this, not the directory's file. A field of its own can come from a
+   * project's repository: never run what one says as code.
+   */
+  get manifest(): Record<string, unknown> {
+    const file = process.env.AGENTBOX_SUPERAGENT_MANIFEST || join(env("AGENTBOX_SUPERAGENT_DIR"), "superagent.json");
+    return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
   },
   /** Its own state, kept across restarts and upgrades: agentbox never reads it. */
   get home() {

@@ -17,6 +17,9 @@ shaped after one agent.
 Every agent on the Agents page is a superagent. Each person keeps theirs in
 their own directories or git repositories and adds them with `agentbox
 superagent add`; [agents.md](agents.md) is how to use them on the page.
+Each registered directory is a generic agent: one definition, with layers
+for a person and for a project over it, and one instance in each project
+that turns it on ([Overrides and gates](#overrides-and-gates)).
 
 The people who set superagents up are expected to have their coding agent do
 it, so the bar is flexibility, not a form: a superagent is a directory of
@@ -47,8 +50,11 @@ my-agent/
 ```
 
 Add it with `agentbox superagent add <dir>` (or `POST /api/superagents
-{dir}`); run it again after changing the manifest. `agentbox superagent rm`
-forgets it and leaves the directory and its state alone.
+{dir}`). It is off until a gate turns it on ([Overrides and
+gates](#overrides-and-gates)), so adding one never starts work by itself.
+Agentbox reads the manifest again when it changes, and starts its program
+again with the new one. `agentbox superagent rm` forgets it and its
+instances and leaves the directory and its state alone.
 
 ### `superagent.json`
 
@@ -59,6 +65,7 @@ forgets it and leaves the directory and its state alone.
   "description": "Issues to reviewed pull requests",
   "run": ["bun", "main.ts"],        // optional: its program, argv, run in the directory and kept running
   "url": "http://127.0.0.1:9000",   // optional instead of run: a program agentbox does not run
+  "enabled": false,                 // optional: on when no layer says (default off: adding it starts nothing)
   "icon": "fix",                    // optional: its picture until one is set on the page (brain, sparkle, fix, release, health)
   "projects": ["owner/repo"],       // optional: the projects it shows in (repo ids, owner/repo or checkout paths);
                                     // default main.start.repoId; none: every project. It places it on the page,
@@ -80,16 +87,104 @@ forgets it and leaves the directory and its state alone.
 }
 ```
 
-A directory can be a copy that runs another directory's code: its `run`
-names that code by its full path, and the program reads `superagent.json`
-from `AGENTBOX_SUPERAGENT_DIR`, not from beside its code. With `{{name}}` in
-its instructions, a copy needs no edit to call itself.
+Do not copy a directory to change it for a person or a project: write a
+layer ([Overrides and gates](#overrides-and-gates)). With `{{name}}` in its
+instructions, each instance calls itself by its own name.
 
 Each part is optional. A manifest with only `main.start` and `instructions`
 is a conversation agent with standing instructions and no code. One with
 `main.schedule` adopts a same-session schedule (docs/v2.md, Schedules that
 speak to one session) as its main conversation, which is how an existing
 steward becomes a superagent without changing how it runs.
+
+## Overrides and gates
+
+One directory defines a generic agent. A person or a project never copies it
+to change it: they write a layer over it. The effective manifest of an agent
+in a project is, from the least specific to the most:
+
+| Layer | File | Whose |
+|---|---|---|
+| base | `<its directory>/superagent.json` | the agent's author |
+| user | `~/.agents/overrides/<name>.json` | the person, in every project |
+| project | `<checkout>/.agentbox/superagents/<name>.json` | the project, shared by git (like `.vscode/settings.json`) |
+| local | `<checkout>/.agentbox/superagents/<name>.local.json` | the person, in that project only |
+
+`<name>` is the generic agent's name, and `<checkout>` is the project's
+checkout on this machine. Each layer is a JSON merge patch
+([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) over the manifest,
+the agent's own fields too (`steward.repos`, `vulcan.writer`). A null
+removes a field. Three keys are the layer's own:
+
+```jsonc
+{
+  "enabled": true,                  // the gate (below); null or absent: this layer does not decide
+  "instructions": "Run bun test before you call work done.",  // said after MAIN.md; every layer's, in order
+  "soul": "…",                      // a SOUL.md for it; the most specific layer's wins over the directory's
+  "steward": { "repos": ["owner/repo"] }   // anything else is the merge patch
+}
+```
+
+Agentbox reads each file again when it changes. A program reads its
+effective manifest from `AGENTBOX_SUPERAGENT_MANIFEST` (the SDK's
+`me.manifest`), not from its directory, and agentbox starts it again when
+that manifest changes. A layer that cannot be read turns the agent off and
+says why on its Settings.
+
+**The gates.** Each layer can set `enabled`. For an agent in a project, the
+project's gate wins when one is set: the local file first, then the shared
+file. Else the person's gate decides, else the manifest's `enabled`, else it
+is off. Settings shows which layer decided. On the page and with
+`agentbox superagent enable|disable <name> [--project P | --user]`, a person
+sets their own gates: the user one, and the local one of a project, which
+agentbox adds to the checkout's `.git/info/exclude`. The shared project file
+is changed in git, like any other file of the project.
+
+**Instances.** A generic agent with no project runs once, for the person:
+its own name, with the base and the user layer, on when the user gate (else
+the manifest) says so. A project whose shared or local file names the agent
+can turn it on there, by its own gate or by the person's. Then agentbox makes
+one instance for that project, `<name>-<project>` (`vulcan-plaibook-dev`),
+once, and keeps that name. A taken name gets a number. An instance has its
+own main conversation, memory, store, home, token, loops, picture and page,
+and shows under that project on the Agents page, in the place of its
+generic agent. Its manifest is the generic one with its layers, its own name,
+`projects` set to its project, and `main.start` with `repoId` of its project
+and `worktree: true` unless a layer says otherwise (a `cwd` is dropped). Its
+program runs from the generic directory with `AGENTBOX_SUPERAGENT_PROJECT`
+(the repo id) and `AGENTBOX_SUPERAGENT_BASE`. A generic agent whose main is a
+schedule's session has no instances. An instance that a gate turns off keeps
+its conversations and shows as off; to remove one, turn it off in its project
+(`agentbox superagent rm` of its generic agent removes the instances too).
+
+**What a project layer may change.** A project's file is in a repository that
+other people push to. It may change:
+
+- `enabled`, `instructions` and `soul`;
+- the agent's own fields, and `title`, `description`, `icon`, `memory`,
+  `sweep`, `events`, `main.rollover`, and `main.loops` with prompts only.
+
+It may not change, without the person's approval, what runs, where it runs,
+on which credentials, or what it reads from disk:
+
+- `run`, `url` and `github`;
+- `main.start` (provider, model, account, directory), `main.schedule` and
+  `main.instructions` (a file path);
+- `main.loops` with a `check` (a command) or a `file`, and `main` itself
+  taken away.
+
+Agentbox leaves these fields out and shows them on Settings. The person
+approves exactly those fields with those values (`agentbox superagent
+approve <name> project|local`, or Review on the page): the approval is a
+digest of them, so a later change to any of them needs approval again. Only
+a person approves or sets a gate: a request from a session or a program is
+refused. The local file has the same rule, because a repository can commit
+it too. `projects` and `name` in a project layer are ignored: an instance's
+are its own.
+
+What a project layer may change is still input from other people: its
+instructions are as trusted as the repository's own `CLAUDE.md`, and a
+program must never run what one of its own fields says as code.
 
 ## What agentbox does for it
 
@@ -108,7 +203,10 @@ must not be cut in half runs as a session, or in a unit of its own
 | `AGENTBOX_URL` | the server, for the HTTP API |
 | `AGENTBOX_BIN` | the `agentbox` command, to put in the prompts it writes |
 | `AGENTBOX_SUPERAGENT` | its name |
-| `AGENTBOX_SUPERAGENT_DIR` | its directory |
+| `AGENTBOX_SUPERAGENT_DIR` | its directory: the generic agent's, for an instance |
+| `AGENTBOX_SUPERAGENT_MANIFEST` | its effective manifest, with its layers: read this one |
+| `AGENTBOX_SUPERAGENT_PROJECT` | an instance's project (a repo id); empty for the person's own |
+| `AGENTBOX_SUPERAGENT_BASE` | the generic agent it is |
 | `AGENTBOX_SUPERAGENT_HOME` | `<agentbox home>/superagents/<name>/`: its own state, which agentbox never reads |
 | `AGENTBOX_SUPERAGENT_TOKEN` | the secret every request from agentbox carries, and what proves the program to agentbox: it sends it back as `x-agentbox-superagent-token`, with `x-agentbox-superagent: <name>` (the SDK's `call` does), to claim work, write its memory or ask for a GitHub action |
 | `PORT` | where to answer agentbox, on 127.0.0.1 |
@@ -195,7 +293,7 @@ aside, uses nothing in it, and tells the next fresh main. A fresh main starts
 with the preferences, the latest handoff and the decisions since, in at most
 12,000 characters, and the commands to read the rest.
 
-**SOUL.md.** When its directory holds `SOUL.md`, each fresh main reads it
+**SOUL.md.** When its directory holds `SOUL.md` (or a layer gives `soul`), each fresh main reads it
 after MAIN.md: whole lines up to 4,000 characters, and nothing when it holds
 credential-shaped text. It gives no authority. Agentbox never writes it: it
 is part of the directory, which is the person's config.
@@ -480,7 +578,9 @@ every(60_000, async () => {
 });
 ```
 
-Keep state in its home (`store()`), make every step safe to repeat (a
+Read its config from `me.manifest` (its layers over its directory), and its
+project from `me.project` when it is an instance in one: the same code then
+serves the person and each project. Keep state in its home (`store()`), make every step safe to repeat (a
 restart can land anywhere), and put each idempotency key in the store before
 the side effect it guards. Its tests are its own: `bun test` in its
 directory.

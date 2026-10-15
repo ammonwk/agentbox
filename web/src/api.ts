@@ -235,6 +235,11 @@ export const api = {
     post<{ session: string; started: boolean }>(`/api/superagents/${enc(name)}/chat`, { text, sendId }),
   superagentPatch: (name: string, patch: { enabled?: boolean; main?: string | null }) =>
     request<SuperagentInfo>("PATCH", `/api/superagents/${enc(name)}`, patch),
+  /** A person's gate (docs/superagents.md, Overrides and gates): theirs everywhere, or theirs in one project. */
+  superagentGate: (name: string, body: { layer: "user" | "local"; enabled: boolean | null; project?: string }) =>
+    request<SuperagentInfo>("PUT", `/api/superagents/${enc(name)}/gate`, body),
+  /** Approve what a project layer asks that needs the person (`digest` as read); null takes it back. */
+  superagentApprove: (name: string, layer: "project" | "local", digest: string | null) => post<SuperagentInfo>(`/api/superagents/${enc(name)}/approve`, { layer, digest }),
   superagentRestart: (name: string) => post<SuperagentInfo>(`/api/superagents/${enc(name)}/restart`),
   superagentLog: (name: string) => get<{ text: string }>(`/api/superagents/${enc(name)}/log`),
   superagentMemory: (name: string, q: string) => get<MemoryView>(`/api/superagents/${enc(name)}/memory${q.trim() ? `?q=${enc(q)}` : ""}`),

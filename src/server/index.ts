@@ -1613,7 +1613,7 @@ const router = new Router(mapError)
 superagentRoutes(router, superagents, { scheduleHot });
 claimRoutes(router, workClaims, superagents);
 /** The GitHub App broker: superagents request actions; tokens stay in it (src/core/github/). */
-export const github = new GitHubActions({ broker: new GitHubBroker(), cards, dirOf: (n) => superagents.get(n).dir, cwdOf: (id) => fleet.sessions().find((s) => s.id === id)?.cwd ?? null });
+export const github = new GitHubActions({ broker: new GitHubBroker(), cards, dirOf: (n) => () => superagents.manifest(n), cwdOf: (id) => fleet.sessions().find((s) => s.id === id)?.cwd ?? null });
 githubRoutes(router, github, superagents);
 // An action may name a work claim: it must still be its superagent's, at its fence, when it is sent.
 github.claims = {

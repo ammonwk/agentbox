@@ -30,7 +30,7 @@ function view(id: string, over: Record<string, unknown> = {}) {
   views.set(id, { id, provider: "codex", status: "waiting", host: "tmux", pid: 1, queued: [], question: null, limitHit: null, contextUsed: 10, contextLimit: 100, cacheWarmUntil: NOW + 30 * 60_000, lastActivityAt: NOW - 20 * 60_000, ...over });
 }
 function manifest(over: Record<string, unknown> = {}, start: Record<string, unknown> = { provider: "codex" }) {
-  writeFileSync(join(dir, "superagent.json"), JSON.stringify({ name: "keeper", title: "Keeper", description: "Keeps things", memory: true, main: { start, instructions: "MAIN.md", rollover: true }, ...over }));
+  writeFileSync(join(dir, "superagent.json"), JSON.stringify({ name: "keeper", title: "Keeper", description: "Keeps things", enabled: true, memory: true, main: { start, instructions: "MAIN.md", rollover: true }, ...over }));
 }
 const st = () => stateOf("keeper");
 const info = () => hub.get("keeper");
@@ -47,6 +47,7 @@ beforeEach(async () => {
   previous = process.env.AGENTBOX_HOME;
   home = mkdtempSync(join(tmpdir(), "superagent-memory-"));
   process.env.AGENTBOX_HOME = home;
+  process.env.AGENTBOX_OVERRIDES = join(home, "overrides");
   dir = join(home, "keeper");
   mkdirSync(dir);
   writeFileSync(join(dir, "MAIN.md"), "You keep things for {{dir}}.");
@@ -99,6 +100,7 @@ beforeEach(async () => {
 afterEach(() => {
   closeJournals();
   closeDb();
+  delete process.env.AGENTBOX_OVERRIDES;
   if (previous === undefined) delete process.env.AGENTBOX_HOME;
   else process.env.AGENTBOX_HOME = previous;
   rmSync(home, { recursive: true, force: true });
