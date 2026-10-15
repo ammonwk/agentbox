@@ -3,6 +3,7 @@
 import { expect, test } from "bun:test";
 import { chatShown, personsOpening } from "./chatPresentation";
 import type { TimelineEvent } from "../../../../src/core/types";
+import { OPENING_SEPARATOR } from "../../../../src/core/superagent/marks";
 
 test("an agent's Chat shows its questions, and the one asked now only as the card (#40)", () => {
   const questions = [{ question: "Which branch?", header: "Branch", multiSelect: false, options: [{ label: "main" }] }];
@@ -20,9 +21,13 @@ test("an agent's Chat shows its questions, and the one asked now only as the car
 
 test("a main's first message shows what the person wrote, not the instructions before it", () => {
   const events: TimelineEvent[] = [
-    { id: "u", at: 1, kind: "user", text: "You keep notes.\n\n---\n\nSOUL\n\n---\n\nWhat is due today?" },
+    { id: "u", at: 1, kind: "user", text: `You keep notes.\n\n---\n\nSOUL${OPENING_SEPARATOR}What is due today?\n\n---\n\nThe rest${OPENING_SEPARATOR}stays.` },
     { id: "a", at: 2, kind: "assistant", text: "Nothing." },
   ];
-  expect(personsOpening(events, true)[0]).toMatchObject({ text: "What is due today?" });
+  // A markdown rule, or the separator itself, in the person's message stays in it.
+  expect(personsOpening(events, true)[0]).toMatchObject({ text: `What is due today?\n\n---\n\nThe rest${OPENING_SEPARATOR}stays.` });
+  // A main started before the unique separator: its last rule ends the prompt.
+  const old: TimelineEvent[] = [{ id: "u", at: 1, kind: "user", text: "You keep notes.\n\n---\n\nWhat is due today?" }];
+  expect(personsOpening(old, true)[0]).toMatchObject({ text: "What is due today?" });
   expect(personsOpening(events, false)[0]).toMatchObject({ text: events[0]!.kind === "user" ? events[0]!.text : "" });
 });

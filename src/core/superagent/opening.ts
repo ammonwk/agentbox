@@ -7,6 +7,7 @@
  */
 import { agentboxBin } from "../paths";
 import { readSoul, type MemoryFile } from "./files";
+import { OPENING_SEPARATOR } from "./marks";
 import { memoryCommand } from "./memory";
 
 export type Opening = {
@@ -89,5 +90,5 @@ export function opening(o: Opening, text: string, from: Continued | null, file: 
     from?.work ? `Current work, read when this conversation started:\n${from.work}` : "",
     from?.old ? `Previous conversation session: ${from.old}. Read it with ${agentboxBin()} log if needed; do not resume it or copy its transcript.` : "",
   ].filter((p) => p.trim());
-  return parts.length ? `${parts.join("\n\n")}\n\n---\n\n${text}` : text;
+  return parts.length ? `${parts.join("\n\n")}${OPENING_SEPARATOR}${text}` : text;
 }

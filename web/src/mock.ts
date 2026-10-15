@@ -1863,7 +1863,8 @@ function memoryOf(name: string): MemoryView {
 function mockSuperagents(method: string, p: string[], b: unknown, query: URLSearchParams): unknown {
   const [name, action, sub] = p;
   if (!name) return method === "GET" ? superagents : null;
-  const a = superagents.find((x) => x.name === name);
+  // An old local agent's id names the superagent it became, as canonical() does.
+  const a = superagents.find((x) => x.name === name) ?? (name.startsWith("local-vulcan-") ? superagents[0] : undefined);
   if (!a) throw new Error(`no superagent ${name}`);
   if (!action) {
     if (method === "PATCH") {

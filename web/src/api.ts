@@ -225,6 +225,8 @@ export const api = {
   resumeCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup/resume"),
   // ---- superagents (docs/superagents.md)
   superagents: () => get<SuperagentInfo[]>("/api/superagents"),
+  /** One superagent. An old local agent's id answers with the superagent it became. */
+  superagent: (name: string) => get<SuperagentInfo>(`/api/superagents/${enc(name)}`),
   superagentView: (name: string, tab: string | null) =>
     get<SuperagentView | null>(`/api/superagents/${enc(name)}/view${tab ? `?tab=${enc(tab)}` : ""}`),
   superagentAction: (name: string, body: { action: string; values: Record<string, unknown>; tab: string | null }) =>

@@ -8,7 +8,7 @@ import type { AppState, Session, SuperagentInfo } from "../../../src/core/types"
 import type { SweepRecord } from "../../../src/core/superagent/state";
 import { readSent } from "../../../src/core/sent";
 import { api, useTimeline, type HelpReceipt } from "../api";
-import { Button, Empty } from "../components";
+import { Button, Confirm, Empty } from "../components";
 import { useLoad } from "../lib/cloud";
 import { go, hrefOf } from "../route";
 import { AGENT_TABS, type AgentTab } from "../lib/agentviews";
@@ -42,8 +42,11 @@ export function agentStatus(info: SuperagentInfo, main: Session | null): { label
   return p ? { label: "Running", tone: "ok" } : { label: "No conversation", tone: "idle" };
 }
 
+/** The id of the main's composer. It names no session, so a rollover keeps
+ *  its draft and its unconfirmed sends: the old main becomes read-only. */
+const mainComposer = (info: SuperagentInfo) => `${info.name}:main`;
 /** The draft key of the box a message goes to: the main's composer, or the first-message box. */
-const chatKey = (info: SuperagentInfo) => (info.main ? `agent:${info.name}:${info.main}` : `superagent:${info.name}`);
+const chatKey = (info: SuperagentInfo) => (info.main ? `agent:${mainComposer(info)}` : `superagent:${info.name}`);
 
 export function AgentSpace({ info, state, threads, viewed, reload }: { info: SuperagentInfo; state: AppState; threads: AgentThread[]; viewed: string | null; reload: () => Promise<void> }) {
   const route = agentRoute();
@@ -59,6 +62,7 @@ export function AgentSpace({ info, state, threads, viewed, reload }: { info: Sup
   const status = agentStatus(info, main);
   const work = thread?.kind === "work" && tab === "chat";
   const [closing, setClosing] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
   const setTab = (view: AgentTab) => go({ page: "agents", id: info.name, view, ...(view !== "feed" && route.thread ? { thread: route.thread } : {}) });
   /** A page's "give guidance": its text goes into the chat's box, after what is there. */
@@ -99,7 +103,7 @@ export function AgentSpace({ info, state, threads, viewed, reload }: { info: Sup
         </div>
         <nav aria-label="Agent views">
           {work && session && session.status !== "closed" && (
-            <Button variant="ghost" size="sm" loading={closing} onClick={() => void close()}>
+            <Button variant="ghost" size="sm" loading={closing} onClick={() => setConfirmClose(true)}>
               Close session
             </Button>
           )}
@@ -111,6 +115,18 @@ export function AgentSpace({ info, state, threads, viewed, reload }: { info: Sup
           ))}
         </nav>
       </header>
+      {confirmClose && session && (
+        <Confirm
+          title={`Close “${thread?.title ?? session.id}”?`}
+          confirmLabel="Close"
+          body={<p>Closing takes it, and every session it started, off the board. The conversation is kept, and you can open it again to read it or resume it.</p>}
+          onCancel={() => setConfirmClose(false)}
+          onConfirm={() => {
+            setConfirmClose(false);
+            void close();
+          }}
+        />
+      )}
       {closeError && (
         <p className="error agent-space-error" role="alert">
           {closeError}
@@ -191,10 +207,12 @@ function ThreadChat({ info, state, sessionId, session, kind }: { info: Superagen
   // A main's first message is shown as the person wrote it, not with what agentbox put before it.
   const isMain = sessionId === info.main || info.previous.includes(sessionId);
   const events = useMemo(() => personsOpening(tl.events, isMain && tl.exhausted), [tl.events, isMain, tl.exhausted]);
-  const composerId = `${info.name}:${sessionId}`;
+  // The main's box keeps one key across rollovers; a work thread has its own.
+  const composerId = kind === "main" ? mainComposer(info) : `${info.name}:${sessionId}`;
   const [echoes, setEchoes] = useState<ChatEcho[]>([]);
   const [help, setHelp] = useState<HelpReceipt | null>(null);
-  const question = session?.question ? { sessionId, ask: session.question } : null;
+  // An earlier main and a disabled agent are read-only: no live card answers their question.
+  const question = session?.question && kind !== "earlier" && info.enabled ? { sessionId, ask: session.question } : null;
   const identity = state.onboarding.identity;
   const me = identity ? { name: identity.name ?? "", github: identity.github ?? "" } : undefined;
   // Sent or Read under your newest message, and the dots while its turn is open.
@@ -288,6 +306,12 @@ function ThreadChat({ info, state, sessionId, session, kind }: { info: Superagen
   const receipt = async (request: string) => {
     const r = await api.submission(sessionId, request);
     if (r) return asReceipt(r);
+    // A send from before a rollover went to an earlier main.
+    if (kind === "main")
+      for (const id of info.previous) {
+        const old = await api.submission(id, request).catch(() => null);
+        if (old) return asReceipt(old);
+      }
     const h = await api.superagentHelpReceipt(info.name, request).catch(() => null);
     if (h?.issue) setHelp(h);
     return h;
@@ -371,6 +395,9 @@ function StartChat({ info, onStarted }: { info: SuperagentInfo; onStarted: () =>
   const key = chatKey(info);
   const pendingKey = `agentbox.superagentStart.${info.name}`;
   const [text, setText] = useState(() => loadDraft(key)?.text ?? "");
+  // As in AgentComposer: each edit is a new revision, and a save names the one
+  // it replaces, so an empty box deletes this tab's draft.
+  const revision = useRef(loadDraft(key)?.revision ?? newRevision());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [help, setHelp] = useState<HelpReceipt | null>(null);
@@ -378,7 +405,9 @@ function StartChat({ info, onStarted }: { info: SuperagentInfo; onStarted: () =>
   useEffect(() => ref.current?.focus({ preventScroll: true }), []);
   const save = (t: string) => {
     setText(t);
-    void saveDraft(key, t, [], newRevision());
+    const previous = revision.current;
+    revision.current = newRevision();
+    void saveDraft(key, t, [], revision.current, previous);
   };
   const send = async (e?: FormEvent) => {
     e?.preventDefault();
@@ -394,12 +423,15 @@ function StartChat({ info, onStarted }: { info: SuperagentInfo; onStarted: () =>
         setHelp(r);
         // Refused: nothing was filed. The text stays, and a new attempt takes a new id.
         if (r.state === "refused") return localStorage.removeItem(pendingKey);
+        localStorage.removeItem(pendingKey);
+        save("");
       } else {
         await api.superagentChat(info.name, text, sendId);
+        // It is sent: delete the draft before the reload, which can fail.
+        localStorage.removeItem(pendingKey);
+        save("");
         await onStarted();
       }
-      localStorage.removeItem(pendingKey);
-      save("");
     } catch (err) {
       setError((err as Error).message);
     } finally {

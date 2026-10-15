@@ -11,6 +11,7 @@ import { Fleet } from "../fleet";
 import { Superagents } from "../superagents";
 import { closeJournals, journalOf } from "./memory";
 import { CHECKPOINT_MARK } from "./rollover";
+import { OPENING_SEPARATOR } from "./marks";
 import { patchState, stateOf } from "./state";
 
 let home: string, dir: string, previous: string | undefined, hub: Superagents;
@@ -128,7 +129,7 @@ test("a cold main with a saved handoff continues in a successor that gets the me
   expect(attempts).toBe(1);
   expect(spawns[0].prompt).toContain("You keep things for");
   expect(spawns[0].prompt).toContain("Ship the memory feature");
-  expect(spawns[0].prompt.endsWith("---\n\nWhat next?")).toBe(true);
+  expect(spawns[0].prompt.endsWith(`${OPENING_SEPARATOR}What next?`)).toBe(true);
   expect(handed).toEqual([["old", next]]);
   expect(st().rolled).toEqual({ old: next });
   expect(st().contexts?.[next]?.map((x) => x.session)).toEqual(["old"]);

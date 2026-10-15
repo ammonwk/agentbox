@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import type { AppState, SuperagentInfo } from "../../../src/core/types";
 import { api } from "../api";
 import { PROVIDER_LABEL } from "../bits";
-import { Button, Icon, RelativeTime, Toggle } from "../components";
+import { Button, Confirm, Icon, RelativeTime, Toggle } from "../components";
 import { hrefOf } from "../route";
 import { AgentPictureEditor } from "./AgentAvatar";
 import { AgentMemory } from "./AgentMemory";
@@ -199,6 +199,7 @@ function Program({ info, busy, restart }: { info: SuperagentInfo; busy: boolean;
 function Loops({ info, reload }: { info: SuperagentInfo; reload: () => Promise<void> }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const remove = async (id: string) => {
     setBusy(id);
     setError(null);
@@ -241,7 +242,7 @@ function Loops({ info, reload }: { info: SuperagentInfo; reload: () => Promise<v
                 </span>
               </span>
               {l.source === "set" && (
-                <Button variant="ghost" loading={busy === l.id} onClick={() => void remove(l.id)}>
+                <Button variant="ghost" loading={busy === l.id} onClick={() => setRemoving(l.id)}>
                   Remove
                 </Button>
               )}
@@ -255,6 +256,20 @@ function Loops({ info, reload }: { info: SuperagentInfo; reload: () => Promise<v
         <p className="error" role="alert">
           {error}
         </p>
+      )}
+      {removing && (
+        <Confirm
+          title={`Remove the loop “${removing}”?`}
+          confirmLabel="Remove"
+          danger
+          body={<p>{info.title} stops getting its prompt. To get it back, set the loop again through the API.</p>}
+          onCancel={() => setRemoving(null)}
+          onConfirm={() => {
+            const id = removing;
+            setRemoving(null);
+            void remove(id);
+          }}
+        />
       )}
     </section>
   );

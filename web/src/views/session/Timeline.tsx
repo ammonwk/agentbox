@@ -7,7 +7,7 @@ import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline, rowEventIds, traceTurns, withBtw, type TimelineRow } from "../../lib/timeline";
 import { field, type SendCall } from "../../lib/sendtool";
 import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
-import { Markdown } from "./Markdown";
+import { LocalLinks, Markdown } from "./Markdown";
 import { AskRow, QuestionCard } from "./Question";
 import { anchoredScrollTop, isAtTop, followsAfterScroll, shouldAutoScroll, onChatSubmitted, followChatSize } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
@@ -739,8 +739,10 @@ function Party({ name }: { name: string | null }) {
   const board = useBoardSessions();
   const { byName, tab } = useFamily();
   const local = useLocalAgents();
-  const s = name ? senderOf(name, board, byName) : null;
-  const started = !s && name ? local.names.get(name) : undefined;
+  // A teammate's shared agent: the name is a session on its host, not here.
+  const here = useContext(LocalLinks);
+  const s = name && here ? senderOf(name, board, byName) : null;
+  const started = !s && name && here ? local.names.get(name) : undefined;
   if (started) {
     return (
       <a

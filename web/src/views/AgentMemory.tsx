@@ -30,14 +30,19 @@ export function AgentMemory({ info }: { info: SuperagentInfo }) {
     const t = setInterval(() => void memory.reload(), 15_000);
     return () => clearInterval(t);
   }, [memory.reload]);
-  const prefer = (key: string, text: string) =>
-    api
-      .superagentPrefer(info.name, key, text)
-      .then(() => {
+  /** True when the server saved it. A failure keeps what was typed, and says why. */
+  const prefer = (key: string, text: string): Promise<boolean> =>
+    api.superagentPrefer(info.name, key, text).then(
+      () => {
         setError(null);
-        return memory.reload();
-      })
-      .catch((e) => setError((e as Error).message));
+        void memory.reload();
+        return true;
+      },
+      (e) => {
+        setError((e as Error).message);
+        return false;
+      },
+    );
   const thread = (session: string) => hrefOf({ page: "agents", id: info.name, view: "chat", thread: session });
   const m: MemoryView | null = memory.data, c = m?.checkpoint;
   const rollover = info.rollover;
@@ -96,7 +101,7 @@ export function AgentMemory({ info }: { info: SuperagentInfo }) {
           e.preventDefault();
           const form = e.currentTarget,
             data = new FormData(form);
-          void prefer(String(data.get("key")), String(data.get("text"))).then(() => form.reset());
+          void prefer(String(data.get("key")), String(data.get("text"))).then((saved) => saved && form.reset());
         }}
       >
         <input className="input" name="key" placeholder="key, e.g. review-style" aria-label="Preference key" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,59}" />

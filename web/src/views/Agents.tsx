@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { AppState, Session, SuperagentInfo } from "../../../src/core/types";
 import { Button, Empty, ErrorBoundary } from "../components";
-import { go, hrefOf, selectScope, type Route } from "../route";
+import { go, hrefOf, scopeOf, selectScope, type Route } from "../route";
 import { useScope } from "../lib/projects";
 import { shownStatus, titleOf } from "../lib/board";
 import { agentActivity, type AgentOption } from "../lib/agentorder";
@@ -104,11 +104,32 @@ function AgentsPage({ state, route }: { state: AppState; route: Extract<Route, {
   const options = useMemo(() => shown.map((a) => agentOption(a, state)), [shown, state]);
   const selected = list?.find((a) => a.name === name) ?? null;
 
-  // An old link to a local agent (`#/agents/local-vulcan/…`) opens the superagent it became.
-  const renamed = name?.startsWith("local-") && list?.some((a) => a.name === name.slice(6)) ? name.slice(6) : null;
+  // An old link to a local agent (`#/agents/local-vulcan-project-5d0d…/…`)
+  // opens the superagent it became: the server knows each move (canonical()).
+  const unknown = list && name && !name.startsWith(TEAM_PREFIX) && !selected ? name : null;
+  const [missing, setMissing] = useState<string | null>(null);
   useEffect(() => {
-    if (renamed) go({ ...route, id: renamed }, true);
-  }, [renamed]);
+    if (!unknown) return;
+    let live = true;
+    api.superagent(unknown).then(
+      (a) => {
+        if (!live) return;
+        if (a.name !== unknown) go({ ...route, id: a.name }, true);
+        else setMissing(unknown);
+      },
+      () => live && setMissing(unknown),
+    );
+    return () => {
+      live = false;
+    };
+  }, [unknown]);
+  const renamed = !!unknown && missing !== unknown;
+  // A link with no project (`#/agents/<name>`, from a phone or another page)
+  // opens in the agent's first project, not in whichever tab was first.
+  useEffect(() => {
+    if (!name || renamed || (!list && !error) || scopeOf().has("project")) return;
+    selectScope("project", name.startsWith(TEAM_PREFIX) ? null : (selected?.projects?.[0] ?? null), route, true);
+  }, [name, renamed, !!list, !!error, selected?.name]);
   // The page itself opens on the first active agent, in your order; with
   // none here, on the first shared one.
   const firstShared = teamRail?.rows[0]?.id ?? null;
@@ -169,7 +190,13 @@ function AgentsPage({ state, route }: { state: AppState; route: Extract<Route, {
   if (selected && !inProject(selected))
     return (
       <Empty title={`${selected.title} is not in this project`}>
-        <Button onClick={() => selectScope("project", selected.projects![0] ?? null, { page: "agents", id: selected.name })}>Open it in its project</Button>
+        {selected.projects?.length ? (
+          <Button onClick={() => selectScope("project", selected.projects![0]!, { page: "agents", id: selected.name })}>Open it in its project</Button>
+        ) : (
+          <p>
+            Its manifest names no project (<code>"projects": []</code>), so no project shows it.
+          </p>
+        )}
       </Empty>
     );
   if (!selected)

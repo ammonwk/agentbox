@@ -2,12 +2,12 @@
  *  `GET /agentbox/view` with, and the buttons that post its actions
  *  (docs/superagents.md, Its page). Agentbox draws them; the program decides them. */
 
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { api, type SuperagentActionReply } from "../api";
 import type { SuperagentAction, SuperagentBlock, SuperagentField, SuperagentInfo, SuperagentView } from "../../../src/core/types";
 import { Button, Empty, Icon } from "../components";
 import { hrefOf } from "../route";
-import { Markdown } from "./session/Markdown";
+import { LocalLinks, Markdown } from "./session/Markdown";
 
 /** One tab of its page (`null`: the first), asked again as often as the page says. */
 export function usePage(info: SuperagentInfo, tab: string | null) {
@@ -15,31 +15,42 @@ export function usePage(info: SuperagentInfo, tab: string | null) {
   const [error, setError] = useState<string | null>(null);
   const [n, setN] = useState(0);
   const running = info.hasPage && info.enabled && (!info.process || info.process.state === "running");
+  // Each refresh and each action's view takes a number. A refresh that answers
+  // after a newer number changes nothing, so it cannot undo an action's view.
+  const seq = useRef(0);
+  const show = (v: SuperagentView) => {
+    seq.current++;
+    setView(v);
+  };
   useEffect(() => {
     if (!running) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const load = () =>
-      api.superagentView(info.name, tab).then(
+    const load = () => {
+      const mine = ++seq.current;
+      return api.superagentView(info.name, tab).then(
         (v) => {
           if (!live) return;
-          setView(v);
-          setError(null);
+          if (mine === seq.current) {
+            setView(v);
+            setError(null);
+          }
           timer = setTimeout(load, Math.max(2, v?.refresh ?? 15) * 1000);
         },
         (e: Error) => {
           if (!live) return;
-          setError(e.message);
+          if (mine === seq.current) setError(e.message);
           timer = setTimeout(load, 15_000);
         },
       );
+    };
     void load();
     return () => {
       live = false;
       if (timer) clearTimeout(timer);
     };
   }, [info.name, tab, running, n]);
-  return { view, setView, error, running, reload: () => setN((x) => x + 1) };
+  return { view, setView: show, error, running, reload: () => setN((x) => x + 1) };
 }
 
 export type Page = ReturnType<typeof usePage>;
@@ -90,9 +101,10 @@ export function PagePanel({ info, page, tab, onCompose }: { info: SuperagentInfo
 
 export type Act = (a: SuperagentAction, values: Record<string, unknown>) => Promise<void>;
 
-/** False on a teammate's page of a shared superagent: its sessions and its
- *  `#…` links belong to its host, so they show as text, not as links. */
-export const LocalLinks = createContext(true);
+/** False on a teammate's page of a shared superagent: its sessions, its
+ *  `#…` links and the paths in its markdown belong to its host, so they show
+ *  as text, not as links. */
+export { LocalLinks };
 
 export function Blocks({ blocks, act }: { blocks: SuperagentBlock[]; act: Act }) {
   return (

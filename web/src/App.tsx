@@ -115,10 +115,13 @@ export function App() {
   // For the key handler below, which is added once.
   const tabOrder = useRef<{ ids: string[]; selected: string | null }>({ ids: [], selected: null });
   tabOrder.current = { ids: projectTabs.tabs.map((t) => t.id), selected: scope.project };
+  // A link to one agent with no project waits: the Agents page selects the
+  // agent's first project. For an agent that names none, the first tab opens.
+  const agentLink = route.page === "agents" && !!route.id && !scopeOf().has("project");
   useEffect(() => {
-    if (!state || scope.project || !projectTabs.tabs.length || route.page === "session") return;
+    if (!state || scope.project || !projectTabs.tabs.length || route.page === "session" || agentLink) return;
     selectScope("project", projectTabs.tabs[0]!.id, route, true);
-  }, [!!state, scope.project, route.page, projectTabs.tabs[0]?.id]);
+  }, [!!state, scope.project, route.page, projectTabs.tabs[0]?.id, agentLink]);
   const nav = navOf(route);
   // The start of the system bar, where an open session puts its facts.
 

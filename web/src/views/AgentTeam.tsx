@@ -116,15 +116,18 @@ export function TeamSpace({ instance }: { instance: TeamInstance }) {
           ))}
         </nav>
       </header>
-      {tab === "settings" ? (
-        <div className="agent-about agent-settings">
-          <TeamSettings instance={instance} people={people.byId} />
-        </div>
-      ) : tab === "feed" ? (
-        <TeamFeed human={human} instance={instance} tab={route.tab ?? null} onCompose={(t) => void compose(t)} />
-      ) : (
-        <TeamChat human={human} instance={instance} chat={chat} />
-      )}
+      {/* What its host wrote names places on its host: none is a link here. */}
+      <LocalLinks.Provider value={false}>
+        {tab === "settings" ? (
+          <div className="agent-about agent-settings">
+            <TeamSettings instance={instance} people={people.byId} />
+          </div>
+        ) : tab === "feed" ? (
+          <TeamFeed human={human} instance={instance} tab={route.tab ?? null} onCompose={(t) => void compose(t)} />
+        ) : (
+          <TeamChat human={human} instance={instance} chat={chat} />
+        )}
+      </LocalLinks.Provider>
     </div>
   );
 }
