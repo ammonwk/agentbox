@@ -19,17 +19,17 @@ import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
  * and throttling. Standing conditions (disk, battery) sit last, after a spacer,
  * because they are context rather than news.
  *
- * After the machine, the subscriptions you are actually spending: the enabled
- * accounts across every provider, newest activity first, each with its 5-hour
- * and weekly window — because "which account has room" is the other thing you
- * glance down for before starting work.
+* Subscriptions are not in the line: with a session open, its own account's
+ * 5-hour and weekly windows sit in the session's facts (`AccountLimit`), so the
+ * usage shown is always the usage being spent. The sheet the bar opens lists
+ * every enabled account, newest activity first.
  *
  * Every cell is conditional on its own field. On a kernel without PSI, a
  * desktop with no battery, or a chip whose sensors we cannot name, the cell is
  * absent rather than showing a zero we cannot support.
  *
- * With a session open, the bar starts with that session's facts — account,
- * branch, model, context, tokens. SessionView puts them in `slotRef`.
+ * With a session open, the bar starts with that session's facts — id, context,
+ * provider, account and that account's usage. SessionView puts them in `slotRef`.
  */
 
 function gb(n: number): string {
@@ -256,17 +256,6 @@ export function SystemBar({
           </span>
         ) : null}
 
-        {limits.length > 0 ? (
-          <>
-            <Div />
-            <span className="sys-limits">
-              {limits.map((a) => (
-                <LimitCell key={a.id} account={a} hue={accountHue(a.id, accounts)} focused={a.id === focusAccount} now={now} />
-              ))}
-            </span>
-          </>
-        ) : null}
-
         <span className="sys-spacer" />
 
         {/* ── Standing conditions ── */}
@@ -310,15 +299,14 @@ export function SystemBar({
   );
 }
 
-/** How many subscriptions the bar carries: the ones in use, newest first. */
+/** How many subscriptions the sheet lists: the ones in use, newest first. */
 const LIMIT_CELLS = 6;
 
 /**
- * The subscriptions along the bottom: every enabled account across every
+ * The subscriptions in the sheet: every enabled account across every
  * provider, most recently active first — a session on it (started or touched),
  * or else its last usage reading. The open session's account is always among
- * them, and the list is capped so a fleet of accounts cannot crowd out the
- * machine figures.
+ * them, and the list is capped so the sheet stays as tall as its other blocks.
  */
 function recentAccounts(
   accounts: readonly AccountView[],
@@ -344,20 +332,23 @@ function recentAccounts(
 }
 
 /**
- * One account, a dot in its colour and two hairline bars: 5-hour over weekly, each with its figure and
- * the time until it resets. Quiet by default; only amber or red pulls the eye.
+ * The open session's account, in its facts on the bar: a dot in its colour and
+ * two hairline bars, 5-hour over weekly, each with its figure and the time until
+ * it resets. Quiet by default; only amber or red pulls the eye.
  */
-function LimitCell({ account, hue, focused, now }: { account: AccountView; hue: number; focused: boolean; now: number }) {
+export function AccountLimit({ accountId, accounts }: { accountId: string | null; accounts: readonly AccountView[] }) {
+  const now = useNow(30_000);
+  const account = accounts.find((x) => x.id === accountId);
+  if (!account) return null;
+  const hue = accountHue(account.id, accounts);
   const { short, weekly } = headlineWindows(account.usage);
   return (
     <span
       className="sys-limit"
-      data-focus={focused || undefined}
       data-stale={account.usage.stale ? true : undefined}
       style={hue >= 0 ? { ["--acct" as string]: `var(--acct-${hue})` } : undefined}
-      title={limitTitle(account, now, focused)}
+      title={limitTitle(account, now)}
     >
-      {/* The colour says which account; the name is in the tooltip. */}
       <i className="sys-limit-dot" aria-hidden="true" />
       <LimitRow kind="5h" w={short} now={now} />
       <LimitRow kind="wk" w={weekly} now={now} />
@@ -370,12 +361,12 @@ function LimitCell({ account, hue, focused, now }: { account: AccountView; hue: 
  * service and the login it is showing usage for — several providers and
  * several logins on one of them are otherwise a row of identical-looking bars.
  */
-function limitTitle(account: AccountView, now: number, focused = false): string {
+function limitTitle(account: AccountView, now: number): string {
   const { short, weekly } = headlineWindows(account.usage);
   const line = (w: UsageWindow | null, name: string) =>
     w ? `${name}: ${Math.round(usedNow(w, now))}% used, ${resetText(w.resetsAt, now)}` : `${name}: no data`;
   return (
-    `${whoOf(account)}${focused ? " · this session's account" : ""}\n` +
+    `${whoOf(account)}\n` +
     `${line(short, "5-hour")}\n${line(weekly, "Weekly")}` +
     (account.usage.stale ? `\nStale: ${account.usage.stale}` : "")
   );

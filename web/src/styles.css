@@ -1244,14 +1244,6 @@ textarea,
   min-width: 0;
   container-type: inline-size;
 }
-/* A session's facts and every figure need about 1460px. With less, the
- * subscriptions give way; the sheet the bar opens still lists them. */
-@container (max-width: 1460px) {
-  .sys-session:not(:empty) + .sysbar-row .sys-limits,
-  .sys-session:not(:empty) + .sysbar-row .sys-div:has(+ .sys-limits) {
-    display: none;
-  }
-}
 .sysbar-line > .sysbar-row {
   flex: 1 1 auto;
   width: auto;
@@ -1274,8 +1266,20 @@ textarea,
   margin: 0;
   gap: 14px;
 }
-/* The sidebar names the project; the path is in the branch's tooltip. */
-.sys-session .fact-cwd {
+/* The session's id, quiet until hovered; a click copies it. */
+.sys-session .sys-sid {
+  min-height: 0;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 11px;
+}
+.sys-session .sys-sid:hover {
+  color: var(--text);
+}
+.sys-session .sys-sid svg {
   display: none;
 }
 
@@ -1412,16 +1416,9 @@ textarea,
   display: block;
 }
 
-/* Subscriptions: per account a name, then 5-hour over weekly as hairline bars
- * with the figure and the countdown to reset. Deliberately quieter than the
- * machine cells — muted until a window is actually close to full. */
-.sys-limits {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: none;
-  min-width: 0;
-}
+/* The open session's account: 5-hour over weekly as hairline bars with the
+ * figure and the countdown to reset. Deliberately quieter than the machine
+ * cells — muted until a window is actually close to full. */
 .sys-limit {
   display: grid;
   grid-template-columns: auto 34px 28px auto;
@@ -1444,10 +1441,6 @@ textarea,
   margin-right: 2px;
   border-radius: 50%;
   background: var(--acct, var(--faint));
-}
-/* The account the open session is spending. */
-.sys-limit[data-focus] .sys-limit-dot {
-  box-shadow: 0 0 0 2px var(--sunken), 0 0 0 3.5px var(--acct, var(--faint));
 }
 .sys-limit-bar {
   display: block;
@@ -1487,19 +1480,13 @@ textarea,
   white-space: nowrap;
 }
 
-/* Narrower windows keep the bars and drop the countdowns, then the whole
- * group; the expanded sheet always has all of it. */
-@media (max-width: 1480px) {
+/* A narrow window keeps the bars and drops the countdowns; the account's
+ * tooltip and the expanded sheet still have them. */
+@media (max-width: 1100px) {
   .sys-limit {
     grid-template-columns: auto 30px 28px;
   }
   .sys-limit .sys-limit-reset {
-    display: none;
-  }
-}
-@media (max-width: 1300px) {
-  .sys-limits,
-  .sys-div:has(+ .sys-limits) {
     display: none;
   }
 }

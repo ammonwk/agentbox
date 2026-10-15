@@ -2,7 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSPropertie
 import { createPortal } from "react-dom";
 import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
 import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
-import { AccountChip, ContextBar, PROVIDER_LABEL, UsageBar } from "../../bits";
+import { AccountChip, ContextBar, CopyButton, PROVIDER_LABEL, UsageBar } from "../../bits";
+import { AccountLimit } from "../../SystemBar";
 import { Button, Confirm, Empty, Icon, type IconComponent } from "../../components";
 import {
   descendantsOf,
@@ -576,10 +577,38 @@ export function Detail({
   // What it runs as and on, and what it has spent.
   const sysbarSlot = useSysbarSlot();
   const phone = useIsPhone();
-  // The bar is one line beside the machine's figures: there the context is a
-  // percentage, the cache reads are in the tooltip, and the account chip says
-  // the provider, so a Claude model is "opus-5-5".
+  // The bar is one line beside the machine's figures, so it carries only what
+  // you glance down for: which session, how full its context is, what it runs
+  // on, and the usage of the account it spends. The rest is in the provider's
+  // tooltip.
   const inBar = !!sysbarSlot && !phone;
+  const tokensTitle = `input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`;
+  const barFacts = (
+    <div className="sx-facts">
+      <CopyButton className="fact mono sys-sid" text={session.id} label={session.id} />
+      <span className="fact">
+        <ContextBar used={session.contextUsed} limit={session.contextLimit} />
+      </span>
+      <span
+        className="fact"
+        title={[
+          session.model ? `${session.model}${session.effort ? ` · ${session.effort}` : ""}` : null,
+          tildify(session.cwd, home) + (session.branch ? ` · ${session.branch}` : ""),
+          `${fmtTokens(session.tokens.input + session.tokens.output)} tok · ${fmtTokens(session.tokens.cacheRead)} cached · ≈${fmtCost(session.tokens.costEquiv)}`,
+        ]
+          .filter(Boolean)
+          .join("\n")}
+      >
+        {PROVIDER_LABEL[session.provider]}
+      </span>
+      <span className="fact">
+        <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
+      </span>
+      {/* A cold session wakes on whichever account has room, so the one it
+          last ran on is not the usage it will spend. */}
+      {session.cold ? null : <AccountLimit accountId={session.accountId} accounts={state.accounts} />}
+    </div>
+  );
   const facts = (
     <div className="sx-facts">
       <span className="fact">
@@ -598,18 +627,18 @@ export function Detail({
       ) : null}
       {session.model ? (
         <span className="fact mono" title={session.model}>
-          {inBar ? session.model.replace(/^claude-/, "") : session.model}
+          {session.model}
           {session.effort ? <span className="muted"> · {session.effort}</span> : null}
         </span>
       ) : null}
       <span className="fact">
-        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide={!inBar} />
+        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
       </span>
       <span
         className="fact"
-        title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
+        title={tokensTitle}
       >
-        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {inBar ? null : <>{fmtTokens(session.tokens.cacheRead)} cached · </>}
+        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {fmtTokens(session.tokens.cacheRead)} cached · 
         <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
       </span>
       {pr && (
@@ -670,7 +699,7 @@ export function Detail({
         ) : null}
         {/* On a computer the facts go in the system bar along the bottom. A
             phone hides that bar in a session, so there they stay here. */}
-        {inBar && sysbarSlot ? createPortal(facts, sysbarSlot) : facts}
+        {inBar && sysbarSlot ? createPortal(barFacts, sysbarSlot) : facts}
 
         {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
         {(session.status === "blocked" && !session.question && shownStatus(session) !== "retrying") || error ? (
