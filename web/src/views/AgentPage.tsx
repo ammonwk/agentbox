@@ -2,7 +2,7 @@
  *  `GET /agentbox/view` with, and the buttons that post its actions
  *  (docs/superagents.md, Its page). Agentbox draws them; the program decides them. */
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { api, type SuperagentActionReply } from "../api";
 import type { SuperagentAction, SuperagentBlock, SuperagentField, SuperagentInfo, SuperagentView } from "../../../src/core/types";
 import { Button, Empty, Icon } from "../components";
@@ -88,9 +88,13 @@ export function PagePanel({ info, page, tab, onCompose }: { info: SuperagentInfo
   );
 }
 
-type Act = (a: SuperagentAction, values: Record<string, unknown>) => Promise<void>;
+export type Act = (a: SuperagentAction, values: Record<string, unknown>) => Promise<void>;
 
-function Blocks({ blocks, act }: { blocks: SuperagentBlock[]; act: Act }) {
+/** False on a teammate's page of a shared superagent: its sessions and its
+ *  `#…` links belong to its host, so they show as text, not as links. */
+export const LocalLinks = createContext(true);
+
+export function Blocks({ blocks, act }: { blocks: SuperagentBlock[]; act: Act }) {
   return (
     <>
       {(blocks ?? []).map((b, i) => (
@@ -101,6 +105,7 @@ function Blocks({ blocks, act }: { blocks: SuperagentBlock[]; act: Act }) {
 }
 
 function BlockView({ block: b, act }: { block: SuperagentBlock; act: Act }) {
+  const local = useContext(LocalLinks);
   switch (b.type) {
     case "heading":
       return <h4 className="ag-h">{b.text}</h4>;
@@ -144,13 +149,19 @@ function BlockView({ block: b, act }: { block: SuperagentBlock; act: Act }) {
           ) : null}
           {b.sessions?.length || b.links?.length ? (
             <div className="ag-item-links">
-              {b.sessions?.map((id) => (
-                <a key={id} href={hrefOf({ page: "session", id, tab: "timeline" })}>
-                  <Icon.terminal size={12} /> {id}
-                </a>
-              ))}
+              {b.sessions?.map((id) =>
+                local ? (
+                  <a key={id} href={hrefOf({ page: "session", id, tab: "timeline" })}>
+                    <Icon.terminal size={12} /> {id}
+                  </a>
+                ) : (
+                  <span key={id} className="hint" title="A session on its host. A teammate cannot open it.">
+                    <Icon.terminal size={12} /> {id}
+                  </span>
+                ),
+              )}
               {b.links?.map((l, i) =>
-                /^https?:/.test(l.url) || l.url.startsWith("#") ? (
+                /^https?:/.test(l.url) || (local && l.url.startsWith("#")) ? (
                   <a key={i} href={l.url} target={l.url.startsWith("#") ? undefined : "_blank"} rel="noreferrer">
                     {l.url.startsWith("#") ? null : <Icon.external size={12} />} {l.label}
                   </a>

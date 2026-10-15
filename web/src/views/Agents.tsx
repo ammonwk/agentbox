@@ -12,8 +12,10 @@ import { useScope } from "../lib/projects";
 import { shownStatus, titleOf } from "../lib/board";
 import { agentActivity, type AgentOption } from "../lib/agentorder";
 import { avatarUrl } from "./AgentAvatar";
-import { AgentBrowser, firstActive, landingForAgent, type AgentThread } from "./AgentBrowser";
+import { AgentBrowser, firstActive, landingForAgent, landingForTeam, TEAM_PREFIX, type AgentThread, type TeamRail } from "./AgentBrowser";
 import { AgentSpace } from "./AgentSpace";
+import { TeamSpace } from "./AgentTeam";
+import { TeamAccessContext, useTeam, useTeamAccess, useTeamDirectory } from "../lib/teamagents";
 import "./session/session.css";
 import "./agents.css";
 
@@ -75,7 +77,26 @@ function threadsOf(a: SuperagentInfo, state: AppState): AgentThread[] {
 }
 
 export function Agents({ state, route }: { state: AppState; route: Extract<Route, { page: "agents" }> }) {
+  const team = useTeamAccess();
+  return (
+    <TeamAccessContext.Provider value={team}>
+      <AgentsPage state={state} route={route} />
+    </TeamAccessContext.Provider>
+  );
+}
+
+/** The workspace's shared agents that another machine hosts, for the rail;
+ *  null when the cloud is not set up here or nobody is signed in. */
+function useTeamRail(): TeamRail | null {
+  const team = useTeam();
+  const dir = useTeamDirectory(team.human, team.workspace);
+  const rows = useMemo(() => (dir.data ?? []).filter((i) => !i.here), [dir.data]);
+  return team.human && team.workspace ? { rows, error: dir.error, loaded: dir.data !== null } : null;
+}
+
+function AgentsPage({ state, route }: { state: AppState; route: Extract<Route, { page: "agents" }> }) {
   const { project } = useScope();
+  const teamRail = useTeamRail();
   const { list, error, reload } = useSuperagents();
   const name = route.id ?? null;
   const inProject = (a: SuperagentInfo) => !project || a.projects === null || a.projects.includes(project);
@@ -88,14 +109,47 @@ export function Agents({ state, route }: { state: AppState; route: Extract<Route
   useEffect(() => {
     if (renamed) go({ ...route, id: renamed }, true);
   }, [renamed]);
-  // The page itself opens on the first active agent, in your order.
+  // The page itself opens on the first active agent, in your order; with
+  // none here, on the first shared one.
+  const firstShared = teamRail?.rows[0]?.id ?? null;
   useEffect(() => {
-    if (!name && options.length) go(landingForAgent(firstActive(options)!.id), true);
-  }, [name, options.length, project]);
+    if (name) return;
+    if (options.length) go(landingForAgent(firstActive(options)!.id), true);
+    else if (list && firstShared) go(landingForTeam(firstShared), true);
+  }, [name, options.length, project, !!list, firstShared]);
 
   if (error && !list) return <Empty title="Could not load the agents">{error}</Empty>;
   if (!list || renamed) return <Empty title="Loading agents…" />;
-  if (!list.length)
+  // A shared agent another machine hosts: the same rail, and its team pane.
+  if (name?.startsWith(TEAM_PREFIX)) {
+    const instance = teamRail?.rows.find((i) => i.id === name.slice(TEAM_PREFIX.length)) ?? null;
+    return (
+      <div className="agents-page">
+        <AgentBrowser id={name} options={options} threads={[]} viewed={null} team={teamRail}>
+          <ErrorBoundary resetKey={name} label="This shared agent">
+            {instance ? (
+              <TeamSpace key={instance.id} instance={instance} />
+            ) : !teamRail ? (
+              <Empty title="Sign in to see shared agents">
+                <p>
+                  A shared agent runs on a teammate's machine. Sign in on the <a href={hrefOf({ page: "team" })}>Team page</a> to read it.
+                </p>
+              </Empty>
+            ) : teamRail.error && !teamRail.loaded ? (
+              <Empty title="Could not load the shared agents">{teamRail.error}</Empty>
+            ) : !teamRail.loaded ? (
+              <Empty title="Loading shared agents…" />
+            ) : (
+              <Empty title="No such shared agent">
+                <p>Its host stopped the share, or you cannot see it in this workspace.</p>
+              </Empty>
+            )}
+          </ErrorBoundary>
+        </AgentBrowser>
+      </div>
+    );
+  }
+  if (!list.length && !teamRail?.rows.length)
     return (
       <Empty title="No agents yet">
         <p>
@@ -130,7 +184,7 @@ export function Agents({ state, route }: { state: AppState; route: Extract<Route
   const viewed = route.thread && threads.some((t) => t.id === route.thread) ? route.thread : selected.main;
   return (
     <div className="agents-page">
-      <AgentBrowser id={selected.name} options={options} threads={threads} viewed={viewed}>
+      <AgentBrowser id={selected.name} options={options} threads={threads} viewed={viewed} team={teamRail}>
         <ErrorBoundary resetKey={selected.name} label="This agent">
           <AgentSpace key={selected.name} info={selected} state={state} threads={threads} viewed={viewed} reload={reload} />
         </ErrorBoundary>

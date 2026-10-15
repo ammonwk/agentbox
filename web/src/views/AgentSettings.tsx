@@ -10,6 +10,7 @@ import { Button, Icon, RelativeTime, Toggle } from "../components";
 import { hrefOf } from "../route";
 import { AgentPictureEditor } from "./AgentAvatar";
 import { AgentMemory } from "./AgentMemory";
+import { TeamShare } from "./AgentTeam";
 import { Markdown } from "./session/Markdown";
 
 export function AgentSettings({ info, state, reload }: { info: SuperagentInfo; state: AppState; reload: () => Promise<void> }) {
@@ -121,6 +122,8 @@ export function AgentSettings({ info, state, reload }: { info: SuperagentInfo; s
             : 'Off. "sweep": "23:00" in its manifest closes its idle work sessions each day at that time.'}
         </p>
       </section>
+
+      <TeamShare info={info} reload={reload} />
 
       <AgentPictureEditor agent={info} onChange={reload} />
 

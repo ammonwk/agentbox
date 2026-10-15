@@ -6,6 +6,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { halfOf, placeIn, ranksOf, readOrder, saveOrder, stepIn } from "../lib/manualorder";
 import { useDismiss } from "./newsession/popover";
 import { agentActivity, dropAgent, firstActiveIn, resting, sidebarOrder, type AgentActivity, type AgentOption } from "../lib/agentorder";
+import type { TeamInstance } from "../lib/teamagents";
 
 /** Your order of the agents, by workspace and project, and of each agent's
  *  work sessions, by agent (lib/manualorder.ts). Keyed by superagent name. */
@@ -36,9 +37,31 @@ export function agentRoute(): Extract<Route, { page: "agents" }> {
 /** An agent's Chat with its main conversation. */
 export const landingForAgent = (id: string): Route => ({ page: "agents", id, view: "chat" });
 
+/** The route id of a shared instance another machine hosts: its cloud id after `team:`. */
+export const TEAM_PREFIX = "team:";
+export const teamRouteId = (instance: string) => `${TEAM_PREFIX}${instance}`;
+export const landingForTeam = (instance: string): Route => landingForAgent(teamRouteId(instance));
+
+/** The rail's Team group: the workspace's shared instances that this machine does not host. */
+export type TeamRail = { rows: TeamInstance[]; error: string | null; loaded: boolean };
+
 /** The agents rail beside the open agent: each agent with its picture and
  *  what it is doing, in your order, and the open one's conversations under it. */
-export function AgentBrowser({ id, options, threads, viewed, children }: { id: string; options: AgentOption[]; threads: AgentThread[]; viewed: string | null; children: ReactNode }) {
+export function AgentBrowser({
+  id,
+  options,
+  threads,
+  viewed,
+  team = null,
+  children,
+}: {
+  id: string;
+  options: AgentOption[];
+  threads: AgentThread[];
+  viewed: string | null;
+  team?: TeamRail | null;
+  children: ReactNode;
+}) {
   const route = agentRoute();
   const narrow = useIsNarrow();
   const [expanded, setExpanded] = useState(true);
@@ -260,8 +283,49 @@ export function AgentBrowser({ id, options, threads, viewed, children }: { id: s
               );
             })}
           </ul>
+          {team && (team.rows.length > 0 || team.error) && (
+            <section className="agent-team-group" aria-labelledby="agent-team-head">
+              <div className="agent-tree-head">
+                <h2 id="agent-team-head">Team</h2>
+              </div>
+              {team.error && <p className="hint agent-team-error">{team.error}</p>}
+              <ul className="agent-tree-list">
+                {team.rows.map((t) => {
+                  const rid = teamRouteId(t.id);
+                  const host = t.host.name ?? "a teammate's machine";
+                  return (
+                    <li key={t.id}>
+                      <a
+                        className="rail-row agent-tree-row agent-team-row"
+                        data-team={t.id}
+                        data-selected={rid === id}
+                        data-nav-item
+                        data-nav-id={`agent-team-${t.id}`}
+                        aria-current={rid === id ? "page" : undefined}
+                        href={hrefOf(landingForTeam(t.id))}
+                        title={`${t.title} · ${t.description}\nOn ${host}, shared by ${t.shared_by.display_name || t.shared_by.email}`}
+                      >
+                        <span className="agent-role-icon">
+                          <AgentAvatar role={t.description} size={22} />
+                        </span>
+                        <span className="rail-text">
+                          <span className="rail-title agent-tree-name">{t.title}</span>
+                          <span className="agent-team-host">
+                            {host} · {t.host.live ? "online" : "offline"}
+                          </span>
+                        </span>
+                        <span className="rail-state" role="img" aria-label={t.host.live ? "Host online" : "Host offline"} title={t.host.live ? "Host online" : "Host offline"}>
+                          <span className={`st-dot ${t.host.live ? "agent-team-live" : "st-closed"}`} />
+                        </span>
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
         </div>
-        {menu && <MoveMenu x={menu.x} y={menu.y} canStep={(by) => canStep(menu.row, by)} onStep={(by) => step(menu.row, by)} onDone={() => setMenu(null)} />}
+        {menu &&<MoveMenu x={menu.x} y={menu.y} canStep={(by) => canStep(menu.row, by)} onStep={(by) => step(menu.row, by)} onDone={() => setMenu(null)} />}
       </nav>
       <div className="sv-main" data-nav-region="detail" tabIndex={-1}>
         {children}
