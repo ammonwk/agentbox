@@ -40,7 +40,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getDb, getRepoById, MIGRATIONS } from "../src/core/db";
 import { repoCheckoutPath } from "../src/core/git";
 import { agentboxHome } from "../src/core/paths";
-import { excludeLocalLayers, isObject, layerFromJson, layerPath, mergePatch, readLayer, resolveLayers, restrictedDigest, splitProjectPatch, stable } from "../src/core/superagent/layers";
+import { excludeLocalLayers, tracked, isObject, layerFromJson, layerPath, mergePatch, readLayer, resolveLayers, restrictedDigest, splitProjectPatch, stable } from "../src/core/superagent/layers";
 import { patchState } from "../src/core/superagent/state";
 import { asInstance, readManifest } from "../src/core/superagents";
 
@@ -226,6 +226,12 @@ for (const [name, dir] of generics) {
       plan.skipped.push(`${row.name}: ${row.dir} has files ${name}'s directory does not: ${stray.join(", ")}`);
       continue;
     }
+    // A gate is not the manifest's to give an instance: each layer's `enabled` is resolved apart from it.
+    delete m.enabled;
+    if (repo && checked.some((c) => c.repo === repo)) {
+      plan.skipped.push(`${row.name}: another copy of ${name} is that project's already; one project has one instance`);
+      continue;
+    }
     checked.push({ row, m, repo });
   }
   // The person's own copy, when there is one: what it changed goes into the person's layer.
@@ -263,7 +269,14 @@ for (const [name, dir] of generics) {
   if (person) {
     const res = resolveLayers(baseRaw, [userLayer], {});
     asInstance(res.raw, name, null);
-    if (!same(res.raw, person.m)) throw new Error(`${name}: its layer would not give its own copy's manifest:\n  would ${JSON.stringify(stable(res.raw))}\n  is    ${JSON.stringify(stable(person.m))}`);
+    if (!same(res.raw, person.m)) {
+      plan.skipped.push(`${name}: its layer would not give its own copy's manifest, so none of its copies move:\n    would ${JSON.stringify(stable(res.raw))}\n    is    ${JSON.stringify(stable(person.m))}`);
+      plan.instances = [];
+      plan.person = null;
+      plan.userBody = userBody;
+      plans.push(plan);
+      continue;
+    }
   }
   for (const c of checked) {
     if (!c.repo) continue;
@@ -275,6 +288,11 @@ for (const [name, dir] of generics) {
     const taken = rows().find((r) => r.base === name && r.project === c.repo);
     if (taken) {
       plan.skipped.push(`${c.row.name}: ${name} has an instance in that project already (${taken.name})`);
+      continue;
+    }
+    const localFile = layerPath("local", name, checkout)!;
+    if (existsSync(localFile) && tracked(checkout, localFile)) {
+      plan.skipped.push(`${c.row.name}: ${localFile} is committed to the repository, so it is not yours alone: remove it from git (git rm --cached) first`);
       continue;
     }
     const shared = readLayer("project", layerPath("project", name, checkout)!);
@@ -307,7 +325,10 @@ for (const [name, dir] of generics) {
     // The check: the generic directory and every layer, as they will be, give the copy's own manifest.
     const res = resolveLayers(baseRaw, [userLayer, shared, localLayer], approve ? { local: approve } : {});
     asInstance(res.raw, c.row.name, c.repo);
-    if (!same(res.raw, want)) throw new Error(`${c.row.name}: its layers would not give its own manifest:\n  would ${JSON.stringify(stable(res.raw))}\n  is    ${JSON.stringify(stable(want))}`);
+    if (!same(res.raw, want)) {
+      plan.skipped.push(`${c.row.name}: its layers would not give its own manifest:\n    would ${JSON.stringify(stable(res.raw))}\n    is    ${JSON.stringify(stable(want))}`);
+      continue;
+    }
     plan.instances.push({ row: c.row, repo: c.repo, checkout, local, body, enabled, soul, approve });
   }
   plans.push(plan);
@@ -345,13 +366,22 @@ for (const p of plans) {
 }
 
 // ---- then the rows, in one step: from here a running server never makes a second instance
-db.transaction(() => {
-  for (const p of plans) {
-    if (p.register) db.run("INSERT INTO superagents (name, dir, enabled, previous, created_at, gate_moved) VALUES (?, ?, 0, '[]', ?, 1)", [p.generic, p.dir, Date.now()]);
-    else if (p.person) db.run("UPDATE superagents SET dir = ?, gate_moved = 1 WHERE name = ? AND base IS NULL", [p.dir, p.generic]);
-    for (const i of p.instances) db.run("UPDATE superagents SET base = ?, project = ?, dir = ?, gate_moved = 1 WHERE name = ?", [p.generic, i.repo, p.dir, i.row.name]);
-  }
-})();
+const unstage = () => {
+  for (const { tmp } of pending) rmSync(tmp, { force: true });
+};
+try {
+  db.transaction(() => {
+    for (const p of plans) {
+      if (p.register) db.run("INSERT INTO superagents (name, dir, enabled, previous, created_at, gate_moved) VALUES (?, ?, 0, '[]', ?, 1)", [p.generic, p.dir, Date.now()]);
+      else if (p.person) db.run("UPDATE superagents SET dir = ?, gate_moved = 1 WHERE name = ? AND base IS NULL", [p.dir, p.generic]);
+      for (const i of p.instances) db.run("UPDATE superagents SET base = ?, project = ?, dir = ?, gate_moved = 1 WHERE name = ?", [p.generic, i.repo, p.dir, i.row.name]);
+    }
+  })();
+} catch (e) {
+  // Nothing moved: the files staged beside the layers go too.
+  unstage();
+  throw e;
+}
 for (const p of plans) for (const i of p.instances) if (i.approve) patchState(i.row.name, (st) => void (st.approved = { ...st.approved, local: i.approve! }));
 
 // ---- then the layers into their places

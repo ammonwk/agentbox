@@ -223,7 +223,7 @@ export function AgentLayers({ info, reload }: { info: SuperagentInfo; reload: ()
       )}
       {asking?.restricted && (
         <Confirm
-          title={`Let ${asking.path} change ${asking.restricted.fields.join(", ")}?`}
+          title={`Let ${asking.kind === "local" ? "your file in this project" : "the project's file"} change ${asking.restricted.fields.join(", ")}?`}
           confirmLabel="Approve"
           danger
           body={
@@ -232,7 +232,9 @@ export function AgentLayers({ info, reload }: { info: SuperagentInfo; reload: ()
                 Anyone who can push to this project's repository can write this file. Approve only what you read here, from <span className="mono">{asking.path}</span>. A later change to
                 these fields needs your approval again.
               </p>
-              <pre className="ag-log">{JSON.stringify(asking.restricted.values, null, 2)}</pre>
+              <pre className="ag-log" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                {JSON.stringify(asking.restricted.values, null, 2)}
+              </pre>
             </>
           }
           onCancel={() => setAsking(null)}

@@ -20,7 +20,7 @@ agentbox superagent enable|disable <name> [--project P | --user]
                                              in that project; with --user, everywhere (docs/superagents.md)
 agentbox superagent gate <name> on|off|unset [--project P | --user]   the same, and unset leaves it to the next layer
 agentbox superagent layers <name>            its layers over its directory, its gate and which layer decided it
-agentbox superagent approve <name> project|local [--yes | --revoke]
+agentbox superagent approve <name> project|local [--digest D | --revoke]
                                              let a project layer change what needs you (run, main.start, …)
 agentbox superagent log <name>               the end of its program's output
 agentbox superagent main <name> <id|none>    say which session is its main conversation
@@ -105,21 +105,23 @@ export async function superagent(api: Api, args: string[]): Promise<number> {
       return 0;
     }
     case "approve": {
-      const { flags, rest: more } = parseArgs(rest.slice(1), [], ["revoke", "yes"]);
+      const { flags, rest: more } = parseArgs(rest.slice(1), ["digest"], ["revoke"]);
       const layer = more[0];
-      if (layer !== "project" && layer !== "local") throw new Error("superagent approve <name> project|local [--yes | --revoke]");
+      if (layer !== "project" && layer !== "local") throw new Error("superagent approve <name> project|local [--digest D | --revoke]");
       const path = `/api/superagents/${encodeURIComponent(name())}`;
       let digest: string | null = null;
       if (!flags.has("revoke")) {
         const s = await api<SuperagentInfo>("GET", path);
         const l = s.layers.find((x) => x.kind === layer);
         if (!l?.restricted) throw new Error(`${s.name}'s ${layer} layer asks for nothing that needs your approval`);
-        console.log(`${l.path} asks to set:\n${JSON.stringify(l.restricted.values, null, 2)}`);
-        if (!flags.has("yes")) {
-          console.log(`Read it. To approve exactly this: agentbox superagent approve ${s.name} ${layer} --yes`);
+        // The person approves what they read: the digest printed with it, refused when the file changed since.
+        const given = str(flags.get("digest"));
+        if (!given) {
+          console.log(`${l.path} asks to set:\n${JSON.stringify(l.restricted.values, null, 2)}`);
+          console.log(`Read it. To approve exactly this: agentbox superagent approve ${s.name} ${layer} --digest ${l.restricted.digest}`);
           return 0;
         }
-        digest = l.restricted.digest;
+        digest = given;
       }
       console.log(line(await api<SuperagentInfo>("POST", `${path}/approve`, { layer, digest })));
       return 0;

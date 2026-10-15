@@ -184,7 +184,10 @@ approves exactly those fields with those values (`agentbox superagent
 approve <name> project|local`, or Review on the page): the approval is a
 digest of them, so a later change to any of them needs approval again. Only
 a person approves or sets a gate: a request from a session, or from a
-superagent's program or anything it started, is refused. The local file has the same rule, because a repository can commit
+superagent's program or anything it started, is refused. Like every loopback
+rule here, this holds against mistakes and other sites, not against code
+that runs as you on purpose: a program can leave its process tree, or write
+the layer files itself (docs/v2.md, Security). The local file has the same rule, because a repository can commit
 it too. `projects` and `name` in a project layer are ignored: an instance's
 are its own.
 

@@ -1056,26 +1056,42 @@ export class Superagents {
    */
   private tick(): Promise<void> {
     // One pass at a time: two passes could each start a program for one agent. A failed pass is logged, never thrown.
-    const next = this.ticking.then(() => this.tickOnce()).catch((e: unknown) => console.error("agentbox: superagents:", e));
+    // A pass asked for while one waits is that one: a slow pass never queues more than one after it.
+    if (this.queued) return this.queued;
+    const next = this.ticking.then(() => {
+      this.queued = null;
+      return this.tickOnce();
+    }).catch((e: unknown) => console.error("agentbox: superagents:", e));
+    this.queued = next;
     this.ticking = next;
     return next;
   }
   private ticking: Promise<void> = Promise.resolve();
+  private queued: Promise<void> | null = null;
 
   private async tickOnce(): Promise<void> {
-    if (this.reconcile()) this.changed();
+    try {
+      if (this.reconcile()) this.changed();
+    } catch (e) {
+      console.error("agentbox: superagent instances:", e);
+    }
     const now = Date.now();
     for (const r of rows()) {
-      const p = this.procs.get(r.name);
-      const { m, raw } = this.resolved(r);
-      if (!this.enabledOf(r) || !m?.run) {
-        if (p?.child) this.kill(r.name);
-        continue;
+      // One agent that cannot start never keeps the others from starting.
+      try {
+        const p = this.procs.get(r.name);
+        const { m, raw } = this.resolved(r);
+        if (!this.enabledOf(r) || !m?.run) {
+          if (p?.child) this.kill(r.name);
+          continue;
+        }
+        // A program reads its manifest when it starts: a changed one (its directory or a layer) starts it again.
+        if (p?.child && p.digest !== digestOf(raw)) this.kill(r.name);
+        if (p?.child || (p && p.backoffUntil > now)) continue;
+        await this.spawn(r, m, p);
+      } catch (e) {
+        console.error(`agentbox: superagent ${r.name}:`, e);
       }
-      // A program reads its manifest when it starts: a changed one (its directory or a layer) starts it again.
-      if (p?.child && p.digest !== digestOf(raw)) this.kill(r.name);
-      if (p?.child || (p && p.backoffUntil > now)) continue;
-      await this.spawn(r, m, p);
     }
   }
 
