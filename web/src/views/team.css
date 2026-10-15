@@ -239,3 +239,8 @@
 .team-msg-uncertain {
   color: var(--warning);
 }
+
+/* A hub's sections sit above the cloud's. */
+.team + .team {
+  margin-top: 14px;
+}

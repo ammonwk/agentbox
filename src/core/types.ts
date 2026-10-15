@@ -601,6 +601,11 @@ export interface Session {
    *  turn is over and it is waiting on teammates, background agents or
    *  shells, not thinking. */
   background: boolean;
+  /** On a hub (docs/hub.md): the node it runs on, null for the hub's own.
+   *  Absent on a machine that is not a hub. */
+  node?: string | null;
+  /** On a hub: its node cannot be reached, and was last heard from then. */
+  away?: { lastSeen: number };
 }
 
 export interface TokenTotals {
@@ -1558,6 +1563,9 @@ export type ServerMessage =
   /** The server is about to exit to be restarted; the socket closes next
    *  (code 1012). Reconnect promptly rather than backing off. */
   | { type: "restarting" }
+  /** To a hub's socket on a node (`/api/node/ws`, docs/hub.md): what the
+   *  node lends, on connect and every few seconds. */
+  | { type: "node"; state: NodeState }
   | { type: "error"; message: string };
 
 /** Client → server. A client watches at most one session's timeline. */
@@ -1640,3 +1648,94 @@ export type SuperagentBlock =
       actions?: SuperagentAction[];
       children?: SuperagentBlock[];
     };
+
+// -------------------------------------------------------------------- hub
+
+/** The person behind a request (docs/hub.md, Trust model): the machine's
+ *  owner on loopback, the tailnet login on the tailnet, and on a node the
+ *  person the hub says made it. */
+export interface Person {
+  login: string;
+  name: string;
+  /** Their role in the hub's members.json; `owner` for the machine's own
+   *  user; null for a person a hub vouches for on a node. */
+  role: "owner" | "member" | null;
+  via: "local" | "tailnet" | "hub";
+}
+
+export interface HubMember {
+  login: string;
+  role: "owner" | "member";
+  name?: string;
+}
+
+/** What a node lets the hub use (`link.json`'s `lend`). */
+export interface Lend {
+  /** Most sessions the hub may start here; null for no limit. Phase 2. */
+  maxSessions: number | null;
+  /** Account ids the hub may use, or every one. Only sessions on these are shared. */
+  accounts: "all" | string[];
+  /** Whether the hub may start sessions here. Phase 2; false until then. */
+  acceptStarts: boolean;
+  /** Whether the lent accounts' usage is shown on the hub. */
+  shareHeadroom: boolean;
+}
+
+/** One lent account's room, as a node shares it. */
+export interface NodeHeadroom {
+  id: string;
+  provider: AccountProvider;
+  label: string;
+  eligible: boolean;
+  /** Weekly and short-window use, percent. */
+  weekly: number | null;
+  short: number | null;
+  weeklyResetsAt: number | null;
+  shortResetsAt: number | null;
+}
+
+/** `GET /api/node/state`, and the `node` frame without `sessions`. */
+export interface NodeState {
+  name: string;
+  lend: Lend;
+  headroom: NodeHeadroom[] | null;
+  sessions?: HotState["sessions"];
+}
+
+/** A node as the hub shows it on Team › Nodes. No token, ever. */
+export interface HubNodeView {
+  id: string;
+  name: string;
+  ip: string;
+  port: number;
+  /** Its tailnet device name, login (null for a tagged device) and tags. */
+  device: string | null;
+  login: string | null;
+  tags: string[];
+  requestedAt: number;
+  approvedAt: number | null;
+  approvedBy: string | null;
+  reachable: boolean;
+  lastSeen: number | null;
+  error: string | null;
+  sessions: number;
+  lend: Lend | null;
+  headroom: NodeHeadroom[] | null;
+}
+
+/** `GET /api/hub`. */
+export interface HubStatus {
+  role: "none" | "hub" | "node";
+  /** Who asked. */
+  person: Person;
+  /** This machine on the tailnet, when the listener is up. */
+  self: { name: string; ip: string } | null;
+  /** On a hub. */
+  members?: HubMember[];
+  nodes?: HubNodeView[];
+  /** On a node: its link, without the token. `lastHubAt` is when the hub
+   *  last asked it anything, since this server started. */
+  link?: { hub: { url: string; ip: string; name: string }; name: string; joinedAt: number; lend: Lend; lastHubAt: number | null };
+  /** Why a hub file could not be read, when one could not. */
+  error?: string;
+}

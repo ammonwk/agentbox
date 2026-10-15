@@ -605,6 +605,12 @@ const Row = memo(function Row({
           {s.kids}
         </button>
       ) : null}
+      {s.node ? (
+        <span className="rail-node" data-away={s.away ? true : undefined} title={s.away ? `${s.node} is away: last seen ${new Date(s.away.lastSeen).toLocaleString()}` : `runs on ${s.node}`}>
+          {s.node}
+          {s.away ? " · away" : ""}
+        </span>
+      ) : null}
       {s.provider !== usual ? <ProviderBadge provider={s.provider} short /> : null}
       <span className="rail-when">
         <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />

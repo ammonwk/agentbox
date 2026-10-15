@@ -10,6 +10,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
+  HubMember,
+  HubStatus,
+  Lend,
   Btw,
   Account,
   AccountUsage,
@@ -152,11 +155,11 @@ export interface Upload {
 }
 
 /** Raw bytes, not JSON, so it skips `request`; same header and envelope. */
-async function upload(file: Blob): Promise<Upload> {
+async function upload(file: Blob, sessionId?: string): Promise<Upload> {
   if (MOCK) return { name: "mock.png", path: `/tmp/agentbox-mock/${Math.random().toString(36).slice(2)}.png` };
   let res: Response;
   try {
-    res = await fetch("/api/uploads", { method: "POST", headers: { "x-agentbox": "1", "content-type": file.type }, body: file });
+    res = await fetch(sessionId ? `/api/sessions/${enc(sessionId)}/uploads` : "/api/uploads", { method: "POST", headers: { "x-agentbox": "1", "content-type": file.type }, body: file });
   } catch (err) {
     throw new Error(`/api/uploads: cannot reach agentbox (${(err as Error).message})`);
   }
@@ -179,7 +182,9 @@ async function transcribe(audio: Blob): Promise<string> {
   return env.data.text;
 }
 
-export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComponent(name)}`;
+/** `sessionId` for an image saved where that session runs: a hub's node's session (docs/hub.md). */
+export const uploadUrl = (name: string, sessionId?: string): string =>
+  sessionId ? `/api/sessions/${encodeURIComponent(sessionId)}/uploads/${encodeURIComponent(name)}` : `/api/uploads/${encodeURIComponent(name)}`;
 
 /** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
  *  is the session's directory's. */
@@ -375,6 +380,13 @@ export const api = {
   saveSkillBody: (path: string, body: string) => post<{ ok: boolean }>("/api/skill/body", { path, body }),
   promoteSkill: (name: string) => post<SkillResult>("/api/skill/promote", { name }),
   demoteSkill: (name: string) => post<SkillResult>("/api/skill/demote", { name }),
+
+  // a hub and its nodes (docs/hub.md)
+  hub: () => get<HubStatus>("/api/hub"),
+  hubMembers: (members: HubMember[]) => request<HubStatus>("PUT", "/api/hub/members", { members }),
+  hubApprove: (node: string) => post<HubStatus>(`/api/hub/nodes/${enc(node)}/approve`),
+  hubRemove: (node: string) => request<HubStatus>("DELETE", `/api/hub/nodes/${enc(node)}`),
+  hubLend: (lend: Partial<Lend>) => request<HubStatus>("PATCH", "/api/hub/link", { lend }),
 
   // this machine and the agentbox cloud (docs/cloud.md)
   cloud: () => get<CloudStatus>("/api/cloud"),

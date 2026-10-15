@@ -18,7 +18,7 @@ import { getDb, getSchedule } from "./db";
 import { FleetError, type Fleet, type SpawnRequest } from "./fleet";
 import { agentboxBin, agentboxHome, packageRoot, userHome } from "./paths";
 import { submitWithReceipt } from "./send-receipts";
-import type { ProviderId, SuperagentInfo } from "./types";
+import type { Person, ProviderId, SuperagentInfo } from "./types";
 
 const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
@@ -70,7 +70,11 @@ type Proc = {
   stopping: boolean;
 };
 
-export type Caller = { session: string | null; via: "app" | "api" };
+/** Who an action came from: the session that proved itself, whether a browser
+ *  sent it (`app`) or anything else (`api`), and the person behind the
+ *  request (docs/hub.md): the machine's owner on loopback, the tailnet login
+ *  on a hub. */
+export type Caller = { session: string | null; via: "app" | "api"; person: Person };
 
 export const superagentHome = (name: string): string => join(agentboxHome(), "superagents", name);
 

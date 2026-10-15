@@ -60,7 +60,11 @@ import { completeDir, resolveDirs } from "../core/dirs";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
-import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
+import { PeerCheck, admit, admitted, sourceOf, tailnetCert, tailnetSelf, type Admission, type Peer } from "./tailnet";
+import { hubRole, readLink, readMembers, readNodes, removeLink } from "../core/hub";
+import { HubNodes, type Target } from "./hubnodes";
+import { asLocalRequest, auditHubAction, hubRoutes, lends, nodeGate, nodeState, type HubDeps } from "./hub";
+import { ownerPerson, personOf, setPerson, setTailnetSelf } from "./person";
 import { VoiceHub } from "../voice/hub";
 import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
 import { transcribe } from "../voice/deepgram";
@@ -90,6 +94,7 @@ import type {
   Health,
   HotState,
   MetricsState,
+  Person,
   PrClaim,
   PrInfo,
   AccountProvider,
@@ -170,6 +175,47 @@ export const scheduler = new Scheduler(fleet, () => scheduleCold());
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
 export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`);
+/** On a hub, its joined nodes and their sessions (docs/hub.md); on any
+ *  other machine it has none and does nothing. */
+export const hubNodes = new HubNodes(
+  () => {
+    scheduleHot();
+    attachRemoteWatches();
+  },
+  () => new Set(fleet.sessions().map((s) => s.id)),
+);
+/** A page watching a node's session from before the hub heard of it (a
+ *  restart of the hub): its watch goes to the node once the node is back. */
+function attachRemoteWatches(): void {
+  for (const ws of clients) {
+    const d = ws.data;
+    if (d.kind !== "app" || !d.watching || d.remote || d.hub) continue;
+    const target = remoteTarget(d.watching);
+    if (target) watchRemote(ws, target, d.watching);
+  }
+}
+
+/** A page's watch of a node's session, through the node; when the node
+ *  ends it, the next word from the node (`attachRemoteWatches`) starts it again. */
+function watchRemote(ws: Socket, target: Target, id: string): void {
+  const d = ws.data;
+  if (d.kind !== "app") return;
+  const stop = hubNodes.watch(target, id, d.person ?? ownerPerson(), (m) => send(ws, m), () => {
+    if (d.remote === stop) d.remote = null;
+  });
+  d.remote = stop;
+}
+/** Who each tailnet connection is, for the hub's routes. */
+const peerOfReq = new WeakMap<Request, Peer>();
+let peerCheck: PeerCheck | null = null;
+/** On a node: whether it shares this session with its hub. */
+function sharedHere(id: string): boolean {
+  const link = readLink();
+  const s = link ? fleet.sessions().find((x) => x.id === id) : undefined;
+  return !!link && !!s && lends(link, s.accountId);
+}
+/** On a hub: the node a session it shows runs on, or null for its own. */
+const remoteTarget = (id: string) => (hubRole() === "hub" ? hubNodes.resolve(id) : null);
 /** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
 export const cloud = new CloudBridge(fleet, VERSION);
 function cardId(raw: string): number {
@@ -227,9 +273,11 @@ function hotState(open = false): HotState {
       closedStamp += 1 + (s.closedAt ?? 0);
       return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
-    .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }))
-    .sort(byAttention);
-  return { sessions, serverTime: Date.now(), closedStamp };
+    .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }));
+  // A hub shows its nodes' sessions beside its own (docs/hub.md); nothing
+  // else does, and its own sessions say they are its own.
+  if (hubRole() === "hub") return { sessions: [...sessions.map((s) => ({ ...s, node: null })), ...hubNodes.sessions()].sort(byAttention), serverTime: Date.now(), closedStamp };
+  return { sessions: sessions.sort(byAttention), serverTime: Date.now(), closedStamp };
 }
 
 /**
@@ -413,9 +461,34 @@ function coldState(): ColdState {
 // ------------------------------------------------------------- websocket
 
 type SocketData =
-  | { kind: "app"; watching: string | null; cursor: string | null; busy: boolean; again: boolean }
-  | { kind: "term"; sessionId: string; cols: number; rows: number; proc?: ReturnType<typeof Bun.spawn> }
-  | { kind: "voice"; convId: string; conv?: Conversation };
+  | {
+      kind: "app";
+      watching: string | null;
+      cursor: string | null;
+      busy: boolean;
+      again: boolean;
+      /** Who opened it, for the watches a hub passes through to a node. */
+      person?: Person;
+      /** On a node, a socket of its hub's: `state` gets the shared sessions
+       *  and `node` frames, `watch` only its watch (docs/hub.md). */
+      hub?: "state" | "watch";
+      /** The link token it was opened with. */
+      hubToken?: string;
+      /** On a hub, the watch of a remote session, passed through to its node. */
+      remote?: (() => void) | null;
+    }
+  | {
+      kind: "term";
+      sessionId: string;
+      cols: number;
+      rows: number;
+      proc?: ReturnType<typeof Bun.spawn>;
+      /** On a node, the link token a hub opened it with. */
+      hubToken?: string;
+    }
+  | { kind: "voice"; convId: string; conv?: Conversation }
+  /** On a hub, a remote session's terminal, relayed to its node. */
+  | { kind: "relay"; target: Target; person: Person; cols: number; rows: number; peer?: WebSocket; queue: (string | Uint8Array)[] };
 type Socket = ServerWebSocket<SocketData>;
 
 const clients = new Set<Socket>();
@@ -425,10 +498,43 @@ function dropClient(ws: Socket): void {
   setMetricsWatchers(clients.size);
 }
 
+/** What a hub's socket on this node is sent of a frame: the sessions this
+ *  node shares, the watched timeline, and nothing of its cold state or load. */
+function forHub(msg: ServerMessage, mode: "state" | "watch"): ServerMessage | null {
+  const link = readLink();
+  if (!link) return null;
+  switch (msg.type) {
+    case "hot":
+      return mode === "state" ? { ...msg, state: { ...msg.state, sessions: msg.state.sessions.filter((s) => lends(link, s.accountId)) } } : null;
+    case "hotDelta":
+      return mode === "state" ? { ...msg, sessions: msg.sessions.filter((s) => lends(link, s.accountId)) } : null;
+    case "timeline":
+    case "btw":
+    case "error":
+    case "starting":
+    case "restarting":
+      return msg;
+    case "node":
+      return mode === "state" ? msg : null;
+    default:
+      return null;
+  }
+}
+
 function send(ws: Socket, msg: ServerMessage): void {
   if (ws.readyState !== WebSocket.OPEN) {
     dropClient(ws);
     return;
+  }
+  if (ws.data.kind === "app" && ws.data.hub) {
+    if (readLink()?.token !== ws.data.hubToken) {
+      ws.close(1008, "the link to this node ended");
+      dropClient(ws);
+      return;
+    }
+    const shown = forHub(msg, ws.data.hub);
+    if (!shown) return;
+    msg = shown;
   }
   try {
     ws.send(JSON.stringify(msg));
@@ -532,7 +638,7 @@ function scheduleCold(): void {
  */
 async function pumpTimeline(ws: Socket): Promise<void> {
   const d = ws.data;
-  if (d.kind !== "app" || !d.watching) return;
+  if (d.kind !== "app" || !d.watching || d.remote) return;
   if (d.busy) {
     d.again = true;
     return;
@@ -588,10 +694,23 @@ function handleAppMessage(ws: Socket, raw: string | Buffer): void {
   }
   const msg = parsed.message;
   if (msg.type === "ping" || ws.data.kind !== "app") return;
+  // The hub watches only what this node shares.
+  if (ws.data.hub && msg.sessionId && !sharedHere(msg.sessionId)) {
+    send(ws, { type: "error", message: `no session ${msg.sessionId}` });
+    return;
+  }
+  ws.data.remote?.();
+  ws.data.remote = null;
   ws.data.watching = msg.sessionId;
   ws.data.cursor = null;
   // Before the first pass no transcript is known; `welcome` pumps it after.
   if (!booted) return;
+  // A hub's page watching a node's session: the node sends the timeline.
+  const target = msg.sessionId ? remoteTarget(msg.sessionId) : null;
+  if (target && msg.sessionId) {
+    watchRemote(ws, target, msg.sessionId);
+    return;
+  }
   if (msg.sessionId) send(ws, { type: "btw", sessionId: msg.sessionId, items: listBtw(msg.sessionId) });
   void pumpTimeline(ws);
 }
@@ -601,6 +720,7 @@ function handleAppMessage(ws: Socket, raw: string | Buffer): void {
 function openTerminal(ws: Socket): void {
   const d = ws.data;
   if (d.kind !== "term") return;
+  if (d.hubToken !== undefined) hubTerms.add(ws);
   let name: string;
   try {
     name = fleet.tmuxOf(d.sessionId);
@@ -629,6 +749,24 @@ function openTerminal(ws: Socket): void {
   });
 }
 
+/** Terminals a hub opened on this node, closed with its link. */
+const hubTerms = new Set<Socket>();
+
+/** The link ended or changed: every socket a hub opened with it goes. The
+ *  hub opens new ones with the link as it is now, if it still has one. */
+function dropHubSockets(): void {
+  const token = readLink()?.token;
+  for (const ws of [...clients, ...hubTerms]) {
+    const t = ws.data.kind === "app" || ws.data.kind === "term" ? ws.data.hubToken : undefined;
+    if (t === undefined) continue;
+    // A terminal stays while its session is still lent.
+    if (t === token && ws.data.kind === "term" && sharedHere(ws.data.sessionId)) continue;
+    ws.close(1008, "the link to this node changed");
+    if (ws.data.kind === "app") dropClient(ws);
+    else hubTerms.delete(ws);
+  }
+}
+
 /** When you last typed into each session's terminal: a panel that opens
  *  there at once is yours, and is not pushed (`notifyBlocked`). */
 const typedAt = new Map<string, number>();
@@ -643,6 +781,10 @@ function termOf(d: SocketData): { write(s: string): void; resize(c: number, r: n
 function handleTermMessage(ws: Socket, raw: string | Buffer): void {
   const t = termOf(ws.data);
   if (!t) return;
+  if (ws.data.kind === "term" && ws.data.hubToken !== undefined && readLink()?.token !== ws.data.hubToken) {
+    ws.close(1008, "the link to this node ended");
+    return;
+  }
   let msg: unknown;
   try {
     msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
@@ -663,6 +805,7 @@ function handleTermMessage(ws: Socket, raw: string | Buffer): void {
 function closeTerminal(ws: Socket): void {
   const d = ws.data;
   if (d.kind !== "term") return;
+  hubTerms.delete(ws);
   termOf(d)?.close();
   d.proc?.kill();
 }
@@ -693,6 +836,24 @@ const accountProvider = (v: unknown): AccountProvider => {
   if (p === "opencode") throw new HttpError(400, "opencode has no accounts of its own: it runs on the OpenCode Go accounts, as omp does");
   return p;
 };
+
+/** A pasted image, saved for a prompt to name by path. */
+async function uploaded(req: Request): Promise<Response> {
+  const len = Number(req.headers.get("content-length") ?? 0);
+  if (len > MAX_UPLOAD_BYTES) throw new HttpError(413, `the image is over ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
+  const bytes = new Uint8Array(await req.arrayBuffer());
+  try {
+    return json(saveUpload(bytes, req.headers.get("content-type") ?? ""), 201);
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message);
+  }
+}
+
+function uploadResponse(name: string): Response {
+  const f = uploadFile(name);
+  if (!f) throw new HttpError(404, "no such upload");
+  return new Response(Bun.file(f.path), { headers: { "content-type": f.mime, "cache-control": "private, max-age=86400" } });
+}
 
 /** Requests from a browser on this machine, whose desktop is the server's. */
 const fromThisMachine = new WeakSet<Request>();
@@ -967,15 +1128,16 @@ const router = new Router(mapError)
     scheduleCold();
     return json(s);
   })
-  .add("POST", "/api/uploads", async ({ req }) => {
-    const len = Number(req.headers.get("content-length") ?? 0);
-    if (len > MAX_UPLOAD_BYTES) throw new HttpError(413, `the image is over ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
-    const bytes = new Uint8Array(await req.arrayBuffer());
-    try {
-      return json(saveUpload(bytes, req.headers.get("content-type") ?? ""), 201);
-    } catch (e) {
-      throw new HttpError(400, (e as Error).message);
-    }
+  .add("POST", "/api/uploads", ({ req }) => uploaded(req))
+  // The same, on the machine the session runs on: a hub passes a node's
+  // session's image through to that node, where its agent can read it.
+  .add("POST", "/api/sessions/:id/uploads", ({ req, params }) => {
+    fleet.get(params.id!);
+    return uploaded(req);
+  })
+  .add("GET", "/api/sessions/:id/uploads/:name", ({ params }) => {
+    fleet.get(params.id!);
+    return uploadResponse(params.name!);
   })
   .add("POST", "/api/transcribe", async ({ req }) => {
     const mime = req.headers.get("content-type") ?? "";
@@ -993,11 +1155,7 @@ const router = new Router(mapError)
       throw new HttpError(502, (e as Error).message);
     }
   })
-  .add("GET", "/api/uploads/:name", ({ params }) => {
-    const f = uploadFile(params.name!);
-    if (!f) throw new HttpError(404, "no such upload");
-    return new Response(Bun.file(f.path), { headers: { "content-type": f.mime, "cache-control": "private, max-age=86400" } });
-  })
+  .add("GET", "/api/uploads/:name", ({ params }) => uploadResponse(params.name!))
   .add("GET", "/api/sessions/:id/image", ({ req, params, url }) => {
     const s = fleet.get(params.id!);
     let img;
@@ -1091,7 +1249,7 @@ const router = new Router(mapError)
     const b = await readBody(req);
     requireString(b, "action");
     // Who asked: a session proves itself with its capability; a page in a browser sends an Origin.
-    const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const) };
+    const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const), person: personOf(req) };
     return json(await superagents.action(params.name!, b, caller));
   })
   .add("POST", "/api/superagents/:name/chat", async ({ req, params }) => {
@@ -1571,7 +1729,16 @@ const router = new Router(mapError)
     void refreshSlow();
     return json(r);
   });
-cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
+const hubDeps: HubDeps = {
+  port: PORT,
+  linkChanged: () => dropHubSockets(),
+  nodes: hubNodes,
+  openSessions: () => hotState(true).sessions,
+  accountViews,
+  peerOf: (req) => peerOfReq.get(req) ?? null,
+  whois: (ip) => peerCheck?.whois(ip) ?? Promise.resolve(null),
+};
+hubRoutes(cloudRoutes(router, cloud, fleet), hubDeps).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
     if (found.kind === "notBuilt") return notBuiltPage();
@@ -1631,12 +1798,51 @@ function welcome(ws: Socket): void {
   send(ws, { type: "cold", state: coldState() });
   send(ws, { type: "metrics", state: metricsSnapshot() });
   send(ws, { type: "build", entry: uiBuild });
+  const link = ws.data.kind === "app" && ws.data.hub === "state" ? readLink() : null;
+  if (link) send(ws, { type: "node", state: nodeState(hubDeps, link, false) });
   setMetricsWatchers(clients.size);
   // A watch sent while it waited.
-  if (ws.data.kind === "app" && ws.data.watching) {
+  const remote = ws.data.kind === "app" && ws.data.watching ? remoteTarget(ws.data.watching) : null;
+  if (remote && ws.data.kind === "app" && ws.data.watching) {
+    watchRemote(ws, remote, ws.data.watching);
+  } else if (ws.data.kind === "app" && ws.data.watching) {
     send(ws, { type: "btw", sessionId: ws.data.watching, items: listBtw(ws.data.watching) });
     void pumpTimeline(ws);
   }
+}
+
+/** How a request came in: the tailnet door's names for this machine, who it
+ *  admitted, and the source address. Loopback has none of these. */
+type Door = { hosts?: readonly string[]; admission?: Admission; source?: string };
+
+/** A hub's page on a node's terminal: frames both ways, the node's close passed on. */
+function openRelay(ws: Socket): void {
+  const d = ws.data;
+  if (d.kind !== "relay") return;
+  const { rec, remoteId } = d.target;
+  let peer: WebSocket;
+  try {
+    peer = hubNodes.socket(rec, `/api/node/ws/term/${encodeURIComponent(remoteId)}?cols=${d.cols}&rows=${d.rows}`, d.person);
+  } catch (e) {
+    ws.close(1011, `node ${rec.name}: ${(e as Error).message}`.slice(0, 120));
+    return;
+  }
+  peer.binaryType = "arraybuffer";
+  d.peer = peer;
+  peer.onopen = () => {
+    for (const m of d.queue) peer.send(m);
+    d.queue = [];
+  };
+  peer.onmessage = (e) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (typeof e.data === "string") ws.send(e.data);
+    else ws.sendBinary(new Uint8Array(e.data as ArrayBuffer));
+  };
+  peer.onclose = (e) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const passed = e.code === 1000 || (e.code >= 4000 && e.code < 5000);
+    ws.close(passed ? e.code : 1011, (e.reason || `node ${rec.name} is away`).slice(0, 120));
+  };
 }
 
 export async function startServer(): Promise<void> {
@@ -1672,6 +1878,7 @@ export async function startServer(): Promise<void> {
     scheduler.stop();
     waits.stop();
     superagents.stopAll();
+    hubNodes.stop();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -1684,6 +1891,10 @@ export async function startServer(): Promise<void> {
     open(ws) {
       if (ws.data.kind === "term") {
         openTerminal(ws);
+        return;
+      }
+      if (ws.data.kind === "relay") {
+        openRelay(ws);
         return;
       }
       if (ws.data.kind === "voice") {
@@ -1713,56 +1924,125 @@ export async function startServer(): Promise<void> {
         return;
       }
       if (ws.data.kind === "term") handleTermMessage(ws, raw);
-      else handleAppMessage(ws, raw);
+      else if (ws.data.kind === "relay") {
+        const d = ws.data;
+        const m = typeof raw === "string" ? raw : new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+        if (d.peer?.readyState === WebSocket.OPEN) d.peer.send(m);
+        else if (!d.peer || d.peer.readyState === WebSocket.CONNECTING) d.queue.push(m);
+      } else handleAppMessage(ws, raw);
     },
     close(ws) {
       if (ws.data.kind === "voice") ws.data.conv?.detach();
       else if (ws.data.kind === "term") closeTerminal(ws);
+      else if (ws.data.kind === "relay") ws.data.peer?.close();
       else {
+        ws.data.remote?.();
+        ws.data.remote = null;
         waiting.delete(ws);
         dropClient(ws);
       }
     },
   };
 
-  const handle = (req: Request, srv: Server<SocketData>, hosts?: readonly string[]): Response | undefined | Promise<Response> => {
+  const handle = (req: Request, srv: Server<SocketData>, door: Door = {}): Response | undefined | Promise<Response> => {
     const url = new URL(req.url);
+    const hosts = door.hosts;
     const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
     const verdict = checkRequest(req, PORT, { upgrade, hosts });
     if (!verdict.ok) return fail(verdict.reason, 403);
     // The loopback listener, or the tailnet one reached at this machine's own address.
     if (!hosts || srv.requestIP(req)?.address === hosts[0]) fromThisMachine.add(req);
+    // Who asked: loopback is the machine's owner; the tailnet door says who else.
+    if (!hosts) setPerson(req, ownerPerson());
+    else if (door.admission?.kind === "person") setPerson(req, door.admission.person);
 
     if (url.pathname === "/ws") {
       if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);
-      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false } })
+      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false, person: personOf(req) } })
         ? undefined
         : fail("websocket upgrade failed", 500);
     }
     // Terminals and voice need the board; a page's socket may wait for it.
     if (!booted && (url.pathname.startsWith("/ws/") || url.pathname.startsWith("/api/")) && url.pathname !== "/api/health") {
       if (upgrade) return fail("agentbox is starting", 503);
-      return untilBooted.then(() => router.handle(req));
+      return untilBooted.then(() => (url.pathname.startsWith("/api/node/") ? nodeRequest(req, url, srv, door.source ?? null, upgrade) : dispatch(req, url)) as Response | Promise<Response>);
     }
+    // The hub, on this node (docs/hub.md): its own gate, whatever the door let in.
+    if (url.pathname.startsWith("/api/node/")) return nodeRequest(req, url, srv, door.source ?? null, upgrade);
     if (url.pathname === "/ws/voice") {
       if (!upgrade) return fail("voice requires a WebSocket upgrade", 426);
       const convId = url.searchParams.get("c") ?? "";
       if (!/^[a-z0-9-]{8,64}$/.test(convId)) return fail("voice needs a conversation id", 400);
       return srv.upgrade(req, { data: { kind: "voice", convId } }) ? undefined : fail("websocket upgrade failed", 500);
     }
-    const term = url.pathname.match(/^\/ws\/term\/([a-z0-9]+)$/);
+    const term = url.pathname.match(/^\/ws\/term\/([a-z0-9-]+)$/);
     if (term) {
       if (!upgrade) return fail("terminal requires a WebSocket upgrade", 426);
       const cols = Math.max(20, Math.min(500, Number(url.searchParams.get("cols")) || 120));
       const rows = Math.max(5, Math.min(200, Number(url.searchParams.get("rows")) || 40));
-      return srv.upgrade(req, { data: { kind: "term", sessionId: term[1]!, cols, rows } })
-        ? undefined
-        : fail("websocket upgrade failed", 500);
+      const target = remoteTarget(term[1]!);
+      const data: SocketData = target ? { kind: "relay", target, person: personOf(req), cols, rows, queue: [] } : { kind: "term", sessionId: term[1]!, cols, rows };
+      return srv.upgrade(req, { data }) ? undefined : fail("websocket upgrade failed", 500);
     }
     // A search reads every transcript, minutes on a loaded machine, and sends
     // nothing until it is done: the idle timeout would cut it.
     if (url.pathname === "/api/grep") srv.timeout(req, 0);
+    return dispatch(req, url);
+  };
+
+  /** On a hub, a request for a node's session goes to that node; everything else is this machine's. */
+  const dispatch = (req: Request, url: URL): Promise<Response> => {
+    const m = hubRole() === "hub" ? url.pathname.match(/^\/api\/sessions\/([^/]+)(\/.*)?$/) : null;
+    let target: ReturnType<typeof remoteTarget> = null;
+    try {
+      target = m ? remoteTarget(decodeURIComponent(m[1]!)) : null;
+    } catch {
+      /* not an id: the router answers it */
+    }
+    if (target) return hubNodes.proxy(req, url, target, m![2] ?? "", personOf(req));
     return router.handle(req);
+  };
+
+  /** A request from the hub on this node: its gate, then only what it may reach. */
+  const nodeRequest = (req: Request, url: URL, srv: Server<SocketData>, source: string | null, upgrade: boolean): Response | undefined | Promise<Response> => {
+    const v = nodeGate(req, url, source);
+    if (!v.ok) return fail(v.reason, v.status);
+    const { rest, person, link } = v;
+    if (rest === "/state" && req.method === "GET") return json(nodeState(hubDeps, link, true));
+    if (rest === "/leave" && req.method === "POST") {
+      auditHubAction(person, req.method, url.pathname);
+      removeLink();
+      dropHubSockets();
+      console.log(`agentbox: hub: ${link.hub.name} ended this node's link`);
+      return json(null);
+    }
+    if (rest === "/ws") {
+      if (!upgrade) return fail("/api/node/ws requires a WebSocket upgrade", 426);
+      const hub = url.searchParams.get("watch") ? ("watch" as const) : ("state" as const);
+      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false, person, hub, hubToken: link.token } }) ? undefined : fail("websocket upgrade failed", 500);
+    }
+    const term = rest.match(/^\/ws\/term\/([a-z0-9]+)$/);
+    if (term) {
+      if (!upgrade) return fail("terminal requires a WebSocket upgrade", 426);
+      if (!sharedHere(term[1]!)) return fail(`no session ${term[1]}`, 404);
+      auditHubAction(person, "TERM", url.pathname);
+      const cols = Math.max(20, Math.min(500, Number(url.searchParams.get("cols")) || 120));
+      const rows = Math.max(5, Math.min(200, Number(url.searchParams.get("rows")) || 40));
+      return srv.upgrade(req, { data: { kind: "term", sessionId: term[1]!, cols, rows, hubToken: link.token } }) ? undefined : fail("websocket upgrade failed", 500);
+    }
+    const sess = rest.match(/^\/sessions\/([^/]+)(\/.*)?$/);
+    if (sess) {
+      const id = decodeURIComponent(sess[1]!);
+      if (!sharedHere(id)) return fail(`no session ${id}`, 404);
+      const local = asLocalRequest(req, url, `/api/sessions/${encodeURIComponent(id)}${sess[2] ?? ""}`, PORT);
+      // The node's own guards: the same CSRF rule as any local request.
+      const ok = checkRequest(local, PORT);
+      if (!ok.ok) return fail(ok.reason, 403);
+      setPerson(local, person);
+      auditHubAction(person, req.method, url.pathname);
+      return router.handle(local);
+    }
+    return fail(`no route for ${req.method} ${url.pathname}`, 404);
   };
 
   // Serve from the start, before the accounts and the first pass, which on
@@ -1824,6 +2104,16 @@ export async function startServer(): Promise<void> {
     scheduleCold();
   });
   fleet.on("transcript", onTranscript);
+  // A hub keeps a socket to each joined node; a node tells its hub's
+  // sockets what it lends, which is also how the hub knows it is there.
+  hubNodes.start();
+  setInterval(() => {
+    const link = readLink();
+    const hubs = [...clients].filter((ws) => ws.data.kind === "app" && ws.data.hub === "state");
+    if (!link || hubs.length === 0) return;
+    const state = nodeState(hubDeps, link, false);
+    for (const ws of hubs) send(ws, { type: "node", state });
+  }, 5_000).unref?.();
   fleet.on("btw", onBtw);
   voice = new VoiceHub(fleet);
   accounts.on("change", scheduleCold);
@@ -1839,7 +2129,7 @@ export async function startServer(): Promise<void> {
 
 async function listenOnTailnet(
   websocket: WebSocketHandler<SocketData>,
-  handle: (req: Request, srv: Server<SocketData>, hosts?: readonly string[]) => Response | undefined | Promise<Response>,
+  handle: (req: Request, srv: Server<SocketData>, door?: Door) => Response | undefined | Promise<Response>,
 ): Promise<void> {
   const self = await tailnetSelf();
   if (!self) {
@@ -1847,6 +2137,8 @@ async function listenOnTailnet(
     return;
   }
   const peers = new PeerCheck(self);
+  peerCheck = peers;
+  setTailnetSelf(self);
   let server: Server<SocketData> | null = null;
   let tls: { cert: string; key: string } | null = null;
   const listen = () => {
@@ -1859,9 +2151,15 @@ async function listenOnTailnet(
         websocket,
         ...(tls ? { tls } : {}),
         async fetch(req, srv) {
-          const from = srv.requestIP(req)?.address;
-          if (!from || !(await peers.isOwner(from))) return fail("only your own Tailscale devices may connect", 403);
-          return handle(req, srv, self.names);
+          const from = sourceOf(req, srv.requestIP(req)?.address);
+          const peer = from ? await peers.whois(from) : null;
+          // With no hub or link this is v2's rule: the owner's own untagged devices.
+          const a = admit(peer, peers.isOwnDevice(peer), { members: readMembers(), nodes: readNodes(), link: readLink() });
+          if (!admitted(a, req.method, new URL(req.url).pathname)) {
+            return fail(a.kind === "refused" ? a.reason : "not on this route", 403);
+          }
+          if (peer) peerOfReq.set(req, peer);
+          return handle(req, srv, { hosts: self.names, admission: a, source: from });
         },
       });
       console.log(`agentbox listening on ${tls ? "https" : "http"}://${self.dnsName ?? self.ip}:${PORT} (your Tailscale devices)`);

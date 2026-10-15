@@ -139,8 +139,14 @@ export function store(file = "state.db"): Database {
   return db;
 }
 
-/** Who an action came from, as agentbox saw it. */
-export type Caller = { session: string | null; via: "app" | "api" };
+/** Who an action came from, as agentbox saw it. `person` is who made the
+ *  request (the machine's owner on loopback, a member's tailnet login on a
+ *  hub); an older agentbox does not send it. */
+export type Caller = {
+  session: string | null;
+  via: "app" | "api";
+  person?: { login: string; name: string; role: "owner" | "member" | null; via: "local" | "tailnet" | "hub" };
+};
 export type ActionRequest = { action: string; values: Record<string, unknown>; tab: string | null; caller: Caller };
 /** What an action answers: words for the page, a page to show, or where to go. */
 export type ActionReply = { message?: string; view?: SuperagentView; open?: string } & Record<string, unknown>;

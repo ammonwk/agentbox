@@ -71,7 +71,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   const mode = composerMode(session);
   const ref = textareaRef;
   const provider = PROVIDER_LABEL[session.provider];
-  const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images });
+  const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images, at: session.node ? session.id : undefined });
   const skill = useSkillComplete({ value: text, onChange: setText, skills, textareaRef: ref });
   /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
   const btw = mode.kind === "send" && session.provider === "claude" ? BTW.exec(text) : null;

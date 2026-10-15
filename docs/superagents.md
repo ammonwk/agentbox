@@ -134,11 +134,13 @@ The answer may carry `message` (shown), `view` (drawn instead), `open` (an
 app link to go to, such as `#/agents/janus`), and `compose` (text put in the
 chat's message box, for "give guidance").
 
-**Who asked.** `caller` is `{session, via}`: `via` is `app` when a browser
-sent it and `api` otherwise, and `session` is the session that proved itself
-with its capability (`agentbox superagent call` from inside a session does),
-or null. It is how a program lets only its writer publish, or only a person
-create. Like every loopback rule here it holds against mistakes and other
+**Who asked.** `caller` is `{session, via, person}`: `via` is `app` when a
+browser sent it and `api` otherwise, `session` is the session that proved
+itself with its capability (`agentbox superagent call` from inside a session
+does), or null, and `person` is who made the request (`{login, name, role,
+via}`: the machine's owner on loopback, a member's tailnet login on a hub,
+docs/hub.md). It is how a program lets only its writer publish, or only a
+person create, or on a hub only one person approve. Like every loopback rule here it holds against mistakes and other
 sites, not against code running as you on purpose (docs/v2.md, Security).
 
 **Being called.** A session the program started calls it with `agentbox

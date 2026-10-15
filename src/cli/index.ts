@@ -31,6 +31,7 @@ import * as cards from "./cards";
 import * as prs from "./prs";
 import { cloud, CLOUD_USAGE } from "./cloud";
 import { handover, superagent, SUPERAGENT_USAGE } from "./superagents";
+import { hub, HUB_USAGE } from "./hub";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
@@ -439,6 +440,9 @@ superagents (programs that run on agentbox: docs/superagents.md):
 ${SUPERAGENT_USAGE.replace(/^agentbox /gm, "  ")}
   handover <from> <to> [--close]       what <from> started, its cards, PRs and their waits go to <to>; messages to <from> reach <to>
 
+hub and nodes (one board across machines on a tailnet: docs/hub.md):
+${HUB_USAGE.replace(/^agentbox /gm, "  ")}
+
 pull requests (who has one: no two sessions work the same PR):
   pr claim <n|owner/repo#n|url> [--for ID]   this session has it, and it says "you hold"; refused, naming the other session, if another live one does
   pr release [<n|…>]                 let go of what this session claimed (one, or all)
@@ -606,6 +610,9 @@ export async function main(argv: string[]): Promise<number | null> {
       case "superagents":
         await ensureServer();
         return await superagent(api, argv.slice(1));
+      case "hub":
+        await ensureServer();
+        return await hub(api, argv.slice(1));
       case "handover":
         await ensureServer();
         return await handover(api, argv.slice(1));

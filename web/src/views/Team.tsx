@@ -1,4 +1,5 @@
-/** The Team page: you, your workspaces, this machine, and what the
+/** The Team page: a hub's members and nodes (./Hub.tsx, docs/hub.md); then
+ *  you, your workspaces, this machine, and what the
  *  workspace shares (plans, skills, messages between machines), over the
  *  agentbox cloud (docs/cloud.md).
  *
@@ -30,6 +31,7 @@ import { Button, Empty, Field, Icon, Toggle } from "../components";
 import { humanCloud, rememberDefaults, signInRedirect, useCloudStatus, useCloudUser, useLoad } from "../lib/cloud";
 import { useScope } from "../lib/projects";
 import { Markdown } from "./session/Markdown";
+import { HubTeam } from "./Hub";
 import "./team.css";
 
 type Tab = "you" | "workspace" | "machine" | "plans" | "skills" | "messages";
@@ -72,6 +74,16 @@ const Err = ({ error }: { error: string | null }) =>
   ) : null;
 
 export function Team({ state }: { state: AppState }) {
+  // A hub's members and nodes, or a node's link (docs/hub.md); nothing on a machine that is neither.
+  return (
+    <>
+      <HubTeam />
+      <CloudTeam state={state} />
+    </>
+  );
+}
+
+function CloudTeam({ state }: { state: AppState }) {
   const { status, error, refresh } = useCloudStatus();
   if (error) return <Empty title="Could not ask this machine about the cloud">{error}</Empty>;
   if (!status) return <p className="hint">Loading…</p>;

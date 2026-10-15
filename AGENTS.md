@@ -93,7 +93,11 @@ once: commit your own files by path, never `git add -A`.
   tailnet listener (`src/server/tailnet.ts`): the same app on this machine's
   Tailscale IP, for a phone, where every peer must `tailscale whois` to the
   machine's own user on an untagged node, and only then do the Tailscale
-  names stand in for loopback. `AGENTBOX_TAILNET=0` turns it off.
+  names stand in for loopback. `AGENTBOX_TAILNET=0` turns it off. A hub
+  also admits its members' devices, and a node its hub on `/api/node/*`
+  with the link's token (`docs/hub.md`, Trust model; `admit` in
+  `tailnet.ts`): with no `hub/members.json` or `hub/link.json` the rule is
+  the one above, and `src/server/__tests__/hub.test.ts` holds both.
 - **`agentbox serve` holds its port from its first line.** A CLI that finds
   the server slow starts another; that one must fail at once, not run a
   second fleet.
