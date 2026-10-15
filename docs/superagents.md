@@ -230,6 +230,99 @@ for (const c of claims) await agentbox.attachClaim(c.key, c.fence, s.id);
 Keep the fence that each call gives back. A superagent that is a shared team
 instance keeps its claims in the cloud. The calls stay the same.
 
+## GitHub actions
+
+A superagent can act on GitHub as a GitHub App: comment, open or update a
+draft PR, mark it ready, merge it, close an issue, request a review. It never
+holds the App's key or a token. It requests each action from agentbox, and
+agentbox's broker (`src/core/github/`) does it after it checks the action
+again. Programs and sessions get no `GH_TOKEN` from it.
+
+**What the manifest proposes.** A `github` field in `superagent.json`:
+
+```jsonc
+"github": {
+  "app": { "appId": 123456, "installationId": 7890123, "login": "my-app[bot]" },
+  "repos": ["owner/repo"],
+  "actions": ["comment", "open_pr", "update_pr", "ready_pr", "request_review"],  // also merge_pr, close_issue
+  "approval": "prepare",                         // or "automatic"
+  "mergePolicy": { "requiredChecks": ["ci"], "minApprovals": 1 }   // optional, for merge_pr
+}
+```
+
+**What the host owner pins.** The proposal does nothing until the person who
+owns this machine pins it, from their own terminal or the app:
+
+    agentbox github policy <superagent>             # read what it proposes
+    agentbox github pin <superagent> --key <pem>    # pin exactly that
+
+The pin records the policy's digest and the path of the App's private key.
+The key path is host config: it is never in a manifest, it must be absolute,
+and the file must be mode 0600. A session or a program cannot pin, approve,
+decline or answer an action's card: a request with their headers is
+refused. When the manifest's `github` field changes, every action is refused
+until the owner pins again.
+`agentbox github unpin <superagent>` stops them all.
+
+**How a program requests an action.** `POST /api/github/actions` with the
+headers `x-agentbox-superagent: $AGENTBOX_SUPERAGENT` and
+`x-agentbox-superagent-token: $AGENTBOX_SUPERAGENT_TOKEN`. A session of the
+superagent (its main, an earlier main, or a session one of them started)
+sends the same body with `agentbox github request <file>`:
+
+```jsonc
+{
+  "request": "0b8e…",                  // a UUID you keep: a retry with it answers the same record
+  "action": { "kind": "comment", "repo": "owner/repo", "number": 12, "body": "…" },
+  "claim": { "key": "https://github.com/owner/repo/issues/12", "fence": 3 },  // optional: the work you hold
+  "cwd": "/path/to/checkout"           // open_pr, update_pr: the checkout with the head commit
+}
+```
+
+The answer is `{request, state, result, card?}`. In prepare mode the state is
+`prepared` and `card` is a Review decision card: the person answers
+"approve" or "decline" there, or runs `agentbox github approve <request>`.
+In automatic mode the action is sent at once. Read the outcome with
+`GET /api/github/actions/:request`: `sent` (with the `url`), `refused` or
+`failed` (nothing was sent; the `message` says why), or `uncertain`.
+`POST /api/github/read` reads an issue, a PR, its reviews or its checks as
+the App.
+
+**The states.** `prepared` → `approved` → `attempting` → `sent`. An action is
+`attempting` from the moment the broker starts to send it. A server that
+stops then leaves it there, and the next server marks it `uncertain`. An
+uncertain action is never sent again: a person looks at GitHub, and a GET
+reads back what a merge or a closure did. A failure after part of the action
+was visible on GitHub is also `uncertain`. To try again, use a new request id.
+
+**What is refused.**
+
+- A superagent with no pin, or a manifest that changed since the pin.
+- A repo or an action kind outside the pinned policy.
+- The same request id with a different body (409).
+- A claim that the requesting superagent does not hold at that fence, when
+  it asks and again at dispatch. An action that names a claim on a host with
+  no claims service is refused too.
+- Contact without consent. Bot contact is off until each person opts in, in
+  the cloud, by their numeric GitHub id. The broker checks every explicit
+  recipient, every `@mention` (in quotes, code or HTML entities too), an
+  issue's author for a reply, and each requested reviewer. It refuses a team
+  mention. It checks consent when it sends, so an approval does not outlive
+  an opt-out. Without the cloud, every action that contacts a person is
+  refused.
+- Issue-closing keywords in a PR ("fixes #12"): `close_issue` closes an
+  issue, after its PR merged, with evidence.
+- A publication that changes `.github/workflows/` or a submodule, a file
+  over 5 MB, more than 500 paths, or a head or base that moved since the
+  request.
+- A merge whose head moved, whose checks are not green, or that does not have
+  the pinned number of approvals on its head. GitHub's branch protection
+  still applies: the broker never asks to bypass it.
+
+`open_pr` creates a draft on `agentbox/<claim or request>`. `update_pr`
+updates that branch, without force: the claim's branch, or the one this
+superagent's own `open_pr` made.
+
 ## Writing one
 
 Start from the closest example. A program in TypeScript imports the SDK by

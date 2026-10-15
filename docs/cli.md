@@ -34,7 +34,11 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox agent memory <ID> show <record ID>
     agentbox agent memory <ID> note --request <stable UUID> --file decision.json # {decision,why,refs:[{label,ref}]}
     agentbox agent memory <ID> handoff --request <checkpoint UUID> --file handoff.json
-    agentbox agent memory <ID> prefer --key <key> --text <text>   # local agents; forget --key <key>
+    agentbox agent report --request <UUID> --file <text file>   # an agent files an Agentbox issue itself: public, 3 a day
+    agentbox agent loop <agent> --when "every hour" [--check CMD] --prompt T | --file F   # its own schedule, into its current chat; off stops it
+    agentbox agent ls [--project P]   # each agent: on or paused, project, its chat session now
+    agentbox agent send <agent> [--project P] <text…|->   # into another agent's chat, by name; starts one if it has none
+    agentbox agent memory <ID> prefer --key <key> --text <text>   # or --file <text file>; local agents; forget --key <key>
 
 Chat, Feed and Settings share one agent identity. Recommendations are immutable
 {title,finding,reason,next,evidence:[{url,label}],action:<optional action UUID>}.
@@ -102,6 +106,7 @@ See docs/agents.md for exact action JSON, host configuration and boundaries.
     agentbox ls -q ...              # ids only, for piping
     agentbox ls --json | jq ...     # every field
     agentbox show <id>              # the header: where, model, context, first/last prompt, last reply
+    agentbox show <id> --json       # its board record, e.g. lastActivityAt
     agentbox log <id> | tail -60    # the conversation as text, oldest first
     agentbox log <id> --tools       # with tool calls and their output
     agentbox grep <regex> [-i] [--all]   # search every conversation: id  time  who  line
@@ -205,6 +210,7 @@ why). Arming the same wait twice is one wait.
     agentbox adopt <id>... --detach # move a session from another terminal into agentbox
     agentbox label <id> 'name'      # rename it on the board
     agentbox claude|codex|omp|opencode|devin|muse --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
+    agentbox claude --detach --worktree 'prompt'   # in a new worktree of the repo you are in: for a worker, never the shared checkout
     agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.
@@ -239,6 +245,7 @@ why). Arming the same wait twice is one wait.
     agentbox pr claim <n|…>         # it is yours, and says so ("you hold", "you already hold"); refused,
                                     # naming "another session", if another live session has it
     agentbox pr release [<n|…>]     # release ownership and its PR waits (one, or all)
+    agentbox pr ready <n|…> --head <sha>   # you verified it ready: the project's Terminus gets it, once per head
     agentbox pr transfer <repo#n> --expect <holder> --to <successor>
                                     # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has
@@ -252,6 +259,11 @@ why). Arming the same wait twice is one wait.
     agentbox superagent add <dir>   # register one (a person's call: do it only when asked)
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
+    agentbox github request <file>  # in a superagent's session: one GitHub action as its App,
+                                    # {request, action, claim?, cwd?}; keep the request id for retries
+    agentbox github actions [<request>]   # their states: prepared, sent, refused (why), uncertain…
+    agentbox github read <owner/repo> <n> issue|pull|reviews|checks   # read as its App
+    agentbox github pin|approve …   # the host owner's: never from a session (refused)
 
 ## Across machines (when this machine is in an agentbox cloud workspace)
 

@@ -169,6 +169,11 @@ why). Arming the same wait twice is one wait.
     agentbox superagent send <name> <text…|->   # into its main conversation, as your message; starts one if it has none
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
+    agentbox github request <file>  # in a superagent's session: one GitHub action as its App,
+                                    # {request, action, claim?, cwd?}; keep the request id for retries
+    agentbox github actions [<request>]   # their states: prepared, sent, refused (why), uncertain…
+    agentbox github read <owner/repo> <n> issue|pull|reviews|checks   # read as its App
+    agentbox github pin|approve …   # the host owner's: never from a session (refused)
 
 A superagent's main conversation has more when its manifest turns it on
 (\`agent\` is the same verb as \`superagent\`):
