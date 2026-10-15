@@ -128,7 +128,8 @@ export function SessionView({
   const now = useNow(60_000);
   const closing = useClosing().pending;
 
-  // The open session and those above it: expanded unless you fold them.
+  // The open session and those above it. Those above it are expanded unless
+  // you fold them, so it is in sight; its own children stay as you left them.
   const keep = useMemo(() => {
     const byId = new Map(state.sessions.map((s) => [s.id, s]));
     const set = new Set<string>();

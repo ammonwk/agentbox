@@ -183,8 +183,9 @@ export type Nested<T> = T & { depth: number; kids: number; open: boolean };
 /** What is folded in the list. Each is asked with `auto`, what the row would
  *  be left alone, and says what you made of it. */
 export interface Folds {
-  /** Whether the sessions `id` started show under it. Left alone, the open
-   *  session's and those above it do. */
+  /** Whether the sessions `id` started show under it. Left alone, those of
+   *  the sessions above the open one do, so it is in sight; the open
+   *  session's own stay folded until you unfold them. */
   open: (id: string, auto: boolean) => boolean;
   /** Whether the inactive ones among them show too. Left alone, they do when
    *  all of them are inactive, or the open session is one of them. */
@@ -297,7 +298,7 @@ export function sectionsOf<T extends SessionRow>(
   };
   const place = (s: T, depth: number, out: Nested<T>[], quiet: Map<string, Quiet[]>) => {
     const k = kids.get(s.id) ?? [];
-    const open = k.length > 0 && folds.open(s.id, folds.keep.has(s.id));
+    const open = k.length > 0 && folds.open(s.id, k.some((c) => folds.keep.has(c.id)));
     out.push(nest(s, depth, k.length, open));
     if (!open) return;
     const awake = k.filter(active);
