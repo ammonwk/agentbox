@@ -1,5 +1,5 @@
 import type { TimelineEvent } from "../../../../src/core/types";
-import { isCheckpointPrompt, OPENING_SEPARATOR } from "../../../../src/core/superagent/marks";
+import { isCheckpointPrompt, personsText } from "../../../../src/core/superagent/marks";
 /** Presentation only: the provider transcript and approval text stay intact. */
 
 /** What the viewed conversation's transcript and session say now:
@@ -30,20 +30,14 @@ export function chatShown<E extends TimelineEvent>(events: readonly E[], live: s
     (e.kind === "user" && !isCheckpointPrompt(e.text)) || e.kind === "assistant" || (e.kind === "tool" && !!e.ask && e.ask.id !== live));
 }
 
-/** The separator that a main started before OPENING_SEPARATOR put before the
- *  person's message. It is also a markdown rule, so it is only a fallback. */
-const OLD_OPENING = "\n\n---\n\n";
-
 /** A main conversation's first message as the person wrote it: the
  *  instructions, SOUL.md and memory agentbox put before it stay in the
  *  transcript, out of Chat. Only for the event that starts the conversation. */
 export function personsOpening<E extends TimelineEvent>(events: readonly E[], start: boolean): readonly E[] {
   const first = events[0];
   if (!start || first?.kind !== "user") return events;
-  // The person's text follows the first separator, and can contain the separator itself.
-  const at = first.text.indexOf(OPENING_SEPARATOR);
-  const old = at < 0 ? first.text.lastIndexOf(OLD_OPENING) : -1;
-  if (at < 0 && old < 0) return events;
-  const text = at >= 0 ? first.text.slice(at + OPENING_SEPARATOR.length) : first.text.slice(old + OLD_OPENING.length);
+  // The person's text follows the first separator, and can contain the separator itself (marks.ts).
+  const text = personsText(first.text);
+  if (text === first.text) return events;
   return [{ ...first, text }, ...events.slice(1)];
 }

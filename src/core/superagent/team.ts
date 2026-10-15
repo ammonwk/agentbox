@@ -37,7 +37,7 @@ import { cloudSentMark } from "../sent";
 import type { Superagents } from "../superagents";
 import type { TimelineEvent } from "../types";
 import type { WorkClaims } from "../workclaims";
-import { isCheckpointPrompt } from "./marks";
+import { isCheckpointPrompt, personsText } from "./marks";
 import { CREDENTIAL } from "./memory";
 import { dropShare, saveShare, shareOf, shares } from "./shares";
 import { CloudClaims } from "./teamclaims";
@@ -61,10 +61,6 @@ export function redact(text: string): string {
 
 const clip = (s: string) => (s.length > MAX_EVENT_TEXT ? `${s.slice(0, MAX_EVENT_TEXT)}…` : s);
 
-/** The separator agentbox puts between a fresh main's first prompt (its
- *  instructions, SOUL.md, memory) and the person's message (opening.ts).
- *  The same rule as `personsOpening` in web/src/views/session/chatPresentation.ts. */
-const OPENING = "\n\n---\n\n";
 
 /** What a teammate sees of a timeline: what was said and the questions it
  *  asked. Tool calls, their input and output, thinking and notes stay here,
@@ -80,8 +76,8 @@ export function teamChatEvents(events: readonly TimelineEvent[], start = false):
   for (const e of events) {
     if (e.kind === "user") {
       if (e.sender || isCheckpointPrompt(e.text)) continue;
-      const cut = e === opening ? e.text.lastIndexOf(OPENING) : -1;
-      const text = cut < 0 ? e.text : e.text.slice(cut + OPENING.length);
+      // The person's text, as the Agents page shows it (marks.ts `personsText`).
+      const text = e === opening ? personsText(e.text) : e.text;
       out.push({ id: e.id, at: e.at, kind: "user", text: clip(redact(text)) });
     } else if (e.kind === "assistant") out.push({ id: e.id, at: e.at, kind: e.kind, text: clip(redact(e.text)) });
     else if (e.kind === "tool" && e.ask)
