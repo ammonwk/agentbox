@@ -60,6 +60,7 @@ beforeEach(async () => {
     placement: (provider: string) => ({ provider, accountId: placements[provider] === "none" ? null : `${provider}-1`, mode: placements[provider] ?? "none", claim: 0, candidates: [], why: placements[provider] === "none" ? `${provider} is at its weekly limit` : "room" }),
     installed: async () => true,
     chooseAuto: Fleet.prototype.chooseAuto,
+    adapter: () => ({ efforts: ["low", "high"], readOnly: null }),
     sessions: () => [...views.values()],
     tick: async () => {},
     timeline: async (id: string) => ({ events: (prompts.get(id) ?? []).map((text, i) => ({ id: String(i), at: i, kind: "user", text })) }),
