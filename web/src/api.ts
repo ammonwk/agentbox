@@ -334,6 +334,10 @@ export const api = {
   saveSettings: (patch: SettingsPatch) => request<AgentSettings>("PUT", "/api/settings", patch),
   applyBalancer: (b: BalancerSettings) => request<AgentSettings>("PUT", "/api/settings", { balancer: b }),
 
+  // folders (the new-session dialog's Where)
+  completeDir: (path: string) => get<{ exact: string | null; entries: string[] }>(`/api/dirs?path=${enc(path)}`),
+  resolveDirs: (paths: string[]) => post<Record<string, string | null>>("/api/dirs/resolve", { paths }),
+
   // repos, worktrees
   addRepo: (ref: string) => post<Repo>("/api/repos", { ref }),
   deleteRepo: (id: string) => request<unknown>("DELETE", `/api/repos/${enc(id)}`),

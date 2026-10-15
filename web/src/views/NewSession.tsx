@@ -8,7 +8,9 @@ import { AttachButton, useAttachments } from "../attachments";
 import type { PromptHistoryEntry } from "../lib/prompthistory";
 import { Button, Icon, Modal } from "../components";
 import {
+  forgetFolder,
   loadFolderChoices,
+  loadForgottenFolders,
   loadPrefs,
   loadRepoChoices,
   noteFolderChoice,
@@ -21,8 +23,10 @@ import {
   recentFolders,
   reposByChoice,
   reposByRecency,
+  saveFolderChoices,
   savePrefs,
   skillsFor,
+  tidyFolderChoices,
   worktreeDefault,
   type NewSessionPrefs,
 } from "../lib/newsession";
@@ -254,15 +258,46 @@ export function NewSession({
     setWtText("");
   }
 
-  // A folder picked or typed in the Where menu, remembered for the next time.
+  // A folder picked in the Where menu. It is remembered once a session
+  // starts there (submit), so a guess that went nowhere is not kept.
   const [folderChoices, setFolderChoices] = useState<Record<string, number>>(loadFolderChoices);
+  const [forgotten, setForgotten] = useState<Record<string, number>>(loadForgottenFolders);
   function pickFolder(p: string) {
     setWherePicked(true);
     setWhere("path");
     setPath(p);
-    noteFolderChoice(p);
-    setFolderChoices((c) => ({ ...c, [p]: Date.now() }));
   }
+  function dropFolder(p: string) {
+    forgetFolder(p);
+    setFolderChoices(loadFolderChoices);
+    setForgotten(loadForgottenFolders);
+  }
+
+  // Once per opening, the server says which remembered folders are still
+  // folders: `~/x` and `/home/me/x` become one, and the rest leave the menu
+  // (and the choices, for good).
+  const [missing, setMissing] = useState<Record<string, number>>({});
+  useEffect(() => {
+    const paths = [
+      ...new Set([...Object.keys(folderChoices), ...state.sessions.flatMap((s) => (s.cwd && !s.worktree ? [s.cwd] : []))]),
+    ];
+    if (paths.length === 0) return;
+    let live = true;
+    api
+      .resolveDirs(paths)
+      .then((r) => {
+        if (!live || !r) return;
+        const tidy = tidyFolderChoices(loadFolderChoices(), r);
+        saveFolderChoices(tidy);
+        setFolderChoices(tidy);
+        setMissing(Object.fromEntries(Object.keys(r).flatMap((p) => (r[p] === null ? [[p, Infinity]] : []))));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const hidden = useMemo(() => ({ ...forgotten, ...missing }), [forgotten, missing]);
 
   // "Add repository …" in the Where menu: register a repo the list does not
   // know — a local path or an owner/repo slug — and run against it from now
@@ -314,13 +349,13 @@ export function NewSession({
   }, [worktree, wt.kind]);
   const skills = useMemo(() => skillsFor(state.skills, provider, where === "repo" ? repo : null), [state.skills, provider, where, repo]);
   const folders = useMemo(
-    () => recentFolders(state.sessions, folderChoices, knownRepos.map((r) => r.ref)),
-    [state.sessions, folderChoices, knownRepos],
+    () => recentFolders(state.sessions, folderChoices, knownRepos.map((r) => r.ref), 12, hidden),
+    [state.sessions, folderChoices, knownRepos, hidden],
   );
 
   const projectMatches = useMemo(
-    () => promptProjects(prompt, knownRepos, recentFolders(state.sessions, folderChoices, knownRepos.map((r) => r.ref), Infinity)),
-    [prompt, knownRepos, state.sessions, folderChoices],
+    () => promptProjects(prompt, knownRepos, recentFolders(state.sessions, folderChoices, knownRepos.map((r) => r.ref), Infinity, hidden)),
+    [prompt, knownRepos, state.sessions, folderChoices, hidden],
   );
   const promptProject = projectMatches.length === 1 ? projectMatches[0] : null;
   useEffect(() => {
@@ -379,7 +414,7 @@ export function NewSession({
       }
       const r = await api.createSession(input);
       noteStarted(r.session);
-      if (where === "path") noteFolderChoice(path.trim());
+      if (where === "path") noteFolderChoice(r.session.cwd ?? path.trim());
       savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider }, project);
       onCreated(r.session.id);
     } catch (e) {
@@ -427,6 +462,7 @@ export function NewSession({
             adding={otherBusy}
             onRepo={pickRepo}
             onFolder={pickFolder}
+            onForgetFolder={dropFolder}
             onAddRepo={(v) => void addOther(v)}
           />
           {where === "repo" && repo ? (

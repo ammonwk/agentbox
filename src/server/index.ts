@@ -56,6 +56,7 @@ import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
+import { completeDir, resolveDirs } from "../core/dirs";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
@@ -1400,6 +1401,13 @@ const router = new Router(mapError)
   .add("POST", "/api/push/test", async () => {
     if (pushSubscriptions().length === 0) throw new HttpError(409, "no device has notifications turned on");
     return json(await pushToAll({ title: "agentbox", body: "Notifications work on this device.", url: "/#/sessions", tag: "test" }));
+  })
+  // The new-session dialog's folder field (src/core/dirs.ts).
+  .add("GET", "/api/dirs", ({ url }) => json(completeDir(url.searchParams.get("path") ?? "")))
+  .add("POST", "/api/dirs/resolve", async ({ req }) => {
+    const paths = (await readBody(req)).paths;
+    if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string")) throw new HttpError(400, "paths must be a list of strings");
+    return json(resolveDirs(paths));
   })
   .add("GET", "/api/repos", () => json(listRepos()))
   .add("POST", "/api/repos", async ({ req }) => {

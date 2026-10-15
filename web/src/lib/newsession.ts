@@ -437,6 +437,7 @@ export function recentFolders(
   chosen: Record<string, number> = {},
   repoRefs: readonly string[] = [],
   limit = 12,
+  forgotten: Record<string, number> = {},
 ): string[] {
   const last = new Map<string, number>(Object.entries(chosen));
   for (const s of sessions) {
@@ -445,7 +446,8 @@ export function recentFolders(
     last.set(s.cwd, Math.max(last.get(s.cwd) ?? 0, s.lastActivityAt));
   }
   return [...last]
-    .filter(([p]) => !repoRefs.includes(p))
+    // A forgotten folder stays out until a session is started there from the dialog again.
+    .filter(([p]) => !repoRefs.includes(p) && (forgotten[p] === undefined || (chosen[p] ?? -Infinity) > forgotten[p]))
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([p]) => p);
@@ -462,4 +464,42 @@ export function noteFolderChoice(path: string, at = Date.now()): void {
   const choices = loadChoices(FOLDERS_KEY);
   choices[path] = at;
   saveChoices(FOLDERS_KEY, choices);
+}
+
+/**
+ * The choices once the server has said where each one is (`resolved`: path →
+ * absolute, or null when it is not a folder): `~/x` and `/home/me/x` become
+ * one entry, and a path that is not a folder goes.
+ */
+export function tidyFolderChoices(
+  choices: Record<string, number>,
+  resolved: Record<string, string | null>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [p, at] of Object.entries(choices)) {
+    const abs = p in resolved ? resolved[p] : p;
+    if (abs) out[abs] = Math.max(out[abs] ?? 0, at);
+  }
+  return out;
+}
+
+export function saveFolderChoices(choices: Record<string, number>): void {
+  saveChoices(FOLDERS_KEY, choices);
+}
+
+const FORGOTTEN_KEY = "agentbox.folderForgotten";
+
+/** Folder → when its × in the Where menu was pressed. */
+export function loadForgottenFolders(): Record<string, number> {
+  return loadChoices(FORGOTTEN_KEY);
+}
+
+/** Out of the menu, even while sessions run there, until the dialog starts one there again. */
+export function forgetFolder(path: string, at = Date.now()): void {
+  const choices = loadChoices(FOLDERS_KEY);
+  delete choices[path];
+  saveChoices(FOLDERS_KEY, choices);
+  const forgotten = loadChoices(FORGOTTEN_KEY);
+  forgotten[path] = at;
+  saveChoices(FORGOTTEN_KEY, forgotten);
 }

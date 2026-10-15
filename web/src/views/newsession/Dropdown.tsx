@@ -19,6 +19,7 @@ export interface MenuItem {
  * the typed text itself ("Use …", "Open folder …").
  *
  * Arrows move, Enter picks, Escape and an outside press close (useDismiss).
+ * With `onTab`, Tab can put text in the search box instead (a folder's path).
  */
 export function Dropdown({
   label,
@@ -34,6 +35,8 @@ export function Dropdown({
   maxHeight = 360,
   align = "start",
   onClosedKey,
+  onQuery,
+  onTab,
   id,
 }: {
   /** The control's name: the pill's aria-label prefix and the list's label. */
@@ -51,6 +54,10 @@ export function Dropdown({
   align?: "start" | "end";
   /** A key on the closed pill; true when it was handled (effort's ←/→). */
   onClosedKey?: (e: React.KeyboardEvent) => boolean;
+  /** What is typed, as it changes ("" on close): for a menu that fetches its rows. */
+  onQuery?: (query: string) => void;
+  /** Tab on the active row: the text for the search box, or null to close as usual. */
+  onTab?: (key: string, query: string) => string | null;
   id?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -74,6 +81,7 @@ export function Dropdown({
     setActive(i >= 0 && !query ? i : Math.max(0, rows.findIndex((r) => !r.disabled)));
   }, [open, query]);
   useEffect(() => scrollActiveIntoView(listRef.current, active), [active]);
+  useEffect(() => onQuery?.(query), [query]);
   // Once placed: until useFloating has measured, the menu is display:none,
   // and a hidden box cannot take focus.
   const placed = open && style.display !== "none";
@@ -121,7 +129,13 @@ export function Dropdown({
       e.preventDefault();
       pick(active);
     } else if (e.key === "Tab") {
-      close(false);
+      const r = rows[active];
+      const next = r && !r.disabled && !e.shiftKey ? onTab?.(r.key, query) : null;
+      if (next != null) {
+        e.preventDefault();
+        setQuery(next);
+        searchRef.current?.focus();
+      } else close(false);
     }
   }
 
