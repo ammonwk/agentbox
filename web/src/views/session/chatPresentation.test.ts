@@ -8,6 +8,7 @@ test("an agent's Chat shows its questions, and the one asked now only as the car
   const questions = [{ question: "Which branch?", header: "Branch", multiSelect: false, options: [{ label: "main" }] }];
   const events: TimelineEvent[] = [
     { id: "u", at: 1, kind: "user", text: "Fix it" },
+    { id: "note", at: 1, kind: "user", text: "[agentbox: memory checkpoint 6b6b4061-a26f-4b8e-b4ff-97796b617d5d] The user has been away for 15 minutes." },
     { id: "bash", at: 2, kind: "tool", name: "Bash", summary: "ls", status: "ok" },
     { id: "asked", at: 3, kind: "tool", name: "AskUserQuestion", summary: "", status: "ok", ask: { id: "q1", questions, answers: { "Which branch?": "main" } } },
     { id: "a", at: 4, kind: "assistant", text: "On main." },

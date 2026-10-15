@@ -1,4 +1,5 @@
 import type { TimelineEvent } from "../../../../src/core/types";
+import { isCheckpointPrompt } from "../../../../src/core/superagent/marks";
 /** Presentation only: the provider transcript and approval text stay intact. */
 
 /** What the viewed conversation's transcript and session say now:
@@ -25,5 +26,6 @@ export type AskEvent = ToolEvent & { ask: NonNullable<ToolEvent["ask"]> };
  *  now (`live`, its call's id) is the answerable card at the tail instead. */
 export function chatShown<E extends TimelineEvent>(events: readonly E[], live: string | null) {
   return events.filter((e): e is E & (Extract<TimelineEvent, { kind: "user" | "assistant" }> | AskEvent) =>
-    e.kind === "user" || e.kind === "assistant" || (e.kind === "tool" && !!e.ask && e.ask.id !== live));
+    // Agentbox's request for a handoff is its own note, not the person's message.
+    (e.kind === "user" && !isCheckpointPrompt(e.text)) || e.kind === "assistant" || (e.kind === "tool" && !!e.ask && e.ask.id !== live));
 }

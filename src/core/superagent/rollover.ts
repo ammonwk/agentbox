@@ -28,8 +28,8 @@ import { describe as describeWait } from "../waits";
 import { journalOf, memoryCommand } from "./memory";
 import { patchState, stateOf, type Checkpoint, type Selection } from "./state";
 
-/** The prompt that asks for a handoff, and the marker that finds it again in a transcript. */
-export const CHECKPOINT_MARK = "[agentbox: memory checkpoint";
+import { CHECKPOINT_MARK } from "./marks";
+export { CHECKPOINT_MARK } from "./marks";
 /** A handoff is asked for while at least this much of the cache's life is left. */
 const CHECKPOINT_WARM_MS = 3 * 60_000;
 /** A request with no handoff after this long, the main idle, failed. */
@@ -391,5 +391,3 @@ export class Rollover {
   }
 }
 
-/** The checkpoint request a prompt is, so Chat can keep it out of view. */
-export const isCheckpointPrompt = (text: string): boolean => text.includes(CHECKPOINT_MARK);
