@@ -65,11 +65,11 @@ function soul(o: Opening): string {
 
 function peers(o: Opening): string {
   if (!o.peers.length) return "";
-  const lines = o.peers.map((p) => `- ${p.title} (${p.name}): ${p.description || "no description"}. ${p.main ? `Its chat is session ${p.main}.` : "It has no chat yet."}`);
+  const lines = o.peers.map((p) => `- ${p.title} (${p.name}): ${(p.description || "no description").replace(/[.\s]+$/, "")}. ${p.main ? `Its chat is session ${p.main}.` : "It has no chat yet."}`);
   return [
     "Other agents active in your projects, as of this conversation's start:",
     ...lines,
-    `Ask one with ${agentboxBin()} superagent chat <name> <message>; ${agentboxBin()} superagent ls shows each one's chat now. Coordinate with them; do not duplicate their work.`,
+    `Ask one with ${agentboxBin()} superagent send <name> <message>; ${agentboxBin()} superagent ls shows each one's chat now. Coordinate with them; do not duplicate their work.`,
   ].join("\n");
 }
 
