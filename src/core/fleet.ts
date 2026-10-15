@@ -316,6 +316,8 @@ export interface SpawnRequest {
 export class Fleet extends EventEmitter {
   /** Machine cleanup holds all activity except its one helper session. */
   activityAllowed: (id?: string) => boolean = () => true;
+  /** What else a handover moves: the work claims (src/core/workclaims.ts), which the server sets. */
+  onHandOver?: (from: string, to: string) => Promise<unknown>;
   private requireActivity(id?: string): void {
     if (!this.activityAllowed(id)) throw new FleetError(409, "Sessions are paused for machine cleanup. Resume them from the system bar first.");
   }
@@ -3854,6 +3856,8 @@ export class Fleet extends EventEmitter {
     // checks (arm's one-per-thing, the idle close, agentbox waits) read them
     // by session, and a loop must not lose its timer to a new conversation.
     moveWaits(from, to);
+    // And the work it claimed, each key with a new fence.
+    await this.onHandOver?.(from, to);
     await this.tick();
     return moved;
   }

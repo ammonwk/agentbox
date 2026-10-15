@@ -440,6 +440,39 @@ export const MIGRATIONS: readonly string[] = [
     report TEXT NOT NULL
   );
   `,
+  // 31 — work claims (src/core/workclaims.ts): one holder per source, a fence
+  // that grows on every change of holder, and a lease core renews. A released
+  // row stays, so its key's next fence is higher than any before it. The
+  // events are each change, for reading back what happened.
+  `
+  CREATE TABLE work_claims (
+    scope       TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    fence       INTEGER NOT NULL,
+    state       TEXT NOT NULL,
+    superagent  TEXT,
+    session     TEXT,
+    note        TEXT,
+    lease_until INTEGER NOT NULL,
+    claimed_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (scope, key)
+  );
+  CREATE INDEX work_claims_session ON work_claims(session);
+  CREATE TABLE work_claim_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope      TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    fence      INTEGER NOT NULL,
+    superagent TEXT,
+    session    TEXT,
+    note       TEXT,
+    at         INTEGER NOT NULL
+  );
+  CREATE INDEX work_claim_events_key ON work_claim_events(scope, key, id);
+  `,
 ];
 
 function migrate(d: Database) {

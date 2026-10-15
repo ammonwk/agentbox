@@ -89,6 +89,8 @@ import { VERSION } from "../version";
 import { RUNNING_REVISION } from "../revision";
 import { CloudBridge } from "../core/cloud/bridge";
 import { Superagents } from "../core/superagents";
+import { WorkClaims } from "../core/workclaims";
+import { claimRoutes } from "./claims";
 import { cloudHttpError, cloudRoutes } from "./cloud";
 import { superagentRoutes } from "./superagents";
 import { prReady } from "../core/superagent/events";
@@ -181,6 +183,10 @@ export const scheduler = new Scheduler(fleet, () => scheduleCold());
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
 export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`);
+/** Who has which work, by source: renewed on the scheduler's tick, moved on a handover (src/core/workclaims.ts). */
+export const workClaims = new WorkClaims(fleet);
+fleet.onHandOver = (from, to) => workClaims.handOver(from, to);
+scheduler.onTick(() => workClaims.tick());
 /** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
 export const cloud = new CloudBridge(fleet, VERSION);
 function cardId(raw: string): number {
@@ -1572,6 +1578,7 @@ const router = new Router(mapError)
     return json(r);
   });
 superagentRoutes(router, superagents, { scheduleHot });
+claimRoutes(router, workClaims);
 cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);

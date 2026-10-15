@@ -87,7 +87,7 @@ must not be cut in half runs as a session, or in a unit of its own
 | `AGENTBOX_SUPERAGENT` | its name |
 | `AGENTBOX_SUPERAGENT_DIR` | its directory |
 | `AGENTBOX_SUPERAGENT_HOME` | `<agentbox home>/superagents/<name>/`: its own state, which agentbox never reads |
-| `AGENTBOX_SUPERAGENT_TOKEN` | the secret every request from agentbox carries |
+| `AGENTBOX_SUPERAGENT_TOKEN` | the secret every request from agentbox carries; the program sends it back to claim work ([Claims](#claims)) |
 | `PORT` | where to answer agentbox, on 127.0.0.1 |
 
 **Its main conversation.** The Agents page shows it as the superagent's chat:
@@ -167,12 +167,68 @@ lean on:
   so a writer cannot post one for it.
 - `POST /api/sessions/:id/handover {to, close?}`: what one session holds goes
   to the one taking over: the sessions it started, its cards, its PRs and
-  their waits, and messages to it (`agentbox handover`).
+  their waits, its work claims, and messages to it (`agentbox handover`).
 - `POST /api/waits` with `session`: a durable wait told to that session.
 - `POST /api/cards`, with `notify: false` for a decision the superagent's own
   page already shows.
 - `POST /api/prs/claim`, `/api/prs/who`: who has a PR.
 - `GET /api/state`: everything on the board.
+- `POST /api/claims`: who has a piece of work (below).
+
+## Claims
+
+A claim says who has a piece of work, so that two programs or two sessions
+never do the same work. Agentbox keeps the claims (`src/core/workclaims.ts`);
+a program never keeps its own copy of who holds what.
+
+**The key.** A claim is keyed by its source. Agentbox makes each source
+canonical:
+
+- A GitHub issue or pull request is `github:owner/repo#12`. Host casing,
+  repository casing, fragments, query strings and `/issues` against `/pull`
+  give the same key. `owner/repo#12` is the same issue too.
+- Another http(s) link is the link without its fragment, with its query sorted.
+- `env:<repo>:<environment>` is a deployment environment, in the scope `env`.
+- Any other `scheme:id` is its own key, as you give it.
+
+**The holder** is `{superagent, session}`. A program says who it is with two
+headers, `x-agentbox-superagent: <name>` and `x-agentbox-superagent-token:
+<AGENTBOX_SUPERAGENT_TOKEN>`; the SDK's `call` sends both. A wrong token gets
+403. A session that proves itself with its capability is the holder session.
+
+**The rules.**
+
+- One holder for each scope and key. A claim of several sources takes all of
+  them or none. A held source is refused with 409, and the answer's `data` is
+  `{key, holder, state}`. The holder itself gets 409 too: read your claims back
+  with `GET /api/claims` when an answer was lost.
+- The fence is an integer. It increases on each change of holder: the claim,
+  an attach, a takeover and a handover. Each later call must give the current
+  fence. A stale fence gets 409.
+- Agentbox renews the lease while the holder session runs. A program never
+  renews. A lease past its end makes the claim `uncertain`, and an uncertain
+  claim still excludes all others: expiry never frees work.
+- Only `release` by the holder, with the current fence, frees a key.
+- A takeover is for a person or the holder's own program. Agentbox stops the
+  holder session, then proves the stop: no process and no pane. Only then does
+  it move the key, with fence + 1. A caller cannot send the proof. When the
+  stop is not proven, the claim stays `takeover_requested`, the old holder
+  still excludes, and you can ask again.
+- A handover (`POST /api/sessions/:id/handover`) moves the claims of the old
+  session to the new one, each with fence + 1.
+
+**The order.** `POST /api/sessions` takes no id of your choice. Thus claim
+first, then start the session, then attach it:
+
+```ts
+const claims = await agentbox.claim([issueUrl], { note: "work 12" });
+const s = await agentbox.start({ provider: "codex", prompt });
+for (const c of claims) await agentbox.attachClaim(c.key, c.fence, s.id);
+// … when the work ends: agentbox.releaseClaim(key, fenceNow)
+```
+
+Keep the fence that each call gives back. A superagent that is a shared team
+instance keeps its claims in the cloud. The calls stay the same.
 
 ## Writing one
 
