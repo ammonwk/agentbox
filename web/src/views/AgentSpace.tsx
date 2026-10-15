@@ -725,7 +725,6 @@ function AgentSpace({
   }
   return (
     <AgentBrowser id={id} options={options} onCreate={onCreate} ongoing={ongoing} threads={threads} loading={!ready} more={more !== null} loadMore={() => { void readList(more ?? 0).catch((e) => setRailError(e.message)); }} error={railError}>
-      {footer}
     <div className={`agent-space agent-space-${tab}`}>
 
       <header className="agent-space-head">
@@ -861,6 +860,7 @@ function AgentSpace({
               {transport.sessionAction && selected?.canRestore && (selected.cacheWarmUntil ?? 0) > now &&
                 <Button variant="ghost" loading={sessionBusy} onClick={() => void manageSession("restore")}>Restore cached session</Button>}
             </div>}
+            {footer}
             {transport.help && <p className="agent-help-hint"><code>/help &lt;feedback&gt;</code> reports an issue or improvement to Agentbox on GitHub.</p>}
           </div>
         </>

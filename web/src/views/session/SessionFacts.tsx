@@ -1,56 +1,52 @@
 import { useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { AccountView, AppState, Session } from "../../../../src/core/types";
 import { ago, fmtCost, fmtTokens, guessHome, tildify } from "../../api";
 import { AccountChip, ContextBar, UsageBar } from "../../bits";
 import { Icon } from "../../components";
 import { hrefOf } from "../../route";
-import { useSysbarSlot } from "../../sysbarslot";
-import { useIsPhone } from "../../lib/phone";
 import { outstandingOf, sortWindows } from "../../lib/usage";
 import { useDismiss, useFloating } from "../newsession/popover";
 
-/** The selected session's facts, shared by Sessions and local Agent chat. */
+/** The selected session's facts, shared by Sessions and local Agent chat: a
+ *  quiet line under the message box. The context is a percentage, the cache
+ *  reads are in the tooltip, and the account chip says the provider, so a
+ *  Claude model is "opus-5-5". */
 export function SessionFacts({session, state}: {session: Session; state: AppState}) {
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
   // What it runs as and on, and what it has spent.
-  const sysbarSlot = useSysbarSlot();
-  const phone = useIsPhone();
-  // The bar is one line beside the machine's figures: there the context is a
-  // percentage, the cache reads are in the tooltip, and the account chip says
-  // the provider, so a Claude model is "opus-5-5".
-  const inBar = !!sysbarSlot && !phone;
-  const facts = (
+  return (
     <div className="sx-facts">
       <span className="fact">
         <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
       </span>
-      <span className="fact mono fact-cwd" title={session.cwd}>
-        <Icon.folder size={12} />
-        <span className="fact-cwd-text">
-          <span dir="ltr">{tildify(session.cwd, home)}</span>
-        </span>
-      </span>
+      {/* The sidebar names the project; with a branch, the path is in its tooltip. */}
       {session.branch ? (
         <span className="fact mono" title={session.cwd}>
           <Icon.branch size={12} /> {session.branch}
         </span>
-      ) : null}
+      ) : (
+        <span className="fact mono fact-cwd" title={session.cwd}>
+          <Icon.folder size={12} />
+          <span className="fact-cwd-text">
+            <span dir="ltr">{tildify(session.cwd, home)}</span>
+          </span>
+        </span>
+      )}
       {session.model ? (
         <span className="fact mono" title={session.model}>
-          {inBar ? session.model.replace(/^claude-/, "") : session.model}
+          {session.model.replace(/^claude-/, "")}
           {session.effort ? <span className="muted"> · {session.effort}</span> : null}
         </span>
       ) : null}
       <span className="fact">
-        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide={!inBar} />
+        <ContextBar used={session.contextUsed} limit={session.contextLimit} />
       </span>
       <span
         className="fact"
         title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
       >
-        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {inBar ? null : <>{fmtTokens(session.tokens.cacheRead)} cached · </>}
+        {fmtTokens(session.tokens.input + session.tokens.output)} tok ·{" "}
         <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
       </span>
       {pr && (
@@ -61,8 +57,6 @@ export function SessionFacts({session, state}: {session: Session; state: AppStat
       )}
     </div>
   );
-
-  return inBar && sysbarSlot ? createPortal(facts, sysbarSlot) : facts;
 }
 
 /**

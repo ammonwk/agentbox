@@ -554,9 +554,6 @@ function Detail({
             {marks}
           </div>
         ) : null}
-        {/* On a computer the facts go in the system bar along the bottom. A
-            phone hides that bar in a session, so there they stay here. */}
-        <SessionFacts session={session} state={state} />
 
         {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
         {(session.status === "blocked" && !session.question && shownStatus(session) !== "retrying") || error ? (
@@ -701,6 +698,7 @@ function Detail({
           accounts={state.accounts}
           skills={skills}
           textareaRef={composerRef}
+          footer={<SessionFacts session={session} state={state} />}
         />
       </div>
 

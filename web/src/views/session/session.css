@@ -912,6 +912,16 @@ button.rail-state:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Under the message box, the facts are a quiet line. */
+.cmp .sx-facts,
+.agent-compose-wrap > .sx-facts {
+  gap: 14px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.agent-compose-wrap > .sx-facts {
+  margin: 6px 12px 0;
+}
 .sx-facts a.fact {
   color: var(--accent);
   text-decoration: none;
@@ -3074,6 +3084,8 @@ a.wk-item:hover {
      else. The header, the hints and the extra keys come back with the
      keyboard's going; an error stays, since it is about what you just sent. */
   :root[data-kb] .sx-header,
+  :root[data-kb] .cmp .sx-facts,
+  :root[data-kb] .agent-compose-wrap > .sx-facts,
   :root[data-kb] .term-transcript-bar,
   :root[data-kb] .cmp-aux,
   :root[data-kb] .cmp-hint,

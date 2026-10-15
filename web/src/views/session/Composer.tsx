@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
 import { ago, api, fmtRetryAt, fmtTokens, useNow } from "../../api";
 import { AttachButton, AttachFrame, expandImages, tokensIn, useAttachments } from "../../attachments";
@@ -48,11 +48,13 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * the box is replaced by the Adopt explanation. `/` completes the skills the
  * session can run, as in the new-session prompt.
  */
-export function Composer({ session, accounts, skills, textareaRef }: {
+export function Composer({ session, accounts, skills, textareaRef, footer }: {
   session: Session;
   accounts: readonly AccountView[];
   skills: readonly SkillInfo[];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  /** A quiet line under the box: the session's facts. */
+  footer?: ReactNode;
 }) {
   // The draft left here last time (the composer is keyed by session, so this
   // is read once per session). Sending clears it again.
@@ -389,6 +391,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       ) : mode.kind === "resume" ? (
         <div className="cmp-hint">Resumes on the same account{lastOn ? `, ${lastOn}` : ""}, in agentbox&apos;s tmux — its cache is still warm.</div>
       ) : null}
+      {footer}
     </div>
   );
 }

@@ -1232,47 +1232,33 @@ textarea,
   opacity: 0.55;
 }
 
-/* The open session's facts, then the machine. The facts give way first when
- * the window is narrow: they shrink, and the machine figures keep their size. */
+/* The plans, then the machine. Each is a button that opens its own sheet. */
 .sysbar-line {
   display: flex;
   align-items: center;
   min-width: 0;
-  container-type: inline-size;
-}
-/* A session's facts and every figure need about 1460px. With less, the
- * subscriptions give way; the sheet the bar opens still lists them. */
-@container (max-width: 1460px) {
-  .sys-session:not(:empty) + .sysbar-row .sys-limits,
-  .sys-session:not(:empty) + .sysbar-row .sys-div:has(+ .sys-limits) {
-    display: none;
-  }
 }
 .sysbar-line > .sysbar-row {
   flex: 1 1 auto;
   width: auto;
   min-width: 320px;
 }
-.sys-session {
+.sys-plans {
   display: flex;
   align-items: center;
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: none;
   height: 42px;
   padding: 0 14px;
+  border: 0;
   border-right: 1px solid var(--border);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
-.sys-session:empty,
-.sysbar-bare:has(> .sys-session:empty) {
-  display: none;
-}
-.sys-session .sx-facts {
-  margin: 0;
-  gap: 14px;
-}
-/* The sidebar names the project; the path is in the branch's tooltip. */
-.sys-session .fact-cwd {
-  display: none;
+.sys-plans:hover,
+.sys-plans[aria-expanded="true"] {
+  background: var(--hover);
 }
 
 .sysbar-row {
@@ -1483,8 +1469,8 @@ textarea,
   white-space: nowrap;
 }
 
-/* Narrower windows keep the bars and drop the countdowns, then the whole
- * group; the expanded sheet always has all of it. */
+/* Narrower windows keep the bars and drop the countdowns, then keep only
+ * each account's dot; the plans sheet always has all of it. */
 @media (max-width: 1480px) {
   .sys-limit {
     grid-template-columns: auto 30px 28px;
@@ -1493,50 +1479,50 @@ textarea,
     display: none;
   }
 }
-@media (max-width: 1300px) {
-  .sys-limits,
-  .sys-div:has(+ .sys-limits) {
+@media (max-width: 1460px) {
+  .sys-limits {
+    gap: 6px;
+  }
+  .sys-limit {
+    grid-template-columns: auto;
+  }
+  .sys-limit > :not(.sys-limit-dot) {
     display: none;
   }
 }
 
-/* One grid for every account, so their bars line up: per account the name
- * across the top, then 5h, bar, figure, countdown, and the same for the week. */
-.syslimits {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 1px 6px;
-  font-size: 11px;
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
+/* The plans sheet: a block an account, its windows as the Accounts page draws them. */
+.sysplans .sysblock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-.syslimits-acct,
-.syslimits-row {
-  display: contents;
+.sysplans .sysblock > .label {
+  margin-bottom: 0;
 }
-.syslimits-acct[data-stale] .syslimits-name,
-.syslimits-acct[data-stale] .syslimits-row > * {
+.sysplans .sysblock[data-stale] .ubar {
   opacity: 0.55;
 }
-.syslimits-name {
-  grid-column: 1 / -1;
-  font-size: 12px;
+.sysplan-name {
+  font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.syslimits-acct + .syslimits-acct .syslimits-name {
-  margin-top: 4px;
+.sysplan-stale {
+  font-size: 11.5px;
+  color: var(--warning);
 }
-.syslimits .sys-limit-bar {
-  height: 4px;
+.sysplan-at {
+  font-size: 11px;
 }
-.syslimits .sys-limit-reset {
-  color: var(--faint);
-}
-.syslimits-wk {
-  margin-left: 8px;
+.sysplans-all {
+  align-self: center;
+  justify-self: start;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
 }
 
 /* Throttling is a condition, not a measurement, so it gets a border as well as

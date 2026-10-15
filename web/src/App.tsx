@@ -12,7 +12,6 @@ import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
 import { useServerBehind, useUpdateReady } from "./lib/update";
 import { useKeyboardNavigation } from "./lib/keyboard";
 import { SystemBar } from "./SystemBar";
-import { SysbarSlot } from "./sysbarslot";
 import { SessionView } from "./views/session/SessionView";
 import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
@@ -133,7 +132,6 @@ export function App() {
   }, [!!state, scope.project, route.page, route.page === "agents" ? route.id : null, projectTabs.tabs[0]?.id, localAgents.data]);
   const nav = navOf(route);
   // The start of the system bar, where an open session puts its facts.
-  const [sysbarSlot, setSysbarSlot] = useState<HTMLElement | null>(null);
 
   const counts = useMemo(() => countsOf(scoped), [scoped]);
 
@@ -300,7 +298,6 @@ export function App() {
         {/* The one banner left: the rest are in the inbox (Inbox.tsx). */}
         <StaleBanner />
 
-        <SysbarSlot.Provider value={sysbarSlot}>
         <main className={`content ${(flush || route.page === "skills" || route.page === "mcps") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
@@ -353,10 +350,9 @@ export function App() {
             )}
           </ErrorBoundary>
         </main>
-        </SysbarSlot.Provider>
 
         <ErrorBoundary label="The system bar">
-          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} cleanup={state?.cleanup ?? null} focusAccount={focusAccount} slotRef={setSysbarSlot} />
+          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} cleanup={state?.cleanup ?? null} focusAccount={focusAccount} />
         </ErrorBoundary>
       </div>
 

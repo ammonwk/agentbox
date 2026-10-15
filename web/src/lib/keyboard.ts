@@ -41,6 +41,13 @@ function selectorFor(el: HTMLElement): string | null {
   return null;
 }
 
+/** Whether #content shows the route in the address bar. A link can redirect
+ * (the Agents link opens its first agent's chat), so the route to wait for is
+ * the one the hash holds now, not the one that was clicked. */
+export function pageSettled(contentRoute: string | undefined, hash: string): boolean {
+  return contentRoute === hrefOf(parseHash(hash));
+}
+
 /** Arrows move through navigation and into/out of panes. They never click
  * actions: only marked drill-in controls and internal page links open on →.
  * F6 moves between panes even from an editor or terminal. */
@@ -71,7 +78,6 @@ export function useKeyboardNavigation() {
     // the old page or leaving focus on a link that was just unmounted.
     const afterRender = (find: () => HTMLElement | null | undefined) => {
       cancelPending?.();
-      const expectedRoute = hrefOf(parseHash(location.hash));
       const observer = new MutationObserver(tryFocus);
       let frame = 0;
       const timer = setTimeout(() => {
@@ -85,7 +91,7 @@ export function useKeyboardNavigation() {
         cancelPending = undefined;
       }
       function tryFocus() {
-        if (document.getElementById("content")?.dataset.navRoute !== expectedRoute) return;
+        if (!pageSettled(document.getElementById("content")?.dataset.navRoute, location.hash)) return;
         const el = find();
         if (el && focus(el)) cancel();
       }

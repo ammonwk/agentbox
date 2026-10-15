@@ -54,7 +54,7 @@
   /* Keep the escape from a pause reachable inside a phone conversation,
    * where the ordinary machine strip is normally hidden. */
   .app[data-page] .sysbar:has(.sys-cleanup) { display: block; }
-  .sysbar:has(.sys-cleanup) .sys-session { display: none; }
+  .sysbar:has(.sys-cleanup) .sys-plans { display: none; }
   .sysbar:has(.sys-cleanup) .sysbar-row { min-width: 0; height: 48px; }
   .sys-cleanup-action { min-width: 48px; min-height: 48px; }
   .sys-cleanup-link { padding: 0 8px; }

@@ -5,9 +5,12 @@ import { api, useMetrics, useNow, type SystemState } from "./api";
 import { Icon, Spinner } from "./components";
 import { selectScope } from "./route";
 import "./cleanup.css";
-import { accountHue, PROVIDER_LABEL } from "./bits";
+import { accountHue, PROVIDER_LABEL, UsageBar } from "./bits";
+import { ago } from "./api";
+import { hrefOf } from "./route";
 import { fmtCountdown } from "./lib/format";
-import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
+import { recentAccounts } from "./lib/plans";
+import { headlineWindows, outstandingOf, resetText, sortWindows, usageTone, usedNow } from "./lib/usage";
 
 /**
  * The machine, along the bottom of every view.
@@ -23,17 +26,15 @@ import { headlineWindows, resetText, usageTone, usedNow } from "./lib/usage";
  * and throttling. Standing conditions (disk, battery) sit last, after a spacer,
  * because they are context rather than news.
  *
- * After the machine, the subscriptions you are actually spending: the enabled
+ * Before the machine, the subscriptions you are actually spending: the enabled
  * accounts across every provider, newest activity first, each with its 5-hour
  * and weekly window — because "which account has room" is the other thing you
- * glance down for before starting work.
+ * glance down for before starting work. A click opens every plan, as a click
+ * on the machine opens its detail.
  *
  * Every cell is conditional on its own field. On a kernel without PSI, a
  * desktop with no battery, or a chip whose sensors we cannot name, the cell is
  * absent rather than showing a zero we cannot support.
- *
- * With a session open, the bar starts with that session's facts — account,
- * branch, model, context, tokens. SessionView puts them in `slotRef`.
  */
 
 function gb(n: number): string {
@@ -45,27 +46,41 @@ export function SystemBar({
   accounts,
   sessions,
   focusAccount,
-  slotRef,
   cleanup,
 }: {
   accounts: readonly AccountView[];
   sessions: readonly Session[];
   focusAccount: string | null;
   cleanup: CleanupState | null;
-  /** Gets the element the open session's facts go in. */
-  slotRef?: (el: HTMLElement | null) => void;
 }) {
   const { metrics, stale } = useMetrics();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<"plans" | "machine" | null>(null);
+  const toggle = (sheet: "plans" | "machine") => setOpen((o) => (o === sheet ? null : sheet));
   const now = useNow(30_000);
   const sys = metrics?.system;
-  const limits = recentAccounts(accounts, sessions, focusAccount);
+  const limits = recentAccounts(accounts, sessions, focusAccount, LIMIT_CELLS);
 
-  const slot = <div className="sys-session" ref={slotRef} />;
+  const plans = limits.length > 0 ? (
+    <button
+      className="sys-plans"
+      onClick={() => toggle("plans")}
+      aria-expanded={open === "plans"}
+      aria-label={open === "plans" ? "Hide plans" : "Show plans"}
+    >
+      <span className="sys-limits">
+        {limits.map((a) => (
+          <LimitCell key={a.id} account={a} hue={accountHue(a.id, accounts)} focused={a.id === focusAccount} now={now} />
+        ))}
+      </span>
+    </button>
+  ) : null;
+  const plansSheet = open === "plans" ? (
+    <PlansDetail accounts={recentAccounts(accounts, sessions, focusAccount)} focusAccount={focusAccount} now={now} />
+  ) : null;
   // No machine figures: the first sweep has not landed, or this system gives
   // none. An empty strip would be a permanent piece of furniture claiming a
-  // measurement, so only a session's facts show, and only while one is open.
-  if (!sys) return <div className="sysbar"><div className="sysbar-line">{slot}<CleanupControl state={cleanup} stale={stale} /></div></div>;
+  // measurement, so only the plans show.
+  if (!sys) return <div className="sysbar" data-stale={stale}><div className="sysbar-line">{plans}<span className="sys-spacer" /><CleanupControl state={cleanup} stale={stale} /></div>{plansSheet}</div>;
 
   const memUsed = sys.memTotal - sys.memAvailable;
   const memFrac = sys.memTotal ? memUsed / sys.memTotal : 0;
@@ -91,14 +106,14 @@ export function SystemBar({
     // `data-stale` rather than unmounting: the shell already tells you the
     // socket is down, and removing the bar would make a disconnect look like a
     // machine that stopped having a temperature. Dimmed and labelled instead.
-    <div className="sysbar" data-open={open} data-stale={stale}>
+    <div className="sysbar" data-stale={stale}>
       <div className="sysbar-line">
-      {slot}
+      {plans}
       <button
         className="sysbar-row"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        aria-label={open ? "Hide machine detail" : "Show machine detail"}
+        onClick={() => toggle("machine")}
+        aria-expanded={open === "machine"}
+        aria-label={open === "machine" ? "Hide machine detail" : "Show machine detail"}
       >
         {/* ── Cores ── */}
         <span className="sys-cell" title={`${sys.cores} cores, each bar one core`}>
@@ -262,17 +277,6 @@ export function SystemBar({
           </span>
         ) : null}
 
-        {limits.length > 0 ? (
-          <>
-            <Div />
-            <span className="sys-limits">
-              {limits.map((a) => (
-                <LimitCell key={a.id} account={a} hue={accountHue(a.id, accounts)} focused={a.id === focusAccount} now={now} />
-              ))}
-            </span>
-          </>
-        ) : null}
-
         <span className="sys-spacer" />
 
         {/* ── Standing conditions ── */}
@@ -306,13 +310,14 @@ export function SystemBar({
 
         {stale ? <span className="sys-stale">not updating</span> : null}
         <span className="sys-chevron" aria-hidden="true">
-          {open ? "▾" : "▴"}
+          {open === "machine" ? "▾" : "▴"}
         </span>
       </button>
       <CleanupControl state={cleanup} stale={stale} />
       </div>
 
-      {open ? <SystemDetail sys={sys} limits={limits} now={now} /> : null}
+      {plansSheet}
+      {open === "machine" ? <SystemDetail sys={sys} /> : null}
     </div>
   );
 }
@@ -349,39 +354,6 @@ function CleanupControl({ state, stale }: { state: CleanupState | null; stale: b
       {error && !state?.error ? <button onClick={() => setError(null)} aria-label="Dismiss cleanup error"><Icon.x size={14} /></button> : null}
     </div> : null}
   </div>;
-}
-
-/** How many subscriptions the bar carries: the ones in use, newest first. */
-const LIMIT_CELLS = 6;
-
-/**
- * The subscriptions along the bottom: every enabled account across every
- * provider, most recently active first — a session on it (started or touched),
- * or else its last usage reading. The open session's account is always among
- * them, and the list is capped so a fleet of accounts cannot crowd out the
- * machine figures.
- */
-function recentAccounts(
-  accounts: readonly AccountView[],
-  sessions: readonly Session[],
-  focusAccount: string | null,
-): AccountView[] {
-  const active = new Map<string, number>();
-  for (const s of sessions) {
-    if (!s.accountId) continue;
-    const at = Math.max(s.lastActivityAt, s.startedAt);
-    if (at > (active.get(s.accountId) ?? 0)) active.set(s.accountId, at);
-  }
-  const recency = (a: AccountView) => Math.max(active.get(a.id) ?? 0, a.usage.at ?? 0);
-  const ranked = accounts
-    .filter((a) => a.enabled)
-    .sort((a, b) => recency(b) - recency(a) || a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-    .slice(0, LIMIT_CELLS);
-  if (focusAccount && !ranked.some((a) => a.id === focusAccount)) {
-    const focused = accounts.find((a) => a.id === focusAccount);
-    if (focused) ranked.splice(Math.max(0, ranked.length - 1), 1, focused);
-  }
-  return ranked;
 }
 
 /**
@@ -448,37 +420,51 @@ function LimitRow({ kind, w, now }: { kind: "5h" | "wk"; w: UsageWindow | null; 
   );
 }
 
+/** How many subscriptions the bar carries: the ones in use, newest first. */
+const LIMIT_CELLS = 6;
+
+/**
+ * Every plan, one block an account: its service, login and plan, then each
+ * limit window as the Accounts page draws it, the weekly one with what
+ * sessions still claim.
+ */
+function PlansDetail({ accounts, focusAccount, now }: { accounts: AccountView[]; focusAccount: string | null; now: number }) {
+  return (
+    <div className="sysdetail sysplans">
+      {accounts.map((a) => {
+        const windows = sortWindows(a.usage.windows);
+        const outstanding = outstandingOf(a.claims);
+        return (
+          <section key={a.id} className="sysblock" data-stale={a.usage.stale ? true : undefined}>
+            <div className="label">
+              {PROVIDER_LABEL[a.provider]}
+              {a.plan ? ` · ${a.plan}` : ""}
+              {a.id === focusAccount ? " · this session" : ""}
+            </div>
+            <div className="sysplan-name" title={whoOf(a)}>{a.label || a.email || a.id}</div>
+            {windows.length === 0 ? (
+              <div className="faint">{a.usage.source === "none" ? "This provider reports no usage." : "No usage read yet."}</div>
+            ) : (
+              windows.map((w) => <UsageBar key={w.id} window={w} now={now} outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0} />)
+            )}
+            {a.usage.stale ? <div className="sysplan-stale">{a.usage.stale}</div> : null}
+            <div className="faint sysplan-at">{a.usage.at ? `as of ${ago(a.usage.at)}` : ""}</div>
+          </section>
+        );
+      })}
+      <a className="sysplans-all" href={hrefOf({ page: "accounts", sub: "accounts" })}>All accounts</a>
+    </div>
+  );
+}
+
 function Div() {
   return <span className="sys-div" aria-hidden="true" />;
 }
 
 /** The expanded sheet: everything the one-line bar had to leave out. */
-function SystemDetail({ sys, limits, now }: { sys: SystemState; limits: AccountView[]; now: number }) {
+function SystemDetail({ sys }: { sys: SystemState }) {
   return (
     <div className="sysdetail">
-      {limits.length > 0 ? (
-        <Block title="subscriptions">
-          <div className="syslimits">
-            {/* Two lines an account — its name, then both windows side by
-                side — so four accounts are as tall as the other blocks. */}
-            {limits.map((a) => {
-              const { short, weekly } = headlineWindows(a.usage);
-              return (
-                <div key={a.id} className="syslimits-acct" data-stale={a.usage.stale ? true : undefined} title={limitTitle(a, now)}>
-                  <span className="muted syslimits-name">{whoOf(a)}</span>
-                  <span className="syslimits-row">
-                    <span className="faint">5h</span>
-                    <LimitRow kind="5h" w={short} now={now} />
-                    <span className="faint syslimits-wk">wk</span>
-                    <LimitRow kind="wk" w={weekly} now={now} />
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </Block>
-      ) : null}
-
       <Block title="cores">
         <div className="coregrid">
           {sys.perCore.map((v, i) => (
