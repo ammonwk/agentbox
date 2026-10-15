@@ -131,6 +131,12 @@ edits unstaged.
   when they next move. A new fold field must be plain data (`foldstate.ts`),
   or the reader must say how to save it.
 
+- **Core names no agent.** An agent is a superagent: a directory a person
+  owns (`superagent.json`, `MAIN.md`, an optional program), registered with
+  `agentbox superagent add`. No agent's name, prompt, template or process is
+  in `src/` (`docs/superagents.md`). What one agent needs is its own code; core
+  changes only for a generic piece any superagent turns on from its manifest.
+
 ## Where things are
 
 - `src/core/providers/` — one adapter per CLI (transcript format, processes,
@@ -186,6 +192,14 @@ edits unstaged.
   once. Without `cloud.env` none of it runs. Schema changes are new files
   under `supabase/migrations/` (`supabase migration new`), with RLS and
   explicit grants.
+- `src/core/superagents.ts`, `src/core/superagent/` — superagents (the
+  Agents page): the registry, their programs, the page and action relay, the
+  main conversation, and the generic services a manifest turns on (memory
+  journal and MEMORY.md, SOUL.md, rollover, loops, the daily sweep, events).
+  `src/core/workclaims.ts` is the claims API, `src/core/github/` the GitHub App
+  broker (tokens never leave it), `src/core/superagent/team.ts` and
+  `src/cloud/superagents.ts` the shared instances. `superagents/` holds the
+  examples; `docs/superagents.md` is the contract a program is written against.
 - `src/core/cli-guide.ts` — the `agentbox` CLI guide for agents: `agentbox
   guide` prints it and `bun run docs:cli` writes it to `docs/cli.md`.
 - `src/core/pwa.ts` — the board's PWA launcher entry. Chrome writes its

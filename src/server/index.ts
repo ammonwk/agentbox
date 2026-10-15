@@ -185,7 +185,7 @@ export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
-export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`);
+export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`, () => scheduleHot());
 /** Who has which work, by source: renewed on the scheduler's tick, moved on a handover (src/core/workclaims.ts). */
 export const workClaims = new WorkClaims(fleet);
 fleet.onHandOver = (from, to) => workClaims.handOver(from, to);
