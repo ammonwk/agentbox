@@ -17,6 +17,7 @@ import type { AskQuestion, MateMessage, TimelineEvent, TokenTotals } from "../ty
 import { askQuestionsOf } from "./ask";
 import { PrRepoFold } from "../prrepo";
 import { loadFields, saveFields } from "./foldstate";
+import { BranchFold } from "./branches";
 import { cap, capJson, INPUT_CAP, OUTPUT_CAP, type Piece, type ToolEvent, type TranscriptFormat } from "./jsonl-reader";
 import type { TranscriptFacts, TranscriptRef, Wake } from "./types";
 import { dropPasteTags, isFleetNote } from "../sent";
@@ -1184,21 +1185,51 @@ export interface ClaudeExtra<S = any> {
   restore(s: S): void;
 }
 
+/** A message of yours that Claude's rewind can go back to: something typed,
+ *  a slash command or a `!` line, not a tool result or Claude's own notes. */
+function isRewindable(r: any): boolean {
+  if (r.type !== "user" || r.isMeta || r.isCompactSummary) return false;
+  const content = r.message?.content;
+  const typed = (t: unknown) => typeof t === "string" && ["prompt", "command", "bash"].includes(classifyUserText(t));
+  if (typeof content === "string") return typed(content);
+  if (!Array.isArray(content) || content.some((b: any) => b?.type === "tool_result")) return false;
+  return content.some((b: any) => (b?.type === "text" && typed(b.text)) || b?.type === "image");
+}
+
+/** The conversation's tree (`branches.ts`): records of the main chain, by uuid. */
+function addBranch(branches: BranchFold, r: any, index: number): void {
+  if (!r || typeof r !== "object" || r.isSidechain === true) return;
+  // Where a rewind or `/resume` pointed the conversation; Claude resumes from it.
+  if (r.type === "last-prompt" && r.explicit === true && typeof r.leafUuid === "string") return branches.pin(index, r.leafUuid);
+  if (typeof r.uuid !== "string") return;
+  branches.add(index, r.uuid, typeof r.parentUuid === "string" ? r.parentUuid : null, isRewindable(r));
+}
+
 /** The format the generic reader drives. `extra` folds subagent tokens. */
 export function claudeFormat(ref: Pick<TranscriptRef, "path" | "agentSessionId">, extra?: ClaudeExtra): TranscriptFormat {
   const fold = new ClaudeFold(ref, extra ? () => extra.totals() : undefined);
+  const branches = new BranchFold();
   return {
-    add: (v) => fold.add(v),
-    reset: () => fold.reset(),
+    add: (v, i) => {
+      fold.add(v);
+      addBranch(branches, v, i);
+    },
+    reset: () => {
+      fold.reset();
+      branches.reset();
+    },
+    branches: () => branches.view(),
+    leafId: (leaf) => branches.idAt(leaf),
     facts: () => fold.facts(),
     links: claudeLinks,
     pieces: claudePieces,
     refreshExtra: extra ? () => extra.refresh() : undefined,
-    state: () => ({ fold: saveFields(fold, ["ref"]), extra: extra?.state() ?? null }),
+    state: () => ({ fold: saveFields(fold, ["ref"]), branches: saveFields(branches), extra: extra?.state() ?? null }),
     restore: (s) => {
-      const saved = s as { fold: unknown; extra: unknown };
+      const saved = s as { fold: unknown; branches: unknown; extra: unknown };
       if (!!saved.extra !== !!extra) throw new Error("saved for another kind of transcript");
       loadFields(fold, saved.fold);
+      loadFields(branches, saved.branches);
       if (extra) extra.restore(saved.extra);
     },
   };

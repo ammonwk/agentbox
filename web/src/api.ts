@@ -269,6 +269,14 @@ export const api = {
     post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path, background }),
   keys: (id: string, keys: string[]) => post<unknown>(`/api/sessions/${enc(id)}/keys`, { keys }),
   /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
+  /** Go back to one of your messages and carry on from there with `text`; `code` puts the files back too. */
+  edit: (id: string, turnId: string, text: string, mode: "send" | "code", sendId: string) =>
+    request<{ receipt: SendReceipt }>("POST", `/api/sessions/${enc(id)}/edit`, { turnId, text, mode, sendId }, AbortSignal.timeout(120_000)),
+  /** The same in a new session copied from this one, which is left as it was. */
+  fork: (id: string, turnId: string, text: string) =>
+    request<{ session: Session }>("POST", `/api/sessions/${enc(id)}/edit`, { turnId, text, mode: "fork" }, AbortSignal.timeout(180_000)),
+  /** Carry on from another version of a message (`TimelineEvent.versions`). */
+  continueFrom: (id: string, via: string) => post<null>(`/api/sessions/${enc(id)}/continue-from`, { via }),
   answer: (id: string, question: string, answers: AskAnswer[]) => post<unknown>(`/api/sessions/${enc(id)}/answer`, { question, answers }),
   interrupt: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/interrupt`),
   /** Ask Claude a side question (/btw); the answer arrives over the watch as a `btw` frame. */
@@ -289,9 +297,10 @@ export const api = {
    *  history; only a project's, when one is selected. */
   closed: (q: string, offset: number, limit = 30, project: string | null = null) =>
     get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit), ...(project ? { project } : {}) })}`),
-  timeline: (id: string, opts: { before?: string; limit?: number } = {}) => {
+  timeline: (id: string, opts: { before?: string; limit?: number; via?: string } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set("before", opts.before);
+    if (opts.via) q.set("via", opts.via);
     if (opts.limit) q.set("limit", String(opts.limit));
     const qs = q.toString();
     return get<TimelinePage>(`/api/sessions/${enc(id)}/timeline${qs ? `?${qs}` : ""}`);
@@ -764,6 +773,15 @@ function overlaps(held: readonly TimelineEvent[], incoming: readonly TimelineEve
   return incoming.some((e) => ids.has(e.id));
 }
 
+/** The page holds everything held from its start on: the conversation did
+ *  not go back to an earlier message meanwhile (an edit), leaving what was
+ *  held after it on another branch. */
+function agrees(held: readonly TimelineEvent[], page: readonly TimelineEvent[]): boolean {
+  const ids = new Set(page.map((e) => e.id));
+  const from = page[0]!.at;
+  return held.every((e) => e.at <= from || ids.has(e.id));
+}
+
 /**
  * One session's timeline, over the `watch` subscription: a `reset` frame with
  * the newest page, then increments, merged by id (a tool event is re-sent with
@@ -811,7 +829,7 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
         // alone is right. Merging keeps unchanged events as they were, so
         // rows already on screen are not rebuilt; older pages the cache held
         // stay, and so does the cursor behind them.
-        const keep = fromCache && held.length > 0 && msg.events.length > 0 && overlaps(held, msg.events) && held[0]!.at <= msg.events[0]!.at;
+        const keep = fromCache && held.length > 0 && msg.events.length > 0 && overlaps(held, msg.events) && held[0]!.at <= msg.events[0]!.at && agrees(held, msg.events);
         fromCache = false;
         if (keep) {
           eventsRef.current = mergeTimeline(held, msg.events);

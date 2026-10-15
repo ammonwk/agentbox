@@ -16,13 +16,16 @@ import { useFamily } from "./family";
 import { PROVIDER_LABEL, StatusDot } from "../../bits";
 import { shownStatus, titleOf } from "../../lib/board";
 import { hrefOf } from "../../route";
-import { readSent, splitPastes } from "../../../../src/core/sent";
+import { dropPasteTags, readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
+import { EditBox, EditButton, EditsCtx, editsOf, VersionBar, VersionNav, useVersionTimeline, type MessageEdits } from "./versions";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
 const NO_TURNS: Turn[] = [];
+const NO_QUEUED: QueuedMessage[] = [];
+const NO_ECHOES: Echo[] = [];
 /** A step still running after this long is flagged red. */
 const SLOW_MS = 120_000;
 /** A thinking block older than this is an idle gap, not a thought: no duration. */
@@ -41,10 +44,16 @@ const FILL_PAGE = 400;
  * older history in, anchored so the reader does not lose their place.
  */
 export function Timeline({ session }: { session: Session }) {
-  const { events, ready, loadingOlder, exhausted, error, loadOlder } = useTimeline(session.id);
+  // Reading the conversation through another version of a message (an
+  // edit's), rather than as it stands: paged on its own, nothing live.
+  const [via, setVia] = useState<{ session: string; via: string } | null>(null);
+  const viewing = via?.session === session.id ? via.via : null;
+  const current = useTimeline(session.id);
+  const version = useVersionTimeline(session.id, viewing);
+  const { events, ready, loadingOlder, exhausted, error, loadOlder } = viewing ? version : current;
   const btw = useBtw(session.id);
   // The agent works on the last turn: its trace stays open-ended and its answer waits.
-  const live = session.status === "running" && !session.background;
+  const live = session.status === "running" && !session.background && !viewing;
   const allRows = useMemo(() => traceTurns(withBtw(groupTimeline(events), btw, exhausted), live), [events, btw, exhausted, live]);
   // Which trace holds each event, so a jump to one inside opens it first.
   const traceOf = useMemo(() => {
@@ -102,13 +111,14 @@ export function Timeline({ session }: { session: Session }) {
     return m;
   }, [events, board]);
   // Sent mid-turn and held by the agent until its current step yields.
-  const queued = session.queued;
-  const echoes = useEchoes(session.id, events, queued);
+  const queued = viewing ? NO_QUEUED : session.queued;
+  const sending = useEchoes(session.id, events, queued);
+  const echoes = viewing ? NO_ECHOES : sending;
   // The turn is open but nothing has landed: the agent is thinking (a running
   // tool has a row of its own, spinning, so this is only for the gap before
   // the next step is written). The terminal shows the same state.
   const lastEv = events[events.length - 1];
-  const thinking = session.status === "running" && !(lastEv?.kind === "tool" && lastEv.status === "running");
+  const thinking = live && !(lastEv?.kind === "tool" && lastEv.status === "running");
   // When the current wait began: the last step's end, or the session's last activity.
   const liveSince = lastEv
     ? lastEv.kind === "tool" && typeof lastEv.endedAt === "number" && lastEv.endedAt > lastEv.at
@@ -140,7 +150,7 @@ export function Timeline({ session }: { session: Session }) {
   // A question came up while you were at the tail (or the session opened on
   // one): show it from its top, which a card taller than the view would
   // otherwise have scrolled past.
-  const question = session.question;
+  const question = viewing ? null : session.question;
   useLayoutEffect(() => {
     const el = boxRef.current;
     const card = el?.querySelector<HTMLElement>(".ask-live");
@@ -165,9 +175,9 @@ export function Timeline({ session }: { session: Session }) {
 
   // ---- the message rail: where you are, and going to one of them
   const turnList = useTurns(session.id, session.lastActivityAt);
-  const turns = turnList?.turns ?? NO_TURNS;
+  const turns = viewing ? NO_TURNS : (turnList?.turns ?? NO_TURNS);
   const turnIds = useMemo(() => new Set(turns.map((t) => t.id)), [turns]);
-  const [current, setCurrent] = useState<string | null>(null);
+  const [reading, setCurrent] = useState<string | null>(null);
   const [jump, setJump] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -232,6 +242,52 @@ export function Timeline({ session }: { session: Session }) {
   }, [jump, ready, staged, events, exhausted, error, loadingOlder, loadOlder, rowOf, traceOf, flipped, hideSteps, toggleTrace]);
 
   const local = useMemo(() => ({ names: agentNames, jump: (id: string) => setJump(id) }), [agentNames]);
+
+  // ---- editing a message, and its versions
+  const [editing, setEditing] = useState<string | null>(null);
+  // The version just flipped to, to go to once its page is in.
+  const [focus, setFocus] = useState<string | null>(null);
+  // Each message with versions: the one the conversation as it stands has.
+  const standing = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of current.events) if (e.kind === "user" && e.versions) m.set(e.versions.of[0]!, e.versions.of[e.versions.index]!);
+    return m;
+  }, [current.events]);
+  const flip = useCallback(
+    (ev: Extract<TimelineEvent, { kind: "user" }>, to: number) => {
+      const v = ev.versions;
+      const target = v?.of[to];
+      if (!v || !target) return;
+      setEditing(null);
+      setFocus(target);
+      setVia(standing.get(v.of[0]!) === target ? null : { session: session.id, via: target });
+    },
+    [standing, session.id],
+  );
+  const versionOf = (e: TimelineEvent, via: string) => e.kind === "user" && e.versions?.of[e.versions.index] === via;
+  useEffect(() => {
+    if (!focus || !ready) return;
+    const e = events.find((x) => versionOf(x, focus));
+    if (e) {
+      setJump(e.id);
+      setFocus(null);
+    } else if (exhausted || error) setFocus(null);
+    else if (!loadingOlder) loadOlder(1000);
+  }, [focus, ready, events, exhausted, error, loadingOlder, loadOlder]);
+  const shown = useMemo(() => {
+    const e = viewing ? events.find((x) => versionOf(x, viewing)) : undefined;
+    return e?.kind === "user" && e.versions ? { index: e.versions.index, of: e.versions.of.length } : null;
+  }, [viewing, events]);
+  const edits = useMemo<MessageEdits>(
+    () => ({
+      session,
+      canEdit: !!editsOf(session.provider) && !viewing && session.host !== "external" && session.host !== "subagent",
+      editing,
+      setEditing,
+      flip,
+    }),
+    [session, viewing, editing, flip],
+  );
 
   const toLatest = () => {
     const el = boxRef.current;
@@ -332,6 +388,7 @@ export function Timeline({ session }: { session: Session }) {
   return (
     <BoardSessions.Provider value={board}>
     <LocalAgents.Provider value={local}>
+    <EditsCtx.Provider value={edits}>
     <Me.Provider value={me}>
     <div className="tl-wrap">
       <div className="sx-panel tl" ref={boxRef} onScroll={onScroll} tabIndex={0} aria-label="Timeline">
@@ -380,7 +437,7 @@ export function Timeline({ session }: { session: Session }) {
           {thinking && session.background ? <ThinkingLive since={liveSince} now={now} background /> : null}
         </div>
       </div>
-      {!pinned ? (
+      {!pinned && !viewing ? (
         <div className="tl-jump">
           <Button size="sm" icon={Icon.arrowDown} onClick={toLatest}>
             Latest
@@ -392,16 +449,18 @@ export function Timeline({ session }: { session: Session }) {
           {note}
         </div>
       ) : null}
+      {viewing ? <VersionBar session={session} via={viewing} version={shown} onBack={() => setVia(null)} /> : null}
       <MessageRail
         turns={turns}
         total={turnList?.total ?? 0}
-        current={pinned && current === turns[turns.length - 1]?.id ? null : current}
+        current={pinned && reading === turns[turns.length - 1]?.id ? null : reading}
         busy={jump}
         onJump={(t) => setJump(t.id)}
         onStep={step}
       />
     </div>
     </Me.Provider>
+    </EditsCtx.Provider>
     </LocalAgents.Provider>
     </BoardSessions.Provider>
   );
@@ -524,6 +583,7 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
  */
 function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean }) {
   const sent = useMemo(() => readSent(ev.text), [ev.text]);
+  const edits = useContext(EditsCtx);
   const parts = useMemo(() => splitPastes(sent.text), [sent.text]);
   const [open, setOpen] = useState(false);
   const bodyId = useId();
@@ -537,9 +597,22 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
     ),
   );
   if (!sent.agent) {
+    if (!queued && edits?.editing === ev.id) return <EditBox ev={ev} text={dropPasteTags(sent.text)} />;
     const images = ev.images ? `${ev.images} image${ev.images === 1 ? "" : "s"}` : null;
     return (
-      <Bubble id={ev.id} at={ev.at} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : null].filter(Boolean).join(" · ")} copy={sent.text}>
+      <Bubble
+        id={ev.id}
+        at={ev.at}
+        className={queued ? "tl-queued" : undefined}
+        note={[images, queued ? "Queued" : null].filter(Boolean).join(" · ")}
+        copy={sent.text}
+        actions={queued ? null : (
+          <>
+            <EditButton ev={ev} />
+            <VersionNav ev={ev} />
+          </>
+        )}
+      >
         {/* A long brief is its first lines; the rest on a click. */}
         <Clamp lines={14}>{body}</Clamp>
       </Bubble>
@@ -557,6 +630,7 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
         <Icon.send size={12} /> <span className="tl-sent-label">agentbox</span>
         {open ? null : queuedNote}
       </button>
+      {queued ? null : <VersionNav ev={ev} />}
       {open ? (
         <div id={bodyId} className="tl-sent-full">
           <div className="tl-who">
@@ -589,7 +663,7 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
  * your picture, and under it a copy button and the time. `note` says what
  * else is true of it — its images, that it waits in the queue.
  */
-function Bubble({ id, at, className, note, title, copy, children }: { id?: string; at: number; className?: string; note?: string; title?: string; copy: string; children: React.ReactNode }) {
+function Bubble({ id, at, className, note, title, copy, actions, children }: { id?: string; at: number; className?: string; note?: string; title?: string; copy: string; actions?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className={`tl-me${className ? ` ${className}` : ""}`} data-ev={id} title={title}>
       <div className="tl-me-row">
@@ -598,6 +672,7 @@ function Bubble({ id, at, className, note, title, copy, children }: { id?: strin
       </div>
       <div className="tl-me-foot">
         <CopyIcon text={copy} />
+        {actions}
         {note ? <span>{note}</span> : null}
         <time dateTime={new Date(at).toISOString()}>{fmtHourMin(at)}</time>
       </div>

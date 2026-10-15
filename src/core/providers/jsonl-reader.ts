@@ -15,6 +15,7 @@
 import { statSync } from "node:fs";
 import type { TimelineEvent, TimelinePage } from "../types";
 import { JsonlTail, type JsonlTailState } from "./jsonl";
+import { branched, currentLeaf, hiddenRanges, isHidden, leafThrough, versionsOf, wentBack, type Branches, type PromptRows } from "./branches";
 import type { TranscriptFacts, TranscriptReader, TranscriptRef } from "./types";
 
 export type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
@@ -41,11 +42,23 @@ export interface TranscriptFormat {
   /** Fold sources other than the main file (claude's subagent transcripts).
    *  True when anything new was read. */
   refreshExtra?(): boolean;
+  /** Your messages and where each continued from (`branches.ts`), for a
+   *  format whose transcript is a tree: only one path through it is shown. */
+  branches?(): Branches;
+  /** The id of the record a branch ends at, to point the conversation at it. */
+  leafId?(leaf: number): string | null;
   /** The fold's running state (extras included), for `restore` in a later
    *  process. A format without it is read from the start on every restart. */
   state?(): unknown;
   /** Take up a saved state; throws when it does not fit. */
   restore?(s: unknown): void;
+}
+
+/** The records a page leaves out, and the messages that say why. */
+interface Path {
+  branches: Branches | null;
+  rows: PromptRows | null;
+  hidden: [number, number][] | null;
 }
 
 /** What `JsonlTranscriptReader.saveState` returns. */
@@ -245,24 +258,58 @@ export class JsonlTranscriptReader implements TranscriptReader {
   /** Events of records `[from, to)`, grouped by record. Results are folded
    *  into their calls; a result whose call is outside the range is dropped
    *  here, because the page that holds the call already shows it. */
-  private project(from: number, to: number, loaded: Map<number, any>): { index: number; events: TimelineEvent[] }[] {
+  private project(from: number, to: number, loaded: Map<number, any>, path: Path): { index: number; events: TimelineEvent[] }[] {
     const recs = this.tail.range(from, to);
     for (const r of recs) loaded.set(r.index, r.value);
     const out: { index: number; events: TimelineEvent[] }[] = [];
     for (const r of recs) {
       const events: TimelineEvent[] = [];
-      for (const p of this.piecesOf(r.value, r.index)) {
-        if (p.kind === "event") events.push(p.event);
-        else if (p.kind === "call") events.push(this.withResult(p.event, this.resultOf(p.callId, loaded)));
+      if (!path.hidden || !isHidden(path.hidden, r.index)) {
+        for (const p of this.piecesOf(r.value, r.index)) {
+          if (p.kind === "event") events.push(this.versioned(p.event, r.index, path));
+          else if (p.kind === "call") events.push(this.withResult(p.event, this.resultOf(p.callId, loaded)));
+        }
       }
       out.push({ index: r.index, events });
     }
     return out;
   }
 
+  /**
+   * The path shown: the conversation as it stands, or through one version of
+   * a message (`via`). Null `hidden` when the transcript never branched.
+   */
+  private pathOf(via?: string | null): Path {
+    const b = this.format.branches?.() ?? null;
+    const n = this.tail.recordCount;
+    if (!b || !branched(b)) return { branches: null, rows: null, hidden: null };
+    const at = via ? this.parse(via) : null;
+    const leaf = at === null ? currentLeaf(b, n) : leafThrough(b.prompts, at, n);
+    return { branches: b, rows: b.prompts, hidden: hiddenRanges(b.prompts, leaf) };
+  }
+
+  /** The id of the last record of the branch through one version of a
+   *  message (`via`): what to point the conversation at to carry on there.
+   *  Null when it is not a version this file has. */
+  leafIdOf(via: string): string | null {
+    this.pull();
+    const at = this.parse(via);
+    const b = this.format.branches?.();
+    if (at === null || !b || !this.format.leafId) return null;
+    return this.format.leafId(leafThrough(b.prompts, at, this.tail.recordCount));
+  }
+
+  /** A message with other versions says which they are. */
+  private versioned(ev: TimelineEvent, index: number, path: Path): TimelineEvent {
+    if (ev.kind !== "user" || !path.rows) return ev;
+    const all = versionsOf(path.rows, index);
+    if (!all) return ev;
+    return { ...ev, versions: { index: all.indexOf(index), of: all.map((i) => this.cursorAt(i)) } };
+  }
+
   /** The newest `limit` events ending before record `end` (whole records, so
    *  a page can run a few events over). */
-  private page(end: number, limit: number): { events: TimelineEvent[]; start: number } {
+  private page(end: number, limit: number, path: Path): { events: TimelineEvent[]; start: number } {
     const loaded = new Map<number, any>();
     const groups: { index: number; events: TimelineEvent[] }[][] = [];
     let count = 0;
@@ -271,7 +318,7 @@ export class JsonlTranscriptReader implements TranscriptReader {
     let lo = end;
     while (lo > 0 && count < limit) {
       const from = Math.max(0, lo - chunk);
-      const got = this.project(from, lo, loaded);
+      const got = this.project(from, lo, loaded, path);
       const keep: { index: number; events: TimelineEvent[] }[] = [];
       for (let i = got.length - 1; i >= 0 && count < limit; i--) {
         keep.unshift(got[i]!);
@@ -285,21 +332,26 @@ export class JsonlTranscriptReader implements TranscriptReader {
     return { events, start: Math.min(start, end) };
   }
 
-  async timeline(opts: { before?: string | null; limit: number }): Promise<TimelinePage> {
+  async timeline(opts: { before?: string | null; limit: number; via?: string | null }): Promise<TimelinePage> {
     this.pull();
     const n = this.tail.recordCount;
     const end = this.parse(opts.before) ?? n;
     const limit = Math.max(1, opts.limit);
-    const { events, start } = this.page(end, limit);
-    return { events, before: start > 0 ? this.cursorAt(start) : null, cursor: this.cursorAt(n) };
+    const { events, start } = this.page(end, limit, this.pathOf(opts.via));
+    const page: TimelinePage = { events, before: start > 0 ? this.cursorAt(start) : null, cursor: this.cursorAt(n) };
+    if (opts.via) page.via = opts.via;
+    return page;
   }
 
   async since(cursor: string): Promise<{ events: TimelineEvent[]; cursor: string; reset: boolean }> {
     this.pull();
     const n = this.tail.recordCount;
     const from = this.parse(cursor);
-    if (from === null || n - from > MAX_SINCE_RECORDS) {
-      const { events } = this.page(n, RESET_PAGE);
+    const path = this.pathOf();
+    // A message that went back to before what the reader has hides some of
+    // it: start again from the conversation as it now stands.
+    if (from === null || n - from > MAX_SINCE_RECORDS || (path.branches && wentBack(path.branches, from))) {
+      const { events } = this.page(n, RESET_PAGE, path);
       return { events, cursor: this.cursorAt(n), reset: true };
     }
     if (from === n) return { events: [], cursor: this.cursorAt(n), reset: false };
@@ -309,8 +361,9 @@ export class JsonlTranscriptReader implements TranscriptReader {
     for (const r of recs) loaded.set(r.index, r.value);
     const events: TimelineEvent[] = [];
     for (const r of recs) {
+      if (path.hidden && isHidden(path.hidden, r.index)) continue;
       for (const p of this.piecesOf(r.value, r.index)) {
-        if (p.kind === "event") events.push(p.event);
+        if (p.kind === "event") events.push(this.versioned(p.event, r.index, path));
         else if (p.kind === "call") events.push(this.withResult(p.event, this.resultOf(p.callId, loaded)));
         else {
           // A result for a call the client already has: send the call again,

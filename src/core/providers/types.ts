@@ -13,6 +13,7 @@
  */
 
 import type { AskStep } from "./claude-ask";
+import type { RewindGoal, RewindState, RewindStep } from "./claude-rewind";
 import type {
   Account,
   AskAnswer,
@@ -241,8 +242,10 @@ export interface TranscriptReader {
    * can skip work. A truncated or replaced file is re-read from the start.
    */
   refresh(): Promise<{ changed: boolean; facts: TranscriptFacts }>;
-  /** A page of timeline events ending at `before` (or the newest events). */
-  timeline(opts: { before?: string | null; limit: number }): Promise<TimelinePage>;
+  /** A page of timeline events ending at `before` (or the newest events).
+   *  With `via` (a message's `versions.of` entry), the conversation through
+   *  that version of the message rather than as it stands. */
+  timeline(opts: { before?: string | null; limit: number; via?: string | null }): Promise<TimelinePage>;
   /**
    * Events after `cursor`. `reset` means the cursor is no longer valid (the
    * file was replaced) and `events` is a fresh newest page instead. A tool
@@ -257,6 +260,9 @@ export interface TranscriptReader {
    * fleet's reader cache keys it by that code (`readercache.ts`).
    */
   saveState?(): unknown;
+  /** The id of the last record of the branch through one version of a
+   *  message (`TimelineEvent.versions`), for a transcript that branches. */
+  leafIdOf?(via: string): string | null;
   /** Take up a `saveState` from an earlier process, before the first
    *  `refresh`. False when it no longer fits the file; nothing is changed. */
   loadState?(saved: unknown): boolean;
@@ -284,6 +290,8 @@ export interface ResumeOptions {
   model?: string;
   effort?: string;
   autoApprove: boolean;
+  /** Resume into a new session with this id, the conversation copied: a fork. */
+  forkAs?: string;
   /** Flags the session was launched with outside agentbox, kept by adopt
    *  (`carryOver`). When present they decide model and permissions: the
    *  session keeps the permissions it was started with, whatever
@@ -461,6 +469,28 @@ export interface ProviderAdapter {
   /** The AskUserQuestion dialog on `screen`, read whole, for when the
    *  transcript has not recorded it — or null. */
   askOnScreen?(screen: string): { id: string; questions: AskQuestion[] } | null;
+
+  /**
+   * Going back to one of your messages and carrying on from there with
+   * another: an edit (`claude-rewind.ts`). Driven off the screen a step at a
+   * time, as `answerStep`; `inputEmpty` says the restored message has been
+   * cleared from the input box, and `isOpen` that a dialog of its own is up.
+   * `fork` sessions are started by `resumeCommand` with `ResumeOptions.forkAs`.
+   */
+  rewind?: {
+    start(): RewindState;
+    step(screen: string, goal: RewindGoal, st: RewindState): RewindStep;
+    inputEmpty(screen: string): boolean;
+    isOpen(screen: string): boolean;
+    /** It can put the files back as they were, too. */
+    undoesCode: boolean;
+    /** `resumeCommand` takes `forkAs`. */
+    forks: boolean;
+    /** Point the conversation at another branch's last record (`branches.ts`),
+     *  and the command that makes the running TUI take it up. */
+    pointAt?(transcriptPath: string, agentSessionId: string, leafId: string): void;
+    reload?(agentSessionId: string): string;
+  };
 }
 
 /**

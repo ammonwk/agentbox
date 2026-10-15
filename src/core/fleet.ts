@@ -122,6 +122,7 @@ import { statedUntil, statedWaitMs } from "./retrywait";
 import { retryClock } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
+import type { RewindGoal } from "./providers/claude-rewind";
 import { devinQueuedCount } from "./providers/devin";
 import { accountProvider } from "./providers";
 import { bridgedModel } from "../bridge/models";
@@ -2531,8 +2532,8 @@ export class Fleet extends EventEmitter {
     return t;
   }
 
-  timeline(id: string, before: string | null, limit: number): Promise<TimelinePage> {
-    return this.readerOf(id).timeline({ before, limit });
+  timeline(id: string, before: string | null, limit: number, via: string | null = null): Promise<TimelinePage> {
+    return this.readerOf(id).timeline({ before, limit, via });
   }
 
   since(id: string, cursor: string): Promise<{ events: TimelineEvent[]; cursor: string; reset: boolean }> {
@@ -3044,8 +3045,9 @@ export class Fleet extends EventEmitter {
     return this.get(id);
   }
 
-  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string) {
-    const notice = prReleaseNotice(rec.id);
+  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string, forkAs?: string) {
+    // A fork is a new session: what the old one was told is not its news.
+    const notice = forkAs ? null : prReleaseNotice(rec.id);
     if (notice) prompt = `${notice}\n\n${prompt ?? ""}`;
     const adapter = this.adapter(rec.provider);
     const launch = rec.launch ? cleanMcpLaunch(rec.provider, rec.launch, new Map([["CODEX_HOME", account.home]])) : undefined;
@@ -3057,6 +3059,7 @@ export class Fleet extends EventEmitter {
       ...(resumeModel(rec) ? { model: resumeModel(rec)! } : {}),
       autoApprove: getSettings().autoApprove,
       ...(launch ? { carry: launch.args } : {}),
+      ...(forkAs ? { forkAs } : {}),
     };
     const resumed = adapter.resumeCommand(opts);
     const readOnly = !!adapter.readOnly && !!launch && adapter.readOnly.every((a) => launch.args.includes(a));
@@ -3379,6 +3382,182 @@ export class Fleet extends EventEmitter {
         if (grown) rt.setRoomy?.(pane, false);
       }
     });
+  }
+
+  // ------------------------------------------------------ editing a message
+
+  /**
+   * Go back to one of your messages and carry on from there with `text`
+   * instead (`ProviderAdapter.rewind`): the CLI's own rewind, driven off its
+   * screen, then `text` typed as any message is. `goal.code` puts the files
+   * back as they were before it too. What was said after it stays in the
+   * transcript, as the message's other version. A stopped session is resumed
+   * first; one mid-turn is interrupted by the rewind's Escape.
+   */
+  edit(id: string, goal: RewindGoal, text: string, attempt?: () => void): Promise<void> {
+    return this.serial(id, async () => {
+      let s = this.get(id);
+      const rw = this.adapter(s.provider).rewind;
+      if (!rw) throw new FleetError(409, `${this.adapter(s.provider).label} messages cannot be edited from here`);
+      if (goal.code && !rw.undoesCode) throw new FleetError(409, `${this.adapter(s.provider).label} cannot put the files back`);
+      if (s.host === "subagent") throw this.callersAgent(s);
+      if (s.host === "external") throw new FleetError(409, "running in another terminal — adopt it to edit here");
+      if (s.status === "blocked") throw new FleetError(409, "it is showing a prompt; answer that first");
+      if (s.host === "none") {
+        await this.resumeNow(id);
+        s = this.get(id);
+      }
+      const pane = s.tmux ?? getSessionRecord(id)?.tmux;
+      if (!pane) throw new FleetError(409, "not running in agentbox");
+      await this.untilReady(id);
+      if (this.startedAt.has(id)) await this.untilSettled(id, pane);
+      if (s.provider === "claude") await this.clearBtw(id, pane);
+      await this.clearLimitDialog(s.provider, pane);
+      attempt?.();
+      await this.rewindIn(pane, rw, goal);
+      await this.typeInto(id, s.provider, pane, text);
+    });
+  }
+
+  /**
+   * Edit in a copy: a new session with the conversation so far (the CLI's own
+   * fork, on the same account so it starts warm, in the same directory),
+   * gone back to the message there and carried on with `text`. The session
+   * it came from is left as it was; the fork is started under it.
+   */
+  async fork(id: string, goal: RewindGoal, text: string): Promise<Session> {
+    const rec = getSessionRecord(id);
+    if (!rec) throw new FleetError(404, `no session ${id}`);
+    const view = this.get(id);
+    const adapter = this.adapter(rec.provider);
+    const rw = adapter.rewind;
+    if (!rw?.forks) throw new FleetError(409, `${adapter.label} sessions cannot be forked from here`);
+    if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to fork");
+    const account = this.accountFor(rec, view);
+    if (!account) throw new FleetError(409, "this session's account is no longer set up");
+    const cwd = this.resumeCwd(rec);
+    if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
+
+    const forkAs = randomUUID();
+    const prepared = this.resumeLaunch(rec, account, cwd, undefined, forkAs);
+    const newId = newSessionId();
+    const now = this.now();
+    const placement = this.placement(rec.provider, view.model, account.id, rec.effort ?? null);
+    const claim = this.claimOf(rec.provider, view.model, rec.effort ?? null, false);
+    insertSessionRecord({
+      id: newId,
+      provider: rec.provider,
+      agentSessionId: forkAs,
+      accountId: account.id,
+      cwd,
+      worktree: null,
+      label: null,
+      claim,
+      origin: "agentbox",
+      tmux: tmuxName(newId),
+      transcriptPath: null,
+      startedAt: now,
+      lastActivityAt: now,
+      archivedAt: null,
+      facts: { cwd, lastPrompt: text, lastPromptAt: now },
+      createdAt: now,
+      effort: rec.effort ?? null,
+      model: rec.model ?? null,
+      parent: id,
+      parentByHand: true,
+    });
+    if (rec.launch) updateSessionRecord(newId, { launch: rec.launch });
+    this.byAgentId.set(`${rec.provider}:${forkAs}`, newId);
+    insertAssignment({
+      id: randomUUID(),
+      sessionId: newId,
+      at: now,
+      provider: rec.provider,
+      accountId: account.id,
+      mode: placement.mode,
+      claim,
+      candidates: placement.candidates,
+      settings: getSettings().balancer,
+      why: `fork of ${id}, on its account`,
+    });
+    this.startTmux(getSessionRecord(newId)!, account, cwd, undefined, prepared);
+    await this.tick();
+    const pane = tmuxName(newId);
+    await this.serial(newId, async () => {
+      await this.untilReady(newId);
+      await this.untilSettled(newId, pane);
+      await this.rewindIn(pane, rw, goal);
+      await this.typeInto(newId, rec.provider, pane, text);
+    }).catch((e) => {
+      throw new FleetError(409, `the fork ${newId} started, but going back in it failed: ${(e as Error).message}`);
+    });
+    return this.get(newId);
+  }
+
+  /**
+   * Carry on from another version of a message (`via`, from
+   * `TimelineEvent.versions`): point the conversation at the end of that
+   * branch and have the running TUI take it up; a stopped session takes it up
+   * when it is next resumed. Not mid-turn: the CLI is writing to the file.
+   */
+  continueFrom(id: string, via: string): Promise<void> {
+    return this.serial(id, async () => {
+      const s = this.get(id);
+      const rec = getSessionRecord(id);
+      const rw = this.adapter(s.provider).rewind;
+      if (!rec?.transcriptPath || !rec.agentSessionId || !rw?.pointAt || !rw.reload) {
+        throw new FleetError(409, `${this.adapter(s.provider).label} sessions cannot switch versions from here`);
+      }
+      if (s.host === "subagent") throw this.callersAgent(s);
+      if (s.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
+      if (s.status === "running") throw new FleetError(409, "it is mid-turn; stop it or wait for the turn to end");
+      if (s.status === "blocked") throw new FleetError(409, "it is showing a prompt; answer that first");
+      const leaf = this.readerOf(id).leafIdOf?.(via) ?? null;
+      if (!leaf) throw new FleetError(409, "that version is not in the transcript");
+      rw.pointAt(transcriptFile(rec.transcriptPath), rec.agentSessionId, leaf);
+      if (s.host === "tmux" && s.tmux) {
+        await this.untilReady(id);
+        await this.typeInto(id, s.provider, s.tmux, rw.reload(rec.agentSessionId));
+      }
+    });
+  }
+
+  /** Drive a rewind to `goal` on the pane, then clear the message it put back
+   *  in the input box. Leaves no dialog of its own up when it fails. */
+  private async rewindIn(pane: string, rw: NonNullable<ProviderAdapter["rewind"]>, goal: RewindGoal): Promise<void> {
+    const rt = this.deps.runtime;
+    let screen = rt.capture(pane) ?? "";
+    const grown = rt.setRoomy?.(pane, true) ?? false;
+    const zoomed = rt.setZoom?.(pane, true) ?? false;
+    if (grown || zoomed) screen = await this.settled(pane, screen);
+    // One key at a time: two Escapes in one write read as Alt+Escape.
+    const press = async (keys: string[]) => {
+      for (const k of keys) {
+        rt.sendKeys(pane, [k]);
+        await Bun.sleep(120);
+      }
+      screen = await this.settled(pane, screen);
+    };
+    try {
+      const st = rw.start();
+      for (let n = 0; ; n++) {
+        if (n > 200) throw new FleetError(409, "going back did not finish; the Terminal tab shows where it stopped");
+        const next = rw.step(screen, goal, st);
+        if ("done" in next) break;
+        if ("error" in next) {
+          for (let i = 0; i < 3 && rw.isOpen(screen); i++) await press(["Escape"]);
+          throw new FleetError(409, next.error);
+        }
+        await press(next.keys);
+      }
+      for (let i = 0; !rw.inputEmpty(screen); i++) {
+        if (i === 3) throw new FleetError(409, "went back, but the old message would not clear from the input box; the Terminal tab shows where it stopped");
+        await press(rw.isOpen(screen) ? ["Escape"] : ["Escape", "Escape"]);
+      }
+    } finally {
+      if (zoomed) rt.setZoom?.(pane, false);
+      if (grown) rt.setRoomy?.(pane, false);
+    }
   }
 
   // ------------------------------------------------------ side questions

@@ -69,6 +69,7 @@ import { HttpError, Router, fail, json, readBody } from "./router";
 import { optionalString, parseAnswers, parseSettingsPatch, requireBoolean, requireString } from "./validate";
 import { parseClientMessage } from "./protocol";
 import { TurnIndex } from "../core/turns";
+import { rewindGoalOf } from "../core/providers/claude-rewind";
 import { loadTurnState, saveTurnState } from "../core/readercache";
 import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
@@ -888,6 +889,36 @@ const router = new Router(mapError)
       throw e;
     }
   })
+  .add("POST", "/api/sessions/:id/edit", async ({ req, params }) => {
+    const b = await readBody(req);
+    const turnId = requireString(b, "turnId");
+    const text = requireString(b, "text");
+    if (!text.trim()) throw new HttpError(400, "the message is empty");
+    const mode = b.mode ?? "send";
+    if (mode !== "send" && mode !== "code" && mode !== "fork") throw new HttpError(400, "mode is send, code or fork");
+    const goal = rewindGoalOf((await turnIndex.list(params.id!)).turns, turnId, mode === "code");
+    if (typeof goal === "string") throw new HttpError(409, goal);
+    if (mode === "fork") {
+      const session = await fleet.fork(params.id!, goal, text);
+      scheduleHot();
+      return json({ session });
+    }
+    const sendId = requireString(b, "sendId");
+    if (!/^[\w-]{1,64}$/.test(sendId)) throw new HttpError(400, "invalid send ID");
+    try {
+      const receipt = await submitWithReceipt(params.id!, sendId, `edit:${turnId}:${mode}`, text, (attempt) => fleet.edit(params.id!, goal, text, attempt));
+      scheduleHot();
+      return json({ receipt });
+    } catch (e) {
+      if (e instanceof SendReceiptConflict) throw new HttpError(409, e.message);
+      throw e;
+    }
+  })
+  .add("POST", "/api/sessions/:id/continue-from", async ({ req, params }) => {
+    await fleet.continueFrom(params.id!, requireString(await readBody(req), "via"));
+    scheduleHot();
+    return json(null);
+  })
   .add("GET", "/api/sessions/:id/submissions/:sendId", ({ params }) => json(sendReceipt(params.id!, params.sendId!)))
   .add("POST", "/api/sessions/:id/keys", async ({ req, params }) => {
     const b = await readBody(req);
@@ -1214,7 +1245,7 @@ const router = new Router(mapError)
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));
-    return json(await fleet.timeline(params.id!, url.searchParams.get("before"), limit));
+    return json(await fleet.timeline(params.id!, url.searchParams.get("before"), limit, url.searchParams.get("via")));
   })
   .add("GET", "/api/sessions/:id/turns", async ({ params }) => {
     fleet.get(params.id!);

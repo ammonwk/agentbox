@@ -21,7 +21,7 @@
  * stale file for a recycled pid detectable.
  */
 
-import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { moveInto } from "./move";
 import { randomUUID } from "node:crypto";
@@ -35,6 +35,7 @@ import * as darwin from "../darwin";
 import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf } from "./procs";
 import { pickOption, plainScreen, RULE, underInput } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
+import { claudeInputEmpty, claudeRewindOpen, claudeRewindStep, rewindStart } from "./claude-rewind";
 import { briefing } from "./briefing";
 import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
@@ -518,8 +519,19 @@ function resumeCommand(opts: ResumeOptions): Command {
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
     argv.push(...THINKING, ...told(), ...HOOKED);
   }
+  if (opts.forkAs) argv.push("--fork-session", "--session-id", opts.forkAs);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
+}
+
+/**
+ * Point the conversation at another branch: the record Claude itself writes
+ * when a rewind or `/resume` picks where to carry on from. It resumes from the
+ * newest explicit one, and `/resume <its own id>` in the running TUI reloads
+ * from it. One line appended, as Claude appends its own.
+ */
+function pointAt(transcriptPath: string, agentSessionId: string, leafId: string): void {
+  appendFileSync(transcriptPath, `${JSON.stringify({ type: "last-prompt", leafUuid: leafId, explicit: true, sessionId: agentSessionId })}\n`);
 }
 
 /** Flags adopt carries over, by how many values each takes (`carryFlags`). */
@@ -690,5 +702,15 @@ export const claudeAdapter: ProviderAdapter = {
   approvePrompt: claudeApprovePrompt,
   blockedOn: claudeBlockedOn,
   answerStep: askStep,
+  rewind: {
+    start: rewindStart,
+    step: claudeRewindStep,
+    inputEmpty: claudeInputEmpty,
+    isOpen: claudeRewindOpen,
+    undoesCode: true,
+    forks: true,
+    pointAt,
+    reload: (id) => `/resume ${id}`,
+  },
   askOnScreen: askFromScreen,
 };

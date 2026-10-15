@@ -631,7 +631,16 @@ export interface Attention {
  * these; the UI renders only these.
  */
 export type TimelineEvent = { id: string; at: number } & (
-  | { kind: "user"; text: string; images?: number }
+  | {
+      kind: "user";
+      text: string;
+      images?: number;
+      /** The versions of this message, when the conversation went back to
+       *  before it and carried on with another (an edit, Claude's rewind):
+       *  `of` holds one `via` per version, oldest first, for reading the
+       *  conversation through that one, and `index` is this one's place. */
+      versions?: { index: number; of: string[] };
+    }
   | { kind: "assistant"; text: string }
   | { kind: "thinking"; text: string }
   | {
@@ -742,6 +751,8 @@ export interface TurnList {
 
 export interface TimelinePage {
   events: TimelineEvent[];
+  /** Read through another version of a message (`via`), not the conversation as it stands. */
+  via?: string;
   /** Pass back as `before` to get the page before this one. Null at the start. */
   before: string | null;
   /** Pass back as `since` to get what happened after this page. */
