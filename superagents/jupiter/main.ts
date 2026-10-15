@@ -9,12 +9,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { ActionError, agentbox, call, serve, store, type ActionRequest, type SuperagentBlock, type SuperagentView } from "../lib/sdk";
+import { ActionError, agentbox, call, me, serve, store, type ActionRequest, type SuperagentBlock, type SuperagentView } from "../lib/sdk";
 import type { AppState, SuperagentInfo } from "../../src/core/types";
 
 const PROVIDERS = ["claude", "codex", "devin", "omp", "opencode", "muse"] as const;
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
-const manifest = JSON.parse(readFileSync(join(import.meta.dir, "superagent.json"), "utf8")) as { makes?: string };
+// Its manifest is the one in its directory, which may be a copy that runs this code.
+const manifest = JSON.parse(readFileSync(join(me.dir, "superagent.json"), "utf8")) as { makes?: string };
 const MAKES = resolve((manifest.makes ?? "~/.agents/superagents").replace(/^~(?=\/|$)/, homedir()));
 
 type Spec = {

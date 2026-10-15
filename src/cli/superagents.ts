@@ -91,10 +91,11 @@ export async function superagent(api: Api, args: string[]): Promise<number> {
       return 0;
     }
     case "send": {
-      const words = rest.slice(1);
+      let words = rest.slice(1), project: string | null = null;
+      if (words[0] === "--project") [, project = null, ...words] = words;
       const text = words.length === 1 && words[0] === "-" ? (await new Response(Bun.stdin.stream()).text()).trim() : words.join(" ");
-      if (!text.trim()) throw new Error("superagent send <name> <text…|->");
-      const s = await api<SuperagentInfo>("GET", `/api/superagents/${encodeURIComponent(name())}`);
+      if (!text.trim()) throw new Error("superagent send <name> [--project P] <text…|->");
+      const s = await pick(api, name(), project);
       if (!s.enabled) throw new Error(`${s.title} is disabled; enable it first`);
       if (s.main) {
         // Waking it is the point of messaging an agent, so --wake is implied.
@@ -108,6 +109,8 @@ export async function superagent(api: Api, args: string[]): Promise<number> {
     }
     case "memory":
       return memory(api, name(), rest.slice(1));
+    case "report":
+      return report(api, rest);
     case "loop":
     case "loops":
       return loop(api, name(), rest.slice(1));
@@ -225,12 +228,15 @@ async function loop(api: Api, name: string, args: string[]): Promise<number> {
       console.log(`${l.id}  ${l.source}  ${l.when}${l.check ? `, when \`${l.check}\` exits 0` : ""}; next ${l.nextAt ? clock(l.nextAt) : "never"}${l.due ? `, one due since ${clock(l.due)} (it waits for the turn to end)` : ""}${l.last ? `; last ${clock(l.last.at)}: ${l.last.result}${l.last.detail ? ` (${l.last.detail})` : ""}` : ""}`);
     return 0;
   };
+  // The form the old agents learnt: `loop <name> --when … --prompt …` sets, `loop <name> off` removes, the loop "loop".
+  if (verb?.startsWith("--")) return loop(api, name, ["set", "loop", ...args]);
+  if (verb === "off" && !id) return loop(api, name, ["rm", "loop"]);
   switch (verb) {
     case undefined:
     case "ls":
       return show(await api<SuperagentInfo>("GET", base));
     case "set": {
-      const { flags } = parseArgs(more, ["when", "check", "prompt", "file"], []);
+      const { flags } = parseArgs(more, ["when", "check", "prompt", "file", "project"], []);
       const get = (k: string) => str(flags.get(k)) ?? "";
       const prompt = get("file") ? readFileSync(get("file"), "utf8").trim() : get("prompt");
       if (!id || !get("when") || !prompt) throw new Error('superagent loop <name> set <id> --when "every hour" (--prompt <text> | --file <file>) [--check <command: exit 0 runs, 1 skips>]');
@@ -243,6 +249,30 @@ async function loop(api: Api, name: string, args: string[]): Promise<number> {
     default:
       throw new Error(`superagent loop takes ls, set or rm: not "${verb}"`);
   }
+}
+
+/**
+ * The superagent `name` means: the one of that name, or else the one named
+ * `<name>-…` that shows in `project` (by id, name or owner/repo) or, with no
+ * project given, in the project of the session this runs in. Several of one
+ * agent, one per project, are copies of one directory under such names.
+ */
+async function pick(api: Api, name: string, project: string | null): Promise<SuperagentInfo> {
+  const all = await api<SuperagentInfo[]>("GET", "/api/superagents");
+  const want = name.toLowerCase();
+  const exact = all.find((s) => s.name === want);
+  if (exact) return exact;
+  let found = all.filter((s) => s.name.startsWith(`${want}-`));
+  if (found.length > 1) {
+    const state = await api<AppState>("GET", "/api/state");
+    const me = process.env.AGENTBOX_SESSION ? state.sessions.find((x) => x.id === process.env.AGENTBOX_SESSION) : undefined;
+    const repo = project
+      ? state.repos.find((r) => r.id === project || r.displayName.toLowerCase() === project.toLowerCase() || r.fullName?.toLowerCase() === project.toLowerCase())?.id
+      : (me?.agentProject ?? undefined);
+    if (repo) found = found.filter((s) => s.projects?.includes(repo));
+  }
+  if (found.length === 1) return found[0]!;
+  throw new Error(found.length ? `"${name}" is several agents; name one: ${found.map((s) => s.name).join(", ")}` : `no agent "${name}"; agentbox superagent ls lists them`);
 }
 
 /** `agentbox report --request <uuid> --file <text>`: from a superagent's

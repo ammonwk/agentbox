@@ -6,13 +6,14 @@
  * The pass holds nothing between runs but its store, so a restart picks up
  * where it was, and every start is keyed so it never happens twice.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ActionError, AgentboxError, agentbox, call, every, md, me, serve, store, type SuperagentBlock, type SuperagentView } from "../lib/sdk";
 import type { Session } from "../../src/core/types";
 
 type Config = { repos: string[]; author: string; every: number; owners: { provider: string; running: number; perPass: number; prompt: string } };
-const manifest = JSON.parse(readFileSync(join(import.meta.dir, "superagent.json"), "utf8")) as { steward: Config };
+// Its manifest is the one in its directory, which may be a copy that runs this code.
+const manifest = JSON.parse(readFileSync(join(me.dir, "superagent.json"), "utf8")) as { steward: Config };
 const cfg = manifest.steward;
 
 type Check = { conclusion?: string | null; state?: string | null; status?: string | null; name?: string; context?: string };
@@ -91,7 +92,8 @@ async function pass(): Promise<void> {
   // Owners for what needs work and has nobody, a few a pass, up to the dial.
   const running = (db.query("SELECT session FROM started").all() as { session: string }[]).filter((r) => live(byId.get(r.session))).length;
   let room = Math.min(cfg.owners.perPass, cfg.owners.running - running);
-  const template = readFileSync(join(import.meta.dir, cfg.owners.prompt), "utf8");
+  // The copy's own prompt file when it has one, else this code's.
+  const template = readFileSync(existsSync(join(me.dir, cfg.owners.prompt)) ? join(me.dir, cfg.owners.prompt) : join(import.meta.dir, cfg.owners.prompt), "utf8");
   for (const pr of prs) {
     if (room <= 0) break;
     if (pr.state !== "needs-work" || pr.owner) continue;

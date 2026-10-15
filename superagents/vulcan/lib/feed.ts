@@ -2,13 +2,14 @@
  *  decide. A decision is recorded, with its delivery receipt, before anything is
  *  sent; an approval is delivered at most once and never again after a restart. */
 import { randomUUID } from "node:crypto";
-import { ActionError, AgentboxError, agentbox, call, type Caller } from "../../lib/sdk";
+import { ActionError, AgentboxError, agentbox, call, me, type Caller } from "../../lib/sdk";
 import type { SendReceipt } from "../../../src/core/types";
 import type { Ctx } from "./ctx";
 import { ProposalInput, type Proposal } from "./types";
 import { familyOf, writable } from "./work";
 
-const cardKey = (id: string) => `vulcan-proposal:${id}`;
+// Keyed by its name too: two copies of Vulcan add two cards, never one.
+const cardKey = (id: string) => `${me.name}-proposal:${id}`;
 
 /** The sessions whose word reaches the Feed: Vulcan's main, and a family's writer while it may write. */
 async function mayRecommend(ctx: Ctx, session: string | null): Promise<string | null> {

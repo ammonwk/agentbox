@@ -297,6 +297,18 @@ export class Superagents {
     return this.info(this.row(name));
   }
 
+  /**
+   * The registered name `name` stands for: itself, or the superagent an old
+   * local agent of that id became (scripts/migrate-local-agents.ts records
+   * each move in `superagent_imports`), so its conversations' old commands
+   * still reach it. Unknown names come back as they are, to be refused.
+   */
+  canonical(name: string): string {
+    if (NAME.test(name) && rowOf(name)) return name;
+    const moved = getDb().query("SELECT name FROM superagent_imports WHERE source = ?").get(name) as { name: string } | null;
+    return moved?.name ?? name;
+  }
+
   /** Whether a superagent of this name is registered here. */
   has(name: string): boolean {
     return NAME.test(name) && !!rowOf(name);
@@ -625,9 +637,10 @@ export class Superagents {
     return { name, title: m?.title ?? name, dir: r.dir, memory: !!m?.memory, rollover: rolloverOf(m), main: this.mainOf(r, m) };
   }
 
-  /** What instructions may name: its directory and home, and the agentbox checkout (its docs, its examples). */
+  /** What instructions may name: its name (so a copied directory needs no
+   *  edit), its directory and home, and the agentbox checkout (its docs, its examples). */
   private fill(text: string, r: Row): string {
-    return text.replaceAll("{{dir}}", r.dir).replaceAll("{{home}}", superagentHome(r.name)).replaceAll("{{agentbox}}", packageRoot).replaceAll("{{bin}}", agentboxBin());
+    return text.replaceAll("{{name}}", r.name).replaceAll("{{dir}}", r.dir).replaceAll("{{home}}", superagentHome(r.name)).replaceAll("{{agentbox}}", packageRoot).replaceAll("{{bin}}", agentboxBin());
   }
 
   private row(name: string): Row {

@@ -48,29 +48,29 @@ export function superagentRoutes(router: Router, superagents: Superagents, hooks
   return router
     .add("GET", "/api/superagents", () => json(superagents.list()))
     .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))
-    .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(params.name!)))
+    .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(superagents.canonical(params.name!))))
     .add("PATCH", "/api/superagents/:name", async ({ req, params }) => {
       const b = await readBody(req);
       const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
       const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
-      return json(await superagents.patch(params.name!, { main, enabled }));
+      return json(await superagents.patch(superagents.canonical(params.name!), { main, enabled }));
     })
     .add("DELETE", "/api/superagents/:name", ({ params }) => {
-      superagents.remove(params.name!);
+      superagents.remove(superagents.canonical(params.name!));
       return json(null);
     })
-    .add("POST", "/api/superagents/:name/restart", async ({ params }) => json(await superagents.restart(params.name!)))
+    .add("POST", "/api/superagents/:name/restart", async ({ params }) => json(await superagents.restart(superagents.canonical(params.name!))))
     .add("GET", "/api/superagents/:name/log", ({ params, url }) => {
       const bytes = Number(url.searchParams.get("bytes")) || undefined;
-      return json({ text: superagents.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
+      return json({ text: superagents.log(superagents.canonical(params.name!), bytes && Math.min(bytes, 1024 * 1024)) });
     })
-    .add("GET", "/api/superagents/:name/view", async ({ params, url }) => json(await superagents.view(params.name!, url.searchParams.get("tab"))))
+    .add("GET", "/api/superagents/:name/view", async ({ params, url }) => json(await superagents.view(superagents.canonical(params.name!), url.searchParams.get("tab"))))
     .add("POST", "/api/superagents/:name/action", async ({ req, params }) => {
       const b = await readBody(req);
       requireString(b, "action");
       // Who asked: a session proves itself with its capability; a page in a browser sends an Origin.
       const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const) };
-      return json(await superagents.action(params.name!, b, caller));
+      return json(await superagents.action(superagents.canonical(params.name!), b, caller));
     })
     .add("POST", "/api/superagents/:name/chat", async ({ req, params }) => {
       const b = await readBody(req);
@@ -78,66 +78,66 @@ export function superagentRoutes(router: Router, superagents: Superagents, hooks
       if (!text.trim()) throw new HttpError(400, "the message is empty");
       const sendId = requireString(b, "sendId");
       if (!/^[\w-]{1,64}$/.test(sendId)) throw new HttpError(400, "invalid send ID");
-      const out = await superagents.chat(params.name!, text, sendId);
+      const out = await superagents.chat(superagents.canonical(params.name!), text, sendId);
       hooks.scheduleHot();
       return json(out);
     })
 
     // ----- its memory journal (src/core/superagent/memory-view.ts)
     .add("GET", "/api/superagents/:name/memory", ({ req, params, url }) => {
-      actorFor(req, superagents, params.name!, "read its memory");
-      return json(superagents.memory(params.name!, url.searchParams.get("q")));
+      actorFor(req, superagents, superagents.canonical(params.name!), "read its memory");
+      return json(superagents.memory(superagents.canonical(params.name!), url.searchParams.get("q")));
     })
     .add("GET", "/api/superagents/:name/memory/:record", ({ req, params }) => {
-      actorFor(req, superagents, params.name!, "read its memory");
-      return json(superagents.memoryRecord(params.name!, params.record!));
+      actorFor(req, superagents, superagents.canonical(params.name!), "read its memory");
+      return json(superagents.memoryRecord(superagents.canonical(params.name!), params.record!));
     })
     .add("POST", "/api/superagents/:name/memory/:kind", async ({ req, params }) => {
       const kind = params.kind!;
       if (kind !== "handoff" && kind !== "note" && kind !== "prefer") throw new HttpError(404, `no memory write ${kind}: handoff, note or prefer`);
-      const actor = actorFor(req, superagents, params.name!, `write its memory`);
-      return json(superagents.remember(params.name!, kind, actor, await readBody(req)));
+      const actor = actorFor(req, superagents, superagents.canonical(params.name!), `write its memory`);
+      return json(superagents.remember(superagents.canonical(params.name!), kind, actor, await readBody(req)));
     })
 
     // ----- its loops (src/core/superagent/loops.ts)
     .add("PUT", "/api/superagents/:name/loops/:id", async ({ req, params }) => {
-      actorFor(req, superagents, params.name!, "set its loops");
-      return json(superagents.setLoop(params.name!, params.id!, await readBody(req)));
+      actorFor(req, superagents, superagents.canonical(params.name!), "set its loops");
+      return json(superagents.setLoop(superagents.canonical(params.name!), params.id!, await readBody(req)));
     })
     .add("DELETE", "/api/superagents/:name/loops/:id", ({ req, params }) => {
-      actorFor(req, superagents, params.name!, "remove its loops");
-      return json(superagents.removeLoop(params.name!, params.id!));
+      actorFor(req, superagents, superagents.canonical(params.name!), "remove its loops");
+      return json(superagents.removeLoop(superagents.canonical(params.name!), params.id!));
     })
     .add("GET", "/api/superagents/:name/sweeps", ({ params }) => {
-      superagents.get(params.name!);
-      return json(superagents.sweeps.list(params.name!));
+      superagents.get(superagents.canonical(params.name!));
+      return json(superagents.sweeps.list(superagents.canonical(params.name!)));
     })
 
     // ----- its picture (src/core/superagent/avatar.ts): a person sets it on the page
     .add("GET", "/api/superagents/:name/avatar", ({ params }) => {
-      const f = superagents.avatar(params.name!);
+      const f = superagents.avatar(superagents.canonical(params.name!));
       if (!f) throw new HttpError(404, `${params.name} has no picture`);
       return new Response(Bun.file(f.path), { headers: { "content-type": f.mime, "cache-control": "private, max-age=31536000, immutable" } });
     })
     .add("PUT", "/api/superagents/:name/avatar", async ({ req, params }) => {
-      if (actorFor(req, superagents, params.name!, "set its picture").kind !== "person") throw new HttpError(403, "a person sets a superagent's picture");
+      if (actorFor(req, superagents, superagents.canonical(params.name!), "set its picture").kind !== "person") throw new HttpError(403, "a person sets a superagent's picture");
       const len = Number(req.headers.get("content-length") ?? 0);
       if (len > AVATAR_MAX_BYTES) throw new HttpError(413, `Choose an image of at most ${AVATAR_MAX_BYTES / 1024 / 1024} MB`);
       const bytes = new Uint8Array(await req.arrayBuffer());
-      return json(superagents.setAvatar(params.name!, bytes, req.headers.get("content-type") ?? ""));
+      return json(superagents.setAvatar(superagents.canonical(params.name!), bytes, req.headers.get("content-type") ?? ""));
     })
     .add("DELETE", "/api/superagents/:name/avatar", ({ req, params }) => {
-      if (actorFor(req, superagents, params.name!, "remove its picture").kind !== "person") throw new HttpError(403, "a person removes a superagent's picture");
-      return json(superagents.setAvatar(params.name!, null));
+      if (actorFor(req, superagents, superagents.canonical(params.name!), "remove its picture").kind !== "person") throw new HttpError(403, "a person removes a superagent's picture");
+      return json(superagents.setAvatar(superagents.canonical(params.name!), null));
     })
 
     // ----- reports to agentbox's issue tracker (src/core/superagent/feedback.ts)
     .add("POST", "/api/superagents/:name/help", async ({ req, params }) => {
       if (authenticatedSession(req)) throw new HttpError(403, "/help is a person's report from the Agents page; a session files one with agentbox report");
-      superagents.get(params.name!);
-      return json(await superagents.feedback.submit(params.name!, await readBody(req)));
+      superagents.get(superagents.canonical(params.name!));
+      return json(await superagents.feedback.submit(superagents.canonical(params.name!), await readBody(req)));
     })
-    .add("GET", "/api/superagents/:name/help/:request", async ({ params }) => json(await superagents.feedback.receipt(params.name!, params.request!)))
+    .add("GET", "/api/superagents/:name/help/:request", async ({ params }) => json(await superagents.feedback.receipt(superagents.canonical(params.name!), params.request!)))
     .add("POST", "/api/report", async ({ req }) => {
       const by = authenticatedSession(req);
       if (!by) throw new HttpError(403, "a report comes from a superagent's session: run agentbox report from inside one");
