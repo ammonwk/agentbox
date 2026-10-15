@@ -945,9 +945,12 @@ const router = new Router(mapError)
     if (!["send", "resume", "btw"].includes(kind)) throw new HttpError(400, "invalid submission kind");
     const text = typeof b.text === "string" ? b.text : requireString(b, "text");
     if (kind !== "resume" && !text.trim()) throw new HttpError(400, "the message is empty");
+    // A person's message in an agent's Chat ends a running turn first, as
+    // Escape by hand would (`Fleet.endTurnFor`); a session's never does.
+    const interrupt = kind === "send" && b.interrupt === true && !authenticatedSession(req);
     try {
       const receipt = await submitWithReceipt(params.id!, id, kind, text, (attempt) => {
-        if (kind === "send") return fleet.send(params.id!, text, attempt);
+        if (kind === "send") return fleet.send(params.id!, text, attempt, false, interrupt);
         if (kind === "resume") return fleet.resume(params.id!, text || undefined, attempt);
         return fleet.askBtw(params.id!, text, attempt);
       });
