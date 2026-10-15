@@ -160,3 +160,15 @@ test("a program is its superagent only with its own token", () => {
   expect(() => claimCaller(req({ "x-agentbox-superagent": "../vulcan", "x-agentbox-superagent-token": token }), hub)).toThrow("no superagent");
   expect(claimCaller(req({}), hub)).toEqual({ superagent: null, session: null });
 });
+
+test("an environment is held in one scope only, and a key held in one backend is refused in another", async () => {
+  await expect(claims.claim(vulcan, { sources: ["env:acme/app:prod", "acme/app#1"] }, T)).rejects.toThrow("separate calls");
+  await expect(claims.claim(vulcan, { sources: ["env:acme/app:prod"], scope: "work" }, T)).rejects.toThrow("scope env");
+  expect((await claims.claim(vulcan, { sources: ["env:Acme/App:PROD"] }, T))[0]!.scope).toBe("env");
+  // A second backend (a shared instance's, in the cloud) sees what box.db holds.
+  const local = claims.local;
+  const cloud = { ...local, get: async () => null, claim: async () => [] } as unknown as typeof local;
+  claims.backends.push(cloud);
+  claims.backendOf = (s) => (s === "steward" ? cloud : local);
+  await expect(claims.claim(other, { sources: ["env:acme/app:prod"] }, T)).rejects.toThrow("is held");
+});

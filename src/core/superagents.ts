@@ -345,8 +345,10 @@ export class Superagents {
         if (owner) return owner;
         path.add(at);
         const rec: SessionRecord | null | undefined = records.get(at) ?? getSessionRecord(at);
-        // A parent set by hand (a drag on the board) groups; it is no start, so it grants nothing.
-        at = opts.authority && rec?.parentByHand ? null : rec?.parent;
+        // A parent set by hand (a drag on the board), or one its starter could
+        // not prove it acts for, groups; it grants nothing. A handover keeps what was given.
+        const grants: boolean = rec?.parentProof === "handover" || (rec?.parentProof !== "unproven" && !rec?.parentByHand);
+        at = opts.authority && !grants ? null : rec?.parent;
       }
       return null;
     };

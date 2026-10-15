@@ -309,6 +309,10 @@ export interface SpawnRequest {
   parent?: string;
   /** Start under this id: a scheduled session keeps the one it was shown under. */
   id?: string;
+  /** False: the caller could not prove it acts for `parent` (or the session
+   *  above `callerPid`), so the parent groups it and gives it no superagent's
+   *  authority (`SessionRecord.parentProof`). */
+  parentProven?: boolean;
   /** Who wrote `prompt` (`Opener`): recorded so the opening shows who sent it. */
   opener?: Opener;
 }
@@ -2838,6 +2842,7 @@ export class Fleet extends EventEmitter {
       effort: effort ?? null,
       model: model ?? null,
       parent: parent ?? null,
+      parentProof: parent && req.parentProven === false ? "unproven" : null,
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     if (req.opener && req.prompt) recordOpening({ session: id, opener: req.opener, prompt: req.prompt }, now);
@@ -3851,7 +3856,12 @@ export class Fleet extends EventEmitter {
     if (!getSessionRecord(to)) throw new FleetError(404, `no session ${to}`);
     if (getSessionRecord(from)?.successor !== to) updateSessionRecord(from, { successor: to });
     const moved = this.startedBy(from).filter((id) => id !== to);
-    for (const id of moved) updateSessionRecord(id, { parent: to, parentByHand: true });
+    // A moved session keeps the authority its old parent gave it, no more.
+    for (const id of moved) {
+      const r = getSessionRecord(id);
+      const proven = r?.parentProof === "handover" || (r?.parentProof !== "unproven" && !r?.parentByHand);
+      updateSessionRecord(id, { parent: to, parentByHand: true, parentProof: proven ? "handover" : "unproven" });
+    }
     // Its waits too: told through `heir` either way, but the successor's own
     // checks (arm's one-per-thing, the idle close, agentbox waits) read them
     // by session, and a loop must not lose its timer to a new conversation.

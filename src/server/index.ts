@@ -92,7 +92,8 @@ import { Superagents } from "../core/superagents";
 import { WorkClaims } from "../core/workclaims";
 import { claimRoutes } from "./claims";
 import { cloudHttpError, cloudRoutes } from "./cloud";
-import { superagentRoutes } from "./superagents";
+import { superagentCaller, superagentRoutes } from "./superagents";
+import { configurePeers, peerPorts } from "./peer";
 import { prReady } from "../core/superagent/events";
 import { githubRoutes, requirePersonForCard } from "./github";
 import { GitHubActions } from "../core/github/actions";
@@ -189,10 +190,13 @@ export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
+configurePeers({ server: PORT, sessionAbove: (pid) => fleet.callerOf(pid) });
 export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`, () => scheduleHot());
 /** Who has which work, by source: renewed on the scheduler's tick, moved on a handover (src/core/workclaims.ts). */
 export const workClaims = new WorkClaims(fleet);
 fleet.onHandOver = (from, to) => workClaims.handOver(from, to);
+// A session's claims are kept where the superagent it acts for keeps its own.
+workClaims.ownerOf = (session) => superagents.ownerOf(session, { authority: true });
 scheduler.onTick(() => workClaims.tick());
 /** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
 export const cloud = new CloudBridge(fleet, VERSION);
@@ -771,6 +775,14 @@ const router = new Router(mapError)
     const claim = b.claim !== undefined ? prNamed({ pr: b.claim, cwd: b.cwd }, null) : null;
     const key = claim ? `${claim.repo.toLowerCase()}#${claim.number}` : "";
     const opener = authenticatedSession(req);
+    // A parent gives a superagent's authority (claims, GitHub actions) only
+    // to a session its starter proves it acts for: that superagent's program,
+    // the parent itself, or another session of the same superagent.
+    const callerPidOf = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined;
+    const parentId = optionalString(b, "parent") ?? (callerPidOf ? fleet.callerOf(callerPidOf) : null);
+    const owner = parentId ? superagents.ownerOf(parentId, { authority: true }) : null;
+    const program = superagentCaller(req, superagents);
+    const parentProven = !owner || (program ? program === owner : !!opener && (opener === parentId || superagents.ownerOf(opener, { authority: true }) === owner));
     if (claim) {
       const held = holderOf(prClaimsNow(), claim.repo, claim.number);
       if (held) throw new HttpError(409, new PrHeld(held, fleet.sessions().find((s) => s.id === held.sessionId)).message.replace(/^not claimed/, "not started"));
@@ -797,6 +809,7 @@ const router = new Router(mapError)
         accountId: optionalString(b, "accountId") ?? null,
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
+        parentProven,
         // Only the caller's capability says which session wrote the prompt.
         ...(opener ? { opener: { from: opener, agent: superagents.ownerOf(opener) } } : {}),
       });
@@ -1115,6 +1128,12 @@ const router = new Router(mapError)
     const to = requireString(b, "to");
     if (to === params.id) throw new HttpError(400, "a session cannot hand over to itself");
     if (!fleet.sessions().some((s) => s.id === params.id)) throw new HttpError(404, `no session ${params.id}`);
+    if (!fleet.sessions().some((s) => s.id === to)) throw new HttpError(404, `no session ${to}`);
+    // What it holds (its sessions, claims, PRs) is its own to give: the
+    // session itself, the program of the superagent it belongs to, or a person.
+    const program = superagentCaller(req, superagents), caller = authenticatedSession(req);
+    if (program ? program !== superagents.ownerOf(params.id!, { authority: true }) : caller && caller !== params.id)
+      throw new HttpError(403, `only session ${params.id} itself, its superagent's program or a person hands over what it holds`);
     const moved = await fleet.handOver(params.id!, to);
     const cardsMoved = moveCards(params.id!, to);
     const claimsMoved = movePrClaims(params.id!, to);
@@ -1597,7 +1616,7 @@ githubRoutes(router, github, superagents);
 github.claims = {
   current: async (scope, key) => {
     const c = (await workClaims.list({ key, scope: scope === "env" ? "env" : "work" }))[0];
-    return c ? { fence: c.fence, holder: c.holder } : null;
+    return c ? { fence: c.fence, state: c.state, holder: c.holder } : null;
   },
 };
 /** Shared superagents: answers teammates through the cloud, and keeps a shared one's claims there (src/core/superagent/team.ts). */
@@ -1785,6 +1804,11 @@ export async function startServer(): Promise<void> {
     if (!verdict.ok) return fail(verdict.reason, 403);
     // The loopback listener, or the tailnet one reached at this machine's own address.
     if (!hosts || srv.requestIP(req)?.address === hosts[0]) fromThisMachine.add(req);
+    // The client's port, so a person-only act can see which process sent it (peer.ts).
+    if (!hosts) {
+      const port = srv.requestIP(req)?.port;
+      if (port) peerPorts.set(req, port);
+    }
 
     if (url.pathname === "/ws") {
       if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);

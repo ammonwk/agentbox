@@ -522,6 +522,14 @@ export const MIGRATIONS: readonly string[] = [
     updated_at   INTEGER NOT NULL
   );
   `,
+  // 34 — whether a session's parent may give it its superagent's authority
+  // (`Superagents.ownership`): "unproven" for one started under a parent its
+  // starter could not prove it acts for, "handover" for one a handover moved;
+  // and an index for the walk back along `successor`.
+  `
+  ALTER TABLE sessions ADD COLUMN parent_proof TEXT;
+  CREATE INDEX sessions_successor ON sessions(successor);
+  `,
 ];
 
 function migrate(d: Database) {
@@ -621,6 +629,10 @@ export interface SessionRecord {
   parent?: string | null;
   /** You set or cleared `parent` yourself (`Fleet.patch`): the fleet leaves it be. */
   parentByHand?: boolean;
+  /** Whether `parent` gives it its superagent's authority: "unproven" when its
+   *  starter could not prove it acts for that parent (it groups, nothing
+   *  more); "handover" when a handover moved it, which keeps what it had. */
+  parentProof?: "unproven" | "handover" | null;
   /** When the fleet stopped it for sitting idle (`Fleet.parkIdle`); null once
    *  it runs again, or once you stop it yourself. */
   parkedAt?: number | null;
@@ -649,7 +661,7 @@ type SessionRow = {
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
-  parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
+  parent_by_hand: number | null; parent_proof: string | null; successor: string | null; hopped_at: number | null;
   pin_order: number | null; bookmarked_at: number | null; quiet: number | null;
 };
 
@@ -675,6 +687,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     model: r.model ?? null,
     parent: r.parent ?? null,
     parentByHand: !!r.parent_by_hand,
+    parentProof: (r.parent_proof as SessionRecord["parentProof"]) ?? null,
     parkedAt: r.parked_at ?? null,
     parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
     parkedWhy: r.parked_why ?? null,
@@ -707,6 +720,7 @@ const RECORD_COLUMNS = {
   model: "model",
   parent: "parent",
   parentByHand: "parent_by_hand",
+  parentProof: "parent_proof",
   parkedAt: "parked_at",
   parkedMates: "parked_mates",
   parkedWhy: "parked_why",

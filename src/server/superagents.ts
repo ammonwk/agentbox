@@ -8,6 +8,7 @@ import { superagentToken, type Superagents } from "../core/superagents";
 import { AVATAR_MAX_BYTES } from "../core/superagent/avatar";
 import { HttpError, json, readBody, type Router } from "./router";
 import { requireString } from "./validate";
+import { requireNoSessionPeer } from "./peer";
 
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
 
@@ -39,7 +40,11 @@ export function actorFor(req: Request, superagents: Superagents, name: string, w
     return { kind: "program" };
   }
   const session = authenticatedSession(req);
-  if (!session) return { kind: "person" };
+  if (!session) {
+    // A read is open to the person anyway; a write as a person must not come from inside a session.
+    if (req.method !== "GET") requireNoSessionPeer(req, `to ${what} as a person`);
+    return { kind: "person" };
+  }
   if (superagents.get(name).main === session) return { kind: "main", session };
   throw new HttpError(403, `only ${name}'s current main conversation, its program or a person can ${what}`);
 }
@@ -50,6 +55,9 @@ export function superagentRoutes(router: Router, superagents: Superagents, hooks
     .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))
     .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(superagents.canonical(params.name!))))
     .add("PATCH", "/api/superagents/:name", async ({ req, params }) => {
+      // Its main gives its authority to the sessions it starts: only a person,
+      // its program or its main itself names another.
+      actorFor(req, superagents, superagents.canonical(params.name!), "change it");
       const b = await readBody(req);
       const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
       const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
@@ -133,7 +141,8 @@ export function superagentRoutes(router: Router, superagents: Superagents, hooks
 
     // ----- reports to agentbox's issue tracker (src/core/superagent/feedback.ts)
     .add("POST", "/api/superagents/:name/help", async ({ req, params }) => {
-      if (authenticatedSession(req)) throw new HttpError(403, "/help is a person's report from the Agents page; a session files one with agentbox report");
+      if (authenticatedSession(req) || superagentCaller(req, superagents)) throw new HttpError(403, "/help is a person's report from the Agents page; a session files one with agentbox report");
+      requireNoSessionPeer(req, "/help");
       superagents.get(superagents.canonical(params.name!));
       return json(await superagents.feedback.submit(superagents.canonical(params.name!), await readBody(req)));
     })

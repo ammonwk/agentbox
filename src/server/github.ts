@@ -17,6 +17,7 @@ import { authenticatedSession } from "../core/session-authority";
 import type { Superagents } from "../core/superagents";
 import { HttpError, json, readBody, type Router } from "./router";
 import { superagentCaller } from "./superagents";
+import { requireNoSessionPeer } from "./peer";
 
 /** Headers that make a request a session's or a program's, valid or not. */
 const AGENT_HEADERS = ["x-agentbox-superagent", "x-agentbox-superagent-token", "x-agentbox-session", "x-agentbox-session-token"];
@@ -24,6 +25,7 @@ const AGENT_HEADERS = ["x-agentbox-superagent", "x-agentbox-superagent-token", "
 /** A person at this machine: neither a program's headers nor a session's. */
 export function requirePerson(req: Request): void {
   if (AGENT_HEADERS.some((h) => req.headers.has(h))) throw new HttpError(403, "only a person can do this, from the app or their own terminal: not a session or a superagent's program");
+  requireNoSessionPeer(req, "this");
 }
 
 /** An answer on a GitHub action's card approves it: only a person gives one. */

@@ -38,7 +38,7 @@ export type ActionCaller = { superagent: string; session: string | null };
  */
 export interface ClaimCheck {
   /** The claim on `key` (canonicalised by the claims service) as it is now; null when nobody holds it. */
-  current(scope: string, key: string): Promise<{ fence: number; holder: { superagent: string | null; session: string | null } } | null>;
+  current(scope: string, key: string): Promise<{ fence: number; state?: string; holder: { superagent: string | null; session: string | null } } | null>;
 }
 /** The scope a claim is in when the request does not name one (src/core/workclaims.ts). */
 export const DEFAULT_CLAIM_SCOPE = "work";
@@ -305,6 +305,7 @@ export class GitHubActions {
     if (!now) throw new FleetError(409, `nobody holds ${claim.key} now`);
     if (now.holder.superagent !== superagent) throw new FleetError(409, `${now.holder.superagent}, not ${superagent}, holds ${claim.key}`);
     if (now.fence !== claim.fence) throw new FleetError(409, `the claim on ${claim.key} is at fence ${now.fence}, not ${claim.fence}: it moved since`);
+    if (now.state === "takeover_requested") throw new FleetError(409, `${claim.key} is being taken over: its holder acts on it no more`);
   }
 
   /**
@@ -313,7 +314,8 @@ export class GitHubActions {
    * the branch of this superagent's own `open_pr` that made the PR.
    */
   private branchFor(superagent: string, request: string, action: GitHubAction, claim: GitHubActionView["claim"]): string {
-    if (claim) return brokerBranch(`${claim.scope}:${claim.key}`);
+    // The superagent too: two on one App never share a branch for one key.
+    if (claim) return brokerBranch(`${superagent}:${claim.scope}:${claim.key}`);
     if (action.kind !== "update_pr") return brokerBranch(request);
     const opened = getDb()
       .query(`SELECT branch, result FROM github_actions WHERE superagent = ? AND state = 'sent' AND json_extract(action, '$.kind') = 'open_pr' AND json_extract(action, '$.repo') = ?`)

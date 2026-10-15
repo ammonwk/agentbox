@@ -94,7 +94,9 @@ export function canonicalSource(raw: string): { key: string; source: string } {
     u.searchParams.sort();
     return { key: u.href, source: u.href };
   }
-  if (/^[a-z][a-z0-9+.-]*:\S+$/i.test(t)) return { key: t, source: t };
+  // A scheme is one key whatever its case: `GitHub:x` is `github:x`.
+  const scheme = /^([a-z][a-z0-9+.-]*):(\S+)$/i.exec(t);
+  if (scheme) return { key: `${scheme[1]!.toLowerCase()}:${scheme[2]}`, source: t };
   throw new ClaimError(400, `${t} is not a source: give a link, owner/repo#number, env:<repo>:<environment>, or scheme:id`);
 }
 
@@ -315,10 +317,16 @@ function isHolder(c: ClaimCaller, h: ClaimHolder): boolean {
 }
 
 /** The claims service: who may do what, the stop and its proof, and the lease tick. The backends keep the state. */
+/** The scope a key is claimed in: an environment lock or a work item. */
+export const scopeOfKey = (key: string): ClaimScope => (key.startsWith("env:") ? "env" : "work");
+
 export class WorkClaims {
   readonly backends: ClaimsBackend[];
   /** Where a superagent's claims are kept: box.db, unless it is a shared team instance. */
   backendOf: (superagent: string | null) => ClaimsBackend;
+  /** The superagent a session acts for (`Superagents.ownerOf` with authority), so a
+   *  session's claims are kept where its superagent's are. */
+  ownerOf: (session: string) => string | null = () => null;
 
   constructor(
     private readonly fleet: SessionControl,
@@ -338,7 +346,7 @@ export class WorkClaims {
 
   private async held(caller: ClaimCaller, scope: ClaimScope, source: string, now: number): Promise<{ backend: ClaimsBackend; claim: WorkClaim }> {
     const { key } = canonicalSource(source);
-    const first = this.backendOf(caller.superagent);
+    const first = this.backendFor(caller);
     // Its own backend first; then the others, for a claim made before it was
     // shared or after it was unshared, which stays where it was made.
     for (const backend of [first, ...this.backends.filter((b) => b !== first)]) {
@@ -348,22 +356,40 @@ export class WorkClaims {
     throw new ClaimError(404, `nobody holds ${key}`);
   }
 
+  /** Where the caller's claims go: its superagent's backend, a session's by the superagent it acts for. */
+  private backendFor(caller: ClaimCaller): ClaimsBackend {
+    return this.backendOf(caller.superagent ?? (caller.session ? this.ownerOf(caller.session) : null));
+  }
+
   async claim(caller: ClaimCaller, req: { sources: readonly string[]; scope?: ClaimScope; session?: string | null; note?: string | null }, now = Date.now()): Promise<WorkClaim[]> {
     if (!req.sources.length || req.sources.length > MAX_SOURCES) throw new ClaimError(400, `give 1 to ${MAX_SOURCES} sources`);
     const items = [...new Map(req.sources.map((s) => canonicalSource(s)).map((c) => [c.key, c])).values()];
-    const scope = req.scope ?? (items.every((i) => i.key.startsWith("env:")) ? "env" : "work");
+    // The scope is the key's: an environment is always `env`, everything else `work`,
+    // so one key can never be held twice under two scopes.
+    const scopes = new Set(items.map((i) => scopeOfKey(i.key)));
+    if (scopes.size > 1) throw new ClaimError(400, "claim environments (env:…) and work items in separate calls");
+    const scope = [...scopes][0]!;
+    if (req.scope && req.scope !== scope) throw new ClaimError(400, `${items[0]!.key} is claimed in scope ${scope}, not ${req.scope}`);
     let session = req.session ?? null;
     if (caller.session) {
       if (session && session !== caller.session) throw new ClaimError(403, "a session claims for itself");
       session = caller.session;
     } else if (session) this.known(session);
     const note = req.note?.trim().slice(0, MAX_NOTE) || null;
-    return this.backendOf(caller.superagent).claim(items, scope, { superagent: caller.superagent, session }, note, now);
+    // One holder for each key across every backend: a key held in box.db is not
+    // claimed again in the cloud, nor the other way.
+    const target = this.backendFor(caller);
+    for (const other of this.backends.filter((b) => b !== target))
+      for (const i of items) {
+        const held = await other.get(scope, i.key, now);
+        if (held && held.state !== "released") throw new ClaimError(409, `${i.key} is held (${held.holder.superagent ?? held.holder.session ?? "a person"})`, { key: i.key, holder: held.holder, state: held.state });
+      }
+    return target.claim(items, scope, { superagent: caller.superagent, session }, note, now);
   }
 
   /** The session that does the work, once the program has started it. The one before must have stopped: a running one is replaced by a handover or a takeover. */
   async attach(caller: ClaimCaller, req: { key: string; scope?: ClaimScope; fence: number; session: string }, now = Date.now()): Promise<WorkClaim> {
-    const { backend, claim } = await this.held(caller, req.scope ?? "work", req.key, now);
+    const { backend, claim } = await this.held(caller, req.scope ?? scopeOfKey(canonicalSource(req.key).key), req.key, now);
     if (!isHolder(caller, claim.holder)) throw new ClaimError(403, `only the holder of ${claim.key} attaches a session to it`);
     this.known(req.session);
     const old = claim.holder.session;
@@ -373,7 +399,7 @@ export class WorkClaims {
   }
 
   async release(caller: ClaimCaller, req: { key: string; scope?: ClaimScope; fence: number }, now = Date.now()): Promise<WorkClaim> {
-    const { backend, claim } = await this.held(caller, req.scope ?? "work", req.key, now);
+    const { backend, claim } = await this.held(caller, req.scope ?? scopeOfKey(canonicalSource(req.key).key), req.key, now);
     if (!isHolder(caller, claim.holder)) throw new ClaimError(403, `only the holder of ${claim.key} releases it`);
     return backend.release(claim.scope, claim.key, req.fence, now);
   }
@@ -385,7 +411,7 @@ export class WorkClaims {
    * and checks again.
    */
   async takeover(caller: ClaimCaller, req: { key: string; scope?: ClaimScope; to?: string | null }, now = Date.now()): Promise<WorkClaim> {
-    const { backend, claim } = await this.held(caller, req.scope ?? "work", req.key, now);
+    const { backend, claim } = await this.held(caller, req.scope ?? scopeOfKey(canonicalSource(req.key).key), req.key, now);
     if (caller.session && !caller.superagent) throw new ClaimError(403, "a session hands its work over (POST /api/sessions/:id/handover); a takeover is a person's or the holder's program's");
     if (caller.superagent && caller.superagent !== claim.holder.superagent) throw new ClaimError(403, `${claim.key} is not ${caller.superagent}'s to take over`);
     const to = req.to ?? null;
@@ -408,13 +434,25 @@ export class WorkClaims {
 
   async list(f: ClaimFilter, now = Date.now()): Promise<WorkClaim[]> {
     const key = f.key === undefined ? undefined : canonicalSource(f.key).key;
-    return (await Promise.all(this.backends.map((b) => b.list({ ...f, key }, now)))).flat();
+    // A backend that cannot answer (the cloud, offline) leaves the others' claims readable.
+    const all = await Promise.allSettled(this.backends.map((b) => b.list({ ...f, key }, now)));
+    for (const r of all) if (r.status === "rejected") console.error("agentbox: claims: a backend did not answer:", (r.reason as Error).message);
+    return all.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
   }
 
   /** A handover's part (`Fleet.handOver`): `from`'s claims go to `to`. */
   async handOver(from: string, to: string, now = Date.now()): Promise<number> {
     let moved = 0;
-    for (const b of this.backends) moved += await b.handOver(from, to, now);
+    // Each backend on its own: one that fails (the cloud, offline) does not stop
+    // the others or the rest of the handover; its claims stay with `from`, and
+    // the lease tick reports them.
+    for (const b of this.backends) {
+      try {
+        moved += await b.handOver(from, to, now);
+      } catch (e) {
+        console.error(`agentbox: claims: ${from}'s claims in one backend did not move to ${to}:`, (e as Error).message);
+      }
+    }
     return moved;
   }
 
