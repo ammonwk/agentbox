@@ -73,6 +73,10 @@ Settings.
   and a project file's fields that need your approval. Settings also has the program's state, Restart and its output, the provider
   of its main and why, its loops, its sweep time, its picture, and its memory.
 
+![Settings of a generic agent: your gate for every project, and its instances in projects](images/agents-gates.jpg)
+
+![Settings of an instance: its layers, and a project file's field that waits for your approval](images/agents-layers.jpg)
+
 A session of an agent that stops on a question, or asks you to decide, is
 pushed to your phone like any session, unless its program started it with
 `notify: false`.
