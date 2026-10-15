@@ -32,7 +32,7 @@ import { halfOf, placeIn, ranksOf, readOrder, saveOrder } from "../../lib/manual
 import { openingTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
-import { useScope, useProjectData, sessionProject } from "../../lib/projects";
+import { useScope, useProjectData, projectOfSession } from "../../lib/projects";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
 import { movePin, toggleBookmark, togglePin } from "./pins";
@@ -64,8 +64,10 @@ function readView(): RailView {
 }
 
 /** Survive a trip to Accounts and back: a list that forgets its search every
- *  time you look away is a list you stop searching. The sort and the
- *  Active/Inactive tab are preferences, so they outlive the browser tab too. */
+ *  time you look away is a list you stop searching. One per project ("" is
+ *  All projects): a search in one is not what another list is narrowed by.
+ *  The sort and the Active/Inactive tab are preferences, so they outlive the
+ *  browser tab too. */
 const rememberedFilters = new Map<string, BoardFilter>();
 
 /** Rows you expanded or folded by hand. One in neither is as it would be left
@@ -178,6 +180,7 @@ export function Rail({
   /** Top-level rows in each tab, after the search. */
   counts: Record<RailView, number>;
   state: AppState;
+  /** The sessions the selected project shows; the bookmarks menu lists these. */
   visibleSessions: readonly SessionRow[];
   current: string | null;
   list: ListState;
@@ -887,7 +890,7 @@ function CloseFeedback() {
 function RowTitle({ s }: { s: SessionRow }) {
   const { repos, agents } = useProjectData();
   const agent = agents.find((a) => a.session === s.id || (a.previous.includes(s.id) || a.workSessions?.includes(s.id)));
-  const registered = repos.find((r) => r.id === sessionProject(repos, agents, s));
+  const registered = repos.find((r) => r.id === projectOfSession(repos, agents, s));
   const project = agent ? [registered?.displayName, agent.name].filter(Boolean).join(" · ") : registered?.displayName ?? projectOf(s);
   const marks = useContext(RepoMarks);
   const shape = marks.shape ? marks.shapes.get(repoKey(s)) : undefined;
@@ -1174,7 +1177,9 @@ function ClosedList({
     }
   };
 
-  // From the top whenever it opens, the search changes, or something is closed or reopened.
+  // From the top whenever it opens, the search or the project changes, or
+  // something is closed or reopened. A page still in flight for the old
+  // search or project is dropped on the way out.
   useEffect(() => {
     if (!open) return;
     gen.current++;
@@ -1182,7 +1187,10 @@ function ClosedList({
     const limit = Math.max(PAGE, keep.current);
     keep.current = 0;
     const t = setTimeout(() => void load(0, limit), query ? 200 : 0);
-    return () => { clearTimeout(t); gen.current++; };
+    return () => {
+      clearTimeout(t);
+      gen.current++;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, query, stamp, project]);
 
@@ -1253,20 +1261,24 @@ function ClosedList({
   );
 }
 
+/** The Active/Inactive tablist, apart from the rail so another list can put
+ *  the same two tabs over it. */
 export function RailTabs({ view, counts, onChange }: { view: RailView; counts: Record<RailView, number>; onChange: (view: RailView) => void }) {
-  return (      <div className="rail-views" role="tablist" aria-label="Which sessions">
-        {(["active", "inactive"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            className="rail-view"
-            aria-selected={view === v}
-            title={v === "active" ? "Running, or did something in the last 3 hours" : "Nothing in the last 3 hours"}
-            onClick={() => onChange(v)}
-          >
-            {v === "active" ? "Active" : "Inactive"} <span>{counts[v]}</span>
-          </button>
-        ))}
-      </div>);
+  return (
+    <div className="rail-views" role="tablist" aria-label="Which sessions">
+      {(["active", "inactive"] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          role="tab"
+          className="rail-view"
+          aria-selected={view === v}
+          title={v === "active" ? "Running, or did something in the last 3 hours" : "Nothing in the last 3 hours"}
+          onClick={() => onChange(v)}
+        >
+          {v === "active" ? "Active" : "Inactive"} <span>{counts[v]}</span>
+        </button>
+      ))}
+    </div>
+  );
 }

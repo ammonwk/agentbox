@@ -254,7 +254,7 @@ export function blockedNews(
   typedAt: (id: string) => number = () => 0,
   now = Date.now(),
 ): { news: PushMessage[]; next: number | null } {
-  const blocked = sessions.filter((s) => s.status === "blocked");
+  const blocked = sessions.filter((s) => s.status === "blocked" && !s.quiet);
   const ids = new Set(blocked.map((s) => s.id));
   for (const id of told) if (!ids.has(id)) told.delete(id);
   for (const id of since.keys()) if (!ids.has(id)) since.delete(id);

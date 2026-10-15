@@ -197,7 +197,7 @@ export function lookPr(spec: Extract<WaitSpec, { kind: "pr" }>, memo: Wait["memo
     const changed = readable && (memo.feedback ? memo.feedback !== readable.fingerprint : readable.count > 0);
     const next = { ...base, failedChecks: keys, feedback: readable?.fingerprint ?? memo.feedback };
     if (freshFailures.length || changed) return {
-      end: { how: "happened", text: `${name} has actionable updates on ${short(pr.head)}: ${[...(changed ? ["review/comment feedback changed"] : []), ...freshFailures.map(c => `${c.name} (${c.how})`)].join(", ")}. Read and disposition the actual review/comment/check evidence now; queued CI does not delay this notice. This is not a clean verdict or readiness. Keep the full-check wait. After disposition, rearm with agentbox wait pr ${spec.repo}#${spec.number} --feedback --head ${pr.head}; its durable cursor skips already observed feedback. Existing owner, round cap, consent and merge policy still apply.` }, memo: next,
+      end: { how: "happened", text: `${name} has actionable updates on ${short(pr.head)}: ${[...(changed ? ["review/comment feedback changed"] : []), ...freshFailures.map(c => `${c.name} (${c.how})`)].join(", ")}. Read and disposition the actual review/comment/check evidence now; queued CI does not delay this notice. This is not a clean verdict or readiness. Keep the full-check wait. After disposition, rearm with agentbox wait pr ${spec.repo}#${spec.number} --feedback --head ${pr.head}; its durable cursor skips already observed feedback. Existing owner, consent and merge policy still apply.` }, memo: next,
     };
     if (!readable) throw feedback instanceof Error ? feedback : new Error("PR feedback was not read");
     if (pr.checksError) throw pr.checksError;
@@ -350,6 +350,9 @@ export class Waits {
     }
     if (going.length >= MAX_PER_SESSION) throw new FleetError(409, `${sessionId} already has ${going.length} waits going (\`agentbox waits\`): cancel some with \`agentbox unwait\``);
     const now = this.now();
+    // A feedback wait rearmed for the same head carries its cursor: the
+    // feedback already dispositioned does not wake it again, across a restart
+    // of the server too. A released or cancelled one has nothing to carry.
     let memo: Wait["memo"] = {};
     if (spec.kind === "pr" && spec.feedback) {
       const prior = listWaits(0, sessionId).reverse().find(w => w.ended && w.ended !== "cancelled" && w.spec.kind === "pr" && w.spec.feedback && w.spec.repo.toLowerCase() === spec.repo.toLowerCase() && w.spec.number === spec.number && (w.memo.head ? w.memo.head.startsWith(spec.head!) : w.spec.head === spec.head));
@@ -443,6 +446,8 @@ export class Waits {
       const read = reads.get(prKey(spec)) ?? new Error("GitHub returned nothing for it");
       if (read instanceof Error) this.failed(w, read, now);
       else {
+        // `lookPr` throws what it could not read: the checks past 100, or the
+        // feedback read itself. That is a failed look, not a look that answers.
         try { this.looked(w, lookPr(spec, w.memo, read, w.createdAt, now), now); }
         catch (e) { this.failed(w, e, now); }
       }
@@ -478,9 +483,7 @@ export class Waits {
 
   private looked(w: Wait, look: Look, now: number): void {
     if (getWait(w.id)?.ended) return;
-    if ("end" in look) {
-      return this.end(w, look.end.how, look.end.text, look.memo);
-    }
+    if ("end" in look) return this.end(w, look.end.how, look.end.text, look.memo);
     updateWait(w.id, { checkedAt: now, seen: look.seen, failingSince: null, memo: { ...(look.memo ?? w.memo), failures: undefined } });
   }
 
@@ -501,8 +504,8 @@ export class Waits {
   }
 
   private end(w: Wait, how: Exclude<WaitEnd, "cancelled">, text: string, memo?: Wait["memo"]): void {
-    // The event and its cursor commit together: a crash must never consume
-    // feedback without leaving a durable notification for the owner.
+    // The ending and the cursor it leaves commit together: a crash must never
+    // consume feedback without leaving the owner a durable notification.
     updateWait(w.id, { ended: how, outcome: text, endedAt: this.now(), ...(memo ? { memo, checkedAt: this.now(), failingSince: null } : {}) });
     console.log(`agentbox: wait ${w.id} for ${w.sessionId} (${describe(w.spec)}) ended: ${how}`);
   }

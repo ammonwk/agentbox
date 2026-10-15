@@ -136,6 +136,11 @@ See docs/agents.md for exact action JSON, host configuration and boundaries.
                                     # those named (a name takes its shards too: "API Tests
                                     # (shard 1/3)"). A check that fails ends it at once and
                                     # is named
+    agentbox wait pr <n> --feedback --head <sha>
+                                    # new/edited review or comment, failed check, or moved head;
+                                    # independent of queued CI. Read the actual verdict now,
+                                    # then rearm: a durable cursor skips observed feedback.
+                                    # Keep a separate full-check wait; neither is merge permission.
     agentbox wait pr <n> --merged [--head <sha>]
                                     # its merge (or its closing); with --head, also its
                                     # head moving off that commit: the wait for a PR
@@ -244,6 +249,16 @@ why). Arming the same wait twice is one wait.
     agentbox pr transfer <repo#n> --expect <holder> --to <successor>
                                     # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has
+
+## Superagents (programs that run on agentbox: docs/superagents.md)
+
+    agentbox superagent ls          # each one: its program, its main conversation, its directory
+    agentbox superagent call <name> <action> --json <file>   # what a superagent's prompt tells you
+                                    # to run: its answer is JSON; it knows which session called
+    agentbox superagent view <name> [--tab t]   # its page, as JSON
+    agentbox superagent add <dir>   # register one (a person's call: do it only when asked)
+    agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
+                                    # waits go to <to>; messages to <from> reach <to>
 
 ## Across machines (when this machine is in an agentbox cloud workspace)
 

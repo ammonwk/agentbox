@@ -7,7 +7,7 @@ import { api, clockNow, MOCK, subscribeToClock, useAppState, useConnection } fro
 import type { AgentSettings, AppState } from "../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./components";
 import { needsYou, titleOf } from "./lib/board";
-import { go, hrefOf, navOf, onGo, parseHash, type NavId, type Route } from "./route";
+import { go, hrefOf, navOf, onGo, parseHash, restoreScope, scopeOf, selectScope, type NavId, type Route } from "./route";
 import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
 import { useServerBehind, useUpdateReady } from "./lib/update";
 import { useKeyboardNavigation } from "./lib/keyboard";
@@ -24,20 +24,19 @@ import { Review } from "./views/Review";
 import { Dictation } from "./Dictation";
 import { request } from "./api";
 import { useLoad } from "./lib/cloud";
-import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
+import { ProjectContext, scopedState, projectOfSession, useScope } from "./lib/projects";
 import { ProjectTabs, useProjectTabs } from "./ProjectTabs";
 import { Profile } from "./views/Profile";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import { restoreScope, selectScope, scopeOf } from "./route";
 import type { LocalAgent } from "../../src/core/agents/conversation";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
 // heaviest thing in the bundle.)
 const Team = lazy(() => import("./views/Team").then((m) => ({ default: m.Team })));
-const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
 const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice })));
+const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
 
 // ----------------------------------------------------------------- routing
 
@@ -115,10 +114,10 @@ export function App() {
   const selectedSession = route.page === "session" ? state?.sessions.find((s) => s.id === route.id) : null;
   useEffect(() => {
     if (selectedSession && !scopeOf().has("project") && localAgents.data) {
-      selectScope("project", sessionProject(state!.repos, agents, selectedSession), route, true);
+      selectScope("project", projectOfSession(state!.repos, agents, selectedSession), route, true);
     }
   }, [selectedSession?.id, localAgents.data]);
-  const wrongSession = scope.project && selectedSession && sessionProject(state!.repos, agents, selectedSession) !== scope.project;
+  const wrongSession = scope.project && selectedSession && projectOfSession(state!.repos, agents, selectedSession) !== scope.project;
   const projectTabs = useProjectTabs(state, agents, scope.project);
   // For the key handler below, which is added once.
   const tabOrder = useRef<{ ids: string[]; selected: string | null }>({ ids: [], selected: null });
@@ -305,7 +304,7 @@ export function App() {
             ) : staleProject && ["agents", "session", "sessions", "review"].includes(route.page) ? (
               <Empty title="This project is no longer registered"><Button onClick={() => setSwitcherOpen(true)}>Choose a project</Button></Empty>
             ) : wrongSession ? (
-              <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", sessionProject(state.repos, agents, selectedSession!), route)}>Open in its project</Button></Empty>
+              <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", projectOfSession(state.repos, agents, selectedSession!), route)}>Open in its project</Button></Empty>
             ) : route.page === "sessions" || route.page === "session" ? (
               <SessionView
                 key={scope.project ?? "all"}

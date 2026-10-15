@@ -33,7 +33,7 @@ import { isInstalledApp } from "../../lib/phone";
 import { SessionFacts } from "./SessionFacts";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
-import { useScope, useProjectData, sessionProject } from "../../lib/projects";
+import { useScope, useProjectData, projectOfSession } from "../../lib/projects";
 import { selectScope } from "../../route";
 import { ago, fmtRetryAt } from "../../lib/format";
 import { buildSessionIndex } from "../../lib/sessionrefs";
@@ -75,7 +75,9 @@ export function SessionView({
   onNew,
 }: {
   state: AppState;
-  /** Scope the list without hiding running descendants from close/stop warnings. */
+  /** The board as the selected project sees it (lib/projects.tsx): what the
+   *  list shows. `state` stays whole, so closing a session still warns of
+   *  the running sessions it started in other projects. */
   visible?: AppState;
   id: string | null;
   tab: SessionTab;
@@ -190,9 +192,9 @@ export function SessionView({
     else go({ page: "sessions" });
   };
 
-  // Alt+Shift+T: the most recently closed session, from all of history —
-  // reopen it and open it. Pressed again it reopens the one before, since
-  // the one just reopened is closed no more.
+  // Alt+Shift+T: the most recently closed session, from all of history (the
+  // selected project's) — reopen it and open it. Pressed again it reopens the
+  // one before, since the one just reopened is closed no more.
   const reopenLast = () => {
     api.closed("", 0, 1, scope.project, true).then((page) => {
       const s = page.sessions[0];
@@ -282,7 +284,7 @@ export function SessionView({
   const [railW, setRailW] = useRailWidth();
   const showRail = !narrow || !id;
   const showMain = !narrow || !!id;
-  if (session && scope.project && sessionProject(projectData.repos, projectData.agents, session) !== scope.project) return <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", sessionProject(projectData.repos, projectData.agents, session), { page: "session", id: session.id, tab })}>Open in its project</Button></Empty>;
+  if (session && scope.project && projectOfSession(projectData.repos, projectData.agents, session) !== scope.project) return <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", projectOfSession(projectData.repos, projectData.agents, session), { page: "session", id: session.id, tab })}>Open in its project</Button></Empty>;
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
@@ -462,7 +464,7 @@ function RailResizer({ width, onWidth }: { width: number; onWidth: (w: number, s
 // ------------------------------------------------------------------ detail
 
 
-function Detail({
+export function Detail({
   session,
   state,
   tab,

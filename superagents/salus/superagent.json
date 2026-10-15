@@ -1,0 +1,6 @@
+{
+  "name": "salus",
+  "title": "Salus",
+  "description": "Investigates production errors, traces and slow queries, and verifies fixes after deployment.",
+  "main": { "start": { "provider": "claude" }, "instructions": "MAIN.md" }
+}

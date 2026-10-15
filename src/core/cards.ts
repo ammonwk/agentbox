@@ -54,8 +54,6 @@ function toCard(r: Row, withLong: boolean): Card {
 }
 
 export interface NewCard {
-  /** Surface in Review without initiating an unsolicited push notification. */
-  notify?: boolean;
   kind: CardKind;
   title: string;
   short: string;
@@ -69,6 +67,8 @@ export interface NewCard {
   about?: string | null;
   /** When it happened, for one added after the fact; never later than now. */
   at?: number | null;
+  /** False: a decision that does not push to your devices (a superagent's Feed already shows it). */
+  notify?: boolean;
 }
 
 export interface CardFilter {

@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, getWait, insertWait, updateWait, insertSessionRecord, type SessionRecord, insertSchedule, insertAccount } from "../db";
 import { claimPr, releasePr, prClaims, prReleased, movePrClaims } from "../prclaims";
-import { Waits, lookPr } from "../waits";
+import { Waits, lookPr, type Look } from "../waits";
 import { Fleet, type Runtime } from "../fleet";
 import { claudeAdapter } from "../providers/claude";
 import { Scheduler } from "../scheduler";
-import type { Session, WaitSpec, Schedule } from "../types";
+import type { Session, Wait, WaitSpec, Schedule } from "../types";
 import type { NewSession, PaneInfo } from "../tmux";
 
 const dir = mkdtempSync(join(tmpdir(), "agentbox-release-"));
@@ -80,10 +80,12 @@ test("feedback cursor survives restart without reviving a released owner's notif
   const feedback = { ...spec(9003), all: false, feedback: true } as Extract<WaitSpec, { kind: "pr" }>;
   const w = insertWait({ sessionId: "old", spec: feedback, createdAt: now, deadline: now + 60_000 });
   const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async () => {} });
-  // Exercise the durable transition without starting a GitHub read for this fixture.
-  waits.tick = async () => {};
+  // The durable transition is what this test is about, and `looked` writes it;
+  // the GitHub read that would feed it is what `tick` is stubbed out of.
+  const inner = waits as unknown as { tick: () => Promise<void>; looked: (w: Wait, look: Look, now: number) => void };
+  inner.tick = async () => {};
   const read = { state: "OPEN" as const, head: "a".repeat(40), base: "main", mergeable: "MERGEABLE" as const, checks: [], feedback: { fingerprint: "observed", count: 1 } };
-  (waits as any).looked(w, lookPr(feedback, {}, read, now, now), now);
+  inner.looked(w, lookPr(feedback, {}, read, now, now), now);
   closeDb();
   expect(getWait(w.id)).toMatchObject({ ended: "happened", toldAt: null, memo: { feedback: "observed" } });
   const again = waits.arm("old", { ...feedback, head: read.head }).wait;

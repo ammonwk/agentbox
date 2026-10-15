@@ -274,7 +274,11 @@ interface Tracked {
 
 export interface SpawnRequest {
   provider: ProviderId;
+  /** Reads, never writes: for a reviewer. Only a provider whose CLI can be
+   *  held to it (`ProviderAdapter.readOnly`); it gets no global MCP servers. */
   readOnly?: boolean;
+  /** False: its stops are not pushed (`Session.quiet`). */
+  notify?: boolean;
   cwd?: string;
   repoId?: string;
   worktree?: boolean;
@@ -1149,6 +1153,9 @@ export class Fleet extends EventEmitter {
    */
   private matchPendingSpawns(now: number): void {
     const defaults = new Set(listAccounts().filter((a) => a.isDefault).map((a) => a.id));
+    // No window here: a process in a pane of ours that names its own session
+    // is proof whenever it arrives, and discovery can run before the pane
+    // becomes visible. The window still bounds the weaker sibling guess below.
     const pending = listSessionRecords(now - MATCH_WINDOW_MS).filter(
       (r) => r.agentSessionId === null && r.origin === "agentbox" && !r.archivedAt && !r.successor,
     );
@@ -1157,6 +1164,9 @@ export class Fleet extends EventEmitter {
       const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
       const proc = pane && !pane.dead ? this.processUnder(pane.pid, rec.provider) : undefined;
       let agentId = proc?.agentSessionId ?? null;
+      // A pane is only evidence of our own spawn if the process there is the
+      // one we started: on our account, in our directory, and not older than
+      // the row. Another process's transcript can otherwise be read as ours.
       if (agentId && (!proc!.accountId || !samePath(proc!.cwd, rec.cwd) || proc!.accountId !== rec.accountId || proc!.startedAt < rec.createdAt - 10_000)) continue;
       // One we just spawned never began before us, so a process naming an older
       // conversation is misread: wait for it to name its own rather than guess
@@ -1187,6 +1197,9 @@ export class Fleet extends EventEmitter {
       }
       if (!agentId) continue;
       const discovered = findSessionRecord(rec.provider, agentId);
+      // Discovery already made a row for the process we started. Ours, which
+      // holds the claim, the pin and the tmux session, is the real one: the
+      // discovered row becomes its closed alias.
       if (discovered) {
         if (!proc?.agentSessionId || !samePath(discovered.cwd, rec.cwd) || !attachDiscoveredSpawn(rec.id, discovered.id, now)) continue;
       } else updateSessionRecord(rec.id, { agentSessionId: agentId });
@@ -2375,6 +2388,7 @@ export class Fleet extends EventEmitter {
       closedAt: rec.archivedAt,
       pinOrder: rec.pinOrder ?? null,
       bookmarkedAt: rec.bookmarkedAt ?? null,
+      ...(rec.quiet ? { quiet: true } : {}),
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
@@ -2513,7 +2527,8 @@ export class Fleet extends EventEmitter {
   /**
    * Closed sessions for the See closed list, most recently closed first: all
    * of them, not only the board's window, so an old one can be found and
-   * reopened. `q` matches as the board's search does; `offset` pages.
+   * reopened. `q` matches as the board's search does; `offset` pages;
+   * `include` filters before paging, so a project's page is a full page.
    */
   closed(q: string, offset: number, limit: number, include?: (s: Session) => boolean): { sessions: Session[]; total: number } {
     const needle = q.trim().toLowerCase();
@@ -2722,6 +2737,7 @@ export class Fleet extends EventEmitter {
     this.requireActivity(req.id);
     if (req.readOnly && req.provider !== "codex") throw new FleetError(400, "read-only reviews currently require Codex");
     const adapter = this.adapter(req.provider);
+    if (req.readOnly && !adapter.readOnly) throw new FleetError(400, `${adapter.label} sessions cannot be started read-only`);
     const settings = getSettings();
     if (req.effort && !adapter.efforts.includes(req.effort)) {
       throw new FleetError(400, `${adapter.label} takes no effort "${req.effort}"${adapter.efforts.length ? ` (${adapter.efforts.join(", ")})` : ""}`);
@@ -2766,8 +2782,8 @@ export class Fleet extends EventEmitter {
 
     const model = req.model || settings.models[req.provider] || undefined;
     const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
-    const launch = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
-    const cmd = req.readOnly ? launch : withGlobalMcp(req.provider, account, launch, [], cwd);
+    const launched = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
+    const cmd = req.readOnly ? launched : withGlobalMcp(req.provider, account, launched, [], cwd);
     const now = this.now();
     const name = tmuxName(id);
     const parent = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
@@ -2795,7 +2811,9 @@ export class Fleet extends EventEmitter {
     });
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     if (req.opener && req.prompt) recordOpening({ session: id, opener: req.opener, prompt: req.prompt }, now);
-    if (req.readOnly) updateSessionRecord(id, { launch: { args: ["--sandbox", "read-only", "--ask-for-approval", "never"], env: {} } });
+    // Carried on every resume, as an adopted session's own flags are.
+    if (req.readOnly) updateSessionRecord(id, { launch: { args: [...adapter.readOnly!], env: {} } });
+    if (req.notify === false) updateSessionRecord(id, { quiet: true });
     insertAssignment({
       id: randomUUID(),
       sessionId: id,
@@ -3140,8 +3158,9 @@ export class Fleet extends EventEmitter {
       autoApprove: getSettings().autoApprove,
       ...(launch ? { carry: launch.args } : {}),
     };
-    const command = adapter.resumeCommand(opts);
-    const cmd = launch?.args.includes("read-only") ? command : withGlobalMcp(rec.provider, account, command, opts.carry, cwd, launch?.env);
+    const resumed = adapter.resumeCommand(opts);
+    const readOnly = !!adapter.readOnly && !!launch && adapter.readOnly.every((a) => launch.args.includes(a));
+    const cmd = readOnly ? resumed : withGlobalMcp(rec.provider, account, resumed, opts.carry, cwd, launch?.env);
     return { opts, cmd, typed, inherited: launch?.env };
   }
 
@@ -4070,7 +4089,14 @@ function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
     // Managed requests fail closed without it; ordinary sessions still start.
     console.error(`agentbox: ${id}'s session capability could not be written:`, e);
   }
-  return { AGENTBOX_SESSION: id, ...(process.env.AGENTBOX_HOME ? { AGENTBOX_HOME: process.env.AGENTBOX_HOME } : {}), ...(process.env.AGENTBOX_PORT ? { AGENTBOX_PORT: process.env.AGENTBOX_PORT } : {}), ...(process.env.AGENTBOX_TMUX_SOCKET ? { AGENTBOX_TMUX_SOCKET: process.env.AGENTBOX_TMUX_SOCKET } : {}), ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}) };
+  // A session's CLI must talk to the server that started it, isolated or not.
+  return {
+    AGENTBOX_SESSION: id,
+    ...(process.env.AGENTBOX_HOME ? { AGENTBOX_HOME: process.env.AGENTBOX_HOME } : {}),
+    ...(process.env.AGENTBOX_PORT ? { AGENTBOX_PORT: process.env.AGENTBOX_PORT } : {}),
+    ...(process.env.AGENTBOX_TMUX_SOCKET ? { AGENTBOX_TMUX_SOCKET: process.env.AGENTBOX_TMUX_SOCKET } : {}),
+    ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}),
+  };
 }
 
 /** The variables a launch marks secret (`Command.secret`) apart from the
@@ -4173,8 +4199,9 @@ export function repoRootOf(cwd: string): string | null {
   if (!cwd) return null;
   if (roots.has(cwd)) return roots.get(cwd)!;
   let root = existsSync(cwd) ? gitRootOf(cwd) : null;
-  // Worktree git files contain physical paths; the main checkout may have
-  // been registered through a symlink (notably /var on macOS).
+  // A worktree's `.git` file holds physical paths, while the main checkout may
+  // have been registered through a symlink (macOS `/var` is `/private/var`).
+  // Without this, such a session's worktree maps to no repository at all.
   if (root) { try { root = realpathSync(root); } catch { /* removed meanwhile */ } }
   roots.set(cwd, root);
   return root;

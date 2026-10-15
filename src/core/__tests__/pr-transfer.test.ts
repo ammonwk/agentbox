@@ -32,19 +32,17 @@ test("only the current holder can transfer; a competing stale handoff cannot rep
   expect(claims()[0]!.sessionId).toBe("next");
 });
 
-
 test("transfer revokes predecessor waits and branch fallback, then clears successor exclusions regardless of repo casing", () => {
   const ref = { repo: "Team/Repo", number: 2 };
   const byBranch = [{ ...ref, sessionId: "holder", at: 1 }];
-  const current = () => prClaims(sessions, byBranch);
   releasePr("next", { repo: "TEAM/REPO", number: 2 });
   const wait = insertWait({ sessionId: "holder", spec: { kind: "pr", ...ref, head: "aaaaaaa", all: true, checks: [], merged: false }, createdAt: 1, deadline: Date.now() + 60_000 });
   const pending = insertWait({ sessionId: "holder", spec: { kind: "pr", ...ref, head: "aaaaaaa", all: true, checks: [], merged: false }, createdAt: 1, deadline: Date.now() + 60_000 });
   updateWait(pending.id, { ended: "stuck", endedAt: 2, outcome: "old result" });
-  transferPr(current(), sessions, "team/repo", 2, "holder", "holder", "next", 3);
+  transferPr(prClaims(sessions, byBranch), sessions, "team/repo", 2, "holder", "holder", "next", 3);
   for (const id of [wait.id, pending.id]) expect(getWait(id)!.ended).toBe("cancelled");
   expect(prReleased("holder", { repo: "team/repo", number: 2 })).toBe(true);
   expect(prReleased("next", ref)).toBe(false);
   releasePr("next", ref);
-  expect(current().some(c => c.number === 2)).toBe(false);
+  expect(prClaims(sessions, byBranch).some(c => c.number === 2)).toBe(false);
 });

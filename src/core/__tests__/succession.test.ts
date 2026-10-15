@@ -133,15 +133,22 @@ describe("a schedule that keeps to one session", () => {
   });
 });
 
-
 test("late pane discovery attaches only the proven new provider identity, preserving an alias", () => {
   const now = NOW + 20 * 60_000;
-  insertAccount({id:"own-account",provider:"codex",label:"Fixture",email:null,plan:null,home:dir,isDefault:true,enabled:true,createdAt:NOW});
+  insertAccount({ id: "own-account", provider: "codex", label: "Fixture", email: null, plan: null, home: dir, isDefault: true, enabled: true, createdAt: NOW });
   const pending = { ...record("late-spawn"), provider: "codex" as const, tmux: "ab-late-spawn", accountId: "own-account", cwd: "/tmp/own-writer", pinOrder: 3 };
   const discovered = { ...pending, id: "late-discovery", origin: "external" as const, tmux: null, agentSessionId: "provider-own", createdAt: NOW + 1000, transcriptPath: "/tmp/provider-own.jsonl", pinOrder: 9, bookmarkedAt: NOW + 1000 };
   insertSessionRecord(pending); insertSessionRecord(discovered);
   const proc = { pid: 345, provider: "codex", accountId: "other-account", agentSessionId: "provider-own", cwd: pending.cwd, startedAt: NOW + 1000 };
-  const fleet: any = Object.create(Fleet.prototype);
+  // The pass reads exactly these: the panes, the live processes under them,
+  // the provider transcripts it may guess from, and what it has matched so far.
+  const fleet = Object.create(Fleet.prototype) as unknown as {
+    panes: Map<string, { pid: number; dead: boolean }>;
+    livePids: Map<number, unknown>;
+    tracked: Map<string, unknown>;
+    byAgentId: Map<string, string>;
+    matchPendingSpawns(now: number): void;
+  };
   Object.assign(fleet, { panes: new Map([[pending.tmux, { pid: 345, dead: false }]]), livePids: new Map([[345, proc]]), tracked: new Map(), byAgentId: new Map() });
   fleet.matchPendingSpawns(now);
   expect(getSessionRecord(pending.id)!.agentSessionId).toBeNull();

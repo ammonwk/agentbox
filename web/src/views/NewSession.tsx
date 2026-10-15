@@ -53,6 +53,7 @@ export function NewSession({
   onScheduled,
 }: {
   state: AppState;
+  /** The selected project: its dialog remembers on its own and starts in its repo. */
   project?: string | null;
   onClose: () => void;
   onCreated: (id: string) => void;

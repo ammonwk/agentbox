@@ -9,7 +9,6 @@
  *  holds the machine's credential. Nothing here needs the cloud to run
  *  agentbox: without it the page says how to set one up. */
 
-import { useScope } from "../lib/projects";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import type { HumanCloud } from "../../../src/cloud/client";
 import {
@@ -29,6 +28,7 @@ import { api } from "../api";
 import { CopyButton, PROVIDER_LABEL, PROVIDERS } from "../bits";
 import { Button, Empty, Field, Icon, Toggle } from "../components";
 import { humanCloud, rememberDefaults, signInRedirect, useCloudStatus, useCloudUser, useLoad } from "../lib/cloud";
+import { useScope } from "../lib/projects";
 import { Markdown } from "./session/Markdown";
 import "./team.css";
 
@@ -201,6 +201,9 @@ function SignedIn({ human, status, refresh, state }: { human: HumanCloud; status
   const settings = useLoad(() => human.settings(), []);
   const web = (settings.data?.frontend[WEB_NAMESPACE] ?? {}) as { teamTab?: Tab; workspace?: string };
   const [tab, setTab] = useState<Tab | null>(null);
+  // The workspace is part of the URL's scope (route.ts), shared with any
+  // other page that works in one; the saved preference is where a browser
+  // with none in its URL starts.
   const scope = useScope();
   const wsId = scope.workspace || null;
   const setWsId = (id: string) => scope.select("workspace", id);
@@ -208,9 +211,10 @@ function SignedIn({ human, status, refresh, state }: { human: HumanCloud; status
     if (settings.data) rememberDefaults(settings.data.defaults);
   }, [settings.data]);
   const memberships = me.data?.memberships ?? [];
-  const current = memberships.find((m) => m.workspace.id === (wsId ?? status.installation?.workspaceId)) ?? memberships[0] ?? null;
+  const current = memberships.find((m) => m.workspace.id === (wsId ?? web.workspace ?? status.installation?.workspaceId)) ?? memberships[0] ?? null;
   useEffect(() => {
-    if (me.data && current && scope.workspace !== current.workspace.id) setWsId(current.workspace.id);
+    // The one resolved for a URL without one is written into it, in place: not a history entry.
+    if (me.data && current && scope.workspace !== current.workspace.id) scope.select("workspace", current.workspace.id, undefined, true);
   }, [me.data, current?.workspace.id, scope.workspace]);
   const shownTab = tab ?? web.teamTab ?? "you";
   // Where you were on this page is a frontend preference, kept under this

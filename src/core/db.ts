@@ -401,6 +401,22 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE sessions ADD COLUMN pin_order REAL;
   ALTER TABLE sessions ADD COLUMN bookmarked_at INTEGER;
   `,
+  // 28 — superagents (src/core/superagents.ts): a name, where its code is,
+  // and its main conversation. Its manifest, code and state are its own.
+  `
+  CREATE TABLE superagents (
+    name       TEXT PRIMARY KEY,
+    dir        TEXT NOT NULL,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    main       TEXT,
+    previous   TEXT NOT NULL DEFAULT '[]',
+    main_send  TEXT,
+    created_at INTEGER NOT NULL
+  );
+  `,
+  // 29 — a session whose stops are not pushed to your phone: one a program
+  // started, whose own page shows what it waits on.
+  `ALTER TABLE sessions ADD COLUMN quiet INTEGER;`,
 ];
 
 function migrate(d: Database) {
@@ -517,6 +533,8 @@ export interface SessionRecord {
   pinOrder?: number | null;
   /** When you bookmarked it; null when it is not bookmarked. */
   bookmarkedAt?: number | null;
+  /** Started with `notify: false`: its stops are not pushed. */
+  quiet?: boolean;
 }
 
 type SessionRow = {
@@ -527,7 +545,7 @@ type SessionRow = {
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
   parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
-  pin_order: number | null; bookmarked_at: number | null;
+  pin_order: number | null; bookmarked_at: number | null; quiet: number | null;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -559,6 +577,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     hoppedAt: r.hopped_at ?? null,
     pinOrder: r.pin_order ?? null,
     bookmarkedAt: r.bookmarked_at ?? null,
+    quiet: !!r.quiet,
   };
 }
 
@@ -590,6 +609,7 @@ const RECORD_COLUMNS = {
   hoppedAt: "hopped_at",
   pinOrder: "pin_order",
   bookmarkedAt: "bookmarked_at",
+  quiet: "quiet",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;
@@ -663,8 +683,10 @@ export function findSessionRecord(provider: ProviderId, agentSessionId: string):
   return row ? rowToRecord(row) : null;
 }
 
-/** Reconcile discovery that ran before a managed pane became visible. The
- * caller must prove the provider identity from the live process in that pane. */
+/** Reconcile discovery that ran before a managed pane became visible: the
+ * pending row takes the identity, the discovered row becomes a closed alias
+ * of it. The caller must prove the provider identity from the live process in
+ * that pane. One transaction, so a crash leaves one of the two, not both. */
 export function attachDiscoveredSpawn(pendingId: string, discoveredId: string, now: number): boolean {
   const pending = getSessionRecord(pendingId), discovered = getSessionRecord(discoveredId);
   if (!pending || !discovered || pending.agentSessionId || pending.origin !== "agentbox" || !pending.tmux || pending.archivedAt || pending.successor ||

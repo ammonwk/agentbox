@@ -28,6 +28,7 @@ export class Held extends Error {
 
 export interface Check {
   name: string;
+  /** A stable identity for this run of this check, so a re-run counts as fresh. */
   key?: string;
   done: boolean;
   /** Concluded without failing: success, neutral or skipped. */
@@ -42,7 +43,9 @@ export interface PrRead {
   base: string;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   checks: Check[];
+  /** Every check could not be read: the rest of the read still stands. */
   checksError?: Error;
+  /** A digest of this PR's reviews and comments, never their text; an error when they could not be read. */
   feedback?: { fingerprint: string; count: number } | Error;
 }
 

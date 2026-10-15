@@ -45,6 +45,8 @@ export function assignedPrHolder(pr: PrRef): string | null {
 }
 
 export function prReleased(sessionId: string, pr: PrRef): boolean {
+  // A release recorded as Team/Repo is the record for team/repo: a claim, a
+  // rename or another session's casing is not a new PR.
   return !!getDb().query("SELECT 1 FROM pr_releases WHERE session_id = ? AND lower(repo) = lower(?) AND number = ?").get(sessionId, pr.repo, pr.number);
 }
 

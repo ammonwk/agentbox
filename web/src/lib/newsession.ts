@@ -35,15 +35,23 @@ const PREFS_KEY = "agentbox.newSession";
  *  picked anything yet starts with. */
 export const CLOUD_DEFAULTS_KEY = "agentbox.cloud.defaults";
 
+/** Each project's dialog remembers on its own, under its own key, so a draft
+ *  for one is not what another opens on; All projects is the key as it was,
+ *  so what was there stays there. */
+const prefsKey = (project: string | null) => (project ? `${PREFS_KEY}.project.${project}` : PREFS_KEY);
+
+/** A project's dialog starts in that project's repo, with the provider and
+ *  per-provider choices All projects has, until a Where is picked by hand or
+ *  a draft is left. */
 export function loadPrefs(project: string | null = null): NewSessionPrefs {
   try {
-    const raw = localStorage.getItem(project ? `${PREFS_KEY}.project.${project}` : PREFS_KEY);
+    const raw = localStorage.getItem(prefsKey(project));
     if (project && !raw) {
       const global = loadPrefs();
       return withCloudDefaults({ provider: global.provider, perProvider: global.perProvider, where: "repo", repoId: project });
     }
     const v = JSON.parse(raw ?? "{}") as unknown;
-    const prefs = v && typeof v === "object" ? v as NewSessionPrefs : {};
+    const prefs = v && typeof v === "object" ? (v as NewSessionPrefs) : {};
     if (project && !prefs.wherePicked && !prefs.draft?.trim() && !prefs.draftImages?.length) {
       return withCloudDefaults({ ...prefs, where: "repo", repoId: project });
     }
@@ -77,7 +85,7 @@ function withCloudDefaults(local: NewSessionPrefs): NewSessionPrefs {
 
 export function savePrefs(p: NewSessionPrefs, project: string | null = null): void {
   try {
-    localStorage.setItem(project ? `${PREFS_KEY}.project.${project}` : PREFS_KEY, JSON.stringify(p));
+    localStorage.setItem(prefsKey(project), JSON.stringify(p));
   } catch {
     // private mode or full: forgetting is fine
   }
@@ -158,7 +166,11 @@ const SKILL_SOURCES: Record<ProviderId, readonly SkillSource[] | null> = {
   muse: null,
 };
 
-/** The registered repo a session runs in (a worktree's `repoRoot` is its main checkout). */
+/** The registered repo a session runs in (a worktree's `repoRoot` is its main
+ *  checkout, resolved by the server; `ref` may be a GitHub slug). The longest
+ *  path wins, so a registered repo inside another is the one a session in it
+ *  belongs to. A prefix only counts when the session has no `repoRoot`: a
+ *  worktree's root must equal its repo's checkout, not sit under it. */
 export function repoOfSession(repos: readonly Repo[], s: Pick<Session, "repoRoot" | "cwd">): Repo | null {
   const root = s.repoRoot ?? s.cwd;
   // A nested registered repository wins over its parent. Worktrees use the

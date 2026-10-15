@@ -86,11 +86,22 @@ function routePath(route: Route): string {
   }
 }
 
-/** Scope is part of each history entry, so separate tabs and Back cannot
- * silently change the context of a draft. No process changes on navigation. */
+// ------------------------------------------------------------------- scope
+
+/**
+ * What the board is looking at, beside where: the selected project (a repo
+ * id; "" is an explicit All projects) and the Team page's cloud workspace,
+ * as `#/route?project=…&workspace=…`. Part of each history entry, so Back,
+ * a reload and separate tabs cannot silently change the context a draft or
+ * a list is in. Selecting one is navigation only: no process starts or stops.
+ */
+export type ScopeKey = "project" | "workspace";
+
 export function scopeOf(hash = location.hash): URLSearchParams {
   return new URLSearchParams(hash.split("?")[1] ?? "");
 }
+
+/** The link to a route, in the scope the page is in now. */
 export function hrefOf(route: Route): string {
   const scope = scopeOf().toString();
   return routePath(route) + (scope ? `?${scope}` : "");
@@ -189,11 +200,12 @@ export function listUnderSession(): void {
 }
 
 /**
- * Send the app's own links through go() to preserve the selected project
- * and the narrow-screen session history. On React's root and added after it: React's handlers
- * have run (a preventDefault is seen) and its stopPropagation, which a link
- * in a clickable row uses, does not hide the click from a listener on the
- * same element.
+ * Send the app's own links through go(), so they keep the scope the page is
+ * in and, on a narrow screen, history as go() keeps it. A link into another
+ * scope is a plain hash navigation: it means that scope. On React's root and
+ * added after it: React's handlers have run (a preventDefault is seen) and
+ * its stopPropagation, which a link in a clickable row uses, does not hide
+ * the click from a listener on the same element.
  */
 export function followLinks(root: HTMLElement): void {
   root.addEventListener("click", (e) => {

@@ -30,6 +30,7 @@ import { sourceCheckout } from "../core/snapshot";
 import { Fleet, FleetError, repoRootOf } from "../core/fleet";
 import { ResourceCleanup } from "../core/cleanup";
 import { sessionProject } from "../core/projects";
+import { agentBindings } from "../core/agents/bindings";
 import * as tmux from "../core/tmux";
 import { attentionOf, byAttention, retrying } from "../core/attention";
 import { calibrate } from "../core/calibration";
@@ -52,12 +53,12 @@ import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { parseSpec, Waits } from "../core/waits";
-import { CARD_KINDS, Cards } from "../core/cards";
+import { CARD_KINDS, Cards, moveCards } from "../core/cards";
 import type { CardKind, CardState, McpServerInput, McpState } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
-import { claimPr, holderOf, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
-import { repoFullNameOf, repoCheckoutPath } from "../core/git";
+import { claimPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
+import { repoCheckoutPath, repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { attribute } from "../core/senders";
@@ -88,6 +89,7 @@ import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import { RUNNING_REVISION } from "../revision";
 import { CloudBridge } from "../core/cloud/bridge";
+import { Superagents } from "../core/superagents";
 import { cloudHttpError, cloudRoutes } from "./cloud";
 import { AgentsRuntime } from "../core/agents/runtime";
 import { agentRoutes } from "./agents";
@@ -178,6 +180,8 @@ fleet.activityAllowed = id => cleanup.allows(id);
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
+/** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
+export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`);
 /** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
 export const cloud = new CloudBridge(fleet, VERSION);
 function cardId(raw: string): number {
@@ -393,6 +397,11 @@ function speaker(b: Record<string, unknown>): string | null {
 /** PRs a session is being started on, until it exists to hold them. */
 const startingOn = new Set<string>();
 
+/** The registered repos with the canonical root their sessions' `repoRoot`
+ *  is compared to (`sessionProject`): a GitHub clone's is under the repo
+ *  root, and a symlinked local one's is its real path. */
+const reposWithRoots = (): Repo[] => listRepos().map((r) => ({ ...r, checkoutRoot: repoRootOf(repoCheckoutPath(r)) ?? repoCheckoutPath(r) }));
+
 function coldState(): ColdState {
   const views = accountViews();
   const prClaims = prClaimsNow();
@@ -400,7 +409,7 @@ function coldState(): ColdState {
     accounts: views,
     cleanup: cleanup.state(),
     logins: accounts.loginFlows(),
-    repos: listRepos().map((r) => ({ ...r, checkoutRoot: repoRootOf(repoCheckoutPath(r)) ?? repoCheckoutPath(r) })),
+    repos: reposWithRoots(),
     prs: slow.prs.map((p) => ({ ...p, owner: holderOf(prClaims, p.repo, p.number)?.sessionId ?? null })),
     prClaims,
     skills: slow.skills,
@@ -684,6 +693,7 @@ function closeTerminal(ws: Socket): void {
 
 function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
+  // A schema refusal is the request's shape, not the server's fault.
   if (e instanceof ZodError) return new HttpError(400, e.message);
   const c = cloudHttpError(e);
   if (c) return c;
@@ -761,6 +771,8 @@ const router = new Router(mapError)
     try {
       const out = await fleet.spawn({
         provider: provider(b.provider),
+        readOnly: b.readOnly === true,
+        notify: b.notify === false ? false : undefined,
         cwd: optionalString(b, "cwd"),
         repoId: optionalString(b, "repoId"),
         worktree: b.worktree === true,
@@ -1079,6 +1091,60 @@ const router = new Router(mapError)
     scheduleHot();
     return json(out);
   })
+  // A session hands what it holds to the one taking over from it: what it
+  // started, its cards, its pull requests and their waits, and messages to it.
+  .add("POST", "/api/sessions/:id/handover", async ({ req, params }) => {
+    const b = await readBody(req);
+    const to = requireString(b, "to");
+    if (to === params.id) throw new HttpError(400, "a session cannot hand over to itself");
+    if (!fleet.sessions().some((s) => s.id === params.id)) throw new HttpError(404, `no session ${params.id}`);
+    const moved = await fleet.handOver(params.id!, to);
+    const cardsMoved = moveCards(params.id!, to);
+    const claimsMoved = movePrClaims(params.id!, to);
+    if (b.close === true) await fleet.close(params.id!, true, true);
+    scheduleHot();
+    scheduleCold();
+    return json({ to, children: moved, cards: cardsMoved, claims: claimsMoved, closed: b.close === true });
+  })
+
+  // ----- superagents (src/core/superagents.ts, docs/superagents.md)
+  .add("GET", "/api/superagents", () => json(superagents.list()))
+  .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))
+  .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(params.name!)))
+  .add("PATCH", "/api/superagents/:name", async ({ req, params }) => {
+    const b = await readBody(req);
+    const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
+    const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
+    return json(await superagents.patch(params.name!, { main, enabled }));
+  })
+  .add("DELETE", "/api/superagents/:name", ({ params }) => {
+    superagents.remove(params.name!);
+    return json(null);
+  })
+  .add("POST", "/api/superagents/:name/restart", async ({ params }) => json(await superagents.restart(params.name!)))
+  .add("GET", "/api/superagents/:name/log", ({ params, url }) => {
+    const bytes = Number(url.searchParams.get("bytes")) || undefined;
+    return json({ text: superagents.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
+  })
+  .add("GET", "/api/superagents/:name/view", async ({ params, url }) => json(await superagents.view(params.name!, url.searchParams.get("tab"))))
+  .add("POST", "/api/superagents/:name/action", async ({ req, params }) => {
+    const b = await readBody(req);
+    requireString(b, "action");
+    // Who asked: a session proves itself with its capability; a page in a browser sends an Origin.
+    const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const) };
+    return json(await superagents.action(params.name!, b, caller));
+  })
+  .add("POST", "/api/superagents/:name/chat", async ({ req, params }) => {
+    const b = await readBody(req);
+    const text = requireString(b, "text");
+    if (!text.trim()) throw new HttpError(400, "the message is empty");
+    const sendId = requireString(b, "sendId");
+    if (!/^[\w-]{1,64}$/.test(sendId)) throw new HttpError(400, "invalid send ID");
+    const out = await superagents.chat(params.name!, text, sendId);
+    scheduleHot();
+    return json(out);
+  })
+
   // ----- scheduled sessions (src/core/scheduler.ts)
   .add("POST", "/api/schedules", async ({ req }) => {
     const b = await readBody(req);
@@ -1164,7 +1230,6 @@ const router = new Router(mapError)
     const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
     return json(
       cards.add({
-        notify: !!authenticatedSession(req) && !agents.ownsSession(authenticatedSession(req)),
         kind,
         title: requireString(b, "title"),
         short: requireString(b, "short"),
@@ -1177,6 +1242,7 @@ const router = new Router(mapError)
         sessionId: id(b.session) ?? (callerPid ? fleet.callerOf(callerPid) : null),
         about: id(b.about),
         at: typeof b.at === "number" && b.at > 0 ? b.at : null,
+        notify: b.notify !== false && !agents.ownsSession(authenticatedSession(req)),
       }),
       201,
     );
@@ -1213,11 +1279,11 @@ const router = new Router(mapError)
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 30));
     const project = url.searchParams.get("project");
-    const repos = listRepos().map((r) => ({ ...r, checkoutRoot: repoRootOf(repoCheckoutPath(r)) ?? repoCheckoutPath(r) }));
-    const local = project ? agents.conversations.local() : [];
+    const repos = project ? reposWithRoots() : [];
+    const bound = project ? agentBindings(agents.conversations.local()) : undefined;
     const owner = agents.sessionOwnership(), human = url.searchParams.get("human") === "1";
     const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit,
-      (s) => (!human || !owner(s.id)) && (!project || sessionProject(repos, local, s) === project));
+      (s) => (!human || !owner(s.id)) && (!project || sessionProject(repos, s, bound) === project));
     return json({ sessions: page.sessions.map((s) => ({ ...s, agentOwner: owner(s.id), attention: attentionOf(s, null) })), total: page.total });
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
@@ -1418,12 +1484,16 @@ const router = new Router(mapError)
     const repo = await addRepo(requireString(b, "ref")).catch((e: Error) => {
       throw new HttpError(400, e.message);
     });
+    // The repo itself goes out now (the switcher offers it, a scope on it
+    // is good again); its skills and PRs follow when the slow inputs are in.
+    scheduleCold();
     void refreshSlow();
     void refreshPrs();
     return json(repo, 201);
   })
   .add("DELETE", "/api/repos/:id", ({ params }) => {
     deleteRepo(params.id!);
+    scheduleCold();
     void refreshSlow();
     return json(null);
   })
@@ -1657,6 +1727,7 @@ export async function startServer(): Promise<void> {
     }
     scheduler.stop();
     waits.stop();
+    superagents.stopAll();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -1778,6 +1849,7 @@ export async function startServer(): Promise<void> {
   phase("first pass");
   scheduler.start();
   waits.start();
+  superagents.start();
   cards.start();
   // Local first: with no cloud.env this reads nothing and sends nothing.
   cloud.start();
