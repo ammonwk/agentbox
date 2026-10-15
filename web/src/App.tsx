@@ -122,7 +122,7 @@ export function App() {
   useEffect(() => {
     if (selectedSession && !scopeOf().has("project")) selectScope("project", sessionProject(state!.repos, selectedSession), route, true);
   }, [selectedSession?.id]);
-  const wrongSession = !!scope.project && !!selectedSession && sessionProject(state!.repos, selectedSession) !== scope.project;
+  const wrongSession = !!scope.project && !!selectedSession && !scoped!.sessions.some((s) => s.id === selectedSession.id);
   const projectName = project?.displayName ?? (staleProject ? "Unavailable project" : "All projects");
   const nav = navOf(route);
   // The start of the system bar, where an open session puts its facts.

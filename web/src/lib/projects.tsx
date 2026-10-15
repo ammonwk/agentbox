@@ -47,14 +47,28 @@ function cardInProject(state: AppState, c: Card, project: string): boolean {
   return false;
 }
 
-/** The state as the project sees it: its sessions, its cards, and the
- *  schedules on its repo or in its checkout. What belongs to no project is
- *  seen only from All projects. */
+/** The project's sessions, and the open ones they run under wherever those
+ *  are, so a steward or lead in another checkout still holds its children
+ *  together instead of leaving them at the root. */
+function projectSessions(state: AppState, project: string): AppState["sessions"] {
+  const byId = new Map(state.sessions.map((s) => [s.id, s]));
+  const keep = new Set<string>();
+  for (const s of state.sessions) {
+    if (sessionProject(state.repos, s) !== project) continue;
+    keep.add(s.id);
+    for (let p = byId.get(s.parent ?? ""); p && p.status !== "closed" && !keep.has(p.id); p = byId.get(p.parent ?? "")) keep.add(p.id);
+  }
+  return state.sessions.filter((s) => keep.has(s.id));
+}
+
+/** The state as the project sees it: its sessions and those they run under,
+ *  its cards, and the schedules on its repo or in its checkout. What belongs
+ *  to no project is otherwise seen only from All projects. */
 export function scopedState(state: AppState, project: string | null): AppState {
   if (!project) return state;
   return {
     ...state,
-    sessions: state.sessions.filter((s) => sessionProject(state.repos, s) === project),
+    sessions: projectSessions(state, project),
     cards: state.cards.filter((c) => cardInProject(state, c, project)),
     schedules: state.schedules.filter((s) => s.spec.repoId === project || (!s.spec.repoId && s.spec.cwd && repoOfSession(state.repos, { repoRoot: null, cwd: s.spec.cwd })?.id === project)),
   };
