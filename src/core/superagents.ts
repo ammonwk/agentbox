@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { Subprocess } from "bun";
 import { getDb, getRepoById, getSchedule, getSessionRecord, getSettings, listRepos, listSessionRecords, type SessionRecord } from "./db";
 import { repoCheckoutPath } from "./git";
+import { ppidOf } from "./providers/procs";
 import { FleetError, newSessionId, type Fleet, type SpawnRequest } from "./fleet";
 import { agentboxBin, agentboxHome, packageRoot, userHome } from "./paths";
 import { submitWithReceipt } from "./send-receipts";
@@ -32,7 +33,7 @@ import { Sweeps } from "./superagent/sweep";
 import { AgentFeedback } from "./superagent/feedback";
 import { avatarFile, removeAvatar, saveAvatar } from "./superagent/avatar";
 import { teamOf } from "./superagent/shares";
-import { excludeLocalLayers, isObject, layerPath, readLayer, resolveLayers, stable, writeLayerKey, type GateSource, type Layer, type LayerKind, type Resolution } from "./superagent/layers";
+import { excludeLocalLayers, tracked, isObject, layerPath, readLayer, resolveLayers, stable, writeLayerKey, type GateSource, type Layer, type LayerKind, type Resolution } from "./superagent/layers";
 
 /** A loop in the manifest: `prompt` inline, or `file` in the directory. */
 export const LoopSpec = z
@@ -69,6 +70,8 @@ export const Manifest = z
     url: z.string().url().optional(),
     /** Whether it is on when no layer says (src/core/superagent/layers.ts). Off by default: adding one starts nothing. */
     enabled: z.boolean().optional(),
+    /** Its own fields a project's layer may set with no approval: dotted paths, each with everything under it (layers.ts). */
+    projectFields: z.array(z.string().regex(/^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/, "a project field is a dotted path")).max(50).optional(),
     /** The picture the Agents page shows when none was set on the page: one of AGENT_ICONS. */
     icon: z.enum(AGENT_ICONS).optional(),
     /** The projects it shows in, for navigation only: repo ids, owner/repo, or checkout paths. None: every project. */
@@ -495,11 +498,13 @@ export class Superagents {
    * stay where they are. An instance is not removed on its own: the gate of
    * its project would start it again, so it is turned off there instead.
    */
-  remove(name: string): void {
+  remove(name: string): string[] {
     const r = this.row(name);
     if (r.base) throw new FleetError(409, `${name} is ${r.base}'s instance in a project: turn it off there (agentbox superagent disable ${name}), or remove ${r.base}`);
-    for (const x of [...this.instancesOf(name), r]) this.forget(x.name);
+    const gone = [...this.instancesOf(name), r].map((x) => x.name);
+    for (const x of gone) this.forget(x);
     this.changed();
+    return gone;
   }
 
   private forget(name: string): void {
@@ -536,7 +541,10 @@ export class Superagents {
       if (!repo) throw new FleetError(404, `no project ${id}`);
       const checkout = repoCheckoutPath(repo);
       if (!existsSync(checkout)) throw new FleetError(409, `${repo.displayName} has no checkout on this machine (${checkout}) to keep the gate in`);
-      writeLayerKey(layerPath("local", generic, checkout)!, "enabled", enabled);
+      const file = layerPath("local", generic, checkout)!;
+      // A person's own file in the project: one that git tracks is anyone's, and a write to it could be committed.
+      if (existsSync(file) && tracked(checkout, file)) throw new FleetError(409, `${file} is committed to the repository, so it is not yours alone: remove it from git (git rm --cached) first`);
+      writeLayerKey(file, "enabled", enabled);
       excludeLocalLayers(checkout);
       await this.tick();
       this.changed();
@@ -594,6 +602,17 @@ export class Superagents {
     if (p) p.backoffUntil = 0;
     await this.tick();
     return this.get(name);
+  }
+
+  /** The superagent whose program `pid` is, or runs under: a request from it is never a person's. */
+  programAbove(pid: number): string | null {
+    const programs = new Map<number, string>();
+    for (const [name, p] of this.procs) if (p.pid) programs.set(p.pid, name);
+    for (let at: number | null = pid, n = 0; at && at > 1 && n < 64; at = ppidOf(at), n++) {
+      const name = programs.get(at);
+      if (name) return name;
+    }
+    return null;
   }
 
   /** The end of its program's output. */
@@ -901,7 +920,12 @@ export class Superagents {
     const key = [base, ...layers, approved.project, approved.local, checkout, dir];
     const hit = this.memo.get(r.name);
     if (hit && hit.key.length === key.length && hit.key.every((k, i) => k === key[i])) return hit.out;
-    const res = resolveLayers(base as Record<string, unknown>, layers, approved);
+    let res: Resolution;
+    try {
+      res = resolveLayers(base as Record<string, unknown>, layers, approved);
+    } catch (e) {
+      return this.keep(r.name, key, { m: null, raw: null, error: `${r.name}'s layers cannot be read: ${(e as Error).message}`, res: null, dir });
+    }
     const raw = res.raw;
     const wrong = asInstance(raw, r.name, repo?.id ?? null);
     if (wrong) return this.keep(r.name, key, { m: null, raw: null, error: `${generic.name}: ${wrong}`, res, dir });
@@ -1030,7 +1054,15 @@ export class Superagents {
    * stop what a gate turned off or whose manifest changed, and start what
    * should run and is not, each after its backoff.
    */
-  private async tick(): Promise<void> {
+  private tick(): Promise<void> {
+    // One pass at a time: two passes could each start a program for one agent. A failed pass is logged, never thrown.
+    const next = this.ticking.then(() => this.tickOnce()).catch((e: unknown) => console.error("agentbox: superagents:", e));
+    this.ticking = next;
+    return next;
+  }
+  private ticking: Promise<void> = Promise.resolve();
+
+  private async tickOnce(): Promise<void> {
     if (this.reconcile()) this.changed();
     const now = Date.now();
     for (const r of rows()) {
@@ -1055,16 +1087,24 @@ export class Superagents {
     } catch {
       return [];
     }
+    // A generic agent whose main is a schedule's session has no instances.
+    if (base.main?.schedule) return [];
     const out: { repo: Repo; enabled: boolean; by: GateSource }[] = [];
     for (const repo of listRepos()) {
-      const checkout = repoCheckoutPath(repo);
-      const layers = this.layersOf(g.name, checkout);
-      if (!layers.some((l) => l.kind !== "user" && l.exists)) continue;
-      const res = resolveLayers(base as Record<string, unknown>, layers, {});
-      out.push({ repo, enabled: res.enabled, by: res.by });
+      try {
+        const checkout = repoCheckoutPath(repo);
+        const layers = this.layersOf(g.name, checkout);
+        if (!layers.some((l) => l.kind !== "user" && l.exists)) continue;
+        const res = resolveLayers(base as Record<string, unknown>, layers, {});
+        out.push({ repo, enabled: res.enabled, by: res.by });
+      } catch (e) {
+        console.error(`agentbox: superagent ${g.name} in ${repo.displayName}: its layers cannot be read: ${(e as Error).message}`);
+      }
     }
     return out;
   }
+
+  private copyNoted = new Set<string>();
 
   /** An instance for each project a generic agent is on in and has none. True when it made one. */
   private reconcile(): boolean {
@@ -1073,6 +1113,14 @@ export class Superagents {
       if (g.base) continue;
       for (const { repo, enabled } of this.projectGates(g)) {
         if (!enabled || getDb().query("SELECT 1 FROM superagents WHERE base = ? AND project = ?").get(g.name, repo.id)) continue;
+        // A copy of it from before instances (a directory of its own for this project) is still that project's:
+        // scripts/migrate-instances.ts makes it the instance. Never run a second one beside it.
+        const copy = rows().find((x) => !x.base && x.name !== g.name && x.name.startsWith(`${g.name}-`) && this.resolved(x).m?.projects?.length === 1 && this.resolved(x).m?.projects?.[0] === repo.id);
+        if (copy) {
+          if (!this.copyNoted.has(copy.name)) console.error(`agentbox: ${copy.name} is a copy of ${g.name} for ${repo.displayName}: no instance is made beside it; run scripts/migrate-instances.ts`);
+          this.copyNoted.add(copy.name);
+          continue;
+        }
         const name = instanceName(g.name, repo.displayName);
         getDb().run("INSERT INTO superagents (name, dir, enabled, previous, created_at, base, project, gate_moved) VALUES (?, ?, 0, '[]', ?, ?, ?, 1)", [
           name,

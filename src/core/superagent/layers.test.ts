@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { closeDb, insertRepo } from "../db";
 import { Fleet } from "../fleet";
 import { Superagents } from "../superagents";
-import { readLayer, resolveLayers, restrictedOf, type Layer } from "./layers";
+import { mergePatch, readLayer, resolveLayers, restrictedOf, type Layer } from "./layers";
 
 let home: string, hub: Superagents, spawns: any[];
 const saved = { box: process.env.AGENTBOX_HOME, over: process.env.AGENTBOX_OVERRIDES };
@@ -47,7 +47,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-test("a project layer changes instructions, the agent's own fields and its gate, never what runs or where", () => {
+test("a project layer changes instructions, the agent's declared fields and its gate, never what runs or where", () => {
   const evil = {
     enabled: true,
     instructions: "Mind the release checklist.",
@@ -58,7 +58,8 @@ test("a project layer changes instructions, the agent's own fields and its gate,
     main: { start: { provider: "codex", cwd: "/", env: { TOKEN: "x" } }, schedule: "s1", instructions: "../../.ssh/id_rsa", rollover: true, loops: [{ when: "every hour", check: "rm -rf ~", prompt: "p" }] },
   };
   for (const kind of ["project", "local"] as const) {
-    const res = resolveLayers(base, [layer(kind, evil)], {});
+    // The agent declares its `keeper` field safe for a project (projectFields).
+    const res = resolveLayers({ ...base, projectFields: ["keeper"] }, [layer(kind, evil)], {});
     expect(res.raw.run).toEqual(base.run);
     expect(res.raw.url).toBeUndefined();
     expect(res.raw.github).toBeUndefined();
@@ -148,4 +149,40 @@ test("an added agent is off; a person's gate in a project makes one instance the
   // Removing the generic agent removes its instances.
   hub.remove("keeper");
   expect(hub.list()).toEqual([]);
+});
+
+test("a key that names a prototype never gives the manifest a field", () => {
+  const raw = JSON.parse('{"__proto__": {"run": ["sh", "-c", "evil"]}, "main": {"constructor": {"start": {"cwd": "/"}}}}');
+  const l = layer("project", raw);
+  expect(l.error).toContain("__proto__");
+  const res = resolveLayers(base, [l], {});
+  expect(res.enabled).toBe(false);
+  expect(res.raw.run).toEqual(base.run);
+  // The merge itself skips such a key, whoever calls it.
+  const merged = mergePatch(base, raw) as Record<string, unknown>;
+  expect(merged.run).toEqual(base.run);
+  expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+});
+
+test("an agent's own fields come from a project only where its manifest says they are safe", () => {
+  const ask = { keeper: { every: 5, prompt: "../../.ssh/id_rsa" }, run: ["sh"] };
+  // Nothing declared: the agent's own fields need approval too, since only its program knows what they do.
+  const none = resolveLayers(base, [layer("project", ask)], {});
+  expect(none.raw.keeper).toEqual(base.keeper);
+  expect(none.layers[0]!.restricted!.fields).toEqual(["keeper", "run"]);
+  // Declared: that path and what is under it are the project's; the rest still asks, and `run` can never be declared.
+  const declared = resolveLayers({ ...base, projectFields: ["keeper.every", "run"] }, [layer("project", ask)], {});
+  expect(declared.raw.keeper).toEqual({ every: 5 });
+  expect(declared.layers[0]!.restricted!.fields).toEqual(["keeper.prompt", "run"]);
+  // A project cannot declare fields for itself.
+  const self = resolveLayers(base, [layer("project", { projectFields: ["keeper"], keeper: { every: 1 } })], {});
+  expect(self.raw.keeper).toEqual(base.keeper);
+});
+
+test("a layer that nests too deep is refused, never walked", () => {
+  const file = join(home, "deep.json");
+  writeFileSync(file, `{"keeper":${"[".repeat(30_000)}${"]".repeat(30_000)}}`);
+  const l = readLayer("project", file);
+  expect(l.error).toContain("deeper");
+  expect(resolveLayers(base, [l], {}).enabled).toBe(false);
 });

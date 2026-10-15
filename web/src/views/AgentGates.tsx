@@ -227,10 +227,13 @@ export function AgentLayers({ info, reload }: { info: SuperagentInfo; reload: ()
           confirmLabel="Approve"
           danger
           body={
-            <p>
-              Anyone who can push to this project's repository can write this file. Approve only what you read in it now: <span className="mono">{asking.path}</span>. A later change to these
-              fields needs your approval again.
-            </p>
+            <>
+              <p>
+                Anyone who can push to this project's repository can write this file. Approve only what you read here, from <span className="mono">{asking.path}</span>. A later change to
+                these fields needs your approval again.
+              </p>
+              <pre className="ag-log">{JSON.stringify(asking.restricted.values, null, 2)}</pre>
+            </>
           }
           onCancel={() => setAsking(null)}
           onConfirm={() => {

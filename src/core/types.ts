@@ -1639,7 +1639,7 @@ export interface SuperagentLayer {
   soul: boolean;
   error: string | null;
   /** A project layer's fields that need the person's approval; null when it has none. */
-  restricted: { fields: string[]; digest: string; approved: boolean } | null;
+  restricted: { fields: string[]; values: Record<string, unknown>; digest: string; approved: boolean } | null;
 }
 
 export interface SuperagentInfo {

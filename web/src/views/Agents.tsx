@@ -52,8 +52,8 @@ const sessionsOf = (a: SuperagentInfo, state: AppState) => state.sessions.filter
 export function shownIn(a: SuperagentInfo, project: string | null, all: readonly SuperagentInfo[]): boolean {
   if (!project) return true;
   if (a.base) return a.project === project;
-  if (a.projects !== null) return a.projects.includes(project);
-  return !all.some((x) => x.base === a.name && x.project === project);
+  if (all.some((x) => x.base === a.name && x.project === project)) return false;
+  return a.projects === null || a.projects.includes(project);
 }
 
 /** A superagent as the rail shows it. A disabled one is paused, whatever its sessions do: it is listed last. */

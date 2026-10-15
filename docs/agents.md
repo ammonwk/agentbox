@@ -39,7 +39,9 @@ An agent turned on in a project runs there as an instance of its own,
 `<name>-<project>` (`vulcan-plaibook-dev`): its own conversations, memory and
 state, from the one directory. The project's gate wins over yours, and your
 local one wins over the project's shared one. A project's file cannot change
-what runs, where, or on which credentials until you approve it on Settings.
+what runs, where, or on which credentials, or an agent's own field that the
+agent does not declare safe (`projectFields`), until you approve it on
+Settings.
 
 ## The Agents page
 

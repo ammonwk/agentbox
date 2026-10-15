@@ -94,9 +94,8 @@ export function superagentRoutes(router: Router, superagents: Superagents, hooks
       // A person's: what is pinned to the name, and its token, go with it, so one added later under the name starts with neither.
       if (superagentCaller(req, superagents) || authenticatedSession(req)) throw new HttpError(403, "a person removes a superagent");
       requireNoSessionPeer(req, "removing a superagent");
-      const name = superagents.canonical(params.name!);
-      superagents.remove(name);
-      unpin(name);
+      // Its instances go with it, and what is pinned to each of their names.
+      for (const gone of superagents.remove(superagents.canonical(params.name!))) unpin(gone);
       return json(null);
     })
     .add("POST", "/api/superagents/:name/restart", async ({ params }) => json(await superagents.restart(superagents.canonical(params.name!))))

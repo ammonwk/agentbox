@@ -1826,7 +1826,7 @@ const superagents: SuperagentInfo[] = [
     base: "vulcan", project: "r-agentbox", gate: { enabled: true, by: "local", error: null },
     layers: [
       userLayer("vulcan", { exists: true, enabled: true, fields: ["main", "memory", "sweep"] }),
-      layerOf("project", `${AGENTBOX_LAYERS}/vulcan.json`, { exists: true, fields: ["vulcan", "main"], instructions: true, restricted: { fields: ["main.start"], digest: "9a1f0c", approved: false } }),
+      layerOf("project", `${AGENTBOX_LAYERS}/vulcan.json`, { exists: true, fields: ["vulcan", "main"], instructions: true, restricted: { fields: ["main.start"], values: { "main.start": { provider: "codex", model: "gpt-6-astra" } }, digest: "9a1f0c", approved: false } }),
       layerOf("local", `${AGENTBOX_LAYERS}/vulcan.local.json`, { exists: true, enabled: true }),
     ],
   }),

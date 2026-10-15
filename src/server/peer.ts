@@ -45,17 +45,24 @@ export function sessionOfPeer(req: Request, server: number, sessionAbove: (pid: 
   return pid ? sessionAbove(pid) : null;
 }
 
-let config: { server: number; sessionAbove: (pid: number) => string | null } | null = null;
+type PeerConfig = { server: number; sessionAbove: (pid: number) => string | null; programAbove?: (pid: number) => string | null };
+let config: PeerConfig | null = null;
 
-/** The server's port and how a process maps to a session, set at startup. */
-export function configurePeers(c: { server: number; sessionAbove: (pid: number) => string | null }): void {
+/** The server's port and how a process maps to a session (or a superagent's program), set at startup. */
+export function configurePeers(c: PeerConfig): void {
   config = c;
 }
 
-/** Refuse a request whose client process runs under an agentbox session:
- *  `what` is a person's to do, whatever headers the request leaves out. */
+/** Refuse a request whose client process runs under an agentbox session, or
+ *  under a superagent's program (which runs as the server's child, outside
+ *  any session): `what` is a person's to do, whatever headers the request leaves out. */
 export function requireNoSessionPeer(req: Request, what: string): void {
   if (!config) return;
-  const s = sessionOfPeer(req, config.server, config.sessionAbove);
+  const port = peerPorts.get(req);
+  const pid = port ? processOn(port, config.server) : null;
+  if (!pid) return;
+  const s = config.sessionAbove(pid);
   if (s) throw new HttpError(403, `${what} is a person's to do; this request comes from inside session ${s}`);
+  const program = config.programAbove?.(pid);
+  if (program) throw new HttpError(403, `${what} is a person's to do; this request comes from ${program}'s program`);
 }

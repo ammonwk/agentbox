@@ -34,13 +34,13 @@
  *     --make terminus=terminus-plaibook-dev
  */
 import { Database } from "bun:sqlite";
-import { cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getDb, getRepoById, MIGRATIONS } from "../src/core/db";
 import { repoCheckoutPath } from "../src/core/git";
 import { agentboxHome } from "../src/core/paths";
-import { excludeLocalLayers, isObject, layerPath, mergePatch, readLayer, resolveLayers, restrictedDigest, restrictedOf, stable, writeLayerKey, type Layer } from "../src/core/superagent/layers";
+import { excludeLocalLayers, isObject, layerFromJson, layerPath, mergePatch, readLayer, resolveLayers, restrictedDigest, splitProjectPatch, stable } from "../src/core/superagent/layers";
 import { patchState } from "../src/core/superagent/state";
 import { asInstance, readManifest } from "../src/core/superagents";
 
@@ -76,6 +76,26 @@ const rowOf = (name: string) => rows().find((r) => r.name === name) ?? null;
 const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
 const same = (a: unknown, b: unknown) => JSON.stringify(stable(a)) === JSON.stringify(stable(b));
 const say = (line: string) => console.log(line);
+
+/** A layer file's JSON, or {} when there is none. One that is not a JSON object stops its copy. */
+function bodyOf(file: string): Record<string, unknown> {
+  if (!existsSync(file)) return {};
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, "utf8"));
+  } catch (e) {
+    throw new Error(`${file} is not JSON (${(e as Error).message})`);
+  }
+  if (!isObject(raw)) throw new Error(`${file} is not a JSON object`);
+  return raw;
+}
+
+/** `b` merged into a layer file's `a`, keeping b's nulls: they are the patch's own removals. */
+function deepMerge(a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...a };
+  for (const [k, v] of Object.entries(b)) out[k] = isObject(v) && isObject(out[k]) ? deepMerge(out[k] as Record<string, unknown>, v) : v;
+  return out;
+}
 
 /** A merge patch that makes `a` into `b`. */
 function diff(a: unknown, b: unknown): unknown {
@@ -140,7 +160,9 @@ type Plan = {
   user: Record<string, unknown>;
   userEnabled: boolean | null;
   person: Row | null;
-  instances: { row: Row; repo: string; checkout: string; local: Record<string, unknown>; enabled: boolean; soul: string | null; approve: string | null }[];
+  /** The person's layer as it will be. */
+  userBody: Record<string, unknown>;
+  instances: { row: Row; repo: string; checkout: string; local: Record<string, unknown>; body: Record<string, unknown>; enabled: boolean; soul: string | null; approve: string | null }[];
   skipped: string[];
 };
 
@@ -172,7 +194,7 @@ for (const [name, dir] of generics) {
   const baseRaw = made ? { ...withoutInstanceKeys(readManifest(rowOf(makes.get(name)!)!.dir)), name } : (readManifest(dir) as Record<string, unknown>);
   if (baseRaw.name !== name) throw new Error(`${dir}/superagent.json names ${String(baseRaw.name)}, not ${name}`);
   const own = rowOf(name);
-  const plan: Plan = { generic: name, dir, register: !own, user: {}, userEnabled: null, person: null, instances: [], skipped: [] };
+  const plan: Plan = { generic: name, dir, register: !own, user: {}, userEnabled: null, person: null, userBody: {}, instances: [], skipped: [] };
   const mainOf = (d: string) => (existsSync(join(d, "MAIN.md")) ? readFileSync(join(d, "MAIN.md"), "utf8") : null);
   const genericMain = made ? mainOf(rowOf(makes.get(name)!)!.dir) : mainOf(dir);
   // Each copy: the person's own (its name), and each project's (`<name>-…`, naming one project).
@@ -206,7 +228,7 @@ for (const [name, dir] of generics) {
     }
     checked.push({ row, m, repo });
   }
-  // The person's layer: what the person's own copy changed, else what the first project's did.
+  // The person's own copy, when there is one: what it changed goes into the person's layer.
   const person = checked.find((c) => !c.repo) ?? null;
   if (own && resolve(own.dir) !== resolve(dir) && !person) {
     plan.skipped.push(`${name}: its own row runs from ${own.dir}, and that copy cannot move, so none of its copies move`);
@@ -214,43 +236,79 @@ for (const [name, dir] of generics) {
     plans.push(plan);
     continue;
   }
-  const first = person ?? checked[0] ?? null;
-  if (first) plan.user = withoutInstanceKeys(diff(baseRaw, first.m));
-  if (person) {
-    // The person's own copy names the projects it shows in; an instance's are its own.
-    if ("projects" in person.m) plan.user.projects = person.m.projects;
-    else if ("projects" in baseRaw) plan.user.projects = null;
-    plan.person = person.row;
-    plan.userEnabled = person.row.enabled === 1;
+  // The layers as they are now: each is merged into, never written over, and the check reads them.
+  let userBody: Record<string, unknown>;
+  try {
+    userBody = bodyOf(layerPath("user", name, null)!);
+  } catch (e) {
+    plan.skipped.push(`${name}: ${(e as Error).message}; fix it, then run this again`);
+    plan.instances = [];
+    plans.push(plan);
+    continue;
   }
-  const afterUser = mergePatch(baseRaw, plan.user) as Record<string, unknown>;
+  if (person) {
+    const was = mergePatch(baseRaw, layerFromJson("user", "user", userBody).patch) as Record<string, unknown>;
+    plan.user = withoutInstanceKeys(diff(was, person.m));
+    // The person's own copy names the projects it shows in; an instance's are its own.
+    if (!same(was.projects, person.m.projects)) plan.user.projects = "projects" in person.m ? person.m.projects : null;
+    plan.person = person.row;
+    // The gate as the person last set it: the new server moved the row's to this layer, and the page writes it there.
+    const gate = layerFromJson("user", "user", userBody).enabled;
+    plan.userEnabled = gate ?? person.row.enabled === 1;
+  }
+  plan.userBody = deepMerge(userBody, { ...plan.user, ...(plan.userEnabled === null ? {} : { enabled: plan.userEnabled }) });
+  const userLayer = layerFromJson("user", layerPath("user", name, null)!, plan.userBody);
+  if (userLayer.error) throw new Error(userLayer.error);
+  // The person's own instance: its manifest must be its copy's.
+  if (person) {
+    const res = resolveLayers(baseRaw, [userLayer], {});
+    asInstance(res.raw, name, null);
+    if (!same(res.raw, person.m)) throw new Error(`${name}: its layer would not give its own copy's manifest:\n  would ${JSON.stringify(stable(res.raw))}\n  is    ${JSON.stringify(stable(person.m))}`);
+  }
   for (const c of checked) {
     if (!c.repo) continue;
-    const want = structuredClone(c.m);
-    asInstance(want, c.row.name, c.repo);
-    const have = structuredClone(afterUser);
-    asInstance(have, c.row.name, c.repo);
-    const local = withoutInstanceKeys(diff(have, want));
-    const soulFile = join(c.row.dir, "SOUL.md");
-    const soul = existsSync(soulFile) && (!existsSync(join(dir, "SOUL.md")) || readFileSync(soulFile, "utf8") !== readFileSync(join(dir, "SOUL.md"), "utf8")) ? readFileSync(soulFile, "utf8") : null;
-    const restricted = restrictedOf(local);
     const checkout = repoCheckoutPath(getRepoById(c.repo)!);
     if (!existsSync(checkout)) {
       plan.skipped.push(`${c.row.name}: its project's checkout ${checkout} is not on this machine`);
       continue;
     }
+    const taken = rows().find((r) => r.base === name && r.project === c.repo);
+    if (taken) {
+      plan.skipped.push(`${c.row.name}: ${name} has an instance in that project already (${taken.name})`);
+      continue;
+    }
+    const shared = readLayer("project", layerPath("project", name, checkout)!);
+    let localBody: Record<string, unknown>;
+    try {
+      localBody = bodyOf(layerPath("local", name, checkout)!);
+    } catch (e) {
+      plan.skipped.push(`${c.row.name}: ${(e as Error).message}; fix it, then run this again`);
+      continue;
+    }
+    const want = structuredClone(c.m);
+    asInstance(want, c.row.name, c.repo);
+    // What the generic directory and the layers give now, with what is already in its local layer.
+    const now = resolveLayers(baseRaw, [userLayer, shared, layerFromJson("local", "local", localBody)], {});
+    asInstance(now.raw, c.row.name, c.repo);
+    const local = withoutInstanceKeys(diff(now.raw, want));
+    const soulFile = join(c.row.dir, "SOUL.md");
+    const soul = existsSync(soulFile) && (!existsSync(join(dir, "SOUL.md")) || readFileSync(soulFile, "utf8") !== readFileSync(join(dir, "SOUL.md"), "utf8")) ? readFileSync(soulFile, "utf8") : null;
     // A gate the new server moved to a layer named after the copy, before this ran, is the copy's.
     const moved = readLayer("user", layerPath("user", c.row.name, null)!);
     const enabled = moved.exists && moved.enabled !== null ? moved.enabled : c.row.enabled === 1;
-    plan.instances.push({ row: c.row, repo: c.repo, checkout, local, enabled, soul, approve: restricted.length ? restrictedDigest(restricted) : null });
-    // The check: the generic directory and the layers give the copy's own manifest.
-    const layers: Layer[] = [
-      { kind: "user", path: "user", exists: true, patch: plan.user, enabled: plan.userEnabled, instructions: null, soul: null, error: null },
-      { kind: "local", path: "local", exists: true, patch: local, enabled, instructions: null, soul, error: null },
-    ];
-    const res = resolveLayers(baseRaw, layers, restricted.length ? { local: restrictedDigest(restricted) } : {});
+    const body = deepMerge(localBody, { ...local, ...(soul ? { soul } : {}), enabled });
+    const localLayer = layerFromJson("local", layerPath("local", name, checkout)!, body);
+    if (localLayer.error) throw new Error(localLayer.error);
+    // The person moved this copy, so what its local layer keeps from it is approved as it is now.
+    const fields = (mergePatch(baseRaw, userLayer.patch) as Record<string, unknown>).projectFields;
+    const declared = Array.isArray(fields) ? fields.filter((x): x is string => typeof x === "string") : [];
+    const restricted = splitProjectPatch(localLayer.patch, declared).restricted;
+    const approve = restricted.length ? restrictedDigest(restricted) : null;
+    // The check: the generic directory and every layer, as they will be, give the copy's own manifest.
+    const res = resolveLayers(baseRaw, [userLayer, shared, localLayer], approve ? { local: approve } : {});
     asInstance(res.raw, c.row.name, c.repo);
     if (!same(res.raw, want)) throw new Error(`${c.row.name}: its layers would not give its own manifest:\n  would ${JSON.stringify(stable(res.raw))}\n  is    ${JSON.stringify(stable(want))}`);
+    plan.instances.push({ row: c.row, repo: c.repo, checkout, local, body, enabled, soul, approve });
   }
   plans.push(plan);
 }
@@ -271,7 +329,22 @@ if (dry) {
   process.exit(0);
 }
 
-// ---- the rows first, in one step: a running server then never makes a second instance
+// ---- the layers to files beside their places first: a failure there changes nothing
+const pending: { tmp: string; path: string }[] = [];
+const stage = (path: string, body: Record<string, unknown>) => {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.migrate-${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`);
+  pending.push({ tmp, path });
+};
+for (const p of plans) {
+  // The person's layer only when it changes: an agent with nothing of the person's gets no empty file.
+  const user = layerPath("user", p.generic, null)!;
+  if (!same(bodyOf(user), p.userBody)) stage(user, p.userBody);
+  for (const i of p.instances) stage(layerPath("local", p.generic, i.checkout)!, i.body);
+}
+
+// ---- then the rows, in one step: from here a running server never makes a second instance
 db.transaction(() => {
   for (const p of plans) {
     if (p.register) db.run("INSERT INTO superagents (name, dir, enabled, previous, created_at, gate_moved) VALUES (?, ?, 0, '[]', ?, 1)", [p.generic, p.dir, Date.now()]);
@@ -281,24 +354,17 @@ db.transaction(() => {
 })();
 for (const p of plans) for (const i of p.instances) if (i.approve) patchState(i.row.name, (st) => void (st.approved = { ...st.approved, local: i.approve! }));
 
-// ---- then the layers
-for (const p of plans) {
-  const user = layerPath("user", p.generic, null)!;
-  for (const [k, v] of Object.entries(p.user)) writeLayerKey(user, k, v, true);
-  if (p.userEnabled !== null) writeLayerKey(user, "enabled", p.userEnabled);
+// ---- then the layers into their places
+for (const { tmp, path } of pending) renameSync(tmp, path);
+for (const p of plans)
   for (const i of p.instances) {
-    const local = layerPath("local", p.generic, i.checkout)!;
-    for (const [k, v] of Object.entries(i.local)) writeLayerKey(local, k, v, true);
-    if (i.soul) writeLayerKey(local, "soul", i.soul);
-    writeLayerKey(local, "enabled", i.enabled);
     excludeLocalLayers(i.checkout);
     // A layer named after the copy held only its gate, which is now in its project's layer.
     const moved = layerPath("user", i.row.name, null)!;
     if (existsSync(moved)) {
       const body = readJson(moved);
       if (Object.keys(body).every((k) => k === "enabled")) rmSync(moved);
-      else say(`  ${moved} holds more than a gate: it is no longer read; move what you need into ${user}`);
+      else say(`  ${moved} holds more than a gate: it is no longer read; move what you need into ${layerPath("user", p.generic, null)}`);
     }
   }
-}
 console.log("\ndone: the server reads the layers at its next look (agentbox superagent ls)");

@@ -83,6 +83,23 @@ export function readLayer(kind: LayerKind, path: string): Layer {
   return layer;
 }
 
+/** How deep a layer's JSON may nest: deeper is no config, and every walk of it would recurse. */
+const DEPTH_MAX = 32;
+
+/** The nesting depth of a JSON value, counted without recursion. */
+function depthOf(root: unknown): number {
+  let max = 0;
+  const stack: [unknown, number][] = [[root, 1]];
+  while (stack.length) {
+    const [v, d] = stack.pop()!;
+    if (!v || typeof v !== "object") continue;
+    if (d > max) max = d;
+    if (max > DEPTH_MAX) return max;
+    for (const x of Array.isArray(v) ? v : Object.values(v)) stack.push([x, d + 1]);
+  }
+  return max;
+}
+
 function parseLayer(kind: LayerKind, path: string, st: { size: number; isFile(): boolean }): Layer {
   const out: Layer = { kind, path, exists: true, patch: {}, enabled: null, instructions: null, soul: null, error: null };
   const fail = (why: string): Layer => ({ ...out, error: `${path}: ${why}` });
@@ -94,7 +111,17 @@ function parseLayer(kind: LayerKind, path: string, st: { size: number; isFile():
   } catch (e) {
     return fail(`not JSON: ${(e as Error).message}`);
   }
+  return layerFromJson(kind, path, raw);
+}
+
+/** A layer from its file's JSON, checked as a file of it is. */
+export function layerFromJson(kind: LayerKind, path: string, raw: unknown): Layer {
+  const out: Layer = { kind, path, exists: true, patch: {}, enabled: null, instructions: null, soul: null, error: null };
+  const fail = (why: string): Layer => ({ ...out, error: `${path}: ${why}` });
   if (!isObject(raw)) return fail("a layer is a JSON object");
+  if (depthOf(raw) > DEPTH_MAX) return fail(`it nests deeper than ${DEPTH_MAX} levels`);
+  const unsafe = unsafeKey(raw);
+  if (unsafe) return fail(`it has a key "${unsafe}", which agentbox does not read`);
   const { enabled, instructions, soul, name: _name, ...patch } = raw;
   if (enabled !== undefined && enabled !== null && typeof enabled !== "boolean") return fail("enabled is true, false or null");
   if (instructions !== undefined && instructions !== null && (typeof instructions !== "string" || instructions.length > INSTRUCTIONS_MAX))
@@ -111,54 +138,105 @@ function parseLayer(kind: LayerKind, path: string, st: { size: number; isFile():
 
 export const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
-/** RFC 7396: an object merges key by key, null removes a key, anything else replaces. */
+/** Keys that would reach an object's prototype instead of the object. */
+const UNSAFE = new Set(["__proto__", "constructor", "prototype"]);
+
+/** Whether a JSON value has a key that names a prototype, at any depth. */
+function unsafeKey(v: unknown): string | null {
+  if (Array.isArray(v)) {
+    for (const x of v) {
+      const k = unsafeKey(x);
+      if (k) return k;
+    }
+    return null;
+  }
+  if (!isObject(v)) return null;
+  for (const [k, x] of Object.entries(v)) {
+    if (UNSAFE.has(k)) return k;
+    const inner = unsafeKey(x);
+    if (inner) return inner;
+  }
+  return null;
+}
+
+/** RFC 7396: an object merges key by key, null removes a key, anything else
+ *  replaces. A key that names a prototype is never merged: it could give the
+ *  result a field that no walk of the patch sees. */
 export function mergePatch(target: unknown, patch: unknown): unknown {
   if (!isObject(patch)) return structuredClone(patch);
   const out: Record<string, unknown> = isObject(target) ? { ...target } : {};
   for (const [k, v] of Object.entries(patch)) {
+    if (UNSAFE.has(k)) continue;
     if (v === null) delete out[k];
-    else out[k] = mergePatch(out[k], v);
+    else Object.defineProperty(out, k, { value: mergePatch(Object.hasOwn(out, k) ? out[k] : undefined, v), enumerable: true, writable: true, configurable: true });
   }
   return out;
 }
+
+/** What a project layer changes with no approval besides its own keys and the agent's declared fields. */
+const PROJECT_FREE = new Set(["title", "description", "icon", "memory", "sweep", "events"]);
+/** What a project layer never changes, and is not asked about: an instance's own. */
+const PROJECT_IGNORED = new Set(["name", "projects", "projectFields"]);
+/** Agentbox's own fields that need approval: an agent cannot declare them safe for a project. */
+const PROJECT_RESTRICTED = new Set(["run", "url", "github"]);
 
 /**
- * The parts of a patch a project layer may not change without the person's
- * approval: what runs (`run`, `url`, a loop's `check`), where and on which
- * credentials (`main.start`, `main.schedule`), what it reads from disk
- * (`main.instructions`, a loop's `file`) and what it may do on GitHub
- * (`github`). Each is given with its value, for the digest the person approves.
+ * Split a project layer's patch into what it may change and what needs the
+ * person's approval. It may change, with no approval: `title`,
+ * `description`, `icon`, `memory`, `sweep`, `events`, `main.rollover`,
+ * `main.loops` with prompts only, and the agent's own fields that its
+ * manifest declares safe for a project (`projectFields`, dotted paths: a
+ * path and everything under it). Everything else needs approval: what runs
+ * (`run`, `url`, a loop's `check`), where and on which credentials
+ * (`main.start`, `main.schedule`), what it reads from disk
+ * (`main.instructions`, a loop's `file`), what it may do on GitHub
+ * (`github`), and every own field the agent did not declare, which only its
+ * program knows the meaning of. Each restricted part is given with its
+ * value, for the digest the person approves.
  */
-export function restrictedOf(patch: Record<string, unknown>): { field: string; value: unknown }[] {
-  const out: { field: string; value: unknown }[] = [];
-  for (const k of ["run", "url", "github"]) if (k in patch) out.push({ field: k, value: patch[k] });
-  if (!("main" in patch)) return out;
-  const main = patch.main;
-  // Taking `main` away, or giving something that is not an object, takes `main.start` with it.
-  if (!isObject(main)) return [...out, { field: "main", value: main }];
-  for (const k of ["start", "schedule", "instructions"]) if (k in main) out.push({ field: `main.${k}`, value: main[k] });
-  if ("loops" in main) {
-    const loops = main.loops;
-    if (!Array.isArray(loops) || loops.some((l) => !isObject(l) || "check" in l || "file" in l)) out.push({ field: "main.loops", value: loops });
+export function splitProjectPatch(patch: Record<string, unknown>, declared: readonly string[]): { free: Record<string, unknown>; restricted: { field: string; value: unknown }[] } {
+  const free: Record<string, unknown> = {};
+  const restricted: { field: string; value: unknown }[] = [];
+  const own = (path: string, value: unknown): unknown => {
+    if (declared.some((d) => path === d || path.startsWith(`${d}.`))) return value;
+    if (isObject(value) && declared.some((d) => d.startsWith(`${path}.`))) {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value)) {
+        const kept = own(`${path}.${k}`, v);
+        if (kept !== undefined) out[k] = kept;
+      }
+      return Object.keys(out).length ? out : undefined;
+    }
+    restricted.push({ field: path, value });
+    return undefined;
+  };
+  for (const [k, v] of Object.entries(patch)) {
+    if (PROJECT_IGNORED.has(k)) continue;
+    if (PROJECT_FREE.has(k)) free[k] = v;
+    else if (PROJECT_RESTRICTED.has(k)) restricted.push({ field: k, value: v });
+    else if (k === "main") {
+      // Taking `main` away, or giving something that is not an object, takes `main.start` with it.
+      if (!isObject(v)) {
+        restricted.push({ field: "main", value: v });
+        continue;
+      }
+      const main: Record<string, unknown> = {};
+      for (const [mk, mv] of Object.entries(v)) {
+        const promptsOnly = mk === "loops" && Array.isArray(mv) && mv.every((l) => isObject(l) && !("check" in l) && !("file" in l));
+        if (mk === "rollover" || promptsOnly) main[mk] = mv;
+        else restricted.push({ field: `main.${mk}`, value: mv });
+      }
+      if (Object.keys(main).length) free.main = main;
+    } else {
+      const kept = own(k, v);
+      if (kept !== undefined) free[k] = kept;
+    }
   }
-  return out;
+  return { free, restricted };
 }
 
-/** The patch without its restricted parts: what a project layer gives with no approval. */
-export function withoutRestricted(patch: Record<string, unknown>): Record<string, unknown> {
-  const fields = new Set(restrictedOf(patch).map((r) => r.field));
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(patch)) {
-    if (fields.has(k)) continue;
-    if (k === "main" && isObject(v)) {
-      const main = Object.fromEntries(Object.entries(v).filter(([mk]) => !fields.has(`main.${mk}`)));
-      if (Object.keys(main).length) out.main = main;
-      continue;
-    }
-    out[k] = v;
-  }
-  return out;
-}
+/** The fields of a project layer that need approval, when the agent declares no field of its own safe. */
+export const restrictedOf = (patch: Record<string, unknown>, declared: readonly string[] = []) => splitProjectPatch(patch, declared).restricted;
 
 /** The same restricted fields with the same values always give the same digest. */
 export function restrictedDigest(r: { field: string; value: unknown }[]): string {
@@ -207,7 +285,10 @@ export function resolveLayers(base: Record<string, unknown>, given: Layer[], app
   const views: LayerView[] = [];
   let error: string | null = null;
   for (const l of given) {
-    const restricted = l.kind === "user" ? [] : restrictedOf(l.patch);
+    // The agent's own fields a project may set, as its directory and the person say: never a project's own say.
+    const declared = Array.isArray(raw.projectFields) ? raw.projectFields.filter((x): x is string => typeof x === "string") : [];
+    const split = l.kind === "user" ? { free: l.patch, restricted: [] } : splitProjectPatch(l.patch, declared);
+    const restricted = split.restricted;
     const digest = restricted.length ? restrictedDigest(restricted) : null;
     const ok = !digest || approved[l.kind] === digest;
     views.push({
@@ -219,16 +300,15 @@ export function resolveLayers(base: Record<string, unknown>, given: Layer[], app
       instructions: !!l.instructions,
       soul: l.soul !== null,
       error: l.error,
-      restricted: digest ? { fields: restricted.map((r) => r.field), digest, approved: ok } : null,
+      restricted: digest ? { fields: restricted.map((r) => r.field), values: Object.fromEntries(restricted.map((r) => [r.field, r.value])), digest, approved: ok } : null,
     });
     if (!l.exists) continue;
     if (l.error) {
       error ??= l.error;
       continue;
     }
-    // A project layer never names where the agent shows: its instance is in that project.
-    const patch = l.kind === "user" ? l.patch : ok ? l.patch : withoutRestricted(l.patch);
-    if (l.kind !== "user") delete patch.projects;
+    // A project layer never names where the agent shows, or what a project may set: those are not its own.
+    const patch = l.kind === "user" ? l.patch : ok ? Object.fromEntries(Object.entries(l.patch).filter(([k]) => !PROJECT_IGNORED.has(k))) : split.free;
     raw = mergePatch(raw, patch) as Record<string, unknown>;
     if (l.instructions) instructions.push({ from: l.path, text: l.instructions });
     if (l.soul !== null) soul = { path: `${l.path} (soul)`, text: l.soul };

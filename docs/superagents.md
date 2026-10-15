@@ -66,6 +66,7 @@ instances and leaves the directory and its state alone.
   "run": ["bun", "main.ts"],        // optional: its program, argv, run in the directory and kept running
   "url": "http://127.0.0.1:9000",   // optional instead of run: a program agentbox does not run
   "enabled": false,                 // optional: on when no layer says (default off: adding it starts nothing)
+  "projectFields": ["myagent.labels"], // optional: its own fields a project's layer may set with no approval (dotted paths)
   "icon": "fix",                    // optional: its picture until one is set on the page (brain, sparkle, fix, release, health)
   "projects": ["owner/repo"],       // optional: the projects it shows in (repo ids, owner/repo or checkout paths);
                                     // default main.start.repoId; none: every project. It places it on the page,
@@ -161,8 +162,11 @@ its conversations and shows as off; to remove one, turn it off in its project
 other people push to. It may change:
 
 - `enabled`, `instructions` and `soul`;
-- the agent's own fields, and `title`, `description`, `icon`, `memory`,
-  `sweep`, `events`, `main.rollover`, and `main.loops` with prompts only.
+- `title`, `description`, `icon`, `memory`, `sweep`, `events`,
+  `main.rollover`, and `main.loops` with prompts only;
+- the agent's own fields that its manifest declares safe for a project, in
+  `projectFields` (dotted paths, each with everything under it). Only the
+  directory and the person's layer declare them.
 
 It may not change, without the person's approval, what runs, where it runs,
 on which credentials, or what it reads from disk:
@@ -171,20 +175,32 @@ on which credentials, or what it reads from disk:
 - `main.start` (provider, model, account, directory), `main.schedule` and
   `main.instructions` (a file path);
 - `main.loops` with a `check` (a command) or a `file`, and `main` itself
-  taken away.
+  taken away;
+- every own field the agent did not declare: only its program knows whether
+  one is a path it reads, a provider it spends or a command it runs.
 
 Agentbox leaves these fields out and shows them on Settings. The person
 approves exactly those fields with those values (`agentbox superagent
 approve <name> project|local`, or Review on the page): the approval is a
 digest of them, so a later change to any of them needs approval again. Only
-a person approves or sets a gate: a request from a session or a program is
-refused. The local file has the same rule, because a repository can commit
+a person approves or sets a gate: a request from a session, or from a
+superagent's program or anything it started, is refused. The local file has the same rule, because a repository can commit
 it too. `projects` and `name` in a project layer are ignored: an instance's
 are its own.
 
 What a project layer may change is still input from other people: its
-instructions are as trusted as the repository's own `CLAUDE.md`, and a
-program must never run what one of its own fields says as code.
+instructions are as trusted as the repository's own `CLAUDE.md`. Declare a
+field in `projectFields` only when any value of it is safe from a stranger:
+never a path, a command, a provider, a model or a count with no bound. A
+layer that nests deeper than 32 levels, or names `__proto__`, `constructor`
+or `prototype`, is refused, and the agent is off until it is fixed.
+
+The project's gate wins over the person's, as the person's own local gate
+wins over the project's. So a project whose shared file says `"enabled":
+true` turns on, in that project, an agent the person registered, even when
+the person's own gate is off: with the agent's own code and the person's
+config, never with code from the project. The person's local gate (`agentbox
+superagent disable <name> --project P`) turns it off there again.
 
 ## What agentbox does for it
 
