@@ -155,10 +155,11 @@ The answer may carry `message` (shown), `view` (drawn instead), `open` (an
 app link to go to, such as `#/agents/janus`), and `compose` (text put in the
 chat's message box, for "give guidance").
 
-**Who asked.** `caller` is `{session, via}`: `via` is `app` when a browser
-sent it and `api` otherwise, and `session` is the session that proved itself
-with its capability (`agentbox superagent call` from inside a session does),
-or null. It is how a program lets only its writer publish, or only a person
+**Who asked.** `caller` is `{session, via, user?}`: `via` is `app` when a
+browser sent it, `team` when a teammate on another machine sent it through
+the cloud ([Team](#team)), and `api` otherwise. `session` is the session that
+proved itself with its capability (`agentbox superagent call` from inside a
+session does), or null. It is how a program lets only its writer publish, or only a person
 create. Like every loopback rule here it holds against mistakes and other
 sites, not against code running as you on purpose (docs/v2.md, Security).
 
@@ -407,6 +408,48 @@ was visible on GitHub is also `uncertain`. To try again, use a new request id.
 `open_pr` creates a draft on `agentbox/<claim or request>`. `update_pr`
 updates that branch, without force: the claim's branch, or the one this
 superagent's own `open_pr` made.
+
+## Team
+
+The owner of this machine can share a superagent with their cloud workspace
+(docs/cloud.md, "Shared superagents"). It still runs here, on this machine
+only. Teammates who can see it read its Chat (its main conversation, without
+tool calls and with credentials redacted), read its page, take its actions,
+and send guidance to its main conversation. A teammate never gets a terminal
+or any other session.
+
+**Sharing.** The owner shares it from the Agents page, signed in to the
+cloud: `POST /api/superagents/:name/share` with the browser's cloud session.
+The cloud checks that the person owns this machine's installation, and that
+the installation has the `superagents:host` scope. A session or a program
+cannot share. `visibility` is `private` (its maintainers only) or `workspace`
+(every member). Seeing a superagent gives no right to change it, to unshare
+it or to run it elsewhere.
+
+**`via: "team"`.** An action from a teammate reaches the program with
+`caller: {session: null, via: "team", user: {id, name}}`. `user.id` is the
+teammate's cloud user id, as the cloud vouches. The program must treat it as
+a remote person: not the owner of this machine, and not one of its own
+sessions. Let a teammate do only what you would let any member of the
+workspace do: read, ask, propose. Keep publication, deletion and spending for
+the owner (`via: "app"`) or for your own sessions.
+
+**Guidance.** A teammate's message arrives in the main conversation as
+`[via agentbox cloud from <name> (<email>), a teammate]`, framed as a
+colleague's request, not the owner's. Agentbox types it only into the main
+conversation the teammate saw. When the main changed since then (a rollover,
+a handover), it types nothing, and the teammate reads the new one first.
+
+**Claims.** A shared superagent keeps its claims in the cloud, with the same
+rules and the same calls ([Claims](#claims)): one holder for each key across
+every instance of the workspace. Release its claims on this machine before
+you share it, and its cloud claims before you unshare it.
+
+**Template copy by git.** The cloud holds no code. The registry names the
+superagent's source: `{repo, path, commit}`, from its checkout's `origin`.
+A teammate who wants one of their own copies that directory from git, at
+that commit, changes it, and adds it with `agentbox superagent add`. Push the
+commit first, or the teammate cannot fetch it.
 
 ## Writing one
 

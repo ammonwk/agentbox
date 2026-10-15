@@ -45,7 +45,8 @@ Seven kinds of identity, kept apart on purpose:
 - **Installation** (`installations`). One machine's agentbox, registered by
   its owner into one workspace. Its secret (`abins_…`) is shown once, goes to
   that machine, and is stored in the cloud only as a hash. It has scopes:
-  `messages:send`, `messages:receive`, `artifacts:read`, `artifacts:publish`.
+  `messages:send`, `messages:receive`, `artifacts:read`, `artifacts:publish`,
+  and `superagents:host` to host shared superagents ([Shared superagents](#shared-superagents)).
 - **Provider connection** (`provider_connections`). Which provider logins an
   installation runs on: provider, a label, a plan, and the email only when the
   machine's owner turns that on. Nothing else can be stored: the RPC refuses
@@ -430,7 +431,11 @@ caller inside an agent session (`callerPid`).
   email template), `migrations/` (schema, RLS, RPCs, grants).
 - `src/cloud/` — shared and independent: `protocol.ts` (schemas), `client.ts`
   (`HumanCloud`, `InstallationCloud`), `skillbundle.ts` (read and install
-  bundles; Node fs).
+  bundles; Node fs), `superagents.ts` and `relay.ts` (shared superagents and
+  the relay's crypto).
+- `src/core/superagent/team.ts`, `teamclaims.ts`, `shares.ts` — the host of
+  shared superagents; `src/server/team.ts` — their routes;
+  `web/src/lib/teamagents.ts` — the browser's API.
 - `src/core/cloud/` — this machine: `config.ts` (cloud.env, the credential,
   local settings), `store.ts` (`cloud.db`: outbox, inbox, last directory),
   `deliver.ts` (into a session, through the guards), `bridge.ts` (the loop,
@@ -440,9 +445,11 @@ caller inside an agent session (`callerPid`).
 
 ## Not done yet
 
-- **Realtime.** Machines poll (5 seconds by default; `pollSeconds`). Realtime
+- **Realtime.** Machines poll for messages (5 seconds by default;
+  `pollSeconds`), and for shared superagents' requests (2 seconds). Realtime
   authorizes per signed-in user, and an installation is not one. A push
-  channel for installations needs its own design.
+  channel for installations needs its own design. The shared superagents'
+  relay uses Broadcast only to carry sealed pages to a browser.
 - **Storage.** Skill bundles are text in Postgres, at most 512 KiB. Binary
   files and larger bundles need Supabase Storage with policies of their own.
 - **One workspace per machine.** To be in a second workspace, a machine must
@@ -455,31 +462,129 @@ caller inside an agent session (`callerPid`).
 - No project is deployed, and no production migration is applied. Set up a
   hosted project as above.
 
-## Shared Agent instances
+## Shared superagents
 
-[Agents](agents.md) extends this foundation with workspace-visible instances, work
-items, fenced runs, safe activity, verified contact preferences and concrete
-action decisions. Apply the additional `2026101321*` through `20261013233000`
-migrations before enabling execution. Agent operators need the independent
-`agents:execute` installation scope and an agent-specific executor grant; neither
-workspace membership nor existing delivery grants imply those rights. Human
-authoring and action approvals use the browser's human JWT directly. The server
-retains only its installation secret and local provider/App credentials.
+A person can share a superagent that runs on their machine with their
+workspace (docs/superagents.md, Team). The migration is
+`supabase/migrations/20261015120000_shared_superagents.sql`. The clients are
+`HumanSuperagents` and `InstallationSuperagents` in `src/cloud/superagents.ts`,
+the host side is `src/core/superagent/team.ts`, and the browser's API is
+`web/src/lib/teamagents.ts`.
 
-The `agent_*` RPCs require the authenticated human; `inst_agent_*` RPCs authenticate
-the installation secret and scope on every call. All shared tables use workspace
-RLS for reads and RPC-only writes. No new public terminal, transcript or credential
-API is introduced. GitHub outreach preferences require linking the human's own
-GitHub OAuth identity; an editable login or contribution-history match is not
-consent. Enable the GitHub OAuth provider and manual identity linking in your
-hosted Supabase project before opting in. Unlinked users remain contact-denied.
+### What is in the cloud, and what never is
 
-### Shared Agent Chat relay
+| In the cloud | Never in the cloud |
+|---|---|
+| A registry of instances: name, title, description, source `{repo, path, commit}`, maintainers, visibility, the host installation | The superagent's code: a teammate copies it from git at the source commit |
+| A teammate's read request and the two ephemeral public keys, for 45 seconds | A transcript, a chat page or a view: they cross Realtime Broadcast sealed (`src/cloud/relay.ts`) |
+| Guidance and action requests, until they reach a final state (then the body is deleted, and the receipt a week later) | An action's answer: it is sealed for the person who asked |
+| The claims of shared instances, with their events | A terminal, a session id that opens anything, a credential |
+| Each person's contact preferences, keyed by their verified GitHub id | A GitHub token or an App key: the broker keeps them on the host |
 
-Enable Realtime for cross-installation Chat. Agentbox uses HTTP/WebSocket Broadcast
-only, not database broadcast, for encrypted provider-transcript pages. The
-`agent_reads` table holds expiring request/public-key metadata; no response bodies.
-The SQL migration `20261014010000_agent_conversation_feed.sql` binds read authority
-to current workspace membership, execution host and grant, and scopes pending
-human guidance and immutable recommendations. See [Agents](agents.md#chat-about-and-feed)
-for key authentication, revocation, delivery receipts and local-only behavior.
+### Who can do what
+
+- **The host owner** (the owner of the installation that runs it) shares,
+  changes and unshares it (`superagent_share`, `superagent_update`,
+  `superagent_unshare`). The host is always the installation that shared
+  it: nobody, a maintainer included, can point an instance at another
+  machine. The installation must hold the `superagents:host` scope, which
+  its owner turns on.
+- **A teammate who can see it** (a maintainer, or any member when its
+  visibility is `workspace`) reads its chat and its page, sends guidance and
+  takes its actions (`superagent_directory`, `superagent_read_request`,
+  `superagent_read_key`, `superagent_guide`, `superagent_act`). That gives no
+  right to change, unshare or host it.
+- **A non-member** sees nothing and asks nothing.
+- **The host installation** answers reads, runs commands and keeps the
+  claims of its own instances (`inst_superagent_*`, with its secret).
+
+The local server's share routes (`POST` and `DELETE
+/api/superagents/:name/share`, docs/v2.md) act with the browser's cloud
+session token for that one request and never keep it. A session's
+capability or a program's token cannot share.
+
+### The relay
+
+1. The browser makes an ephemeral ECDH P-256 key pair with WebCrypto, which
+   works only in a secure context (https, localhost or 127.0.0.1). It joins
+   the Broadcast channel `superagent-relay:<read id>`, then asks
+   (`superagent_read_request`: `chat` with a cursor, or `view` with a tab).
+2. The host sees the request (`inst_superagent_pending`, every two seconds
+   while it shares something). It gives its own ephemeral public key
+   (`inst_superagent_read_offer`), builds the page, seals it with AES-GCM
+   bound to the read id, and broadcasts it in chunks of 30 KB. It calls
+   `inst_superagent_read_offer` again before each chunk: a reader removed,
+   a visibility narrowed or an unshare stops the rest.
+3. The browser gets the host's key from `superagent_read_key`. The cloud
+   gives it only to the person who asked, while they can still see the
+   instance and its host is still the one they asked. An observer of the
+   channel, or a machine that is not the host, cannot read or forge a page.
+
+The chat page is the main conversation's timeline, or an earlier main's:
+what was said and the questions it asked. It has no tool call and no tool
+output, and the memory journal's `CREDENTIAL` pattern redacts credentials.
+
+### Commands
+
+`superagent_guide` and `superagent_act` queue a command for the host. The
+host takes it (`inst_superagent_command_claim`, which checks the sender again
+and hands a command out once). It checks again right before it types or acts
+(`inst_superagent_command_check`), and reports the result, which deletes the
+body. Guidance names the conversation the teammate saw. The host types it
+there or nowhere, once, through the composer's receipts. An action reaches
+the program with `caller.via: "team"`, and its answer comes back sealed on
+the relay. A queued command expires after ten minutes, and an unshare
+refuses what is still queued.
+
+### Claims
+
+`superagent_claims` holds one row for each (workspace, scope, key): one
+holder across every instance of the workspace. The installation RPCs keep
+the rules of `src/core/workclaims.ts` in the same statement as each change:
+
+- all or none;
+- a fence that grows on each change of holder, and a stale fence refused;
+- a lease of 90 seconds that the host renews while the session runs;
+- an expired lease that turns `uncertain` and still excludes;
+- a takeover that only the holding instance's host completes, after it
+  proved the stop.
+
+The database also makes the key of a GitHub issue or an environment from
+its source, so a raw call cannot make a second key for the same issue. On
+the host, `WorkClaims.backendOf` sends a shared superagent's calls to
+`CloudClaims` (`src/core/superagent/teamclaims.ts`).
+
+### Contact preferences
+
+`contact_preference` records a person's own choice, per workspace, repo
+(`*`: all) and instance (null: all). A yes needs a GitHub identity that the
+person verified: a linked GitHub OAuth identity, or the id that the
+`github-session` function wrote after GitHub confirmed a token. A no never
+needs one. For each numeric GitHub id, `inst_superagent_contact_check` says
+yes only for a member who verified that id and said yes for a scope that
+covers this one, with no row that says no. The default is no. The GitHub
+broker asks it at dispatch (`CloudConsent`, `src/core/github/consent.ts`)
+when the cloud is set up. Without the cloud, the broker refuses every action
+that contacts a person.
+
+### Tests
+
+`src/cloud/__tests__/superagents.test.ts` (`bun run test:cloud`) checks:
+
+- only the host owner shares and changes an instance, and seeing one gives
+  no edit or host right;
+- a non-member reads nothing;
+- the claims' exclusion, fences, expiry and takeover;
+- the relay's key and commands are checked again, and a page crosses
+  Realtime and opens for its reader;
+- consent is off by default, and a no wins.
+
+`src/core/superagent/team.test.ts` checks the redaction, and that guidance
+goes only to the conversation the teammate saw.
+
+### Not done yet
+
+- A claim held by an instance whose host was revoked stays held. No person
+  can take it over yet, because no host can prove the stop.
+- The relay's channels are public and carry only sealed chunks. Private
+  channels with Realtime Authorization are not used.
