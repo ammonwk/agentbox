@@ -58,6 +58,7 @@ export async function approve(ctx: Ctx, caller: Caller, id: string, now = Date.n
     if (p.run !== main && !writable(ctx, p.run, now)) throw new ActionError("Recommendation belongs to an earlier conversation; ask the agent to review it in the current workspace", 409);
     p.state = "approved";
     p.decidedAt = now;
+    if (caller.person?.login) p.decidedBy = { login: caller.person.login, name: caller.person.name };
     // The receipt id is written before the send it names: a retry finds it and sends nothing new.
     p.delivery = { request: randomUUID(), state: "queued", result: "" };
     ctx.store.saveProposal(p);
@@ -88,6 +89,7 @@ export async function dismiss(ctx: Ctx, caller: Caller, id: string, now = Date.n
   if (p.state !== "open") throw new ActionError("Already decided", 409);
   p.state = "dismissed";
   p.decidedAt = now;
+  if (caller.person?.login) p.decidedBy = { login: caller.person.login, name: caller.person.name };
   ctx.store.saveProposal(p);
   await closeCard(p, "Dismissed in Feed");
   return p;
@@ -123,10 +125,11 @@ export async function reconcileDelivery(ctx: Ctx, p: Proposal): Promise<Proposal
   return current;
 }
 
+/** Its card withdrawn, saying who decided it. */
 async function closeCard(p: Proposal, why: string): Promise<void> {
   if (p.card === null) return;
   try {
-    await call("POST", `/api/cards/${p.card}/close`, { why });
+    await agentbox.closeCard(p.card, why, p.decidedBy);
   } catch (e) {
     // Gone, or already closed: the decision stands either way.
     if (!(e instanceof AgentboxError && (e.status === 404 || e.status === 409))) throw e;

@@ -3,5 +3,6 @@
   "title": "Salus",
   "description": "Watches production crashes, triages each against the code, hands the ones you approve to a fixer, and verifies after the merge that they stopped.",
   "run": ["bun", "main.ts"],
-  "main": { "start": { "provider": "claude", "cwd": "." }, "instructions": "MAIN.md" }
+  "main": { "start": { "provider": "claude", "cwd": "." }, "instructions": "MAIN.md" },
+  "node": "auto"
 }

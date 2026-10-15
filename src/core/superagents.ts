@@ -22,6 +22,8 @@ import type { Person, ProviderId, SuperagentInfo } from "./types";
 
 const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
+/** "auto", "local" (a setting that undoes a manifest's), or a node's name. */
+const NODE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** How long a view or an action may take before the page is told it did not answer. */
 const VIEW_MS = 8_000;
 const ACTION_MS = 60_000;
@@ -41,6 +43,9 @@ export const Manifest = z
     run: z.array(z.string().min(1)).min(1).optional(),
     /** Where a program agentbox does not run answers (`/agentbox/view`, `/agentbox/action`). */
     url: z.string().url().optional(),
+    /** On a hub (docs/hub.md): where the SDK's `start` puts a session that
+     *  does not say, "auto" or a node's name. Absent: the hub itself. */
+    node: z.string().regex(NODE, 'node is "auto" or a node\'s name').optional(),
     main: z
       .object({
         /** A `POST /api/sessions` body: what agentbox starts on the first message when there is no main yet. */
@@ -56,7 +61,7 @@ export const Manifest = z
   .passthrough();
 export type Manifest = z.infer<typeof Manifest>;
 
-type Row = { name: string; dir: string; enabled: number; main: string | null; previous: string; main_send: string | null; created_at: number };
+type Row = { name: string; dir: string; enabled: number; main: string | null; previous: string; main_send: string | null; created_at: number; node: string | null };
 
 type Proc = {
   child: Subprocess | null;
@@ -143,6 +148,8 @@ export class Superagents {
     /** The server's own address, for the programs. */
     private readonly serverUrl: string,
     private readonly changed: () => void = () => {},
+    /** Whether this machine is a hub (docs/hub.md). */
+    private readonly onHub: () => boolean = () => false,
   ) {}
 
   start(): void {
@@ -188,8 +195,12 @@ export class Superagents {
     this.changed();
   }
 
-  async patch(name: string, p: { enabled?: boolean; main?: string | null }): Promise<SuperagentInfo> {
+  async patch(name: string, p: { enabled?: boolean; main?: string | null; node?: string | null }): Promise<SuperagentInfo> {
     const r = this.row(name);
+    if (p.node !== undefined) {
+      if (p.node !== null && !NODE.test(p.node)) throw new FleetError(400, 'node is "auto", "local", a node\'s name, or null for what its manifest says');
+      getDb().run("UPDATE superagents SET node = ? WHERE name = ?", [p.node, name]);
+    }
     if (p.enabled !== undefined) {
       getDb().run("UPDATE superagents SET enabled = ? WHERE name = ?", [p.enabled ? 1 : 0, name]);
       if (!p.enabled) this.kill(name);
@@ -362,6 +373,7 @@ export class Superagents {
       previous: this.previousOf(r, m, main),
       canStart: !main && !!m?.main?.start,
       hasPage: !!(m?.url || m?.run),
+      node: this.nodeOf(r, m),
       process: m?.run
         ? {
             state: p?.child ? "running" : r.enabled !== 1 ? "stopped" : p && p.backoffUntil > Date.now() ? "backoff" : "starting",
@@ -373,6 +385,14 @@ export class Superagents {
         : null,
       createdAt: r.created_at,
     };
+  }
+
+  /** Where its sessions start when it does not say: its setting, else its
+   *  manifest's; only on a hub, where there is anywhere else to start them. */
+  private nodeOf(r: Row, m: Manifest | null): string | null {
+    if (!this.onHub()) return null;
+    const node = r.node ?? m?.node ?? null;
+    return node === "local" ? null : node;
   }
 
   private endpoint(name: string): string | null {

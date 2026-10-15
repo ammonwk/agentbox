@@ -25,7 +25,8 @@ import {
   type Link,
   type NodeRecord,
 } from "../core/hub";
-import type { AccountView, HotState, HubStatus, NodeState, Person } from "../core/types";
+import { listRepos } from "../core/db";
+import type { AccountView, HotState, HubStatus, NodeHeadroom, NodeRepo, NodeState, Person, Repo } from "../core/types";
 import type { HubNodes } from "./hubnodes";
 import { parsePersonHeader, personOf, tailnetSelfNow } from "./person";
 import { HttpError, json, readBody, type Router } from "./router";
@@ -42,6 +43,8 @@ export type HubDeps = {
   /** The open sessions as this machine shows them, with attention. */
   openSessions: () => Row[];
   accountViews: () => AccountView[];
+  /** On a node: how many sessions the hub started here are still open. */
+  placedOpen: () => number;
   /** A connection's tailnet source, when it came over the tailnet. */
   peerOf: (req: Request) => Peer | null;
   /** `tailscale whois` of another address; null off the tailnet. */
@@ -76,25 +79,70 @@ export function lends(link: Link, accountId: string | null): boolean {
   return link.lend.accounts === "all" || (accountId !== null && link.lend.accounts.includes(accountId));
 }
 
+/** Accounts as a node shares them, and as the hub weighs its own for a placement. */
+export function headroomOf(views: AccountView[]): NodeHeadroom[] {
+  return views.map((a) => ({
+    id: a.id,
+    provider: a.provider,
+    label: a.label,
+    eligible: a.placement?.eligible ?? false,
+    weekly: a.placement?.weekly ?? null,
+    short: a.placement?.short ?? null,
+    weeklyResetsAt: a.placement?.weeklyResetsAt ?? null,
+    shortResetsAt: a.placement?.shortResetsAt ?? null,
+  }));
+}
+
+/** The repos this machine has, by the names a start may give them. */
+export const repoNames = (): NodeRepo[] => listRepos().map((r) => ({ fullName: r.fullName, displayName: r.displayName }));
+
+/** The registered repo a start names: its id, its GitHub `owner/name`, or its ref. */
+export function repoNamed(name: string): Repo | null {
+  const lower = name.trim().toLowerCase();
+  const all = listRepos();
+  return all.find((r) => r.id === name) ?? all.find((r) => r.fullName?.toLowerCase() === lower) ?? all.find((r) => r.ref === name) ?? null;
+}
+
 export function nodeState(deps: HubDeps, link: Link, withSessions: boolean): NodeState {
-  const headroom = link.lend.shareHeadroom
-    ? deps.accountViews().filter((a) => lends(link, a.id)).map((a) => ({
-        id: a.id,
-        provider: a.provider,
-        label: a.label,
-        eligible: a.placement?.eligible ?? false,
-        weekly: a.placement?.weekly ?? null,
-        short: a.placement?.short ?? null,
-        weeklyResetsAt: a.placement?.weeklyResetsAt ?? null,
-        shortResetsAt: a.placement?.shortResetsAt ?? null,
-      }))
-    : null;
   return {
     name: link.name,
     lend: link.lend,
-    headroom,
+    headroom: link.lend.shareHeadroom ? headroomOf(deps.accountViews().filter((a) => lends(link, a.id))) : null,
+    repos: repoNames(),
+    placed: deps.placedOpen(),
     ...(withSessions ? { sessions: deps.openSessions().filter((s) => lends(link, s.accountId)) } : {}),
   };
+}
+
+/** Starts from the hub under way on this node, which `maxSessions` counts
+ *  before they are open. */
+let startingForHub = 0;
+
+/**
+ * On a node, a start its hub asked for (`POST /api/node/sessions`), before
+ * anything runs: the node's owner lets the hub start sessions, there is room
+ * under its limit, it names a repo registered here rather than a directory,
+ * and any account it names is lent. What it may run on comes back: the lent
+ * accounts, among which the balancer picks as ever. `done` must be called
+ * once the start has finished or failed.
+ */
+export function hubStartRules(link: Link, b: Record<string, unknown>, placedOpen: number): { accounts: string[] | undefined; repo: Repo; done: () => void } {
+  const name = link.name;
+  if (!link.lend.acceptStarts) throw new HttpError(403, `${name} does not take starts from its hub (its owner turns that on: agentbox hub lend --starts on)`);
+  const max = link.lend.maxSessions;
+  if (max !== null && placedOpen + startingForHub >= max) throw new HttpError(409, `${name} is at its limit: ${placedOpen + startingForHub} of the ${max} sessions it lends the hub are open`);
+  if (b.cwd !== undefined) throw new HttpError(400, "a start from the hub names a registered repo, not a directory");
+  if (typeof b.repo !== "string" || !b.repo) throw new HttpError(400, "a start from the hub names the repo to run in");
+  const repo = repoNamed(b.repo);
+  if (!repo) throw new HttpError(404, `${name} has no ${b.repo} registered`);
+  if (typeof b.accountId === "string" && b.accountId !== "auto" && !lends(link, b.accountId)) throw new HttpError(403, `${name} does not lend account ${b.accountId} to the hub`);
+  startingForHub++;
+  let once = false;
+  const done = () => {
+    if (!once) startingForHub--;
+    once = true;
+  };
+  return { accounts: link.lend.accounts === "all" ? undefined : link.lend.accounts, repo, done };
 }
 
 export function hubStatus(req: Request, deps: HubDeps): HubStatus {

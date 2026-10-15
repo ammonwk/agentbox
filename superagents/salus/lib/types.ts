@@ -54,11 +54,12 @@ export type Crash = {
   sample: Sample | null;
   state: State;
   triage?: {
-    /** Its read-only checkout, cut at `base`. */
+    /** Its read-only checkout, cut at `base` by agentbox where the session runs ("" until it has started). */
     cwd: string;
+    /** The commit of the base branch it reads. */
     base: string;
     startedAt: number;
-    /** Null while asked of agentbox and not yet answered: proven by `cwd` before any second start. */
+    /** Null while asked of agentbox and not yet answered: found by its prompt's marker before any second start. */
     session: string | null;
     verdict?: TriageVerdict;
     error?: string;
@@ -87,6 +88,8 @@ export type Crash = {
   /** What the page should say about where it stands, when the state alone does not. */
   note?: string;
   card?: number;
+  /** The person who decided it (Fix or Dismiss), as the action's `caller.person` said. */
+  decidedBy?: { login: string; name: string };
   createdAt: number;
   updatedAt: number;
 };

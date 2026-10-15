@@ -417,6 +417,13 @@ export const MIGRATIONS: readonly string[] = [
   // 29 — a session whose stops are not pushed to your phone: one a program
   // started, whose own page shows what it waits on.
   `ALTER TABLE sessions ADD COLUMN quiet INTEGER;`,
+  // 30 — a hub's people (docs/hub.md): the member a card is for and who
+  // decided it, and where a superagent's sessions start when it does not say.
+  `
+  ALTER TABLE cards ADD COLUMN person TEXT;
+  ALTER TABLE cards ADD COLUMN decided_by TEXT;
+  ALTER TABLE superagents ADD COLUMN node TEXT;
+  `,
 ];
 
 function migrate(d: Database) {

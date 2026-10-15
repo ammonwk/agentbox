@@ -7,8 +7,9 @@
  *  it was last heard from, and the socket is tried again from 2 seconds,
  *  doubling to a minute. Nothing here ever marks a remote session stopped. */
 
-import { readNodes, type NodeRecord } from "../core/hub";
+import { readNodes, readParents, setParent, type NodeRecord } from "../core/hub";
 import type { HotState, HubNodeView, NodeState, Person, ServerMessage } from "../core/types";
+import type { Machine } from "./placement";
 import { personHeader, tailnetSelfNow } from "./person";
 import { SEAM_FROM, seamOn } from "./tailnet";
 
@@ -19,6 +20,8 @@ const RETRY_MAX_MS = 60_000;
 /** The node sends a `node` frame every 5s; three missed and it is away. */
 const SILENT_MS = 15_000;
 const PROXY_TIMEOUT_MS = 30_000;
+/** A start cuts a worktree and may fetch first. */
+const START_TIMEOUT_MS = 120_000;
 
 type Remote = {
   rec: NodeRecord;
@@ -225,9 +228,12 @@ export class HubNodes {
     return { byHubId, hubIdOf };
   }
 
-  /** The joined nodes' shared sessions, as the hub shows them. */
+  /** The joined nodes' shared sessions, as the hub shows them. A session
+   *  the hub started on a node under one of its own has that parent, which
+   *  the node cannot know. */
   sessions(): Row[] {
     const { hubIdOf } = this.mapping();
+    const parents = readParents();
     const out: Row[] = [];
     for (const r of this.remotes.values()) {
       const own = hubIdOf.get(r)!;
@@ -235,7 +241,7 @@ export class HubNodes {
         out.push({
           ...s,
           id: own.get(s.id)!,
-          parent: s.parent ? (own.get(s.parent) ?? null) : null,
+          parent: (s.parent ? (own.get(s.parent) ?? null) : null) ?? parents[`${r.rec.id}:${s.id}`] ?? null,
           successor: s.successor ? (own.get(s.successor) ?? null) : null,
           node: r.rec.name,
           ...(r.connected ? {} : { away: { lastSeen: r.lastSeen ?? r.rec.approvedAt ?? 0 } }),
@@ -273,8 +279,57 @@ export class HubNodes {
         sessions: r?.sessions.size ?? 0,
         lend: r?.state?.lend ?? null,
         headroom: r?.state?.headroom ?? null,
+        repos: r?.state?.repos ?? null,
+        placed: r?.state?.placed ?? null,
       };
     });
+  }
+
+  /** The approved nodes as places to start a session (src/server/placement.ts). */
+  machines(): Machine[] {
+    return [...this.remotes.values()].map((r) => ({
+      node: r.rec.name,
+      reachable: r.connected && !!r.state,
+      lend: r.state?.lend ?? { acceptStarts: false, maxSessions: null },
+      headroom: r.state?.headroom ?? null,
+      repos: r.state?.repos ?? [],
+      placed: r.state?.placed ?? 0,
+    }));
+  }
+
+  /** An approved node by its name. */
+  named(name: string): NodeRecord | null {
+    return this.remotes.get(readNodes().find((n) => n.name === name && n.approvedAt !== null)?.id ?? "")?.rec ?? null;
+  }
+
+  /**
+   * Start a session on a node (`POST /api/node/sessions`): the node checks
+   * what it lends and starts it on its own path. Its answer comes back as a
+   * response; a started session is the hub's to show at once, under its id
+   * here, with the parent the hub gave it.
+   */
+  async startOn(rec: NodeRecord, body: Record<string, unknown>, person: Person, parent: string | null): Promise<Response> {
+    const headers = { ...this.headers(rec, person), "content-type": "application/json", "x-agentbox": "1" };
+    const failed = (status: number, error: string, data: unknown = null) => Response.json({ ok: false, data, error: `node ${rec.name}: ${error}` }, { status });
+    let res: Response;
+    try {
+      res = await fetch(`${this.base(rec)}/api/node/sessions`, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(START_TIMEOUT_MS) });
+    } catch (e) {
+      return failed(502, `could not be reached: ${this.remotes.get(rec.id)?.connected ? (e as Error).message : "it is away"}`);
+    }
+    const env = (await res.json().catch(() => null)) as { ok: boolean; data: { session?: Row; placement?: unknown } | null; error: string | null } | null;
+    if (!env) return failed(502, `answered HTTP ${res.status} and no JSON`);
+    if (!env.ok || !env.data?.session) return failed(res.ok ? 502 : res.status, env.error ?? `HTTP ${res.status}`, env.data);
+    const row = env.data.session;
+    if (parent) setParent(`${rec.id}:${row.id}`, parent);
+    const r = this.remotes.get(rec.id);
+    if (r) r.sessions.set(row.id, row);
+    const hubId = r ? (this.mapping().hubIdOf.get(r)?.get(row.id) ?? row.id) : row.id;
+    this.onChange();
+    return Response.json(
+      { ok: true, data: { session: { ...row, id: hubId, node: rec.name, parent: parent ?? null }, placement: env.data.placement ?? null, node: rec.name }, error: null },
+      { status: 201 },
+    );
   }
 
   /** `/api/sessions/<hubId>/<rest>` passed to the node that has it. */

@@ -14,6 +14,10 @@ export function person(caller: Caller): void {
   if (caller.via !== "app" || caller.session) throw new ActionError("A person decides this, on Salus's page", 403);
 }
 
+/** Who decided, for the record: the person agentbox says made the request. */
+export const decider = (caller: Caller): { decidedBy?: { login: string; name: string } } =>
+  caller.person?.login ? { decidedBy: { login: caller.person.login, name: caller.person.name } } : {};
+
 /** The marker an issue Salus filed carries, so a retry finds it instead of filing another. */
 export const marker = (c: Crash): string => `salus-crash:${tag(c.id)}`;
 
@@ -26,7 +30,7 @@ export async function fix(ctx: Ctx, id: string, caller: Caller, now = Date.now()
     if (!f) throw new ActionError("Its triage proposed no fix; triage it again", 409);
     const p = await project(ctx);
     // The ids are fixed before anything leaves this machine, so a retry repeats nothing.
-    if (c.state === "triaged") c = ctx.store.save({ ...c, state: "filing", family: c.family ?? { id: randomUUID(), file: "", sendId: randomUUID() } }, now);
+    if (c.state === "triaged") c = ctx.store.save({ ...c, ...decider(caller), state: "filing", family: c.family ?? { id: randomUUID(), file: "", sendId: randomUUID() } }, now);
 
     if (!c.issue) {
       const found = await ctx.tools.gh<{ items: { html_url: string; number: number; body?: string }[] }>(

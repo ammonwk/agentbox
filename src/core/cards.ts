@@ -41,13 +41,27 @@ type Row = {
   default_text: string | null; default_at: number | null; key: string | null; session_id: string | null; about: string | null;
   state: CardState; answer: string | null; answered_at: number | null; delivered_at: number | null; tried_at: number | null;
   later_at: number | null; created_at: number; closed_why: string | null; undo: string | null;
+  person: string | null; decided_by: string | null;
 };
+
+/** Who answered or decided a card: a login and a name. */
+export type DecidedBy = { login: string; name: string };
+
+function decidedByOf(raw: string | null): DecidedBy | null {
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(raw) as Partial<DecidedBy>;
+    return typeof o.login === "string" && typeof o.name === "string" ? { login: o.login, name: o.name } : null;
+  } catch {
+    return null;
+  }
+}
 
 function toCard(r: Row, withLong: boolean): Card {
   return {
     id: r.id, kind: r.kind, title: r.title, short: r.short, hasLong: !!r.long, ...(withLong ? { long: r.long } : {}),
     pr: r.pr, recommend: r.recommend, default: r.default_text, defaultAt: r.default_at, key: r.key,
-    sessionId: r.session_id, about: r.about, state: r.state, answer: r.answer, answeredAt: r.answered_at,
+    sessionId: r.session_id, about: r.about, person: r.person ?? null, decidedBy: decidedByOf(r.decided_by ?? null), state: r.state, answer: r.answer, answeredAt: r.answered_at,
     deliveredAt: r.delivered_at, unread: r.state === "answered" && !!r.answer && r.delivered_at === null,
     laterAt: r.later_at, createdAt: r.created_at, closedWhy: r.closed_why,
   };
@@ -69,6 +83,8 @@ export interface NewCard {
   at?: number | null;
   /** False: a decision that does not push to your devices (a superagent's Feed already shows it). */
   notify?: boolean;
+  /** On a hub, the member it is for (a login): only their devices are pushed. */
+  person?: string | null;
 }
 
 export interface CardFilter {
@@ -153,9 +169,9 @@ export class Cards {
     }
     const text = (v: string | null | undefined, max = SHORT_MAX) => v?.trim().slice(0, max) || null;
     const { lastInsertRowid } = getDb().run(
-      `INSERT INTO cards (kind, title, short, long, pr, recommend, default_text, default_at, key, session_id, about, state, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
-      [c.kind, title, short, text(c.long, LONG_MAX), text(c.pr, 500), text(c.recommend), text(c.default), c.defaultAt ?? null, key, c.sessionId ?? null, c.about ?? null, Math.min(c.at ?? this.now(), this.now())],
+      `INSERT INTO cards (kind, title, short, long, pr, recommend, default_text, default_at, key, session_id, about, person, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+      [c.kind, title, short, text(c.long, LONG_MAX), text(c.pr, 500), text(c.recommend), text(c.default), c.defaultAt ?? null, key, c.sessionId ?? null, c.about ?? null, c.person?.trim().toLowerCase() || null, Math.min(c.at ?? this.now(), this.now())],
     );
     const card = this.get(Number(lastInsertRowid));
     this.changed();
@@ -177,15 +193,15 @@ export class Cards {
 
   /** The user's answer; "" for a card that only wanted seeing. Typed into the
    *  asking session after `UNDO_MS`, unless taken back. */
-  answer(id: number, text: string): Card {
+  answer(id: number, text: string, by: DecidedBy | null = null): Card {
     const r = this.row(id);
     if (r.state === "closed") throw new FleetError(409, `card ${id} was withdrawn: ${r.closed_why ?? "the question went away"}`);
     if (r.state === "answered" && r.delivered_at !== null) throw new FleetError(409, `card ${id} was answered already, and the answer has gone to its session`);
     const answer = text.trim();
     if (!answer && r.kind === "decision") throw new FleetError(400, "a decision needs an answer; keep it for later instead");
     const at = this.now();
-    getDb().run(`UPDATE cards SET state = 'answered', answer = ?, answered_at = ?, tried_at = NULL, undo = ? WHERE id = ?`, [
-      answer, at, JSON.stringify({ state: r.state === "answered" ? "open" : r.state, laterAt: r.later_at }), id,
+    getDb().run(`UPDATE cards SET state = 'answered', answer = ?, answered_at = ?, tried_at = NULL, undo = ?, decided_by = ? WHERE id = ?`, [
+      answer, at, JSON.stringify({ state: r.state === "answered" ? "open" : r.state, laterAt: r.later_at }), by ? JSON.stringify(by) : null, id,
     ]);
     if (answer) this.deliverLater(id, UNDO_MS);
     this.changed();
@@ -207,16 +223,17 @@ export class Cards {
     if (!r.undo) throw new FleetError(409, `nothing to undo on card ${id}`);
     if (r.state === "answered" && (r.delivered_at !== null || r.tried_at !== null)) throw new FleetError(409, "the answer has already gone to its session");
     const was = JSON.parse(r.undo) as { state: CardState; laterAt: number | null };
-    getDb().run(`UPDATE cards SET state = ?, later_at = ?, answer = NULL, answered_at = NULL, undo = NULL WHERE id = ?`, [was.state, was.laterAt, id]);
+    getDb().run(`UPDATE cards SET state = ?, later_at = ?, answer = NULL, answered_at = NULL, undo = NULL, decided_by = NULL WHERE id = ?`, [was.state, was.laterAt, id]);
     this.changed();
     return this.get(id);
   }
 
-  /** The asker withdraws it. */
-  close(id: number, why: string): Card {
+  /** The asker withdraws it; `by` is the person whose decision elsewhere (a
+   *  superagent's page) settled it, when one did. */
+  close(id: number, why: string, by: DecidedBy | null = null): Card {
     const r = this.row(id);
     if (r.state === "answered") throw new FleetError(409, `card ${id} was answered already`);
-    getDb().run(`UPDATE cards SET state = 'closed', closed_why = ?, answered_at = ?, undo = NULL WHERE id = ?`, [why.trim() || null, this.now(), id]);
+    getDb().run(`UPDATE cards SET state = 'closed', closed_why = ?, answered_at = ?, undo = NULL, decided_by = ? WHERE id = ?`, [why.trim() || null, this.now(), by ? JSON.stringify(by) : null, id]);
     this.changed();
     return this.get(id);
   }

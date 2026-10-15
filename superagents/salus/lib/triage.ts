@@ -1,9 +1,9 @@
 /** A triage: one read-only Codex session per crash, in a checkout of the base
  *  as GitHub has it now, whose last word is a verdict Salus reads from its
- *  transcript. */
-import { existsSync, mkdirSync } from "node:fs";
+ *  transcript. Agentbox cuts the checkout where the session runs (a repo and a
+ *  ref in its start), which on a hub may be any node that has the repo
+ *  (docs/hub.md); Salus touches no disk of its own for it. */
 import { createHash } from "node:crypto";
-import { join } from "node:path";
 import { ActionError, agentbox, transcript } from "../../lib/sdk";
 import type { Ctx } from "./ctx";
 import { TriageVerdict, type Crash } from "./types";
@@ -30,28 +30,26 @@ export const slugOf = (url: string): string | null => /github\.com[:/]([\w.-]+\/
 /** A short stable name for a crash, for paths and markers. */
 export const tag = (id: string): string => createHash("sha256").update(id).digest("hex").slice(0, 12);
 
+/** What a triage's prompt starts with, so a start asked and never answered is found again. */
+const marker = (id: string): string => `[salus triage ${tag(id)}]`;
+
 export async function startTriage(ctx: Ctx, id: string, now = Date.now()): Promise<Crash> {
   return ctx.lock(id, async () => {
     let c = ctx.store.crash(id);
     if (c.state !== "new" && !(c.state === "triaging" && c.triage && !c.triage.session)) return c;
     const p = await project(ctx);
-    const cwd = join(ctx.home, "triage", tag(id));
     // A start asked before and never answered: find what agentbox did before asking again.
     if (c.triage && !c.triage.session) {
-      const had = (await agentbox.state(false)).sessions.find((s) => s.cwd === cwd && s.provider === "codex");
-      if (had) return ctx.store.save({ ...c, triage: { ...c.triage, session: had.id } }, now);
+      const had = (await agentbox.state(false)).sessions.find((s) => s.provider === "codex" && s.firstPrompt?.startsWith(marker(id)));
+      if (had) return ctx.store.save({ ...c, triage: { ...c.triage, cwd: had.cwd, session: had.id } }, now);
     }
-    if (!existsSync(cwd)) {
-      await ctx.tools.git(p.checkout, "fetch", "--quiet", "origin", `refs/heads/${p.base}`);
-      const sha = await ctx.tools.git(p.checkout, "rev-parse", "FETCH_HEAD");
-      mkdirSync(join(ctx.home, "triage"), { recursive: true });
-      await ctx.tools.git(p.checkout, "worktree", "add", "--detach", cwd, sha);
-    }
-    const base = await ctx.tools.git(cwd, "rev-parse", "HEAD");
-    c = ctx.store.save({ ...c, state: "triaging", triage: { cwd, base, startedAt: now, session: null }, note: undefined }, now);
+    // The base as GitHub has it now, by its commit: wherever the checkout is
+    // cut, it is cut at the same point the prompt names.
+    const base = c.triage?.base ?? (await ctx.tools.gh<{ sha: string }>(`repos/${p.slug}/commits/${encodeURIComponent(p.base)}`, undefined, "GET")).sha;
+    c = ctx.store.save({ ...c, state: "triaging", triage: { cwd: "", base, startedAt: now, session: null }, note: undefined }, now);
     const main = (await agentbox.self()).main;
-    const s = await agentbox.start({ provider: "codex", readOnly: true, notify: false, cwd, ...(main ? { parent: main } : {}), prompt: triagePrompt(ctx, c, p) });
-    return ctx.store.save({ ...c, triage: { ...c.triage!, session: s.id } }, now);
+    const s = await agentbox.start({ provider: "codex", readOnly: true, notify: false, repo: p.slug, ref: base, ...(main ? { parent: main } : {}), prompt: triagePrompt(ctx, c, p) });
+    return ctx.store.save({ ...c, triage: { ...c.triage!, cwd: s.cwd, session: s.id } }, now);
   });
 }
 
@@ -67,18 +65,14 @@ export async function collectTriage(ctx: Ctx, id: string, now = Date.now()): Pro
     const v = verdictIn(await transcript(t.session));
     const error = v.ok ? undefined : (v.error ?? (s?.status === "blocked" ? "The triage was stuck on a prompt" : "The triage ended without a verdict"));
     const out = ctx.store.save({ ...c, state: "triaged", triage: { ...t, ...(v.ok ? { verdict: v.verdict } : { error }) } }, now);
-    await retire(ctx, out);
+    await retire(out);
     return out;
   });
 }
 
-/** Done with a triage: its session closed (the transcript stays the record) and its checkout removed. */
-async function retire(ctx: Ctx, c: Crash): Promise<void> {
-  if (c.triage?.session) await agentbox.close(c.triage.session).catch(() => {});
-  if (c.triage?.cwd && existsSync(c.triage.cwd)) {
-    const p = await project(ctx).catch(() => null);
-    if (p) await ctx.tools.git(p.checkout, "worktree", "remove", "--force", c.triage.cwd).catch(() => {});
-  }
+/** Done with a triage: its session closed (the transcript stays the record) and its checkout removed, where it ran. */
+async function retire(c: Crash): Promise<void> {
+  if (c.triage?.session) await agentbox.close(c.triage.session, { removeWorktree: true }).catch(() => {});
 }
 
 /** The last `salus-triage` block the agent wrote, checked. */
@@ -107,7 +101,7 @@ function triagePrompt(ctx: Ctx, c: Crash, p: Project): string {
     .map((f) => `  ${f.inApp ? "" : "(library) "}${f.file}${f.line ? `:${f.line}` : ""}${f.fn ? ` in ${f.fn}` : ""}`)
     .join("\n");
   const window = ctx.settings().windowHours;
-  return `You are triaging a production exception for Salus, the agent that watches ${p.slug}'s crashes. This session is read-only: read the code and reason; do not try to change anything.
+  return `${marker(c.id)} You are triaging a production exception for Salus, the agent that watches ${p.slug}'s crashes. This session is read-only: read the code and reason; do not try to change anything.
 
 This checkout is ${p.slug} at ${c.triage!.base}, the current ${p.base}. Production may run an older revision: if this one already fixes it, say so.
 

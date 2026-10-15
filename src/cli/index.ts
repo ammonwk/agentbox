@@ -127,7 +127,7 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
       continue;
     }
     const [, key, inline] = m;
-    const takesValue = key === "account" || key === "model" || key === "claim" || key === "parent";
+    const takesValue = key === "account" || key === "model" || key === "claim" || key === "parent" || key === "node" || key === "repo" || key === "ref";
     if (inline !== undefined) flags.set(key!, inline);
     else if (takesValue && args[i + 1] !== undefined) flags.set(key!, args[++i]!);
     else flags.set(key!, true);
@@ -135,9 +135,10 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
   return { flags, rest };
 }
 
-/** `agentbox claude [--account X] [--model M] [--parent ID] [--detach] [prompt…]` */
+/** `agentbox claude [--account X] [--model M] [--parent ID] [--node N|auto] [--repo R] [--ref REF] [--detach] [prompt…]` */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
   const { flags, rest } = parseFlags(args);
+  const str = (k: string): string | undefined => (typeof flags.get(k) === "string" ? (flags.get(k) as string) : undefined);
   // Asking how is not asking to start one.
   if (flags.has("help")) {
     console.log(USAGE);
@@ -164,10 +165,16 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
   try {
     out = await api("POST", "/api/sessions", {
       provider,
-      cwd: process.cwd(),
+      // A named repo is where it runs, not this directory.
+      cwd: str("repo") ? undefined : process.cwd(),
       prompt: rest.join(" ") || undefined,
       model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
       accountId,
+      // On a hub (docs/hub.md): another machine, or the one with the most room;
+      // a repo by its owner/name, and a ref to read it at in a worktree of its own.
+      node: str("node"),
+      repo: str("repo"),
+      ref: str("ref"),
       claim: typeof flags.get("claim") === "string" ? flags.get("claim") : undefined,
       // Started from inside another session, it is that session's child;
       // `--parent` names it outright, for a program no session runs.
@@ -183,8 +190,14 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
   }
 
   const { session, placement } = out;
-  const account = placement.candidates.find((c) => c.accountId === placement.accountId);
-  process.stderr.write(`${session.id} → ${account?.label ?? placement.accountId}: ${placement.why}\n`);
+  const account = placement?.candidates.find((c) => c.accountId === placement.accountId);
+  const where = session.node ? `${session.node}: ` : "";
+  process.stderr.write(`${session.id} → ${where}${account?.label ?? placement?.accountId ?? "?"}${placement ? `: ${placement.why}` : ""}\n`);
+  // Its terminal is on another machine: the board (or that machine) has it.
+  if (session.node) {
+    console.log(session.id);
+    return 0;
+  }
   if (flags.has("detach")) {
     console.log(session.id);
     return 0;
@@ -381,10 +394,16 @@ async function recover(args: string[]): Promise<number> {
 
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
-  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--parent ID] [--detach] [prompt…]
+  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--parent ID] [--detach]
+         [--repo OWNER/NAME [--ref REF]] [--node NAME|auto] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d);
-                        --parent puts it under that session (default: the one this runs in)
+                        --parent puts it under that session (default: the one this runs in);
+                        --repo runs in that registered repo instead of here, --ref at that
+                        branch, tag or commit in a worktree of its own (detached);
+                        on a hub, --node starts it on that node, or auto on the machine
+                        with the most room that may take it (its id is printed: open it
+                        on the board)
   usage                 each account's limits and what running sessions claim
   attach <id>           attach this terminal to a session in agentbox
 

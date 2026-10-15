@@ -6,7 +6,7 @@ import { fix, follow, needHours } from "../lib/fix";
 import { tick } from "../lib/tick";
 import { verdictIn } from "../lib/triage";
 import { verify } from "../lib/verify";
-import { APP, MAIN, REPO, verdict, world, type World } from "./harness";
+import { APP, MAIN, REPO, SHA, verdict, world, type World } from "./harness";
 
 const H = 3_600_000;
 let w: World;
@@ -32,19 +32,35 @@ test("off, nothing is polled or started", async () => {
   expect(w.box.starts).toHaveLength(0);
 });
 
-test("a crash above the threshold is triaged read-only in a checkout of the fetched base; below it is not recorded", async () => {
+test("a crash above the threshold is triaged read-only in a checkout agentbox cuts at the base's commit; below it is not recorded", async () => {
   w.src.add("crash-a", Date.now() - H, 5);
   w.src.add("crash-b", Date.now() - H, 2);
   await tick(w.ctx);
   expect(w.ctx.store.crashes().map((c) => c.id)).toEqual(["crash-a"]);
   expect(w.box.starts).toHaveLength(1);
-  expect(w.box.starts[0]).toMatchObject({ provider: "codex", readOnly: true, notify: false, parent: MAIN });
+  // The repo by name and the base by its commit, as GitHub has it now: no checkout of Salus's own.
+  expect(w.gh.asked).toContain("GET repos/acme/app/commits/main");
+  expect(w.box.starts[0]).toMatchObject({ provider: "codex", readOnly: true, notify: false, parent: MAIN, repo: REPO, ref: SHA });
+  expect(w.box.starts[0]!.cwd).toBeUndefined();
+  expect(w.box.starts[0]!.node).toBeUndefined();
   const c = w.ctx.store.crash("crash-a");
-  expect(w.box.starts[0]!.cwd).toBe(c.triage!.cwd);
-  expect(w.git.calls.some((x) => x.endsWith("fetch --quiet origin refs/heads/main"))).toBe(true);
-  expect(w.git.calls.some((x) => x.includes(`worktree add --detach ${c.triage!.cwd}`))).toBe(true);
+  expect(c.triage).toMatchObject({ base: SHA, cwd: "/worktrees/t1", session: "t1" });
+  expect(w.git.calls.some((x) => x.includes("worktree"))).toBe(false);
   // The exception text goes to the triage as marked evidence.
   expect(String(w.box.starts[0]!.prompt)).toContain("<crash-evidence>\nType: TypeError\nMessage: x is undefined");
+});
+
+test("where its superagent's settings put its sessions (a hub's node) is where a triage starts; a start never answered is found, not asked again", async () => {
+  w.box.node = "auto";
+  w.src.add("crash-a", Date.now() - H, 5);
+  await tick(w.ctx);
+  expect(w.box.starts[0]).toMatchObject({ node: "auto", repo: REPO, ref: SHA });
+  // As if the answer to that start were lost: the crash still says it is waiting on it.
+  const c = w.ctx.store.crash("crash-a");
+  w.ctx.store.save({ ...c, triage: { ...c.triage!, session: null } });
+  await tick(w.ctx);
+  expect(w.box.starts).toHaveLength(1);
+  expect(w.ctx.store.crash("crash-a").triage!.session).toBe("t1");
 });
 
 test("triage stays within its budget: at most N at once and M a day", async () => {
@@ -65,7 +81,8 @@ test("the verdict is read from the triage's transcript; its session is closed an
   const c = w.ctx.store.crash(id);
   expect(c.triage!.verdict!.fix!.title).toBe("Export crashes on rows without an owner");
   expect(w.box.closed).toEqual([c.triage!.session!]);
-  expect(w.git.calls.some((x) => x.includes(`worktree remove --force ${c.triage!.cwd}`))).toBe(true);
+  // Its checkout goes with it, on whichever machine it ran.
+  expect(w.box.closes.get(c.triage!.session!)).toMatchObject({ closed: true, removeWorktree: true });
 });
 
 test("a triage that ends without a valid verdict says so and can be asked again", async () => {
@@ -96,6 +113,13 @@ test("Fix is a person's: a session or the API cannot", async () => {
   await expect(fix(w.ctx, id, { session: "someone", via: "api" })).rejects.toThrow("A person decides this");
   await expect(fix(w.ctx, id, { session: null, via: "api" })).rejects.toThrow("A person decides this");
   expect(w.gh.issues).toHaveLength(0);
+});
+
+test("a decision records the person agentbox says made it", async () => {
+  const id = await triaged();
+  const owner = { ...APP, person: { login: "member@team", name: "Member", role: "member" as const, via: "tailnet" as const } };
+  await action(w.ctx, { action: "dismiss", values: { id }, tab: null, caller: owner });
+  expect(w.ctx.store.crash(id)).toMatchObject({ state: "dismissed", decidedBy: { login: "member@team", name: "Member" } });
 });
 
 test("Fix files one issue with no exception text, writes the family, and hands it to the main conversation once", async () => {

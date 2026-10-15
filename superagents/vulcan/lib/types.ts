@@ -167,5 +167,7 @@ export type Proposal = {
   card: number | null;
   createdAt: number;
   decidedAt?: number;
+  /** The person who approved or dismissed it (the action's `caller.person`); absent from an agentbox that does not say. */
+  decidedBy?: { login: string; name: string };
   delivery?: { request: string; state: "queued" | "sent" | "refused" | "uncertain"; result: string };
 };

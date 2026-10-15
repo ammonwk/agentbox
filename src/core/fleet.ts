@@ -54,7 +54,7 @@ import {
   usageSamplesSince,
   type SessionRecord,
 } from "./db";
-import { branchOnDisk, checkoutAt, createWorktree, worktreeForBranch } from "./git";
+import { branchOnDisk, checkoutAt, createWorktree, detachedWorktree, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
 import { prReleaseNotice, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
@@ -278,11 +278,18 @@ export interface SpawnRequest {
   branch?: string;
   /** The PR `branch` belongs to, for fetching it when origin has no such branch. */
   pr?: number;
+  /** Run at this ref of the repo (a branch, tag or commit) as origin has it
+   *  now, in a new worktree with a detached HEAD (`detachedWorktree`). Wins
+   *  over `branch` and `worktree`. */
+  ref?: string;
   prompt?: string;
   model?: string;
   /** One of the adapter's `efforts`. */
   effort?: string;
   accountId?: string | null;
+  /** Only these accounts may take it: a node's lent ones, for a start its
+   *  hub asked for (docs/hub.md). The balancer picks among them as ever. */
+  accounts?: readonly string[];
   /** The process asking (the CLI, the fleet MCP). A session it runs under
    *  becomes the new session's parent. */
   callerPid?: number;
@@ -2664,9 +2671,10 @@ export class Fleet extends EventEmitter {
     return out;
   }
 
-  placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true): Placement {
+  placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true, only?: readonly string[]): Placement {
     const adapter = this.adapter(provider);
     const asked = model || getSettings().models[provider] || null;
+    const states = this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null);
     return place({
       provider,
       model: asked,
@@ -2678,7 +2686,7 @@ export class Fleet extends EventEmitter {
       accountId: accountId && accountId !== "auto" ? accountId : null,
       // One started without a model runs on the CLI's own default: that is
       // the route whose refusals count against it.
-      accounts: this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null),
+      accounts: only ? states.filter((a) => only.includes(a.account.id)) : states,
       settings: getSettings().balancer,
       now: this.now(),
     });
@@ -2694,7 +2702,8 @@ export class Fleet extends EventEmitter {
       throw new FleetError(400, `${adapter.label} takes no effort "${req.effort}"${adapter.efforts.length ? ` (${adapter.efforts.join(", ")})` : ""}`);
     }
     const effort = req.effort || undefined;
-    const placement = this.placement(req.provider, req.model, req.accountId, effort);
+    if (req.accounts && req.accountId && req.accountId !== "auto" && !req.accounts.includes(req.accountId)) throw new FleetError(403, `account ${req.accountId} is not one this start may use`);
+    const placement = this.placement(req.provider, req.model, req.accountId, effort, true, req.accounts);
     if (!placement.accountId) throw new FleetError(409, placement.why, placement);
     const account = getAccount(placement.accountId);
     if (!account) throw new FleetError(404, `no account ${placement.accountId}`);
@@ -2707,7 +2716,14 @@ export class Fleet extends EventEmitter {
     if (req.repoId) {
       const repo = getRepoById(req.repoId);
       if (!repo) throw new FleetError(404, `no repo ${req.repoId}`);
-      if (req.branch) {
+      if (req.ref) {
+        try {
+          cwd = detachedWorktree(repo, id, req.ref).path;
+        } catch (e) {
+          throw new FleetError(400, (e as Error).message);
+        }
+        worktree = cwd;
+      } else if (req.branch) {
         const wt = worktreeForBranch(repo, id, req.branch, req.pr);
         cwd = wt.path;
         worktree = wt.created ? wt.path : null;
@@ -2720,8 +2736,9 @@ export class Fleet extends EventEmitter {
       } else {
         throw new FleetError(400, "a GitHub repo needs a worktree (it has no checkout of its own to work in)");
       }
-      // Only a checkout cut just now: an existing one was set up by whoever made it.
-      if (worktree) setUpWorktree(repo, worktree, id);
+      // Only a checkout cut just now: an existing one was set up by whoever
+      // made it. A read-only look at a ref needs no `.env` or install.
+      if (worktree && !(req.ref && req.readOnly)) setUpWorktree(repo, worktree, id);
     }
     if (!cwd) throw new FleetError(400, "say where the session should run: a repo or a directory");
     if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);

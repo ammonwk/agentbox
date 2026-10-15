@@ -24,7 +24,13 @@ export type PushSubscription = {
   /** What subscribed, for the Settings list. */
   userAgent: string | null;
   createdAt: number;
+  /** Who turned it on (docs/hub.md): their login, and whether they were the
+   *  machine's owner then. One from before people were recorded is the owner's. */
+  person?: { login: string; owner: boolean };
 };
+
+/** Whose devices a message goes to: the owner's, or a member's by login. */
+export type PushTo = { owner: true; login?: string } | { owner: false; login: string };
 
 export type PushMessage = {
   title: string;
@@ -131,7 +137,7 @@ export function pushSubscriptions(): PushSubscription[] {
 }
 
 /** A subscription as a browser gives it (`PushSubscription.toJSON()`), checked. */
-export function parseSubscription(body: Record<string, unknown>, userAgent: string | null): PushSubscription {
+export function parseSubscription(body: Record<string, unknown>, userAgent: string | null, person?: { login: string; owner: boolean }): PushSubscription {
   const keys = body.keys as Record<string, unknown> | undefined;
   const endpoint = body.endpoint;
   if (typeof endpoint !== "string" || typeof keys?.p256dh !== "string" || typeof keys.auth !== "string") {
@@ -146,7 +152,7 @@ export function parseSubscription(body: Record<string, unknown>, userAgent: stri
   // The server posts to this address: only a push service's, never one of its own network's.
   if (url.protocol !== "https:") throw new Error("the push endpoint must be https");
   if (unb64url(keys.p256dh).length !== 65 || unb64url(keys.auth).length !== 16) throw new Error("the push subscription's keys are malformed");
-  return { endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth }, userAgent, createdAt: Date.now() };
+  return { endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth }, userAgent, createdAt: Date.now(), ...(person ? { person: { login: person.login.toLowerCase(), owner: person.owner } } : {}) };
 }
 
 export function addSubscription(sub: PushSubscription): void {
@@ -156,6 +162,17 @@ export function addSubscription(sub: PushSubscription): void {
 
 export function removeSubscription(endpoint: string): void {
   setKv("push.subscriptions", pushSubscriptions().filter((s) => s.endpoint !== endpoint));
+}
+
+/** The devices of whoever `to` names. The owner's are those its owner
+ *  turned on, and any from before people were recorded; on a machine that is
+ *  not a hub every device is the owner's. */
+export function subscriptionsOf(to: PushTo): PushSubscription[] {
+  const login = to.login?.toLowerCase();
+  return pushSubscriptions().filter((s) => {
+    if (to.owner) return !s.person || s.person.owner || (!!login && s.person.login === login);
+    return s.person?.login === login;
+  });
 }
 
 // ------------------------------------------------------------------ sending
@@ -180,12 +197,12 @@ async function sendTo(sub: PushSubscription, msg: PushMessage): Promise<"sent" |
   return `${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`.trim();
 }
 
-/** Send to every subscribed device; what went wrong, per device, comes back. */
-export async function pushToAll(msg: PushMessage): Promise<{ sent: number; failed: string[] }> {
+/** Send to the devices of whoever `to` names; what went wrong, per device, comes back. */
+export async function pushTo(to: PushTo, msg: PushMessage): Promise<{ sent: number; failed: string[] }> {
   let sent = 0;
   const failed: string[] = [];
   await Promise.all(
-    pushSubscriptions().map(async (sub) => {
+    subscriptionsOf(to).map(async (sub) => {
       const host = new URL(sub.endpoint).host;
       try {
         const r = await sendTo(sub, msg);
@@ -234,9 +251,10 @@ let recheck: ReturnType<typeof setTimeout> | null = null;
  */
 export function notifyBlocked(board: () => readonly Session[], reasonOf: (id: string) => string | null, typedAt: (id: string) => number = () => 0): void {
   const { news, next } = blockedNews(board(), reasonOf, typedAt);
+  // A session's stops are the owner's to hear of (docs/hub.md).
   for (const msg of news) {
-    if (pushSubscriptions().length === 0) continue;
-    void pushToAll(msg).then((r) => {
+    if (subscriptionsOf({ owner: true }).length === 0) continue;
+    void pushTo({ owner: true }, msg).then((r) => {
       for (const f of r.failed) console.error(`agentbox: push for ${msg.tag} failed — ${f}`);
     });
   }

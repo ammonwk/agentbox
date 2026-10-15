@@ -298,7 +298,7 @@ const schedules: Schedule[] = [
 ];
 
 const card = (c: Pick<Card, "id" | "kind" | "title" | "short"> & Partial<Card>): Card => ({
-  hasLong: true, pr: null, recommend: null, default: null, defaultAt: null, key: null, sessionId: "k9d1", about: null, state: "open",
+  hasLong: true, pr: null, recommend: null, default: null, defaultAt: null, key: null, sessionId: "k9d1", about: null, person: null, decidedBy: null, state: "open",
   answer: null, answeredAt: null, deliveredAt: null, unread: false, laterAt: null, createdAt: T0 - 40 * M, closedWhy: null, ...c,
 });
 const cards: Card[] = [

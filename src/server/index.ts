@@ -37,7 +37,7 @@ import { McpError, addServer, importServer, readRegistry, removeServer, setEnabl
 import { checkServer, discover, foundDefinition, publicFound, reachAll, viewOf } from "../core/mcp-reach";
 import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
 import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
-import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushSubscriptions, pushToAll, removeSubscription } from "../core/push";
+import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushTo, removeSubscription, subscriptionsOf, type PushTo } from "../core/push";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getDb, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
@@ -51,7 +51,7 @@ import type { CardKind, CardState, McpServerInput, McpState } from "../core/type
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
 import { claimPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
-import { repoCheckoutPath, repoFullNameOf } from "../core/git";
+import { removeDetachedWorktree, repoCheckoutPath, repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { agentTimeline, sessionWork } from "../core/work";
@@ -61,10 +61,13 @@ import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../c
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
 import { PeerCheck, admit, admitted, sourceOf, tailnetCert, tailnetSelf, type Admission, type Peer } from "./tailnet";
-import { hubRole, readLink, readMembers, readNodes, removeLink } from "../core/hub";
+import { addPlaced, hubRole, readLink, readMembers, readNodes, readPlaced, removeLink, type Link } from "../core/hub";
 import { HubNodes, type Target } from "./hubnodes";
-import { asLocalRequest, auditHubAction, hubRoutes, lends, nodeGate, nodeState, type HubDeps } from "./hub";
-import { ownerPerson, personOf, setPerson, setTailnetSelf } from "./person";
+import { asLocalRequest, auditHubAction, headroomOf, hubRoutes, hubStartRules, lends, nodeGate, nodeState, repoNamed, repoNames, type HubDeps } from "./hub";
+import { ownerPerson, personOf, setPerson, setTailnetSelf, tailnetSelfNow } from "./person";
+import { choose, type Machine } from "./placement";
+import { requireOwnerOnHub, roleRefusal } from "./roles";
+import { accountProvider as accountsOf } from "../core/providers/account";
 import { VoiceHub } from "../voice/hub";
 import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
 import { transcribe } from "../voice/deepgram";
@@ -174,7 +177,7 @@ export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
-export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`);
+export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`, undefined, () => hubRole() === "hub");
 /** On a hub, its joined nodes and their sessions (docs/hub.md); on any
  *  other machine it has none and does nothing. */
 export const hubNodes = new HubNodes(
@@ -216,6 +219,56 @@ function sharedHere(id: string): boolean {
 }
 /** On a hub: the node a session it shows runs on, or null for its own. */
 const remoteTarget = (id: string) => (hubRole() === "hub" ? hubNodes.resolve(id) : null);
+/** On a node: the starts its hub asked for, with the link they came under. */
+const startsForHub = new WeakMap<Request, Link>();
+/** On a node: the sessions its hub started here that are still open. */
+function placedOpen(): number {
+  const placed = new Set(readPlaced());
+  return placed.size ? fleet.sessions().filter((s) => placed.has(s.id) && s.status !== "closed").length : 0;
+}
+
+/** The repo a start names, as every machine knows it: its GitHub `owner/name`. */
+function startRepoName(b: Record<string, unknown>): string | null {
+  if (typeof b.repo === "string" && b.repo.trim()) return repoNamed(b.repo)?.fullName ?? b.repo.trim();
+  if (typeof b.repoId === "string") return getRepoById(b.repoId)?.fullName ?? null;
+  if (typeof b.cwd === "string" && b.cwd) return repoFullNameOf(b.cwd);
+  return null;
+}
+
+/**
+ * On a hub, a start that names `node` (docs/hub.md, Placement): a joined
+ * node's name, or "auto" for the machine with the most room that may take
+ * it, the hub among them. The answer is the node's, or null when the session
+ * starts here: the hub was named, or chosen.
+ */
+async function placeOnNode(req: Request, b: Record<string, unknown>): Promise<Response | null> {
+  if (typeof b.node !== "string" || !b.node.trim()) throw new HttpError(400, 'node is a node\'s name, or "auto"');
+  if (hubRole() !== "hub") throw new HttpError(409, "only a hub starts sessions on other machines (docs/hub.md), and this machine is not one");
+  const want = b.node.trim().toLowerCase();
+  if (want === tailnetSelfNow()?.hostName) return null;
+  const prov = provider(b.provider);
+  // Named outright, a node may take a start from a checkout here, in a new
+  // worktree of the same repo there; "auto" never moves a start that names
+  // a directory rather than a repo, which only this machine has.
+  const named = typeof b.repo === "string" || typeof b.repoId === "string";
+  const repo = want === "auto" && !named ? null : startRepoName(b);
+  let target = want;
+  if (want === "auto") {
+    const hub: Machine = { node: null, reachable: true, lend: { acceptStarts: true, maxSessions: null }, headroom: headroomOf(accountViews()), repos: repoNames(), placed: 0 };
+    const choice = choose([hub, ...hubNodes.machines()], { provider: accountsOf(prov), repo });
+    if (!choice.ok) return Response.json({ ok: false, data: { considered: choice.considered }, error: choice.why }, { status: 409 });
+    if (choice.node === null) return null;
+    target = choice.node;
+  }
+  const rec = hubNodes.named(target);
+  if (!rec) throw new HttpError(404, `no node ${target} is joined to this hub`);
+  if (!repo) throw new HttpError(400, `a session on ${target} runs in a repo registered there: name it (repo, as owner/name), or start from a checkout whose origin is on GitHub`);
+  if (b.claim !== undefined) throw new HttpError(400, "a session on a node cannot be started with a PR claim; claim it once it runs");
+  const body: Record<string, unknown> = { provider: prov, repo };
+  for (const k of ["prompt", "model", "effort", "accountId", "readOnly", "notify", "ref", "branch", "pr", "worktree"]) if (b[k] !== undefined) body[k] = b[k];
+  const caller = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? fleet.callerOf(b.callerPid) : null;
+  return hubNodes.startOn(rec, body, personOf(req), optionalString(b, "parent") ?? caller);
+}
 /** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
 export const cloud = new CloudBridge(fleet, VERSION);
 function cardId(raw: string): number {
@@ -223,18 +276,37 @@ function cardId(raw: string): number {
   return Number(raw);
 }
 
-/** One push for a batch of new decisions, never for what merely happened. */
+/** Whose devices a card goes to (docs/hub.md): on a hub, the member it
+ *  names; anything else, the owner's. */
+function cardPushTo(person: string | null): PushTo {
+  const member = person && hubRole() === "hub" ? readMembers()?.find((m) => m.login === person) : undefined;
+  return member && member.role !== "owner" ? { owner: false, login: member.login } : { owner: true };
+}
+
+/** A person's own devices. */
+const pushToPerson = (p: Person): PushTo => (p.role === "owner" ? { owner: true, login: p.login } : { owner: false, login: p.login });
+
+/** One push for a batch of new decisions, never for what merely happened:
+ *  one per person the batch is for. */
 export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
-  if (pushSubscriptions().length === 0) return;
-  const [first] = batch;
-  void pushToAll({
-    title: batch.length === 1 ? "A decision for you" : `${batch.length} decisions for you`,
-    body: batch.length === 1 ? first!.title : `${first!.title}, and ${batch.length - 1} more`,
-    url: "/#/review",
-    tag: "cards",
-  }).then((r) => {
-    for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
-  });
+  const byPerson = new Map<string, { to: PushTo; cards: typeof batch }>();
+  for (const c of batch) {
+    const to = cardPushTo(c.person);
+    const k = to.owner ? "" : to.login;
+    byPerson.set(k, { to, cards: [...(byPerson.get(k)?.cards ?? []), c] });
+  }
+  for (const { to, cards: mine } of byPerson.values()) {
+    if (subscriptionsOf(to).length === 0) continue;
+    const [first] = mine;
+    void pushTo(to, {
+      title: mine.length === 1 ? "A decision for you" : `${mine.length} decisions for you`,
+      body: mine.length === 1 ? first!.title : `${first!.title}, and ${mine.length - 1} more`,
+      url: "/#/review",
+      tag: "cards",
+    }).then((r) => {
+      for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
+    });
+  }
 });
 const turnIndex = new TurnIndex(fleet, {
   load: (id) => loadTurnState(fleet.get(id).provider, id),
@@ -252,6 +324,12 @@ function seekable(id: string): { io: SeekIO; claude: boolean } {
   fleet.tmuxOf(id);
   const io: SeekIO = { capture: () => fleet.screen(id), keys: (k) => fleet.keys(id, k), sleep: (ms) => Bun.sleep(ms) };
   return { io, claude: s.provider === "claude" };
+}
+/** A schedule's note command: a command it runs as this machine's user, so on a hub the owner's to set. */
+function noteCmdOf(req: Request, b: Record<string, unknown>): string | null {
+  const cmd = optionalString(b, "noteCmd") ?? null;
+  if (cmd) requireOwnerOnHub(req, "a schedule's note command runs as the hub's user");
+  return cmd;
 }
 /** A held-to-talk message: an hour of phone audio is well under this. */
 const MAX_AUDIO_BYTES = 40 * 1024 * 1024;
@@ -881,36 +959,58 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions", async ({ req }) => {
     const b = await readBody(req);
+    // On a hub, `node` places it on a joined node (docs/hub.md, Placement);
+    // null from `placeOnNode` is this machine.
+    if (b.node !== undefined && b.node !== null) {
+      const placed = await placeOnNode(req, b);
+      if (placed) return placed;
+    }
     // Started to work a pull request: it has it from its first moment, or
     // does not start, so two are never sent to the same one.
     const claim = b.claim !== undefined ? prNamed({ pr: b.claim, cwd: b.cwd }, null) : null;
     const key = claim ? `${claim.repo.toLowerCase()}#${claim.number}` : "";
-    if (claim) {
-      const held = holderOf(prClaimsNow(), claim.repo, claim.number);
-      if (held) throw new HttpError(409, new PrHeld(held, fleet.sessions().find((s) => s.id === held.sessionId)).message.replace(/^not claimed/, "not started"));
-      if (startingOn.has(key)) throw new HttpError(409, `not started: another session is being started on ${claim.repo}#${claim.number} this moment`);
-      startingOn.add(key);
-    }
+    // On a node, a start its hub asked for: within what the node lends.
+    const forHub = startsForHub.get(req);
+    const rules = forHub ? hubStartRules(forHub, b, placedOpen()) : null;
+    let holding = false;
     try {
+      if (claim) {
+        const held = holderOf(prClaimsNow(), claim.repo, claim.number);
+        if (held) throw new HttpError(409, new PrHeld(held, fleet.sessions().find((s) => s.id === held.sessionId)).message.replace(/^not claimed/, "not started"));
+        if (startingOn.has(key)) throw new HttpError(409, `not started: another session is being started on ${claim.repo}#${claim.number} this moment`);
+        startingOn.add(key);
+        holding = true;
+      }
+      // A repo by name (its id, `owner/name` or ref), as a hub's start names it.
+      const named = rules?.repo ?? (typeof b.repo === "string" && b.repo ? repoNamed(b.repo) : null);
+      if (typeof b.repo === "string" && b.repo && !named) throw new HttpError(404, `no repo ${b.repo} is registered here`);
+      const ref = optionalString(b, "ref");
+      const branch = optionalString(b, "branch");
       const out = await fleet.spawn({
         provider: provider(b.provider),
         readOnly: b.readOnly === true,
         notify: b.notify === false ? false : undefined,
-        cwd: optionalString(b, "cwd"),
-        repoId: optionalString(b, "repoId"),
-        worktree: b.worktree === true,
-        branch: optionalString(b, "branch"),
+        cwd: rules ? undefined : optionalString(b, "cwd"),
+        repoId: named?.id ?? optionalString(b, "repoId"),
+        // The hub's sessions on a node never run in its owner's own checkout.
+        worktree: b.worktree === true || (!!rules && !ref && !branch),
+        branch,
+        ref,
         pr: typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0 ? b.pr : undefined,
         prompt: typeof b.prompt === "string" ? b.prompt : undefined,
         model: optionalString(b, "model"),
         effort: optionalString(b, "effort"),
         accountId: optionalString(b, "accountId") ?? null,
-        callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
-        parent: optionalString(b, "parent"),
+        accounts: rules?.accounts,
+        callerPid: !rules && typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
+        parent: rules ? undefined : optionalString(b, "parent"),
       });
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
+      if (rules) addPlaced(out.session.id);
       scheduleHot();
       scheduleCold();
+      // To the hub, the row it shows, with its attention.
+      if (rules) return json({ ...out, session: hotState(true).sessions.find((s) => s.id === out.session.id) ?? out.session }, 201);
       return json(out, 201);
     } catch (e) {
       // A refusal carries the placement, so the dialog can show why.
@@ -922,7 +1022,8 @@ const router = new Router(mapError)
       }
       throw e;
     } finally {
-      startingOn.delete(key);
+      rules?.done();
+      if (holding) startingOn.delete(key);
     }
   })
 
@@ -1205,9 +1306,14 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions/:id/close", async ({ req, params }) => {
     const b = await readBody(req);
-    const out = await fleet.close(params.id!, requireBoolean(b, "closed"));
+    const closed = requireBoolean(b, "closed");
+    const worktree = closed && b.removeWorktree === true ? fleet.get(params.id!).worktree : null;
+    const out = await fleet.close(params.id!, closed);
+    // A checkout cut at a ref for it (`ref` in a start), once it is done:
+    // gone when nothing in it would be lost, else left to the reclaim.
+    const removed = worktree ? removeDetachedWorktree(worktree) : false;
     scheduleHot();
-    return json(out);
+    return json({ ...out, ...(worktree ? { worktreeRemoved: removed } : {}) });
   })
   // A session hands what it holds to the one taking over from it: what it
   // started, its cards, its pull requests and their waits, and messages to it.
@@ -1233,7 +1339,8 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
     const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
-    return json(await superagents.patch(params.name!, { main, enabled }));
+    const node = b.node === null ? null : typeof b.node === "string" ? b.node : undefined;
+    return json(await superagents.patch(params.name!, { main, enabled, node }));
   })
   .add("DELETE", "/api/superagents/:name", ({ params }) => {
     superagents.remove(params.name!);
@@ -1282,7 +1389,7 @@ const router = new Router(mapError)
         effort: optionalString(spec, "effort"),
         accountId: optionalString(spec, "accountId") ?? null,
       },
-      noteCmd: optionalString(b, "noteCmd") ?? null,
+      noteCmd: noteCmdOf(req, b),
       sameSession: b.sameSession === true,
       freshOver: typeof b.freshOver === "number" ? b.freshOver : null,
     });
@@ -1299,7 +1406,7 @@ const router = new Router(mapError)
     if (b.label !== undefined) edit.label = b.label === null ? null : requireString(b, "label");
     if (b.enabled !== undefined) edit.enabled = requireBoolean(b, "enabled");
     if (b.repoId !== undefined) edit.repoId = requireString(b, "repoId");
-    if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : requireString(b, "noteCmd");
+    if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : (requireOwnerOnHub(req, "a schedule's note command runs as the hub's user"), requireString(b, "noteCmd"));
     if (b.sameSession !== undefined) edit.sameSession = requireBoolean(b, "sameSession");
     if (b.freshOver !== undefined) {
       if (b.freshOver !== null && typeof b.freshOver !== "number") throw new HttpError(400, "freshOver must be a number of tokens");
@@ -1324,6 +1431,7 @@ const router = new Router(mapError)
     const who = speaker(b);
     if (!who) throw new HttpError(400, "a wait tells a session how it ended: run this from inside one, or name it with --for <session id>");
     const spec = (b.spec && typeof b.spec === "object" ? { ...b.spec } : {}) as Record<string, unknown>;
+    if (spec.kind === "until") requireOwnerOnHub(req, "a wait's until command runs as the hub's user");
     // A pull request as it was typed, a run with no repo named: the repo is the caller's.
     if (spec.kind === "pr" && b.pr !== undefined) Object.assign(spec, prNamed(b, who));
     const cwd = optionalString(b, "cwd");
@@ -1346,6 +1454,9 @@ const router = new Router(mapError)
     if (!CARD_KINDS.includes(kind)) throw new HttpError(400, `kind is one of ${CARD_KINDS.join(", ")}`);
     const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
     const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
+    // On a hub, the member it is for (docs/hub.md); anywhere else there is only the owner.
+    const person = optionalString(b, "person")?.trim().toLowerCase() || null;
+    if (person && hubRole() === "hub" && !readMembers()?.some((m) => m.login === person)) throw new HttpError(400, `${person} is not a member of this hub`);
     return json(
       cards.add({
         kind,
@@ -1361,6 +1472,7 @@ const router = new Router(mapError)
         about: id(b.about),
         at: typeof b.at === "number" && b.at > 0 ? b.at : null,
         notify: b.notify !== false,
+        person,
       }),
       201,
     );
@@ -1369,14 +1481,18 @@ const router = new Router(mapError)
   .add("POST", "/api/cards/:id/answer", async ({ req, params }) => {
     const b = await readBody(req);
     if (typeof b.text !== "string") throw new HttpError(400, "text must be a string");
-    return json(cards.answer(cardId(params.id!), b.text));
+    const p = personOf(req);
+    return json(cards.answer(cardId(params.id!), b.text, p.login ? { login: p.login, name: p.name } : null));
   })
   .add("POST", "/api/cards/:id/later", ({ params }) => json(cards.later(cardId(params.id!))))
   .add("POST", "/api/cards/:id/undo", ({ params }) => json(cards.undo(cardId(params.id!))))
   .add("POST", "/api/cards/:id/ack", ({ params }) => json(cards.ack(cardId(params.id!))))
   .add("POST", "/api/cards/:id/close", async ({ req, params }) => {
     const b = await readBody(req);
-    return json(cards.close(cardId(params.id!), typeof b.why === "string" ? b.why : ""));
+    // Settled by a person's decision elsewhere, a superagent's page: who (its `caller.person`).
+    const by = b.by as { login?: unknown; name?: unknown } | undefined;
+    const decided = by && typeof by.login === "string" && by.login ? { login: by.login.slice(0, 200), name: typeof by.name === "string" ? by.name.slice(0, 200) : by.login.slice(0, 200) } : null;
+    return json(cards.close(cardId(params.id!), typeof b.why === "string" ? b.why : "", decided));
   })
   // What `agentbox watch` needs of each session, closed ones too (it must see
   // a reopen as one), and nothing else. With `after`, the rows it already has,
@@ -1570,13 +1686,15 @@ const router = new Router(mapError)
     return json(next);
   })
   // ---- notifications (src/core/push.ts)
-  .add("GET", "/api/push", async () =>
-    json({ publicKey: await pushPublicKey(), devices: pushSubscriptions().map((d) => ({ endpoint: d.endpoint, userAgent: d.userAgent, createdAt: d.createdAt })) }),
+  .add("GET", "/api/push", async ({ req }) =>
+    json({ publicKey: await pushPublicKey(), devices: subscriptionsOf(pushToPerson(personOf(req))).map((d) => ({ endpoint: d.endpoint, userAgent: d.userAgent, createdAt: d.createdAt })) }),
   )
   .add("POST", "/api/push/subscribe", async ({ req }) => {
     let sub;
+    // The device is the person's who turned it on: their cards come to it (docs/hub.md).
+    const p = personOf(req);
     try {
-      sub = parseSubscription(await readBody(req), req.headers.get("user-agent"));
+      sub = parseSubscription(await readBody(req), req.headers.get("user-agent"), { login: p.login, owner: p.role === "owner" });
     } catch (e) {
       throw e instanceof HttpError ? e : new HttpError(400, (e as Error).message);
     }
@@ -1587,9 +1705,10 @@ const router = new Router(mapError)
     removeSubscription(requireString(await readBody(req), "endpoint"));
     return json(null);
   })
-  .add("POST", "/api/push/test", async () => {
-    if (pushSubscriptions().length === 0) throw new HttpError(409, "no device has notifications turned on");
-    return json(await pushToAll({ title: "agentbox", body: "Notifications work on this device.", url: "/#/sessions", tag: "test" }));
+  .add("POST", "/api/push/test", async ({ req }) => {
+    const to = pushToPerson(personOf(req));
+    if (subscriptionsOf(to).length === 0) throw new HttpError(409, "no device of yours has notifications turned on");
+    return json(await pushTo(to, { title: "agentbox", body: "Notifications work on this device.", url: "/#/sessions", tag: "test" }));
   })
   // The new-session dialog's folder field (src/core/dirs.ts).
   .add("GET", "/api/dirs", ({ url }) => json(completeDir(url.searchParams.get("path") ?? "")))
@@ -1735,6 +1854,7 @@ const hubDeps: HubDeps = {
   nodes: hubNodes,
   openSessions: () => hotState(true).sessions,
   accountViews,
+  placedOpen,
   peerOf: (req) => peerOfReq.get(req) ?? null,
   whois: (ip) => peerCheck?.whois(ip) ?? Promise.resolve(null),
 };
@@ -1971,6 +2091,8 @@ export async function startServer(): Promise<void> {
     if (url.pathname.startsWith("/api/node/")) return nodeRequest(req, url, srv, door.source ?? null, upgrade);
     if (url.pathname === "/ws/voice") {
       if (!upgrade) return fail("voice requires a WebSocket upgrade", 426);
+      const refused = roleRefusal(req, url.pathname);
+      if (refused) return fail(refused, 403);
       const convId = url.searchParams.get("c") ?? "";
       if (!/^[a-z0-9-]{8,64}$/.test(convId)) return fail("voice needs a conversation id", 400);
       return srv.upgrade(req, { data: { kind: "voice", convId } }) ? undefined : fail("websocket upgrade failed", 500);
@@ -2000,6 +2122,9 @@ export async function startServer(): Promise<void> {
       /* not an id: the router answers it */
     }
     if (target) return hubNodes.proxy(req, url, target, m![2] ?? "", personOf(req));
+    // On a hub, what is the owner's alone (src/server/roles.ts).
+    const refused = roleRefusal(req, url.pathname);
+    if (refused) return Promise.resolve(fail(refused, 403));
     return router.handle(req);
   };
 
@@ -2020,6 +2145,16 @@ export async function startServer(): Promise<void> {
       if (!upgrade) return fail("/api/node/ws requires a WebSocket upgrade", 426);
       const hub = url.searchParams.get("watch") ? ("watch" as const) : ("state" as const);
       return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false, person, hub, hubToken: link.token } }) ? undefined : fail("websocket upgrade failed", 500);
+    }
+    // A session the hub starts here, on this node's own start path and rules.
+    if (rest === "/sessions" && req.method === "POST") {
+      const local = asLocalRequest(req, url, "/api/sessions", PORT);
+      const ok = checkRequest(local, PORT);
+      if (!ok.ok) return fail(ok.reason, 403);
+      setPerson(local, person);
+      startsForHub.set(local, link);
+      auditHubAction(person, req.method, url.pathname);
+      return router.handle(local);
     }
     const term = rest.match(/^\/ws\/term\/([a-z0-9]+)$/);
     if (term) {

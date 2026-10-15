@@ -18,6 +18,8 @@ const membersPath = (): string => join(hubDir(), "members.json");
 const nodesPath = (): string => join(hubDir(), "nodes.json");
 const linkPath = (): string => join(hubDir(), "link.json");
 const auditPath = (): string => join(hubDir(), "audit.jsonl");
+const placedPath = (): string => join(hubDir(), "placed.json");
+const parentsPath = (): string => join(hubDir(), "parents.json");
 
 /** A node that asked to join, approved or not. */
 export interface NodeRecord {
@@ -171,9 +173,23 @@ function cached<T>(path: () => string, parse: (v: unknown) => T) {
   };
 }
 
+function parsePlaced(v: unknown): string[] {
+  const ids = (v as { sessions?: unknown })?.sessions;
+  if (!Array.isArray(ids)) throw new Error("placed.json has no sessions list");
+  return ids.filter((x): x is string => typeof x === "string");
+}
+
+function parseParents(v: unknown): Record<string, string> {
+  const o = (v as { parents?: unknown })?.parents;
+  if (!o || typeof o !== "object") throw new Error("parents.json has no parents");
+  return Object.fromEntries(Object.entries(o).filter((e): e is [string, string] => typeof e[1] === "string"));
+}
+
 const membersFile = cached(membersPath, parseMembers);
 const nodesFile = cached(nodesPath, parseNodes);
 const linkFile = cached(linkPath, parseLink);
+const placedFile = cached(placedPath, parsePlaced);
+const parentsFile = cached(parentsPath, parseParents);
 
 /** The hub's members, or null when this machine is not a hub. */
 export const readMembers = (): HubMember[] | null => membersFile().value;
@@ -212,6 +228,27 @@ export function writeLink(link: Link): void {
 
 export function removeLink(): void {
   rmSync(linkPath(), { force: true });
+  // What the hub started here was the link's; a new link starts from none.
+  rmSync(placedPath(), { force: true });
+}
+
+/** How many ids each list keeps: the newest, far more than are ever open. */
+const KEEP = 2000;
+
+/** On a node: the sessions its hub started here (`maxSessions` counts the open ones). */
+export const readPlaced = (): string[] => placedFile().value ?? [];
+
+export function addPlaced(id: string): void {
+  writePrivate(placedPath(), { sessions: [...readPlaced().filter((x) => x !== id), id].slice(-KEEP) });
+}
+
+/** On a hub: the parent it gave each session it started on a node, which the
+ *  node cannot know, by `<node id>:<its id there>`. */
+export const readParents = (): Record<string, string> => parentsFile().value ?? {};
+
+export function setParent(key: string, parent: string): void {
+  const all = Object.entries(readParents()).filter(([k]) => k !== key);
+  writePrivate(parentsPath(), { parents: Object.fromEntries([...all, [key, parent]].slice(-KEEP)) });
 }
 
 export const linkExists = (): boolean => existsSync(linkPath());

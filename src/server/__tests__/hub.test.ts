@@ -13,11 +13,25 @@
  * Devices: owner@team 127.0.0.4, member@team 127.0.0.5, stranger@team
  * 127.0.0.6 (on the tailnet, not a member), another tagged box 127.0.0.7,
  * solo@team's phone 127.0.0.9.
+ *
+ * Phase 2 (placement): both the hub and the node register acme/app, a clone
+ * of a bare repo standing in for GitHub (each machine's ~/.gitconfig sends
+ * github.com/acme/app there). Only the node can run codex: a stand-in `codex`
+ * on its PATH and an API-key login, so the hub, whose codex account is not
+ * logged in, has no room for one. Push services are an HTTPS sink on
+ * loopback that counts what each device was sent.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
+import { choose, type Machine as Place } from "../placement";
+import { Ctx } from "../../../superagents/salus/lib/ctx";
+import { Settings, writeSettings } from "../../../superagents/salus/lib/settings";
+import { Store } from "../../../superagents/salus/lib/store";
+import { record } from "../../../superagents/salus/lib/tick";
+import { startTriage } from "../../../superagents/salus/lib/triage";
 
 const ROOT = mkdtempSync(join(tmpdir(), "agentbox-hub-test-"));
 const BIN = join(import.meta.dir, "..", "..", "..", "bin", "agentbox");
@@ -36,7 +50,7 @@ const PEERS = {
 
 type Machine = { name: string; ip: string; port: number; env: Record<string, string>; home: string; proc: ReturnType<typeof Bun.spawn> | null; log: string };
 
-function machine(name: string, ip: string, port: number, self: Record<string, unknown>): Machine {
+function machine(name: string, ip: string, port: number, self: Record<string, unknown>, extra: Record<string, string> = {}): Machine {
   const home = join(ROOT, name);
   mkdirSync(join(home, "ab"), { recursive: true });
   const seam = join(ROOT, `${name}-seam.json`);
@@ -53,6 +67,7 @@ function machine(name: string, ip: string, port: number, self: Record<string, un
     AGENTBOX_TMUX_SOCKET: `agentbox-hubtest-${name}-${process.pid}`,
     AGENTBOX_TAILNET: "0",
     AGENTBOX_TAILNET_SEAM: seam,
+    ...extra,
   });
   return { name, ip, port, env, home, proc: null, log: join(ROOT, `${name}.log`) };
 }
@@ -135,17 +150,114 @@ function plantSession(m: Machine): void {
   writeFileSync(join(dir, `${SESSION_UUID}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
 }
 
-const hub = machine("hubbox", "127.0.0.2", 47911, { userId: 10, login: null, tags: ["tag:server"] });
-const node = machine("nodebox", "127.0.0.3", 47912, { userId: 10, login: null, tags: ["tag:server"] });
-const solo = machine("solobox", "127.0.0.10", 47913, { userId: 30, login: "solo@team", displayName: "Solo" });
+const git = (cwd: string, ...args: string[]): string => {
+  const r = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", ...args], { cwd, stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr.toString()}`);
+  return r.stdout.toString().trim();
+};
+
+/** GitHub's acme/app, as a bare repo; its main's commit. */
+const ORIGIN = join(ROOT, "origin.git");
+let MAIN_SHA = "";
+function plantOrigin(): void {
+  const work = join(ROOT, "origin-work");
+  mkdirSync(work, { recursive: true });
+  git(work, "init", "-q");
+  writeFileSync(join(work, "README.md"), "acme/app\n");
+  git(work, "add", "README.md");
+  git(work, "commit", "-q", "-m", "first");
+  git(ROOT, "clone", "-q", "--bare", work, ORIGIN);
+  MAIN_SHA = git(ORIGIN, "rev-parse", "main");
+}
+
+/** A clone of acme/app on a machine, its origin named as GitHub's. */
+function plantClone(m: Machine): string {
+  const dir = join(m.home, "app");
+  git(ROOT, "clone", "-q", ORIGIN, dir);
+  git(dir, "remote", "set-url", "origin", "https://github.com/acme/app.git");
+  return dir;
+}
+
+/** Registered as acme/app; from then on the machine's git fetches GitHub's acme/app from the bare repo. */
+async function registerRepo(m: Machine, dir: string): Promise<string> {
+  const r = await local(m, "POST", "/api/repos", { ref: dir });
+  expect(r.status).toBe(201);
+  expect(r.data.fullName).toBe("acme/app");
+  writeFileSync(join(m.home, ".gitconfig"), `[url "${ORIGIN}"]\n\tinsteadOf = https://github.com/acme/app.git\n`);
+  return r.data.id;
+}
+
+/** A `codex` that answers --version and otherwise sits, and a login it is happy with. */
+function plantCodex(m: Machine): string {
+  const bin = join(ROOT, `${m.name}-bin`);
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "codex"), '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.200.0"; exit 0; fi\nexec sleep 600\n');
+  chmodSync(join(bin, "codex"), 0o755);
+  mkdirSync(join(m.home, ".codex"), { recursive: true });
+  writeFileSync(join(m.home, ".codex", "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-test" }));
+  return bin;
+}
+
+/** Push services: an HTTPS sink that counts the messages each device was sent. */
+const pushed = new Map<string, number>();
+let sink: ReturnType<typeof Bun.serve> | null = null;
+function startSink(): void {
+  const key = join(ROOT, "sink.key");
+  const cert = join(ROOT, "sink.crt");
+  const r = Bun.spawnSync(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=127.0.0.1"], { stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`openssl: ${r.stderr.toString()}`);
+  sink = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    tls: { key: Bun.file(key), cert: Bun.file(cert) },
+    fetch: (req) => {
+      const path = new URL(req.url).pathname;
+      pushed.set(path, (pushed.get(path) ?? 0) + 1);
+      return new Response(null, { status: 201 });
+    },
+  });
+}
+
+/** A browser's push subscription for a device whose sink path is `name`. */
+async function subscription(name: string): Promise<Record<string, unknown>> {
+  const pair = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])) as CryptoKeyPair;
+  const p256dh = Buffer.from(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey))).toString("base64url");
+  const auth = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url");
+  return { endpoint: `https://127.0.0.1:${sink!.port}/${name}`, keys: { p256dh, auth } };
+}
+
+/** A port nothing holds, a closing socket's TIME-WAIT included: a fixed one
+ *  is refused for a minute after the last run (the server's port hold does
+ *  not reuse it). */
+function freePort(): number {
+  const l = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const port = l.port;
+  l.stop(true);
+  return port;
+}
+
+const NODE_BIN = join(ROOT, "nodebox-bin");
+// The hub posts to the sink's own certificate.
+const hub = machine("hubbox", "127.0.0.2", freePort(), { userId: 10, login: null, tags: ["tag:server"] }, { NODE_TLS_REJECT_UNAUTHORIZED: "0" });
+const node = machine("nodebox", "127.0.0.3", freePort(), { userId: 10, login: null, tags: ["tag:server"] }, { PATH: `${NODE_BIN}:${process.env.PATH}` });
+const solo = machine("solobox", "127.0.0.10", freePort(), { userId: 30, login: "solo@team", displayName: "Solo" });
+let hubRepoId = "";
 
 beforeAll(async () => {
   plantSession(node);
   plantSession(solo);
+  plantCodex(node);
+  plantOrigin();
+  const hubClone = plantClone(hub);
+  const nodeClone = plantClone(node);
+  startSink();
   await Promise.all([start(hub), start(node), start(solo)]);
+  hubRepoId = await registerRepo(hub, hubClone);
+  await registerRepo(node, nodeClone);
 }, 60_000);
 
 afterAll(async () => {
+  sink?.stop(true);
   await Promise.all([hub, node, solo].map(stop));
   for (const m of [hub, node, solo]) Bun.spawnSync(["tmux", "-L", m.env.AGENTBOX_TMUX_SOCKET!, "kill-server"], { stderr: "ignore" });
   if (!process.env.AGENTBOX_KEEP_HUB_TEST) rmSync(ROOT, { recursive: true, force: true });
@@ -317,6 +429,161 @@ describe("a hub and a node", () => {
     expect(noHeader.status).toBe(403);
   });
 
+  // ---- phase 2: placement, worktrees at a ref, superagents, people
+
+  test("a node refuses starts until its owner lends them, and then within its limit", async () => {
+    const body = { provider: "codex", node: "nodebox", repo: "acme/app", ref: "main", readOnly: true, notify: false, prompt: "look around" };
+    const no = await from("127.0.0.5", hub, "POST", "/api/sessions", { body });
+    expect(no.status).toBe(403);
+    expect(no.error).toContain("nodebox does not take starts");
+    // Auto has nowhere either: the hub has no codex account with room, the node takes no starts.
+    const none = await from("127.0.0.5", hub, "POST", "/api/sessions", { body: { ...body, node: "auto" } });
+    expect(none.status).toBe(409);
+    expect(none.error).toContain("no machine can take it");
+    expect(none.error).toContain("nodebox: it does not take starts");
+
+    expect((await local(node, "PATCH", "/api/hub/link", { lend: { acceptStarts: true, maxSessions: 1 } })).status).toBe(200);
+    await eventually("the hub to hear the node lends starts", async () => {
+      const v = (await local(hub, "GET", "/api/hub")).data.nodes.find((x: { name: string }) => x.name === "nodebox");
+      return v?.reachable && v.lend?.acceptStarts && v.repos?.some((r: { fullName: string }) => r.fullName === "acme/app") && v.headroom?.some((h: { provider: string; eligible: boolean }) => h.provider === "codex" && h.eligible);
+    }, 30_000);
+  }, 60_000);
+
+  let placedId = "";
+  test("auto places a repo-and-ref start on the node with room, which cuts a detached worktree at the fetched commit", async () => {
+    const r = await from("127.0.0.5", hub, "POST", "/api/sessions", { body: { provider: "codex", node: "auto", repo: "acme/app", ref: "main", readOnly: true, notify: false, prompt: "read the README" } });
+    expect(r.status).toBe(201);
+    expect(r.data.node).toBe("nodebox");
+    expect(r.data.session.node).toBe("nodebox");
+    placedId = r.data.session.id;
+    const cwd = r.data.session.cwd as string;
+    // On the node's disk, under its own worktree root: at origin's main, detached, and nobody's branch.
+    expect(cwd.startsWith(node.home)).toBe(true);
+    expect(git(cwd, "rev-parse", "HEAD")).toBe(MAIN_SHA);
+    expect(Bun.spawnSync(["git", "symbolic-ref", "-q", "HEAD"], { cwd }).exitCode).not.toBe(0);
+    // The hub shows it as the node's, and the node knows who asked.
+    await eventually("the placed session on the hub's board", async () => (await local(hub, "GET", "/api/state")).data.sessions.find((x: { id: string; node?: string }) => x.id === placedId && x.node === "nodebox"));
+    const audit = readFileSync(join(node.home, "ab", "hub", "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit.some((a: { path: string; person: { login: string } }) => a.path === "/api/node/sessions" && a.person.login === "member@team")).toBe(true);
+  }, 60_000);
+
+  test("a node at its limit refuses another start, and says why", async () => {
+    const body = { provider: "codex", repo: "acme/app", ref: "main", readOnly: true, notify: false, prompt: "again" };
+    const named = await from("127.0.0.5", hub, "POST", "/api/sessions", { body: { ...body, node: "nodebox" } });
+    expect(named.status).toBe(409);
+    expect(named.error).toContain("at its limit");
+    const auto = await from("127.0.0.5", hub, "POST", "/api/sessions", { body: { ...body, node: "auto" } });
+    expect(auto.status).toBe(409);
+    expect(auto.error).toContain("limit");
+    // An account the node does not lend is refused outright.
+    await local(node, "PATCH", "/api/hub/link", { lend: { accounts: [] } });
+    const lent = await from("127.0.0.5", hub, "POST", "/api/sessions", { body: { ...body, node: "nodebox", accountId: "not-lent" } });
+    expect([403, 409]).toContain(lent.status);
+    await local(node, "PATCH", "/api/hub/link", { lend: { accounts: "all" } });
+  }, 60_000);
+
+  test("closing a placed session through the hub removes the worktree it was cut", async () => {
+    await eventually("the hub to reach the node again", async () => (await local(hub, "GET", `/api/sessions/${placedId}/timeline`)).status !== 502, 30_000);
+    const cwd = (await local(node, "GET", "/api/state")).data.sessions.find((x: { id: string }) => x.id === placedId).cwd;
+    const r = await from("127.0.0.5", hub, "POST", `/api/sessions/${placedId}/close`, { body: { closed: true, removeWorktree: true } });
+    expect(r.status).toBe(200);
+    expect(r.data.worktreeRemoved).toBe(true);
+    expect(existsSync(cwd)).toBe(false);
+  }, 60_000);
+
+  test("Salus starts its triage where there is room: on the node, at the base's commit", async () => {
+    // The lending changed in the test before, so the hub reconnects.
+    await eventually("the node reachable again", async () => (await local(hub, "GET", "/api/hub")).data.nodes.find((x: { name: string; reachable: boolean }) => x.name === "nodebox" && x.reachable), 30_000);
+    // Salus registered on the hub, opted in to "auto"; its program is this test.
+    const dir = join(ROOT, "salus");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "superagent.json"), JSON.stringify({ name: "salus", node: "auto" }));
+    expect((await local(hub, "POST", "/api/superagents", { dir })).status).toBe(201);
+    expect((await local(hub, "GET", "/api/superagents/salus")).data.node).toBe("auto");
+    const home = join(ROOT, "salus-home");
+    mkdirSync(home, { recursive: true });
+    Object.assign(process.env, { AGENTBOX_URL: `http://127.0.0.1:${hub.port}`, AGENTBOX_SUPERAGENT: "salus", AGENTBOX_SUPERAGENT_HOME: home });
+    writeSettings(home, Settings.parse({ enabled: true, projectId: "1", repo: hubRepoId, minCount: 1 }));
+    const asked: string[] = [];
+    const gh = async <T>(path: string): Promise<T> => {
+      asked.push(path);
+      if (path === "repos/acme/app/commits/main") return { sha: MAIN_SHA } as T;
+      throw new Error(`gh ${path}`);
+    };
+    const noGit = async (): Promise<string> => {
+      throw new Error("Salus runs no git of its own for a triage");
+    };
+    const ctx = new Ctx(new Store(new Database(":memory:")), { git: noGit, gh }, home, "agentbox", () => null);
+    const now = Date.now();
+    record(ctx, [{ key: "crash-a", count: 3, first: now - 60_000, last: now, sample: { type: "TypeError", value: "x is undefined", frames: [], url: null, lib: "posthog-node" } }], now);
+    const c = await startTriage(ctx, "crash-a");
+    expect(asked).toEqual(["repos/acme/app/commits/main"]);
+    expect(c.triage).toMatchObject({ base: MAIN_SHA });
+    const id = c.triage!.session!;
+    const row = await eventually("the triage on the hub's board", async () => (await local(hub, "GET", "/api/state")).data.sessions.find((x: { id: string }) => x.id === id));
+    expect(row.node).toBe("nodebox");
+    expect(c.triage!.cwd.startsWith(node.home)).toBe(true);
+    expect(git(c.triage!.cwd, "rev-parse", "HEAD")).toBe(MAIN_SHA);
+    // Done with: closed, and its checkout gone from the node.
+    expect((await local(hub, "POST", `/api/sessions/${id}/close`, { closed: true, removeWorktree: true })).data.worktreeRemoved).toBe(true);
+    for (const k of ["AGENTBOX_URL", "AGENTBOX_SUPERAGENT", "AGENTBOX_SUPERAGENT_HOME"]) delete process.env[k];
+  }, 60_000);
+
+  test("a card for a member is pushed to that member's devices only; one for nobody, to the owner's", async () => {
+    expect((await from("127.0.0.4", hub, "POST", "/api/push/subscribe", { body: await subscription("owner-phone") })).status).toBe(200);
+    expect((await from("127.0.0.5", hub, "POST", "/api/push/subscribe", { body: await subscription("member-phone") })).status).toBe(200);
+    // Each sees only their own devices.
+    expect((await from("127.0.0.5", hub, "GET", "/api/push")).data.devices.map((d: { endpoint: string }) => d.endpoint.split("/").pop())).toEqual(["member-phone"]);
+    // A card names a member, or nobody.
+    expect((await local(hub, "POST", "/api/cards", { kind: "decision", title: "x", short: "y", person: "stranger@team" })).status).toBe(400);
+    const mine = await local(hub, "POST", "/api/cards", { kind: "decision", title: "Member's call", short: "Yours to decide.", person: "Member@Team" });
+    expect(mine.data.person).toBe("member@team");
+    await local(hub, "POST", "/api/cards", { kind: "decision", title: "Owner's call", short: "The owner's." });
+    // New decisions are pushed as one batch, 20 seconds after the first.
+    await eventually("the batch to be pushed", async () => (pushed.get("/member-phone") ?? 0) > 0 && (pushed.get("/owner-phone") ?? 0) > 0, 40_000);
+    await Bun.sleep(1_000);
+    expect(pushed.get("/member-phone")).toBe(1);
+    expect(pushed.get("/owner-phone")).toBe(1);
+    // A test push from a member reaches their device, not the owner's.
+    expect((await from("127.0.0.5", hub, "POST", "/api/push/test")).data.sent).toBe(1);
+    expect(pushed.get("/member-phone")).toBe(2);
+    expect(pushed.get("/owner-phone")).toBe(1);
+    // Who answered is on the card.
+    const answered = await from("127.0.0.5", hub, "POST", `/api/cards/${mine.data.id}/answer`, { body: { text: "go ahead" } });
+    expect(answered.data.decidedBy).toEqual({ login: "member@team", name: "Member" });
+  }, 60_000);
+
+  test("what is the owner's alone is refused to a member; a member still starts and reads", async () => {
+    const refused: [string, string, unknown?][] = [
+      ["PUT", "/api/settings", {}],
+      ["POST", "/api/superagents", { dir: "/tmp" }],
+      ["DELETE", "/api/superagents/salus"],
+      ["PATCH", "/api/superagents/salus", { node: null }],
+      ["POST", "/api/accounts", { provider: "codex" }],
+      ["PATCH", "/api/accounts/anything", { enabled: false }],
+      ["POST", "/api/mcp/servers", { name: "x", command: "true" }],
+      ["PATCH", `/api/repos/${hubRepoId}`, { setup: { copy: [], run: "touch /tmp/pwned" } }],
+      ["POST", "/api/worktrees/reclaim", { paths: [] }],
+      ["POST", "/api/waits", { session: "abc123", spec: { kind: "until", cmd: "true", cwd: "/" } }],
+      ["POST", "/api/schedules", { when: "in 4 hours", spec: { provider: "codex", cwd: "/tmp" }, noteCmd: "true" }],
+    ];
+    for (const [method, path, body] of refused) {
+      const r = await from("127.0.0.5", hub, method, path, { body });
+      expect({ method, path, status: r.status }).toEqual({ method, path, status: 403 });
+      expect(r.error).toContain("only the hub's owner");
+    }
+    expect((await from("127.0.0.5", hub, "GET", "/ws/voice?c=abcdefgh", { headers: { upgrade: "websocket", connection: "upgrade", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", "sec-websocket-version": "13" } })).status).toBe(403);
+    // Reads stay open, and the owner may.
+    expect((await from("127.0.0.5", hub, "GET", "/api/accounts")).status).toBe(200);
+    expect((await from("127.0.0.5", hub, "GET", "/api/settings")).status).toBe(200);
+    expect((await from("127.0.0.4", hub, "PUT", "/api/settings", { body: {} })).status).toBe(200);
+    expect((await from("127.0.0.4", hub, "PATCH", "/api/superagents/salus", { body: { node: "local" } })).data.node).toBeNull();
+    // With no hub, the machine's owner on the tailnet is refused nothing.
+    expect((await from("127.0.0.9", solo, "PUT", "/api/settings", { body: {} })).status).toBe(200);
+    // And a start with a node is a hub's alone.
+    expect((await local(solo, "POST", "/api/sessions", { provider: "codex", node: "auto", repo: "acme/app" })).status).toBe(409);
+  }, 60_000);
+
   test("a node that goes away stays listed, marked away, and comes back", async () => {
     await stop(node);
     const row = await eventually("the session marked away", async () => {
@@ -347,5 +614,50 @@ describe("a hub and a node", () => {
     await eventually("the session gone from the hub", async () => !(await local(hub, "GET", "/api/state")).data.sessions.some((x: { id: string }) => x.id === sessionId));
     // The old token opens nothing.
     expect((await from("127.0.0.2", node, "GET", "/api/node/state", { headers: { "x-agentbox-hub-token": token } })).status).toBe(403);
+  });
+});
+
+describe("auto placement chooses by room", () => {
+  const room = (weekly: number | null, short: number | null = null) => [{ id: "a", provider: "codex" as const, label: "a", eligible: true, weekly, short, weeklyResetsAt: null, shortResetsAt: null }];
+  const repos = [{ fullName: "acme/app", displayName: "app" }];
+  const m = (node: string | null, over: Partial<Place> = {}): Place => ({ node, reachable: true, lend: { acceptStarts: true, maxSessions: null }, headroom: room(50), repos, placed: 0, ...over });
+  const want = { provider: "codex" as const, repo: "acme/app" };
+
+  test("the most room wins, measured by an account's fuller window; the hub wins a tie", () => {
+    expect(choose([m(null, { headroom: room(60) }), m("a", { headroom: room(20) }), m("b", { headroom: room(10, 70) })], want)).toMatchObject({ ok: true, node: "a", room: 80 });
+    expect(choose([m(null), m("a")], want)).toMatchObject({ ok: true, node: null });
+  });
+
+  test("away, closed to starts, at its limit, without the repo or without a lent account with room: not a candidate", () => {
+    const c = choose(
+      [
+        m(null, { headroom: [] }),
+        m("away", { reachable: false, headroom: room(0) }),
+        m("closed", { lend: { acceptStarts: false, maxSessions: null }, headroom: room(0) }),
+        m("full", { lend: { acceptStarts: true, maxSessions: 2 }, placed: 2, headroom: room(0) }),
+        m("norepo", { repos: [], headroom: room(0) }),
+        m("private", { headroom: null }),
+        m("spent", { headroom: [{ ...room(100)[0]!, eligible: false }] }),
+        m("ok", { headroom: room(95) }),
+      ],
+      want,
+    );
+    expect(c).toMatchObject({ ok: true, node: "ok", room: 5 });
+    if (!c.ok) return;
+    expect(Object.fromEntries(c.considered.map((x) => [x.node ?? "hub", x.why]))).toEqual({
+      hub: "it has no codex account with room",
+      away: "it is away",
+      closed: "it does not take starts from the hub",
+      full: "it is at its limit (2 of 2 open)",
+      norepo: "it has no acme/app registered",
+      private: "it does not share its accounts' use",
+      spent: "it has no codex account with room that it lends",
+      ok: null,
+    });
+  });
+
+  test("a start that names a directory, not a repo, stays on the hub", () => {
+    expect(choose([m(null, { headroom: room(90) }), m("a", { headroom: room(0) })], { provider: "codex", repo: null })).toMatchObject({ ok: true, node: null });
+    expect(choose([m(null, { headroom: [] }), m("a", { headroom: room(0) })], { provider: "codex", repo: null })).toMatchObject({ ok: false });
   });
 });

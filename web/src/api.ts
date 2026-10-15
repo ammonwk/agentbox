@@ -146,6 +146,8 @@ export interface NewSessionInput {
   model?: string;
   effort?: string;
   accountId?: string;
+  /** On a hub: a node's name, or "auto" (docs/hub.md). */
+  node?: string;
 }
 
 /** An image saved for a prompt to name: agents read it from `path`. */

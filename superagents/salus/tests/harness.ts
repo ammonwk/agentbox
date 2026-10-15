@@ -15,12 +15,16 @@ export const REPO_ID = "repo1";
 export const MAIN = "salusmain";
 export const SHA = "a".repeat(40);
 
-type FakeSession = { id: string; provider: string; cwd: string; parent: string | null; status: string; host: string };
+type FakeSession = { id: string; provider: string; cwd: string; parent: string | null; status: string; host: string; firstPrompt?: string | null };
 
 export class FakeAgentbox {
   sessions: FakeSession[] = [{ id: MAIN, provider: "claude", cwd: "/", parent: null, status: "waiting", host: "tmux" }];
   starts: Record<string, unknown>[] = [];
   closed: string[] = [];
+  /** Each close's body, by session. */
+  closes = new Map<string, Record<string, unknown>>();
+  /** Where the superagent's sessions start when it does not say (a hub's `node`). */
+  node: string | null = null;
   chats: { text: string; sendId: string }[] = [];
   cards: { id: number; key: string | null; kind: string; title: string; notify: boolean }[] = [];
   timelines = new Map<string, { kind: string; text: string }[]>();
@@ -54,7 +58,7 @@ export class FakeAgentbox {
     const body = req.method === "GET" ? {} : ((await req.json().catch(() => ({}))) as Record<string, unknown>);
     let m: RegExpExecArray | null;
     if (req.method === "GET" && path === "/api/state") return this.json({ sessions: this.sessions, repos: [{ id: REPO_ID, ref: this.checkout, kind: "local", displayName: "app", fullName: REPO, defaultBranch: "main" }] });
-    if (req.method === "GET" && path === "/api/superagents/salus") return this.json({ name: "salus", main: this.main, previous: [] });
+    if (req.method === "GET" && path === "/api/superagents/salus") return this.json({ name: "salus", main: this.main, previous: [], node: this.node });
     if (req.method === "POST" && path === "/api/superagents/salus/chat") {
       if (!this.chats.some((c) => c.sendId === body.sendId)) this.chats.push({ text: String(body.text), sendId: String(body.sendId) });
       return this.json({ session: MAIN, started: false });
@@ -65,13 +69,17 @@ export class FakeAgentbox {
     }
     if (req.method === "POST" && path === "/api/sessions") {
       this.starts.push(body);
-      const s = { id: `t${this.starts.length}`, provider: String(body.provider), cwd: String(body.cwd), parent: (body.parent as string) ?? null, status: "running", host: "tmux" };
+      // Agentbox cuts a repo-and-ref start's checkout itself, where it runs.
+      const id = `t${this.starts.length}`;
+      const cwd = body.cwd ? String(body.cwd) : `/worktrees/${id}`;
+      const s = { id, provider: String(body.provider), cwd, parent: (body.parent as string) ?? null, status: "running", host: "tmux", firstPrompt: (body.prompt as string) ?? null };
       this.sessions.push(s);
       return this.json({ session: s }, 201);
     }
     if ((m = /^\/api\/sessions\/([^/]+)\/timeline$/.exec(path))) return this.json({ events: this.timelines.get(m[1]!) ?? [], before: null });
     if ((m = /^\/api\/sessions\/([^/]+)\/close$/.exec(path))) {
       this.closed.push(m[1]!);
+      this.closes.set(m[1]!, body);
       return this.json(null);
     }
     if (req.method === "POST" && path === "/api/cards") {
@@ -114,6 +122,7 @@ export class FakeGh {
       const since = Date.parse(q.get("created")!.replace(/^>=/, ""));
       return { workflow_runs: this.runs.filter((r) => Date.parse(r.created_at) >= since) } as T;
     }
+    if ((m = /^repos\/acme\/app\/commits\/([^/?]+)$/.exec(path))) return { sha: SHA, ref: decodeURIComponent(m[1]!) } as T;
     if ((m = /^repos\/acme\/app\/compare\/(\w+)\.\.\.(\w+)/.exec(path))) return { status: this.contains.get(m[2]!)?.includes(m[1]!) ? "ahead" : "diverged" } as T;
     if (path.startsWith("search/issues")) return { items: this.searchLags ? [] : this.issues.map((i, n) => ({ html_url: `https://github.com/${REPO}/issues/${n + 1}`, number: n + 1, body: i.body })) } as T;
     if (path === `repos/${REPO}/issues` && method === "POST") {

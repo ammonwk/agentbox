@@ -1306,6 +1306,11 @@ export interface Card {
   sessionId: string | null;
   /** The session it is about, when that is another. */
   about: string | null;
+  /** On a hub (docs/hub.md): the member it is for, whose devices it is
+   *  pushed to; null for the owner's. */
+  person: string | null;
+  /** Who answered or decided it, when a person did. */
+  decidedBy: { login: string; name: string } | null;
   state: CardState;
   /** The user's words; "" when it was only seen. */
   answer: string | null;
@@ -1591,6 +1596,10 @@ export interface SuperagentInfo {
   canStart: boolean;
   /** It has a program (run, or a url) that answers for its page. */
   hasPage: boolean;
+  /** On a hub: where its sessions start when it does not say (`node` in a
+   *  start, docs/hub.md), from its settings or its manifest; null for the hub
+   *  itself, and always null on a machine that is not a hub. */
+  node: string | null;
   /** The program agentbox keeps running for it, when its manifest has `run`. */
   process: {
     state: "running" | "starting" | "backoff" | "stopped";
@@ -1671,11 +1680,13 @@ export interface HubMember {
 
 /** What a node lets the hub use (`link.json`'s `lend`). */
 export interface Lend {
-  /** Most sessions the hub may start here; null for no limit. Phase 2. */
+  /** Most sessions the hub may have open here at once that it started
+   *  itself; null for no limit. */
   maxSessions: number | null;
-  /** Account ids the hub may use, or every one. Only sessions on these are shared. */
+  /** Account ids the hub may use, or every one. Only sessions on these are
+   *  shared, and a session the hub starts here runs on one of them. */
   accounts: "all" | string[];
-  /** Whether the hub may start sessions here. Phase 2; false until then. */
+  /** Whether the hub may start sessions here; false until the node's owner says so. */
   acceptStarts: boolean;
   /** Whether the lent accounts' usage is shown on the hub. */
   shareHeadroom: boolean;
@@ -1699,7 +1710,18 @@ export interface NodeState {
   name: string;
   lend: Lend;
   headroom: NodeHeadroom[] | null;
+  /** The repos registered here, by the names a start may give them. */
+  repos: NodeRepo[];
+  /** Sessions the hub started here that are still open: what `maxSessions` counts. */
+  placed: number;
   sessions?: HotState["sessions"];
+}
+
+/** A repo a node has registered, as the hub matches a start's `repo` against it. */
+export interface NodeRepo {
+  /** Its GitHub `owner/name`, when it has one: the name it goes by on every machine. */
+  fullName: string | null;
+  displayName: string;
 }
 
 /** A node as the hub shows it on Team › Nodes. No token, ever. */
@@ -1721,6 +1743,8 @@ export interface HubNodeView {
   sessions: number;
   lend: Lend | null;
   headroom: NodeHeadroom[] | null;
+  repos: NodeRepo[] | null;
+  placed: number | null;
 }
 
 /** `GET /api/hub`. */

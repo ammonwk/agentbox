@@ -6,8 +6,11 @@ a hub and its nodes add on top. With no hub configured, nothing here runs and
 every machine behaves as v2.md says (the tests in
 `src/server/__tests__/hub.test.ts` hold that).
 
-This is phase 1: seeing and driving sessions where they already run. What
-comes next is at the end.
+Phase 1 is seeing and driving sessions where they already run. Phase 2 is
+starting them: placing a session on a node, a start at a repo and a ref,
+superagents placing their work, cards and pushes for one person, and the line
+between what the owner does and what a member does. What comes next is at the
+end.
 
 ## Roles
 
@@ -24,7 +27,8 @@ comes next is at the end.
   hub join`). A machine is a hub or a node, not both.
 - **Member.** A person on the tailnet whose login is in the hub's
   `members.json`, with a role: `owner` or `member`. The owner edits the member
-  list and approves nodes; a member does everything else.
+  list, approves nodes, and changes what the hub is (Roles on a hub, below); a
+  member starts, reads and types into sessions.
 
 **Sessions are static.** A session lives on one node for its whole life. The
 hub lists it, records which node owns it, and passes its routes and its
@@ -98,13 +102,15 @@ Routes read it with `personOf(req)`. A superagent's action is sent
 in a browser, `api` anything else), so existing programs keep working, and a
 program that cares who can read `caller.person.login`.
 
-**What a member can do.** Anything the hub's API allows, except editing the
-members and approving or removing nodes, which are the owner's. That includes
-starting sessions on the hub and typing into sessions on every node that
-joined it, where agents may run without permission prompts. So: a member is
-trusted with the hub's Unix user (why the hub runs under one of its own), and
-a node's owner who joins a hub trusts its members with the sessions the node
-shares. A node shares only the sessions on the accounts it lends.
+**What a member can do.** Start sessions, on the hub and on any node that
+takes starts; read them; type into them, on every node that joined, where
+agents may run without permission prompts. What changes the hub itself, and
+anything that runs a command as the hub's user outside a session, is the
+owner's (Roles on a hub, below). So: a member is still trusted with the hub's
+Unix user through the sessions they start (why the hub runs under one of its
+own), and a node's owner who joins a hub trusts its members with the sessions
+the node shares and, once it takes starts, with sessions in the repos it has
+registered. A node shares only the sessions on the accounts it lends.
 
 **What a node trusts.** Requests from the hub's tailnet IP that carry the
 link's token, on `/api/node/*` only. Nothing else the hub could send reaches
@@ -149,12 +155,20 @@ There is always exactly one owner. Logins compare case-insensitively.
   "lend": { "maxSessions": null, "accounts": "all", "acceptStarts": false, "shareHeadroom": true } }
 ```
 
-`lend` is the node owner's: `accounts` is `"all"` or a list of account ids,
-and the node shares only sessions on those (and none on an account it does
-not list). `maxSessions` and `acceptStarts` limit starts from the hub, which
-phase 1 does not make; they are recorded and shown now so the hub can honour
-them when it does. `shareHeadroom: false` keeps the node's accounts' usage off
-the hub.
+`lend` is the node owner's (`agentbox hub lend`): `accounts` is `"all"` or a
+list of account ids, and the node shares only sessions on those (and none on
+an account it does not list), and runs the hub's starts only on those.
+`acceptStarts` lets the hub start sessions here at all, and `maxSessions`
+caps how many it started are open at once (Placement). `shareHeadroom: false`
+keeps the node's accounts' usage off the hub, which also keeps `"auto"` from
+choosing it.
+
+`placed.json`, on a node: the ids of the sessions the hub started here, which
+`maxSessions` counts while they are open. Leaving the hub removes it.
+
+`parents.json`, on the hub: the parent the hub gave each session it started
+on a node (`<node id>:<its id there>` → a hub session id), which the node
+cannot know. The hub shows it as that session's parent.
 
 `audit.jsonl`, on a node: one line per mutating request the hub passed
 through: `{at, person, method, path}`.
@@ -204,9 +218,10 @@ Requests the hub sends a node, from the hub's IP with
 
 | method | path | |
 |---|---|---|
-| GET | /api/node/state | `NodeState`: the node's name, lending, the open sessions it shares, and its lent accounts' headroom when it shares that |
+| GET | /api/node/state | `NodeState`: the node's name, lending, the open sessions it shares, its lent accounts' headroom when it shares that, the repos it has registered (`repos`: `{fullName, displayName}`), and how many sessions the hub started there are open (`placed`) |
 | WS | /api/node/ws | the app socket (`/ws`): `hot` and `hotDelta` hold only shared sessions; no `cold` or `metrics`; a `node` frame (`NodeState` without sessions) on connect and every 5 seconds, which is how the hub knows it is there; `watch` works as on `/ws` for a shared session |
 | WS | /api/node/ws/term/:id | `/ws/term/:id` for a shared session |
+| POST | /api/node/sessions | a start from the hub (Placement): `POST /api/sessions` on the node's own path, within what it lends; into `audit.jsonl` |
 | any | /api/node/sessions/:id/… | `/api/sessions/:id/…` for a shared session, with the node's own guards. Each that is not a read goes into `audit.jsonl` with the person (a terminal as `TERM`) |
 | POST | /api/node/leave | the hub ends the link: the node removes `link.json` |
 
@@ -251,9 +266,136 @@ An image pasted into a remote session's composer goes to
 agent reads it by path. A local session's composer keeps using
 `/api/uploads`.
 
-What stays on the hub in phase 1, even for a remote session: anything not
-under `/api/sessions/:id/` (`/api/sessions/changes`, cards, waits, PR claims
-naming it, a superagent's action about it).
+What stays on the hub, even for a remote session: anything not under
+`/api/sessions/:id/` (`/api/sessions/changes`, cards, waits, PR claims naming
+it, a superagent's action about it).
+
+## Placement
+
+`POST /api/sessions` on a hub takes `node`:
+
+- absent or null: this machine, as on any agentbox;
+- a joined node's name: that node;
+- `"auto"`: the machine with the most room that may take it, the hub among
+  them (`src/server/placement.ts`, pure, which says for each machine why it
+  was or was not a candidate).
+
+A machine may take an `"auto"` start when it is reachable, takes starts
+(`acceptStarts`; the hub always does), is below its `maxSessions`, has the
+repo registered, shares its headroom, and has an account for the provider
+(a lent one, on a node) that its balancer finds eligible. Of those, the one
+whose best such account has the most room wins: room is 100 less the
+fuller of its weekly and short windows, the same readings Team › Nodes
+shows. The hub wins a tie, so nothing hops for nothing. When none may, the
+start is refused (409) with every machine's reason: `no machine can take it:
+the hub: it has no codex account with room; nodebox: it is at its limit (2
+of 2 open)`.
+
+**A start on a node names a repo.** The hub's directories mean nothing on a
+node, so a start placed there names a registered repo by its GitHub
+`owner/name` (`repo`; the hub turns its own `repoId`, or a checkout's origin,
+into that name) and runs in a new worktree of the node's clone of it: at
+`ref` when one is given (below), on `branch` when that is, and else a fresh
+worktree from the default branch, never the node owner's own checkout. An
+`"auto"` start that names only a directory stays on the hub; one that names a
+node outright from a checkout is taken there as that checkout's repo.
+`claim` is refused for a node in phase 2, and `cwd` from the hub is refused by
+the node. A hub `parent` (or the session above the CLI's `callerPid`) is kept
+on the hub (`parents.json`).
+
+**The node starts it.** The hub sends the start to `POST /api/node/sessions`
+with the person who asked. The node checks, before anything runs, that its
+owner lets the hub start sessions, that the open sessions the hub started
+there and the starts under way are below `maxSessions`, that the repo is
+registered, and that a named account is lent; then it starts the session on
+its own `POST /api/sessions` path, where its balancer picks among the lent
+accounts as it always picks (`SpawnRequest.accounts`). A refusal comes back
+to whoever asked as it is, prefixed with the node's name (`node nodebox:
+nodebox is at its limit: 2 of the 2 sessions it lends the hub are open`). A
+started session is shown on the hub at once, under its id there, and is the
+node's for its whole life: nothing moves it.
+
+The CLI's `agentbox claude|codex|… --node <name|auto>` sends `node` (with
+`--repo owner/name` and `--ref`), and prints the id of a session that went to
+a node instead of attaching to its terminal. The New Session dialog's Where
+row has a Runs on picker on a hub, for a start in a repo: this machine, Auto,
+or a node (one away, not taking starts or at its limit is greyed with why).
+
+### A start at a repo and a ref
+
+On any machine, a start may name `repo` (a registered repo's id, `owner/name`
+or ref) and `ref` (a branch, tag or commit) in place of a directory. The
+machine that runs it fetches `ref` from origin, checks it out with a detached
+HEAD in a new worktree at `<worktree root>/<session id>`
+(`detachedWorktree` in `src/core/git.ts`), and starts the session there; a
+read-only one gets none of the repo's worktree setup. `POST
+/api/sessions/:id/close` with `removeWorktree: true` removes that worktree
+once the session is done, when nothing in it would be lost: HEAD still
+detached where it was cut (its reflog has the one entry), nothing
+uncommitted. Anything else is left for the reclaim.
+
+This is how Salus triages: it reads the base branch's commit from GitHub,
+starts a read-only Codex session at `{repo: owner/name, ref: <sha>}`, and
+closes it with `removeWorktree` once it has the verdict. It runs no git of its
+own for a triage, so its triages can land on any node that has the repo.
+
+### Superagents
+
+The SDK's `agentbox.start` passes `node` through. Without one, it sends the
+superagent's own default, which is `SuperagentInfo.node`: its setting
+(`PATCH /api/superagents/:name {node}`: `"auto"`, a node's name, `"local"`,
+or null for the manifest's) else its manifest's `node`; null, the hub itself,
+unless one of them opts in, and always null on a machine that is not a hub.
+Salus's manifest opts in to `"auto"`. A main conversation agentbox starts
+from a manifest's `main.start` runs on the hub.
+
+## People: cards, pushes and decisions
+
+A card may name `person`, a member's login. On a hub it must be one (400
+otherwise); a card that names nobody, or the owner, is the owner's. A push
+subscription records the person who turned it on (`personOf`) and whether
+they were the owner; one from before people were recorded is the owner's.
+A new decision is pushed to its person's devices only, one batch per person;
+a session's block is pushed to the owner's devices, as before; a test push
+goes to the caller's own; `GET /api/push` lists the caller's own. On a
+machine that is not a hub every device and every card is the owner's, so
+nothing there changes.
+
+Who decided is kept with the card: `decidedBy`, the person who answered it
+(`POST /api/cards/:id/answer`), or whose decision on a superagent's page
+settled it, which the superagent passes as `by` when it closes the card
+(`agentbox.closeCard(id, why, caller.person)` in the SDK). Vulcan's Feed and
+Salus's Fix and Dismiss record `caller.person` as `decidedBy` the same way.
+
+## Roles on a hub
+
+On a hub, a member is refused (403, `only the hub's owner may do that: …`)
+what changes the hub itself or runs a command as its user outside any
+session (`src/server/roles.ts`, before routing):
+
+| what | routes |
+|---|---|
+| registering, changing or removing a superagent | `POST /api/superagents`, `PATCH`/`DELETE /api/superagents/:name` |
+| the hub's accounts | anything but a read under `/api/accounts` and `/api/logins` |
+| the hub's settings | `PUT /api/settings` |
+| the global MCP servers, which every agent runs | anything but a read under `/api/mcp` |
+| the registered repos, and the setup command a new worktree runs | anything but a read under `/api/repos` |
+| the skills every agent reads | `POST /api/skill/*` |
+| installing the hub's service | `POST /api/onboarding/*` |
+| deleting worktrees | `POST /api/worktrees/reclaim` |
+| acting as the hub on the agentbox cloud | anything but a read under `/api/cloud` |
+| hands-free mode, an agent with a shell | `/ws/voice` |
+| a command run on a timer | a wait whose kind is `until`; a schedule's `noteCmd` |
+
+Editing the members and approving or removing nodes were the owner's in
+phase 1 and still are. A member keeps everything else: starting sessions
+(here or placed), schedules without a command, reading, typing into and
+closing sessions, cards, waits, PR claims, a superagent's page and its
+actions (where the superagent decides who may do what, with
+`caller.person`), restarting a superagent. Reads stay open, settings and
+accounts included. Loopback is the owner, so the CLI and every program and
+session on the hub are too. On a machine that is not a hub every request is
+its owner's and none of this refuses anything.
 
 **When the link ends or changes**, the node closes every socket the hub
 opened with it (state, watches, terminals): on `agentbox hub leave` either
@@ -280,7 +422,8 @@ hand.
 
 ## Testing
 
-`src/server/__tests__/hub.test.ts` runs two real servers on one computer,
+`src/server/__tests__/hub.test.ts` runs three real servers on one computer (a
+hub, a node, and a machine with no hub),
 each with its own `AGENTBOX_HOME`, `HOME`, `AGENTBOX_PORT` and
 `AGENTBOX_TMUX_SOCKET`, and `AGENTBOX_TAILNET=0`. `AGENTBOX_TAILNET_SEAM`
 names a JSON file that stands in for `tailscale status` and `whois`: the
@@ -289,19 +432,30 @@ tailnet listener binds the seam's IP (another loopback address, such as
 seam is read only with `AGENTBOX_TAILNET=0`, so a server on the real tailnet
 never honours the header.
 
-## Phase 2 (not built)
+For phase 2, both the hub and the node register `acme/app`, a clone of a bare
+repo that stands in for GitHub (each machine's `~/.gitconfig` sends
+`github.com/acme/app` there); only the node can run Codex (a stand-in `codex`
+on its PATH and an API-key login); and the push services are an HTTPS sink on
+loopback that counts what each device was sent. It covers a node refusing
+starts until lent and at its limit, `"auto"` choosing it, the detached
+worktree at the fetched commit and its removal on close, Salus starting a
+triage on the node, a member's card pushed to that member only, and the
+owner-only routes refusing a member; `choose` is tested on its own for the
+order by room and every reason a machine is not a candidate.
 
-- **Placement.** Starting a session on a node from the hub: `POST
-  /api/sessions` with `node`, or `node: "auto"` chosen by the lent accounts'
-  headroom and whether the repo is checked out there. The node checks
-  `acceptStarts`, `maxSessions` and the lent accounts before it starts
-  anything.
-- **The superagent SDK's `start`** choosing a node, through the same.
-- **Worktrees a superagent cuts.** Salus makes its own git worktrees on the
-  hub today. A remote start needs to take a repo and a ref so that the node
-  cuts the worktree where the session will run.
-- **Cards and push notifications per person**: who a card is for, and pushing
-  it to that person's devices only.
-- **Uploads for a remote session**, saved on its node.
-- **Setting up Headscale**, and the tailnet ACLs that should back the table
-  above.
+## Next (not built)
+
+- **PR claims and waits for a session on a node.** A claim or a wait naming a
+  remote session is kept on the hub, which cannot see the session's branch
+  or process, and a start placed on a node cannot carry `claim`.
+- **A placed session's parent on the node.** The node does not know a parent
+  that is a hub session (`parents.json` keeps it on the hub only), so closing
+  the hub session does not close what it placed on nodes.
+- **Pushes for a session per person.** A session's blocks go to the owner's
+  devices; a session does not record who started it.
+- **Schedules placed on nodes**, and the New Session dialog's Runs on for a
+  schedule.
+- **Placement from the hub's settings.** Who may place on which node is the
+  node owner's `lend` alone; the hub has no per-member say.
+- **Setting up Headscale**, and the tailnet ACLs that should back the trust
+  table above.

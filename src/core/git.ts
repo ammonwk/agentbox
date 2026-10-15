@@ -313,6 +313,51 @@ export function worktreeForBranch(repo: Repo, id: string, branch: string, pr?: n
 }
 
 /**
+ * A checkout of `ref` (a branch, a tag or a commit) as origin has it now, at
+ * worktreeRoot/<id>, with a detached HEAD: for a session that reads the code
+ * at that point and makes no branch of its own (docs/hub.md, a start's `repo`
+ * and `ref`). The ref is fetched first, so where it is cut does not depend on
+ * how stale this machine's clone is; offline, a ref the clone already has is
+ * used as it is. `sha` is the commit it was cut at.
+ */
+export function detachedWorktree(repo: Repo, id: string, ref: string): { path: string; sha: string } {
+  if (!/^[\w./-]{1,200}$/.test(ref) || ref.startsWith("-") || ref.includes("..")) throw new Error(`not a ref: ${ref}`);
+  const { path: repoPath } = ensureRepoClone(repo);
+  mkdirSync(worktreeRoot(), { recursive: true });
+  const abs = join(worktreeRoot(), id);
+  run(["git", "worktree", "prune"], repoPath);
+  if (existsSync(abs) && readdirSync(abs).length > 0) throw new Error(`worktree path is already occupied: ${abs}`);
+  const fetched = run(["git", "fetch", "--quiet", "origin", ref], repoPath);
+  let sha = fetched.code === 0 ? run(["git", "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"], repoPath).stdout.trim() : "";
+  if (!sha) sha = run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoPath).stdout.trim();
+  if (!sha) throw new Error(`"${ref}" is not on origin or in this repo${fetched.code !== 0 ? ` (fetch: ${firstLine(fetched.stderr) || `exit ${fetched.code}`})` : ""}`);
+  const r = run(["git", "worktree", "add", "--detach", abs, sha], repoPath);
+  if (r.code !== 0) throw new Error(`worktree add failed: ${firstLine(r.stderr) || `exit ${r.code}`}`);
+  return { path: abs, sha };
+}
+
+/**
+ * Remove a worktree cut by `detachedWorktree` once its session is done with
+ * it, when nothing would be lost: its HEAD is detached, nothing in it is
+ * uncommitted, and HEAD has not moved since it was cut (its reflog has the
+ * one entry `worktree add` wrote), so it holds no commit of its own. Anything
+ * else is left for the reclaim (src/core/worktrees.ts) to judge. Says
+ * whether it went.
+ */
+export function removeDetachedWorktree(worktreePath: string): boolean {
+  if (!existsSync(worktreePath) || !isGitRepo(worktreePath)) return false;
+  if (run(["git", "symbolic-ref", "--quiet", "HEAD"], worktreePath).code === 0) return false;
+  const status = run(["git", "status", "--porcelain"], worktreePath);
+  if (status.code !== 0 || status.stdout.trim()) return false;
+  const moves = run(["git", "reflog", "show", "--format=%H", "HEAD"], worktreePath);
+  if (moves.code !== 0 || moves.stdout.trim().split("\n").length !== 1) return false;
+  const common = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], worktreePath).stdout.trim();
+  if (!common) return false;
+  removeWorktreeAt(dirname(common), worktreePath);
+  return !existsSync(worktreePath);
+}
+
+/**
  * Drop a worktree directory, keeping its branch.
  *
  * The branch is deliberately left alone. It is the only durable record of what
