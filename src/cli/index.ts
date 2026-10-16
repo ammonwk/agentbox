@@ -9,9 +9,10 @@
  * not running, the CLI starts it.
  */
 
-import { existsSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, webDist } from "../core/paths";
+import { DEFAULT_PORT, agentboxBin, agentboxHome, ensureDirs, packageRoot, webDist } from "../core/paths";
 import { listRepos, listAccounts } from "../core/db";
 import { dependencies, type DepStatus } from "../deps";
 import { VERSION } from "../version";
@@ -19,18 +20,20 @@ import { ApiError, apiClient, serverBase } from "../client";
 import { CLI_GUIDE } from "../core/cli-guide";
 import { fixPwaDesktop } from "../core/pwa";
 import { deriveIdentity, ensureUserEnv, userEnvPath } from "../core/user";
-import { serviceInstalled, lingering } from "../core/service";
+import { installService, serviceInstalled, lingering, startService, stopService } from "../core/service";
 import { voiceConfig } from "../voice/config";
 import { pwaInstalled } from "../core/pwa";
 import { identify } from "../core/accounts/identity";
 import { onboardingItems } from "../core/onboarding";
+import { interruptCheck } from "../core/smoke";
 import * as verbs from "./sessions";
 import * as schedules from "./schedules";
 import * as waits from "./waits";
 import * as cards from "./cards";
 import * as prs from "./prs";
 import { cloud, CLOUD_USAGE } from "./cloud";
-import { handover, superagent, SUPERAGENT_USAGE } from "./superagents";
+import { handover, report, superagent, SUPERAGENT_USAGE } from "./superagents";
+import { github, GITHUB_USAGE } from "./github";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
@@ -73,19 +76,18 @@ async function ensureServer(): Promise<void> {
   mkdirSync(logDir, { recursive: true });
   // The service (systemd/agentbox.service), where it is installed: started
   // there, the server has the environment it has at boot, not this shell's.
-  const service = Bun.which("systemctl") && Bun.spawnSync(["systemctl", "--user", "cat", "agentbox.service"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
-  if (service) Bun.spawnSync(["systemctl", "--user", "start", "agentbox.service"], { stdout: "ignore", stderr: "inherit" });
-  else {
+  if (!startService()) {
     const log = openSync(join(logDir, "server.log"), "a");
-    const serve = ["setsid", "bun", agentboxBin(), "serve"];
+    const serve = [process.execPath, agentboxBin(), "serve"];
     const scoped = Bun.which("systemd-run")
       ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", "--unit=agentbox-serve", ...SERVER_WEIGHT.flatMap((w) => ["-p", w])]
       : [];
-    const p = Bun.spawn([...scoped, ...serve], {
-      stdio: ["ignore", log, log],
-      env: process.env,
-    });
-    p.unref();
+    try {
+      const argv = [...scoped, ...serve];
+      const p = spawn(argv[0]!, argv.slice(1), { stdio: ["ignore", log, log], env: process.env, detached: true });
+      await new Promise<void>((resolve, reject) => { p.once("spawn", resolve); p.once("error", reject); });
+      p.unref();
+    } finally { closeSync(log); }
   }
   process.stderr.write("starting agentbox server…");
   for (let i = 0; i < 40; i++) {
@@ -97,6 +99,31 @@ async function ensureServer(): Promise<void> {
   }
   process.stderr.write("\n");
   throw new ApiError(`the server did not come up; see ${join(logDir, "server.log")}`);
+}
+
+/**
+ * Stop the server: its service where that is installed (a killed process
+ * would be seen as a clean exit and stay down), else whatever listens on the
+ * port. The agents live in tmux and keep running.
+ */
+async function killServer(): Promise<number> {
+  if (!(await reachable())) {
+    console.log("agentbox: the server is not running");
+    return 0;
+  }
+  if (!stopService()) {
+    const pids = Bun.spawnSync(["lsof", "-t", `-iTCP:${DEFAULT_PORT}`, "-sTCP:LISTEN"]).stdout.toString().split(/\s+/).filter(Boolean);
+    for (const pid of pids) process.kill(Number(pid), "SIGTERM");
+  }
+  for (let i = 0; i < 20; i++) {
+    await Bun.sleep(250);
+    if (!(await reachable())) {
+      console.log("agentbox: server stopped; sessions keep running in tmux");
+      return 0;
+    }
+  }
+  console.error("agentbox: the server is still up");
+  return 1;
 }
 
 /** Hand this terminal to tmux until you detach or the agent exits. */
@@ -126,7 +153,7 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
       continue;
     }
     const [, key, inline] = m;
-    const takesValue = key === "account" || key === "model" || key === "claim";
+    const takesValue = key === "account" || key === "model" || key === "claim" || key === "branch";
     if (inline !== undefined) flags.set(key!, inline);
     else if (takesValue && args[i + 1] !== undefined) flags.set(key!, args[++i]!);
     else flags.set(key!, true);
@@ -134,7 +161,16 @@ function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: 
   return { flags, rest };
 }
 
-/** `agentbox claude [--account X] [--model M] [--detach] [prompt…]` */
+/** The registered repo whose checkout holds `dir` (a linked worktree counts
+ *  as its main checkout), for a session started in a worktree of its own. */
+export function repoOfDir(repos: { id: string; checkoutRoot?: string }[], dir: string): string | null {
+  const p = Bun.spawnSync(["git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { stdout: "pipe", stderr: "ignore" });
+  if (p.exitCode !== 0) return null;
+  const root = p.stdout.toString().trim().replace(/\/\.git\/?$/, "");
+  return repos.find((r) => r.checkoutRoot === root)?.id ?? null;
+}
+
+/** `agentbox claude [--account X] [--model M] [--worktree [--branch B]] [--detach] [prompt…]` */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
   const { flags, rest } = parseFlags(args);
   // Asking how is not asking to start one.
@@ -159,11 +195,25 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
     accountId = match.id;
   }
 
+  // --worktree: a new worktree of the registered repo this runs in, never
+  // the shared checkout, as New session in the app does; --branch B: the
+  // worktree of existing branch B, as the app's branch pick.
+  let place: { repoId: string; worktree: true; branch?: string } | null = null;
+  if (flags.has("worktree") || flags.has("branch")) {
+    const state = await api<AppState>("GET", "/api/state");
+    const repoId = repoOfDir(state.repos, process.cwd());
+    if (!repoId) {
+      console.error("agentbox: --worktree needs a registered repo here: run it inside one, or add it in Settings");
+      return 2;
+    }
+    place = { repoId, worktree: true, ...(typeof flags.get("branch") === "string" ? { branch: flags.get("branch") as string } : {}) };
+  }
+
   let out: { session: Session; placement: Placement };
   try {
     out = await api("POST", "/api/sessions", {
       provider,
-      cwd: process.cwd(),
+      ...(place ?? { cwd: process.cwd() }),
       prompt: rest.join(" ") || undefined,
       model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
       accountId,
@@ -325,10 +375,15 @@ function doctor(): number {
     },
     { name: "repos", ok: true, detail: `${listRepos().length} registered`, fatal: false },
     { name: "pwa", ok: true, detail: pwaDetail(), fatal: false },
+    // Agent chat ends a running turn with Escape; a new CLI version can change that.
+    ...(["claude", "codex"] as const).flatMap((p) => {
+      const c = interruptCheck(p);
+      return c ? [{ name: `${p} escape`, ok: c.ok, detail: c.detail, fatal: false }] : [];
+    }),
     {
       name: "service",
       ok: serviceInstalled() !== false,
-      detail: serviceInstalled() === null ? "systemd not available" : serviceInstalled() ? "installed" : "not installed — the board's first-run card can install it",
+      detail: serviceInstalled() === null ? "no supported service manager" : serviceInstalled() ? "installed" : "not installed — run `agentbox service install` or use the board's setup card",
       fatal: false,
     },
     { name: "linger", ok: lingering() !== false, detail: lingering() === null ? "no systemd" : lingering() ? "starts at boot" : "off — run `loginctl enable-linger`", fatal: false },
@@ -378,9 +433,12 @@ async function recover(args: string[]): Promise<number> {
 
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
-  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--detach] [prompt…]
+  start                 start the backend in the background, if needed
+  service install       keep the backend available at login (macOS) or boot (Linux)
+  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--worktree | --branch B] [--detach] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d)
+  kill                  stop the server; sessions keep running in tmux
   usage                 each account's limits and what running sessions claim
   attach <id>           attach this terminal to a session in agentbox
 
@@ -432,13 +490,18 @@ timeout, each saying which; a parked session is resumed to hear it):
 
 ${CLOUD_USAGE}
 
-superagents (programs that run on agentbox: docs/superagents.md):
+superagents (the Agents page: programs and conversations that run on agentbox, docs/superagents.md; \`agent\` is the same verb):
 ${SUPERAGENT_USAGE.replace(/^agentbox /gm, "  ")}
   handover <from> <to> [--close]       what <from> started, its cards, PRs and their waits go to <to>; messages to <from> reach <to>
+  report --request <uuid> --file <f>   from a superagent's session: a public issue on agentbox's tracker, at most 3 a day
+
+GitHub actions (the App broker: a superagent requests, the host owner pins and approves):
+${GITHUB_USAGE.replace(/^agentbox /gm, "  ")}
 
 pull requests (who has one: no two sessions work the same PR):
   pr claim <n|owner/repo#n|url> [--for ID]   this session has it, and it says "you hold"; refused, naming the other session, if another live one does
   pr release [<n|…>]                 let go of what this session claimed (one, or all)
+  pr ready <n|…> --head <sha>        its owner verified it ready: each agent that takes ready PRs ("events": ["pr.ready"]) gets it once per head
   pr who <n|…> [--json]              the session that has it ("(you)" after your own id), or "nobody" (exit 1)
   pr claims [--json]                 every PR a live session has
   claude|codex|… --claim <n|…> …     start a session that has the PR from its first moment, or does not start
@@ -471,10 +534,65 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
                         the bridge that runs other providers' models in devin
                         (docs/devin-bridge.md); check tests it end to end
   doctor                check that everything agentbox needs is present
+  serve-from-commit [on|off|status]
+                        on: a restart serves the checkout's HEAD commit from
+                        $AGENTBOX_HOME/live, never uncommitted edits
+  integrate <branch> [--into <checkout>] [--no-check] [--restart]
+                        put a branch's commits on the checkout's branch around
+                        other sessions' uncommitted edits; checks the commit
+                        first (typecheck, tests); --restart restarts the server
   onboard               derive who agentbox works for (git, gh, the system),
                         write user.env, and say what is still missing
   guide                 how an agent drives the fleet with this CLI
   version               print the version`;
+
+/** `agentbox serve-from-commit [on|off|status]`. */
+async function serveFromCommit(verb = "status"): Promise<number> {
+  const { servesFromCommit, setServesFromCommit, snapshotDir, sourceCheckout } = await import("../core/snapshot");
+  if (verb === "on" || verb === "off") setServesFromCommit(verb === "on");
+  else if (verb !== "status") throw new Error("serve-from-commit takes on, off or status");
+  console.log(servesFromCommit()
+    ? `on: a restart serves the HEAD commit of ${sourceCheckout(packageRoot)} from ${snapshotDir()}`
+    : `off: a restart serves the working tree of ${sourceCheckout(packageRoot)}, uncommitted edits included`);
+  if (verb !== "status") console.log("It takes effect at the next restart of the server.");
+  return 0;
+}
+
+/** Restart the server's service and wait until it answers on `commit`. */
+async function restartServer(commit: string): Promise<void> {
+  const mac = join(process.env.HOME ?? "", "Library", "LaunchAgents", "local.agentbox.server.plist");
+  if (existsSync(mac)) Bun.spawnSync(["launchctl", "kickstart", "-k", `gui/${process.getuid!()}/local.agentbox.server`], { stdout: "ignore", stderr: "inherit" });
+  else if (Bun.which("systemctl") && Bun.spawnSync(["systemctl", "--user", "cat", "agentbox.service"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0)
+    Bun.spawnSync(["systemctl", "--user", "restart", "agentbox.service"], { stdout: "ignore", stderr: "inherit" });
+  else throw new Error("no agentbox service is installed here; restart the server yourself");
+  for (let i = 0; i < 120; i++) {
+    await Bun.sleep(500);
+    const health = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) }).then((r) => r.json()).catch(() => null);
+    const running = (health?.data ?? health)?.revision?.commit as string | undefined;
+    if (running === commit) {
+      console.log(`the server is up on ${commit.slice(0, 8)}`);
+      return;
+    }
+  }
+  throw new Error(`the server did not come up on ${commit.slice(0, 8)} within a minute; see ${join(agentboxHome(), "logs", "server.log")}`);
+}
+
+/** `agentbox integrate <branch> [--into <checkout>] [--no-check] [--restart]` (src/core/integrate.ts). */
+async function integrateBranch(args: string[]): Promise<number> {
+  const { flags, rest } = verbs.parseArgs(args, ["into"], ["no-check", "restart"]);
+  if (rest.length !== 1) throw new Error("usage: agentbox integrate <branch> [--into <checkout>] [--no-check] [--restart]");
+  const { integrate } = await import("../core/integrate");
+  const { servesFromCommit, sourceCheckout } = await import("../core/snapshot");
+  // From the snapshot's own CLI too, the checkout is the one it was made from.
+  const into = typeof flags.get("into") === "string" ? (flags.get("into") as string) : sourceCheckout(packageRoot);
+  const r = integrate({ checkout: into, branch: rest[0]!, check: !flags.has("no-check"), log: (line) => console.log(line) });
+  console.log(`${r.branch}: ${r.from.slice(0, 8)} → ${r.to.slice(0, 8)}${r.fastForward ? " (fast-forward)" : ""}, ${r.files.length} file(s)`);
+  if (r.merged.length) console.log(`merged around uncommitted edits: ${r.merged.join(", ")}`);
+  if (!flags.has("restart")) return 0;
+  if (!servesFromCommit()) console.log("note: serve-from-commit is off, so the restart also loads every uncommitted edit in the checkout");
+  await restartServer(r.to);
+  return 0;
+}
 
 /** `agentbox devin-bridge [status|start|restart|check|run]`. */
 async function devinBridge(verb = "status"): Promise<number | null> {
@@ -537,6 +655,10 @@ export async function main(argv: string[]): Promise<number | null> {
   try {
     switch (cmd) {
       case "serve": {
+        // Run the checkout's HEAD commit, not its working tree (src/core/snapshot.ts).
+        const { prepareServe } = await import("../core/snapshot");
+        const snapshot = prepareServe(packageRoot, (line) => console.log(`agentbox: ${line}`));
+        if (snapshot) process.execve!(process.execPath, [process.execPath, join(snapshot, "bin", "agentbox"), ...argv], process.env);
         ensureDirs();
         const wrote = ensureUserEnv();
         if (wrote) console.log(`agentbox: ${wrote}`);
@@ -550,6 +672,17 @@ export async function main(argv: string[]): Promise<number | null> {
         if (!argv[1]) throw new Error("usage: agentbox go-login <account home>");
         const { runGoLogin } = await import("../core/accounts/godevice");
         return await runGoLogin(argv[1]);
+      }
+      case "kill":
+        return await killServer();
+      case "start":
+        await ensureServer();
+        return 0;
+      case "service": {
+        if (argv[1] !== "install") throw new Error("usage: agentbox service install");
+        const done = installService();
+        console.log(`installed ${done.unit}; starts at ${done.lingering ? "boot" : "login"}`);
+        return 0;
       }
       case "claude":
       case "codex":
@@ -599,10 +732,19 @@ export async function main(argv: string[]): Promise<number | null> {
       case "cloud":
         await ensureServer();
         return await cloud(api, argv.slice(1));
+      // `agent` is the name the Agents page uses: the same verbs.
       case "superagent":
       case "superagents":
+      case "agent":
+      case "agents":
         await ensureServer();
         return await superagent(api, argv.slice(1));
+      case "report":
+        await ensureServer();
+        return await report(api, argv.slice(1));
+      case "github":
+        await ensureServer();
+        return await github(api, argv.slice(1));
       case "handover":
         await ensureServer();
         return await handover(api, argv.slice(1));
@@ -651,6 +793,10 @@ export async function main(argv: string[]): Promise<number | null> {
         return await devinBridge(argv[1]);
       case "doctor":
         return doctor();
+      case "serve-from-commit":
+        return serveFromCommit(argv[1]);
+      case "integrate":
+        return await integrateBranch(argv.slice(1));
       case "onboard":
         return onboard();
       case "guide":

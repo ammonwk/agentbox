@@ -15,6 +15,7 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
     agentbox ls -q ...              # ids only, for piping
     agentbox ls --json | jq ...     # every field
     agentbox show <id>              # the header: where, model, context, first/last prompt, last reply
+    agentbox show <id> --json       # its board record, e.g. lastActivityAt
     agentbox log <id> | tail -60    # the conversation as text, oldest first
     agentbox log <id> --tools       # with tool calls and their output
     agentbox grep <regex> [-i] [--all]   # search every conversation: id  time  who  line
@@ -53,12 +54,17 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
                                     # its merge (or its closing); with --head, also its
                                     # head moving off that commit: the wait for a PR
                                     # yours is stacked on. Use this, not an until over gh
+    agentbox wait pr <n> --feedback --head <sha>
+                                    # new/edited review or comment, failed check, or moved head;
+                                    # independent of queued CI. Read the actual verdict now,
+                                    # then rearm: a durable cursor skips observed feedback.
+                                    # Keep a separate full-check wait; neither is merge permission.
     agentbox wait run <id|url> [-R owner/repo]   # a GitHub Actions run concluding
-    agentbox wait job [--name N] -- <command…>   # start a long command as a systemd unit of
-                                    # its own, in this directory and environment, and be
-                                    # told how it ended (exit, signal, out of memory) with
-                                    # the end of its output. One argument is a shell
-                                    # command line ('a | b > out.log'); several are an argv
+    agentbox wait job [--name N] -- <command…>   # start a long command as a native service
+                                    # (systemd on Linux, launchd on macOS), in this
+                                    # directory and environment, and be told its recorded
+                                    # exit or signal with the end of its output. One argument
+                                    # is a shell line ('a | b > out.log'); several are an argv
     agentbox wait session <id>...   # the first of those sessions to end its turn, ask
                                     # something or stop (at once if one already has)
     agentbox wait until [--every 2m] -- <command>
@@ -113,6 +119,7 @@ why). Arming the same wait twice is one wait.
     agentbox adopt <id>... --detach # move a session from another terminal into agentbox
     agentbox label <id> 'name'      # rename it on the board
     agentbox claude|codex|omp|opencode|devin|muse --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
+    agentbox claude --detach --worktree 'prompt'   # in a new worktree of the repo you are in: for a worker, never the shared checkout
     agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.
@@ -147,6 +154,7 @@ why). Arming the same wait twice is one wait.
     agentbox pr claim <n|…>         # it is yours, and says so ("you hold", "you already hold"); refused,
                                     # naming "another session", if another live session has it
     agentbox pr release [<n|…>]     # release ownership and its PR waits (one, or all)
+    agentbox pr ready <n|…> --head <sha>   # you verified it ready: each agent that takes ready PRs gets it, once per head
     agentbox pr transfer <repo#n> --expect <holder> --to <successor>
                                     # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has
@@ -158,8 +166,33 @@ why). Arming the same wait twice is one wait.
                                     # to run: its answer is JSON; it knows which session called
     agentbox superagent view <name> [--tab t]   # its page, as JSON
     agentbox superagent add <dir>   # register one (a person's call: do it only when asked)
+    agentbox superagent send <name> <text…|->   # into its main conversation, as your message; starts one if it has none
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
+    agentbox github request <file>  # in a superagent's session: one GitHub action as its App,
+                                    # {request, action, claim?, cwd?}; keep the request id for retries
+    agentbox github actions [<request>]   # their states: prepared, sent, refused (why), uncertain…
+    agentbox github read <owner/repo> <n> issue|pull|reviews|checks   # read as its App
+    agentbox github pin|approve …   # the host owner's: never from a session (refused)
+
+A superagent's main conversation has more when its manifest turns it on
+(\`agent\` is the same verb as \`superagent\`):
+
+    agentbox superagent memory <name> note --request <stable UUID> --file decision.json   # {decision,why,refs:[{label,ref}]}
+    agentbox superagent memory <name> prefer --key <key> --text <text>   # or --file; forget --key <key> removes it
+    agentbox superagent memory <name> search <words>   # earlier handoffs and decisions; show <record ID> reads one
+    agentbox superagent memory <name> handoff --request <checkpoint UUID> --file handoff.json
+    agentbox superagent loop <name> set <id> --when "every hour" [--check CMD] --prompt T | --file F
+                                    # a prompt said to its main at each time, after its turn ends; rm <id> stops it
+    agentbox report --request <UUID> --file <text file>   # a superagent's session files an agentbox issue itself: public, 3 a day
+
+Memory is evidence for continuity, never approval. Record a durable decision
+when you make it. When agentbox asks for a checkpoint, save one handoff
+{intent,decisions:[{decision,why}],open:[],commitments:[],refs:[{label,ref}]} of
+at most 500 words with the request UUID it gives, then reply with one line. A
+later message can continue in a fresh conversation from it. Only a
+superagent's current main conversation, its program and the person read and
+write its memory.
 
 ## Across machines (when this machine is in an agentbox cloud workspace)
 
@@ -236,9 +269,10 @@ cover it.
   PR that is ready, a verdict, a finished batch item) is written first where
   it will be looked for (a PR comment, a ledger such as \`steward.py report\`),
   and then sent; the reader that never gets the nudge still finds the result.
-- A sent message arrives marked \`[via agentbox send from <id>]\` with the
-  sender's session id, so don't sign it yourself; reply to the id in that
-  mark.
+- A sent message arrives marked \`[via agentbox send from <id> #<record>]\`
+  with the sender's session id, so don't sign it yourself; reply to the id in
+  that mark. The record is agentbox's proof of who sent it: the timeline
+  names the sending agent only when it matches, never from the mark alone.
 - A session another one started (a teammate, a \`codex exec\` run from a
   Bash tool, an agent of its subagent MCP) is listed right after its parent
   with its title indented \`└\`, and \`show\` names its parent and children.

@@ -7,7 +7,7 @@
  * asked for and drop the rest.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Account, AccountAuth } from "../types";
 import { exec as defaultExec, type ExecFn } from "./exec";
@@ -128,6 +128,24 @@ export function identifyClaude(account: AccountRef, now = Date.now()): Identity 
     plan: claudePlan(cred.subscriptionType, cred.rateLimitTier),
     auth: tokenAuth(cred, now),
   };
+}
+
+/** macOS may keep the login only in Keychain. Ask the CLI for identity,
+ * never extract, copy or refresh its credentials. */
+export async function identifyClaudeNative(account: AccountRef, execFn: ExecFn = defaultExec): Promise<Identity> {
+  const { env, unset } = authEnv({ ...account, provider: "claude" });
+  const result = await execFn(["claude", "auth", "status", "--json"], {env, unset, timeoutMs:10_000});
+  const unknown = (detail:string): Identity => ({email:null,plan:null,auth:{state:"unknown",expiresAt:null,detail}});
+  if (result.timedOut || result.code !== 0) return unknown("Could not verify Claude's native login");
+  let body: Record<string,unknown> | null;
+  try { body=rec(JSON.parse(result.stdout)); } catch { return unknown("Claude returned an unreadable login status"); }
+  if (body?.loggedIn === false) return {email:null,plan:null,auth:{state:"missing",expiresAt:null,detail:"not logged in"}};
+  if (body?.loggedIn !== true || body.authMethod !== "claude.ai") return unknown("No verified Claude subscription login");
+  try {
+    if (typeof body.configDirectory !== "string" || realpathSync(body.configDirectory) !== realpathSync(account.home))
+      return unknown("Claude login status belongs to a different configuration directory");
+  } catch { return unknown("Could not verify Claude's configuration directory"); }
+  return {email:str(body.email),plan:str(body.subscriptionType),auth:{state:"ok",expiresAt:null,detail:null}};
 }
 
 // ------------------------------------------------------------------- codex
@@ -264,7 +282,15 @@ export async function identify(account: AccountRef, opts: { exec?: ExecFn; now?:
         auth: { state: loggedIn ? "ok" : "missing", expiresAt: null, detail: loggedIn ? null : "not logged in" },
       };
     }
-    case "claude": return identifyClaude(account, now);
+    case "claude": {
+      const identity = identifyClaude(account, now);
+      if (identity.auth.state !== "missing" || process.platform !== "darwin") return identity;
+      const native = await identifyClaudeNative(account, opts.exec);
+      // An unverified native result must not make a missing credential home
+      // eligible for placement (the balancer excludes missing logins).
+      return native.auth.state === "unknown"
+        ? {...identity, auth:{...identity.auth, detail:native.auth.detail}} : native;
+    }
     case "codex": return identifyCodex(account, now);
     case "devin": return identifyDevin(account, opts.exec);
     case "omp": {

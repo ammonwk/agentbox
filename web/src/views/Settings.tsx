@@ -223,12 +223,12 @@ function General({ settings, save, saveStateOf }: SectionProps) {
     <section className="card" data-nav-item data-nav-id="settings:general" tabIndex={0} aria-label="General">
       <h3>General</h3>
 
-      <Field label="Theme" hint="Also on the switch at the bottom of the sidebar.">
+      <Field label="Theme" hint="Choose Light, Dark, or follow your system appearance.">
         {(id) => (
           <div className="seg" role="group" aria-label="Theme" id={id}>
-            {(["light", "system", "dark"] as const).map((t) => (
-              <button key={t} type="button" aria-pressed={settings.theme === t} onClick={() => save("theme", { theme: t })}>
-                {t[0].toUpperCase() + t.slice(1)}
+            {([["light", "Light"], ["system", "System"], ["dark", "Dark"]] as const).map(([value, label]) => (
+              <button key={value} type="button" aria-pressed={settings.theme === value} disabled={saveStateOf("theme")?.phase === "saving"} onClick={() => save("theme", { theme: value })}>
+                {label}
               </button>
             ))}
           </div>
@@ -282,6 +282,24 @@ function General({ settings, save, saveStateOf }: SectionProps) {
         )}
       </Field>
       <SaveMark state={saveStateOf("boardDays")} />
+
+      <Field label="Close idle agent work" hint="Each day at this time (24-hour, this machine's clock), every agent closes its work sessions that have been idle for two hours. A closed session keeps its transcript and can be resumed. An agent's main chat is never closed, and a session with an armed wait, an open Review card, an open PR or a child still at work is kept. The agent's Feed shows what it closed and kept. Leave empty to turn it off.">
+        {(id) => (
+          <div className="input-row">
+            <CommitInput
+              id={id}
+              value={settings.agentSweepAt}
+              placeholder="HH:MM"
+              onCommit={(v) => {
+                const at = v.trim();
+                if (at === "" || /^([01]\d|2[0-3]):[0-5]\d$/.test(at)) save("agentSweepAt", { agentSweepAt: at });
+              }}
+            />
+            <span className="suffix">{settings.agentSweepAt ? "each day" : "off"}</span>
+          </div>
+        )}
+      </Field>
+      <SaveMark state={saveStateOf("agentSweepAt")} />
 
       <ToggleRow
         label="Auto-approve tool calls"
@@ -660,51 +678,26 @@ function Repositories({
   );
 }
 
-const START_IN: [boolean | null, string][] = [
-  [true, "New worktree"],
-  [false, "Main checkout"],
-  [null, "Last used"],
-];
-
 /**
- * Where the repo's new sessions start, and what a worktree of it needs that git
- * does not carry. Folded to one line: set once per repo, then only read.
+ * What a worktree of the repo needs that git does not carry, and the dev
+ * server New session can start in it. Folded to one line: set once per repo, then only read.
  */
 function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Track; saveStateOf: SectionProps["saveStateOf"] }) {
   const key = (field: string) => `repo:${repo.id}:${field}`;
   const patch = (field: string, p: RepoPatch) => track(key(field), api.patchRepo(repo.id, p));
   const { copy, run } = repo.setup;
+  const dev = repo.setup.dev ?? "";
   const summary = [
-    `Starts in: ${START_IN.find(([v]) => v === repo.worktreeDefault)![1].toLowerCase()}`,
     copy.length > 0 ? `copies ${copy.length} path${copy.length === 1 ? "" : "s"}` : null,
     run ? `runs ${run}` : null,
+    repo.setup.dev ? `dev server: ${repo.setup.dev}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
 
   return (
     <details className="repo-setup">
-      <summary>{summary}</summary>
-
-      <Field label="New sessions start in" hint="What New session picks when this repo is chosen. Last used keeps whatever the previous session did.">
-        {(id) => (
-          <div className="seg" role="group" aria-label="New sessions start in" id={id}>
-            {START_IN.map(([v, label]) => (
-              <button
-                key={label}
-                type="button"
-                aria-pressed={repo.worktreeDefault === v}
-                disabled={v === false && repo.kind === "github"}
-                title={v === false && repo.kind === "github" ? "A GitHub repo has no checkout of its own to work in." : undefined}
-                onClick={() => patch("start", { worktreeDefault: v })}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-      </Field>
-      <SaveMark state={saveStateOf(key("start"))} />
+      <summary>{summary || "Worktree setup and dev server"}</summary>
 
       <Field
         label="Copy into new worktrees"
@@ -718,7 +711,7 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
             mono
             value={copy.join("\n")}
             placeholder={".env\napps/api/.env"}
-            onCommit={(v) => patch("copy", { setup: { copy: v.split("\n").map((l) => l.trim()).filter(Boolean), run } })}
+            onCommit={(v) => patch("copy", { setup: { copy: v.split("\n").map((l) => l.trim()).filter(Boolean), run, dev } })}
           />
         )}
       </Field>
@@ -729,10 +722,20 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
         hint="Runs in each new worktree as the agent starts. Its output is in the agentbox logs, under setup/<session>.log."
       >
         {(id) => (
-          <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim() } })} />
+          <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim(), dev } })} />
         )}
       </Field>
       <SaveMark state={saveStateOf(key("run"))} />
+
+      <Field
+        label="Dev server command"
+        hint="What New session's Dev server switch starts, with PORT set to a free port ($PORT in the command is that port). Blank runs the package.json dev script. The worktree uses this checkout's node_modules through symlinks, and the setup command does not run. Its output is under dev/<session>.log."
+      >
+        {(id) => (
+          <CommitInput id={id} mono value={dev} placeholder="bun run dev -- --port $PORT" onCommit={(v) => patch("dev", { setup: { copy, run, dev: v.trim() } })} />
+        )}
+      </Field>
+      <SaveMark state={saveStateOf(key("dev"))} />
     </details>
   );
 }

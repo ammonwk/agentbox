@@ -1,14 +1,15 @@
+import { chatShown, chatTimestamps, type ChatPresence } from "./chatPresentation";
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
+import type { AgentIcon, Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline, rowEventIds, traceTurns, withBtw, type TimelineRow } from "../../lib/timeline";
 import { field, type SendCall } from "../../lib/sendtool";
 import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
-import { Markdown } from "./Markdown";
+import { LocalLinks, Markdown } from "./Markdown";
 import { AskRow, QuestionCard } from "./Question";
-import { anchoredScrollTop, isAtTop, isPinnedToBottom, shouldAutoScroll } from "./scroll";
+import { anchoredScrollTop, isAtTop, followsAfterScroll, shouldAutoScroll, onChatSubmitted, followChatSize } from "./scroll";
 import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { MessageRail, useTurns } from "./MessageRail";
 import { takeJump } from "./jump";
@@ -19,6 +20,7 @@ import { hrefOf } from "../../route";
 import { readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
+import { AgentAvatar, agentName, NeutralAgent } from "../AgentAvatar";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -128,7 +130,7 @@ export function Timeline({ session }: { session: Session }) {
     if (!el || events.length === 0) return;
     const p = prev.current;
     const firstId = events[0].id;
-    if (!p.initial && p.firstId && firstId !== p.firstId && events.length > p.count) {
+    if (!pinned && !p.initial && p.firstId && firstId !== p.firstId && events.length > p.count) {
       // Older history landed above the reader: hold their place.
       el.scrollTop = anchoredScrollTop(p, el);
     } else if (shouldAutoScroll({ wasPinned: pinned, grew: events.length >= p.count, initial: p.initial })) {
@@ -141,6 +143,11 @@ export function Timeline({ session }: { session: Session }) {
   // one): show it from its top, which a card taller than the view would
   // otherwise have scrolled past.
   const question = session.question;
+  const hasEvents = events.length > 0;
+  useEffect(() => {
+    const el = boxRef.current;
+    if (el) return followChatSize(el, () => pinned && !question);
+  }, [ready, hasEvents, pinned, question]);
   useLayoutEffect(() => {
     const el = boxRef.current;
     const card = el?.querySelector<HTMLElement>(".ask-live");
@@ -239,6 +246,11 @@ export function Timeline({ session }: { session: Session }) {
     setPinned(true);
   };
 
+  useEffect(() => onChatSubmitted(session.id, () => {
+    setJump(null);
+    toLatest();
+  }), [session.id]);
+
   const step = (dir: -1 | 1) => {
     const box = boxRef.current;
     if (!box) return;
@@ -265,9 +277,9 @@ export function Timeline({ session }: { session: Session }) {
   const onScroll = () => {
     const el = boxRef.current;
     if (!el) return;
+    const nowPinned = followsAfterScroll(el, pinned, prev.current.scrollTop);
     prev.current.scrollTop = el.scrollTop;
     prev.current.scrollHeight = el.scrollHeight;
-    const nowPinned = isPinnedToBottom(el);
     if (nowPinned !== pinned) setPinned(nowPinned);
     // A screenful from the top, so the next page is in before you reach it.
     if (isAtTop(el, el.clientHeight) && !exhausted && !loadingOlder && !error) loadOlder();
@@ -283,6 +295,7 @@ export function Timeline({ session }: { session: Session }) {
     if (el.scrollHeight <= el.clientHeight * 1.5) loadOlder(FILL_PAGE);
   }, [ready, staged, exhausted, loadingOlder, error, loadOlder, rows]);
 
+  const timeIds = chatTimestamps(events.filter((e) => e.kind === "user" || e.kind === "assistant"));
   const renderRow = (r: Exclude<TimelineRow, { type: "trace" }>) =>
     r.type === "tools" ? (
       <ToolRun key={r.id} events={r.events} now={now} />
@@ -296,7 +309,7 @@ export function Timeline({ session }: { session: Session }) {
     ) : r.type === "sent" ? (
       <SentRow key={r.event.id} ev={r.event} send={r.send} />
     ) : (
-      <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
+      <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} showTime={timeIds.has(r.event.id)} />
     );
 
   // Just started, and the CLI has not written its first turn: what you asked
@@ -496,12 +509,13 @@ function useThinkDur(events: readonly TimelineEvent[]): ReadonlyMap<string, numb
   }, [events]);
 }
 
-const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number }) {
+type ChatAgent = { name: string; role: string; icon: AgentIcon | null; avatar: string | null };
+const EventRow = memo(function EventRow({ ev, dur, agent, showTime, delivery }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; agent?: ChatAgent; showTime?: boolean; delivery?: "Sent" | "Read" }) {
   switch (ev.kind) {
     case "user":
-      return <UserRow ev={ev} />;
+      return <UserRow ev={ev} showTime={showTime} delivery={delivery} />;
     case "assistant":
-      return <AssistantRow ev={ev} />;
+      return <AssistantRow ev={ev} agent={agent} showTime={showTime} />;
     case "thinking":
       return <Thinking text={ev.text} dur={dur} />;
     case "meta":
@@ -522,7 +536,7 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
  * "agentbox", that opens on a click to who sent it (linked) and all of it.
  * Pastes are shown as pastes: Claude records one wrapped in `<pasted_content>`.
  */
-function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean }) {
+function UserRow({ ev, queued, showTime = true, delivery }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean; showTime?: boolean; delivery?: "Sent" | "Read" }) {
   const sent = useMemo(() => readSent(ev.text), [ev.text]);
   const parts = useMemo(() => splitPastes(sent.text), [sent.text]);
   const [open, setOpen] = useState(false);
@@ -536,10 +550,13 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
       <Markdown key={i} text={p.text} />
     ),
   );
-  if (!sent.agent) {
+  // Unmarked and with no sender the server proved: yours. A session's
+  // opening that another session started it with has a sender, and is not.
+  if (!sent.agent && !ev.sender) {
     const images = ev.images ? `${ev.images} image${ev.images === 1 ? "" : "s"}` : null;
     return (
-      <Bubble id={ev.id} at={ev.at} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : null].filter(Boolean).join(" · ")} copy={sent.text}>
+      <Bubble id={ev.id} at={ev.at} showTime={showTime} className={queued ? "tl-queued" : undefined} note={[images, queued ? "Queued" : delivery ?? null].filter(Boolean).join(" · ")}
+        title={delivery === "Read" ? "The agent has started on this message" : delivery === "Sent" ? "Delivered; waiting for activity from the agent" : undefined} copy={sent.text}>
         {/* A long brief is its first lines; the rest on a click. */}
         <Clamp lines={14}>{body}</Clamp>
       </Bubble>
@@ -551,16 +568,36 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
       · queued
     </span>
   ) : null;
+  // A registered agent proven to have sent it: its message, beside its own
+  // picture and name, on the left with the replies; never the recipient's.
+  const from = ev.sender?.kind === "agent" ? ev.sender.agent : undefined;
+  if (from)
+    return (
+      <div className="tl-agent-reply tl-from-agent" data-ev={ev.id} title={`Sent by ${agentName(from.name)}${ev.sender?.session ? ` (${ev.sender.session})` : ""}`}>
+        <div className="tl-agent-row">
+          <AgentAvatar role={from.role} icon={from.icon} src={from.avatar} />
+          <div className="tl-bubble tl-agent-bubble">
+            <div className="tl-agent-name">{agentName(from.name)}</div>
+            {body}
+          </div>
+        </div>
+        <div className="tl-agent-foot">
+          <CopyIcon text={sent.text} />
+          <span>{ev.sender?.opening ? "started this session" : "via agentbox send"}{queued ? " · queued" : ""}</span>
+          {showTime && <time dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>}
+        </div>
+      </div>
+    );
   return (
     <div className={`tl-user tl-sent tl-sent-fold${open ? " is-open" : ""}${queued ? " tl-queued" : ""}`} data-ev={ev.id}>
       <button type="button" className="tl-sent-toggle" aria-expanded={open} aria-controls={bodyId} title={open ? "Hide the message" : "Show who sent it and the whole message"} onClick={() => setOpen(!open)}>
-        <Icon.send size={12} /> <span className="tl-sent-label">agentbox</span>
+        {ev.sender ? <SenderBadge sender={ev.sender} claimed={sent.from} /> : <><Icon.send size={12} /> <span className="tl-sent-label">agentbox</span></>}
         {open ? null : queuedNote}
       </button>
       {open ? (
         <div id={bodyId} className="tl-sent-full">
           <div className="tl-who">
-            <Party name={sent.from} />
+            {ev.sender?.kind === "agent" || ev.sender?.kind === "session" ? <Party name={ev.sender.session} /> : ev.sender ? null : <Party name={sent.from} />}
             {sent.via ? <span className="tl-via">via {sent.via}</span> : null}
             {queuedNote}
             <time className="tl-time">{fmtHourMin(ev.at)}</time>
@@ -585,11 +622,42 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
 }
 
 /**
+ * Who sent a message that came in through the user role, as the server
+ * proved it: a registered agent with its picture (or its own icon), another
+ * agent session, agentbox itself, or an unverified mark, which never takes a
+ * name or picture from its own text. Shown folded or open.
+ */
+function SenderBadge({ sender, claimed }: { sender: NonNullable<Extract<TimelineEvent, { kind: "user" }>["sender"]>; claimed: string | null }) {
+  const face =
+    sender.kind === "agent" && sender.agent ? (
+      <AgentAvatar role={sender.agent.role} icon={sender.agent.icon} src={sender.agent.avatar} size={20} />
+    ) : (
+      <span className={`tl-sender-face tl-sender-${sender.kind}`} aria-hidden="true">
+        {sender.kind === "system" || sender.kind === "schedule" ? <Icon.send size={11} /> : <NeutralAgent size={12} />}
+      </span>
+    );
+  const title =
+    sender.kind === "unverified" && sender.opening
+      ? "Another session started this one with this message; agentbox has no record of who wrote it"
+      : sender.kind === "unverified"
+      ? `agentbox has no record of this message being sent${claimed ? ` (it names ${claimed})` : ""}; its text is shown as written`
+      : sender.kind === "agent" || sender.kind === "session"
+        ? `Sent by ${sender.kind === "agent" ? agentName(sender.label) : sender.label}${sender.session ? ` (${sender.session})` : ""}`
+        : sender.label;
+  return (
+    <span className={`tl-sender-badge tl-sender-kind-${sender.kind}`} title={title}>
+      {face}
+      <span className="tl-sent-label">{sender.kind === "agent" ? agentName(sender.label) : sender.label}</span>
+    </span>
+  );
+}
+
+/**
  * Your message, the way a chat app sets it: a bubble on the right beside
  * your picture, and under it a copy button and the time. `note` says what
  * else is true of it — its images, that it waits in the queue.
  */
-function Bubble({ id, at, className, note, title, copy, children }: { id?: string; at: number; className?: string; note?: string; title?: string; copy: string; children: React.ReactNode }) {
+function Bubble({ id, at, className, note, title, copy, children, showTime = true }: { id?: string; at: number; showTime?: boolean; className?: string; note?: string; title?: string; copy: string; children: React.ReactNode }) {
   return (
     <div className={`tl-me${className ? ` ${className}` : ""}`} data-ev={id} title={title}>
       <div className="tl-me-row">
@@ -599,7 +667,7 @@ function Bubble({ id, at, className, note, title, copy, children }: { id?: strin
       <div className="tl-me-foot">
         <CopyIcon text={copy} />
         {note ? <span>{note}</span> : null}
-        <time dateTime={new Date(at).toISOString()}>{fmtHourMin(at)}</time>
+        {showTime && <time dateTime={new Date(at).toISOString()}>{fmtHourMin(at)}</time>}
       </div>
     </div>
   );
@@ -631,9 +699,11 @@ function Starting({ session }: { session: Session }) {
 /** Your GitHub picture, or your initials when there is none. */
 function Avatar() {
   const me = useContext(Me);
-  const [failed, setFailed] = useState(false);
-  if (me.github && !failed) {
-    return <img className="tl-avatar" src={`https://github.com/${encodeURIComponent(me.github)}.png?size=80`} alt="" onError={() => setFailed(true)} />;
+  const src = me.github ? `https://github.com/${encodeURIComponent(me.github)}.png?size=80` : null;
+  // Remembered per source: a new identity gets its own try.
+  const [failed, setFailed] = useState<string | null>(null);
+  if (src && failed !== src) {
+    return <img className="tl-avatar" src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailed(src)} />;
   }
   const initials = me.name.split(/\s+/).filter(Boolean).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   return (
@@ -669,8 +739,10 @@ function Party({ name }: { name: string | null }) {
   const board = useBoardSessions();
   const { byName, tab } = useFamily();
   const local = useLocalAgents();
-  const s = name ? senderOf(name, board, byName) : null;
-  const started = !s && name ? local.names.get(name) : undefined;
+  // A teammate's shared agent: the name is a session on its host, not here.
+  const here = useContext(LocalLinks);
+  const s = name && here ? senderOf(name, board, byName) : null;
+  const started = !s && name && here ? local.names.get(name) : undefined;
   if (started) {
     return (
       <a
@@ -826,9 +898,9 @@ function citations(text: string): { text: string; cites: string[] } {
   return { text: rest.trim(), cites };
 }
 
-function AssistantRow({ ev }: { ev: Extract<TimelineEvent, { kind: "assistant" }> }) {
+function AssistantRow({ ev, agent, showTime = !!agent }: { ev: Extract<TimelineEvent, { kind: "assistant" }>; agent?: ChatAgent; showTime?: boolean }) {
   const { text, cites } = useMemo(() => citations(ev.text), [ev.text]);
-  return (
+  const content = (
     <div className="tl-assistant">
       <Markdown text={text} />
       {cites.length ? (
@@ -846,6 +918,20 @@ function AssistantRow({ ev }: { ev: Extract<TimelineEvent, { kind: "assistant" }
       ) : null}
     </div>
   );
+  if (!agent) return <div data-ev={ev.id}>{content}{showTime && <time className="tl-assistant-time" dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>}</div>;
+  return <div className="tl-agent-reply" data-ev={ev.id}>
+    <div className="tl-agent-row">
+      <AgentAvatar role={agent.role} icon={agent.icon} src={agent.avatar} />
+      <div className="tl-bubble tl-agent-bubble">
+        <div className="tl-agent-name">{agent.name}</div>
+        {content}
+      </div>
+    </div>
+    <div className="tl-agent-foot">
+      <CopyIcon text={text} />
+      {showTime && <time dateTime={new Date(ev.at).toISOString()}>{fmtHourMin(ev.at)}</time>}
+    </div>
+  </div>;
 }
 
 type Flat = Exclude<TimelineRow, { type: "trace" }>;
@@ -1210,3 +1296,56 @@ function Field({ f }: { f: InputField }) {
     </>
   );
 }
+
+/** Who is on each side of an agent chat. `me` is the viewer, for their own
+ *  messages only: with no `me`, no message wears your picture. */
+export type ChatSides = {
+  me?: { name: string; github: string };
+  agent?: ChatAgent;
+};
+/** Sent from here and not yet in the transcript. */
+export type ChatEcho = { id: string; text: string; at: number; note: string };
+
+/** The question an agent's session is showing now, answerable from Chat
+ *  as from its Timeline (`Session.question`). */
+export type ChatQuestion = { sessionId: string; ask: NonNullable<Session["question"]> };
+
+/** Agent chat (the Agents page): the same provider-neutral bubbles as
+ *  Sessions, with what the transcript and session say now (`ChatPresence`):
+ *  Sent or Read under the person's newest message, and the agent typing
+ *  while a turn shown here is open. `question`: the one it is asking now,
+ *  as a card at the tail. */
+export function AgentConversationEvents({ events, me, agent, echoes = [], presence, question = null }: { events: readonly TimelineEvent[]; echoes?: readonly ChatEcho[]; presence?: ChatPresence | null; question?: ChatQuestion | null } & ChatSides) {
+  const shown = chatShown(events, question?.ask.id ?? null);
+  const times = chatTimestamps([...shown, ...echoes]);
+  return (
+    <Me.Provider value={me ?? NOBODY}>
+      <div className="tl-stream">
+        {shown.map((e) =>
+          e.kind === "tool" ? (
+            <AskRow key={e.id} ev={e} />
+          ) : (
+            <EventRow key={e.id} ev={e} agent={agent} showTime={times.has(e.id)} delivery={presence && e.id === presence.message ? (presence.read ? "Read" : "Sent") : undefined} />
+          ),
+        )}
+        {echoes.map((e) => (
+          <Bubble key={e.id} at={e.at} showTime={times.has(e.id)} className="tl-echo" note={e.note} copy={e.text}>
+            <Markdown text={e.text} />
+          </Bubble>
+        ))}
+        {question && <QuestionCard key={question.ask.id} sessionId={question.sessionId} ask={question.ask} />}
+        {presence?.working && (
+          <div className="tl-agent-reply tl-typing" role="status" aria-label={`${agent?.name ?? "The agent"} is working`}>
+            <div className="tl-agent-row">
+              {agent && <AgentAvatar role={agent.role} icon={agent.icon} src={agent.avatar} />}
+              <div className="tl-bubble tl-agent-bubble" title="Its turn is open: it is working">
+                <span className="tl-typing-dots" aria-hidden="true"><i /><i /><i /></span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Me.Provider>
+  );
+}
+const NOBODY = { name: "", github: "" };

@@ -122,7 +122,7 @@ async function login(api: Api, args: string[]): Promise<number> {
   const { HumanCloud, supabaseFor } = await import("../cloud/client");
   const human = new HumanCloud(supabaseFor(config));
   await human.sendCode(email);
-  const code = prompt(`a sign-in code was sent to ${email}; code:`)?.trim();
+  const code = prompt(`a sign-in email was sent to ${email}; its code or its link:`)?.trim();
   if (!code) throw new Error("no code");
   let me = await human.verifyCode(email, code);
   try {

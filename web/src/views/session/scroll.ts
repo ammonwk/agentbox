@@ -25,6 +25,39 @@ export function isPinnedToBottom(box: ScrollBox, slack: number = PIN_SLACK): boo
   return distanceFromBottom(box) <= slack;
 }
 
+/** A viewport shrinking under a delivery notice is not the reader scrolling
+ * up. Keep following until its scroll position actually moves away. */
+export function followsAfterScroll(box: ScrollBox, wasPinned: boolean, previousTop: number): boolean {
+  return isPinnedToBottom(box) || (wasPinned && box.scrollTop >= previousTop);
+}
+
+/** Sending is an explicit return to the conversation's tail. Keep this separate
+ * from delivery echoes: even a slow or uncertain send should reveal the tail,
+ * and receipt reconciliation must not interrupt somebody reading history. */
+const SUBMITTED = "agentbox:chat-submitted";
+
+export function chatSubmitted(chatId: string): void {
+  dispatchEvent(new CustomEvent<string>(SUBMITTED, { detail: chatId }));
+}
+
+export function onChatSubmitted(chatId: string, fn: () => void): () => void {
+  const on = (e: Event) => { if ((e as CustomEvent<string>).detail === chatId) fn(); };
+  addEventListener(SUBMITTED, on);
+  return () => removeEventListener(SUBMITTED, on);
+}
+
+/** Drafts, delivery notices and images can resize a chat without a new event.
+ * Follow those changes only while the reader has chosen to stay at the tail. */
+export function followChatSize(box: HTMLElement, follows: () => boolean): () => void {
+  const observer = new ResizeObserver(() => {
+    if (follows()) box.scrollTop = box.scrollHeight;
+  });
+  observer.observe(box);
+  const stream = box.querySelector(".tl-stream");
+  if (stream) observer.observe(stream);
+  return () => observer.disconnect();
+}
+
 /**
  * Should we scroll to the tail after this render?
  *

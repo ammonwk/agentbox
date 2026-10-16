@@ -273,7 +273,7 @@ export function lookJob(spec: Extract<WaitSpec, { kind: "job" }>, memo: Wait["me
   if (job.running) return { seen: "running" };
   const goneAt = memo.goneAt ?? now;
   if (now - goneAt < GONE_AFTER_MS) return { seen: "its unit is not running and has left no result yet", memo: { goneAt } };
-  return { end: { how: "broken", text: `The job's unit (${spec.unit}) is gone and left no result: the machine or your systemd restarted under it, or it was stopped by hand. It did not finish. ${log}` } };
+  return { end: { how: "broken", text: `The job's unit (${spec.unit}) is gone and left no result: the machine or its service manager restarted under it, or it was stopped by hand. Completion is unknown; do not rerun it without checking its effects. ${log}` } };
 }
 
 const IDLE: Session["status"][] = ["waiting", "blocked", "stopped", "closed"];
@@ -316,7 +316,7 @@ export class Waits {
   private telling = new Set<number>();
 
   constructor(
-    private readonly fleet: Pick<Fleet, "get" | "heir" | "note">,
+    private readonly fleet: Pick<Fleet, "get" | "heir" | "note"> & Partial<Pick<Fleet, "activityAllowed">>,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -527,7 +527,9 @@ export class Waits {
       updateWait(w.id, { ended: "cancelled", endedAt: now, outcome: prReleaseNotice(s?.id ?? w.sessionId), untold: null });
       return;
     }
-    const hold = !s
+    const hold = s && this.fleet.activityAllowed?.(s.id) === false
+      ? "its session is paused for machine cleanup"
+      : !s
       ? "its session is gone"
       : s.closedAt
         ? "its session is closed; it is told if it is reopened and runs again"

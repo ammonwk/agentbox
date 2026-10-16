@@ -120,6 +120,7 @@ export function AccountChip({
 // ----------------------------------------------------------------- status
 
 const STATUS_LABEL: Record<ShownStatus, string> = {
+  paused: "Paused",
   retrying: "Retrying",
   blocked: "Blocked",
   waiting: "Your turn",
@@ -129,6 +130,7 @@ const STATUS_LABEL: Record<ShownStatus, string> = {
 };
 
 const STATUS_TITLE: Record<ShownStatus, string> = {
+  paused: "Paused for machine cleanup; resume from the system bar",
   retrying: "Stopped on an error that agentbox retries by itself — nothing for you to do",
   blocked: "Showing a prompt it needs answered — a permission, a trust dialog, a login",
   waiting: "The turn is over; the process is alive and waiting for you",
@@ -139,6 +141,7 @@ const STATUS_TITLE: Record<ShownStatus, string> = {
 
 /** `work` is what it left running in the background (SessionRow.backgroundWork). */
 export function StatusPill({ status, work }: { status: ShownStatus; work?: string | null }) {
+  if (status === "paused") work = null;
   return (
     <span className={`pill pill-${status}`} title={work ? `Running ${work}: its turn is over, and that work runs inside its process` : STATUS_TITLE[status]}>
       <span className="pill-dot" aria-hidden="true" />
@@ -171,6 +174,7 @@ export function ShapeMark({ shape }: { shape: Shape }) {
  *  `copy` (a session id) clicking it copies the id instead of following the
  *  row's link, a check says so for a moment. */
 export function StatusDot({ status, shape, repo, copy, work }: { status: ShownStatus; shape?: Shape; repo?: string; copy?: string; work?: string | null }) {
+  if (status === "paused") work = null;
   const [done, setDone] = useState(false);
   const t = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {

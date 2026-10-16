@@ -58,6 +58,21 @@ The server runs from the checkout it was started in, so a change only
 reaches it once it is there. Several agents may be editing that checkout at
 once: commit your own files by path, never `git add -A`.
 
+With `agentbox serve-from-commit on`, the server runs that checkout's HEAD
+commit instead (`src/core/snapshot.ts`): `serve` moves a worktree of its own,
+`$AGENTBOX_HOME/live`, to HEAD, builds its UI when `web/` changed, and then
+becomes the server there. A restart puts only committed work live, so another
+session's unfinished edit cannot break it. Commit first, then restart;
+`/api/health` names the commit it runs (`revision`).
+
+To put a finished branch into a checkout that others are editing, use
+`agentbox integrate <branch> [--restart]` (`src/core/integrate.ts`), not
+cherry-pick or stash. It replays the branch onto HEAD in a scratch worktree,
+runs the typecheck and the tests on that exact commit, merges each changed
+file around the uncommitted edits in memory, and changes nothing on a
+conflict. It writes the files, then moves the branch, and leaves the others'
+edits unstaged.
+
 ## Rules that are easy to break
 
 - **The provider's transcript is the record.** Never write a copy of a
@@ -116,6 +131,12 @@ once: commit your own files by path, never `git add -A`.
   when they next move. A new fold field must be plain data (`foldstate.ts`),
   or the reader must say how to save it.
 
+- **Core names no agent.** An agent is a superagent: a directory a person
+  owns (`superagent.json`, `MAIN.md`, an optional program), registered with
+  `agentbox superagent add`. No agent's name, prompt, template or process is
+  in `src/` (`docs/superagents.md`). What one agent needs is its own code; core
+  changes only for a generic piece any superagent turns on from its manifest.
+
 ## Where things are
 
 - `src/core/providers/` — one adapter per CLI (transcript format, processes,
@@ -171,6 +192,14 @@ once: commit your own files by path, never `git add -A`.
   once. Without `cloud.env` none of it runs. Schema changes are new files
   under `supabase/migrations/` (`supabase migration new`), with RLS and
   explicit grants.
+- `src/core/superagents.ts`, `src/core/superagent/` — superagents (the
+  Agents page): the registry, their programs, the page and action relay, the
+  main conversation, and the generic services a manifest turns on (memory
+  journal and MEMORY.md, SOUL.md, rollover, loops, the daily sweep, events).
+  `src/core/workclaims.ts` is the claims API, `src/core/github/` the GitHub App
+  broker (tokens never leave it), `src/core/superagent/team.ts` and
+  `src/cloud/superagents.ts` the shared instances. `superagents/` holds the
+  examples; `docs/superagents.md` is the contract a program is written against.
 - `src/core/cli-guide.ts` — the `agentbox` CLI guide for agents: `agentbox
   guide` prints it and `bun run docs:cli` writes it to `docs/cli.md`.
 - `src/core/pwa.ts` — the board's PWA launcher entry. Chrome writes its

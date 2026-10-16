@@ -54,6 +54,11 @@ import { Plugs } from "@phosphor-icons/react/dist/csr/Plugs";
 import { PlugsConnected } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { PushPin } from "@phosphor-icons/react/dist/csr/PushPin";
 import { BookmarkSimple } from "@phosphor-icons/react/dist/csr/BookmarkSimple";
+import { Wrench } from "@phosphor-icons/react/dist/csr/Wrench";
+import { Cloud } from "@phosphor-icons/react/dist/csr/Cloud";
+import { Heartbeat } from "@phosphor-icons/react/dist/csr/Heartbeat";
+import { Sparkle } from "@phosphor-icons/react/dist/csr/Sparkle";
+import { Pause } from "@phosphor-icons/react/dist/csr/Pause";
 
 export type IconProps = { size?: number; className?: string; weight?: IconWeight };
 export type IconComponent = (props: IconProps) => ReactElement;
@@ -125,4 +130,9 @@ export const Icon = {
   plugsOn: icon(PlugsConnected),
   pin: icon(PushPin),
   bookmark: icon(BookmarkSimple),
+  wrench: icon(Wrench),
+  cloud: icon(Cloud),
+  heartbeat: icon(Heartbeat),
+  sparkle: icon(Sparkle),
+  pause: icon(Pause),
 };

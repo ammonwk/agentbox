@@ -429,18 +429,6 @@ code {
   border-radius: 0 3px 3px 0;
   background: var(--accent);
 }
-.nav-new {
-  color: var(--accent);
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-.nav-new:hover {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-.nav-new kbd {
-  margin-left: auto;
-}
 .nav-update {
   color: var(--accent);
 }
@@ -478,65 +466,73 @@ code {
   box-shadow: none;
 }
 
-.sidebar .spacer {
-  flex: 1;
-}
-
-.conn {
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 30px;
-  padding: 0 14px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.conn .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--faint);
+  flex-direction: column;
+  gap: 4px;
   flex-shrink: 0;
 }
-.conn.on .dot {
-  background: var(--success);
+.nav-profile {
+  margin-bottom: 4px;
 }
-.conn.off .dot {
-  background: var(--danger);
-  animation: pulse 1.6s infinite;
-}
-
-.theme-control {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--sunken);
-  border-radius: var(--radius-sm);
-  flex: none;
-}
-/* Collapsed, only the current theme shows; the choice appears with the room. */
-.sidebar:not(:hover):not(:has(:focus-visible)):not(:has(.nav-bell[aria-expanded="true"])) .theme-opt:not(.on) {
-  display: none;
-}
-.theme-opt {
-  flex: 1 0 28px;
-  min-height: var(--tap);
+.nav-avatar {
   display: grid;
   place-items: center;
-  border: none;
-  background: none;
-  border-radius: 5px;
+  width: 26px;
+  height: 26px;
+  margin-left: -3px;
+  margin-right: -3px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex: none;
+  background: var(--active);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 650;
+}
+.nav-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.settings-nav {
+  display: flex;
+  gap: 6px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex: none;
+}
+.settings-nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
-  cursor: pointer;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
 }
-.theme-opt:hover {
-  color: var(--text);
+.settings-nav a:hover {
   background: var(--hover);
-}
-.theme-opt.on {
-  background: var(--panel);
   color: var(--text);
-  box-shadow: var(--shadow-sm);
+}
+.settings-nav a[aria-current="page"] {
+  background: var(--active);
+  color: var(--text);
+}
+.settings-alert {
+  padding: 0 5px;
+  border-radius: 999px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  font-size: 11px;
 }
 
 .main {
@@ -1236,47 +1232,33 @@ textarea,
   opacity: 0.55;
 }
 
-/* The open session's facts, then the machine. The facts give way first when
- * the window is narrow: they shrink, and the machine figures keep their size. */
+/* The plans, then the machine. Each is a button that opens its own sheet. */
 .sysbar-line {
   display: flex;
   align-items: center;
   min-width: 0;
-  container-type: inline-size;
-}
-/* A session's facts and every figure need about 1460px. With less, the
- * subscriptions give way; the sheet the bar opens still lists them. */
-@container (max-width: 1460px) {
-  .sys-session:not(:empty) + .sysbar-row .sys-limits,
-  .sys-session:not(:empty) + .sysbar-row .sys-div:has(+ .sys-limits) {
-    display: none;
-  }
 }
 .sysbar-line > .sysbar-row {
   flex: 1 1 auto;
   width: auto;
   min-width: 320px;
 }
-.sys-session {
+.sys-plans {
   display: flex;
   align-items: center;
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: none;
   height: 42px;
   padding: 0 14px;
+  border: 0;
   border-right: 1px solid var(--border);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
-.sys-session:empty,
-.sysbar-bare:has(> .sys-session:empty) {
-  display: none;
-}
-.sys-session .sx-facts {
-  margin: 0;
-  gap: 14px;
-}
-/* The sidebar names the project; the path is in the branch's tooltip. */
-.sys-session .fact-cwd {
-  display: none;
+.sys-plans:hover,
+.sys-plans[aria-expanded="true"] {
+  background: var(--hover);
 }
 
 .sysbar-row {
@@ -1487,8 +1469,8 @@ textarea,
   white-space: nowrap;
 }
 
-/* Narrower windows keep the bars and drop the countdowns, then the whole
- * group; the expanded sheet always has all of it. */
+/* Narrower windows keep the bars and drop the countdowns, then keep only
+ * each account's dot; the plans sheet always has all of it. */
 @media (max-width: 1480px) {
   .sys-limit {
     grid-template-columns: auto 30px 28px;
@@ -1497,50 +1479,50 @@ textarea,
     display: none;
   }
 }
-@media (max-width: 1300px) {
-  .sys-limits,
-  .sys-div:has(+ .sys-limits) {
+@media (max-width: 1460px) {
+  .sys-limits {
+    gap: 6px;
+  }
+  .sys-limit {
+    grid-template-columns: auto;
+  }
+  .sys-limit > :not(.sys-limit-dot) {
     display: none;
   }
 }
 
-/* One grid for every account, so their bars line up: per account the name
- * across the top, then 5h, bar, figure, countdown, and the same for the week. */
-.syslimits {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 1px 6px;
-  font-size: 11px;
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
+/* The plans sheet: a block an account, its windows as the Accounts page draws them. */
+.sysplans .sysblock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-.syslimits-acct,
-.syslimits-row {
-  display: contents;
+.sysplans .sysblock > .label {
+  margin-bottom: 0;
 }
-.syslimits-acct[data-stale] .syslimits-name,
-.syslimits-acct[data-stale] .syslimits-row > * {
+.sysplans .sysblock[data-stale] .ubar {
   opacity: 0.55;
 }
-.syslimits-name {
-  grid-column: 1 / -1;
-  font-size: 12px;
+.sysplan-name {
+  font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.syslimits-acct + .syslimits-acct .syslimits-name {
-  margin-top: 4px;
+.sysplan-stale {
+  font-size: 11.5px;
+  color: var(--warning);
 }
-.syslimits .sys-limit-bar {
-  height: 4px;
+.sysplan-at {
+  font-size: 11px;
 }
-.syslimits .sys-limit-reset {
-  color: var(--faint);
-}
-.syslimits-wk {
-  margin-left: 8px;
+.sysplans-all {
+  align-self: center;
+  justify-self: start;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
 }
 
 /* Throttling is a condition, not a measurement, so it gets a border as well as
@@ -2434,23 +2416,19 @@ kbd {
     box-shadow: none;
     transition: none;
   }
-  .sidebar nav {
+  .sidebar nav,
+  .sidebar-footer {
     display: contents;
   }
   .sidebar .brand,
-  .sidebar .spacer,
-  .sidebar .conn,
-  .sidebar .theme-control,
-  .nav-fullscreen,
-  .nav-new kbd {
+  .nav-fullscreen {
     display: none;
   }
   .sidebar .nav-label {
     opacity: 1;
     transition: none;
   }
-  .nav-item,
-  .nav-new {
+  .nav-item {
     flex: 1 1 0;
     min-width: 0;
     min-height: 48px;
@@ -2480,32 +2458,25 @@ kbd {
     height: 3px;
     border-radius: 0 0 3px 3px;
   }
-  /* Every destination stays reachable: the bar scrolls within itself, and
-     each entry is placed by name, so a page added later takes its place
-     without renumbering the rest. */
+  /* Keep every destination available on narrow screens. The rail scrolls
+     within itself; named entries keep Agents before Sessions as it grows. */
   .sidebar { overflow-x: auto; }
-  .sidebar .nav-item, .sidebar .nav-new, .sidebar .nav-bell { flex: 0 0 56px; }
-  /* New sits where the thumb rests, after Sessions and Review. */
-  .nav-new {
-    order: 3;
-  }
-  .nav-new .nav-label { display: none; }
-  .nav-new::after { content: "New"; }
-  .sidebar [data-nav-id="agents"],
-  .sidebar [data-nav-id="sessions"] { order: 1; }
-  .sidebar [data-nav-id="review"] { order: 2; }
-  .sidebar [data-nav-id="voice"] { order: 4; }
-  .sidebar [data-nav-id="accounts"] { order: 5; }
-  .sidebar [data-nav-id="skills"] { order: 6; }
-  .sidebar [data-nav-id="team"] { order: 7; }
-  .sidebar [data-nav-id="mcps"] { order: 8; }
-  .sidebar [data-nav-id="settings"] { order: 9; }
+  .sidebar .nav-item, .sidebar .nav-bell { flex: 0 0 56px; }
+  .sidebar [data-nav-id="agents"] { order: 1; }
+  .sidebar [data-nav-id="sessions"] { order: 2; }
+  .sidebar [data-nav-id="review"] { order: 3; }
+  .sidebar [data-nav-id="voice"] { order: 5; }
+  .sidebar [data-nav-id="team"] { order: 6; }
+  .sidebar [data-nav-id="profile"] { order: 7; }
+  .sidebar [data-nav-id="settings"] { order: 8; }
+  .settings-nav { padding: 8px 12px; }
+  .settings-nav a { padding: 7px 9px; }
   /* The bell is the bar's last tab, and its inbox a sheet above the bar. */
   .inbox-wrap {
     display: contents;
   }
   .nav-bell {
-    order: 10;
+    order: 9;
   }
   .nav-bell[aria-expanded="true"] {
     background: none;
@@ -2573,99 +2544,45 @@ kbd {
   }
 }
 
-/* ---------------------------------------------------------------- projects
-   The logo (desktop) and the bar above the page (a narrow screen, whose tab
-   bar has no logo) name the selected project and open the same switcher
-   (ProjectSwitcher.tsx). */
-.project-brand {
-  border: 0;
-  background: none;
-  color: var(--text);
-  cursor: pointer;
-  text-align: left;
-}
-.project-brand .nav-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.project-bar {
-  display: none;
-  align-items: center;
-  gap: 16px;
-  min-height: 36px;
-  padding: 3px 18px;
-  border-bottom: 1px solid var(--border);
-  flex: none;
-}
-.project-bar > button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: 0;
-  padding: 4px 0;
-  color: var(--muted);
-  cursor: pointer;
-  min-width: 0;
-}
-.project-bar > button > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.project-bar img {
-  display: none;
-  width: 20px;
-  height: 20px;
-}
-.project-options {
-  display: flex;
-  flex-direction: column;
-  max-height: min(52vh, 420px);
-  overflow: auto;
-  margin: 12px 0;
-  gap: 4px;
-}
-.project-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-  padding: 12px;
-}
-.project-option:hover,
-.project-option[aria-pressed="true"] {
-  background: var(--hover);
-}
-.project-option > span {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-.project-option small {
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-.project-option svg {
-  flex: none;
-}
+/* The logo and compact breadcrumb open the same project navigation. */
+.project-brand { border: 0; background: none; color: var(--text); cursor: pointer; text-align: left; }
+.project-brand .nav-label { overflow: hidden; text-overflow: ellipsis; }
+.project-bar { display: flex; align-items: center; gap: 16px; min-height: 36px; padding: 3px 18px; border-bottom: 1px solid var(--border); flex: none; }
+.project-bar > button { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 4px 0; color: var(--muted); cursor: pointer; min-width: 0; }
+.project-bar > button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-bar img { display: none; width: 20px; height: 20px; }
+.project-options { display: flex; flex-direction: column; max-height: min(52vh, 420px); overflow: auto; margin: 12px 0; gap: 4px; }
+.project-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-radius: 8px; background: none; color: var(--text); text-align: left; cursor: pointer; padding: 12px; }
+.project-option:hover, .project-option[aria-pressed="true"] { background: var(--hover); }
+.project-option > span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.project-option small { color: var(--muted); overflow-wrap: anywhere; }
+.project-option svg { flex: none; }
+@media (max-width: 900px) { .project-bar { padding: 4px 12px; } .project-bar img { display: block; } .project-bar > .hint { margin-left: auto; font-size: 11px; } }
+
+/* Project tabs share the existing scope URLs, including browser history. */
+.project-bar { min-height: 43px; padding: 0 12px; gap: 4px; align-items: stretch; }
+.project-tabs { display: flex; gap: 4px; overflow-x: auto; min-width: 0; scrollbar-width: thin; }
+.project-tab { display: flex; align-items: center; border-bottom: 2px solid transparent; flex: none; }
+.project-tab[data-active] { border-color: var(--accent); background: var(--hover); }
+.project-tab > button { border: 0; background: none; color: var(--muted); cursor: pointer; }
+.project-tab > [role="tab"] { display: flex; align-items: center; gap: 7px; padding: 12px 10px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.project-tab[data-active] > [role="tab"] { color: var(--text); }
+.project-tab-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--warning); }
+.project-tab .project-tab-close { display: grid; place-items: center; width: 24px; height: 24px; margin-right: 4px; border-radius: 4px; opacity: .5; }
+.project-tab .project-tab-close:hover { opacity: 1; background: var(--hover); }
+.project-bar > .project-tab-add { align-self: center; flex: none; padding: 8px; border-radius: 5px; }
+.project-tab-add:hover { background: var(--hover); }
 @media (max-width: 900px) {
-  .project-bar {
-    display: flex;
-    padding: 4px 12px;
-  }
-  .project-bar img {
-    display: block;
-  }
-  .project-bar > .hint {
-    margin-left: auto;
-    font-size: 11px;
-  }
+  .project-bar { padding: 0 8px; }
+  .sidebar .nav-profile { order: 11; }
+  .project-tab > [role="tab"] { padding: 12px 8px; }
 }
+
+.att-recent { z-index: 1100; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--raised); box-shadow: 0 8px 28px #0002; overflow: auto; font-size: 12px; }
+.att-recent > strong { display: block; margin-bottom: 8px; }
+.att-recent p { color: var(--muted); margin: 8px 0; }
+.att-recent-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+.att-recent-grid button { min-width: 0; padding: 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); text-align: left; cursor: pointer; }
+.att-recent-grid button:hover { border-color: var(--accent); }
+.att-recent-grid img { display: block; width: 100%; height: 65px; object-fit: contain; }
+.att-recent-grid span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; margin-top: 4px; }

@@ -63,20 +63,77 @@ export function useCloudStatus(everyMs = 5_000): { status: CloudStatus | null; e
   return { status, error, refresh };
 }
 
+declare global {
+  interface Window {
+    /** The desktop app (desktop/preload.cjs). */
+    agentboxDesktop?: { githubToken(): Promise<string | null> };
+  }
+}
+
+const LINKED_KEY = (userId: string) => `agentbox.cloud.github-linked.${userId}`;
+let desktopSignIn: Promise<void> | null = null;
+
+/** In the desktop app, this machine's GitHub CLI login signs it in
+ *  (supabase/functions/github-session): once a human has signed in with
+ *  their email here, their GitHub user is linked to them, and from then on
+ *  gh's login is enough on any machine. Nothing happens in a browser. */
+async function githubSession(human: HumanCloud, action: "signin" | "link"): Promise<{ access_token: string; refresh_token: string } | null> {
+  const githubToken = await window.agentboxDesktop?.githubToken().catch(() => null);
+  if (!githubToken) return null;
+  const { data, error } = await human.sb.functions.invoke("github-session", { body: { action, githubToken } });
+  if (error) {
+    console.warn(`agentbox: GitHub ${action}:`, (await (error as { context?: Response }).context?.json?.().catch(() => null))?.error ?? error.message);
+    return null;
+  }
+  return data;
+}
+
+function signInWithGitHub(human: HumanCloud): Promise<void> {
+  // Each page using the hook asks at once; one exchange serves them all.
+  desktopSignIn ??= githubSession(human, "signin")
+    .then(async (s) => {
+      if (s) await human.sb.auth.setSession(s);
+    })
+    .finally(() => (desktopSignIn = null));
+  return desktopSignIn;
+}
+
+function linkGitHub(human: HumanCloud, userId: string): void {
+  if (!window.agentboxDesktop) return;
+  try {
+    if (localStorage.getItem(LINKED_KEY(userId))) return;
+  } catch {
+    // private mode: link again; it is idempotent
+  }
+  void githubSession(human, "link").then((r) => {
+    if (!r) return;
+    try {
+      localStorage.setItem(LINKED_KEY(userId), "1");
+    } catch {
+      // as above
+    }
+  });
+}
+
 /** The signed-in human's id, following sign-in and sign-out; `ready` once
- *  a magic link in the URL, if any, has been exchanged. */
+ *  a magic link in the URL, if any, has been exchanged, and in the desktop
+ *  app once its GitHub login has been tried. */
 export function useCloudUser(human: HumanCloud | null): { ready: boolean; userId: string | null; email: string | null } {
   const [s, setS] = useState<{ ready: boolean; userId: string | null; email: string | null }>({ ready: false, userId: null, email: null });
   useEffect(() => {
     if (!human) return;
     let live = true;
-    void human.sb.auth.getSession().then(({ data }) => {
+    void human.sb.auth.getSession().then(async ({ data }) => {
+      if (!data.session && window.agentboxDesktop) await signInWithGitHub(human);
+      const session = data.session ?? (await human.sb.auth.getSession()).data.session;
       if (!live) return;
-      setS({ ready: true, userId: data.session?.user.id ?? null, email: data.session?.user.email ?? null });
+      setS({ ready: true, userId: session?.user.id ?? null, email: session?.user.email ?? null });
+      if (session) linkGitHub(human, session.user.id);
       if (openedBySignIn()) history.replaceState(null, "", `${location.pathname}${location.hash || "#/team"}`);
     });
-    const { data } = human.sb.auth.onAuthStateChange((_event, session) => {
+    const { data } = human.sb.auth.onAuthStateChange((event, session) => {
       setS({ ready: true, userId: session?.user.id ?? null, email: session?.user.email ?? null });
+      if (event === "SIGNED_IN" && session) linkGitHub(human, session.user.id);
     });
     return () => {
       live = false;

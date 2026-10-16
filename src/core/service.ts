@@ -1,5 +1,5 @@
-/** The systemd user service (systemd/agentbox.service): whether it is
- *  installed, and installing it for real paths.
+/** The background service: systemd on Linux, launchd on macOS.
+ *  Installation uses this checkout's actual paths.
  *
  * The shipped unit names `%h/Documents/agentbox`, which is only right for a
  * checkout that lives there. Onboarding writes the unit itself, with the
@@ -9,6 +9,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome, userHome, packageRoot } from "./paths";
+import { installMacService, macServiceInstalled, startMacService, stopMacService } from "./macservice";
 
 export const SERVICE_UNIT = "agentbox.service";
 
@@ -16,8 +17,9 @@ export const SERVICE_UNIT = "agentbox.service";
 const unitDir = (): string =>
   join(process.env.XDG_CONFIG_HOME || join(userHome(), ".config"), "systemd", "user");
 
-/** Whether the service is installed and enabled; null where systemd is not. */
+/** Whether the service is installed and enabled; null without a supported manager. */
 export function serviceInstalled(): boolean | null {
+  if (process.platform === "darwin") return macServiceInstalled();
   if (!Bun.which("systemctl")) return null;
   return Bun.spawnSync(["systemctl", "--user", "is-enabled", SERVICE_UNIT], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 }
@@ -82,6 +84,7 @@ const logPath = (): string => join(agentboxHome(), "logs", "server.log");
  * done, so the caller can say which half needed doing.
  */
 export function installService(): { unit: string; lingering: boolean } {
+  if (process.platform === "darwin") return installMacService();
   if (!Bun.which("systemctl")) throw new Error("systemd is not available on this machine");
   const dir = unitDir();
   mkdirSync(dir, { recursive: true });
@@ -102,4 +105,22 @@ export function installService(): { unit: string; lingering: boolean } {
     throw new Error(`the service is installed and running, but start-at-boot could not be turned on${linger.stderr.toString().trim() ? ` (${linger.stderr.toString().trim()})` : ""} — run \`loginctl enable-linger\` yourself`);
   }
   return { unit: path, lingering: true };
+}
+
+/** Start through the service manager when installed. A false result leaves
+ * the CLI free to use its detached fallback on machines without a service. */
+export function startService(): boolean {
+  if (process.platform === "darwin") return startMacService();
+  if (!Bun.which("systemctl") || Bun.spawnSync(["systemctl", "--user", "cat", SERVICE_UNIT], { stdout: "ignore", stderr: "ignore" }).exitCode !== 0) return false;
+  const result = Bun.spawnSync(["systemctl", "--user", "start", SERVICE_UNIT], { stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error(`could not start ${SERVICE_UNIT}: ${result.stderr.toString().trim()}`);
+  return true;
+}
+
+export function stopService(): boolean {
+  if (process.platform === "darwin") return stopMacService();
+  if (!serviceInstalled()) return false;
+  const result = Bun.spawnSync(["systemctl", "--user", "stop", SERVICE_UNIT], { stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error(`could not stop ${SERVICE_UNIT}: ${result.stderr.toString().trim()}`);
+  return true;
 }

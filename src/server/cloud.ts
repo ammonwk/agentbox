@@ -12,6 +12,7 @@ import { SkillBundleError } from "../cloud/skillbundle";
 import type { CloudBridge } from "../core/cloud/bridge";
 import type { Fleet } from "../core/fleet";
 import { HttpError, json, readBody, type Router } from "./router";
+import { authenticatedSession } from "../core/session-authority";
 import { optionalString, requireString } from "./validate";
 
 /** A cloud refusal keeps its status; "not reached" is 503. */
@@ -93,9 +94,13 @@ export function cloudRoutes(router: Router, bridge: CloudBridge, fleet: Pick<Fle
       // the caller says it is, else the one above its process. The cloud
       // then vouches for the installation and its owner, not this id.
       const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
-      const fromSession =
+      const authenticated = authenticatedSession(req);
+      if ((b.fromSession || callerPid) && !authenticated) throw new HttpError(403, "session messages require the sending session's capability");
+      const fromSession = authenticated ??
         (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
         (callerPid ? fleet.callerOf(callerPid) : null);
+      const refusal = bridge.outboundRefusal(fromSession);
+      if (refusal) throw new HttpError(403, refusal);
       const out = await bridge.send({
         to: requireString(b, "to"),
         text,

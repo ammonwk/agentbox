@@ -4,10 +4,10 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ActionError, agentbox } from "../../lib/sdk";
+import { ActionError, agentbox, AgentboxError, me, type ClaimHolder, type WorkClaim } from "../../lib/sdk";
 import type { Repo, Session } from "../../../src/core/types";
 import type { Ctx } from "./ctx";
-import { authority, liveGrant } from "./grants";
+import { authority, liveGrant, sessionsOf } from "./grants";
 import { writerPrompt } from "./prompts";
 import { AGENT_NAME, canonicalSource, slugFromRemoteUrl } from "./text";
 import { sha, WorkInput, type Work } from "./types";
@@ -46,7 +46,7 @@ export async function startWork(ctx: Ctx, caller: string | null, input: unknown,
     const prior = ctx.store.works().find((w) => w.id === p.id);
     if (prior) {
       if (JSON.stringify(prior.input) !== JSON.stringify(p)) throw new ActionError("Work ID already used", 409);
-      return prior;
+      return prior.claiming && !prior.stoppedAt ? finishStart(ctx, prior, now) : prior;
     }
     const state = await agentbox.state(false);
     const project = state.repos.find((r) => r.id === g.project);
@@ -84,20 +84,182 @@ export async function startWork(ctx: Ctx, caller: string | null, input: unknown,
       session: null,
       state: "starting",
       rounds: [],
+      claiming: true,
       createdAt: now,
     };
-    // Every issue or none: a second family on an issue of this one is told to extend it.
-    ctx.store.transaction(() => {
-      for (const i of issues) {
-        const held = ctx.store.claimOf(i.key);
-        if (held) throw new ActionError(`Issue already belongs to work family ${held}; extend that family instead of creating another writer`, 409);
-        ctx.store.claim(i.key, w.id);
-      }
-      ctx.store.saveWork(w);
-    });
-    await launchWriter(ctx, w, now);
-    return w;
+    // The family is recorded before its claim: a claim whose answer is lost
+    // is then still found, by its note, and never leaks.
+    ctx.store.saveWork(w);
+    return finishStart(ctx, w, now);
   });
+}
+
+/**
+ * Claim every issue or none, in one claim, then start the writer. A refusal
+ * removes the family, because it did not start anything: a second family on
+ * an issue of another family is told to extend that family.
+ */
+async function finishStart(ctx: Ctx, w: Work, now: number): Promise<Work> {
+  try {
+    w.claims = await claimIssues(ctx, w.id, w.input.issues.map((i) => canonicalSource(i.source).url));
+  } catch (e) {
+    if (e instanceof ActionError && e.status === 409) ctx.store.dropWork(w.id);
+    throw e;
+  }
+  delete w.claiming;
+  ctx.store.saveWork(w);
+  await launchWriter(ctx, w, now);
+  return w;
+}
+
+const NOTE = `${AGENT_NAME} work `;
+/** The note on each claim of a family. It names the family, so that Vulcan finds a claim again when its answer was lost. */
+export const claimNote = (id: string): string => `${NOTE}${id}`;
+const keyOf = (source: string): string => (/^https?:\/\//.test(source) ? canonicalSource(source).key : source);
+const fences = (cs: WorkClaim[]): { key: string; fence: number }[] => cs.map((c) => ({ key: c.key, fence: c.fence }));
+
+/**
+ * Claim the sources in agentbox for a family (docs/superagents.md, Claims).
+ * When the answer is lost, or agentbox says that Vulcan itself holds a source,
+ * Vulcan reads its claims back: the ones whose note names this family are its
+ * own. Any other holder is a refusal that names the family or the holder.
+ */
+async function claimIssues(ctx: Ctx, id: string, sources: string[], session?: string): Promise<{ key: string; fence: number }[]> {
+  const note = claimNote(id);
+  try {
+    return fences(await agentbox.claim(sources, { session, note }));
+  } catch (e) {
+    const held = e instanceof AgentboxError && e.status === 409 ? (e.data as { key: string; holder: ClaimHolder } | null) : null;
+    if (held && held.holder.superagent !== me.name) throw refusal(ctx, held, null);
+    const rows = await agentbox.claims({ superagent: me.name });
+    const mine = sources.map((s) => rows.find((r) => r.key === keyOf(s) && r.note === note));
+    if (mine.every((r): r is WorkClaim => !!r)) return fences(mine);
+    if (held) throw refusal(ctx, held, rows.find((r) => r.key === held.key)?.note ?? null);
+    throw e;
+  }
+}
+
+function refusal(ctx: Ctx, held: { key: string; holder: ClaimHolder }, note: string | null): ActionError {
+  const byNote = note?.startsWith(NOTE) ? note.slice(NOTE.length) : null;
+  const family = byNote ?? ctx.store.works().find((x) => x.claims?.some((c) => c.key === held.key))?.id;
+  if (family) return new ActionError(`Issue already belongs to work family ${family}; extend that family instead of creating another writer`, 409);
+  const who = `${held.holder.superagent ?? "a person"}${held.holder.session ? ` (session ${held.holder.session})` : ""}`;
+  return new ActionError(`Issue ${held.key} is already claimed by ${who}; do not start a second writer on it`, 409);
+}
+
+/** The writer holds the family's claims from here: agentbox renews them while it runs. An attach whose answer was lost is read back, never repeated. */
+async function attachWriter(ctx: Ctx, w: Work, session: string): Promise<void> {
+  if (!w.claims?.length) return;
+  const now = await agentbox.claims();
+  const out: { key: string; fence: number }[] = [];
+  for (const c of w.claims) {
+    const at = now.find((x) => x.key === c.key);
+    if (at?.holder.session === session) out.push({ key: c.key, fence: at.fence });
+    else {
+      const r = await agentbox.attachClaim(c.key, c.fence, session);
+      out.push({ key: r.key, fence: r.fence });
+    }
+  }
+  w.claims = out;
+  ctx.store.saveWork(w);
+}
+
+/**
+ * The family is over (stopped): its issues are free for another family. A
+ * claim already gone is no error. A handover or a takeover changes the fence,
+ * so a refused release reads the claim again. When Vulcan still holds it,
+ * Vulcan releases it with the fence it has now. When another holds it, it is
+ * not Vulcan's to release: Vulcan forgets it and notes it on the family.
+ * The result is the change to save on the family.
+ */
+export async function releaseClaims(w: Work): Promise<Pick<Work, "claims" | "claiming" | "notes">> {
+  const kept: { key: string; fence: number }[] = [];
+  const notes = [...(w.notes ?? [])];
+  let claims = w.claims ?? [];
+  let claiming = w.claiming;
+  if (claiming) {
+    // The claim answer was lost: the claims this family has are the ones whose note names it.
+    try {
+      const rows = await agentbox.claims({ superagent: me.name });
+      claims = [...claims, ...fences(rows.filter((r) => r.note === claimNote(w.id) && !claims.some((c) => c.key === r.key)))];
+      claiming = undefined;
+    } catch (e) {
+      console.error(`work ${w.id}: its claims were not read back: ${(e as Error).message}`);
+    }
+  }
+  for (const c of claims) {
+    try {
+      const other = await releaseOne(c);
+      if (other) notes.push(`Vulcan no longer holds ${c.key}: ${other} holds it now, so Vulcan does not release it.`);
+    } catch (e) {
+      console.error(`work ${w.id}: ${c.key} not released: ${(e as Error).message}`);
+      kept.push(c);
+    }
+  }
+  return { claims: kept, claiming, notes: notes.length ? notes : undefined };
+}
+
+/** Release one claim. The result is the other holder that has it now, or null. */
+async function releaseOne(c: { key: string; fence: number }): Promise<string | null> {
+  try {
+    await agentbox.releaseClaim(c.key, c.fence);
+    return null;
+  } catch (e) {
+    if (e instanceof AgentboxError && e.status === 404) return null;
+    // 409 is a stale fence. 403 is a holder that is not Vulcan.
+    if (!(e instanceof AgentboxError) || (e.status !== 409 && e.status !== 403)) throw e;
+  }
+  const now = (await agentbox.claims({ key: c.key })).find((x) => x.key === c.key);
+  if (!now) return null;
+  if (now.holder.superagent !== me.name) return `${now.holder.superagent ?? "a person"}${now.holder.session ? ` (session ${now.holder.session})` : ""}`;
+  try {
+    await agentbox.releaseClaim(c.key, now.fence);
+  } catch (e) {
+    if (!(e instanceof AgentboxError) || e.status !== 404) throw e;
+  }
+  return null;
+}
+
+/** Stop what a family runs, then free its issues. */
+export async function stopWork(ctx: Ctx, id: string, now = Date.now()): Promise<string[]> {
+  const w = ctx.store.work(id);
+  const live = (await agentbox.state(false)).sessions;
+  const stopped: string[] = [];
+  for (const s of sessionsOf(w)) {
+    const l = live.find((x) => x.id === s);
+    if (l && l.host !== "none") {
+      await agentbox.stop(s);
+      stopped.push(s);
+    }
+  }
+  const after = ctx.store.work(id);
+  ctx.store.saveWork({ ...after, stoppedAt: after.stoppedAt ?? now, ...(await releaseClaims(after)) });
+  return stopped;
+}
+
+/**
+ * Issue claims from before agentbox kept them: each live family's issues are
+ * claimed once in agentbox, for its writer when it still has one, and then
+ * forgotten here. A family whose claim is refused keeps its rows for the next start.
+ */
+export async function adoptLegacyClaims(ctx: Ctx): Promise<void> {
+  const legacy = ctx.store.legacyClaims();
+  if (!legacy.size) return;
+  const sessions = (await agentbox.state(false)).sessions;
+  for (const [id, keys] of legacy) {
+    const w = ctx.store.works().find((x) => x.id === id);
+    try {
+      if (w && !w.stoppedAt && !w.claims) {
+        const session = sessions.some((s) => s.id === w.session) ? w.session! : undefined;
+        // When the claim answer is lost, the next start reads the claims back by their note.
+        const claims = await claimIssues(ctx, id, keys, session);
+        ctx.store.saveWork({ ...ctx.store.work(id), claims });
+      }
+      ctx.store.dropLegacyClaims(id);
+    } catch (e) {
+      console.error(`work ${id}: its issue claims stay here for now: ${(e as Error).message}`);
+    }
+  }
 }
 
 /** The worktree git has for a branch, from the checkout's list. */
@@ -149,6 +311,7 @@ async function launchWriter(ctx: Ctx, w: Work, now = Date.now()): Promise<void> 
     w.cwd = s.cwd;
     w.state = "working";
     ctx.store.saveWork(w);
+    await attachWriter(ctx, w, s.id);
   } catch (e) {
     w.state = "uncertain";
     ctx.store.saveWork(w);
@@ -162,6 +325,10 @@ export async function retryStart(ctx: Ctx, id: string, caller: string | null, no
     const w = ctx.store.work(id);
     authority(ctx, w, caller, false, now);
     if (w.state !== "starting" && w.state !== "uncertain") throw new ActionError("Work is not awaiting launch recovery", 409);
+    if (w.claiming) {
+      if (w.stoppedAt) throw new ActionError("Work is stopped", 409);
+      return finishStart(ctx, w, now);
+    }
     const proven = w.launch ? await provenWriter(ctx, w, (await agentbox.state(false)).sessions) : null;
     if (proven) {
       if (!proven.session.agentSessionId) throw new ActionError("Existing launch is not yet proven by its provider transcript; inspect it without replaying the writer prompt", 409);
@@ -169,6 +336,7 @@ export async function retryStart(ctx: Ctx, id: string, caller: string | null, no
       w.cwd = proven.cwd;
       w.state = "working";
       ctx.store.saveWork(w);
+      await attachWriter(ctx, w, proven.session.id);
     } else await launchWriter(ctx, w, now);
     return w;
   });

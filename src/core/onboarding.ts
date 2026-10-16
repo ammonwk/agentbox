@@ -43,7 +43,7 @@ export function onboardingItems(o: Onboarding): OnboardingItem[] {
     { id: "gh", label: "gh is installed and authenticated", done: o.ghReady },
     { id: "accounts", label: "an account is logged in", done: o.accountsReady },
     { id: "voice", label: "voice.env has its Deepgram and Anthropic keys", done: o.voiceReady },
-    { id: "service", label: "the systemd service is installed", done: o.serviceInstalled !== false, notApplicable: o.serviceInstalled === null },
+    { id: "service", label: "the background service is installed", done: o.serviceInstalled !== false, notApplicable: o.serviceInstalled === null },
     { id: "linger", label: "it starts at boot, not first login", done: o.lingering !== false, notApplicable: o.lingering === null },
     { id: "pwa", label: "the board is installed as an app", done: o.pwaInstalled !== false, notApplicable: o.pwaInstalled === null },
   ];

@@ -1,6 +1,6 @@
 /** What every Vulcan module works with: its store, git and gh, the manifest's
  *  own settings, and a per-family lock so two operations never interleave. */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ActionError } from "../../lib/sdk";
 import type { Tools } from "./shell";
@@ -11,7 +11,7 @@ export type Config = {
   writerProvider: "claude" | "codex";
   /** The prompt revision new families pin (`revisions/<name>.md`). */
   promptRevision: string;
-  /** Vulcan's directory: where the revisions are. */
+  /** Vulcan's directory: a `revisions/` here wins over the code's own. */
   dir: string;
   /** How a session reaches this agentbox's CLI, for the prompts. */
   cli: string;
@@ -40,9 +40,10 @@ export class Ctx {
   revision(name: string): string {
     if (!/^[\w.-]{1,80}$/.test(name)) throw new ActionError(`not a prompt revision name: ${name}`);
     try {
-      return readFileSync(join(this.config.dir, "revisions", `${name}.md`), "utf8").trim();
+      const own = join(this.config.dir, "revisions", `${name}.md`);
+      return readFileSync(existsSync(own) ? own : join(import.meta.dir, "..", "revisions", `${name}.md`), "utf8").trim();
     } catch {
-      throw new ActionError(`prompt revision ${name} is not in ${join(this.config.dir, "revisions")}`, 409);
+      throw new ActionError(`prompt revision ${name} is not in ${join(this.config.dir, "revisions")} or this code's revisions`, 409);
     }
   }
 }

@@ -152,6 +152,14 @@
   color: var(--text);
   background: var(--hover);
 }
+/* New session: the one action here, so it keeps the accent. */
+.rail-new,
+.rail-new:hover {
+  color: var(--accent);
+}
+.rail-new:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 /* Active and Inactive: a two-way switch under the search. The chosen side is
  * a raised chip on a sunken track; no accent, so the list keeps the colour. */
 .rail-views {
@@ -394,13 +402,34 @@
 .rail-closed-end {
   height: 1px;
 }
-.rail-err {
+.rail-err,
+.rail-notice {
   margin: 8px 10px;
   padding: 9px 12px;
   border-radius: 10px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.rail-err {
   background: color-mix(in srgb, var(--danger) 12%, var(--panel));
   color: var(--danger);
-  font-size: 12px;
+}
+.rail-notice {
+  background: var(--sunken);
+  color: var(--muted);
+}
+.rail-notice details {
+  margin: 6px 0;
+}
+.rail-notice summary {
+  cursor: pointer;
+}
+.rail-notice p,
+.rail-notice ul {
+  margin: 6px 0;
+}
+.rail-notice ul {
+  padding-left: 18px;
 }
 .rail-none {
   padding: 16px 17px;
@@ -882,6 +911,16 @@ button.rail-state:hover {
   font-size: 11.5px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Under the message box, the facts are a quiet line. */
+.cmp .sx-facts,
+.agent-compose-wrap > .sx-facts {
+  gap: 14px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.agent-compose-wrap > .sx-facts {
+  margin: 6px 12px 0;
 }
 .sx-facts a.fact {
   color: var(--accent);
@@ -1384,6 +1423,36 @@ a.tl-sender:hover .tl-sender-name {
   }
 }
 /* Long content cut to its first lines; the rest on a click. */
+.tl-agent-reply { margin: 8px 0 4px; }
+.tl-agent-row { display: flex; align-items: flex-end; gap: 10px; }
+.tl-agent-row .agent-avatar { flex: none; }
+.tl-bubble.tl-agent-bubble,
+[data-theme="dark"] .tl-bubble.tl-agent-bubble {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.tl-agent-name { color: var(--muted); font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.tl-agent-bubble .tl-assistant { padding: 0; margin: 0; }
+.tl-agent-foot { display: flex; align-items: center; gap: 10px; padding: 5px 0 0 44px; color: var(--faint); font-size: 12px; }
+.tl-agent-reply:hover .tl-me-copy { opacity: 1; }
+/* The agent's turn is open: three dots where its reply will come. */
+.tl-typing .tl-agent-bubble { padding: 10px 14px; }
+.tl-typing-dots { display: inline-flex; gap: 4px; align-items: center; height: 14px; }
+.tl-typing-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: tl-typing 1.2s infinite ease-in-out; }
+.tl-typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.tl-typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes tl-typing {
+  0%, 60%, 100% { opacity: 0.3; transform: none; }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tl-typing-dots i { animation: none; opacity: 0.6; }
+}
+@media (max-width: 640px) {
+  .agent-chat-scroll .tl-avatar { display: grid; }
+  .agent-chat-scroll .tl-me-foot { padding-right: 44px; }
+}
 .tl-clamp-body.is-clamped {
   max-height: calc(var(--lines) * 1.55em + 0.4em);
   overflow: hidden;
@@ -3038,6 +3107,8 @@ a.wk-item:hover {
      else. The header, the hints and the extra keys come back with the
      keyboard's going; an error stays, since it is about what you just sent. */
   :root[data-kb] .sx-header,
+  :root[data-kb] .cmp .sx-facts,
+  :root[data-kb] .agent-compose-wrap > .sx-facts,
   :root[data-kb] .term-transcript-bar,
   :root[data-kb] .cmp-aux,
   :root[data-kb] .cmp-hint,
@@ -3538,4 +3609,52 @@ a.wk-item:hover {
   font: inherit;
   font-size: 15px;
   font-weight: 650;
+}
+
+.rail-section-toggle { width: 100%; border: 0; text-align: left; cursor: pointer; }
+.rail-section-toggle:hover { background: var(--hover); }
+.rail-section-toggle:disabled { cursor: default; }
+.rail-section-toggle .section-chevron { transition: transform .12s; }
+.rail-section-toggle[aria-expanded="true"] .section-chevron { transform: rotate(90deg); }
+.tl-assistant-time { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+/* Who sent a message that came in through the user role. */
+.tl-sender-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tl-sender-badge .tl-sent-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-sender-face {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--sunken);
+  color: var(--muted);
+}
+.tl-sender-kind-agent .tl-sent-label {
+  color: var(--text);
+  font-weight: 600;
+}
+.tl-sender-kind-unverified .tl-sent-label {
+  font-style: italic;
+}
+
+/* An agent's picture, or its own icon on a tinted disc: in Agents and in
+ * Sessions, where a message an agent sent carries it. */
+.agent-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--accent) 14%, var(--sunken));
+  color: var(--accent);
 }

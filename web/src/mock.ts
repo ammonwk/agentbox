@@ -12,6 +12,8 @@
  */
 
 import { mockMcp } from "./mockmcp";
+import type { CleanupState } from "../../src/core/cleanup";
+let cleanupState: CleanupState | null = null;
 import type {
   AccountUsage,
   AccountView,
@@ -53,7 +55,11 @@ import type {
   Schedule,
   Card,
   ScheduleSpec,
+  SuperagentInfo,
+  SuperagentView,
 } from "../../src/core/types";
+import type { MemoryView } from "../../src/core/superagent/memory-view";
+import type { CommandReceipt, SuperagentInstance, TeamActionAnswer, TeamChatEvent, TeamChatPage, TeamViewPage } from "../../src/cloud/superagents";
 import type { AgentTimeline, RepoPatch, SessionWork, TermChannel, TermHandlers } from "./api";
 import { nextRun, parseWhen } from "../../src/core/schedule";
 import { retrying } from "../../src/core/attention";
@@ -75,6 +81,7 @@ const settings: AgentSettings = {
   autoApprove: false,
   parkIdleMin: 60,
   reclaimNightly: false,
+  agentSweepAt: "23:00",
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "" },
   balancer: {
     claimNormal: 1.5,
@@ -378,6 +385,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     parkedAt: null,
     parkHold: null,
     background: false,
+    backgroundWork: null,
     ...p,
     lastPromptAt: p.lastPromptAt ?? p.lastActivityAt ?? T0 - 5 * M,
     cacheWarmUntil: p.cacheWarmUntil ?? (p.lastActivityAt ?? T0 - 5 * M) + H,
@@ -765,6 +773,7 @@ function hot(): HotState {
 
 function cold(): ColdState {
   return {
+    cleanup: cleanupState,
     accounts: accountViews(),
     logins: logins.slice(),
     repos: repos.slice(),
@@ -1309,7 +1318,27 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   const p = url.pathname.split("/").filter(Boolean).map(decodeURIComponent); // ["api", ...]
   const [, head, id, action] = p;
 
+  if (head === "cleanup") {
+    if (method === "GET") return cleanupState;
+    if (id === "resume") {
+      const helper = sessions.find(s => s.id === cleanupState?.sessionId);
+      if (helper) { helper.status = "stopped"; helper.host = "none"; helper.pid = null; }
+      for (const s of sessions) s.paused = false;
+      cleanupState = null;
+    } else if (!cleanupState) {
+      const live = sessions.filter(s => s.host !== "none");
+      for (const s of live) s.paused = true;
+      const helper = sess({ id: "cleanup-demo", provider: "claude", cwd: HOME, title: "Machine cleanup", status: "running", host: "tmux", firstPrompt: "Find and clean up wasted CPU and memory.", lastMessage: "Checking unused servers and containers. Your paused sessions are protected." });
+      sessions.unshift(helper);
+      cleanupState = { phase: "paused", sessionId: helper.id, startedAt: Date.now(), sessions: live.map(s => s.id), error: null };
+    }
+    pushHot(); pushCold();
+    return cleanupState;
+  }
+
   if (head === "mcp") return mockMcp(method, p.slice(2), b);
+  if (head === "superagents") return mockSuperagents(method, p.slice(2), b, url.searchParams);
+  if (head === "cloud" && !id && method === "GET") return { configured: false };
   if (method === "GET") {
     if (head === "sessions" && action === "submissions") return submissions.get(p[4]!) ?? null;
     if (head === "state") return appState();
@@ -1749,4 +1778,295 @@ export const mockServer = {
   },
 
   term,
+};
+
+// ------------------------------------------------------------- superagents
+
+/** Vulcan's main asks a question (the #40 card); two work sessions and an
+ *  earlier main are its own on the board. */
+const OWNED: Record<string, string> = { q7k2: "vulcan", "3mq9": "vulcan", a81c: "vulcan", p0o9: "vulcan" };
+for (const s of sessions) if (OWNED[s.id]) s.agentOwner = OWNED[s.id];
+
+const superagents: SuperagentInfo[] = [
+  {
+    name: "vulcan", title: "Vulcan", description: "Turns reported issues into a reviewed pull request: one writer per family of issues, three reviewers a round.",
+    dir: `${AB}/superagents/vulcan`, enabled: true, error: null, main: "q7k2", previous: ["p0o9"], canStart: false, hasPage: true,
+    process: { state: "running", pid: 48211, since: T0 - 5 * H, restarts: 1, lastExit: { code: 1, at: T0 - 5 * H - M } }, createdAt: T0 - 20 * D,
+    icon: "fix", avatar: null, projects: null, memory: false, rollover: null, sweep: "23:00",
+    loops: [
+      { id: "issues", source: "manifest", when: "every 30 minutes", check: "bun check-issues.ts", prompt: "Read the new issues and start a writer for each new family.", nextAt: T0 + 12 * M, due: null, last: { at: T0 - 18 * M, result: "skipped", detail: "no new issues" } },
+      { id: "standup", source: "set", when: "weekdays at 9:00", check: null, prompt: "Post a short summary of open work.", nextAt: T0 + 14 * H, due: null, last: null },
+    ],
+    selection: { provider: "claude", why: "Claude has the most weekly use left per hour until its reset.", at: T0 - 2 * H },
+    events: ["pr.ready"], team: null,
+  },
+  {
+    name: "salus", title: "Salus", description: "Production health: reads the dashboards and the error tracker, and tells you what needs attention.",
+    dir: `${HOME}/.agents/superagents/salus`, enabled: true, error: null, main: null, previous: [], canStart: true, hasPage: false, process: null, createdAt: T0 - 9 * D,
+    icon: "health", avatar: null, projects: ["r-agentbox", "r-web"], memory: true, rollover: { idleMin: 10, contextPct: 60 }, sweep: null, loops: [],
+    selection: null, events: [], team: null,
+  },
+  {
+    name: "caelus", title: "Caelus", description: "Release follow-through: watches deploys after a merge and reports what shipped.",
+    dir: `${HOME}/.agents/superagents/caelus`, enabled: false, error: null, main: null, previous: [], canStart: true, hasPage: false, process: null, createdAt: T0 - 30 * D,
+    icon: "release", avatar: null, projects: null, memory: false, rollover: null, sweep: null, loops: [], selection: null, events: [], team: null,
+  },
+];
+
+const preferences: Record<string, { key: string; text: string; at: number }[]> = {
+  salus: [{ key: "alert-style", text: "Lead with the user impact, then the evidence. One message per incident.", at: T0 - 3 * D }],
+};
+
+/** A program's page (docs/superagents.md, Its page): Work, Feed and Rules. */
+function vulcanView(tab: string | null): SuperagentView {
+  const tabs = [{ id: "work", title: "Work", badge: 2 }, { id: "feed", title: "Feed", badge: 1 }, { id: "rules", title: "Rules" }];
+  if (tab === "feed")
+    return { tabs, refresh: 30, blocks: [
+      { type: "heading", text: "Ready for you" },
+      { type: "item", id: "pr-214", title: "PR #214 Ship the Feed filters", subtitle: "round 3 of 3 · reviews clean", status: "ok", body: "All three reviewers approved. CI is green.", links: [{ label: "PR #214", url: "https://github.com/you/agentbox/pull/214" }],
+        actions: [{ id: "guide", label: "Give guidance", values: { pr: 214 } }, { id: "publish", label: "Mark ready", style: "primary", confirm: "Mark PR #214 ready for review?" }] },
+    ] };
+  if (tab === "rules")
+    return { tabs, blocks: [
+      { type: "markdown", text: "Vulcan holds each writer to these rules. Change them here; the next round reads them." },
+      { type: "form", id: "rules", fields: [
+        { name: "rounds", label: "Rounds at most", kind: "select", value: "3", options: [{ value: "2", label: "2" }, { value: "3", label: "3" }, { value: "4", label: "4" }] },
+        { name: "notes", label: "Standing notes for writers", kind: "textarea", rows: 4, value: "Keep each PR to one family of issues." },
+        { name: "draft", label: "Open every PR as a draft", kind: "checkbox", value: true },
+      ], actions: [{ id: "save-rules", label: "Save", style: "primary" }] },
+    ] };
+  return { tabs, refresh: 20, blocks: [
+    { type: "fields", items: [{ label: "Open families", value: "2" }, { label: "Rounds today", value: "5" }, { label: "Merged this week", value: "**3**" }] },
+    { type: "heading", text: "Open work" },
+    { type: "item", id: "fam-1", title: "#231 Usage samples lose their window", subtitle: "round 2 · writing", status: "busy", sessions: ["3mq9"], body: "The writer migrates `usage_samples` and waits for permission to clear the test database.",
+      children: [{ type: "item", title: "Reviewer 1", subtitle: "waiting for the round", status: "idle" }], actions: [{ id: "stop", label: "Stop", style: "danger", confirm: "Stop this work? The writer's session closes." }] },
+    { type: "item", id: "fam-2", title: "#228 Idle Codex accounts show no usage", subtitle: "round 1 · review asked", status: "warn", sessions: ["a81c"], links: [{ label: "Issue #228", url: "https://github.com/you/agentbox/issues/228" }] },
+    { type: "divider" },
+    { type: "actions", actions: [{ id: "refresh", label: "Look for new issues" }] },
+  ] };
+}
+
+function memoryOf(name: string): MemoryView {
+  const at = T0 - 26 * H;
+  return {
+    enabled: true, rollover: { idleMin: 10, contextPct: 60 },
+    checkpoint: null, supplied: [],
+    preferences: (preferences[name] ?? []).map((p, i) => ({ id: `pref-${i}`, scope: name, kind: "preference", key: p.key, session: "operator", at: p.at, by: "operator", checkpoint: null, usedBy: null, retired: null, body: { text: p.text } })),
+    handoffs: [{ id: "h-1", scope: name, kind: "handoff", key: null, session: "e1w2", at, by: "agent", checkpoint: "c-1", usedBy: null, retired: null,
+      body: { intent: "Watch the error rate on the export endpoint after the cache change.", decisions: [{ decision: "Page only on a sustained 5xx rate over 2%", why: "Single spikes were deploy noise." }], open: ["Is the nightly job's latency alert still useful?"], commitments: ["Check the export dashboard each morning"], refs: [{ label: "Dashboard", ref: "https://grafana.example/d/export" }] } }],
+    notes: [{ id: "n-1", scope: name, kind: "note", key: null, session: "e1w2", at: at - 2 * H, by: "agent", checkpoint: null, usedBy: null, retired: null, body: { decision: "Treat the staging error tracker as noise", why: "It mirrors load tests.", refs: [] } }],
+    results: null,
+    files: { soul: { path: `${HOME}/.agents/superagents/${name}/SOUL.md`, hash: "3f1c", chars: 612, notes: [] }, memory: { path: `${HOME}/.agents/superagents/${name}/MEMORY.md`, setAside: { path: `${HOME}/.agents/superagents/${name}/MEMORY.md.set-aside-1`, at: T0 - 4 * D } } },
+  };
+}
+
+function mockSuperagents(method: string, p: string[], b: unknown, query: URLSearchParams): unknown {
+  const [name, action, sub] = p;
+  if (!name) return method === "GET" ? superagents : null;
+  // An old local agent's id names the superagent it became, as canonical() does.
+  const a = superagents.find((x) => x.name === name) ?? (name.startsWith("local-vulcan-") ? superagents[0] : undefined);
+  if (!a) throw new Error(`no superagent ${name}`);
+  if (!action) {
+    if (method === "PATCH") {
+      const x = body<{ enabled?: boolean }>(b);
+      if (typeof x.enabled === "boolean") {
+        a.enabled = x.enabled;
+        if (a.process) a.process = { ...a.process, state: x.enabled ? "running" : "stopped", since: Date.now() };
+      }
+    }
+    return a;
+  }
+  switch (action) {
+    case "view":
+      if (!a.hasPage) throw new Error(`${name} has no page`);
+      return vulcanView(query.get("tab"));
+    case "action": {
+      const x = body<{ action: string; values: Record<string, unknown> }>(b);
+      if (x.action === "guide") return { compose: `About PR #${String(x.values?.pr)}: ` };
+      if (x.action === "publish") return { message: "PR #214 is ready for review." };
+      if (x.action === "save-rules") return { message: `Saved: at most ${String(x.values?.rounds)} rounds.` };
+      return { message: `${x.action}: done` };
+    }
+    case "chat": {
+      // The first message starts its main: here, a waiting session of the mock.
+      const x = body<{ text: string }>(b);
+      a.main = "x4p0";
+      a.canStart = false;
+      mustSession("x4p0").agentOwner = a.name;
+      const tl = timelineOf("x4p0");
+      tl.push({ id: `x4p0-u${tl.length}`, at: Date.now(), kind: "user", text: x.text ?? "" });
+      pushHot();
+      return { session: "x4p0", started: true };
+    }
+    case "restart":
+      if (a.process) a.process = { ...a.process, state: "running", since: Date.now(), restarts: a.process.restarts + 1 };
+      return a;
+    case "log":
+      return { text: a.process ? `vulcan: listening on 127.0.0.1:9311\nvulcan: 2 families open\nvulcan: round 2 of #231 started (writer 3mq9)\nvulcan: no new issues\n` : "" };
+    case "memory": {
+      if (!a.memory) throw new Error(`${name} has no memory journal: its manifest does not say "memory": true`);
+      if (method === "POST" && sub === "prefer") {
+        const x = body<{ key: string; text: string }>(b);
+        const list = (preferences[name] ??= []).filter((q) => q.key !== x.key);
+        const key = x.key ?? "", text = x.text?.trim() ?? "";
+        preferences[name] = text ? [...list, { key, text, at: Date.now() }] : list;
+        return null;
+      }
+      const view = memoryOf(name);
+      const q = query.get("q")?.trim().toLowerCase();
+      if (q) view.results = [...view.handoffs, ...view.notes].filter((r) => JSON.stringify(r.body).toLowerCase().includes(q)).map((r) => ({ id: r.id, kind: r.kind, at: r.at, session: r.session, summary: "intent" in r.body ? r.body.intent : "decision" in r.body ? r.body.decision : r.body.text }));
+      return view;
+    }
+    case "sweeps": {
+      if (!a.sweep) return [];
+      const at = new Date(T0);
+      at.setHours(23, 0, 0, 0);
+      if (at.getTime() > T0) at.setDate(at.getDate() - 1);
+      return [
+        { id: "sweep-2", at: at.getTime(), closed: [
+          { id: "w8k2pq4d", title: "Fix the stale PR badge on the board" },
+          { id: "m3z7rt1x", title: "Investigate the slow /api/state response" },
+        ], kept: [
+          { id: "q4t8ws2b", title: "Ship the Feed filters", why: "It has an armed wait (PR #214: every check)." },
+          { id: "r2d6yu9k", title: "Card scope fix", why: "It has an open Review card (card 31 “PR #210 ready”)." },
+        ] },
+        { id: "sweep-1", at: at.getTime() - D, closed: [{ id: "c9v1hn6e", title: "Reviewer: PR #212" }], kept: [] },
+      ];
+    }
+    case "loops":
+      if (method === "DELETE") a.loops = a.loops.filter((l) => l.id !== sub || l.source !== "set");
+      return null;
+    case "avatar":
+      if (method === "GET") throw new Error(`${name} has no picture`);
+      a.avatar = method === "PUT" ? { at: Date.now() } : null;
+      return a;
+    case "help":
+      if (method === "GET") return { state: "sent", result: "Created", issue: "https://github.com/ammonwk/agentbox/issues/412" };
+      return { state: "sent", result: "Created", issue: "https://github.com/ammonwk/agentbox/issues/412", note: "The images stayed on this machine." };
+  }
+  throw new Error(`mock: no ${method} /api/superagents/${p.join("/")}`);
+}
+
+// ------------------------------------------------------- shared superagents
+
+/** The team as web/src/lib/teamagents.ts sees it with `?mock=1`: two
+ *  teammates, Terminus shared from Ammon's machine, and whatever you share
+ *  here. Reads wait a moment, as the relay does. */
+const TEAM_WS = "w-mock";
+const YOU = { user_id: "u-mock-you", email: "dev@example.com", display_name: "Dev" };
+const AMMON = { user_id: "u-mock-ammon", email: "ammon@example.com", display_name: "Ammon" };
+const PRIYA = { user_id: "u-mock-priya", email: "priya@example.com", display_name: "Priya" };
+const iso = (at: number) => new Date(at).toISOString();
+const terminus: SuperagentInstance = {
+  id: "5b0e6c1a-7d2f-4e4b-9a51-2c8f3d6e9a10", workspace_id: TEAM_WS, name: "terminus", title: "Terminus",
+  description: "Watches each pull request until it can merge: CI, review threads, conflicts. It tells the author what blocks it.",
+  source: { repo: "github.com/ammonwk/agentbox", path: "superagents/terminus", commit: "8f84996c2b7e" },
+  maintainers: [AMMON.user_id, YOU.user_id], visibility: "workspace", revision: 3, shared_by: AMMON,
+  host: { installation_id: "i-mock-ammon", name: "ammon-mbp", live: true, last_seen_at: iso(T0 - 20_000) },
+  can_edit: false, maintainer: true, created_at: iso(T0 - 6 * D), updated_at: iso(T0 - 2 * D), unshared_at: null,
+};
+const terminusChat: TeamChatEvent[] = [
+  { id: "t-1", at: T0 - 50 * M, kind: "user", text: "Watch PR #218 and #219 today. #219 is the one Priya waits on." },
+  { id: "t-2", at: T0 - 49 * M, kind: "assistant", text: "Watching both. #218: CI is green, one review thread is open. #219: the `web` job fails on a type error in `Feed.tsx`." },
+  { id: "t-3", at: T0 - 31 * M, kind: "question", questions: [{ question: "Rebase #218 onto main? It is 14 commits behind.", options: ["Rebase it", "Leave it"] }], answers: { "Rebase #218 onto main? It is 14 commits behind.": "Rebase it" } },
+  { id: "t-4", at: T0 - 30 * M, kind: "assistant", text: "Rebased #218. CI runs again." },
+  { id: "t-5", at: T0 - 9 * M, kind: "assistant", text: "#219 has a new conflict in `src/core/fleet.ts` after #217 merged. **The author must decide which side keeps the new retry rule.**" },
+  { id: "t-6", at: T0 - 8 * M, kind: "question", questions: [{ question: "Ask the author of #219 to resolve the conflict, or resolve it myself with the version from #217?", options: ["Ask the author", "Resolve it with #217's version"] }], answers: null },
+];
+const terminusEarlier: TeamChatEvent[] = [
+  { id: "t-0a", at: T0 - 5 * H, kind: "user", text: "Good morning. What is still open from yesterday?" },
+  { id: "t-0b", at: T0 - 5 * H + M, kind: "assistant", text: "Two pull requests: #214 waits on a review, #216 waits on CI." },
+];
+const teamReceipts = new Map<string, { r: CommandReceipt; polls: number }>();
+const relay = () => new Promise((ok) => setTimeout(ok, 350));
+const instanceOrThrow = (id: string) => {
+  if (id !== terminus.id) throw new Error("No such shared superagent, or you cannot see it.");
+  return terminus;
+};
+function terminusView(tab: string | null): SuperagentView {
+  const tabs = [{ id: "prs", title: "Pull requests", badge: 2 }, { id: "done", title: "Merged" }];
+  if (tab === "done") return { tabs, blocks: [{ type: "item", title: "PR #217 Retry the usage fetch once", subtitle: "merged 40 minutes ago", status: "ok" }] };
+  return { tabs, refresh: 30, blocks: [
+    { type: "fields", items: [{ label: "Watched", value: "2" }, { label: "Blocked", value: "1" }, { label: "Merged today", value: "**1**" }] },
+    { type: "heading", text: "Watched" },
+    { type: "item", id: "pr-218", title: "PR #218 Keep the rail's order per project", subtitle: "rebased · CI running", status: "busy", sessions: ["k2m4"], links: [{ label: "PR #218", url: "https://github.com/ammonwk/agentbox/pull/218" }] },
+    { type: "item", id: "pr-219", title: "PR #219 Feed filters", subtitle: "conflict in src/core/fleet.ts", status: "warn", body: "The author must pick which side keeps the retry rule.",
+      actions: [{ id: "nudge", label: "Remind the author", values: { pr: 219 } }, { id: "guide", label: "Give guidance", values: { pr: 219 } }] },
+    { type: "divider" },
+    { type: "actions", actions: [{ id: "recheck", label: "Check every PR again" }] },
+  ] };
+}
+
+export const mockTeam = {
+  async directory(): Promise<(SuperagentInstance & { here: boolean })[]> {
+    const mine = superagents.filter((a) => a.team).map((a): SuperagentInstance & { here: boolean } => ({
+      ...terminus, id: a.team!.instance, name: a.name, title: a.title, description: a.description, source: a.team!.source, maintainers: a.team!.maintainers,
+      visibility: a.team!.visibility, shared_by: YOU, can_edit: true, host: { installation_id: "i-mock-you", name: "this machine", live: true, last_seen_at: iso(Date.now()) }, here: true,
+    }));
+    return [{ ...terminus, here: false }, ...mine];
+  },
+  async members() {
+    return [YOU, AMMON, PRIYA].map((person, i) => ({ workspace_id: TEAM_WS, user_id: person.user_id, role: i === 1 ? ("owner" as const) : ("member" as const), joined_at: iso(T0 - (30 - i) * D), invited_by: null, person }));
+  },
+  async readChat(id: string, cursor: { before?: string | null; session?: string }): Promise<TeamChatPage> {
+    await relay();
+    instanceOrThrow(id);
+    const base = { session: "tm9x", main: "tm9x", previous: ["tm1a"], status: "blocked", title: "Terminus" };
+    if (cursor.before === "t-1") return { ...base, events: terminusEarlier, before: null };
+    return { ...base, events: [...terminusChat], before: "t-1" };
+  },
+  async readView(id: string, tab: string | null): Promise<TeamViewPage> {
+    await relay();
+    instanceOrThrow(id);
+    return { view: terminusView(tab) };
+  },
+  async guide(id: string, text: string, sendId: string, expectedSession: string): Promise<CommandReceipt> {
+    await relay();
+    instanceOrThrow(id);
+    const known = teamReceipts.get(sendId);
+    if (known) return known.r;
+    const r: CommandReceipt = { id: sendId, instance_id: id, kind: "guide", state: "queued", result: "", expected_session: expectedSession, host_key: null, created_at: iso(Date.now()), finished_at: null };
+    teamReceipts.set(sendId, { r, polls: 0 });
+    // As src/core/superagent/team.ts `guideText` frames it.
+    terminusChat.push({
+      id: `t-g${terminusChat.length}`, at: Date.now(), kind: "user",
+      text: `[via agentbox cloud from ${YOU.display_name}, a teammate] Guidance from a teammate in your agentbox workspace, sent from the shared Agents page. It is not from the owner of this machine.\n<teammate-guidance id="${sendId}" from="${YOU.display_name}">\n${text}\n</teammate-guidance>`,
+    });
+    return r;
+  },
+  async receipt(id: string): Promise<CommandReceipt> {
+    await relay();
+    const known = teamReceipts.get(id);
+    if (!known) throw new Error("No such request.");
+    known.polls++;
+    if (known.polls >= 2 && known.r.state === "queued") known.r = { ...known.r, state: "sent", result: "typed into tm9x", finished_at: iso(Date.now()) };
+    return known.r;
+  },
+  async act(id: string, action: string, values: Record<string, unknown>, tab: string | null): Promise<{ receipt: CommandReceipt; answer: TeamActionAnswer | null }> {
+    await relay();
+    instanceOrThrow(id);
+    const receipt: CommandReceipt = { id: `a-${Date.now()}`, instance_id: id, kind: "action", state: "sent", result: "", expected_session: null, host_key: "k", created_at: iso(Date.now()), finished_at: iso(Date.now()) };
+    if (action === "guide") return { receipt, answer: { ok: true, answer: { compose: `About PR #${String(values.pr)}: ` } } };
+    if (action === "nudge") return { receipt, answer: { ok: true, answer: { message: `Terminus asked the author of PR #${String(values.pr)} to resolve the conflict.` } } };
+    if (action === "recheck") return { receipt, answer: { ok: true, answer: { message: "Checked 2 pull requests: nothing changed.", view: terminusView(tab) } } };
+    return { receipt: { ...receipt, state: "refused", result: `${action} is not an action of this page` }, answer: null };
+  },
+  async share(name: string, opts: { visibility: "private" | "workspace"; maintainers?: string[] }): Promise<SuperagentInfo> {
+    await relay();
+    const a = superagents.find((x) => x.name === name);
+    if (!a) throw new Error(`no superagent ${name}`);
+    a.team = {
+      workspace: TEAM_WS, instance: "9c4d2e1f-3b6a-4d8e-8f21-6a0b7c9d1e2f", visibility: opts.visibility,
+      maintainers: [...new Set([YOU.user_id, ...(opts.maintainers ?? [])])], source: { repo: "github.com/you/agentbox", path: a.dir.replace(`${AB}/`, ""), commit: "f2545d9a1c3e" },
+    };
+    return a;
+  },
+  async unshare(name: string): Promise<SuperagentInfo> {
+    await relay();
+    const a = superagents.find((x) => x.name === name);
+    if (!a) throw new Error(`no superagent ${name}`);
+    if (!a.team) throw new Error(`${name} is not shared`);
+    a.team = null;
+    return a;
+  },
 };

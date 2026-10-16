@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Icon } from "../../components";
 import { isPhone } from "../../lib/phone";
+import { recordVoice } from "../../lib/recording";
 
 /**
  * A voice message from the Send button, the way WhatsApp's works: hold it to
@@ -18,12 +19,6 @@ const LOCK_PX = 64;
 const CANCEL_PX = 90;
 /** Shorter than this was a slip of the thumb, not a message. */
 const MIN_MS = 600;
-/** The server's cap (MAX_AUDIO_BYTES). */
-const MAX_BYTES = 40 * 1024 * 1024;
-
-/** Chrome and Firefox record webm/opus, Safari mp4; Deepgram reads either. */
-const MIMES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
-
 /** Phones and tablets: where there is a thumb to hold a button with. */
 export function voiceNotes(): boolean {
   return typeof window !== "undefined" && (isPhone() || window.matchMedia("(pointer: coarse)").matches);
@@ -75,11 +70,8 @@ export function useVoiceNote({ onDone, onError, working }: {
     swallow: false,
     /** Counts recordings, so a microphone that arrives late knows it was let go of. */
     take: 0,
-    stream: null as MediaStream | null,
-    rec: null as MediaRecorder | null,
-    chunks: [] as Blob[],
+    audio: null as ReturnType<typeof recordVoice> | null,
     startedAt: 0,
-    keep: false,
   });
   const cb = useRef({ onDone, onError });
   cb.current = { onDone, onError };
@@ -108,17 +100,14 @@ export function useVoiceNote({ onDone, onError, working }: {
     if (s.timer) clearTimeout(s.timer);
     s.timer = null;
     s.take++;
-    s.keep = keep;
-    if (s.rec && s.rec.state !== "inactive") s.rec.stop();
-    else s.stream?.getTracks().forEach((t) => t.stop());
-    s.rec = null;
-    s.stream = null;
+    s.audio?.stop(keep);
+    s.audio = null;
     if (s.phase !== "idle") go("idle");
   };
   // Leaving the session mid-recording lets go of the microphone.
   useEffect(() => () => end(false), []);
 
-  const begin = async () => {
+  const begin = () => {
     const s = g.current;
     s.timer = null;
     s.swallow = true;
@@ -128,46 +117,21 @@ export function useVoiceNote({ onDone, onError, working }: {
     setHinting(false);
     navigator.vibrate?.(12);
     const take = ++s.take;
-    try {
-      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-        throw new Error(window.isSecureContext ? "this browser cannot record" : "the microphone needs HTTPS — open the https:// address");
-      }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      // Let go of (or cancelled by the permission prompt) before the microphone came.
-      if (s.take !== take) {
-        stream.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      const mimeType = MIMES.find((m) => MediaRecorder.isTypeSupported(m));
-      const rec = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: 32_000 });
-      const chunks: Blob[] = [];
-      const startedAt = Date.now();
-      rec.ondataavailable = (e) => {
-        if (e.data.size) chunks.push(e.data);
-      };
-      rec.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        if (!s.keep) return;
-        if (Date.now() - startedAt < MIN_MS) return setHinting(true);
-        const audio = new Blob(chunks, { type: rec.mimeType || mimeType || "audio/webm" });
-        if (audio.size === 0) cb.current.onError("nothing was recorded");
-        else if (audio.size > MAX_BYTES) cb.current.onError("the recording is too long to send");
+    let startedAt = 0;
+    s.audio = recordVoice({
+      onStart: () => { s.startedAt = startedAt = Date.now(); },
+      onDone: (audio) => {
+        // A newer take or an unmount must not receive the old recorder's callback.
+        if (s.take !== take + 1) return;
+        if (Date.now() - startedAt < MIN_MS) setHinting(true);
         else cb.current.onDone(audio);
-      };
-      rec.onerror = () => {
-        cb.current.onError("the recording failed");
+      },
+      onError: (why) => {
+        if (s.take !== take && s.take !== take + 1) return;
+        cb.current.onError(why);
         end(false);
-      };
-      s.stream = stream;
-      s.rec = rec;
-      s.startedAt = startedAt;
-      rec.start(1000);
-    } catch (e) {
-      if (s.take !== take) return;
-      const err = e as Error;
-      cb.current.onError(err.name === "NotAllowedError" ? "the microphone is blocked for this page — allow it in the browser's site settings" : `no microphone: ${err.message}`);
-      end(false);
-    }
+      },
+    });
   };
 
   const button: VoiceNote["button"] = {
@@ -208,7 +172,7 @@ export function useVoiceNote({ onDone, onError, working }: {
         // The system took the touch (a notification shade, the permission
         // prompt). What was said so far is kept for a tap on the button; with no
         // microphone yet there is nothing to keep.
-        if (s.rec) go("locked");
+        if (s.startedAt) go("locked");
         else end(false);
       }
     },

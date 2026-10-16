@@ -31,7 +31,7 @@ export function useOnboardingInbox(ob: Onboarding | null, sessions: readonly Ses
     setNote(null);
     try {
       const r = await api.installService();
-      setNote(r.lingering ? "Service installed; it starts at boot." : "Service installed, but start-at-boot is off — run `loginctl enable-linger`.");
+      setNote(r.lingering ? "Service installed; it starts at boot." : "Service installed; it starts automatically when you log in.");
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
     } finally {

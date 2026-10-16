@@ -2,7 +2,7 @@
  * Dedicated accounts force Muse's file credential backend so a login cannot
  * overwrite another account's macOS Keychain item. No credentials are copied.
  */
-import { readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Account, ModelOption } from "../types";
 import { userHome } from "../paths";
@@ -10,23 +10,7 @@ import { carryFlags, setsFlag, type Arity } from "../launch";
 import { cliVersion } from "./cli-version";
 import { JsonlTranscriptReader } from "./jsonl-reader";
 import { museFormat } from "./muse-transcript";
-import { cwdOf, environOf, findProcesses, startedAtOf } from "./procs";
-
-/** The paths a process holds open, from /proc (the macOS reader comes with
- *  the macOS port's procs.ts). */
-function openFilesOf(pid: number): string[] {
-  try {
-    return readdirSync(`/proc/${pid}/fd`).flatMap((fd) => {
-      try {
-        return [readlinkSync(`/proc/${pid}/fd/${fd}`)];
-      } catch {
-        return [];
-      }
-    });
-  } catch {
-    return [];
-  }
-}
+import { cwdOf, environOf, openFilesOf, findProcesses, startedAtOf } from "./procs";
 import { underInput } from "./tui-screen";
 import type { Command, LiveProcess, ProviderAdapter, TranscriptRef } from "./types";
 

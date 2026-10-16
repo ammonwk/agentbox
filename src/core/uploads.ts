@@ -26,8 +26,12 @@ const NAME = /^\d{8}-[0-9a-f]{12}\.(png|jpg|gif|webp)$/;
 
 export const uploadsRoot = (): string => join(agentboxHome(), "uploads");
 
+/** The file extension for an image type agents and browsers both read, or null. */
+export const imageExtension = (mime: string): string | null => TYPES[mime.split(";")[0]!.trim().toLowerCase()] ?? null;
+export const imageMime = (ext: string): string | null => MIME[ext] ?? null;
+
 export function saveUpload(bytes: Uint8Array, mime: string): { name: string; path: string } {
-  const ext = TYPES[mime.split(";")[0]!.trim().toLowerCase()];
+  const ext = imageExtension(mime);
   if (!ext) throw new Error(`not an image agents can read: ${mime || "no content type"} (png, jpeg, gif or webp)`);
   if (bytes.byteLength === 0) throw new Error("the image is empty");
   if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new Error(`the image is over ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);

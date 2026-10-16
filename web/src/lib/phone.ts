@@ -32,10 +32,13 @@ export function openingTab(s?: { status: string; question?: unknown }): SessionT
 }
 
 /**
- * Running as the installed app rather than in a browser tab. Only there can
- * the page have Ctrl+W, Ctrl+Tab and Ctrl+Shift+T: a Chrome tab keeps those
+ * Running as the installed app or the desktop app rather than in a browser
+ * tab. Only there can the page have Ctrl+W, Ctrl+T and Ctrl+Shift+T: a Chrome tab keeps those
  * for itself, and elsewhere they would be surprising.
  */
 export function isInstalledApp(): boolean {
-  return typeof window !== "undefined" && window.matchMedia("(display-mode: standalone), (display-mode: window-controls-overlay)").matches;
+  if (typeof window === "undefined") return false;
+  // The desktop app (desktop/) is a window of its own too, with no browser keys.
+  if (/\bElectron\//.test(navigator.userAgent)) return true;
+  return window.matchMedia("(display-mode: standalone), (display-mode: window-controls-overlay)").matches;
 }

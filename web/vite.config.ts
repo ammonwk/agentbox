@@ -1,8 +1,10 @@
 import { defineConfig } from "vite";
+import { sourceRevision } from "../src/revision";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   root: "web",
+  define: { __AGENTBOX_REVISION__: JSON.stringify(sourceRevision()) },
   plugins: [react()],
   build: { outDir: "dist", emptyOutDir: true },
   server: {

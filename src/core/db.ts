@@ -417,6 +417,119 @@ export const MIGRATIONS: readonly string[] = [
   // 29 — a session whose stops are not pushed to your phone: one a program
   // started, whose own page shows what it waits on.
   `ALTER TABLE sessions ADD COLUMN quiet INTEGER;`,
+  // 30 — what agentbox keeps for a superagent beside its row
+  // (src/core/superagent/state.ts): its rollover, loops, sweeps, picture and
+  // provider choice, as JSON; each generic event it was given, once
+  // (src/core/superagent/events.ts); and each local agent of the old Agents
+  // runtime that became a superagent (scripts/migrate-local-agents.ts).
+  `
+  CREATE TABLE superagent_state (
+    name TEXT PRIMARY KEY,
+    body TEXT NOT NULL
+  );
+  CREATE TABLE superagent_events (
+    name TEXT NOT NULL,
+    key  TEXT NOT NULL,
+    at   INTEGER NOT NULL,
+    PRIMARY KEY (name, key)
+  );
+  CREATE TABLE superagent_imports (
+    source TEXT PRIMARY KEY,
+    name   TEXT NOT NULL,
+    at     INTEGER NOT NULL,
+    report TEXT NOT NULL
+  );
+  `,
+  // 31 — work claims (src/core/workclaims.ts): one holder per source, a fence
+  // that grows on every change of holder, and a lease core renews. A released
+  // row stays, so its key's next fence is higher than any before it. The
+  // events are each change, for reading back what happened.
+  `
+  CREATE TABLE work_claims (
+    scope       TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    fence       INTEGER NOT NULL,
+    state       TEXT NOT NULL,
+    superagent  TEXT,
+    session     TEXT,
+    note        TEXT,
+    lease_until INTEGER NOT NULL,
+    claimed_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (scope, key)
+  );
+  CREATE INDEX work_claims_session ON work_claims(session);
+  CREATE TABLE work_claim_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope      TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    fence      INTEGER NOT NULL,
+    superagent TEXT,
+    session    TEXT,
+    note       TEXT,
+    at         INTEGER NOT NULL
+  );
+  CREATE INDEX work_claim_events_key ON work_claim_events(scope, key, id);
+  `,
+  // 32 — the GitHub App broker (src/core/github/): the policy the host owner
+  // pinned for each superagent, with its App key's path, and the journal of
+  // the actions superagents request. An action marked attempting is never
+  // sent again: the next server marks it uncertain.
+  `
+  CREATE TABLE github_pins (
+    superagent   TEXT PRIMARY KEY,
+    digest       TEXT NOT NULL,
+    policy       TEXT NOT NULL,
+    app_key_path TEXT NOT NULL,
+    pinned_at    INTEGER NOT NULL
+  );
+  CREATE TABLE github_actions (
+    request     TEXT PRIMARY KEY,
+    superagent  TEXT NOT NULL,
+    session     TEXT,
+    action      TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    claim       TEXT,
+    cwd         TEXT,
+    branch      TEXT NOT NULL,
+    digest      TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    result      TEXT,
+    receipt     TEXT,
+    card        INTEGER,
+    approved_by TEXT,
+    approved_at INTEGER,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  );
+  CREATE INDEX github_actions_state ON github_actions(state);
+  `,
+  // 33 — superagents this machine shares with its cloud workspace
+  // (src/core/superagent/shares.ts): the instance the cloud gave each, as
+  // the share route wrote it and the team tick reads it back from the cloud.
+  // The cloud is the record; this is what the hub shows and claims route by.
+  `
+  CREATE TABLE superagent_shares (
+    name         TEXT PRIMARY KEY,
+    instance     TEXT NOT NULL UNIQUE,
+    workspace    TEXT NOT NULL,
+    installation TEXT NOT NULL,
+    visibility   TEXT NOT NULL,
+    maintainers  TEXT NOT NULL,
+    source       TEXT,
+    updated_at   INTEGER NOT NULL
+  );
+  `,
+  // 34 — whether a session's parent may give it its superagent's authority
+  // (`Superagents.ownership`): "unproven" for one started under a parent its
+  // starter could not prove it acts for, "handover" for one a handover moved;
+  // and an index for the walk back along `successor`.
+  `
+  ALTER TABLE sessions ADD COLUMN parent_proof TEXT;
+  CREATE INDEX sessions_successor ON sessions(successor);
+  `,
 ];
 
 function migrate(d: Database) {
@@ -516,6 +629,10 @@ export interface SessionRecord {
   parent?: string | null;
   /** You set or cleared `parent` yourself (`Fleet.patch`): the fleet leaves it be. */
   parentByHand?: boolean;
+  /** Whether `parent` gives it its superagent's authority: "unproven" when its
+   *  starter could not prove it acts for that parent (it groups, nothing
+   *  more); "handover" when a handover moved it, which keeps what it had. */
+  parentProof?: "unproven" | "handover" | null;
   /** When the fleet stopped it for sitting idle (`Fleet.parkIdle`); null once
    *  it runs again, or once you stop it yourself. */
   parkedAt?: number | null;
@@ -544,7 +661,7 @@ type SessionRow = {
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
   launch: string | null; effort: string | null; model: string | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
-  parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
+  parent_by_hand: number | null; parent_proof: string | null; successor: string | null; hopped_at: number | null;
   pin_order: number | null; bookmarked_at: number | null; quiet: number | null;
 };
 
@@ -570,6 +687,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     model: r.model ?? null,
     parent: r.parent ?? null,
     parentByHand: !!r.parent_by_hand,
+    parentProof: (r.parent_proof as SessionRecord["parentProof"]) ?? null,
     parkedAt: r.parked_at ?? null,
     parkedMates: (parseJson(r.parked_mates) as string[] | null) ?? null,
     parkedWhy: r.parked_why ?? null,
@@ -602,6 +720,7 @@ const RECORD_COLUMNS = {
   model: "model",
   parent: "parent",
   parentByHand: "parent_by_hand",
+  parentProof: "parent_proof",
   parkedAt: "parked_at",
   parkedMates: "parked_mates",
   parkedWhy: "parked_why",
@@ -770,6 +889,12 @@ export function insertWait(w: Pick<Wait, "sessionId" | "spec" | "createdAt" | "d
     w.sessionId, JSON.stringify(w.spec), w.createdAt, w.deadline, JSON.stringify(w.memo ?? {}),
   ]);
   return getWait(Number(lastInsertRowid))!;
+}
+
+/** Move `from`'s waits that are open, or ended but not yet told, to `to`:
+ *  the session that took over from it (`Fleet.handOver`). Told ones stay. */
+export function moveWaits(from: string, to: string): number {
+  return getDb().run("UPDATE waits SET session_id = ? WHERE session_id = ? AND (ended IS NULL OR told_at IS NULL)", [to, from]).changes;
 }
 
 export function getWait(id: number): Wait | null {
@@ -1413,6 +1538,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   autoApprove: true,
   parkIdleMin: 60,
   reclaimNightly: false,
+  agentSweepAt: "23:00",
   models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "" },
   balancer: DEFAULT_BALANCER,
 };

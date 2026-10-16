@@ -9,19 +9,23 @@ import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./compon
 import { needsYou, titleOf } from "./lib/board";
 import { go, hrefOf, navOf, onGo, parseHash, restoreScope, scopeOf, selectScope, type NavId, type Route } from "./route";
 import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
-import { useUpdateReady } from "./lib/update";
+import { useServerBehind, useUpdateReady } from "./lib/update";
 import { useKeyboardNavigation } from "./lib/keyboard";
 import { SystemBar } from "./SystemBar";
-import { SysbarSlot } from "./sysbarslot";
 import { SessionView } from "./views/session/SessionView";
 import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
+import { SettingsNav } from "./SettingsNav";
 import { Skills } from "./views/Skills";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
-import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
+import { Dictation } from "./Dictation";
+import { request } from "./api";
+import { ProjectContext, scopedState, projectOfSession, useScope } from "./lib/projects";
+import { ProjectTabs, useProjectTabs } from "./ProjectTabs";
+import { Profile } from "./views/Profile";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
@@ -35,11 +39,7 @@ const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Age
 // ----------------------------------------------------------------- routing
 
 function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
-  // An unscoped link to a list opens in the project this browser last looked at.
-  const [route, setRoute] = useState<Route>(() => {
-    restoreScope();
-    return parseHash(location.hash);
-  });
+  const [route, setRoute] = useState<Route>(() => { restoreScope(); return parseHash(location.hash); });
 
   useEffect(() => {
     const onChange = () => setRoute(parseHash(location.hash));
@@ -72,20 +72,12 @@ function isTyping(e: KeyboardEvent): boolean {
 // -------------------------------------------------------------------- app
 
 const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
-  { id: "agents", label: "Agents", icon: Icon.brain, to: { page: "agents", name: null, tab: null } },
+  { id: "agents", label: "Agents", icon: Icon.brain, to: { page: "agents" } },
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
   { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
-  { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
-  { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
   { id: "team", label: "Team", icon: Icon.link, to: { page: "team" } },
-  { id: "mcps", label: "MCPs", icon: Icon.plugs, to: { page: "mcps" } },
-  { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
 ];
-
-/** Pages a project filters; the rest are the machine's, whatever is selected. */
-const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions", "review"]);
-const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "skills", "mcps", "team", "voice"]);
 
 const PAGE_TITLE: Record<NavId, string> = {
   agents: "Agents",
@@ -97,6 +89,7 @@ const PAGE_TITLE: Record<NavId, string> = {
   mcps: "MCPs",
   team: "Team",
   settings: "Settings",
+  profile: "Profile",
 };
 
 export function App() {
@@ -106,34 +99,38 @@ export function App() {
   useEffect(() => {
     if (new URLSearchParams(location.search).has("cloud") && route.page !== "team") navigate({ page: "team" }, true);
   }, []);
-  const theme = useTheme(state?.settings.theme);
+  useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  // The selected project (lib/projects.tsx): the lists, badges and the
-  // new-session dialog see the board through it. Accounts, MCPs, settings
-  // and the system bar are global.
   const scope = useScope();
   const project = state?.repos.find((r) => r.id === scope.project) ?? null;
   const scoped = useMemo(() => (state ? scopedState(state, scope.project) : null), [state, scope.project]);
-  // A scope naming a repo that is registered no more (or on another machine).
   const staleProject = !!state && !!scope.project && !project;
   const selectedSession = route.page === "session" ? state?.sessions.find((s) => s.id === route.id) : null;
-  // An unscoped link straight to a session lands in that session's project.
   useEffect(() => {
-    if (selectedSession && !scopeOf().has("project")) selectScope("project", sessionProject(state!.repos, selectedSession), route, true);
+    if (selectedSession && !scopeOf().has("project")) selectScope("project", projectOfSession(state!.repos, selectedSession), route, true);
   }, [selectedSession?.id]);
-  const wrongSession = !!scope.project && !!selectedSession && sessionProject(state!.repos, selectedSession) !== scope.project;
-  const projectName = project?.displayName ?? (staleProject ? "Unavailable project" : "All projects");
+  const wrongSession = scope.project && selectedSession && projectOfSession(state!.repos, selectedSession) !== scope.project;
+  const projectTabs = useProjectTabs(state, scope.project);
+  // For the key handler below, which is added once.
+  const tabOrder = useRef<{ ids: string[]; selected: string | null }>({ ids: [], selected: null });
+  tabOrder.current = { ids: projectTabs.tabs.map((t) => t.id), selected: scope.project };
+  // A link to one agent with no project waits: the Agents page selects the
+  // agent's first project. For an agent that names none, the first tab opens.
+  const agentLink = route.page === "agents" && !!route.id && !scopeOf().has("project");
+  useEffect(() => {
+    if (!state || scope.project || !projectTabs.tabs.length || route.page === "session" || agentLink) return;
+    selectScope("project", projectTabs.tabs[0]!.id, route, true);
+  }, [!!state, scope.project, route.page, projectTabs.tabs[0]?.id, agentLink]);
   const nav = navOf(route);
   // The start of the system bar, where an open session puts its facts.
-  const [sysbarSlot, setSysbarSlot] = useState<HTMLElement | null>(null);
 
   const counts = useMemo(() => countsOf(scoped), [scoped]);
 
   const contentRef = useRef<HTMLElement>(null);
   useEffect(() => {
     contentRef.current?.scrollTo(0, 0);
-  }, [route.page]);
+  }, [route.page, route.page === "agents" ? route.id : null]);
 
   // With the breadcrumb gone, the tab title is where the session's name lives.
   const here = route.page === "session" && state ? `${titleOfId(state, route.id)} — agentbox` : "agentbox";
@@ -145,7 +142,16 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
       if (document.querySelector(".modal-backdrop")) return;
-      if (e.key === "n") {
+      if (e.key === "Tab" && e.shiftKey) {
+        // Shift+Tab steps to the next project tab, and from the last to the
+        // first. Not in a text field or the terminal (isTyping), where it is
+        // the field's or the agent's own (Claude Code's mode switch), and not
+        // in a dialog; elsewhere it no longer moves focus back.
+        const { ids, selected } = tabOrder.current;
+        if (ids.length < 2) return;
+        e.preventDefault();
+        selectScope("project", ids[(ids.indexOf(selected ?? "") + 1) % ids.length]!);
+      } else if (e.key === "n") {
         e.preventDefault();
         setNewOpen(true);
       } else if (e.key === "/") {
@@ -165,20 +171,34 @@ export function App() {
       e.stopPropagation();
       if (!document.querySelector(".modal-backdrop")) setNewOpen(true);
     };
+    // Ctrl+Tab steps to the next project tab and Ctrl+Shift+Tab to the one
+    // before, from anywhere, as a browser's tabs do. A browser keeps the key
+    // for its own tabs; the installed app and the desktop app give it here.
+    const onCtrlTab = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || e.key !== "Tab") return;
+      const { ids, selected } = tabOrder.current;
+      if (ids.length < 2 || document.querySelector(".modal-backdrop")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const step = e.shiftKey ? ids.length - 1 : 1;
+      selectScope("project", ids[(ids.indexOf(selected ?? "") + step) % ids.length]!);
+    };
     addEventListener("keydown", onKey);
     addEventListener("keydown", onCtrlT, true);
+    addEventListener("keydown", onCtrlTab, true);
     return () => {
       removeEventListener("keydown", onKey);
       removeEventListener("keydown", onCtrlT, true);
+      removeEventListener("keydown", onCtrlTab, true);
     };
   }, []);
 
-  const flush = route.page === "agents" || route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
+  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
-    <ProjectContext.Provider value={{ repos: state?.repos ?? [] }}>
-    <div className="app" data-page={route.page}>
+    <ProjectContext.Provider value={{ repos: state?.repos ?? [] }}><div className="app" data-page={route.page}>
+      <Dictation />
       <a className="skip" href="#content">
         Skip to content
       </a>
@@ -187,43 +207,15 @@ export function App() {
           itself widens over the page on hover, so nothing beside it reflows. */}
       <div className="sidebar-slot">
         <aside className="sidebar" data-nav-region="navigation" aria-label="Application navigation">
-          {/* The logo is the project: it names the selected one and opens the switcher. */}
-          <button
-            type="button"
-            className="brand project-brand"
-            aria-label={`Switch project: ${projectName}`}
-            title={`Switch project · ${projectName}`}
-            aria-haspopup="dialog"
-            onClick={() => setSwitcherOpen(true)}
-          >
+          <a className="brand project-brand" href={hrefOf({ page: "agents" })} aria-label="agentbox home" title="agentbox">
             <BrandMark />
-            <span className="nav-label">{projectName}</span>
+            <span className="nav-label">agentbox</span>
             {MOCK ? (
               <span className="mock-tag" title="Opened with ?mock=1 — nothing here is real and nothing is sent anywhere">
                 mock
               </span>
             ) : null}
-          </button>
-
-          {/* Blurring on a mouse click (e.detail > 0) keeps the Modal from
-              handing focus back here on close: a script refocus outside the
-              gesture reads as keyboard focus, and :focus-visible on this
-              button held the sidebar open after sending. Keyboard activation
-              (Enter) keeps the restore. */}
-          <button
-            type="button"
-            className="nav-item nav-new"
-            data-nav-item
-            title="New session (n)"
-            onClick={(e) => {
-              if (e.detail > 0) e.currentTarget.blur();
-              setNewOpen(true);
-            }}
-          >
-            <Icon.plus />
-            <span className="nav-label">New session</span>
-            <kbd className="nav-label">n</kbd>
-          </button>
+          </a>
 
           <nav aria-label="Primary">
             {NAV.map(({ id, label, icon: IconCmp, to }) => {
@@ -252,28 +244,24 @@ export function App() {
             })}
           </nav>
 
-          <div className="spacer" />
-          <UpdateReady />
-          <InboxBell state={state} themeError={theme.error} />
-          <ConnectionChip />
-          <ThemeControl value={theme.pref} onChange={theme.set} />
+          <div className="sidebar-footer">
+            <UpdateReady />
+            <a className={`nav-item ${nav === "settings" ? "active" : ""}`} data-nav-item data-nav-id="settings" href={hrefOf({ page: "settings" })} aria-current={nav === "settings" ? "page" : undefined} title="Settings">
+              <Icon.settings size={20} weight="duotone" />
+              <span className="nav-label">Settings</span>
+              {counts.accounts > 0 ? <span className="count count-warn" title={countTitle("accounts", counts.accounts)}>{counts.accounts}</span> : null}
+            </a>
+            <InboxBell state={state} />
+            <ProfileLink identity={state?.onboarding.identity} active={route.page === "profile"} />
+          </div>
         </aside>
       </div>
 
       <div className="main">
-        {/* On a phone the sidebar is a tab bar without the logo, so the
-            project is named — and switched — in a bar above the page. */}
-        <div className="project-bar">
-          <button type="button" aria-label={`Switch project: ${projectName}`} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
-            <BrandMark />
-            <span>{projectName}</span>
-            <Icon.chevronDown size={12} />
-          </button>
-          {GLOBAL_PAGES.has(route.page) ? <span className="hint">{route.page === "team" ? "Workspace settings" : "Global settings and tools"}</span> : null}
-        </div>
+        <ProjectTabs tabs={projectTabs.tabs} attention={projectTabs.attention} selected={scope.project} onAdd={() => setSwitcherOpen(true)} onClose={projectTabs.close} />
         {/* The sessions pages carry their own header — the board's filter bar,
             the session's title — so a page title above them is a second one. */}
-        {flush ? null : (
+        {flush || route.page === "agents" || route.page === "profile" ? null : (
           <header className="topbar">
             <h1>{PAGE_TITLE[nav]}</h1>
             {route.page === "accounts" ? (
@@ -297,23 +285,19 @@ export function App() {
           </header>
         )}
 
+        {nav === "settings" ? <SettingsNav route={route} accountAlerts={counts.accounts} /> : null}
+
         {/* The one banner left: the rest are in the inbox (Inbox.tsx). */}
         <StaleBanner />
 
-        <SysbarSlot.Provider value={sysbarSlot}>
         <main className={`content ${(flush || route.page === "skills" || route.page === "mcps") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
-            ) : staleProject && SCOPED_PAGES.has(route.page) ? (
-              <Empty title="This project is no longer registered" action={<Button onClick={() => selectScope("project", null)}>All projects</Button>}>
-                <p>Your conversations and work remain in All projects.</p>
-              </Empty>
+            ) : staleProject && ["agents", "session", "sessions", "review"].includes(route.page) ? (
+              <Empty title="This project is no longer registered"><Button onClick={() => setSwitcherOpen(true)}>Choose a project</Button></Empty>
             ) : wrongSession ? (
-              <Empty
-                title="This session belongs to another project"
-                action={<Button onClick={() => selectScope("project", sessionProject(state.repos, selectedSession), route)}>Open in its project</Button>}
-              />
+              <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", projectOfSession(state.repos, selectedSession!), route)}>Open in its project</Button></Empty>
             ) : route.page === "sessions" || route.page === "session" ? (
               <SessionView
                 key={scope.project ?? "all"}
@@ -332,9 +316,7 @@ export function App() {
                 onNew={() => setNewOpen(true)}
               />
             ) : route.page === "agents" ? (
-              <Suspense fallback={<Empty title="Loading…" />}>
-                <Agents state={state} name={route.name} tab={route.tab} />
-              </Suspense>
+              <Suspense fallback={<Empty title="Loading…" />}><Agents key={`${scope.workspace}:${scope.project ?? "all"}`} state={state} route={route} /></Suspense>
             ) : route.page === "accounts" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
                 <Accounts state={state} route={route} />
@@ -349,6 +331,8 @@ export function App() {
               <Skills skills={state.skills} />
             ) : route.page === "team" ? (
               <Suspense fallback={<Empty title="Loading…" />}><Team state={state} /></Suspense>
+            ) : route.page === "profile" ? (
+              <Profile identity={state.onboarding.identity} />
             ) : route.page === "mcps" ? (
               <Mcps />
             ) : (
@@ -356,14 +340,13 @@ export function App() {
             )}
           </ErrorBoundary>
         </main>
-        </SysbarSlot.Provider>
 
         <ErrorBoundary label="The system bar">
-          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} slotRef={setSysbarSlot} />
+          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} cleanup={state?.cleanup ?? null} focusAccount={focusAccount} />
         </ErrorBoundary>
       </div>
 
-      {switcherOpen && state ? <ProjectSwitcher repos={state.repos} selected={scope.project} onClose={() => setSwitcherOpen(false)} /> : null}
+      {switcherOpen && state && <ProjectSwitcher repos={state.repos} selected={scope.project} onClose={() => setSwitcherOpen(false)} />}
       {newOpen && state ? (
         <ErrorBoundary label="The new-session dialog">
           <NewSession
@@ -383,8 +366,7 @@ export function App() {
           />
         </ErrorBoundary>
       ) : null}
-    </div>
-    </ProjectContext.Provider>
+    </div></ProjectContext.Provider>
   );
 }
 
@@ -403,12 +385,12 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0 };
+  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0, profile: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
     agents: 0,
-    sessions: needsYou(state.sessions),
+    sessions: needsYou(state.sessions.filter((s) => !s.agentOwner)),
     // Kept for later is still yours, but you have seen it: it does not nag.
     review: state.cards.filter((c) => c.state === "open").length,
     voice: 0,
@@ -417,6 +399,7 @@ function countsOf(state: AppState | null): Record<NavId, number> {
     mcps: 0,
     team: 0,
     settings: 0,
+    profile: 0,
   };
 }
 
@@ -436,43 +419,48 @@ function useCountdown(to: number | null): number | null {
   );
 }
 
-/** A rebuild this page is not running yet; it reloads by itself when that is safe (lib/update.ts). */
+/** A rebuild this page is not running yet, which reloads by itself when that
+ *  is safe, or newer commits the server is not running, which wait for a
+ *  click to restart it on them (lib/update.ts). */
 function UpdateReady() {
   const ready = useUpdateReady();
-  if (!ready) return null;
+  const behind = useServerBehind();
+  const [restarting, setRestarting] = useState(false);
+  useEffect(() => setRestarting(false), [behind?.running]);
+  if (!ready && !behind) return null;
+  const n = behind?.commits ?? 0;
   return (
     <button
       type="button"
       className="nav-item nav-update"
-      title="agentbox was rebuilt. Reload to run the new version (it reloads by itself next time you leave the page)"
-      onClick={() => location.reload()}
+      disabled={restarting}
+      title={behind
+        ? `${n} newer commit${n === 1 ? "" : "s"} in the checkout than the server runs. Click to restart the server on ${n === 1 ? "it" : "them"}; sessions keep running.`
+        : "Update ready. It loads automatically when editing, sending or recording is finished. Click to reload now."}
+      onClick={() => {
+        if (!behind) return location.reload();
+        setRestarting(true);
+        request("POST", "/api/server/restart").catch(() => setRestarting(false));
+      }}
     >
       <Icon.refresh />
-      <span className="nav-label">Update</span>
+      <span className="nav-label">{restarting ? "Restarting…" : "Update"}</span>
     </button>
   );
 }
 
-function ConnectionChip() {
-  const { connected, downSince, failing, restarting, starting } = useConnection();
-  const label = connected
-    ? starting
-      ? "Starting…"
-      : MOCK
-        ? "Mock data"
-        : "Live"
-    : restarting
-      ? "Restarting…"
-      : failing
-        ? "Offline"
-        : downSince
-          ? "Reconnecting…"
-          : "Connecting…";
+function ProfileLink({ identity, active }: { identity: AppState["onboarding"]["identity"] | undefined; active: boolean }) {
+  const name = identity?.name || "Your profile";
+  const github = identity?.github;
+  const [failedImage, setFailedImage] = useState<string | null>(null);
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase();
   return (
-    <div className={`conn ${connected ? "on" : failing ? "off" : ""}`} title={`Connection: ${label}`} role="status">
-      <span className="dot" aria-hidden="true" />
-      <span className="conn-label nav-label">{label}</span>
-    </div>
+    <a className={`nav-item nav-profile ${active ? "active" : ""}`} data-nav-item data-nav-id="profile" aria-current={active ? "page" : undefined} href={hrefOf({ page: "profile" })} aria-label={`${name} · Profile`} title={`${name} · Profile`}>
+      <span className="nav-avatar" aria-hidden="true">
+        {github && failedImage !== github ? <img src={`https://github.com/${encodeURIComponent(github)}.png?size=64`} alt="" referrerPolicy="no-referrer" onError={() => setFailedImage(github)} /> : initials}
+      </span>
+      <span className="nav-label">{name}</span>
+    </a>
   );
 }
 
@@ -569,21 +557,8 @@ function Bootstrapping() {
 
 const THEME_CACHE_KEY = "agentbox.theme";
 
-const THEMES: { id: AgentSettings["theme"]; label: string; icon: IconComponent }[] = [
-  { id: "light", label: "Light", icon: Icon.sun },
-  { id: "system", label: "System", icon: Icon.monitor },
-  { id: "dark", label: "Dark", icon: Icon.moon },
-];
-
-/** Three states, honestly: `system` is a real preference. */
 function useTheme(serverPref: AgentSettings["theme"] | undefined) {
-  const [pending, setPending] = useState<AgentSettings["theme"] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const pref = pending ?? serverPref ?? readCachedTheme();
-
-  useEffect(() => {
-    if (pending && serverPref === pending) setPending(null);
-  }, [pending, serverPref]);
+  const pref = serverPref ?? readCachedTheme();
 
   useEffect(() => {
     const apply = () => {
@@ -601,20 +576,6 @@ function useTheme(serverPref: AgentSettings["theme"] | undefined) {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [pref]);
-
-  return {
-    pref,
-    error,
-    set: (next: AgentSettings["theme"]) => {
-      setPending(next);
-      setError(null);
-      api.saveSettings({ theme: next }).catch((e: Error) => {
-        // Revert AND say why: a theme that silently snaps back reads as a glitch.
-        setPending(null);
-        setError(e.message);
-      });
-    },
-  };
 }
 
 function readCachedTheme(): AgentSettings["theme"] {
@@ -629,26 +590,6 @@ function readCachedTheme(): AgentSettings["theme"] {
 function resolveTheme(pref: AgentSettings["theme"]): "light" | "dark" {
   if (pref !== "system") return pref;
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-function ThemeControl({ value, onChange }: { value: AgentSettings["theme"]; onChange: (t: AgentSettings["theme"]) => void }) {
-  return (
-    <div className="theme-control" role="group" aria-label="Colour theme">
-      {THEMES.map(({ id, label, icon: IconCmp }) => (
-        <button
-          key={id}
-          type="button"
-          className={`theme-opt ${value === id ? "on" : ""}`}
-          aria-pressed={value === id}
-          title={`${label} theme`}
-          onClick={() => onChange(id)}
-        >
-          <IconCmp size={14} />
-          <span className="sr-only">{label} theme</span>
-        </button>
-      ))}
-    </div>
-  );
 }
 
 function BrandMark() {
