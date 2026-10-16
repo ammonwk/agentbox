@@ -541,6 +541,8 @@ const Row = memo(function Row({
   target: "under" | DropPos | null;
 }) {
   const said = snippetOf(s);
+  // A repo's shape is tinted with the provider's colour, so only a row without one needs the badge.
+  const shape = useRowShape(s);
   const movable = pinned || s.host !== "subagent";
   const { dnd } = api;
   return (
@@ -611,7 +613,7 @@ const Row = memo(function Row({
           {s.away ? " · away" : ""}
         </span>
       ) : null}
-      {s.provider !== usual ? <ProviderBadge provider={s.provider} short /> : null}
+      {s.provider !== usual && !shape ? <ProviderBadge provider={s.provider} short /> : null}
       <span className="rail-when">
         <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
       </span>
@@ -745,11 +747,16 @@ function CloseFailure() {
   );
 }
 
+/** The shape the row's repo is drawn as, if the list draws repos as shapes. */
+function useRowShape(s: SessionRow): Shape | undefined {
+  const marks = useContext(RepoMarks);
+  return marks.shape ? marks.shapes.get(repoKey(s)) : undefined;
+}
+
 /** The session's name, after the project it works on, in quieter type. */
 function RowTitle({ s }: { s: SessionRow }) {
   const project = projectOf(s);
-  const marks = useContext(RepoMarks);
-  const shape = marks.shape ? marks.shapes.get(repoKey(s)) : undefined;
+  const shape = useRowShape(s);
   return (
     <span className="rail-title">
       {shape ? (
