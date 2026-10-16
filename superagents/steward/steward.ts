@@ -208,13 +208,15 @@ export class Steward {
   }
 
   /**
-   * The owners the `running` dial counts: live sessions it started for work
-   * not yet done, a scan's owners and the owners of hand-offs it still
-   * follows. An owner whose PR is ready, or one it adopted, does not count.
+   * The owners the `running` dial counts, live sessions it started: each a
+   * scan started (as before hand-offs), and each it started for a PR that
+   * has a hand-off open or owned. A hand-off owner whose PR is ready, or a
+   * session it adopted, does not count.
    */
   private runningOwners(byId: Map<string, Session>): number {
     const scan = (this.db.query("SELECT session FROM started WHERE key LIKE 'owner:%'").all() as { session: string }[]).map((r) => r.session);
-    const tended = (this.db.query("SELECT session FROM tends WHERE state = 'owned' AND how = 'started'").all() as { session: string }[]).map((r) => r.session);
+    // Its own owner on a PR with a hand-off open or owned: at work, or about to be given it this pass.
+    const tended = (this.db.query("SELECT session FROM started WHERE key LIKE 'tend:%' AND pr IN (SELECT pr FROM tends WHERE state IN ('open', 'owned'))").all() as { session: string }[]).map((r) => r.session);
     return new Set([...scan, ...tended].filter((id) => live(byId.get(id)))).size;
   }
 
@@ -275,9 +277,14 @@ export class Steward {
       throw new ActionError(`${this.me.title} looks after ${this.cfg.repos.join(", ")}, not ${repo}`, 403);
     const sender = agent ?? from ?? "person";
     const key = `pr.tend:${pr.toLowerCase()}@${head}:${sender}`;
+    // Agentbox gives one again only after it went round (a ready report since):
+    // a new round, even when its owner's answer was not read yet. Only one that
+    // still waits for an owner takes the newest findings in place.
     const had = this.db.query("SELECT state FROM tends WHERE key = ?").get(key) as { state: TendState } | null;
-    if (had && (had.state === "open" || had.state === "owned")) return { message: `${this.me.title} already has ${pr} on ${head.slice(0, 10)} from ${sender}`, key, already: true };
-    // Agentbox gives it again only after it went round (ready, then back): one hand-off more on that head.
+    if (had?.state === "open") {
+      this.db.run(`UPDATE tends SET note = ?, "from" = ? WHERE key = ? AND state = 'open'`, [note, from, key]);
+      return { message: `${this.me.title} already has ${pr} on ${head.slice(0, 10)} from ${sender}, waiting for an owner: it has these findings now`, key, already: true };
+    }
     this.db.run(
       `INSERT INTO tends (key, pr, repo, number, head, sender, "from", note, at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
        ON CONFLICT (key) DO UPDATE SET "from" = excluded."from", note = excluded.note, at = MAX(excluded.at, tends.at + 1), session = NULL, how = NULL, given = NULL, state = 'open'`,
@@ -325,11 +332,6 @@ export class Steward {
         this.log(`${t.pr} is not in ${this.cfg.repos.length ? this.cfg.repos.join(", ") : this.everywhere}: not taken`);
         continue;
       }
-      // An owner that was lost and came back (resumed) has it again.
-      if (t.state === "lost") {
-        if (t.session && live(byId.get(t.session)) && this.move(t, "lost", "state = 'owned'")) t.state = "owned";
-        else continue;
-      }
       let pr: Pr;
       try {
         pr = { ...(JSON.parse(await this.gh(["pr", "view", String(t.number), "--repo", t.repo, "--json", `${FIELDS},state`])) as Omit<Pr, "repo">), repo: t.repo };
@@ -341,6 +343,11 @@ export class Steward {
         this.move(t, t.state, "state = 'closed'");
         this.log(`${t.pr} is ${pr.state.toLowerCase()}: nothing more to do`);
         continue;
+      }
+      // An owner that was lost and came back (resumed) has it again.
+      if (t.state === "lost") {
+        if (t.session && live(byId.get(t.session)) && this.move(t, "lost", "state = 'owned'")) t.state = "owned";
+        else continue;
       }
       const st = stateOf(pr);
       if (!this.discover) prs.push({ ...pr, ...st, owner: t.session });

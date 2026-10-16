@@ -111,11 +111,12 @@ test("discover false never lists PRs and starts nobody for a PR nobody handed to
   expect(box.starts).toHaveLength(0);
 });
 
-test("a hand-off with nobody on the PR starts one fresh owner with the findings, once per head and sender", async () => {
+test("a hand-off with nobody on the PR starts one fresh owner with the findings, and only one", async () => {
   const s = steward({ discover: false });
   expect(tend(s, { note: "P1: the retry loop never ends" }).already).toBe(false);
-  await s.pass();
+  // Before a pass, the same hand-off again is the same one, with the newest findings.
   expect(tend(s, { note: "P1: the retry loop never ends" }).already).toBe(true);
+  await s.pass();
   await s.pass();
   expect(box.starts).toHaveLength(1);
   expect(box.starts[0]).toMatchObject({ claim: `${REPO}#7`, repoId: "r1", branch: "b7", parent: MAIN });
@@ -304,5 +305,33 @@ test("a lost hand-off gets a fresh owner on retry, and the same hand-off can com
   await s.pass();
   expect(box.sends.filter((x) => x.id === "own2").at(-1)!.text).toContain("a comment is unanswered");
   expect(box.starts).toHaveLength(2);
+});
+
+test("a judge faster than the pass: findings on the same head reach the owner, and the old round's answer does not count", async () => {
+  prs.set(7, pr(7, H1));
+  const s = steward({ discover: false });
+  tend(s, { note: "first" });
+  await s.pass();
+  const owner = String(box.holders.get(`${REPO}#7`));
+  say(owner, `STATUS: ready ${H1}`);
+  // Agentbox gave the judge the ready report; the judge sends it back before Steward read that answer.
+  expect(tend(s, { note: "P1: a comment is unanswered" }).already).toBe(false);
+  await s.pass();
+  expect(box.sends.filter((x) => x.id === owner).at(-1)!.text).toContain("a comment is unanswered");
+  expect(s.view("prs").blocks.some((b) => b.type === "item" && b.title === `${REPO}#7 owned`)).toBe(true);
+});
+
+test("an owner of its own that gets findings back counts on the dial again", async () => {
+  prs.set(7, pr(7, H1));
+  prs.set(8, pr(8, H1));
+  const s = steward({ discover: false, owners: { provider: "claude", running: 1, perPass: 2, prompt: "OWNER.md" } });
+  tend(s, { number: 7 });
+  await s.pass();
+  say("own1", `STATUS: ready ${H1}`);
+  await s.pass();
+  tend(s, { number: 7, note: "back" });
+  tend(s, { number: 8 });
+  await s.pass();
+  expect(box.starts).toHaveLength(1);
 });
 
