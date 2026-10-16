@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb } from "../db";
-import { prTend } from "./events";
+import { prReady, prTend } from "./events";
 
 const HEAD = "a".repeat(40);
 let previous: string | undefined, actions: { name: string; values: Record<string, unknown>; session: string | null }[], hub: any;
@@ -49,4 +49,31 @@ test("with no taker, nothing is given and the sender keeps the PR", async () => 
   const out = await prTend(hub, {} as any, { session: "s1", agent: null }, { repo: "acme/app", number: 7, head: HEAD, note: null }, () => let_go++);
   expect(out.state).toBe("skipped");
   expect(let_go).toBe(0);
+});
+
+test("a taker that refuses it takes nothing: the sender keeps the PR, and the next report tries again", async () => {
+  hub.list = () => [agent("cura", ["pr.tend"])];
+  hub.action = async () => {
+    throw new Error("cura looks after other/repo");
+  };
+  let let_go = 0;
+  const pr = { repo: "acme/app", number: 7, head: HEAD, note: null };
+  await expect(prTend(hub, {} as any, { session: "s1", agent: null }, pr, () => let_go++)).rejects.toThrow("did not take it");
+  expect(let_go).toBe(0);
+  hub.action = async () => {};
+  expect((await prTend(hub, {} as any, { session: "s1", agent: null }, pr, () => let_go++)).state).toBe("sent");
+  expect(let_go).toBe(1);
+});
+
+test("sent back and ready again on one head: each direction goes round again", async () => {
+  hub.list = () => [agent("cura", ["pr.tend"]), agent("terminus", ["pr.ready"])];
+  hub.ownerOf = (s: string) => (s === "j1" ? "terminus" : s === "o1" ? "cura" : null);
+  const pr = { repo: "acme/app", number: 7, head: HEAD };
+  expect((await prReady(hub, {} as any, "o1", pr)).state).toBe("sent");
+  expect((await prReady(hub, {} as any, "o1", pr)).state).toBe("already");
+  // Terminus sends it back on that head; the owner clears it with no new commit.
+  expect((await prTend(hub, {} as any, { session: "j1", agent: "terminus" }, { ...pr, note: "a comment is unanswered" })).state).toBe("sent");
+  expect((await prReady(hub, {} as any, "o1", pr)).state).toBe("sent");
+  expect((await prTend(hub, {} as any, { session: "j1", agent: "terminus" }, { ...pr, note: "still unanswered" })).state).toBe("sent");
+  expect((await prTend(hub, {} as any, { session: "j1", agent: "terminus" }, { ...pr, note: "again" })).state).toBe("already");
 });

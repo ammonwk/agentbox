@@ -351,10 +351,15 @@ delivery is not counted, so the next report of the same event tries again.
   per PR, head and sender: the sender's superagent, else its session, else the
   person. The action has `{repo, number, head, from, agent, note}`: `from` is
   the sending session (also the caller) or null, `agent` its superagent or
-  null, and `note` the findings (at most 20,000 characters). Without `--head`,
-  agentbox reads the PR's head from GitHub and refuses a closed PR. A session
+  null, and `note` the findings (at most 20,000 characters). Without a full
+  `--head`, agentbox reads the PR's head from GitHub and refuses a closed PR.
+  A program hands a PR on from a session of its own. A session
   that holds the PR lets go of it once some agent takes the event, so that
   the taker can give it to a fresh owner.
+
+Each event given opens the other again for its PR and head: a judge can send
+a PR back for a check or a comment that its owner clears with no new commit,
+and the next `pr ready` of that head reaches the judge again.
 
 What the taker does with the PR is its own. Steward's code with
 `discover: false` keeps the owner when a session already holds the PR: it

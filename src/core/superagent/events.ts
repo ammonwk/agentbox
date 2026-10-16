@@ -13,12 +13,15 @@
  * gets it as the owner's message.
  *
  * pr.tend: someone hands a pull request on to be taken to ready
- * (`agentbox pr tend <PR> [--note-file F]`): a person by hand, or a judge's
- * session that sends it back with findings. Once per PR, head and sender
+ * (`agentbox pr tend <PR> [--note-file F]`): a person by hand, or a session
+ * (a judge's that sends it back with findings). Once per PR, head and sender
  * (its superagent, else its session, else the person). The action has
  * `{repo, number, head, from, agent, note}`, with the sending session (or
  * null) as the caller; the main gets it as that session's message, or as
  * the person's.
+ *
+ * Each one given opens the other again for its PR and head (`reopen`), so a
+ * PR sent back and made ready again on one head goes round again.
  */
 import { getDb, getSessionRecord, listRepos } from "../db";
 import { FleetError, type Fleet } from "../fleet";
@@ -28,7 +31,7 @@ import type { SuperagentEvent, SuperagentInfo } from "../types";
 
 export type PrReady = { repo: string; number: number; head: string };
 export type PrTend = PrReady & { note: string | null };
-/** Who handed a PR on: a session (and the superagent it is, when it is one's), a superagent's program, or the person. */
+/** Who handed a PR on: a session (and the superagent it acts for, when it does), or the person (both null). */
 export type Sender = { session: string | null; agent: string | null };
 export type Delivered = { superagent: string; state: "sent" | "already" | "failed"; to?: string; result: string };
 export type Outcome = { state: "sent" | "already" | "skipped"; result: string; delivered: Delivered[] };
@@ -41,6 +44,24 @@ function once(name: string, key: string): boolean {
   return getDb().run("INSERT OR IGNORE INTO superagent_events (name, key, at) VALUES (?, ?, ?)", [name, key, Date.now()]).changes === 1;
 }
 const forget = (name: string, key: string) => getDb().run("DELETE FROM superagent_events WHERE name = ? AND key = ?", [name, key]);
+
+/**
+ * A PR goes back and forth on one head: a judge can send it back for a
+ * check or a comment, which its owner clears with no new commit. So each
+ * event that was given opens the other one again for that PR and head:
+ * after a hand-off, the next ready report of the head is new, and after a
+ * ready report, the next hand-off of it is new.
+ */
+function reopen(event: "pr.ready" | "pr.tend", pr: PrReady): void {
+  const base = `${event}:${pr.repo.toLowerCase()}#${pr.number}@`, head = pr.head.toLowerCase();
+  const rows = getDb().query("SELECT name, key FROM superagent_events WHERE substr(key, 1, ?) = ?").all(base.length, base) as { name: string; key: string }[];
+  for (const r of rows) {
+    // A head may be given short: the same commit either way.
+    const h = r.key.slice(base.length).split(":")[0]!;
+    if (head.startsWith(h) || h.startsWith(head)) forget(r.name, r.key);
+  }
+}
+const at = (pr: PrReady) => `${pr.repo.toLowerCase()}#${pr.number}@${pr.head.toLowerCase()}`;
 
 const checkHead = (head: string) => {
   if (!/^[0-9a-f]{7,40}$/i.test(head)) throw new FleetError(400, "--head is the commit SHA of the PR's head");
@@ -104,12 +125,12 @@ export async function prReady(hub: Superagents, fleet: Fleet, owner: string, pr:
   const { list, where } = takers(hub, "pr.ready", pr.repo, from);
   if (!list.length) return { state: "skipped", result: `No agent here takes ready PRs${where}: give one "events": ["pr.ready"] in its manifest`, delivered: [] };
   const url = `https://github.com/${pr.repo}/pull/${pr.number}`;
-  return deliver(
+  const out = await deliver(
     hub,
     fleet,
     {
       event: "pr.ready",
-      key: `pr.ready:${pr.repo.toLowerCase()}#${pr.number}@${pr.head.toLowerCase()}`,
+      key: `pr.ready:${at(pr)}`,
       label: `${pr.repo}#${pr.number} on ${pr.head.slice(0, 10)}`,
       values: { ...pr, owner },
       text: `PR ready for your review: ${url} on head ${pr.head}. Its owner, ${from ? `${from} in session ${owner}` : `session ${owner}`}, verified it ready. Review that exact head, and send your verdict back with agentbox send ${owner} <verdict>.`,
@@ -118,10 +139,12 @@ export async function prReady(hub: Superagents, fleet: Fleet, owner: string, pr:
     },
     list,
   );
+  if (out.state === "sent") reopen("pr.tend", pr);
+  return out;
 }
 
 /**
- * `letGo` runs once some agent takes the event, before it is given: the
+ * `letGo` runs once some agent took the event, and never when none did: the
  * route uses it to release the PR when the sender holds it, so that the
  * taker can give it to a fresh owner.
  */
@@ -130,15 +153,14 @@ export async function prTend(hub: Superagents, fleet: Fleet, sender: Sender, pr:
   if (pr.note && pr.note.length > NOTE_MAX) throw new FleetError(400, `the note has ${pr.note.length} characters, more than ${NOTE_MAX}: put the rest in the PR and link to it`);
   const { list, where } = takers(hub, "pr.tend", pr.repo, sender.agent);
   if (!list.length) return { state: "skipped", result: `No agent here takes PRs to ready${where}: give one "events": ["pr.tend"] in its manifest`, delivered: [] };
-  letGo();
   const url = `https://github.com/${pr.repo}/pull/${pr.number}`;
-  const who = sender.agent ? `${sender.agent}${sender.session ? ` in session ${sender.session}` : "'s program"}` : sender.session ? `session ${sender.session}` : "the person";
-  return deliver(
+  const who = sender.agent && sender.session ? `${sender.agent} in session ${sender.session}` : sender.session ? `session ${sender.session}` : "the person";
+  const out = await deliver(
     hub,
     fleet,
     {
       event: "pr.tend",
-      key: `pr.tend:${pr.repo.toLowerCase()}#${pr.number}@${pr.head.toLowerCase()}:${sender.agent ?? sender.session ?? "person"}`,
+      key: `pr.tend:${at(pr)}:${sender.agent ?? sender.session ?? "person"}`,
       label: `${pr.repo}#${pr.number} on ${pr.head.slice(0, 10)} from ${who}`,
       values: { ...pr, from: sender.session, agent: sender.agent },
       text: `PR handed to you to take to ready: ${url}, head ${pr.head}, from ${who}.${pr.note ? `\nWhat it needs:\n${pr.note}` : ""}`,
@@ -147,4 +169,9 @@ export async function prTend(hub: Superagents, fleet: Fleet, sender: Sender, pr:
     },
     list,
   );
+  if (out.state === "sent") {
+    reopen("pr.ready", pr);
+    letGo();
+  }
+  return out;
 }

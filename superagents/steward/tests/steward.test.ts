@@ -175,7 +175,7 @@ test("ready counts only on the head GitHub shows green; otherwise the owner is t
   prs.set(7, pr(7, H2, { statusCheckRollup: [{ name: "ci", status: "IN_PROGRESS" }] }));
   say(owner, `STATUS: ready ${H1}`);
   await s.pass();
-  expect(box.sends.filter((x) => x.id === owner).at(-1)!.text).toContain("checks are running");
+  expect(box.sends.filter((x) => x.id === owner).at(-1)!.text).toContain(`head as ${H2}, not ${H1}`);
 
   // Ready on the head GitHub shows green: done, and nobody is told anything more.
   prs.set(7, pr(7, H2));
@@ -246,3 +246,63 @@ test("a hand-off outside its repositories, or of a closed PR, starts nobody", as
   expect(box.starts).toHaveLength(0);
   expect(() => steward({ discover: false, repos: [REPO] }).tend({ repo: "other/thing", number: 3, head: H1 }, caller())).toThrow("looks after acme/app");
 });
+
+test("an owner that keeps saying ready on a failing head is told once, then the main hears once", async () => {
+  prs.set(7, pr(7, H1, { statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "FAILURE" }] }));
+  const s = steward({ discover: false });
+  tend(s, { note: "fix it" });
+  await s.pass();
+  const owner = String(box.holders.get(`${REPO}#7`));
+  for (let i = 0; i < 4; i++) {
+    say(owner, `STATUS: ready ${H1}`);
+    await s.pass();
+  }
+  expect(box.sends.filter((x) => x.id === owner)).toHaveLength(1);
+  const toMain = box.sends.filter((x) => x.id === MAIN);
+  expect(toMain).toHaveLength(1);
+  expect(toMain[0]!.text).toContain("ci failed");
+});
+
+test("the dial counts owners still at work: one ready owner frees its place, and one pass never starts past it", async () => {
+  prs.set(7, pr(7, H1));
+  prs.set(8, pr(8, H1));
+  prs.set(9, pr(9, H1));
+  const s = steward({ discover: false, owners: { provider: "claude", running: 1, perPass: 2, prompt: "OWNER.md" } });
+  tend(s, { number: 7 });
+  tend(s, { number: 8 });
+  await s.pass();
+  expect(box.starts).toHaveLength(1);
+  expect(box.sends.find((x) => x.id === MAIN)!.text).toContain("waits for an owner");
+  say(String(box.holders.get(`${REPO}#7`)), `STATUS: ready ${H1}`);
+  await s.pass();
+  await s.pass();
+  expect(box.starts.map((x) => x.claim)).toEqual([`${REPO}#7`, `${REPO}#8`]);
+});
+
+test("findings are put in the prompt as written, $& and all", async () => {
+  const s = steward({ discover: false });
+  tend(s, { note: "replace with `$&` and $' here" });
+  await s.pass();
+  expect(String(box.starts[0]!.prompt)).toContain("replace with `$&` and $' here");
+});
+
+test("a lost hand-off gets a fresh owner on retry, and the same hand-off can come round again after ready", async () => {
+  prs.set(7, pr(7, H1));
+  const s = steward({ discover: false });
+  const { key } = tend(s, { note: "fix it" });
+  await s.pass();
+  box.sessions.find((x) => x.id === "own1")!.status = "closed";
+  box.holders.delete(`${REPO}#7`);
+  await s.pass();
+  expect(s.action({ action: "retry", values: { key }, caller: caller() }).message).toContain("owner");
+  await s.pass();
+  expect(box.starts).toHaveLength(2);
+  say("own2", `STATUS: ready ${H1}`);
+  await s.pass();
+  // Agentbox gives the same head and sender again only after a ready report: it is a new round.
+  expect(tend(s, { note: "a comment is unanswered" }).already).toBe(false);
+  await s.pass();
+  expect(box.sends.filter((x) => x.id === "own2").at(-1)!.text).toContain("a comment is unanswered");
+  expect(box.starts).toHaveLength(2);
+});
+

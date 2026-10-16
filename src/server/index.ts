@@ -856,23 +856,35 @@ const router = new Router(mapError)
     return json(out);
   })
   // Hand it on to be taken to ready: each superagent that takes the pr.tend
-  // event gets it once per head and sender. A person, a session or a
-  // program may; a session that holds the PR lets go of it.
+  // event gets it once per head and sender. A person or a session may (a
+  // program hands one on from a session of its own); a session that holds
+  // the PR lets go of it once an agent took it.
   .add("POST", "/api/prs/tend", async ({ req }) => {
     const b = await readBody(req);
     const session = authenticatedSession(req);
-    const program = session ? null : superagentCaller(req, superagents);
-    if (!session && !program) requireNoSessionPeer(req, "handing a PR on as a person (run it with your session's capability: the agentbox CLI sends it)");
-    const pr = prNamed(b, session);
-    const note = b.note === undefined || b.note === null ? null : requireString(b, "note").trim() || null;
-    let head = optionalString(b, "head");
-    if (!head) {
-      const read = (await readPrs([pr])).get(prKey(pr));
-      if (!read || read instanceof Error) throw new HttpError(502, `could not read ${prKey(pr)}'s head from GitHub: ${read?.message ?? "no answer"}; give --head <sha>`);
-      if (read.state !== "OPEN") throw new HttpError(409, `${prKey(pr)} is ${read.state.toLowerCase()}: nothing to take to ready`);
-      head = read.head;
+    if (!session) {
+      if (superagentCaller(req, superagents)) throw new HttpError(403, "a program hands a PR on from one of its sessions, so that the taker knows who to answer");
+      requireNoSessionPeer(req, "handing a PR on as a person (run it with your session's capability: the agentbox CLI sends it)");
     }
-    const sender = { session, agent: program ?? (session ? superagents.ownerOf(session) : null) };
+    const pr = prNamed(b, session);
+    if (b.note !== undefined && b.note !== null && typeof b.note !== "string") throw new HttpError(400, "note is the findings, as text");
+    const note = typeof b.note === "string" ? b.note.trim() || null : null;
+    let head = optionalString(b, "head")?.toLowerCase();
+    // A short or missing head is read in full from GitHub: one head, one key.
+    if (!head || head.length < 40) {
+      let read;
+      try {
+        read = (await readPrs([pr])).get(prKey(pr));
+      } catch (e) {
+        read = e as Error;
+      }
+      if (!read || read instanceof Error) throw new HttpError(502, `could not read ${prKey(pr)}'s head from GitHub: ${read?.message ?? "no answer"}; give --head <full sha>`);
+      if (read.state !== "OPEN") throw new HttpError(409, `${prKey(pr)} is ${read.state.toLowerCase()}: nothing to take to ready`);
+      if (head && !read.head.toLowerCase().startsWith(head)) throw new HttpError(409, `${prKey(pr)}'s head is ${read.head.slice(0, 10)} on GitHub, not ${head}: judge that head, or give its full sha`);
+      head = read.head.toLowerCase();
+    }
+    // Only a session that acts for a superagent counts as it (not one dragged under its main).
+    const sender = { session, agent: session ? superagents.ownerOf(session, { authority: true }) : null };
     const out = await prTend(superagents, fleet, sender, { ...pr, head, note }, () => {
       if (session && holderOf(prClaimsNow(), pr.repo, pr.number)?.sessionId === session) releasePr(session, pr);
     });

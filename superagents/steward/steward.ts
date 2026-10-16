@@ -92,7 +92,7 @@ export function statusOf(text: string | null): { kind: "needs"; what: string } |
 
 export class Steward {
   last: { at: number; prs: Seen[]; error: string | null } = { at: 0, prs: [], error: null };
-  private running = false;
+  private running: Promise<void> | null = null;
   private again = false;
 
   constructor(
@@ -142,29 +142,32 @@ export class Steward {
     return this.me.project ? "its project's repository" : "every registered GitHub repository";
   }
 
-  /** One pass, never two at once: a pass asked for meanwhile runs right after. */
-  async pass(): Promise<void> {
+  /** One pass, never two at once: a pass asked for meanwhile runs right after, and its caller waits for it. */
+  pass(): Promise<void> {
     if (this.running) {
       this.again = true;
-      return;
+      return this.running;
     }
-    this.running = true;
-    try {
-      do {
-        this.again = false;
-        await this.once();
-      } while (this.again);
-      this.last.error = null;
-    } catch (e) {
-      this.last = { ...this.last, error: (e as Error).message };
-      throw e;
-    } finally {
-      this.running = false;
-    }
+    this.running = (async () => {
+      try {
+        do {
+          this.again = false;
+          await this.once();
+        } while (this.again);
+        this.last.error = null;
+      } catch (e) {
+        this.last = { ...this.last, error: (e as Error).message };
+        throw e;
+      } finally {
+        this.running = null;
+      }
+    })();
+    return this.running;
   }
 
   private async once(): Promise<void> {
     if (this.kv("paused")) return;
+    this.startedThisPass = 0;
     const state = await this.box.state();
     const byId = new Map(state.sessions.map((s) => [s.id, s]));
     const main = await this.box.main();
@@ -187,7 +190,10 @@ export class Steward {
     if (this.discover) await this.ownNeedsWork(byId, main, repos, prs);
 
     // What its sessions asked: one item per question, said to the main conversation once.
-    for (const r of this.db.query("SELECT session, pr FROM started").all() as { session: string; pr: string | null }[]) {
+    // A session it adopted asks through it only while it follows that session's PR.
+    const following = new Set((this.db.query("SELECT session FROM tends WHERE state = 'owned'").all() as { session: string }[]).map((r) => r.session));
+    for (const r of this.db.query("SELECT key, session, pr FROM started").all() as { key: string; session: string; pr: string | null }[]) {
+      if (r.key.startsWith("adopt:") && !following.has(r.session)) continue;
       const s = byId.get(r.session);
       if (!s || s.status === "running") continue;
       const st = statusOf(s.lastMessage);
@@ -201,25 +207,30 @@ export class Steward {
     this.db.run("INSERT OR IGNORE INTO items (key, line, session, at) VALUES (?, ?, ?, ?)", [key, line, session, Date.now()]);
   }
 
-  /** Live sessions it started (not those it adopted): what the `running` dial counts. */
+  /**
+   * The owners the `running` dial counts: live sessions it started for work
+   * not yet done, a scan's owners and the owners of hand-offs it still
+   * follows. An owner whose PR is ready, or one it adopted, does not count.
+   */
   private runningOwners(byId: Map<string, Session>): number {
-    return (this.db.query("SELECT session FROM started WHERE key NOT LIKE 'adopt:%'").all() as { session: string }[]).filter((r) => live(byId.get(r.session))).length;
+    const scan = (this.db.query("SELECT session FROM started WHERE key LIKE 'owner:%'").all() as { session: string }[]).map((r) => r.session);
+    const tended = (this.db.query("SELECT session FROM tends WHERE state = 'owned' AND how = 'started'").all() as { session: string }[]).map((r) => r.session);
+    return new Set([...scan, ...tended].filter((id) => live(byId.get(id)))).size;
   }
 
   private ownerPrompt(pr: Pr, why: string, handoff: string): string {
-    return this.me
-      .template(this.cfg.owners.prompt)
-      .replaceAll("{{url}}", pr.url)
-      .replaceAll("{{title}}", pr.title)
-      .replaceAll("{{number}}", String(pr.number))
-      .replaceAll("{{why}}", why)
-      .replaceAll("{{handoff}}", handoff)
-      .replace(/\n{3,}/g, "\n\n");
+    const template = this.me.template(this.cfg.owners.prompt);
+    // A function, not a string: `$&` and the like in findings are text.
+    const fill = (t: string, k: string, v: string) => t.replaceAll(k, () => v);
+    let out = fill(fill(fill(fill(template, "{{url}}", pr.url), "{{title}}", pr.title), "{{number}}", String(pr.number)), "{{why}}", why);
+    // A copy of the prompt with no place for the hand-off still gets it.
+    out = out.includes("{{handoff}}") ? fill(out, "{{handoff}}", handoff) : handoff ? `${out.trimEnd()}\n\n${handoff}` : out;
+    return out.replace(/\n{3,}/g, "\n\n");
   }
 
   /** Owners for what needs work and has nobody, a few a pass, up to the dial. */
   private async ownNeedsWork(byId: Map<string, Session>, main: string | null, repos: { slug: string; id: string | null }[], prs: Seen[]): Promise<void> {
-    let room = Math.min(this.cfg.owners.perPass, this.cfg.owners.running - this.runningOwners(byId));
+    let room = Math.min(this.cfg.owners.perPass, this.cfg.owners.running - this.runningOwners(byId) - this.startedThisPass);
     for (const pr of prs) {
       if (room <= 0) break;
       if (pr.state !== "needs-work" || pr.owner) continue;
@@ -264,12 +275,24 @@ export class Steward {
       throw new ActionError(`${this.me.title} looks after ${this.cfg.repos.join(", ")}, not ${repo}`, 403);
     const sender = agent ?? from ?? "person";
     const key = `pr.tend:${pr.toLowerCase()}@${head}:${sender}`;
-    const fresh = this.db.run(`INSERT OR IGNORE INTO tends (key, pr, repo, number, head, sender, "from", note, at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`, [key, pr, repo, number, head, sender, from, note, Date.now()]).changes === 1;
-    if (!fresh) return { message: `${this.me.title} already has ${pr} on ${head.slice(0, 10)} from ${sender}`, key, already: true };
+    const had = this.db.query("SELECT state FROM tends WHERE key = ?").get(key) as { state: TendState } | null;
+    if (had && (had.state === "open" || had.state === "owned")) return { message: `${this.me.title} already has ${pr} on ${head.slice(0, 10)} from ${sender}`, key, already: true };
+    // Agentbox gives it again only after it went round (ready, then back): one hand-off more on that head.
+    this.db.run(
+      `INSERT INTO tends (key, pr, repo, number, head, sender, "from", note, at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+       ON CONFLICT (key) DO UPDATE SET "from" = excluded."from", note = excluded.note, at = MAX(excluded.at, tends.at + 1), session = NULL, how = NULL, given = NULL, state = 'open'`,
+      [key, pr, repo, number, head, sender, from, note, Date.now()],
+    );
     // A newer hand-off of the same PR is the one that counts.
     this.db.run("UPDATE tends SET state = 'closed' WHERE pr = ? COLLATE NOCASE AND key != ? AND state IN ('open', 'owned', 'ready', 'lost')", [pr, key]);
     this.log(`${pr} handed over on ${head.slice(0, 10)} by ${sender}${note ? `: ${note.slice(0, 200)}` : ""}`);
     return { message: `${this.me.title} has ${pr} on ${head.slice(0, 10)}: it gives it an owner now`, key, already: false };
+  }
+
+  /** A hand-off's state moves only from the state this pass read: a hand-off that came meanwhile wins.
+   *  `at` names each round of a hand-off (it only grows), so a reopened one is a new round. */
+  private move(t: Tend, from: TendState, set: string, args: unknown[] = []): boolean {
+    return this.db.run(`UPDATE tends SET ${set} WHERE key = ? AND state = ? AND at = ?`, [...(args as never[]), t.key, from, t.at]).changes === 1;
   }
 
   /** The session of its own on a PR: a live one it started or adopted, the latest first. */
@@ -288,18 +311,24 @@ export class Steward {
     return [
       `It was handed to ${this.me.title} (${this.me.name}) to take to ready, by ${who}, on head ${t.head}.`,
       t.note ? `What it needs:\n${t.note}` : "No findings came with it: find what keeps it from ready (checks, review threads, conflicts) and fix that.",
-      `When it is green and clean on a head and you have verified that yourself, run \`${this.me.bin} pr ready ${pr.repo}#${pr.number} --head <SHA>\` to hand it to the project's judge, then end your turn with \`STATUS: ready <SHA>\`. A judge can send it back with more findings; they come to you here.`,
+      `When it is green and clean on a head and you have verified that yourself, run \`${this.me.bin} pr ready ${pr.repo}#${pr.number} --head <SHA>\` to hand it to the project's judge, then end your turn with \`STATUS: ready <SHA>\`. A judge can send it back with more findings, on a new head or the same one; they come to you here.`,
     ].join("\n\n");
   }
 
   /** Give each open hand-off an owner, and follow each owned one to ready. */
   private async tendAll(byId: Map<string, Session>, main: string | null, repos: { slug: string; id: string | null }[], prs: Seen[]): Promise<void> {
-    for (const t of this.tends(["open", "owned"])) {
+    const handed = this.tends(["open", "owned", "lost"]);
+    for (const t of handed) {
       const repo = repos.find((r) => r.slug.toLowerCase() === t.repo.toLowerCase());
       if (!repo) {
-        this.db.run("UPDATE tends SET state = 'closed' WHERE key = ?", [t.key]);
+        this.move(t, t.state, "state = 'closed'");
         this.log(`${t.pr} is not in ${this.cfg.repos.length ? this.cfg.repos.join(", ") : this.everywhere}: not taken`);
         continue;
+      }
+      // An owner that was lost and came back (resumed) has it again.
+      if (t.state === "lost") {
+        if (t.session && live(byId.get(t.session)) && this.move(t, "lost", "state = 'owned'")) t.state = "owned";
+        else continue;
       }
       let pr: Pr;
       try {
@@ -309,7 +338,7 @@ export class Steward {
         continue;
       }
       if (pr.state && pr.state.toUpperCase() !== "OPEN") {
-        this.db.run("UPDATE tends SET state = 'closed' WHERE key = ?", [t.key]);
+        this.move(t, t.state, "state = 'closed'");
         this.log(`${t.pr} is ${pr.state.toLowerCase()}: nothing more to do`);
         continue;
       }
@@ -320,33 +349,39 @@ export class Steward {
     }
   }
 
+  /** Owners started in this pass: the board read at its start does not show them yet. */
+  private startedThisPass = 0;
+
   private async giveOwner(t: Tend, pr: Pr, st: { state: State; why: string }, byId: Map<string, Session>, main: string | null, repoId: string | null): Promise<void> {
     const text = this.handoffText(t, pr);
-    // An owner already: its own from an earlier hand-off, else the session that holds the PR (its context is kept).
+    // An owner already: the session that holds the PR (its context is kept), else one of its own on it.
+    const holder = (await this.box.prWho(t.pr).catch(() => null))?.claim?.sessionId ?? null;
+    const held = holder && live(byId.get(holder)) && holder !== t.from ? holder : null;
     const mine = this.ownOwner(t.pr, byId);
-    const holder = mine ? null : ((await this.box.prWho(t.pr).catch(() => null))?.claim?.sessionId ?? null);
-    const existing = mine ?? (holder && live(byId.get(holder)) && holder !== t.from ? holder : null);
+    const existing = held ?? (holder ? null : mine);
     if (existing) {
+      const ours = existing === mine;
       // Recorded first: a send that fails is put back for the next pass.
-      this.db.run("UPDATE tends SET state = 'owned', session = ?, how = ?, given = ? WHERE key = ?", [existing, mine ? "sent" : "adopted", Date.now(), t.key]);
-      if (!mine) this.db.run("INSERT OR IGNORE INTO started VALUES (?, ?, ?, ?)", [`adopt:${t.pr}:${existing}`, existing, t.pr, Date.now()]);
+      if (!this.move(t, "open", "state = 'owned', session = ?, how = ?, given = ?", [existing, ours ? "sent" : "adopted", Date.now()])) return;
+      if (!ours) this.db.run("INSERT OR IGNORE INTO started VALUES (?, ?, ?, ?)", [`adopt:${t.pr}:${existing}`, existing, t.pr, Date.now()]);
       try {
-        const lead = mine
-          ? `[${this.me.title}] ${pr.url} ("${pr.title}") came back to you.`
+        const lead = ours
+          ? `[${this.me.title}] ${pr.url} ("${pr.title}") came back to you.${holder === existing ? "" : ` Claim it first: \`${this.me.bin} pr claim ${t.pr}\`.`}`
           : `[${this.me.title}] You hold ${pr.url} ("${pr.title}"), so you keep it: ${this.me.title} follows it from now on. Keep the rules you already work under.`;
         await this.box.send(existing, `${lead}\n\n${text}\n\nWhen only a person can decide something, end your turn with \`STATUS: needs <who> — <the question and your recommendation>\`.`, { wake: true });
-        this.log(`${t.pr}: ${mine ? "sent the findings to its owner" : "adopted its holder"} ${existing}`);
+        this.log(`${t.pr}: ${ours ? "sent the findings to its owner" : "adopted its holder"} ${existing}`);
       } catch (e) {
-        this.db.run("UPDATE tends SET state = 'open', session = NULL, how = NULL, given = NULL WHERE key = ?", [t.key]);
+        this.move({ ...t, state: "owned" }, "owned", "state = 'open', session = NULL, how = NULL, given = NULL");
         this.log(`could not tell ${existing} about ${t.pr}: ${(e as Error).message}`);
       }
       return;
     }
-    if (this.cfg.owners.running - this.runningOwners(byId) <= 0) {
-      if (this.nudgeOnce(`room:${t.key}`)) this.log(`${t.pr} waits for room: ${this.cfg.owners.running} owners already run`);
+    if (holder && holder !== t.from) return; // held by a session that is not live yet: the next pass looks again
+    if (this.cfg.owners.running - this.runningOwners(byId) - this.startedThisPass <= 0) {
+      this.item(`room:${t.key}:${t.at}`, `${t.pr} waits for an owner: ${this.cfg.owners.running} owners already run (steward.owners.running)`, null);
       return;
     }
-    const key = `tend:${t.key}`;
+    const key = `tend:${t.key}:${t.at}`;
     if (this.db.query("SELECT 1 FROM started WHERE key = ?").get(key)) return;
     const given = Date.now();
     try {
@@ -357,21 +392,28 @@ export class Steward {
         ...(repoId ? { repoId, branch: pr.headRefName } : {}),
         ...(main ? { parent: main } : {}),
       });
+      this.startedThisPass++;
       this.db.run("INSERT INTO started VALUES (?, ?, ?, ?)", [key, s.id, t.pr, Date.now()]);
-      this.db.run("UPDATE tends SET state = 'owned', session = ?, how = 'started', given = ? WHERE key = ?", [s.id, given, t.key]);
+      this.move(t, "open", "state = 'owned', session = ?, how = 'started', given = ?", [s.id, given]);
       this.log(`started owner ${s.id} for ${t.pr}`);
     } catch (e) {
-      // Held by another session a moment ago, or no account has room: the next pass looks again.
+      // Held by another session a moment ago, or no account has room: the next pass looks again, and the main hears of it once.
       this.log(`could not start an owner for ${t.pr}: ${(e as Error).message}`);
+      this.item(`start:${t.key}:${t.at}`, `${t.pr}: could not start an owner (${(e as Error).message.slice(0, 200)}); it tries again each pass`, null);
     }
   }
 
-  /** An owned hand-off: done when its owner says ready on the head GitHub shows ready; its owner told once when not. */
+  /**
+   * An owned hand-off: ready when its owner answers the hand-off with
+   * `STATUS: ready <SHA>` on the head GitHub shows, with nothing failing.
+   * Each answer is read once. An answer that does not hold up is said back
+   * to the owner once; when the next answer still does not, the main hears.
+   */
   private async follow(t: Tend, pr: Pr, st: { state: State; why: string }, byId: Map<string, Session>): Promise<void> {
     const s = t.session ? byId.get(t.session) : undefined;
     if (!live(s)) {
-      this.db.run("UPDATE tends SET state = 'lost' WHERE key = ?", [t.key]);
-      this.item(`lost:${t.key}`, `${t.pr}: its owner ${t.session} ${s ? s.status : "is gone"} before it was ready; hand it on again with ${this.me.bin} pr tend ${t.pr}, or resume ${t.session}`, t.session);
+      if (!this.move(t, "owned", "state = 'lost'")) return;
+      this.item(`lost:${t.key}:${t.at}`, `${t.pr}: its owner ${t.session} ${s ? s.status : "is gone"} before it was ready. Resume it (${this.me.bin} resume ${t.session}) and it has the PR again; or start a fresh one with ${this.me.bin} superagent call ${this.me.name} retry --set key='${t.key}'`, t.session);
       return;
     }
     // Only an answer to the hand-off counts: a STATUS line from before it (an
@@ -382,16 +424,33 @@ export class Steward {
     const said = statusOf(s!.lastMessage);
     if (!said || said.kind === "needs") return;
     const head = pr.headRefOid.toLowerCase();
-    const nudge = async (text: string) => {
-      if (!this.nudgeOnce(`said:${s!.id}:${s!.lastActivityAt}`)) return;
-      await this.box.send(s!.id, `[${this.me.title}] ${text}`, { wake: true }).catch((e) => this.log(`could not tell ${s!.id}: ${(e as Error).message}`));
+    // Checks still running on the head it named: the same answer is read again next pass.
+    if (said.kind === "ready" && head.startsWith(said.head) && st.state === "pending") return;
+    if (!this.nudgeOnce(`answer:${t.key}:${t.at}:${s!.lastActivityAt}`)) return;
+    const reply = async (why: string, shows: string, text: string) => {
+      if (this.nudgeOnce(`told:${t.key}:${t.at}:${head}:${why}`)) {
+        await this.box.send(s!.id, `[${this.me.title}] ${text}`, { wake: true }).catch((e) => this.log(`could not tell ${s!.id}: ${(e as Error).message}`));
+      } else {
+        this.item(`stuck:${t.key}:${t.at}:${head}:${why}`, `${t.pr}: ${s!.id} was told once and still says ${said.kind}, but GitHub shows ${shows}`, s!.id);
+      }
     };
-    if (st.state !== "ready") return nudge(`You ended with STATUS: ${said.kind}, but GitHub shows ${pr.url} on ${head.slice(0, 10)} as ${st.state}: ${st.why}. Take it to green and clean, then run \`${this.me.bin} pr ready ${t.pr} --head <SHA>\` and end with \`STATUS: ready <SHA>\`.`);
-    if (said.kind === "done" || !head.startsWith(said.head)) {
-      return nudge(`GitHub shows ${pr.url} green and clean on ${head}. If you verified that head, run \`${this.me.bin} pr ready ${t.pr} --head ${head}\` (a second run of one head sends nothing) and end with \`STATUS: ready ${head}\`.`);
-    }
-    this.db.run("UPDATE tends SET state = 'ready' WHERE key = ?", [t.key]);
-    this.log(`${t.pr} is ready on ${head.slice(0, 10)}: ${s!.id} handed it to the judge with pr ready`);
+    // A reviewer's request for changes is the judge's to weigh: the owner cannot clear it.
+    const blocked = st.state === "draft" || (st.state === "needs-work" && st.why !== "a reviewer asked for changes");
+    if (said.kind === "ready" && !head.startsWith(said.head))
+      return reply("moved", `its head as ${head.slice(0, 10)}, not ${said.head.slice(0, 10)}`, `GitHub shows ${pr.url}'s head as ${head}, not ${said.head}. Verify that head, run \`${this.me.bin} pr ready ${t.pr} --head ${head}\` and end with \`STATUS: ready ${head}\`.`);
+    if (blocked) return reply(st.state, `${st.state} on ${head.slice(0, 10)}: ${st.why}`, `GitHub shows ${pr.url} on ${head.slice(0, 10)} as ${st.state}: ${st.why}. Take it to green and clean, then run \`${this.me.bin} pr ready ${t.pr} --head <SHA>\` and end with \`STATUS: ready <SHA>\`.`);
+    if (said.kind === "done")
+      return reply("done", `${head.slice(0, 10)} with no pr ready run said`, `GitHub shows ${pr.url} on ${head}. If you verified that head ready, run \`${this.me.bin} pr ready ${t.pr} --head ${head}\` to hand it to the judge and end with \`STATUS: ready ${head}\`.`);
+    if (this.move(t, "owned", "state = 'ready'")) this.log(`${t.pr} is ready on ${head.slice(0, 10)}: ${s!.id} handed it to the judge with pr ready`);
+  }
+
+  /** A lost hand-off, given an owner again: a fresh one, or the PR's holder now. */
+  retry(key: string): { message: string } {
+    const n = this.db.run("UPDATE tends SET state = 'open', session = NULL, how = NULL, given = NULL, at = MAX(?, at + 1) WHERE key = ? AND state = 'lost'", [Date.now(), key]).changes;
+    if (!n) throw new ActionError(`no lost hand-off ${key}`, 404);
+    this.log(`retry ${key}`);
+    void this.pass().catch((e) => this.log(`pass failed: ${(e as Error).message}`));
+    return { message: "It gets an owner on this pass." };
   }
 
   /** New items go to the main conversation in one message; a main that is working hears it at its next pass. */
@@ -421,6 +480,8 @@ export class Steward {
         if (!r.already) void this.pass().catch((e) => this.log(`pass failed: ${(e as Error).message}`));
         return { message: r.message };
       }
+      case "retry":
+        return this.retry(String(values.key ?? ""));
       case "done": {
         const key = String(values.key ?? "");
         const n = this.db.run("UPDATE items SET done_at = ?, note = ? WHERE key = ? AND done_at IS NULL", [Date.now(), String(values.note ?? ""), key]).changes;
@@ -475,7 +536,7 @@ export class Steward {
         refresh: 10,
         blocks: [{ type: "markdown", text: (this.db.query("SELECT at, what FROM log ORDER BY at DESC LIMIT 80").all() as { at: number; what: string }[]).map((l) => `- ${new Date(l.at).toLocaleString()}: ${md(l.what)}`).join("\n") || "Nothing yet." }],
       };
-    const handed = this.tends(["open", "owned", "ready", "lost"]);
+    const handed = this.tends(["open", "owned", "ready", "lost"]).slice(-50);
     const order: State[] = ["needs-work", "pending", "ready", "draft"];
     return {
       tabs,
