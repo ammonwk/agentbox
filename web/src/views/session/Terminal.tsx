@@ -4,7 +4,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { go } from "../../route";
 import { prRefs, prUrl } from "../../lib/prlinks";
-import { sessionRefs, type SessionIndex } from "../../lib/sessionrefs";
+import { sessionCandidates, sessionRefs, withResolved, type SessionIndex } from "../../lib/sessionrefs";
+import { resolvedSessions, resolveSessions } from "../../lib/sessionresolve";
 import { backoffMs, openTerm, type TermChannel } from "../../api";
 import { terminalAccent } from "../../lib/accent";
 import { Button, Icon } from "../../components";
@@ -165,22 +166,31 @@ export default function Terminal({
 
     // Another session named on screen — its id, tmux name, provider id or
     // worktree path, which the fleet's own agents print all the time — is a
-    // link to it. Only names that are on the board,
-    // so an ordinary eight-letter word never lights up.
+    // link to it. Only names of real sessions, so an ordinary eight-letter
+    // word never lights up: one shaped like an id but not on the board may
+    // name an older session, and is asked about before the answer.
+    const sessionLinks = (text: string, y: number) => {
+      const found = sessionRefs(text, withResolved(idx.current, resolvedSessions()))
+        .filter((r) => r.id !== sessionId)
+        .map((r) => ({
+          range: { start: { x: r.start + 1, y }, end: { x: r.end, y } },
+          text: text.slice(r.start, r.end),
+          decorations: { pointerCursor: true, underline: true },
+          activate: () => {
+            go({ page: "session", id: r.id, tab: "terminal" });
+          },
+        }));
+      return found.length ? found : undefined;
+    };
     const links = term.registerLinkProvider({
       provideLinks(y, callback) {
         const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
-        const found = sessionRefs(text, idx.current)
-          .filter((r) => r.id !== sessionId)
-          .map((r) => ({
-            range: { start: { x: r.start + 1, y }, end: { x: r.end, y } },
-            text: text.slice(r.start, r.end),
-            decorations: { pointerCursor: true, underline: true },
-            activate: () => {
-              go({ page: "session", id: r.id, tab: "terminal" });
-            },
-          }));
-        callback(found.length ? found : undefined);
+        const asked = resolveSessions(sessionCandidates(text, withResolved(idx.current, resolvedSessions()), false));
+        if (!asked) return callback(sessionLinks(text, y));
+        asked.then(
+          () => callback(sessionLinks(text, y)),
+          () => callback(undefined),
+        );
       },
     });
     // PR numbers — `#6307`, `PR 6644`, `owner/repo#12`, a bare `6644` — open the PR on GitHub.

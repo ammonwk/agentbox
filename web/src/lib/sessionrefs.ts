@@ -79,3 +79,36 @@ export function sessionRefs(text: string, index: SessionIndex): SessionRef[] {
   }
   return out;
 }
+
+/** A provider's session id as Claude and Codex write it. */
+const UUID = /(?<![\w-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\w-])/gi;
+const BOX_WORD = new RegExp(`(?<![\\w-])${BOX_ID}(?![\\w-])`, "g");
+
+/** Words in `text` shaped like a session's id that the board does not know:
+ *  the ones to ask the server about, since it holds all of history and the
+ *  board only the recent part. A bare agentbox id must have a digit in it
+ *  unless it was written as code (`loose`), so plain prose is not looked up
+ *  word by word. */
+export function sessionCandidates(text: string, index: SessionIndex, loose: boolean): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(UUID)) if (!index.provider.has(m[0])) out.push(m[0]);
+  for (const m of text.matchAll(BOX_WORD)) if (!index.ids.has(m[0]) && (loose || /\d/.test(m[0]))) out.push(m[0]);
+  return out;
+}
+
+let merged: { index: SessionIndex; found: ReadonlyMap<string, string>; out: SessionIndex } | null = null;
+
+/** The board's index with the sessions the server found by name added
+ *  (`found`: a word → the agentbox id it names). */
+export function withResolved(index: SessionIndex, found: ReadonlyMap<string, string>): SessionIndex {
+  if (found.size === 0) return index;
+  if (merged?.index === index && merged.found === found) return merged.out;
+  const ids = new Set(index.ids);
+  const provider = new Map(index.provider);
+  for (const [ref, id] of found) {
+    ids.add(id);
+    if (ref !== id) provider.set(ref, id);
+  }
+  merged = { index, found, out: { ids, provider } };
+  return merged.out;
+}

@@ -2534,7 +2534,18 @@ export class Fleet extends EventEmitter {
   private trackedOf(id: string): Tracked {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
-    const t = rec.transcriptPath ? this.tracked.get(rec.transcriptPath) : undefined;
+    const path = rec.transcriptPath;
+    // One from before the board's window was never picked up: opened from a
+    // link or the closed list, its transcript is taken up then.
+    if (path && !this.tracked.has(path) && rec.agentSessionId && rec.accountId) {
+      try {
+        const st = statSync(transcriptFile(path));
+        this.track({ provider: rec.provider, accountId: rec.accountId, agentSessionId: rec.agentSessionId, path, mtimeMs: st.mtimeMs, size: st.size });
+      } catch {
+        // Gone from disk: nothing to read.
+      }
+    }
+    const t = path ? this.tracked.get(path) : undefined;
     if (!t) throw new FleetError(404, `session ${id} has no transcript yet`);
     return t;
   }

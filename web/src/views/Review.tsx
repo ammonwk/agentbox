@@ -25,7 +25,8 @@ import { hrefOf } from "../route";
 import { Markdown } from "./session/Markdown";
 import { PrBase } from "./session/prbase";
 import { SessionLinks } from "./session/sessionlinks";
-import { buildSessionIndex } from "../lib/sessionrefs";
+import { buildSessionIndex, withResolved } from "../lib/sessionrefs";
+import { useResolvedSessions } from "../lib/sessionresolve";
 import { prBaseFor } from "../lib/prlinks";
 import "./review.css";
 
@@ -349,7 +350,8 @@ function Source({ card, state }: { card: Card; state: AppState }) {
  * else of the session that made it.
  */
 function CardLinks({ card, state, children }: { card: Card; state: AppState; children: ReactNode }) {
-  const links = useMemo(() => ({ index: buildSessionIndex(state.sessions), self: null }), [state.sessions]);
+  const resolved = useResolvedSessions();
+  const links = useMemo(() => ({ index: withResolved(buildSessionIndex(state.sessions), resolved), self: null }), [state.sessions, resolved]);
   const base = useMemo(() => {
     const own = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/pull\/\d+/.exec(card.pr ?? "")?.[1];
     const asker = state.sessions.find((x) => x.id === card.sessionId);

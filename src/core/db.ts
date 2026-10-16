@@ -724,6 +724,20 @@ export function listSessionRecords(sinceMs = 0): SessionRecord[] {
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
+/** Which of `refs` name a session anywhere in history — its agentbox id or
+ *  its provider's session id — and the agentbox id each names. The board
+ *  holds only recent and open sessions; a link to an old one is resolved
+ *  here. */
+export function resolveSessionRefs(refs: readonly string[]): Record<string, string> {
+  const want = new Set(refs);
+  const out: Record<string, string> = {};
+  for (const r of cachedRecords().values()) {
+    if (want.has(r.id)) out[r.id] = r.id;
+    if (r.agentSessionId && want.has(r.agentSessionId)) out[r.agentSessionId] = r.id;
+  }
+  return out;
+}
+
 /** Every closed session, the most recently closed first. */
 export function listClosedRecords(): SessionRecord[] {
   const rows = getDb()

@@ -304,6 +304,10 @@ export const api = {
    *  history; only a project's, when one is selected. */
   closed: (q: string, offset: number, limit = 30, project: string | null = null) =>
     get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit), ...(project ? { project } : {}) })}`),
+  /** One session by id, wherever in history it is. */
+  session: (id: string) => get<AppState["sessions"][number]>(`/api/sessions/${enc(id)}`),
+  /** Which of these words name a session, as provider id or agentbox id → agentbox id. */
+  resolveSessions: (refs: string[]) => post<Record<string, string>>("/api/sessions/resolve", { refs }),
   timeline: (id: string, opts: { before?: string; limit?: number; via?: string } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set("before", opts.before);

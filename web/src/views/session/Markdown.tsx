@@ -3,7 +3,8 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Parent, PhrasingContent, Root, RootContent } from "mdast";
 import { prRefs, prUrl } from "../../lib/prlinks";
-import { sessionRefs } from "../../lib/sessionrefs";
+import { sessionCandidates, sessionRefs } from "../../lib/sessionrefs";
+import { resolveSessions } from "../../lib/sessionresolve";
 import { PrBase } from "./prbase";
 import { SessionLinks, type SessionLinksValue } from "./sessionlinks";
 import { hrefOf, parseHash } from "../../route";
@@ -222,15 +223,18 @@ function remarkLocalPaths() {
 
 /** A session named in prose — by id, tmux name, provider id or worktree path
  *  — becomes a link to it, the same as a PR number is to GitHub. Inline code
- *  is searched too: agents backtick these names far more often than not. */
+ *  is searched too: agents backtick these names far more often than not. One
+ *  shaped like an id but not on the board is asked about (sessionresolve):
+ *  if it names an older session, the index grows and this draws again. */
 function remarkSessionLinks({ index, self }: SessionLinksValue) {
   return () => (tree: Root) => {
     rewrite(tree, true, (text, code) =>
-      splitRefs(text, code, (t) =>
-        sessionRefs(t, index)
+      splitRefs(text, code, (t) => {
+        void resolveSessions(sessionCandidates(t, index, code));
+        return sessionRefs(t, index)
           .filter((r) => r.id !== self)
-          .map((r) => ({ start: r.start, end: r.end, url: hrefOf({ page: "session", id: r.id, tab: "terminal" }) })),
-      ),
+          .map((r) => ({ start: r.start, end: r.end, url: hrefOf({ page: "session", id: r.id, tab: "terminal" }) }));
+      }),
     );
   };
 }

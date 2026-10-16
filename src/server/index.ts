@@ -40,7 +40,7 @@ import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushTo, removeSubscription, subscriptionsOf, type PushTo } from "../core/push";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
-import { addRepo, deleteRepo, getDb, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
+import { addRepo, deleteRepo, getDb, resolveSessionRefs, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
@@ -1516,6 +1516,17 @@ const router = new Router(mapError)
     const repos = project ? reposWithRoots() : [];
     const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit, project ? (s) => sessionProject(repos, s) === project : undefined);
     return json({ sessions: page.sessions.map((s) => ({ ...s, attention: attentionOf(s, null) })), total: page.total });
+  })
+  // Words in agent output that may name a session off the board (an old
+  // one's id or provider id): which of them do, and as which session.
+  .add("POST", "/api/sessions/resolve", async ({ req }) => {
+    const refs = (await readBody(req)).refs;
+    return json(resolveSessionRefs(Array.isArray(refs) ? refs.filter((r): r is string => typeof r === "string").slice(0, 500) : []));
+  })
+  // One session by id, closed or long idle: a link straight to it.
+  .add("GET", "/api/sessions/:id", ({ params }) => {
+    const s = fleet.get(params.id!);
+    return json({ ...s, attention: attentionOf(s, null) });
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));

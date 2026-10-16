@@ -40,7 +40,8 @@ import { selectScope } from "../../route";
 import { ago, fmtRetryAt } from "../../lib/format";
 import { outstandingOf, sortWindows } from "../../lib/usage";
 import { useDismiss, useFloating } from "../newsession/popover";
-import { buildSessionIndex } from "../../lib/sessionrefs";
+import { buildSessionIndex, withResolved } from "../../lib/sessionrefs";
+import { useResolvedSessions } from "../../lib/sessionresolve";
 import { PrBase } from "./prbase";
 import { SessionLinks } from "./sessionlinks";
 import { TermRail } from "./MessageRail";
@@ -106,10 +107,9 @@ export function SessionView({
   useEffect(() => {
     if (!missing || !id) return;
     let live = true;
-    api.closed(id, 0, 5).then(
-      (page) => {
-        const s = page.sessions.find((x) => x.id === id);
-        if (s && live) {
+    api.session(id).then(
+      (s) => {
+        if (live) {
           closedSessions.set(id, s);
           found((n) => n + 1);
         }
@@ -548,7 +548,8 @@ export function Detail({
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
   // openPrs (src/core/prs.ts) matched it by branch; the newest-updated one wins if there are several.
   const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
-  const links = useMemo(() => buildSessionIndex(state.sessions), [state.sessions]);
+  const resolved = useResolvedSessions();
+  const links = useMemo(() => withResolved(buildSessionIndex(state.sessions), resolved), [state.sessions, resolved]);
   const linkCtx = useMemo(() => ({ index: links, self: session.id }), [links, session.id]);
   const prBase = useMemo(() => prBaseFor(session, state), [session, state]);
   const flashRow = useRef<((row: number) => void) | null>(null);
