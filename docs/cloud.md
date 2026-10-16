@@ -459,8 +459,9 @@ caller inside an agent session (`callerPid`).
 - **Messages go to sessions only.** A message to an installation as a whole,
   or a reply to a human (as a Review card), is not built.
 - **Plan diffs** between revisions are not shown.
-- No project is deployed, and no production migration is applied. Set up a
-  hosted project as above.
+- The tables of the old shared agents (`20261013210000` to
+  `20261014031000`) stay in the schema, unused. Their removal is a separate
+  decision. `20261015120000` adds the shared superagents on top of them.
 
 ## Shared superagents
 

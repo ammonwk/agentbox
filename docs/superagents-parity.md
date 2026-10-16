@@ -139,9 +139,14 @@ added after the merge base (Part 4) to where it is now. A verdict is one of:
 
 ### I. Shared cloud tier
 
-None of PR #4's 12 agent migrations ran on a hosted project. They are
-replaced by one migration, `20261015120000_shared_superagents.sql`
-([cloud.md](cloud.md), Shared superagents).
+PR #4's 12 agent migrations (`20261013210000_shared_agents.sql` to
+`20261014031000_agent_publication_receipts.sql`) ran on a hosted project, so
+they stay in `supabase/migrations/` unchanged: an applied migration is
+history. Nothing reads their tables now. One additive migration,
+`20261015120000_shared_superagents.sql`, adds the shared superagents on top
+([cloud.md](cloud.md), Shared superagents). It drops no table and deletes no
+row, and `agents:execute` stays a valid stored scope that nothing grants.
+The removal of the old tables is a separate decision.
 
 | # | Item | Verdict |
 |---|---|---|

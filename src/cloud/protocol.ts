@@ -160,7 +160,8 @@ export const Installation = z.looseObject({
   name: z.string(),
   platform: z.string(),
   agentbox_version: z.string(),
-  scopes: z.array(z.enum(SCOPES)),
+  // A scope this client does not know (the old `agents:execute`) is left out, not an error.
+  scopes: z.array(z.string()).transform((xs) => xs.filter((x): x is Scope => (SCOPES as readonly string[]).includes(x))),
   accept_own: z.boolean(),
   created_at: ts,
   last_seen_at: ts.nullable(),

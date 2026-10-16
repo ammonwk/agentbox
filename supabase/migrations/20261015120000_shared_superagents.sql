@@ -24,15 +24,19 @@
 
 -- ------------------------------------------------------------------ scope
 
+-- `agents:execute` (20261013210000, the shared agents this replaces) stays a
+-- valid stored scope: an installation that holds it keeps it, and nothing
+-- here removes a row or a table of that tier. Nothing grants it any more:
+-- only `superagents:host` opens what this migration adds.
 alter table public.installations drop constraint installations_scopes_check;
 alter table public.installations add constraint installations_scopes_check check (
-  scopes <@ array['messages:send', 'messages:receive', 'artifacts:read', 'artifacts:publish', 'superagents:host']::text[]
+  scopes <@ array['messages:send', 'messages:receive', 'artifacts:read', 'artifacts:publish', 'superagents:host', 'agents:execute']::text[]
 );
 
 create or replace function private.check_scopes(p_scopes text[]) returns text[]
 language plpgsql immutable set search_path = '' as $$
 begin
-  if p_scopes is null or not (p_scopes <@ array['messages:send', 'messages:receive', 'artifacts:read', 'artifacts:publish', 'superagents:host']::text[]) then
+  if p_scopes is null or not (p_scopes <@ array['messages:send', 'messages:receive', 'artifacts:read', 'artifacts:publish', 'superagents:host', 'agents:execute']::text[]) then
     raise exception 'scopes are messages:send, messages:receive, artifacts:read, artifacts:publish and superagents:host' using errcode = 'PT400';
   end if;
   return (select coalesce(array_agg(distinct s order by s), '{}') from unnest(p_scopes) s);
