@@ -34,7 +34,7 @@ it, or ask Jupiter for a new one.
 |---|---|
 | `jupiter/` | Writes new superagents from a conversation: drafts a directory, shows it on its page with editable fields, and registers it when you press Create. |
 | `vulcan/` | Turns reported issues into a reviewed pull request: one writer per family of issues in its own worktree, three independent read-only reviewers per round, at most three rounds, a guarded publication, and follow-up waits for review feedback and checks. |
-| `steward/` | A do-it-all steward: every minute it reads your open pull requests and the sessions it started, starts an owner for a PR that needs work and has none, and brings its main conversation only what needs judgement. |
+| `steward/` | A do-it-all steward: every minute it reads your open pull requests and the sessions it started, starts an owner for a PR that needs work and has none, and brings its main conversation only what needs judgement. With `steward.discover: false` it takes only the PRs handed to it (`pr.tend`, below) and hands each one to the project's judge with `agentbox pr ready` once its owner verified it ready. Another directory can run its code with a manifest of its own (`run: ["bun", "<agentbox>/superagents/steward/main.ts"]`). |
 | `caelus/`, `salus/` | Conversation-only agents for release follow-through and production health: a manifest and instructions, no code. |
 | `lib/sdk.ts` | What a program in TypeScript needs: the API client, the page server, a store. A superagent in another language uses the same HTTP calls. |
 
@@ -73,7 +73,7 @@ instances and leaves the directory and its state alone.
                                     // decides which ready PRs it gets and which agents its main hears of
   "memory": true,                   // optional: its memory journal and MEMORY.md (below)
   "sweep": "23:00",                 // optional: close its idle work sessions daily; true is the time in Settings
-  "events": ["pr.ready"],           // optional: generic events it takes (below)
+  "events": ["pr.ready"],           // optional: generic events it takes (below): pr.ready, pr.tend
   "main": {                         // optional: its main conversation
     "start": { "provider": "claude", "model": "…", "cwd": "." },  // a POST /api/sessions body; cwd is from the directory, ~ is home;
                                     // "provider": "auto" picks Claude or Codex by room
@@ -337,11 +337,31 @@ main) that have been idle for two hours, and keeps, with the reason, one that
 holds a wait, an open card, a claimed PR or a child at work
 (`GET /api/superagents/:name/sweeps`).
 
-**Events** (`"events"`). `pr.ready`: a session reports a pull request it owns, verified
-it ready on a head (`agentbox pr ready`); each superagent that takes the event
-and shows in the PR's project gets it once per head. With a program, it is the
-action `pr.ready` with `{repo, number, head, owner}` and the owner as the
-caller; without, a message to its main.
+**Events** (`"events"`). Each superagent that takes an event and shows in
+the PR's project gets it, other than the sender's own. With a program, it is
+an action of the event's name; without, a message to its main. A failed
+delivery is not counted, so the next report of the same event tries again.
+
+- `pr.ready`: a session reports a pull request it owns, verified it ready on a
+  head (`agentbox pr ready`). Once per PR and head. The action has `{repo,
+  number, head, owner}`, with the owner as the caller.
+- `pr.tend`: someone hands a pull request on, to be taken to ready
+  (`agentbox pr tend <PR> [--note-file F] [--head SHA]`). A person runs it by
+  hand; a judge's session runs it to send a PR back with its findings. Once
+  per PR, head and sender: the sender's superagent, else its session, else the
+  person. The action has `{repo, number, head, from, agent, note}`: `from` is
+  the sending session (also the caller) or null, `agent` its superagent or
+  null, and `note` the findings (at most 20,000 characters). Without `--head`,
+  agentbox reads the PR's head from GitHub and refuses a closed PR. A session
+  that holds the PR lets go of it once some agent takes the event, so that
+  the taker can give it to a fresh owner.
+
+What the taker does with the PR is its own. Steward's code with
+`discover: false` keeps the owner when a session already holds the PR: it
+sends that session the findings, so that its context is kept, and follows
+it. Only when nobody holds the PR does it start a fresh owner with `claim`.
+Either way the owner runs `agentbox pr ready` when it has verified the PR
+ready, which gives the PR back to the judge.
 
 **Its picture.** A person sets one on the Agents page
 (`PUT /api/superagents/:name/avatar`); agentbox keeps it in its home and shows

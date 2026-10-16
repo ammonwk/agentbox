@@ -155,6 +155,8 @@ why). Arming the same wait twice is one wait.
                                     # naming "another session", if another live session has it
     agentbox pr release [<n|…>]     # release ownership and its PR waits (one, or all)
     agentbox pr ready <n|…> --head <sha>   # you verified it ready: each agent that takes ready PRs gets it, once per head
+    agentbox pr tend <n|…> [--note-file F] [--head <sha>]   # hand it on to the agent that takes PRs to ready, with
+                                    # what it needs; once per head and sender. If you hold it, you let go of it
     agentbox pr transfer <repo#n> --expect <holder> --to <successor>
                                     # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has

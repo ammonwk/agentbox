@@ -805,6 +805,7 @@ export class Superagents {
       loops: this.loopsOf(r, m).length > 0,
       peers,
       prReady: all.some(({ r: x, m: xm }) => this.enabledOf(x) && !!xm?.events?.includes("pr.ready")),
+      prTend: all.some(({ r: x, m: xm }) => x.name !== r.name && this.enabledOf(x) && !!xm?.events?.includes("pr.tend")),
     };
     const file = m.memory ? memoryFile(r.name) : null;
     let aside: string | null = null;

@@ -1,5 +1,6 @@
 /** Who has which pull request, from the CLI (src/core/prclaims.ts). */
 
+import { readFileSync } from "node:fs";
 import type { Api } from "../client";
 import type { AppState, PrClaim } from "../core/types";
 import { idYou, me, parseArgs } from "./sessions";
@@ -9,7 +10,7 @@ const HOW = { said: "claimed it", branch: "on its branch" } as const;
 
 export async function pr(api: Api, args: string[]): Promise<number> {
   const [verb, ...more] = args;
-  const { flags, rest } = parseArgs(more, ["for", "expect", "to", "head"], ["json"]);
+  const { flags, rest } = parseArgs(more, ["for", "expect", "to", "head", "note", "note-file"], ["json"]);
   // The session is the one named, else the one this runs in, as `send` and
   // `card add` say it; the server walks up from the caller's process only
   // when neither reached here (Codex runs commands without the environment).
@@ -44,6 +45,16 @@ export async function pr(api: Api, args: string[]): Promise<number> {
       console.log(flags.has("json") ? JSON.stringify(r) : r.result);
       return 0;
     }
+    case "tend": {
+      // Hand it on to be taken to ready: each superagent that takes pr.tend gets it once per head and sender.
+      if (!rest[0]) throw new Error("pr tend <PR> [--head <SHA>] [--note-file F | --note T]: hand it to the agent here that takes PRs to ready");
+      const file = str(flags.get("note-file"));
+      if (file && flags.has("note")) throw new Error("give --note or --note-file, not both");
+      const note = file ? readFileSync(file === "-" ? 0 : file, "utf8") : str(flags.get("note"));
+      const r = await api<{ state: string; result: string }>("POST", "/api/prs/tend", { ...body, head: str(flags.get("head")), note });
+      console.log(flags.has("json") ? JSON.stringify(r) : r.result);
+      return r.state === "skipped" ? 1 : 0;
+    }
     case "release": {
       const { released } = await api<{ released: number }>("POST", "/api/prs/release", body);
       console.log(released ? `released ${released}` : "no explicit claim removed; named PR waits and branch ownership are released");
@@ -72,6 +83,6 @@ export async function pr(api: Api, args: string[]): Promise<number> {
       return 0;
     }
     default:
-      throw new Error(`pr takes claim, transfer, release, who, ready or claims: not "${verb}"`);
+      throw new Error(`pr takes claim, transfer, release, who, ready, tend or claims: not "${verb}"`);
   }
 }

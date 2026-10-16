@@ -25,6 +25,8 @@ export type Opening = {
   peers: { title: string; name: string; description: string; main: string | null }[];
   /** Some superagent here takes the pr.ready event. */
   prReady: boolean;
+  /** Some other superagent here takes the pr.tend event. */
+  prTend: boolean;
 };
 
 export type Continued = {
@@ -52,6 +54,7 @@ function tools(o: Opening, file: MemoryFile | null): string[] {
       `For recurring work, give yourself a loop instead of timers of your own: ${bin} superagent loop ${o.name} set <id> --when "every hour" [--check <command: exit 0 runs, 1 skips>] --file <prompt file>. Agentbox says the prompt to your current conversation at each time, after your turn ends, and keeps it across new sessions; ${bin} superagent loop ${o.name} rm <id> stops it.`,
     );
   if (o.prReady) out.push(`When you have verified a PR you own ready, run ${bin} pr ready <PR> --head <SHA>: each agent here that takes ready PRs gets it once for that head, so neither of you keeps a wait for the handoff.`);
+  if (o.prTend) out.push(`To hand a PR on to be taken to ready, with what it still needs, run ${bin} pr tend <PR> --note-file <file>: the agent here that takes PRs to ready gets it once for that head and sender, and owns it until it is ready again.`);
   return out;
 }
 

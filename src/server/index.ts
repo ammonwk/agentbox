@@ -94,7 +94,8 @@ import { claimRoutes } from "./claims";
 import { cloudHttpError, cloudRoutes } from "./cloud";
 import { superagentCaller, superagentRoutes } from "./superagents";
 import { configurePeers, peerPorts, requireNoSessionPeer } from "./peer";
-import { prReady } from "../core/superagent/events";
+import { prReady, prTend } from "../core/superagent/events";
+import { prKey, readPrs } from "../core/waitreads";
 import { githubRoutes, requirePersonForCard } from "./github";
 import { GitHubActions } from "../core/github/actions";
 import { GitHubBroker } from "../core/github/broker";
@@ -851,6 +852,30 @@ const router = new Router(mapError)
     if (!owner) throw new HttpError(403, "the PR's owner session reports it ready: run this from inside it");
     const pr = prNamed(b, owner);
     const out = await prReady(superagents, fleet, owner, { ...pr, head: requireString(b, "head") });
+    scheduleHot();
+    return json(out);
+  })
+  // Hand it on to be taken to ready: each superagent that takes the pr.tend
+  // event gets it once per head and sender. A person, a session or a
+  // program may; a session that holds the PR lets go of it.
+  .add("POST", "/api/prs/tend", async ({ req }) => {
+    const b = await readBody(req);
+    const session = authenticatedSession(req);
+    const program = session ? null : superagentCaller(req, superagents);
+    if (!session && !program) requireNoSessionPeer(req, "handing a PR on as a person (run it with your session's capability: the agentbox CLI sends it)");
+    const pr = prNamed(b, session);
+    const note = b.note === undefined || b.note === null ? null : requireString(b, "note").trim() || null;
+    let head = optionalString(b, "head");
+    if (!head) {
+      const read = (await readPrs([pr])).get(prKey(pr));
+      if (!read || read instanceof Error) throw new HttpError(502, `could not read ${prKey(pr)}'s head from GitHub: ${read?.message ?? "no answer"}; give --head <sha>`);
+      if (read.state !== "OPEN") throw new HttpError(409, `${prKey(pr)} is ${read.state.toLowerCase()}: nothing to take to ready`);
+      head = read.head;
+    }
+    const sender = { session, agent: program ?? (session ? superagents.ownerOf(session) : null) };
+    const out = await prTend(superagents, fleet, sender, { ...pr, head, note }, () => {
+      if (session && holderOf(prClaimsNow(), pr.repo, pr.number)?.sessionId === session) releasePr(session, pr);
+    });
     scheduleHot();
     return json(out);
   })

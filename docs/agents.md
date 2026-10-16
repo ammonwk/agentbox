@@ -161,6 +161,13 @@ reports ready (`agentbox pr ready <PR> --head <SHA>`), once per PR and head,
 when it shows in the PR's project. An agent with a program gets it as the
 action `pr.ready`; one without gets it in its main conversation.
 
+An agent with `"events": ["pr.tend"]` takes pull requests to ready. Hand one
+to it with `agentbox pr tend <PR> [--note-file <findings>]`: by hand, or from a
+judge that sends a PR back. It gets each one once per PR, head and sender, the
+same way. Steward's code with `"steward": {"discover": false}` is such an
+agent: it owns each PR it is handed until it is ready, and finds no work of
+its own.
+
 ## Team agents
 
 ![A teammate's view of a shared agent: its Chat through the relay, and a box for guidance](images/agents-team-chat.png)

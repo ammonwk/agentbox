@@ -1594,7 +1594,7 @@ export const AGENT_ICONS = ["brain", "sparkle", "fix", "release", "health"] as c
 export type AgentIcon = (typeof AGENT_ICONS)[number];
 
 /** The generic events agentbox brings a superagent that names them in its manifest (src/core/superagent/events.ts). */
-export const SUPERAGENT_EVENTS = ["pr.ready"] as const;
+export const SUPERAGENT_EVENTS = ["pr.ready", "pr.tend"] as const;
 export type SuperagentEvent = (typeof SUPERAGENT_EVENTS)[number];
 
 /** A prompt agentbox says to a superagent's main conversation on a schedule (src/core/superagent/loops.ts). */

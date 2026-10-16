@@ -502,6 +502,7 @@ pull requests (who has one: no two sessions work the same PR):
   pr claim <n|owner/repo#n|url> [--for ID]   this session has it, and it says "you hold"; refused, naming the other session, if another live one does
   pr release [<n|…>]                 let go of what this session claimed (one, or all)
   pr ready <n|…> --head <sha>        its owner verified it ready: each agent that takes ready PRs ("events": ["pr.ready"]) gets it once per head
+  pr tend <n|…> [--head <sha>] [--note-file F|--note T]   hand it on to be taken to ready: each agent that takes it ("events": ["pr.tend"]) gets it once per head and sender; a session that holds it lets go
   pr who <n|…> [--json]              the session that has it ("(you)" after your own id), or "nobody" (exit 1)
   pr claims [--json]                 every PR a live session has
   claude|codex|… --claim <n|…> …     start a session that has the PR from its first moment, or does not start
