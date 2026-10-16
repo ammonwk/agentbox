@@ -19,6 +19,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly data: unknown = null,
+    /** Only set for a parsed server refusal; transport/invalid replies are uncertain. */
+    readonly status: number | null = null,
   ) {
     super(message);
   }
@@ -40,7 +42,7 @@ export function apiClient(base: string): Api {
     }
     const env = (await res.json().catch(() => null)) as { ok: boolean; data: T; error: string | null } | null;
     if (!env) throw new ApiError(`agentbox answered ${path} with HTTP ${res.status} and no JSON`);
-    if (!env.ok) throw new ApiError(env.error ?? `HTTP ${res.status}`, env.data);
+    if (!res.ok || env.ok !== true) throw new ApiError(env.error ?? `HTTP ${res.status}`, env.data, env.ok === false ? res.status : null);
     return env.data;
   };
 }

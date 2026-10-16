@@ -127,8 +127,6 @@ async function mutate(fn: () => void): Promise<void> {
     tx.onabort = () => reject(failure ?? tx.error);
   });
 }
-/** `previousRevision` is the one this tab last saved: an emptied box deletes a
- *  draft still carrying it, and never a newer one another tab wrote since. */
 export async function saveDraft(id: string, text: string, images: SavedAttachment[], revision: string, previousRevision?: string): Promise<void> {
   try {
     await mutate(() => {
@@ -186,6 +184,18 @@ export async function forgetPending(sessionId: string, id: string): Promise<void
     w.pending = w.pending?.filter((p) => p.id !== id);
     write(all);
   });
+}
+
+/** Preserve the current draft while appending recovered text and renumbering images. */
+export function appendDraft(current: Draft | null, recovered: Draft): { draft: Draft; addedImages: SavedAttachment[] } {
+  const numbersIn = (text: string) => [...text.matchAll(/\[Image #(\d+)\]/g)].map((match) => Number(match[1]));
+  let number = Math.max(0, ...(current?.images ?? []).map((image) => image.n), ...numbersIn(current?.text ?? ""));
+  // An unfinished upload must not take an unrelated image already attached
+  // to the current draft. Renumber every token, including unsaved images.
+  const numbers = new Map([...new Set([...numbersIn(recovered.text), ...recovered.images.map((image) => image.n)])].map((old) => [old, ++number]));
+  const addedImages = recovered.images.map(image=>({...image,n:numbers.get(image.n)!}));
+  const text = recovered.text.replace(/\[Image #(\d+)\]/g,(token,old:string)=>numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
+  return {addedImages,draft:{text:[current?.text.trimEnd(),text].filter(Boolean).join("\n\n"),images:[...(current?.images ?? []),...addedImages],revision:newRevision(),at:Date.now()}};
 }
 
 /** Restoring a known failure is an explicit edit, saved with the removal of

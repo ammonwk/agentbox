@@ -19,6 +19,7 @@ const test = Bun.spawnSync(["bun", "test", "src/cloud/", ...process.argv.slice(2
     AGENTBOX_CLOUD_TEST_URL: env.API_URL,
     AGENTBOX_CLOUD_TEST_PUBLISHABLE_KEY: env.PUBLISHABLE_KEY,
     AGENTBOX_CLOUD_TEST_SECRET_KEY: env.SECRET_KEY,
+    AGENTBOX_CLOUD_TEST_DB_URL: env.DB_URL,
   },
 });
 process.exit(test.exitCode ?? 1);

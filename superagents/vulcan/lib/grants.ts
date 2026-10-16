@@ -5,6 +5,7 @@ import { ActionError, agentbox, type Caller } from "../../lib/sdk";
 import type { Ctx } from "./ctx";
 import { ghLogin } from "./shell";
 import { GrantInput, MAX_GRANT_MS, type Grant, type Work } from "./types";
+import { releaseClaims } from "./work";
 
 export async function createGrant(ctx: Ctx, caller: Caller, input: unknown, now = Date.now()): Promise<Grant> {
   if (caller.via !== "app") throw new ActionError("A grant is created by a person on Vulcan's page, not from a session or the API", 403);
@@ -79,7 +80,9 @@ export async function enforceAuthority(ctx: Ctx, now = Date.now()): Promise<stri
         stopped.push(id);
       }
     }
-    if (!w.stoppedAt) ctx.store.saveWork({ ...ctx.store.work(w.id), stoppedAt: now });
+    // Its issues are free once what ran on them has stopped.
+    const after = ctx.store.work(w.id);
+    if (!after.stoppedAt || after.claims?.length || after.claiming) ctx.store.saveWork({ ...after, stoppedAt: after.stoppedAt ?? now, ...(await releaseClaims(after)) });
   }
   return stopped;
 }

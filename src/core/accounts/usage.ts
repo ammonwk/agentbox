@@ -217,7 +217,7 @@ function claudeUA(version: string | null): string {
 
 export async function fetchClaudeUsage(account: Pick<Account, "home">, deps: UsageDeps): Promise<Reading> {
   const cred = readClaudeCredentials(account.home);
-  if (!cred?.accessToken) return { kind: "skip", stale: "not logged in" };
+  if (!cred?.accessToken) return { kind: "skip", stale: "No readable usage token; Claude's login may be in the system credential store" };
   const now = deps.now();
   // Refresh is the CLI's job. Calling with an expired token would only 401,
   // and doing it every three minutes looks like abuse.

@@ -17,7 +17,7 @@ There are two kinds:
 
 **Propose** by writing a JSON file and running:
 
-    {{bin}} superagent call jupiter propose --json <file>
+    {{bin}} superagent call {{name}} propose --json <file>
 
 The file holds:
 - `request`: a new UUID; keep it, and send the same one with a corrected proposal;

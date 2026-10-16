@@ -1,5 +1,5 @@
 /** Vulcan's page: Work (families), Feed (recommendations), Grants (the form and the list). */
-import { agentbox, block, md, type SuperagentBlock, type SuperagentView } from "../../lib/sdk";
+import { agentbox, block, md, me, type SuperagentBlock, type SuperagentView } from "../../lib/sdk";
 import type { Ctx } from "./ctx";
 import { reconcileDelivery } from "./feed";
 import { standing } from "./grants";
@@ -25,6 +25,7 @@ export async function view(ctx: Ctx, tab: string | null): Promise<SuperagentView
 function status(w: Work): { status: "ok" | "warn" | "bad" | "busy" | "idle"; stage: string } {
   if (w.stoppedAt) return { status: "bad", stage: `stopped ${when(w.stoppedAt)}` };
   if (w.state === "quality_failed") return { status: "bad", stage: `quality failed${w.failure?.issue ? ", improvement issue filed" : ""}` };
+  if (w.claiming) return { status: "busy", stage: "claiming its issues: retry start if it stays here" };
   if (w.state === "starting") return { status: "busy", stage: "starting the writer" };
   if (w.state === "uncertain") return { status: "warn", stage: "start uncertain: retry start" };
   const p = w.publication;
@@ -48,7 +49,7 @@ function rounds(w: Work): string {
 }
 
 function work(ctx: Ctx, works: Work[]): SuperagentBlock[] {
-  if (!works.length) return [block.heading("Work"), block.markdown("No work families. Prepare one in the chat and start it with `agentbox superagent call vulcan work-start --json family.json` from the requester session.")];
+  if (!works.length) return [block.heading("Work"), block.markdown(`No work families. Prepare one in the chat and start it with \`agentbox superagent call ${me.name} work-start --json family.json\` from the requester session.`)];
   return [
     block.heading("Work"),
     ...works.map((w): SuperagentBlock => {
@@ -65,6 +66,7 @@ function work(ctx: Ctx, works: Work[]): SuperagentBlock[] {
         `Base \`${w.input.base}\` at ${short(w.base)}, branch \`${w.branch}\`, writer ${w.provider}, prompt revision \`${w.promptRevision}\`. Accountable: ${md(w.grant.human.name)} (${w.grant.human.github}); publishes as ${w.grant.actor}.`,
         rounds(w),
         p ? `**Publication:** ${p.state}${p.stage ? ` (${p.stage})` : ""} of ${short(p.head)}${p.url ? ` — [#${p.number}](${p.url})` : ""}${p.follow?.note ? `\n\n_${md(p.follow.note)}_` : ""}` : "",
+        w.notes?.length ? w.notes.map((n) => `_${md(n)}_`).join("\n\n") : "",
         w.failure ? `**Failure:** ${md(w.failure.summary)} (${w.failure.state}${w.failure.issue ? `, [issue](${w.failure.issue})` : ""})` : "",
         grant,
       ]
@@ -85,7 +87,7 @@ function work(ctx: Ctx, works: Work[]): SuperagentBlock[] {
 }
 
 function feed(proposals: Proposal[]): SuperagentBlock[] {
-  if (!proposals.length) return [block.heading("Feed"), block.markdown("No recommendations yet. A writer or Vulcan's chat adds one with `agentbox superagent call vulcan recommend --json proposal.json`.")];
+  if (!proposals.length) return [block.heading("Feed"), block.markdown(`No recommendations yet. A writer or Vulcan's chat adds one with \`agentbox superagent call ${me.name} recommend --json proposal.json\`.`)];
   return [
     block.heading("Feed"),
     ...proposals.map((p): SuperagentBlock => {

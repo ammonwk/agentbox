@@ -4,11 +4,11 @@ import { randomUUID } from "node:crypto";
 import { ActionError, agentbox, type ActionReply, type ActionRequest, type Caller } from "../../lib/sdk";
 import type { Ctx } from "./ctx";
 import { approve, dismiss, guide, recommend } from "./feed";
-import { createGrant, enforceAuthority, revokeGrant, sessionsOf } from "./grants";
+import { createGrant, enforceAuthority, revokeGrant } from "./grants";
 import { failure, milestone } from "./outcomes";
 import { followPublication, publish, reconcile } from "./publish";
 import { collect, retryReview, review } from "./reviews";
-import { retryStart, startWork } from "./work";
+import { retryStart, startWork, stopWork } from "./work";
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
@@ -64,17 +64,7 @@ export async function action(ctx: Ctx, req: ActionRequest): Promise<ActionReply>
     case "work-stop": {
       person(caller);
       const { id } = needId(values);
-      const w = ctx.store.work(id);
-      const live = (await agentbox.state(false)).sessions;
-      const stopped: string[] = [];
-      for (const s of sessionsOf(w)) {
-        const l = live.find((x) => x.id === s);
-        if (l && l.host !== "none") {
-          await agentbox.stop(s);
-          stopped.push(s);
-        }
-      }
-      ctx.store.saveWork({ ...ctx.store.work(id), stoppedAt: Date.now() });
+      const stopped = await stopWork(ctx, id);
       return { message: stopped.length ? `Stopped ${stopped.join(", ")}.` : "Nothing was running.", stopped };
     }
     case "work":

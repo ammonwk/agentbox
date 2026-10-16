@@ -444,8 +444,15 @@ export type SessionHost =
   | "none";
 
 export interface Session {
+  /** Suspended by machine cleanup; the underlying turn stays intact. */
+  paused?: boolean;
   /** agentbox's short id, stable for the row's life. */
   id: string;
+  /** Registered agent ownership for navigation; not a messaging capability. */
+  agentOwner?: string | null;
+  /** The project its superagent shows in, when that is exactly one: the
+   *  board puts the session there whatever its checkout (`Superagents.projectBinding`). */
+  agentProject?: string | null;
   provider: ProviderId;
   /** The provider's own session id — what `--resume` takes. Null for the few
    *  seconds between spawning a provider that cannot be told its id up front
@@ -599,6 +606,10 @@ export interface Session {
    *  turn is over and it is waiting on teammates, background agents or
    *  shells, not thinking. */
   background: boolean;
+  /** Work it launched in the background that is still running, in words:
+   *  `workflow "babysit-fleet"`. It runs inside the session's process, so
+   *  the session counts as running, and is neither adopted nor parked. */
+  backgroundWork: string | null;
 }
 
 export interface TokenTotals {
@@ -628,8 +639,26 @@ export interface Attention {
  * A provider-neutral transcript event. Each adapter folds its own format into
  * these; the UI renders only these.
  */
+/** Who sent a message that came in through the provider's user role, as the
+ *  server verified it (src/core/senders.ts); absent on your own messages. */
+export interface SenderView {
+  /** agent: a registered agent; session: another agent session; system and
+   *  schedule: agentbox's own notes; cloud: another installation, as the
+   *  cloud vouches; peer: Claude's own delivery between its sessions;
+   *  unverified: a mark the server has no matching record of, or the
+   *  opening prompt of a session another started, with no record of who wrote it. */
+  kind: "agent" | "session" | "system" | "schedule" | "cloud" | "peer" | "unverified";
+  label: string;
+  /** The sending session, when known and in scope. */
+  session: string | null;
+  /** The superagent the sending session belongs to (`Superagents.ownership`). */
+  agent?: { id: string; name: string; role: string; icon: AgentIcon | null; avatar: string | null };
+  /** The session's opening prompt, which another session started it with. */
+  opening?: boolean;
+}
+
 export type TimelineEvent = { id: string; at: number } & (
-  | { kind: "user"; text: string; images?: number }
+  | { kind: "user"; text: string; images?: number; sender?: SenderView }
   | { kind: "assistant"; text: string }
   | { kind: "thinking"; text: string }
   | {
@@ -787,6 +816,9 @@ export interface AgentSettings {
   /** Remove the worktrees with nothing to lose every night at 3am
    *  (src/core/nightly.ts). */
   reclaimNightly: boolean;
+  /** When each local agent closes its work sessions idle for two hours, as
+   *  "HH:MM" on this machine's clock; "" never does (src/core/agents/sweep.ts). */
+  agentSweepAt: string;
   /** Default model per provider; empty means the provider's own default. */
   models: Record<ProviderId, string>;
   balancer: BalancerSettings;
@@ -846,6 +878,9 @@ export interface RepoSetup {
   copy: string[];
   /** A shell command run in the new worktree; empty for none. */
   run: string;
+  /** The command New session's "Dev server" toggle starts; empty to use the
+   *  package.json `dev` script (src/core/devserver.ts). */
+  dev?: string;
 }
 
 export interface PrInfo {
@@ -1300,6 +1335,8 @@ export interface Card {
 
 /** Changes on a slower clock; pushed only when it moves. */
 export interface ColdState {
+  /** The system-bar cleanup pause, including the one session allowed to work. */
+  cleanup?: import("./cleanup").CleanupState | null;
   accounts: AccountView[];
   logins: LoginFlow[];
   repos: Repo[];
@@ -1506,6 +1543,8 @@ export interface Health {
   /** Present while the server's first pass over the transcripts runs: it
    *  answers, but the board and every other route wait for that pass. */
   starting?: { read: number; of: number };
+  /** The commit the server runs, and whether its files differ from it. */
+  revision?: { commit: string; dirty: boolean } | null;
 }
 
 /** Server → client. */
@@ -1534,6 +1573,8 @@ export type ServerMessage =
   | { type: "btw"; sessionId: string; items: Btw[] }
   /** The UI build on disk (its entry script's name); a page on another reloads. */
   | { type: "build"; entry: string | null }
+  /** The checkout's branch has commits the server does not run (core/behind.ts). */
+  | { type: "behind"; behind: { running: string; head: string; commits: number } | null }
   /** The server is up but its first pass over the transcripts is still
    *  running: the board and timelines follow when it is done. Sent on connect
    *  and as it goes; `read` of `of` transcripts so far. */
@@ -1548,14 +1589,77 @@ export type ClientMessage =
   | { type: "watch"; sessionId: string | null }
   | { type: "ping" };
 
+/** The pictures a superagent can name in its manifest (`icon`), for when none was set on the page. */
+export const AGENT_ICONS = ["brain", "sparkle", "fix", "release", "health"] as const;
+export type AgentIcon = (typeof AGENT_ICONS)[number];
+
+/** The generic events agentbox brings a superagent that names them in its manifest (src/core/superagent/events.ts). */
+export const SUPERAGENT_EVENTS = ["pr.ready", "pr.tend"] as const;
+export type SuperagentEvent = (typeof SUPERAGENT_EVENTS)[number];
+
+/** A prompt agentbox says to a superagent's main conversation on a schedule (src/core/superagent/loops.ts). */
+export interface SuperagentLoop {
+  id: string;
+  /** The manifest's, or set with `PUT /api/superagents/:name/loops/:id` (by a person, its main or its program). */
+  source: "manifest" | "set";
+  when: string;
+  check: string | null;
+  prompt: string;
+  /** The next time it is said, or null when it no longer repeats. */
+  nextAt: number | null;
+  /** A time came while the main was busy: it is said when the turn ends. */
+  due: number | null;
+  last: { at: number; result: "sent" | "skipped" | "failed"; detail: string } | null;
+}
+
+/** A superagent this machine runs and shares with a cloud workspace (src/cloud/superagents.ts). */
+export interface SuperagentTeam {
+  workspace: string;
+  instance: string;
+  visibility: "private" | "workspace";
+  /** Cloud user ids; the host owner is always one. */
+  maintainers: string[];
+  /** Where a teammate copies its directory from as a template; null outside a git checkout with a remote. */
+  source: { repo: string; path: string; commit: string } | null;
+}
+
 /** A superagent as the Agents page shows it (`GET /api/superagents`, src/core/superagents.ts). */
+/** Who decided a superagent's gate: one of its layers, or its manifest's default (src/core/superagent/layers.ts). */
+export type SuperagentGateSource = "user" | "project" | "local" | "manifest";
+
+/** A layer over a superagent's directory, as Settings shows it. */
+export interface SuperagentLayer {
+  kind: "user" | "project" | "local";
+  path: string;
+  exists: boolean;
+  enabled: boolean | null;
+  /** The top-level fields its patch sets. */
+  fields: string[];
+  instructions: boolean;
+  soul: boolean;
+  error: string | null;
+  /** A project layer's fields that need the person's approval; null when it has none. */
+  restricted: { fields: string[]; values: Record<string, unknown>; digest: string; approved: boolean } | null;
+}
+
 export interface SuperagentInfo {
   name: string;
   title: string;
   description: string;
-  /** Where its `superagent.json` and code are. */
+  /** Where its `superagent.json` and code are: its generic agent's directory for an instance. */
   dir: string;
+  /** Its gate, as `gate.enabled`. */
   enabled: boolean;
+  /** The generic agent it is an instance of; null: it is a generic agent, and its instance for you. */
+  base: string | null;
+  /** An instance's project (a repo id); null for a generic agent. */
+  project: string | null;
+  /** Whether it is on, which layer decided, and a layer that cannot be read. */
+  gate: { enabled: boolean; by: SuperagentGateSource; error: string | null };
+  /** The layers over its directory, the least specific first. */
+  layers: SuperagentLayer[];
+  /** A generic agent's instances, and the projects whose layers name it. */
+  instances: { project: string; name: string | null; enabled: boolean; by: SuperagentGateSource }[];
   /** Why its manifest cannot be read, when it cannot. */
   error: string | null;
   /** Its main conversation now, following handovers. */
@@ -1575,6 +1679,24 @@ export interface SuperagentInfo {
     lastExit: { code: number | null; at: number } | null;
   } | null;
   createdAt: number;
+  /** The manifest's picture, for when none was set on the page. */
+  icon: AgentIcon | null;
+  /** A picture set on the page (`/api/superagents/:name/avatar`). */
+  avatar: { at: number } | null;
+  /** The registered repos it shows in; null: every project. Navigation only. */
+  projects: string[] | null;
+  /** It has a memory journal and a read-only MEMORY.md. */
+  memory: boolean;
+  /** When a fresh main takes over from a handoff; null: never. */
+  rollover: { idleMin: number; contextPct: number } | null;
+  loops: SuperagentLoop[];
+  /** When its idle work sessions are closed each day ("HH:MM"); null: never. */
+  sweep: string | null;
+  /** Where its current main runs and why, when agentbox chose (`provider: "auto"`). */
+  selection: { provider: ProviderId; why: string; at: number } | null;
+  events: SuperagentEvent[];
+  /** It is shared with a cloud workspace from this machine. */
+  team: SuperagentTeam | null;
 }
 
 /** What a superagent's page is made of: its program answers `GET /agentbox/view` with this (docs/superagents.md). */

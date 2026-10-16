@@ -62,7 +62,7 @@ export function asObject(v: unknown, label: string): Record<string, unknown> {
  * setting nothing reads.
  */
 export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch {
-  const known = ["theme", "repoMark", "hideSteps", "boardDays", "autoApprove", "parkIdleMin", "reclaimNightly", "models", "balancer"];
+  const known = ["theme", "repoMark", "hideSteps", "boardDays", "autoApprove", "parkIdleMin", "reclaimNightly", "agentSweepAt", "models", "balancer"];
   for (const key of Object.keys(body)) {
     if (!known.includes(key)) throw new HttpError(400, `unknown setting: ${key}`);
   }
@@ -88,6 +88,13 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
   if (body.boardDays !== undefined) patch.boardDays = requirePositiveInt(body, "boardDays");
   if (body.autoApprove !== undefined) patch.autoApprove = requireBoolean(body, "autoApprove");
   if (body.reclaimNightly !== undefined) patch.reclaimNightly = requireBoolean(body, "reclaimNightly");
+  if (body.agentSweepAt !== undefined) {
+    const v = body.agentSweepAt;
+    if (typeof v !== "string" || (v !== "" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(v))) {
+      throw new HttpError(400, "agentSweepAt must be a time as HH:MM, or empty for never");
+    }
+    patch.agentSweepAt = v;
+  }
   if (body.parkIdleMin !== undefined) {
     const v = body.parkIdleMin;
     if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 7 * 24 * 60) {

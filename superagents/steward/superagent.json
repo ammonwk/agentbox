@@ -11,6 +11,7 @@
     "repos": [],
     "author": "@me",
     "every": 60,
+    "discover": true,
     "owners": { "provider": "claude", "running": 4, "perPass": 2, "prompt": "OWNER.md" }
   }
 }

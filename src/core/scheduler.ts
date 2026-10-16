@@ -33,6 +33,7 @@
  * turn is over (`retire`).
  */
 
+import { runShell } from "./runcheck";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { moveCards } from "./cards";
@@ -95,6 +96,10 @@ export class Scheduler {
   private redHeldUntil = new Map<string, number>();
   /** Schedules whose note command is running, or whose note is being said. */
   private coming = new Set<string>();
+  /** Agent intake/leases share this clock; they queue durable work instead
+   * of typing a note into a busy session and losing that intake tick. */
+  private services: (() => Promise<void>)[] = [];
+  onTick(service: () => Promise<void>): void { this.services.push(service); }
 
   constructor(
     private readonly fleet: Fleet,
@@ -184,6 +189,7 @@ export class Scheduler {
 
   /** Start it now. A one-time one is then done; a recurring one keeps its times. */
   async runNow(id: string): Promise<string> {
+    if (!this.fleet.activityAllowed()) throw new FleetError(409, "Sessions are paused for machine cleanup. Resume them from the system bar first.");
     const s = this.get(id);
     if (s.noteCmd || s.sameSession) {
       if (this.coming.has(id)) throw new FleetError(409, "it is at it right now: its note command is running");
@@ -205,8 +211,9 @@ export class Scheduler {
   }
 
   async tick(): Promise<void> {
-    if (this.ticking) return;
+    if (this.ticking || !this.fleet.activityAllowed()) return;
     this.ticking = true;
+    for (const service of this.services) void service().catch((e) => console.error("agentbox: scheduled service:", e));
     try {
       const now = this.now();
       for (const s of listSchedules()) {
@@ -320,6 +327,7 @@ export class Scheduler {
    * command is not started twice.
    */
   private async come(due: Schedule, now: number, early: boolean): Promise<Came> {
+    if (!this.fleet.activityAllowed()) return { quiet: "sessions are paused for machine cleanup" };
     if (this.coming.has(due.id)) return { quiet: "its note command is still running from last time" };
     this.coming.add(due.id);
     try {
@@ -423,6 +431,7 @@ export class Scheduler {
   /** The session it started, or null when it could not (said on the schedule).
    *  `note` goes before what it was asked, `after` behind it. */
   private async fire(s: Schedule, now: number, early: boolean, note?: string, after?: string): Promise<string | null> {
+    if (!this.fleet.activityAllowed()) return null;
     const once = !isRecurring(s.rule);
     const { accountId, ...spec } = s.spec;
     try {
@@ -432,6 +441,7 @@ export class Scheduler {
         ...(note || after ? { prompt: [note, spec.prompt, after].filter(Boolean).join("\n\n") } : {}),
         accountId: accountId && accountId !== "auto" ? accountId : null,
         ...(once ? { id: s.id } : {}),
+        opener: { via: "a schedule" },
       });
       // Its first prompt is the note, which makes a poor title.
       if (note && s.label) await this.fleet.patch(session.id, { label: s.label }).catch(() => {});
@@ -505,15 +515,8 @@ function dirOf(spec: ScheduleSpec): string | null {
 async function runNote(s: Schedule): Promise<string> {
   const cwd = dirOf(s.spec);
   if (!cwd || !existsSync(cwd)) throw new Error(`its directory is gone: ${cwd}`);
-  const p = Bun.spawn(["nice", "-n", "19", "timeout", "--kill-after=5", String(NOTE_TIMEOUT_S), "sh", "-c", s.noteCmd!], {
-    cwd,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, AGENTBOX_SCHEDULE: s.id, AGENTBOX_SCHEDULE_SESSION: s.lastSessionId ?? "" },
-  });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  if (code === 124 || code === 137) throw new Error(`it did not finish in ${NOTE_TIMEOUT_S}s`);
+  const { out, err, code, timedOut } = await runShell(s.noteCmd!, { cwd, timeoutS: NOTE_TIMEOUT_S, env: { AGENTBOX_SCHEDULE: s.id, AGENTBOX_SCHEDULE_SESSION: s.lastSessionId ?? "" } });
+  if (timedOut) throw new Error(`it did not finish in ${NOTE_TIMEOUT_S}s`);
   if (code !== 0) throw new Error(`exit ${code}${err.trim() ? `: ${err.trim().split("\n").pop()!.slice(0, 300)}` : ""}`);
   const note = out.trim();
   return note.length > NOTE_MAX ? `${note.slice(0, NOTE_MAX)}\n[agentbox: the note was cut here, at ${NOTE_MAX} characters.]` : note;

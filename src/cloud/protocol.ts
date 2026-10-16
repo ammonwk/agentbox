@@ -14,7 +14,7 @@ export const CLOUD_PROTOCOL = 1;
 
 // ------------------------------------------------------------- vocabulary
 
-export const SCOPES = ["messages:send", "messages:receive", "artifacts:read", "artifacts:publish"] as const;
+export const SCOPES = ["messages:send", "messages:receive", "artifacts:read", "artifacts:publish", "superagents:host"] as const;
 export type Scope = (typeof SCOPES)[number];
 /** What an installation gets unless its owner picks: it talks and reads,
  *  and publishing is asked for. */
@@ -160,7 +160,8 @@ export const Installation = z.looseObject({
   name: z.string(),
   platform: z.string(),
   agentbox_version: z.string(),
-  scopes: z.array(z.enum(SCOPES)),
+  // A scope this client does not know (the old `agents:execute`) is left out, not an error.
+  scopes: z.array(z.string()).transform((xs) => xs.filter((x): x is Scope => (SCOPES as readonly string[]).includes(x))),
   accept_own: z.boolean(),
   created_at: ts,
   last_seen_at: ts.nullable(),

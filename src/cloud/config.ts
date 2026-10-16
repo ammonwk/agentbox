@@ -17,6 +17,8 @@ export class CloudError extends Error {
     message: string,
     readonly status: number,
     readonly code: string | null = null,
+    /** The database's `detail`, when it raised one: a claim conflict's holder, as JSON. */
+    readonly detail: string | null = null,
   ) {
     super(message);
   }
