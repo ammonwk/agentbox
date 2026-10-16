@@ -69,7 +69,7 @@ describe("a session another has taken over", () => {
     const fleet = fakeFleet([session("old", { host: "none", status: "closed" }), session("new")], { old: "new" });
     const out = await sendAsAgent(fleet, "old", "#8663 is green and clean", { from: "w1", wake: true }, NOW);
     expect(out).toEqual({ to: "new" });
-    expect(fleet.sent).toEqual([{ to: "new", text: "[via agentbox send from w1] [sent to old, which you took over from] #8663 is green and clean", wake: true }]);
+    expect(fleet.sent).toEqual([{ to: "new", text: expect.stringMatching(/^\[via agentbox send from w1 #[0-9a-f]{12}\] \[sent to old, which you took over from\] #8663 is green and clean$/), wake: true }]);
   });
 
   test("refused as its heir would be, saying so", async () => {
@@ -82,7 +82,7 @@ describe("a session another has taken over", () => {
   test("a session nobody took over is sent to as before", async () => {
     const fleet = fakeFleet([session("solo")], {});
     expect(await sendAsAgent(fleet, "solo", "hi", { from: "w3", wake: false }, NOW)).toEqual({ to: "solo" });
-    expect(fleet.sent[0]!.text).toBe("[via agentbox send from w3] hi");
+    expect(fleet.sent[0]!.text).toMatch(/^\[via agentbox send from w3 #[0-9a-f]{12}\] hi$/);
   });
 });
 
@@ -96,6 +96,7 @@ describe("a schedule that keeps to one session", () => {
         if (!s) throw new Error(`no session ${id}`);
         return s;
       },
+      activityAllowed: () => true,
       spawn: async () => {
         // A message wakes the old one while the new one starts.
         sessions.set("old", session("old", { status: "running" }));
@@ -171,4 +172,22 @@ test("late pane discovery attaches only the proven new provider identity, preser
   expect(getSessionRecord(discovered.id)!.archivedAt).toBe(now);
   expect(getSessionRecord(discovered.id)!.agentSessionId).toBeNull();
   expect(fleet.byAgentId.get("codex:provider-own")).toBe(pending.id);
+});
+
+describe("waits across a handover", () => {
+  test("open waits and finished ones not yet told move to the session that takes over; told ones stay", async () => {
+    const { insertWait, updateWait, getWait, listOpenWaits } = await import("../db");
+    insertSessionRecord(record("loop-old"));
+    insertSessionRecord(record("loop-new"));
+    const open = insertWait({ sessionId: "loop-old", spec: { kind: "time" }, createdAt: NOW, deadline: NOW + 3_600_000 });
+    const untold = insertWait({ sessionId: "loop-old", spec: { kind: "time" }, createdAt: NOW, deadline: NOW + 60_000 });
+    updateWait(untold.id, { ended: "happened", endedAt: NOW + 60_000 });
+    const told = insertWait({ sessionId: "loop-old", spec: { kind: "time" }, createdAt: NOW, deadline: NOW + 60_000 });
+    updateWait(told.id, { ended: "happened", endedAt: NOW + 60_000, toldAt: NOW + 61_000 });
+    const fleet = { startedBy: () => [], tick: async () => {} };
+    await Fleet.prototype.handOver.call(fleet as unknown as Fleet, "loop-old", "loop-new");
+    expect([getWait(open.id)!.sessionId, getWait(untold.id)!.sessionId, getWait(told.id)!.sessionId]).toEqual(["loop-new", "loop-new", "loop-old"]);
+    // What reads a session's own waits (arm's duplicate check, the idle close) now sees them.
+    expect(listOpenWaits(0).filter((w) => w.sessionId === "loop-new").map((w) => w.id)).toContain(open.id);
+  });
 });

@@ -1,8 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { createPortal } from "react-dom";
-import type { AccountView, AppState, Schedule } from "../../../../src/core/types";
-import { api, fmtCost, fmtTokens, guessHome, tildify, useNow } from "../../api";
-import { AccountChip, ContextBar, PROVIDER_LABEL, UsageBar } from "../../bits";
+import type { AppState, Schedule } from "../../../../src/core/types";
+import { api, useNow } from "../../api";
+import { PROVIDER_LABEL } from "../../bits";
 import { Button, Confirm, Empty, Icon, type IconComponent } from "../../components";
 import {
   descendantsOf,
@@ -30,15 +29,13 @@ import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
-import { isInstalledApp, useIsPhone } from "../../lib/phone";
-import { useSysbarSlot } from "../../sysbarslot";
+import { isInstalledApp } from "../../lib/phone";
+import { SessionFacts } from "./SessionFacts";
 import { prBaseFor } from "../../lib/prlinks";
 import { repoOfSession, skillsFor } from "../../lib/newsession";
-import { sessionProject, useProjectData, useScope } from "../../lib/projects";
+import { useScope, useProjectData, projectOfSession } from "../../lib/projects";
 import { selectScope } from "../../route";
 import { ago, fmtRetryAt } from "../../lib/format";
-import { outstandingOf, sortWindows } from "../../lib/usage";
-import { useDismiss, useFloating } from "../newsession/popover";
 import { buildSessionIndex } from "../../lib/sessionrefs";
 import { PrBase } from "./prbase";
 import { SessionLinks } from "./sessionlinks";
@@ -91,8 +88,9 @@ export function SessionView({
   // Pins and bookmarks just asked for, shown before the server's state has them.
   const pinned = usePinned(given.sessions);
   const state = useMemo(() => (pinned === given.sessions ? given : { ...given, sessions: [...pinned] }), [given, pinned]);
-  const visiblePinned = usePinned(scoped.sessions);
-  const visible = useMemo(() => (visiblePinned === scoped.sessions ? scoped : { ...scoped, sessions: [...visiblePinned] }), [scoped, visiblePinned]);
+  const humanSessions = useMemo(() => scoped.sessions.filter((s) => !s.agentOwner), [scoped.sessions]);
+  const visiblePinned = usePinned(humanSessions);
+  const visible = useMemo(() => ({ ...scoped, sessions: [...visiblePinned] }), [scoped, visiblePinned]);
   // One closed too long ago to be in the state comes from the closed list's
   // fetches, or is looked up by id for a link straight to it.
   const [, found] = useState(0);
@@ -122,8 +120,8 @@ export function SessionView({
   const narrow = useIsNarrow();
   const list = useListState();
   const scope = useScope();
-  const { repos } = useProjectData();
-  const { filter, sort, view, kids, quiet, reveal, toggleKids } = list;
+  const projectData = useProjectData();
+  const { filter, sort, view, kids, quiet, reveal, toggleKids, ranks } = list;
   // Moves a session to Inactive once its last activity is 3 hours old, with no new state frame.
   const now = useNow(60_000);
   const closing = useClosing().pending;
@@ -156,10 +154,11 @@ export function SessionView({
         tabs[view],
         { open: (x, auto) => shownBy(kids, x, auto), quiet: (x, auto) => shownBy(quiet, x, auto), keep, now },
         sort,
+        ranks,
       ),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
     };
-  }, [visible.sessions, keep, filter, sort, view, now, kids, quiet, closing]);
+  }, [visible.sessions, keep, filter, sort, ranks, view, now, kids, quiet, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
@@ -197,7 +196,7 @@ export function SessionView({
   // selected project's) — reopen it and open it. Pressed again it reopens the
   // one before, since the one just reopened is closed no more.
   const reopenLast = () => {
-    api.closed("", 0, 1, scope.project).then((page) => {
+    api.closed("", 0, 1, scope.project, true).then((page) => {
       const s = page.sessions[0];
       if (!s) return;
       forget(s.id);
@@ -227,14 +226,8 @@ export function SessionView({
       }
       const app = e.ctrlKey && !e.altKey && isInstalledApp();
       if ((app || (e.altKey && !e.ctrlKey)) && !e.metaKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
-        if (app && e.key === "Tab") {
-          if (ordered.length === 0) return;
-          e.preventDefault();
-          e.stopPropagation();
-          const i = ordered.findIndex((s) => s.id === id);
-          const step = e.shiftKey ? -1 : 1;
-          onOpen(ordered[i === -1 ? (step === 1 ? 0 : ordered.length - 1) : (i + step + ordered.length) % ordered.length].id);
-        } else if (e.key.toLowerCase() === "w" && !e.shiftKey) {
+        // Ctrl+Tab is the project tabs' (App.tsx); j/k step through sessions.
+        if (e.key.toLowerCase() === "w" && !e.shiftKey) {
           const row = id ? state.sessions.find((s) => s.id === id) : null;
           if (!row || row.status === "closed") return;
           e.preventDefault();
@@ -291,19 +284,11 @@ export function SessionView({
   const [railW, setRailW] = useRailWidth();
   const showRail = !narrow || !id;
   const showMain = !narrow || !!id;
-  // One found outside the state (the closed list, a link) may be another project's.
-  if (session && scope.project && sessionProject(repos, session) !== scope.project) {
-    return (
-      <Empty
-        title="This session belongs to another project"
-        action={<Button onClick={() => selectScope("project", sessionProject(repos, session), { page: "session", id: session.id, tab })}>Open in its project</Button>}
-      />
-    );
-  }
+  if (session && scope.project && projectOfSession(projectData.repos, session) !== scope.project) return <Empty title="This session belongs to another project"><Button onClick={() => selectScope("project", projectOfSession(projectData.repos, session), { page: "session", id: session.id, tab })}>Open in its project</Button></Empty>;
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
-      {showRail ? <Rail sections={sections} counts={counts} state={state} visibleSessions={visible.sessions} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
+      {showRail ? <Rail sections={sections} counts={counts} state={state} visibleSessions={visible.sessions} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} onNew={onNew} /> : null}
       {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
       ) : sched ? (
@@ -478,50 +463,6 @@ function RailResizer({ width, onWidth }: { width: number; onWidth: (w: number, s
 
 // ------------------------------------------------------------------ detail
 
-/**
- * The session's account, and under a press its usage: each limit window as
- * the Accounts page draws it, the weekly one with what sessions still claim.
- */
-function AccountUsage({ accountId, accounts, cold }: { accountId: string | null; accounts: readonly AccountView[]; cold: boolean }) {
-  const [open, setOpen] = useState(false);
-  const wrap = useRef<HTMLSpanElement>(null);
-  const pop = useRef<HTMLDivElement>(null);
-  useDismiss(open, () => setOpen(false), [wrap, pop]);
-  const style = useFloating(wrap, open, 420, 280);
-  const a = accounts.find((x) => x.id === accountId) ?? null;
-  const toAccounts = hrefOf({ page: "accounts", sub: "accounts" });
-  if (!a) return <AccountChip accountId={accountId} accounts={accounts} cold={cold} onClick={() => (location.hash = toAccounts)} />;
-  const now = Date.now();
-  const outstanding = outstandingOf(a.claims);
-  const windows = sortWindows(a.usage.windows);
-  return (
-    <span className="sx-usage-wrap" ref={wrap}>
-      <AccountChip accountId={accountId} accounts={accounts} cold={cold} onClick={() => setOpen((o) => !o)} />
-      {open ? (
-        <div className="sx-usage" ref={pop} style={style} role="group" aria-label={`Usage of ${a.label}`} onClick={(e) => e.stopPropagation()}>
-          <div className="sx-usage-head">
-            <strong>{a.label}</strong>
-            {a.plan ? <span className="muted">{a.plan}</span> : null}
-          </div>
-          {windows.length === 0 ? (
-            <div className="faint">{a.usage.source === "none" ? "This provider reports no usage." : "No usage read yet."}</div>
-          ) : (
-            windows.map((w) => <UsageBar key={w.id} window={w} now={now} outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0} />)
-          )}
-          {a.usage.stale ? (
-            <div className="sx-usage-stale">
-              <Icon.alert size={12} /> {a.usage.stale}
-            </div>
-          ) : null}
-          <div className="sx-usage-foot">
-            <span className="faint">{a.usage.at ? `as of ${ago(a.usage.at)}` : ""}</span>
-            <a href={toAccounts}>All accounts</a>
-          </div>
-        </div>
-      ) : null}
-    </span>
-  );
-}
 
 export function Detail({
   session,
@@ -541,9 +482,6 @@ export function Detail({
   const [confirmClose, setConfirmClose] = useState(false);
   const close = () => onClose(session);
   const subagents = runningSubagents(session, state.sessions);
-  const home = useMemo(() => guessHome(state.accounts.map((a) => a.home).concat(state.sessions.map((s) => s.cwd))), [state.accounts, state.sessions]);
-  // openPrs (src/core/prs.ts) matched it by branch; the newest-updated one wins if there are several.
-  const pr = state.prs.find((p) => p.sessionId === session.id) ?? null;
   const links = useMemo(() => buildSessionIndex(state.sessions), [state.sessions]);
   const linkCtx = useMemo(() => ({ index: links, self: session.id }), [links, session.id]);
   const prBase = useMemo(() => prBaseFor(session, state), [session, state]);
@@ -570,53 +508,6 @@ export function Detail({
     [state.skills, state.repos, session.provider, session.repoRoot, session.cwd],
   );
 
-  // What it runs as and on, and what it has spent.
-  const sysbarSlot = useSysbarSlot();
-  const phone = useIsPhone();
-  // The bar is one line beside the machine's figures: there the context is a
-  // percentage, the cache reads are in the tooltip, and the account chip says
-  // the provider, so a Claude model is "opus-5-5".
-  const inBar = !!sysbarSlot && !phone;
-  const facts = (
-    <div className="sx-facts">
-      <span className="fact">
-        <AccountUsage accountId={session.accountId} accounts={state.accounts} cold={session.cold} />
-      </span>
-      <span className="fact mono fact-cwd" title={session.cwd}>
-        <Icon.folder size={12} />
-        <span className="fact-cwd-text">
-          <span dir="ltr">{tildify(session.cwd, home)}</span>
-        </span>
-      </span>
-      {session.branch ? (
-        <span className="fact mono" title={session.cwd}>
-          <Icon.branch size={12} /> {session.branch}
-        </span>
-      ) : null}
-      {session.model ? (
-        <span className="fact mono" title={session.model}>
-          {inBar ? session.model.replace(/^claude-/, "") : session.model}
-          {session.effort ? <span className="muted"> · {session.effort}</span> : null}
-        </span>
-      ) : null}
-      <span className="fact">
-        <ContextBar used={session.contextUsed} limit={session.contextLimit} wide={!inBar} />
-      </span>
-      <span
-        className="fact"
-        title={`input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`}
-      >
-        {fmtTokens(session.tokens.input + session.tokens.output)} tok · {inBar ? null : <>{fmtTokens(session.tokens.cacheRead)} cached · </>}
-        <span className="muted">≈{fmtCost(session.tokens.costEquiv)}</span>
-      </span>
-      {pr && (
-        <a className="fact" href={pr.url} target="_blank" rel="noreferrer">
-          <Icon.prs size={12} /> #{pr.number}
-          {pr.isDraft ? " (draft)" : ""}
-        </a>
-      )}
-    </div>
-  );
 
   // Pin and bookmark: in the tabs' row on a computer, beside the name on a phone.
   const marks = (
@@ -665,9 +556,6 @@ export function Detail({
             {marks}
           </div>
         ) : null}
-        {/* On a computer the facts go in the system bar along the bottom. A
-            phone hides that bar in a session, so there they stay here. */}
-        {inBar && sysbarSlot ? createPortal(facts, sysbarSlot) : facts}
 
         {/* A question is the Timeline's last row, and the status says Blocked: no line for it. */}
         {(session.status === "blocked" && !session.question && shownStatus(session) !== "retrying") || error ? (
@@ -812,6 +700,7 @@ export function Detail({
           accounts={state.accounts}
           skills={skills}
           textareaRef={composerRef}
+          footer={<SessionFacts session={session} state={state} />}
         />
       </div>
 

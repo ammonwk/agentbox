@@ -66,6 +66,9 @@ export interface ClientOptions {
   /** Give up on a request after this long (20s): a network that takes the
    *  connection and never answers must not hold a caller forever. */
   timeoutMs?: number;
+  /** Act as the person whose JWT this gives, for one request on the local
+   *  server (src/server/team.ts). The token is never kept. */
+  accessToken?: () => Promise<string | null>;
 }
 
 function timedFetch(ms: number): typeof fetch {
@@ -80,6 +83,7 @@ export function supabaseFor(cfg: CloudConfig, opts: ClientOptions = {}): Supabas
   const c = checkConfig(cfg);
   const persist = opts.persistSession ?? false;
   return createClient(c.url, c.publishableKey, {
+    ...(opts.accessToken ? { accessToken: opts.accessToken } : {}),
     auth: {
       persistSession: persist,
       autoRefreshToken: persist,
@@ -109,7 +113,7 @@ function statusOf(r: Raw): number {
 function unwrap<T>(schema: z.ZodType<T>, r: Raw): T {
   if (r.error) {
     const status = statusOf(r);
-    throw new CloudError(status === 0 ? `could not reach the cloud (${r.error.message})` : r.error.message, status, r.error.code ?? null);
+    throw new CloudError(status === 0 ? `could not reach the cloud (${r.error.message})` : r.error.message, status, r.error.code ?? null, r.error.details ?? null);
   }
   const parsed = schema.safeParse(r.data);
   if (!parsed.success) {
@@ -118,7 +122,7 @@ function unwrap<T>(schema: z.ZodType<T>, r: Raw): T {
   return parsed.data;
 }
 
-async function call<T>(sb: SupabaseClient, fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
+export async function cloudCall<T>(sb: SupabaseClient, fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
   let r: Raw;
   try {
     r = (await sb.rpc(fn, args)) as Raw;
@@ -150,8 +154,15 @@ export class HumanCloud {
     if (error) throw new CloudError(error.message, error.status ?? 400, error.code ?? null);
   }
 
+  /** The code, or the email's whole sign-in link: the default sender's email (no
+   *  custom SMTP) cannot carry the code, only a link with a hashed token. */
   async verifyCode(email: string, code: string): Promise<Me> {
-    const { error } = await this.sb.auth.verifyOtp({ email, token: code.trim(), type: "email" });
+    const link = /^https?:\/\//.test(code.trim()) ? new URL(code.trim()) : null;
+    const tokenHash = link?.searchParams.get("token");
+    if (link && !tokenHash) throw new CloudError("that link has no sign-in token", 400, null);
+    const { error } = tokenHash
+      ? await this.sb.auth.verifyOtp({ token_hash: tokenHash, type: link!.searchParams.get("type") === "signup" ? "signup" : "magiclink" })
+      : await this.sb.auth.verifyOtp({ email, token: code.trim(), type: "email" });
     if (error) throw new CloudError(error.message, error.status ?? 400, error.code ?? null);
     return this.me();
   }
@@ -167,7 +178,7 @@ export class HumanCloud {
   }
 
   me(): Promise<Me> {
-    return call(this.sb, "cloud_me", {}, Me);
+    return cloudCall(this.sb, "cloud_me", {}, Me);
   }
 
   async setDisplayName(name: string): Promise<void> {
@@ -205,7 +216,7 @@ export class HumanCloud {
   // ---- workspaces
 
   createWorkspace(name: string, slug: string): Promise<Workspace> {
-    return call(this.sb, "create_workspace", { p_name: name, p_slug: slug }, Workspace);
+    return cloudCall(this.sb, "create_workspace", { p_name: name, p_slug: slug }, Workspace);
   }
 
   async members(workspaceId: string): Promise<(Member & { person: Person })[]> {
@@ -223,7 +234,7 @@ export class HumanCloud {
   }
 
   createInvite(workspaceId: string, opts: { role?: "admin" | "member"; email?: string | null; ttlHours?: number; maxUses?: number } = {}) {
-    return call(
+    return cloudCall(
       this.sb,
       "create_invite",
       { p_workspace: workspaceId, p_role: opts.role ?? "member", p_email: opts.email || null, p_ttl_hours: opts.ttlHours ?? 72, p_max_uses: opts.maxUses ?? 1 },
@@ -232,27 +243,27 @@ export class HumanCloud {
   }
 
   revokeInvite(inviteId: string): Promise<Invite> {
-    return call(this.sb, "revoke_invite", { p_invite: inviteId }, Invite);
+    return cloudCall(this.sb, "revoke_invite", { p_invite: inviteId }, Invite);
   }
 
   acceptInvite(token: string) {
-    return call(this.sb, "accept_invite", { p_token: token.trim() }, AcceptedInvite);
+    return cloudCall(this.sb, "accept_invite", { p_token: token.trim() }, AcceptedInvite);
   }
 
   removeMember(workspaceId: string, userId: string): Promise<unknown> {
-    return call(this.sb, "remove_member", { p_workspace: workspaceId, p_user: userId }, z.unknown());
+    return cloudCall(this.sb, "remove_member", { p_workspace: workspaceId, p_user: userId }, z.unknown());
   }
 
   setRole(workspaceId: string, userId: string, role: "owner" | "admin" | "member"): Promise<unknown> {
-    return call(this.sb, "set_member_role", { p_workspace: workspaceId, p_user: userId, p_role: role }, z.unknown());
+    return cloudCall(this.sb, "set_member_role", { p_workspace: workspaceId, p_user: userId, p_role: role }, z.unknown());
   }
 
   policy(workspaceId: string): Promise<WorkspacePolicy> {
-    return call(this.sb, "workspace_policy", { p_workspace: workspaceId }, WorkspacePolicy);
+    return cloudCall(this.sb, "workspace_policy", { p_workspace: workspaceId }, WorkspacePolicy);
   }
 
   setPolicy(workspaceId: string, patch: WorkspacePolicyPatch): Promise<WorkspacePolicy> {
-    return call(this.sb, "set_workspace_policy", { p_workspace: workspaceId, p_policy: patch }, WorkspacePolicy);
+    return cloudCall(this.sb, "set_workspace_policy", { p_workspace: workspaceId, p_policy: patch }, WorkspacePolicy);
   }
 
   // ---- installations
@@ -263,7 +274,7 @@ export class HumanCloud {
 
   /** The secret in the answer is shown once: hand it to the machine. */
   registerInstallation(workspaceId: string, name: string, opts: { platform?: string; version?: string; scopes?: Scope[] } = {}) {
-    return call(
+    return cloudCall(
       this.sb,
       "register_installation",
       { p_workspace: workspaceId, p_name: name, p_platform: opts.platform ?? "", p_version: opts.version ?? "", p_scopes: opts.scopes ?? undefined },
@@ -272,7 +283,7 @@ export class HumanCloud {
   }
 
   updateInstallation(id: string, patch: { name?: string; acceptOwn?: boolean; scopes?: Scope[] }): Promise<Installation> {
-    return call(
+    return cloudCall(
       this.sb,
       "update_installation",
       { p_installation: id, p_name: patch.name ?? null, p_accept_own: patch.acceptOwn ?? null, p_scopes: patch.scopes ?? null },
@@ -281,7 +292,7 @@ export class HumanCloud {
   }
 
   revokeInstallation(id: string): Promise<Installation> {
-    return call(this.sb, "revoke_installation", { p_installation: id }, Installation);
+    return cloudCall(this.sb, "revoke_installation", { p_installation: id }, Installation);
   }
 
   providerConnections(installationId: string): Promise<ProviderConnection[]> {
@@ -300,11 +311,11 @@ export class HumanCloud {
   }
 
   grantDelivery(target: string, to: { user?: string; installation?: string }): Promise<DeliveryGrant> {
-    return call(this.sb, "grant_delivery", { p_target: target, p_user: to.user ?? null, p_installation: to.installation ?? null }, DeliveryGrant);
+    return cloudCall(this.sb, "grant_delivery", { p_target: target, p_user: to.user ?? null, p_installation: to.installation ?? null }, DeliveryGrant);
   }
 
   revokeDelivery(grantId: string): Promise<DeliveryGrant> {
-    return call(this.sb, "revoke_delivery", { p_grant: grantId }, DeliveryGrant);
+    return cloudCall(this.sb, "revoke_delivery", { p_grant: grantId }, DeliveryGrant);
   }
 
   /** Receipts the signed-in human may see: sent from their installations, or
@@ -333,7 +344,7 @@ export class HumanCloud {
   }
 
   publishPlan(workspaceId: string, p: { slug: string; title: string; body: string; baseRev?: number | null; summary?: string }) {
-    return call(
+    return cloudCall(
       this.sb,
       "publish_plan",
       { p_workspace: workspaceId, p_slug: p.slug, p_title: p.title, p_body: p.body, p_base_rev: p.baseRev ?? null, p_summary: p.summary ?? "" },
@@ -356,7 +367,7 @@ export class HumanCloud {
   }
 
   publishSkill(workspaceId: string, s: { name: string; files: SkillFileInput[]; description?: string; baseRev?: number | null; summary?: string }) {
-    return call(
+    return cloudCall(
       this.sb,
       "publish_skill",
       { p_workspace: workspaceId, p_name: s.name, p_files: s.files, p_description: s.description ?? "", p_base_rev: s.baseRev ?? null, p_summary: s.summary ?? "" },
@@ -385,7 +396,14 @@ export class InstallationCloud {
   }
 
   #call<T>(fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
-    return call(this.sb, fn, { p_secret: this.#secret, ...args }, schema);
+    return cloudCall(this.sb, fn, { p_secret: this.#secret, ...args }, schema);
+  }
+
+  /** The shared superagents' RPCs (src/cloud/superagents.ts), with this
+   *  machine's secret, which stays private to this class. */
+  superagentCall<T>(fn: string, args: Record<string, unknown>, schema: z.ZodType<T>): Promise<T> {
+    if (!/^inst_superagent_[a-z_]+$/.test(fn)) throw new CloudError("not a shared-superagent RPC", 400);
+    return this.#call(fn, args, schema);
   }
 
   hello(version: string, platform: string): Promise<Hello> {

@@ -41,8 +41,9 @@ function cardInProject(state: AppState, c: Card, project: string): boolean {
     if (slug) return state.repos.some((r) => r.id === project && (r.fullName ?? (r.kind === "github" ? r.ref : "")).toLowerCase() === slug);
   }
   for (const id of [c.about, c.sessionId]) {
+    if (!id) continue; // no `about`: an idle agent has no session either, and must not match
     const s = state.sessions.find((s) => s.id === id);
-    if (s) return sessionProject(state.repos, s) === project;
+    if (s) return projectOfSession(state.repos, s) === project;
   }
   return false;
 }
@@ -54,8 +55,14 @@ export function scopedState(state: AppState, project: string | null): AppState {
   if (!project) return state;
   return {
     ...state,
-    sessions: state.sessions.filter((s) => sessionProject(state.repos, s) === project),
+    sessions: state.sessions.filter((s) => projectOfSession(state.repos, s) === project),
     cards: state.cards.filter((c) => cardInProject(state, c, project)),
     schedules: state.schedules.filter((s) => s.spec.repoId === project || (!s.spec.repoId && s.spec.cwd && repoOfSession(state.repos, { repoRoot: null, cwd: s.spec.cwd })?.id === project)),
   };
+}
+
+/** A session's project: the one its superagent shows in, when it shows in
+ *  exactly one (`Session.agentProject`, set by the server), else its checkout's. */
+export function projectOfSession(repos: readonly Repo[], s: Parameters<typeof sessionProject>[1] & { agentProject?: string | null }): string | null {
+  return s.agentProject !== undefined ? s.agentProject : sessionProject(repos, s);
 }

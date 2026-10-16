@@ -12,6 +12,7 @@ import { action } from "./lib/actions";
 import { Ctx, readConfig } from "./lib/ctx";
 import { enforceAuthority } from "./lib/grants";
 import { tools } from "./lib/shell";
+import { adoptLegacyClaims } from "./lib/work";
 import { Store } from "./lib/store";
 import { view } from "./lib/view";
 
@@ -22,12 +23,14 @@ function cli(): string {
   return env.length ? `env ${env.join(" ")} ${me.bin}` : me.bin;
 }
 
-const ctx = new Ctx(new Store(store()), tools, readConfig(me.dir, cli()));
+const ctx = new Ctx(new Store(store()), tools, readConfig(me.dir, cli(), process.env.AGENTBOX_SUPERAGENT_MANIFEST || undefined));
 
 serve({
   view: (tab) => view(ctx, tab),
   action: (req) => action(ctx, req),
 });
+
+void adoptLegacyClaims(ctx).catch((e) => console.error(`issue claims not moved to agentbox: ${(e as Error).message}`));
 
 every(30_000, async () => {
   const stopped = await enforceAuthority(ctx);

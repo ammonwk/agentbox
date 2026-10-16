@@ -1,0 +1,13 @@
+{
+  "name": "agentbox-desktop",
+  "version": "0.1.0",
+  "description": "agentbox in a desktop window",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "44.7.2"
+  }
+}

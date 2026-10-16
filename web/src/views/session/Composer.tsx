@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import type { AccountView, Placement, Session, SkillInfo } from "../../../../src/core/types";
 import { ago, api, fmtRetryAt, fmtTokens, useNow } from "../../api";
 import { AttachButton, AttachFrame, expandImages, tokensIn, useAttachments } from "../../attachments";
@@ -8,12 +8,13 @@ import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
-import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend } from "./drafts";
-import { PendingSends, deliverPending } from "./submissions";
+import { appendDraft, draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend, updatePending, forgetPending } from "./drafts";
+import { PendingSends, deliverPending, submitPending } from "./submissions";
 import "../newsession.css";
 import { useAction } from "./useAction";
 import { useVoiceNote, voiceNotes } from "./voicenote";
 import { accountProvider } from "../../../../src/core/providers/account";
+import { ComposerInput, ComposerSend } from "./ComposerInput";
 
 /** What the composer can do for a session, and the sentence that says so. */
 export type ComposerMode =
@@ -47,11 +48,13 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
  * the box is replaced by the Adopt explanation. `/` completes the skills the
  * session can run, as in the new-session prompt.
  */
-export function Composer({ session, accounts, skills, textareaRef }: {
+export function Composer({ session, accounts, skills, textareaRef, footer }: {
   session: Session;
   accounts: readonly AccountView[];
   skills: readonly SkillInfo[];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  /** A quiet line under the box: the session's facts. */
+  footer?: ReactNode;
 }) {
   // The draft left here last time (the composer is keyed by session, so this
   // is read once per session). Sending clears it again.
@@ -92,14 +95,6 @@ export function Composer({ session, accounts, skills, textareaRef }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [interruptible, session.id, run]);
-
-  // Grow with the text up to a cap, then scroll.
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(200, el.scrollHeight + 2)}px`;
-  }, [text]);
 
   // Remember the draft as it changes; sending empties the box, which deletes it.
   const savedImages = images.saved();
@@ -192,16 +187,11 @@ export function Composer({ session, accounts, skills, textareaRef }: {
     <div className="cmp" data-mode={mode.kind}>
       <PendingSends sessionId={session.id} onRestore={async (p) => {
         const previousRevision = revision.current;
-        const restoredRevision = newRevision();
-        let n = Math.max(0, ...images.atts.map((a) => a.n), ...tokensIn(text));
-        const numbers = new Map(p.draft.images.map((a) => [a.n, ++n]));
-        const restoredImages = p.draft.images.map((a) => ({ ...a, n: numbers.get(a.n)! }));
-        const recovered = p.draft.text.replace(/\[Image #(\d+)\]/g, (token, old: string) => numbers.has(Number(old)) ? `[Image #${numbers.get(Number(old))}]` : token);
-        const restored = [text.trimEnd(), recovered].filter(Boolean).join("\n\n");
-        await restorePending(session.id, p.id, { text: restored, images: [...images.saved(), ...restoredImages], at: Date.now(), revision: restoredRevision }, previousRevision, () => revision.current === previousRevision);
-        images.restore(restoredImages);
-        revision.current = restoredRevision;
-        setTextState(restored);
+        const {draft:restored,addedImages} = appendDraft({text,images:images.saved(),revision:previousRevision,at:Date.now()},p.draft);
+        await restorePending(session.id,p.id,restored,previousRevision,()=>revision.current===previousRevision);
+        images.restore(addedImages);
+        revision.current = restored.revision;
+        setTextState(restored.text);
       }} />
       {error ? (
         <div className="cmp-error" role="alert">
@@ -274,10 +264,10 @@ export function Composer({ session, accounts, skills, textareaRef }: {
             images go under the text, inside the box. */}
         <AttachFrame a={images} className="cmp-frame">
         <AttachButton a={images} className="cmp-attach" />
-        <textarea
+        <ComposerInput
           id={`cmp-${session.id}`}
-          ref={ref}
-          rows={1}
+          textareaRef={ref}
+          onSend={() => void submit()}
           value={text}
           placeholder={placeholder}
           enterKeyHint="send"
@@ -288,11 +278,8 @@ export function Composer({ session, accounts, skills, textareaRef }: {
             skill.onEdit(e.target);
           }}
           onKeyDown={(e) => {
-            if (skill.onKeyDown(e) || images.onKeyDown(e)) return;
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void submit();
-            } else if (e.key === "Escape") {
+            if (skill.onKeyDown(e) || images.onKeyDown(e)) { e.preventDefault(); return; }
+            if (e.key === "Escape") {
               // Mid-turn Esc stops the turn, as it does in the terminal; at rest it leaves the box.
               if (interruptible) {
                 e.preventDefault();
@@ -333,7 +320,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
               ) : null}
               <span className="cmp-go-wrap">
                 {voice.above}
-                <Button
+                <ComposerSend
                   className="cmp-go"
                   variant="ghost"
                   icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.send}
@@ -356,11 +343,12 @@ export function Composer({ session, accounts, skills, textareaRef }: {
           ) : (
             <span className="cmp-go-wrap">
               {voice.above}
-              <Button
+              <ComposerSend
                 className="cmp-go"
                 variant="ghost"
                 icon={voice.phase === "locked" ? Icon.check : voice.phase === "held" ? Icon.mic : text.trim() ? Icon.send : Icon.play}
                 loading={busy}
+                title={text.trim() ? "Resume with prompt" : "Resume"}
                 aria-label={voice.phase === "locked" ? "Finish the recording" : text.trim() ? "Resume with prompt" : "Resume"}
                 data-ready
                 data-rec={recording ? voice.phase : undefined}
@@ -371,7 +359,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
                 }}
               >
                 <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
-              </Button>
+              </ComposerSend>
             </span>
           )}
         </div>
@@ -408,6 +396,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       ) : mode.kind === "resume" ? (
         <div className="cmp-hint">Resumes on the same account{lastOn ? `, ${lastOn}` : ""}, in agentbox&apos;s tmux — its cache is still warm.</div>
       ) : null}
+      {footer}
     </div>
   );
 }
@@ -542,6 +531,209 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
           />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** An agent's Chat box (the Agents page): the Sessions draft and receipt
+ * model and composer styling, over the agent's own `send`. */
+export function AgentComposer({
+  id,
+  name,
+  send,
+  receipt,
+  disabled = false,
+  attachments = false,
+}: {
+  id: string;
+  /** Images, uploaded to this machine and named by path. */
+  attachments?: boolean;
+  name: string;
+  send: (
+    body: string,
+    request: string,
+    /** /help: the image numbers ticked to publish on the public issue. */
+    publish?: number[],
+  ) => Promise<{ state: string; result: string }>;
+  receipt: (
+    request: string,
+  ) => Promise<{ state: string; result: string } | null>;
+  disabled?: boolean;
+}) {
+  const key = `agent:${id}`,
+    initial = useMemo(() => loadDraft(key), [key]);
+  const [text, setText] = useState(initial?.text ?? ""),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState<string | null>(null);
+  const revision = useRef(initial?.revision ?? newRevision()),
+    lastQueuedRevision = useRef(initial?.revision),
+    ref = useRef<HTMLTextAreaElement>(null);
+  const edit = (s: string) => {
+    revision.current = newRevision();
+    setText(s);
+  };
+  const images = useAttachments({ text, setText: edit, textareaRef: ref, initial: attachments ? initial?.images : [] });
+  const savedImages = images.saved(), savedKey = JSON.stringify(savedImages);
+  // A /help report's images stay on this machine unless each is ticked: the
+  // issue is public. Not kept in the draft, so a restored one starts unticked.
+  const [publish, setPublish] = useState<ReadonlySet<number>>(new Set());
+  const helpImages = attachments && /^\s*\/help\s/.test(text) ? savedImages.map((i) => i.n).filter((n) => tokensIn(text).has(n)).sort((a, b) => a - b) : [];
+  useEffect(() => {
+    // An explicit clear replaces our previous saved revision, never a newer
+    // draft written by another tab. The storage lock orders queued saves.
+    const previous = lastQueuedRevision.current;
+    lastQueuedRevision.current = revision.current;
+    void saveDraft(key, text, savedImages, revision.current, previous);
+  }, [key, text, savedKey]);
+  useEffect(
+    () =>
+      onDraftWork(() => {
+        if (draftTaken(key, revision.current)) {
+          revision.current = newRevision();
+          setText("");
+          images.clear();
+        }
+      }),
+    [key, images.clear],
+  );
+  const check = useCallback(
+    async (p: PendingSend) => {
+      const r = await receipt(p.id);
+      if (r?.state === "sent") await forgetPending(p.sessionId, p.id);
+      else
+        await updatePending(p.id, {
+          state:
+            r?.state === "refused"
+              ? "failed"
+              : r?.state === "queued" || r?.state === "attempting"
+                ? "pending"
+                : "unconfirmed",
+          error: r?.result || null,
+        });
+    },
+    [receipt, key],
+  );
+  async function submit() {
+    if (!text.trim() || busy || disabled || images.uploading) return;
+    // Uploaded images go as their paths on this machine, as in Sessions.
+    const shots = images.saved(), paths = new Map(shots.map((i) => [i.n, i.path]));
+    const missing = attachments ? [...tokensIn(text)].filter((n) => !paths.has(n)) : [];
+    if (missing.length) {
+      setError(`image #${missing.join(", #")} did not upload — retry it or remove it`);
+      return;
+    }
+    const body = attachments && shots.length ? expandImages(text, paths).trim() : text;
+    const published = helpImages.filter((n) => publish.has(n));
+    setBusy(true);
+    setError(null);
+    const p: PendingSend = {
+      id: newRevision(),
+      sessionId: key,
+      draft: {
+        text,
+        images: shots,
+        at: Date.now(),
+        revision: revision.current,
+      },
+      kind: "send",
+      body,
+      bodyHash: submissionHash(body),
+      at: Date.now(),
+      state: "pending",
+      error: null,
+    };
+    try {
+      // onDraftWork clears only the revision taken by this send. Any newer
+      // typing remains a separate draft.
+      await submitPending(p, async () => {
+        const r = await send(p.body, p.id, published);
+        if (r.state === "sent") { await forgetPending(key, p.id); setPublish(new Set()); }
+        else
+          await updatePending(p.id, {
+            state:
+              r.state === "refused"
+                ? "failed"
+                : r.state === "queued"
+                  ? "pending"
+                  : "unconfirmed",
+            error: r.result || null,
+          });
+      });
+    } catch (e) {
+      const message = (e as Error).message;
+      if (!draftTaken(key,p.draft.revision)) setError(message);
+      else {
+        try { await updatePending(p.id, { state: "unconfirmed", error: message }); }
+        catch { setError("Could not save delivery status. Check the conversation before sending again."); }
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  // The paperclip, the text and Send in one low box (Sessions' composer).
+  const box = (
+    <>
+        {attachments && <AttachButton a={images} className="cmp-attach" />}
+        <ComposerInput
+          textareaRef={ref}
+          onSend={() => void submit()}
+          aria-label={`Message ${name}`}
+          placeholder={`Message ${name}`}
+          value={text}
+          disabled={disabled}
+          onKeyDown={(event) => { if (attachments) images.onKeyDown(event); }}
+          onChange={(e) => edit(e.target.value)}
+        />
+        <div className="cmp-tools">
+          <ComposerSend
+            type="submit"
+            aria-label="Send"
+            disabled={!text.trim() || disabled || images.uploading}
+            loading={busy}
+            data-ready={text.trim() ? true : undefined}
+          />
+        </div>
+    </>
+  );
+  return (
+    <div className="cmp agent-composer" data-attachments={attachments || undefined} data-multi={text.includes("\n") || text.length > 90 || undefined}>
+      <PendingSends
+        sessionId={key}
+        reconcileSend={check}
+        onRestore={async (p) => {
+          const previous = revision.current;
+          const {draft:next,addedImages} = appendDraft({text,images:images.saved(),revision:previous,at:Date.now()},p.draft);
+          await restorePending(key,p.id,next,previous,()=>revision.current===previous);
+          images.restore(addedImages);
+          revision.current = next.revision;
+          setText(next.text);
+        }}
+      />
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {helpImages.length > 0 && (
+        <fieldset className="agent-help-publish">
+          <legend>ammonwk/agentbox is public. Unticked images stay on this machine.</legend>
+          {helpImages.map((n) => (
+            <label key={n}>
+              <input type="checkbox" checked={publish.has(n)} disabled={busy}
+                onChange={(e) => setPublish((xs) => { const next = new Set(xs); if (e.target.checked) next.add(n); else next.delete(n); return next; })} />
+              Publish Image #{n} publicly
+            </label>
+          ))}
+        </fieldset>
+      )}
+      <form className="cmp-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        {attachments ? <AttachFrame a={images} className="cmp-frame">{box}</AttachFrame> : <div className="att-frame cmp-frame">{box}</div>}
+      </form>
     </div>
   );
 }

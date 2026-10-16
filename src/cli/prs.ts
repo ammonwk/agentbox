@@ -9,7 +9,7 @@ const HOW = { said: "claimed it", branch: "on its branch" } as const;
 
 export async function pr(api: Api, args: string[]): Promise<number> {
   const [verb, ...more] = args;
-  const { flags, rest } = parseArgs(more, ["for", "expect", "to"], ["json"]);
+  const { flags, rest } = parseArgs(more, ["for", "expect", "to", "head"], ["json"]);
   // The session is the one named, else the one this runs in, as `send` and
   // `card add` say it; the server walks up from the caller's process only
   // when neither reached here (Codex runs commands without the environment).
@@ -34,6 +34,14 @@ export async function pr(api: Api, args: string[]): Promise<number> {
       else if (c.sessionId !== you) console.log(`${c.repo}#${c.number} is ${c.sessionId}'s, not yours, until it stops, closes, or runs \`agentbox pr release ${c.number}\``);
       else if (c.already) console.log(`you already hold ${c.repo}#${c.number} (you are ${you}): it is yours to work`);
       else console.log(`you hold ${c.repo}#${c.number} now (you are ${you}): it is yours to work until you stop or close, or run \`agentbox pr release ${c.number}\``);
+      return 0;
+    }
+    case "ready": {
+      // The owner's readiness event: each superagent that takes pr.ready gets the PR once per head.
+      const head = str(flags.get("head"));
+      if (!rest[0] || !head) throw new Error("pr ready <PR> --head <SHA it was verified ready on>, run by the PR's owner session");
+      const r = await api<{ state: string; result: string }>("POST", "/api/prs/ready", { ...body, head });
+      console.log(flags.has("json") ? JSON.stringify(r) : r.result);
       return 0;
     }
     case "release": {
@@ -64,6 +72,6 @@ export async function pr(api: Api, args: string[]): Promise<number> {
       return 0;
     }
     default:
-      throw new Error(`pr takes claim, transfer, release, who or claims: not "${verb}"`);
+      throw new Error(`pr takes claim, transfer, release, who, ready or claims: not "${verb}"`);
   }
 }

@@ -63,7 +63,7 @@ for (const [args, request] of REACHES) {
 const REFUSES: [string[], RegExp][] = [
   [["card", "zzz"], /card takes add, list, show, ack or close/],
   [["cards", "zzz"], /card takes/],
-  [["pr", "zzz"], /pr takes claim, transfer, release, who or claims/],
+  [["pr", "zzz"], /pr takes claim, transfer, release, who, ready or claims/],
   [["card", "add", "--kind", "note"], /card add needs --title/],
   [["schedule"], /schedule needs a time and a prompt/],
 ];

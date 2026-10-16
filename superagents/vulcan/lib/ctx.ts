@@ -1,6 +1,6 @@
 /** What every Vulcan module works with: its store, git and gh, the manifest's
  *  own settings, and a per-family lock so two operations never interleave. */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ActionError } from "../../lib/sdk";
 import type { Tools } from "./shell";
@@ -11,7 +11,7 @@ export type Config = {
   writerProvider: "claude" | "codex";
   /** The prompt revision new families pin (`revisions/<name>.md`). */
   promptRevision: string;
-  /** Vulcan's directory: where the revisions are. */
+  /** Vulcan's directory: a `revisions/` here wins over the code's own. */
   dir: string;
   /** How a session reaches this agentbox's CLI, for the prompts. */
   cli: string;
@@ -40,16 +40,18 @@ export class Ctx {
   revision(name: string): string {
     if (!/^[\w.-]{1,80}$/.test(name)) throw new ActionError(`not a prompt revision name: ${name}`);
     try {
-      return readFileSync(join(this.config.dir, "revisions", `${name}.md`), "utf8").trim();
+      const own = join(this.config.dir, "revisions", `${name}.md`);
+      return readFileSync(existsSync(own) ? own : join(import.meta.dir, "..", "revisions", `${name}.md`), "utf8").trim();
     } catch {
-      throw new ActionError(`prompt revision ${name} is not in ${join(this.config.dir, "revisions")}`, 409);
+      throw new ActionError(`prompt revision ${name} is not in ${join(this.config.dir, "revisions")} or this code's revisions`, 409);
     }
   }
 }
 
-/** The manifest's own `vulcan` field, with defaults. Agentbox ignores it; this is where it is read. */
-export function readConfig(dir: string, cli: string): Config {
-  const m = JSON.parse(readFileSync(join(dir, "superagent.json"), "utf8")) as { vulcan?: { writer?: { provider?: string }; promptRevision?: string } };
+/** The manifest's own `vulcan` field, with defaults. Agentbox ignores it; this is where it is read.
+ *  `manifest` is the file agentbox gives (its layers over the directory's), else the directory's. */
+export function readConfig(dir: string, cli: string, manifest = join(dir, "superagent.json")): Config {
+  const m = JSON.parse(readFileSync(manifest, "utf8")) as { vulcan?: { writer?: { provider?: string }; promptRevision?: string } };
   const provider = m.vulcan?.writer?.provider ?? "codex";
   if (provider !== "claude" && provider !== "codex") throw new Error(`superagent.json: vulcan.writer.provider is claude or codex, not ${provider}`);
   return { writerProvider: provider, promptRevision: m.vulcan?.promptRevision ?? "producer-to-assertion-v1", dir, cli };

@@ -54,12 +54,14 @@ import type {
   McpServerInput,
   McpState,
 } from "../../src/core/types";
+import type { MemoryView } from "../../src/core/superagent/memory-view";
+import type { SweepRecord } from "../../src/core/superagent/state";
 import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
 import type { CloudStatus, OutboundResult } from "../../src/core/cloud/bridge";
 import type { AgentIdentity, Directory, InstallationSettings, PublishedSkill } from "../../src/cloud/protocol";
 import type { InstallResult, SkillManifest } from "../../src/cloud/skillbundle";
-import { noteServerBuild } from "./lib/update";
+import { noteServerBehind, noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
@@ -81,7 +83,7 @@ const loadMock = (): Promise<MockModule> => (mockModule ??= import("./mock"));
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   if (MOCK) {
     const m = await loadMock();
     // The mock is typed loosely at its one boundary; everything past this line is the contract's type.
@@ -126,6 +128,15 @@ export interface SuperagentActionReply {
   compose?: string;
 }
 
+/** A `/help` report's receipt (src/core/superagent/feedback.ts): `issue` is
+ *  the GitHub issue it made, `note` what the person must know of it. */
+export interface HelpReceipt {
+  state: "sent" | "refused" | "uncertain" | "attempting";
+  result: string;
+  issue?: string;
+  note?: string;
+}
+
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 export type SettingsPatch = DeepPartial<AgentSettings>;
 export type RepoPatch = Partial<Pick<Repo, "worktreeDefault" | "setup">>;
@@ -139,6 +150,8 @@ export interface NewSessionInput {
   /** An existing branch to run on — its worktree, or a new one. */
   branch?: string;
   pr?: number;
+  /** Start the repo's dev server too, with the checkout's deps linked in. */
+  devServer?: boolean;
   prompt?: string;
   model?: string;
   effort?: string;
@@ -208,8 +221,12 @@ export function healthRows(h: Health): { name: string; state: DepState; detail: 
 }
 
 export const api = {
+  startCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup"),
+  resumeCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup/resume"),
   // ---- superagents (docs/superagents.md)
   superagents: () => get<SuperagentInfo[]>("/api/superagents"),
+  /** One superagent. An old local agent's id answers with the superagent it became. */
+  superagent: (name: string) => get<SuperagentInfo>(`/api/superagents/${enc(name)}`),
   superagentView: (name: string, tab: string | null) =>
     get<SuperagentView | null>(`/api/superagents/${enc(name)}/view${tab ? `?tab=${enc(tab)}` : ""}`),
   superagentAction: (name: string, body: { action: string; values: Record<string, unknown>; tab: string | null }) =>
@@ -218,8 +235,29 @@ export const api = {
     post<{ session: string; started: boolean }>(`/api/superagents/${enc(name)}/chat`, { text, sendId }),
   superagentPatch: (name: string, patch: { enabled?: boolean; main?: string | null }) =>
     request<SuperagentInfo>("PATCH", `/api/superagents/${enc(name)}`, patch),
+  /** A person's gate (docs/superagents.md, Overrides and gates): theirs everywhere, or theirs in one project. */
+  superagentGate: (name: string, body: { layer: "user" | "local"; enabled: boolean | null; project?: string }) =>
+    request<SuperagentInfo>("PUT", `/api/superagents/${enc(name)}/gate`, body),
+  /** Approve what a project layer asks that needs the person (`digest` as read); null takes it back. */
+  superagentApprove: (name: string, layer: "project" | "local", digest: string | null) => post<SuperagentInfo>(`/api/superagents/${enc(name)}/approve`, { layer, digest }),
   superagentRestart: (name: string) => post<SuperagentInfo>(`/api/superagents/${enc(name)}/restart`),
   superagentLog: (name: string) => get<{ text: string }>(`/api/superagents/${enc(name)}/log`),
+  superagentMemory: (name: string, q: string) => get<MemoryView>(`/api/superagents/${enc(name)}/memory${q.trim() ? `?q=${enc(q)}` : ""}`),
+  /** An empty `text` forgets the preference. */
+  superagentPrefer: (name: string, key: string, text: string) => post<unknown>(`/api/superagents/${enc(name)}/memory/prefer`, { key, text }),
+  superagentSweeps: (name: string) => get<SweepRecord[]>(`/api/superagents/${enc(name)}/sweeps`),
+  superagentRemoveLoop: (name: string, id: string) => request<unknown>("DELETE", `/api/superagents/${enc(name)}/loops/${enc(id)}`),
+  /** Set (the image's own bytes) or remove (null) its picture. */
+  superagentAvatar: async (name: string, file: Blob | null): Promise<void> => {
+    const path = `/api/superagents/${enc(name)}/avatar`;
+    if (MOCK) return void (await request(file ? "PUT" : "DELETE", path));
+    const res = await fetch(path, { method: file ? "PUT" : "DELETE", headers: { "x-agentbox": "1", ...(file ? { "content-type": file.type } : {}) }, body: file ?? undefined });
+    const env = (await res.json().catch(() => ({ ok: false, error: `${res.status} ${res.statusText}` }))) as { ok?: boolean; error?: string };
+    if (!env.ok) throw new Error(env.error || `${path}: ${res.status} ${res.statusText}`);
+  },
+  superagentHelp: (name: string, body: { request: string; text: string; target: string | null; uiRevision: unknown; publish?: number[] }) =>
+    post<HelpReceipt>(`/api/superagents/${enc(name)}/help`, body),
+  superagentHelpReceipt: (name: string, request: string) => get<HelpReceipt | null>(`/api/superagents/${enc(name)}/help/${enc(request)}`),
 
   /** The board's open sessions and cold state; the closed ones page from `closed`. */
   state: () => get<AppState>("/api/state?open=1"),
@@ -261,8 +299,9 @@ export const api = {
   patchSession: (id: string, patch: { label?: string | null; parent?: string | null; pinOrder?: number | null; bookmarked?: boolean }) =>
     request<Session>("PATCH", `/api/sessions/${enc(id)}`, patch),
   send: (id: string, text: string) => post<unknown>(`/api/sessions/${enc(id)}/send`, { text }),
-  submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string) =>
-    request<SendReceipt>("POST", `/api/sessions/${enc(id)}/submissions`, { sendId, kind, text }, AbortSignal.timeout(30_000)),
+  /** `interrupt`: end a running turn first (an agent's Chat, #25); only for a send. */
+  submit: (id: string, sendId: string, kind: "send" | "resume" | "btw", text: string, interrupt = false) =>
+    request<SendReceipt>("POST", `/api/sessions/${enc(id)}/submissions`, { sendId, kind, text, ...(interrupt && kind === "send" ? { interrupt: true } : {}) }, AbortSignal.timeout(30_000)),
   submission: (id: string, sendId: string) => request<SendReceipt | null>("GET", `/api/sessions/${enc(id)}/submissions/${enc(sendId)}`, undefined, AbortSignal.timeout(10_000)),
   /** `background` leaves a browser tab behind the window in front (Ctrl-click). */
   openFile: (id: string, path: string, background = false) =>
@@ -285,10 +324,9 @@ export const api = {
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
   /** Close stops it and takes it off the list; `false` reopens it (still stopped). */
   close: (id: string, closed: boolean) => post<Closed>(`/api/sessions/${enc(id)}/close`, { closed }),
-  /** A page of closed sessions, the most recently closed first, from all of
-   *  history; only a project's, when one is selected. */
-  closed: (q: string, offset: number, limit = 30, project: string | null = null) =>
-    get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit), ...(project ? { project } : {}) })}`),
+  /** A page of closed sessions, the most recently closed first, from all of history. */
+  closed: (q: string, offset: number, limit = 30, project: string | null = null, human = false) =>
+    get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit), ...(project ? { project } : {}), ...(human ? { human: "1" } : {}) })}`),
   timeline: (id: string, opts: { before?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set("before", opts.before);
@@ -339,7 +377,7 @@ export const api = {
   deleteRepo: (id: string) => request<unknown>("DELETE", `/api/repos/${enc(id)}`),
   /** Where the repo's new sessions start, and what its new worktrees are given. */
   patchRepo: (id: string, patch: RepoPatch) => request<Repo[]>(`PATCH`, `/api/repos/${enc(id)}`, patch),
-  /** Write and enable the systemd user service for this checkout, lingering on. */
+  /** Install the background service: launchd at login, or systemd with lingering. */
   installService: () => post<{ installed: string; lingering: boolean }>("/api/onboarding/service"),
   /** Slow by construction — many git and gh calls. Only ever on a button. */
   scanWorktrees: (scope: "all" | "agentbox") => post<WorktreeScan>("/api/worktrees/scan", { scope }),
@@ -533,6 +571,7 @@ class Wire {
       }
       if (msg.type === "error") this.setStatus({ lastError: msg.message });
       else if (msg.type === "build") noteServerBuild(msg.entry);
+      else if (msg.type === "behind") noteServerBehind(msg.behind);
       else if (msg.type === "restarting") this.restartUntil = Date.now() + RESTART_WINDOW_MS;
       else if (msg.type === "starting") this.setStatus({ starting: { read: msg.read, of: msg.of } });
       else if (msg.type === "hot" && this.status.starting) this.setStatus({ starting: null });

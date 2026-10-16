@@ -3,7 +3,7 @@
  *  improvement issue where the grant names a repo for them. */
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { ActionError, agentbox } from "../../lib/sdk";
+import { ActionError, agentbox, me } from "../../lib/sdk";
 import type { Ctx } from "./ctx";
 import { authority } from "./grants";
 import { ghLogin } from "./shell";
@@ -57,7 +57,7 @@ export async function failure(ctx: Ctx, id: string, caller: string | null, input
     await agentbox.card({
       kind: "decision",
       notify: false,
-      key: `vulcan-quality:${w.id}`,
+      key: `${me.name}-quality:${w.id}`,
       session: w.session ?? undefined,
       title: `${AGENT_NAME}: quality cap reached`,
       short: "The review budget is exhausted and blocking findings remain. Code work has stopped. Review the missed edge case and proposed process correction.",

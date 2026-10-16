@@ -17,13 +17,18 @@
  * session, bytes both ways. Closing it detaches; the agent keeps running.
  */
 
+import { githubProfile } from "../core/profile";
 import { ensureBridge } from "../bridge/service";
 import { ZodError } from "zod";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
-import { DEFAULT_PORT, webDist } from "../core/paths";
+import { DEFAULT_PORT, packageRoot, webDist } from "../core/paths";
+import { behindHead, type Behind } from "../core/behind";
+import { restartService } from "../core/restart";
+import { sourceCheckout } from "../core/snapshot";
 import { Fleet, FleetError, repoRootOf } from "../core/fleet";
+import { ResourceCleanup } from "../core/cleanup";
 import { sessionProject } from "../core/projects";
 import * as tmux from "../core/tmux";
 import { attentionOf, byAttention, retrying } from "../core/attention";
@@ -42,6 +47,7 @@ import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, write
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { addRepo, deleteRepo, getDb, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
+import { devServerPage, devServerStatus } from "../core/devserver";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
@@ -54,8 +60,10 @@ import { claimPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, releaseP
 import { repoCheckoutPath, repoFullNameOf } from "../core/git";
 import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
+import { attribute } from "../core/senders";
 import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
+import { recentScreenshots, screenshotImage } from "../core/screenshots";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
@@ -78,9 +86,22 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
+import { RUNNING_REVISION } from "../revision";
 import { CloudBridge } from "../core/cloud/bridge";
 import { Superagents } from "../core/superagents";
+import { WorkClaims } from "../core/workclaims";
+import { claimRoutes } from "./claims";
 import { cloudHttpError, cloudRoutes } from "./cloud";
+import { superagentCaller, superagentRoutes } from "./superagents";
+import { configurePeers, peerPorts, requireNoSessionPeer } from "./peer";
+import { prReady } from "../core/superagent/events";
+import { githubRoutes, requirePersonForCard } from "./github";
+import { GitHubActions } from "../core/github/actions";
+import { GitHubBroker } from "../core/github/broker";
+import { CloudConsent } from "../core/github/consent";
+import { cloudConfig } from "../core/cloud/config";
+import { TeamHost } from "../core/superagent/team";
+import { teamRoutes } from "./team";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -162,12 +183,23 @@ export const fleet = new Fleet({
   poolAgents: () => poolAgents(),
 });
 setMetricsSource(() => fleet.sessions());
+export const cleanup = new ResourceCleanup(fleet, () => { scheduleCold(); scheduleHot(); });
+fleet.activityAllowed = id => cleanup.allows(id);
 /** Sessions to start later; on the board and in Settings, so cold state. */
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
-export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`);
+export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`, () => scheduleHot());
+configurePeers({ server: PORT, sessionAbove: (pid) => fleet.liveSessionAbove(pid), programAbove: (pid) => superagents.programAbove(pid) });
+/** Who has which work, by source: renewed on the scheduler's tick, moved on a handover (src/core/workclaims.ts). */
+export const workClaims = new WorkClaims(fleet);
+fleet.onHandOver = (from, to) => workClaims.handOver(from, to);
+// A session's claims are kept where the superagent it acts for keeps its own.
+workClaims.ownerOf = (session) => superagents.ownerOf(session, { authority: true });
+// A handover passes a superagent's authority only between its own sessions.
+fleet.authorityOf = (id) => superagents.ownerOf(id, { authority: true });
+scheduler.onTick(() => workClaims.tick());
 /** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
 export const cloud = new CloudBridge(fleet, VERSION);
 function cardId(raw: string): number {
@@ -216,8 +248,13 @@ let voice: VoiceHub;
 /** The sessions on the board — with the closed ones too unless `open`, and
  *  the closed ones you pinned or bookmarked either way, since the list keeps
  *  those at hand — for `GET /api/state` and the sockets' frames. */
+/** A session's `agentProject`, only when its superagent pins one. */
+const withProject = (p: string | undefined) => (p === undefined ? {} : { agentProject: p });
+
 function hotState(open = false): HotState {
   let closedStamp = 0;
+  const owner = superagents.ownership();
+  const project = superagents.projectBinding(owner);
   const sessions = fleet
     .sessions()
     .filter((s) => {
@@ -225,7 +262,7 @@ function hotState(open = false): HotState {
       closedStamp += 1 + (s.closedAt ?? 0);
       return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
-    .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }))
+    .map((s) => ({ ...s, paused: !!s.pid && !cleanup.allows(s.id), agentOwner: owner(s.id), ...withProject(project(s.id)), attention: attentionOf(s, fleet.blockedReason(s.id)) }))
     .sort(byAttention);
   return { sessions, serverTime: Date.now(), closedStamp };
 }
@@ -385,6 +422,7 @@ function coldState(): ColdState {
   const prClaims = prClaimsNow();
   return {
     accounts: views,
+    cleanup: cleanup.state(),
     logins: accounts.loginFlows(),
     repos: reposWithRoots(),
     prs: slow.prs.map((p) => ({ ...p, owner: holderOf(prClaims, p.repo, p.number)?.sessionId ?? null })),
@@ -548,13 +586,13 @@ async function pumpTimeline(ws: Socket): Promise<void> {
         const page = await fleet.timeline(id, null, TIMELINE_PAGE);
         if (d.watching !== id) continue;
         d.cursor = page.cursor;
-        send(ws, { type: "timeline", sessionId: id, events: page.events, cursor: page.cursor, reset: true, before: page.before });
+        send(ws, { type: "timeline", sessionId: id, events: attribute(id, page.events, superagents.senders), cursor: page.cursor, reset: true, before: page.before });
       } else {
         const next = await fleet.since(id, d.cursor);
         if (d.watching !== id) continue;
         d.cursor = next.cursor;
         if (next.events.length > 0 || next.reset) {
-          send(ws, { type: "timeline", sessionId: id, events: next.events, cursor: next.cursor, reset: next.reset });
+          send(ws, { type: "timeline", sessionId: id, events: attribute(id, next.events, superagents.senders), cursor: next.cursor, reset: next.reset });
         }
       }
     } while (d.again);
@@ -649,6 +687,7 @@ function handleTermMessage(ws: Socket, raw: string | Buffer): void {
   }
   const m = msg as { type?: string; data?: unknown; cols?: unknown; rows?: unknown };
   if (m.type === "input" && typeof m.data === "string") {
+    if (ws.data.kind === "term" && !fleet.activityAllowed(ws.data.sessionId)) return;
     t.write(m.data);
     if (ws.data.kind === "term" && !TERM_REPORT.test(m.data)) typedAt.set(ws.data.sessionId, Date.now());
   } else if (m.type === "resize" && typeof m.cols === "number" && typeof m.rows === "number") {
@@ -699,6 +738,15 @@ const router = new Router(mapError)
   .add("GET", "/api/state", ({ url }) => stateResponse(url.searchParams.get("open") === "1"))
   .add("GET", "/api/prompts", () => json(fleet.openingPrompts(PROMPT_HISTORY)))
   .add("GET", "/api/voice", () => json(voice.status()))
+  // The Update button, when the checkout has newer commits: the service
+  // restarts itself onto them. Started after the answer has gone out.
+  .add("POST", "/api/server/restart", () => {
+    if (!serverBehind) throw new HttpError(409, "the server already runs the checkout's newest commit");
+    setTimeout(() => {
+      if (!restartService()) console.error("agentbox: restart asked, but no agentbox service is installed");
+    }, 250);
+    return json({ restarting: true, to: serverBehind.head });
+  })
   .add("GET", "/api/health", async ({ url }) => {
     // Re-check is someone who just installed or logged into something.
     const refresh = url.searchParams.get("refresh") === "1";
@@ -706,12 +754,18 @@ const router = new Router(mapError)
       await detectProviders();
       scheduleCold();
     }
-    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh) };
+    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh), revision: RUNNING_REVISION };
     if (!booted) health.starting = startupProgress();
     return json(health);
   })
 
   // ---- sessions
+  .add("GET", "/api/cleanup", () => json(cleanup.state()))
+  .add("POST", "/api/cleanup", async () => {
+    await fleet.ready;
+    return json(await cleanup.start());
+  })
+  .add("POST", "/api/cleanup/resume", async () => json(await cleanup.resume()))
   .add("POST", "/api/placement", async ({ req }) => {
     const b = await readBody(req);
     return json(fleet.placement(provider(b.provider), optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null, optionalString(b, "effort") ?? null));
@@ -722,6 +776,15 @@ const router = new Router(mapError)
     // does not start, so two are never sent to the same one.
     const claim = b.claim !== undefined ? prNamed({ pr: b.claim, cwd: b.cwd }, null) : null;
     const key = claim ? `${claim.repo.toLowerCase()}#${claim.number}` : "";
+    const opener = authenticatedSession(req);
+    // A parent gives a superagent's authority (claims, GitHub actions) only
+    // to a session its starter proves it acts for: that superagent's program,
+    // the parent itself, or another session of the same superagent.
+    const callerPidOf = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined;
+    const parentId = optionalString(b, "parent") ?? (callerPidOf ? fleet.callerOf(callerPidOf) : null);
+    const owner = parentId ? superagents.ownerOf(parentId, { authority: true }) : null;
+    const program = superagentCaller(req, superagents);
+    const parentProven = !owner || (program ? program === owner : !!opener && (opener === parentId || superagents.ownerOf(opener, { authority: true }) === owner));
     if (claim) {
       const held = holderOf(prClaimsNow(), claim.repo, claim.number);
       if (held) throw new HttpError(409, new PrHeld(held, fleet.sessions().find((s) => s.id === held.sessionId)).message.replace(/^not claimed/, "not started"));
@@ -730,7 +793,10 @@ const router = new Router(mapError)
     }
     try {
       const out = await fleet.spawn({
-        provider: provider(b.provider),
+        // "auto": the provider with room (src/core/providers/auto.ts); the answer's `choice` says why.
+        provider: b.provider === "auto" ? "auto" : provider(b.provider),
+        previous: b.previous === undefined ? undefined : provider(b.previous),
+        writer: b.writer === true,
         readOnly: b.readOnly === true,
         notify: b.notify === false ? false : undefined,
         cwd: optionalString(b, "cwd"),
@@ -738,12 +804,16 @@ const router = new Router(mapError)
         worktree: b.worktree === true,
         branch: optionalString(b, "branch"),
         pr: typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0 ? b.pr : undefined,
+        devServer: b.devServer === true,
         prompt: typeof b.prompt === "string" ? b.prompt : undefined,
         model: optionalString(b, "model"),
         effort: optionalString(b, "effort"),
         accountId: optionalString(b, "accountId") ?? null,
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
+        parentProven,
+        // Only the caller's capability says which session wrote the prompt.
+        ...(opener ? { opener: { from: opener, agent: superagents.ownerOf(opener) } } : {}),
       });
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
       scheduleHot();
@@ -763,11 +833,27 @@ const router = new Router(mapError)
     }
   })
 
+  // ---- a session's dev server (src/core/devserver.ts)
+  .add("GET", "/api/sessions/:id/dev", async ({ params }) => json(await devServerStatus(params.id!)))
+  .add("GET", "/api/sessions/:id/dev/open", ({ params }) =>
+    new Response(devServerPage(params.id!), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }),
+  )
+
   // ---- who has which pull request
   // The session a command runs in, for the CLI to tell "you" from another:
   // AGENTBOX_SESSION when it reached the command, else the walk up from it.
   .add("POST", "/api/whoami", async ({ req }) => json({ id: speaker(await readBody(req)) }))
   .add("GET", "/api/prs/claims", () => json(prClaimsNow()))
+  // Its owner found it ready: each superagent that takes the pr.ready event gets it once per head.
+  .add("POST", "/api/prs/ready", async ({ req }) => {
+    const b = await readBody(req);
+    const owner = authenticatedSession(req);
+    if (!owner) throw new HttpError(403, "the PR's owner session reports it ready: run this from inside it");
+    const pr = prNamed(b, owner);
+    const out = await prReady(superagents, fleet, owner, { ...pr, head: requireString(b, "head") });
+    scheduleHot();
+    return json(out);
+  })
   .add("POST", "/api/prs/who", async ({ req }) => {
     const b = await readBody(req);
     const pr = prNamed(b, speaker(b));
@@ -841,7 +927,9 @@ const router = new Router(mapError)
     // when its environment has it; otherwise it is found above the caller's
     // process, as a spawn's parent is.
     const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
-    const fromSession =
+    const authenticated = authenticatedSession(req);
+    if (b.from === "agent" && !authenticated) throw new HttpError(403, "agent messages require the sending session's capability");
+    const fromSession = authenticated ??
       (typeof b.fromSession === "string" && /^[\w-]{1,64}$/.test(b.fromSession) ? b.fromSession : null) ??
       (b.from === "agent" && callerPid ? fleet.callerOf(callerPid) : null);
     // An agent's message is refused, before anything is typed or resumed, when
@@ -849,7 +937,9 @@ const router = new Router(mapError)
     // one to a session another has taken over goes to that one
     // (src/core/sendguard.ts). Yours never is, and goes where you send it.
     if (b.from === "agent") {
-      const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true }, Date.now());
+      // Only the sending session's capability proves who wrote it; a named or
+      // inferred session is recorded, unproven.
+      const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true, verified: !!authenticated, agent: authenticated ? superagents.ownerOf(authenticated) : null }, Date.now());
       if ("refused" in sent) throw new HttpError(409, sent.refused);
       return json(sent);
     }
@@ -874,9 +964,12 @@ const router = new Router(mapError)
     if (!["send", "resume", "btw"].includes(kind)) throw new HttpError(400, "invalid submission kind");
     const text = typeof b.text === "string" ? b.text : requireString(b, "text");
     if (kind !== "resume" && !text.trim()) throw new HttpError(400, "the message is empty");
+    // A person's message in an agent's Chat ends a running turn first, as
+    // Escape by hand would (`Fleet.endTurnFor`); a session's never does.
+    const interrupt = kind === "send" && b.interrupt === true && !authenticatedSession(req);
     try {
       const receipt = await submitWithReceipt(params.id!, id, kind, text, (attempt) => {
-        if (kind === "send") return fleet.send(params.id!, text, attempt);
+        if (kind === "send") return fleet.send(params.id!, text, attempt, false, interrupt);
         if (kind === "resume") return fleet.resume(params.id!, text || undefined, attempt);
         return fleet.askBtw(params.id!, text, attempt);
       });
@@ -934,6 +1027,17 @@ const router = new Router(mapError)
     scheduleHot();
     scheduleCold();
     return json(s);
+  })
+  .add("GET", "/api/screenshots", ({req}) => {
+    if (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token")) throw new HttpError(403,"Screenshot previews belong to the user's attachment picker");
+    return json(recentScreenshots());
+  })
+  .add("GET", "/api/screenshots/:id", ({req,params}) => {
+    if (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token")) throw new HttpError(403,"Screenshot previews belong to the user's attachment picker");
+    try {
+      const image = screenshotImage(params.id!);
+      return new Response(Bun.file(image.path), {headers:{"content-type":image.mime,"cache-control":"private, no-store","x-content-type-options":"nosniff"}});
+    } catch (e) { throw new HttpError(404,(e as Error).message); }
   })
   .add("POST", "/api/uploads", async ({ req }) => {
     const len = Number(req.headers.get("content-length") ?? 0);
@@ -1026,6 +1130,13 @@ const router = new Router(mapError)
     const to = requireString(b, "to");
     if (to === params.id) throw new HttpError(400, "a session cannot hand over to itself");
     if (!fleet.sessions().some((s) => s.id === params.id)) throw new HttpError(404, `no session ${params.id}`);
+    if (!fleet.sessions().some((s) => s.id === to)) throw new HttpError(404, `no session ${to}`);
+    // What it holds (its sessions, claims, PRs) is its own to give: the
+    // session itself, the program of the superagent it belongs to, or a person.
+    const program = superagentCaller(req, superagents), caller = authenticatedSession(req);
+    if (program ? program !== superagents.ownerOf(params.id!, { authority: true }) : caller && caller !== params.id)
+      throw new HttpError(403, `only session ${params.id} itself, its superagent's program or a person hands over what it holds`);
+    if (!program && !caller) requireNoSessionPeer(req, "a handover");
     const moved = await fleet.handOver(params.id!, to);
     const cardsMoved = moveCards(params.id!, to);
     const claimsMoved = movePrClaims(params.id!, to);
@@ -1033,44 +1144,6 @@ const router = new Router(mapError)
     scheduleHot();
     scheduleCold();
     return json({ to, children: moved, cards: cardsMoved, claims: claimsMoved, closed: b.close === true });
-  })
-
-  // ----- superagents (src/core/superagents.ts, docs/superagents.md)
-  .add("GET", "/api/superagents", () => json(superagents.list()))
-  .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))
-  .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(params.name!)))
-  .add("PATCH", "/api/superagents/:name", async ({ req, params }) => {
-    const b = await readBody(req);
-    const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
-    const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
-    return json(await superagents.patch(params.name!, { main, enabled }));
-  })
-  .add("DELETE", "/api/superagents/:name", ({ params }) => {
-    superagents.remove(params.name!);
-    return json(null);
-  })
-  .add("POST", "/api/superagents/:name/restart", async ({ params }) => json(await superagents.restart(params.name!)))
-  .add("GET", "/api/superagents/:name/log", ({ params, url }) => {
-    const bytes = Number(url.searchParams.get("bytes")) || undefined;
-    return json({ text: superagents.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
-  })
-  .add("GET", "/api/superagents/:name/view", async ({ params, url }) => json(await superagents.view(params.name!, url.searchParams.get("tab"))))
-  .add("POST", "/api/superagents/:name/action", async ({ req, params }) => {
-    const b = await readBody(req);
-    requireString(b, "action");
-    // Who asked: a session proves itself with its capability; a page in a browser sends an Origin.
-    const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const) };
-    return json(await superagents.action(params.name!, b, caller));
-  })
-  .add("POST", "/api/superagents/:name/chat", async ({ req, params }) => {
-    const b = await readBody(req);
-    const text = requireString(b, "text");
-    if (!text.trim()) throw new HttpError(400, "the message is empty");
-    const sendId = requireString(b, "sendId");
-    if (!/^[\w-]{1,64}$/.test(sendId)) throw new HttpError(400, "invalid send ID");
-    const out = await superagents.chat(params.name!, text, sendId);
-    scheduleHot();
-    return json(out);
   })
 
   // ----- scheduled sessions (src/core/scheduler.ts)
@@ -1179,6 +1252,7 @@ const router = new Router(mapError)
   .add("POST", "/api/cards/:id/answer", async ({ req, params }) => {
     const b = await readBody(req);
     if (typeof b.text !== "string") throw new HttpError(400, "text must be a string");
+    requirePersonForCard(req, cards.get(cardId(params.id!)).key);
     return json(cards.answer(cardId(params.id!), b.text));
   })
   .add("POST", "/api/cards/:id/later", ({ params }) => json(cards.later(cardId(params.id!))))
@@ -1208,12 +1282,15 @@ const router = new Router(mapError)
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 30));
     const project = url.searchParams.get("project");
     const repos = project ? reposWithRoots() : [];
-    const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit, project ? (s) => sessionProject(repos, s) === project : undefined);
-    return json({ sessions: page.sessions.map((s) => ({ ...s, attention: attentionOf(s, null) })), total: page.total });
+    const owner = superagents.ownership(), bound = superagents.projectBinding(owner), human = url.searchParams.get("human") === "1";
+    const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit,
+      (s) => (!human || !owner(s.id)) && (!project || (bound(s.id) ?? sessionProject(repos, s)) === project));
+    return json({ sessions: page.sessions.map((s) => ({ ...s, agentOwner: owner(s.id), ...withProject(bound(s.id)), attention: attentionOf(s, null) })), total: page.total });
   })
   .add("GET", "/api/sessions/:id/timeline", async ({ params, url }) => {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? TIMELINE_PAGE) || TIMELINE_PAGE));
-    return json(await fleet.timeline(params.id!, url.searchParams.get("before"), limit));
+    const page = await fleet.timeline(params.id!, url.searchParams.get("before"), limit);
+    return json({ ...page, events: attribute(params.id!, page.events, superagents.senders) });
   })
   .add("GET", "/api/sessions/:id/turns", async ({ params }) => {
     fleet.get(params.id!);
@@ -1370,6 +1447,7 @@ const router = new Router(mapError)
   })
 
   // ---- settings, repos, worktrees, skills
+  .add("GET", "/api/profile", async ({ url }) => json(await githubProfile(url.searchParams.get("refresh") === "1")))
   .add("GET", "/api/settings", () => json(getSettings()))
   .add("PUT", "/api/settings", async ({ req }) => {
     const patch = parseSettingsPatch(await readBody(req));
@@ -1532,6 +1610,23 @@ const router = new Router(mapError)
     void refreshSlow();
     return json(r);
   });
+superagentRoutes(router, superagents, { scheduleHot });
+claimRoutes(router, workClaims, superagents);
+/** The GitHub App broker: superagents request actions; tokens stay in it (src/core/github/). */
+export const github = new GitHubActions({ broker: new GitHubBroker(), cards, dirOf: (n) => () => superagents.manifest(n), cwdOf: (id) => fleet.sessions().find((s) => s.id === id)?.cwd ?? null });
+githubRoutes(router, github, superagents);
+// An action may name a work claim: it must still be its superagent's, at its fence, when it is sent.
+github.claims = {
+  current: async (scope, key) => {
+    const c = (await workClaims.list({ key, scope: scope === "env" ? "env" : "work" }))[0];
+    return c ? { fence: c.fence, state: c.state, holder: c.holder } : null;
+  },
+};
+/** Shared superagents: answers teammates through the cloud, and keeps a shared one's claims there (src/core/superagent/team.ts). */
+export const team = new TeamHost({ fleet, superagents, cloud, claims: workClaims });
+teamRoutes(router, { superagents, cloud, team, claims: workClaims });
+// Contact consent is the cloud's: without it, an action that contacts a person is refused.
+if (cloudConfig().config) github.consent = new CloudConsent(() => team.api(), (name) => team.instanceOf(name));
 cloudRoutes(router, cloud, fleet).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
@@ -1566,6 +1661,22 @@ function checkBuild(): void {
   broadcast({ type: "build", entry });
 }
 
+/** Commits on the checkout's branch that this server does not run: the
+ *  board's Update button offers a restart onto them. */
+let serverBehind: Behind | null = null;
+const BEHIND_POLL_MS = 15_000;
+function checkBehind(): void {
+  let next: Behind | null = null;
+  try {
+    next = behindHead(sourceCheckout(packageRoot), RUNNING_REVISION?.commit);
+  } catch {
+    // An unreadable checkout says nothing new.
+  }
+  if (JSON.stringify(next) === JSON.stringify(serverBehind)) return;
+  serverBehind = next;
+  broadcast({ type: "behind", behind: next });
+}
+
 // ------------------------------------------------------------------ boot
 
 /** The first pass is done and everything below `Bun.serve` in `startServer`
@@ -1592,6 +1703,7 @@ function welcome(ws: Socket): void {
   send(ws, { type: "cold", state: coldState() });
   send(ws, { type: "metrics", state: metricsSnapshot() });
   send(ws, { type: "build", entry: uiBuild });
+  send(ws, { type: "behind", behind: serverBehind });
   setMetricsWatchers(clients.size);
   // A watch sent while it waited.
   if (ws.data.kind === "app" && ws.data.watching) {
@@ -1633,6 +1745,8 @@ export async function startServer(): Promise<void> {
     scheduler.stop();
     waits.stop();
     superagents.stopAll();
+    github.stop();
+    team.stop();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -1693,6 +1807,12 @@ export async function startServer(): Promise<void> {
     if (!verdict.ok) return fail(verdict.reason, 403);
     // The loopback listener, or the tailnet one reached at this machine's own address.
     if (!hosts || srv.requestIP(req)?.address === hosts[0]) fromThisMachine.add(req);
+    // The client's port, so a person-only act can see which process sent it (peer.ts).
+    // The tailnet listener too, for a request this machine sent to its own address.
+    if (!hosts || srv.requestIP(req)?.address === hosts[0]) {
+      const port = srv.requestIP(req)?.port;
+      if (port) peerPorts.set(req, port);
+    }
 
     if (url.pathname === "/ws") {
       if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);
@@ -1756,8 +1876,10 @@ export async function startServer(): Promise<void> {
   waits.start();
   superagents.start();
   cards.start();
+  github.start();
   // Local first: with no cloud.env this reads nothing and sends nothing.
   cloud.start();
+  team.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
   // sessions and in your own terminals alike, and Go's usage is asked through
   // it (accounts/usage.ts), so it is up from the start.
@@ -1771,6 +1893,8 @@ export async function startServer(): Promise<void> {
   setInterval(() => void refreshPrs(), SLOW_REFRESH_MS).unref?.();
   checkBuild();
   setInterval(checkBuild, BUILD_POLL_MS).unref?.();
+  checkBehind();
+  setInterval(checkBehind, BEHIND_POLL_MS).unref?.();
   watchPwaDesktop();
   startNightlyReclaim(() => fleet.sessions());
 

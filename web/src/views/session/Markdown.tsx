@@ -1,4 +1,4 @@
-import { useContext, useMemo, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Parent, PhrasingContent, Root, RootContent } from "mdast";
@@ -26,7 +26,56 @@ import { FileLink } from "./FileLink";
 const BLOCKS = ["h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "hr", "table", "thead", "tbody", "tr", "th", "td"];
 const Inline = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
 
+/** False for text that a program on another machine wrote (a teammate's
+ *  shared agent). Its paths, files and sessions are on its host, so they show
+ *  as text: no `fileref:`, `imgpath:`, `file://` or session link, and no
+ *  image read from this machine. Only web links stay links. */
+export const LocalLinks = createContext(true);
+
 export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
+  const local = useContext(LocalLinks);
+  return local ? <LocalMarkdown text={text} inline={inline} /> : <HostMarkdown text={text} inline={inline} />;
+}
+
+/** Markdown from another machine (LocalLinks false). */
+function HostMarkdown({ text, inline }: { text: string; inline?: boolean }) {
+  const base = useContext(PrBase);
+  const plugins = useMemo(() => [remarkGfm, ...(base ? [remarkPrLinks(base)] : [])], [base]);
+  const md = (
+    <ReactMarkdown
+      remarkPlugins={plugins}
+      disallowedElements={inline ? BLOCKS : undefined}
+      unwrapDisallowed={inline}
+      // The default transform removes every scheme but the web's and mail's.
+      urlTransform={defaultUrlTransform}
+      components={{
+        ...(inline ? { p: Inline } : {}),
+        img: ({ src, alt = "" }) => {
+          const url = typeof src === "string" ? src : "";
+          return /^https?:\/\//i.test(url) && !inline ? <ShownImage src={url} alt={alt} /> : <ShownImageChip src={url} alt={alt} />;
+        },
+        a: ({ node: _node, children, href, ...rest }) =>
+          href && /^(?:https?|mailto):/i.test(href) ? (
+            <a {...rest} href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ) : (
+            <span title="A place on its host. You cannot open it from here.">{children}</span>
+          ),
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+  if (!inline) return <div className="sx-md">{md}</div>;
+  return (
+    <span className="sx-md sx-md-inline" onClick={(e) => (e.target as HTMLElement).closest("a") && e.stopPropagation()}>
+      {md}
+    </span>
+  );
+}
+
+function LocalMarkdown({ text, inline }: { text: string; inline?: boolean }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);
   const board = useBoardSessions();

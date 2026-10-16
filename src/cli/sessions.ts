@@ -189,9 +189,17 @@ export async function ls(api: Api, args: string[]): Promise<number> {
   return 0;
 }
 
-/** `agentbox show <id>...` */
+/** `agentbox show <id>... [--json]` — `--json` prints the board's record:
+ *  one object for one id (its `lastActivityAt` is what a close names), an
+ *  array for several. */
 export async function show(api: Api, args: string[]): Promise<number> {
-  const { ids, sessions } = await resolveIds(api, args);
+  const { flags, rest } = parseArgs(args, [], ["json"]);
+  const { ids, sessions } = await resolveIds(api, rest);
+  if (flags.has("json")) {
+    const rows = ids.map((id) => sessions.find((s) => s.id === id)!);
+    console.log(JSON.stringify(rows.length === 1 ? rows[0] : rows, null, 2));
+    return 0;
+  }
   const s0 = await state(api);
   const acct = new Map(s0.accounts.map((a) => [a.id, a.label]));
   const now = s0.serverTime;

@@ -4,10 +4,10 @@ import { matchPrs, parseWorktreeRef } from "../../lib/newsession";
 import { Dropdown, type MenuItem } from "./Dropdown";
 
 /**
- * Where in the repo it runs: a new worktree, the main checkout, an open PR's
- * branch, or any branch typed into the search. `text` is what the old box
- * held — blank for the main checkout, `#123` for a PR, else a branch — so
- * parseWorktreeRef still reads it.
+ * Which worktree it runs in: a new one, or the one for an open PR's branch or
+ * any branch typed into the search. Never the main checkout. `text` is what
+ * the old box held — blank for a new worktree, `#123` for a PR, else a
+ * branch — so parseWorktreeRef still reads it.
  */
 export function WorktreeField({
   on,
@@ -31,23 +31,19 @@ export function WorktreeField({
   note?: string;
 }) {
   const wt = parseWorktreeRef(text, prs);
-  const selected = on || wt.kind === "new" ? "new" : wt.kind === "main" ? "main" : wt.kind === "pr" ? `pr:${wt.number}` : `branch:${wt.branch}`;
+  const fresh = on || wt.kind === "new" || wt.kind === "main";
+  const selected = fresh ? "new" : wt.kind === "pr" ? `pr:${wt.number}` : `branch:${wt.branch}`;
   const label =
-    on || wt.kind === "new"
+    fresh
       ? "New worktree"
-      : wt.kind === "main"
-        ? "Main checkout"
-        : wt.kind === "pr"
+      : wt.kind === "pr"
           ? `#${wt.number}${wt.pr ? ` ${wt.pr.title}` : ""}`
           : wt.branch;
 
   function items(query: string): MenuItem[] {
     const out: MenuItem[] = [];
     if (!query) {
-      out.push(
-        { key: "new", children: <Row main="New worktree" sub="a fresh branch" /> },
-        { key: "main", children: <Row main="Main checkout" sub="the branch it has out" /> },
-      );
+      out.push({ key: "new", children: <Row main="New worktree" sub="a fresh branch" /> });
     }
     for (const p of matchPrs(prs, query)) {
       out.push({
@@ -71,8 +67,7 @@ export function WorktreeField({
       return;
     }
     onToggle(false);
-    if (key === "main") onText("");
-    else if (key.startsWith("pr:")) onText(`#${key.slice(3)}`);
+    if (key.startsWith("pr:")) onText(`#${key.slice(3)}`);
     else onText(key.slice("branch:".length));
   }
 

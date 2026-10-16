@@ -4,13 +4,14 @@
  *  chunks that no longer exist the first time it opens a lazy view — the
  *  Timeline, the terminal, Accounts — and crashes there. The server says which
  *  build is on disk (`{type:"build"}` on the socket); a page on another one
- *  reloads when that loses nothing: while it is hidden, or when you go to
- *  another page or session (whose composer draft is dropped anyway). Until
- *  then the rail offers the reload. A chunk that is already gone reloads at
+ *  reloads after a short pause in interaction, including in the foreground.
+ *  Drafts, in-flight actions, recording and open dialogs defer the update;
+ *  it retries automatically when they finish. The rail also offers a manual
+ *  reload. A chunk that is already gone reloads at
  *  once, which is the most a crash would have kept. */
 
 import { useSyncExternalStore } from "react";
-import { parseHash, type Route } from "../route";
+import { parseHash } from "../route";
 
 /** The entry script this page was loaded from, e.g. `index-D3v4lAc3.js`; null under the dev server. */
 function ownEntry(): string | null {
@@ -22,6 +23,22 @@ function ownEntry(): string | null {
 const mine = ownEntry();
 let stale = false;
 const listeners = new Set<() => void>();
+const IDLE_MS = 2000;
+let timer: ReturnType<typeof setTimeout> | undefined;
+let composing = false;
+let dragging = false;
+// Other forms do not all persist their edits as composers do. Keep an edited
+// control safe until it is cleared or its form leaves the screen.
+const edited = new Set<HTMLElement>();
+
+function scheduleReload(): void {
+  clearTimeout(timer);
+  if (!stale) return;
+  timer = setTimeout(() => {
+    if (quiet()) location.reload();
+    else scheduleReload();
+  }, IDLE_MS);
+}
 
 /** From the socket: the build the server would serve a fresh load. */
 export function noteServerBuild(entry: string | null): void {
@@ -30,7 +47,7 @@ export function noteServerBuild(entry: string | null): void {
   if (next === stale) return;
   stale = next;
   for (const fn of listeners) fn();
-  if (stale && document.visibilityState === "hidden" && quiet()) location.reload();
+  scheduleReload();
 }
 
 export function useUpdateReady(): boolean {
@@ -43,26 +60,36 @@ export function useUpdateReady(): boolean {
   );
 }
 
-/** Nothing on screen a reload would throw away: a half-typed message, an open dialog, a voice call. */
+/** Nothing on screen a reload would interrupt or throw away. */
 function quiet(): boolean {
+  if (composing || dragging) return false;
+  if (document.querySelector('.dictation[data-phase="starting"], .dictation[data-phase="recording"], .dictation[data-phase="transcribing"]')) return false;
   if (parseHash(location.hash).page === "voice") return false;
-  if (document.querySelector(".modal-backdrop")) return false;
+  if (document.querySelector('.modal-backdrop, [role="dialog"], [aria-busy="true"], .att-strip, [data-rec], .xterm, [data-phase="starting"], [data-phase="recording"], [data-phase="transcribing"]')) return false;
+  for (const el of edited) {
+    if (!el.isConnected) { edited.delete(el); continue; }
+    if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement) {
+      if (el.value !== "") return false;
+    } else if (el.textContent) return false;
+  }
   return ![...document.querySelectorAll("textarea")].some((t) => t.value.trim() !== "");
 }
 
-function samePlace(a: Route, b: Route): boolean {
-  if (a.page !== b.page) return false;
-  return a.page !== "session" || (b.page === "session" && a.id === b.id);
-}
-
-document.addEventListener("visibilitychange", () => {
-  if (stale && document.visibilityState === "hidden" && quiet()) location.reload();
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (el instanceof HTMLElement && el.matches('input, select, [contenteditable="true"]')) edited.add(el);
+  scheduleReload();
 });
-
-// Tab switches inside a session replace the history entry and never get here.
-addEventListener("hashchange", (e) => {
-  if (stale && !samePlace(parseHash(new URL((e as HashChangeEvent).oldURL).hash), parseHash(location.hash))) location.reload();
-});
+document.addEventListener("keydown", scheduleReload);
+document.addEventListener("pointerdown", scheduleReload);
+document.addEventListener("compositionstart", () => { composing = true; scheduleReload(); });
+document.addEventListener("compositionend", () => { composing = false; scheduleReload(); });
+document.addEventListener("dragstart", () => { dragging = true; scheduleReload(); });
+document.addEventListener("dragend", () => { dragging = false; scheduleReload(); });
+document.addEventListener("visibilitychange", scheduleReload);
+// Navigation gets the same safety checks as a build announcement: a new
+// route can restore a saved draft or open another form.
+addEventListener("hashchange", scheduleReload);
 
 // ------------------------------------------------------ a chunk already gone
 
@@ -83,4 +110,26 @@ export function reloadForMissingChunk(): boolean {
   sessionStorage.setItem(RELOADED_AT, String(Date.now()));
   location.reload();
   return true;
+}
+
+// ------------------------------------------------------- newer commits
+
+/** Commits on the checkout's branch that the server does not run yet
+ *  (`{type:"behind"}`). Never acted on by itself: a restart is a click. */
+type Behind = { running: string; head: string; commits: number } | null;
+let behind: Behind = null;
+const behindListeners = new Set<() => void>();
+export function noteServerBehind(next: Behind): void {
+  if (JSON.stringify(next) === JSON.stringify(behind)) return;
+  behind = next;
+  for (const fn of behindListeners) fn();
+}
+export function useServerBehind(): Behind {
+  return useSyncExternalStore(
+    (fn) => {
+      behindListeners.add(fn);
+      return () => behindListeners.delete(fn);
+    },
+    () => behind,
+  );
 }

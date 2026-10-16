@@ -6,14 +6,14 @@
  * The pass holds nothing between runs but its store, so a restart picks up
  * where it was, and every start is keyed so it never happens twice.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ActionError, AgentboxError, agentbox, call, every, md, me, serve, store, type SuperagentBlock, type SuperagentView } from "../lib/sdk";
 import type { Session } from "../../src/core/types";
 
 type Config = { repos: string[]; author: string; every: number; owners: { provider: string; running: number; perPass: number; prompt: string } };
-const manifest = JSON.parse(readFileSync(join(import.meta.dir, "superagent.json"), "utf8")) as { steward: Config };
-const cfg = manifest.steward;
+// Its manifest as it runs: the directory's, with the person's and the project's layers over it.
+const cfg = (me.manifest as { steward: Config }).steward;
 
 type Check = { conclusion?: string | null; state?: string | null; status?: string | null; name?: string; context?: string };
 type Pr = {
@@ -62,11 +62,16 @@ function stateOf(pr: Pr): { state: State; why: string } {
   return pending ? { state: "pending", why: "checks are running" } : { state: "ready", why: "green and clean" };
 }
 
+/** Its repositories: the manifest's, else its project's when it is an instance in one, else every registered one. */
 async function repos(): Promise<{ slug: string; id: string | null }[]> {
   const registered = (await agentbox.state()).repos;
-  const slugs = cfg.repos.length ? cfg.repos : registered.map((r) => r.fullName).filter((x): x is string => !!x);
-  return [...new Set(slugs)].map((slug) => ({ slug, id: registered.find((r) => r.fullName?.toLowerCase() === slug.toLowerCase())?.id ?? null }));
+  const own = me.project ? registered.find((r) => r.id === me.project) : undefined;
+  const slugs = cfg.repos.length ? cfg.repos : me.project ? [own?.fullName].filter((x): x is string => !!x) : registered.map((r) => r.fullName).filter((x): x is string => !!x);
+  // Its own project first: two projects can be checkouts of one repository.
+  const idOf = (slug: string) => (own?.fullName?.toLowerCase() === slug.toLowerCase() ? own.id : (registered.find((r) => r.fullName?.toLowerCase() === slug.toLowerCase())?.id ?? null));
+  return [...new Set(slugs)].map((slug) => ({ slug, id: idOf(slug) }));
 }
+const everywhere = me.project ? "its project's repository" : "every registered GitHub repository";
 
 const live = (s: Session | undefined) => !!s && s.status !== "closed" && s.status !== "stopped";
 
@@ -91,7 +96,8 @@ async function pass(): Promise<void> {
   // Owners for what needs work and has nobody, a few a pass, up to the dial.
   const running = (db.query("SELECT session FROM started").all() as { session: string }[]).filter((r) => live(byId.get(r.session))).length;
   let room = Math.min(cfg.owners.perPass, cfg.owners.running - running);
-  const template = readFileSync(join(import.meta.dir, cfg.owners.prompt), "utf8");
+  // The copy's own prompt file when it has one, else this code's.
+  const template = readFileSync(existsSync(join(me.dir, cfg.owners.prompt)) ? join(me.dir, cfg.owners.prompt) : join(import.meta.dir, cfg.owners.prompt), "utf8");
   for (const pr of prs) {
     if (room <= 0) break;
     if (pr.state !== "needs-work" || pr.owner) continue;
@@ -196,7 +202,7 @@ serve({
       {
         type: "fields",
         items: [
-          { label: "Repositories", value: (cfg.repos.length ? cfg.repos : ["every registered GitHub repository"]).join(", ") },
+          { label: "Repositories", value: (cfg.repos.length ? cfg.repos : [everywhere]).join(", ") },
           { label: "Last pass", value: last.at ? new Date(last.at).toLocaleTimeString() : "not yet" },
           { label: "State", value: paused ? "paused" : last.error ? `failing: ${md(last.error)}` : "running" },
         ],
@@ -245,4 +251,4 @@ serve({
     };
   },
 });
-console.log(`steward ${me.name}: every ${cfg.every}s over ${cfg.repos.join(", ") || "every registered GitHub repository"}`);
+console.log(`steward ${me.name}: every ${cfg.every}s over ${cfg.repos.join(", ") || everywhere}`);

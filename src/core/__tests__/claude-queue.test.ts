@@ -124,3 +124,39 @@ describe("the nudge for stranded notifications", () => {
     expect(strandedNudgeAfter(3)).toBe(60_000);
   });
 });
+
+// Adopting or parking stops the process, and a workflow runs inside it: one
+// missed here is lost work, as a babysitting workflow was to an adopt.
+describe("background work still running", () => {
+  const launch = (toolUseId: string, taskId: string, workflowName: string) =>
+    line({
+      type: "assistant",
+      sessionId: SESSION,
+      uuid: `a${n}`,
+      timestamp: at(),
+      message: { id: `m${n}`, role: "assistant", model: "claude-opus-5-5", stop_reason: "tool_use", content: [{ type: "tool_use", id: toolUseId, name: "Workflow", input: {} }] },
+    }) +
+    line({
+      type: "user",
+      sessionId: SESSION,
+      uuid: `u${n}`,
+      timestamp: at(),
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: "Workflow launched in background." }] },
+      toolUseResult: { status: "async_launched", taskId, taskType: "local_workflow", workflowName },
+    });
+  const note = (taskId: string, status: string) => `<task-notification>\n<task-id>${taskId}</task-id>\n<status>${status}</status>\n</task-notification>`;
+  const names = async (records: string) => ((await factsOf(records)).backgroundTasks ?? []).map((t) => t.name);
+
+  test("a launched workflow runs on after the turn ends", async () => {
+    expect(await names(launch("t1", "w1", "babysit-fleet") + answer("m1"))).toEqual(["babysit-fleet"]);
+  });
+
+  test("its notification ends it, queued or delivered", async () => {
+    expect(await names(launch("t1", "w1", "babysit-fleet") + answer("m1") + queue("enqueue", note("w1", "completed")))).toEqual([]);
+    expect(await names(launch("t1", "w1", "babysit-fleet") + answer("m1") + line({ type: "user", sessionId: SESSION, uuid: `u${n}`, timestamp: at(), message: { role: "user", content: note("w1", "failed") } }))).toEqual([]);
+  });
+
+  test("another task's notification does not", async () => {
+    expect(await names(launch("t1", "w1", "babysit-fleet") + answer("m1") + queue("enqueue", note("b9", "completed")))).toEqual(["babysit-fleet"]);
+  });
+});

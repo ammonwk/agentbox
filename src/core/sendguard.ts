@@ -23,6 +23,7 @@
 
 import type { Fleet } from "./fleet";
 import { agentSentMark } from "./sent";
+import { recordSend } from "./senders";
 import type { Session } from "./types";
 
 export const CHATTER_MAX = 3;
@@ -136,15 +137,20 @@ export async function sendAsAgent(
   fleet: Pick<Fleet, "get" | "heir" | "send">,
   id: string,
   text: string,
-  opts: { from: string | null; wake: boolean },
+  /** `verified`: the sender is proven (its session capability, or the
+   *  server's own runtime identity); `agent`: the registered agent it is. */
+  opts: { from: string | null; wake: boolean; verified?: boolean; agent?: string | null },
   now: number,
 ): Promise<{ to: string } | { refused: string }> {
   const { meant, to: toId, refusal } = agentRefusal(fleet, id, opts, now);
   if (refusal) return { refused: refusal };
   const to = { id: toId };
   const told = to.id === meant ? "" : `[sent to ${meant}, which you took over from] `;
+  // Recorded before it is typed, so the timeline can prove who wrote it
+  // (src/core/senders.ts). Unproven senders are recorded as such.
+  const attribution = opts.from ? recordSend({ to: to.id, from: opts.from, verified: !!opts.verified, agent: opts.verified ? (opts.agent ?? null) : null, body: `${told}${text}` }, now) : null;
   // Counted once it is in, so one that could not be delivered costs nothing.
-  await fleet.send(to.id, `${agentSentMark(opts.from)} ${told}${text}`, undefined, opts.wake);
+  await fleet.send(to.id, `${agentSentMark(opts.from, attribution)} ${told}${text}`, undefined, opts.wake);
   countSend(opts.from, to.id, now);
   return { to: to.id };
 }

@@ -18,10 +18,10 @@ export type SessionRow = Session & {
 /** A session's status as drawn: blocked or waiting on an error agentbox
  *  retries by itself is `retrying`, drawn as working — red or amber there
  *  read as yours to fix. */
-export type ShownStatus = SessionStatus | "retrying";
+export type ShownStatus = SessionStatus | "retrying" | "paused";
 
-export function shownStatus(s: Pick<Session, "status" | "autoResume">): ShownStatus {
-  return retrying(s) ? "retrying" : s.status;
+export function shownStatus(s: Pick<Session, "status" | "autoResume" | "paused">): ShownStatus {
+  return s.paused ? "paused" : retrying(s) ? "retrying" : s.status;
 }
 
 /** The fallback order when two rows carry the same server rank. */
@@ -102,14 +102,17 @@ export interface Quiet {
  *  - mine: the last delivered prompt, from a person or an agent
  *  - all: the last time anything happened in it
  *  - status: blocked, your turn, running, stopped
- *  - repo: grouped by repository or folder */
-export type SortKey = "mine" | "all" | "status" | "repo";
+ *  - repo: grouped by repository or folder
+ *  - custom: the order you dragged them into; one you have not placed comes
+ *    first, by its last prompt */
+export type SortKey = "mine" | "all" | "status" | "repo" | "custom";
 
 export const SORT_LABEL: Record<SortKey, string> = {
   mine: "Last prompt",
   all: "All activity",
   status: "Status",
   repo: "Repo",
+  custom: "Your order",
 };
 
 /** The list's two tabs: sessions that did something lately, and the rest. */
@@ -238,8 +241,16 @@ const SECTION_LABEL: Record<AttentionKind, string> = {
   closed: "Closed",
 };
 
-function ordered<T extends SessionRow>(rows: readonly T[], sort: SortKey): T[] {
+function ordered<T extends SessionRow>(rows: readonly T[], sort: SortKey, ranks: ReadonlyMap<string, number>): T[] {
   if (sort === "status") return sortByAttention(rows);
+  if (sort === "custom") {
+    return [...rows].sort((a, b) => {
+      const ra = ranks.get(a.id), rb = ranks.get(b.id);
+      if (ra !== undefined && rb !== undefined) return ra - rb;
+      if (ra !== undefined || rb !== undefined) return ra === undefined ? -1 : 1;
+      return b.lastPromptAt - a.lastPromptAt;
+    });
+  }
   return [...rows].sort((a, b) => sortTime(b, sort) - sortTime(a, sort));
 }
 
@@ -264,18 +275,21 @@ export function pinBetween(before: number | null, after: number | null): number 
  * the list does not reshuffle under the cursor; the activity sorts are one
  * flat section. A session another one started sits under it, in its section
  * whatever its own status or repo, and only while `open` says its parent is
- * expanded.
+ * expanded. Your order (`ranks`, from lib/manualorder.ts) orders the rows
+ * beside each other, at the top level or under one session, and only in the
+ * custom sort.
  */
 export function sectionsOf<T extends SessionRow>(
   rows: readonly T[],
   folds: Folds = NO_FOLDS,
   sort: SortKey = "status",
+  ranks: ReadonlyMap<string, number> = new Map(),
 ): Section<Nested<T>>[] {
   const up = parentsOf(rows);
   for (const s of rows) if (s.pinOrder !== null) up.delete(s.id);
   const kids = new Map<string, T[]>();
   const roots: T[] = [];
-  for (const s of ordered(rows, sort)) {
+  for (const s of ordered(rows, sort, ranks)) {
     const p = up.get(s.id);
     if (!p) roots.push(s);
     else {

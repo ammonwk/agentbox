@@ -9,12 +9,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { ActionError, agentbox, call, serve, store, type ActionRequest, type SuperagentBlock, type SuperagentView } from "../lib/sdk";
+import { ActionError, agentbox, call, me, serve, store, type ActionRequest, type SuperagentBlock, type SuperagentView } from "../lib/sdk";
 import type { AppState, SuperagentInfo } from "../../src/core/types";
 
 const PROVIDERS = ["claude", "codex", "devin", "omp", "opencode", "muse"] as const;
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
-const manifest = JSON.parse(readFileSync(join(import.meta.dir, "superagent.json"), "utf8")) as { makes?: string };
+// Its manifest as it runs: the directory's, with the person's and the project's layers over it.
+const manifest = me.manifest as { makes?: string };
 const MAKES = resolve((manifest.makes ?? "~/.agents/superagents").replace(/^~(?=\/|$)/, homedir()));
 
 type Spec = {
@@ -122,6 +123,8 @@ async function writeAgent(d: Draft): Promise<string> {
         title: s.title,
         description: s.description,
         main: { start, instructions: "MAIN.md" },
+        // A person pressed Create for a conversation agent: it is on, and still starts nothing until they write to it.
+        enabled: true,
         madeBy: "jupiter",
         ...(s.automation ? { requestedAutomation: s.automation } : {}),
       },
@@ -192,7 +195,12 @@ serve({
         if (changed) db.run("UPDATE drafts SET spec = ?, revision = revision + 1 WHERE id = ? AND revision = ?", [JSON.stringify(spec), d.id, d.revision]);
         if (req.action === "save") return { message: changed ? "Draft saved." : "Nothing changed." };
         const info = await create(draft(d.id));
-        return { message: `${info.title} created. It is ready for a conversation; nothing was started.`, open: `#/agents/${info.name}` };
+        return {
+          message: info.enabled
+            ? `${info.title} created. It is ready for a conversation; nothing was started.`
+            : `${info.title} added, and off: turn it on in its Settings, for you or in a project. Nothing was started.`,
+          open: `#/agents/${info.name}`,
+        };
       }
       case "discard": {
         fromPerson(req);
