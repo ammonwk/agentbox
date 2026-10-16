@@ -4,14 +4,16 @@
  * The rule the whole module is built around (docs/v2.md, "Accounts"): a home
  * owns its credentials and nothing else is copied between homes. Configuration
  * is SYMLINKED from the provider's default home, so editing `settings.json`
- * once changes every account; credentials, transcripts and history are never
- * shared. Two homes holding the same refresh token log each other out the next
- * time either refreshes, which is why `importHome` refuses a second home for an
- * identity that is already registered.
+ * once changes every account; so is claude's per-project auto-memory.
+ * Credentials, transcripts and history are never shared. Two homes holding
+ * the same refresh token log each other out the next time either refreshes,
+ * which is why `importHome` refuses a second home for an identity that is
+ * already registered.
  */
 
 import { randomUUID } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   lstatSync,
@@ -20,11 +22,13 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
 import { adapterFor } from "../providers";
@@ -346,6 +350,102 @@ function linkShared(from: string, to: string, spec: { names: string[]; prefixes:
   return made;
 }
 
+function listDir(p: string): string[] {
+  try {
+    return readdirSync(p);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Point every per-project auto-memory directory in a claude account at the
+ * default home's, so a memory saved on one account is read on all of them.
+ * Claude keys memory by the main checkout, so worktrees already share it
+ * within a home; homes did not. An account's own memory is merged in, never
+ * dropped. Returns the links it made.
+ */
+function linkMemory(shared: string, home: string): string[] {
+  const made: string[] = [];
+  const slugs = new Set<string>();
+  for (const slug of listDir(join(shared, "projects"))) if (listDir(join(shared, "projects", slug, "memory")).length) slugs.add(slug);
+  for (const slug of listDir(join(home, "projects"))) if (present(join(home, "projects", slug, "memory"))) slugs.add(slug);
+  for (const slug of slugs) {
+    const from = join(shared, "projects", slug, "memory");
+    const to = join(home, "projects", slug, "memory");
+    if (present(to) && lstatSync(to).isSymbolicLink()) continue;
+    mkdirSync(from, { recursive: true });
+    mkdirSync(dirname(to), { recursive: true });
+    let parked: string | null = null;
+    if (present(to)) {
+      // Moved aside before linking, so a session saving a memory meanwhile
+      // writes into one directory or the other, both of which get merged.
+      parked = `${to}.merging-${process.pid}`;
+      renameSync(to, parked);
+    }
+    try {
+      symlinkSync(from, to);
+      made.push(`projects/${slug}/memory`);
+    } catch (err) {
+      // A session recreated it in the gap: the next resync merges that one.
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    if (parked) mergeMemory(parked, from, basename(home));
+  }
+  return made;
+}
+
+/** Move one memory directory's files into another. A file that differs from
+ *  one already there keeps both, the newcomer renamed with `suffix`; index
+ *  lines the target lacks are appended, pointing at any renamed file. */
+function mergeMemory(src: string, dst: string, suffix: string): void {
+  const renamed = new Map<string, string>();
+  for (const name of listDir(src)) {
+    if (name === "MEMORY.md") continue;
+    const from = join(src, name);
+    const to = join(dst, name);
+    if (!present(to)) {
+      renameSync(from, to);
+    } else if (statSync(from).isFile() && statSync(to).isFile()) {
+      if (readFileSync(from).equals(readFileSync(to))) {
+        rmSync(from);
+        continue;
+      }
+      const ext = extname(name);
+      const alt = `${name.slice(0, name.length - ext.length)}-${suffix}${ext}`;
+      if (present(join(dst, alt))) continue;
+      renameSync(from, join(dst, alt));
+      renamed.set(name, alt);
+    }
+  }
+  const index = join(src, "MEMORY.md");
+  if (present(index)) {
+    const target = join(dst, "MEMORY.md");
+    const have = new Set(existsSync(target) ? readFileSync(target, "utf8").split("\n").map((l) => l.trim()) : []);
+    const add: string[] = [];
+    for (const raw of readFileSync(index, "utf8").split("\n")) {
+      let line = raw.trimEnd();
+      if (!line.trim() || line.trim().startsWith("#")) continue;
+      for (const [name, alt] of renamed) line = line.replaceAll(`(${name})`, `(${alt})`);
+      if (!have.has(line.trim())) {
+        add.push(line);
+        have.add(line.trim());
+      }
+    }
+    // Appended rather than rewritten, so a line a session adds meanwhile survives.
+    if (add.length) {
+      const sep = existsSync(target) && !readFileSync(target, "utf8").endsWith("\n") ? "\n" : "";
+      appendFileSync(target, sep + add.join("\n") + "\n");
+    }
+    rmSync(index);
+  }
+  try {
+    rmdirSync(src);
+  } catch {
+    console.error(`agentbox: memory_merge_incomplete dir=${src}`);
+  }
+}
+
 /**
  * Bring `<home>/.claude.json` up to date with the default's shareable keys,
  * adding only what is missing. Never overwrites: the account may have changed a
@@ -403,7 +503,10 @@ export function resyncShared(account: Pick<Account, "provider" | "home" | "isDef
   const made: string[] = [];
   if (provider === "claude" || provider === "codex") {
     made.push(...linkShared(defaultHome(provider), home, SHARED[provider]));
-    if (provider === "claude" && syncClaudeJson(home)) made.push(".claude.json");
+    if (provider === "claude") {
+      made.push(...linkMemory(defaultHome(provider), home));
+      if (syncClaudeJson(home)) made.push(".claude.json");
+    }
   } else if (provider === "muse") {
     const cfgDir = join(home, "muse");
     mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
