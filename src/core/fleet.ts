@@ -37,6 +37,7 @@ import {
   getRepoById,
   getSessionRecord,
   getSettings,
+  listSchedules,
   insertAssignment,
   insertBtw,
   insertRateLimitHit,
@@ -88,6 +89,9 @@ import {
   SUBAGENT_QUIET_MS,
   lastWriteUnder,
   wakeHold,
+  DONE_IDLE_MS,
+  endedDone,
+  ShellStillness,
 } from "./park";
 import { cacheExpiring, cacheWarmUntil, KEEP_WARM_MAX, keepWarmNote, keepWarmPlan, type WarmSpell } from "./cache";
 import { read as readLive } from "../subagents/live";
@@ -398,6 +402,8 @@ export class Fleet extends EventEmitter {
   private liveStatus = new Map<string, SessionStatus>();
   /** Idle sessions kept running, and why (see src/core/park.ts). */
   private parkHolds = new Map<string, string>();
+  /** When each background shell last used CPU (park.ts `STUCK_WORK_MS`). */
+  private stillness = new ShellStillness();
   /** Sessions found parkable at the last check (see `parkIdle`). */
   private parkClean = new Map<string, ParkCheck>();
   /** Parked processes that may outlive their tmux session (see reapParked). */
@@ -1493,14 +1499,19 @@ export class Fleet extends EventEmitter {
     if (now < this.nextParkCheck) return;
     this.nextParkCheck = now + PARK_CHECK_MS;
     const idleMs = idleMin * 60_000;
+    // A sameSession schedule's next note goes to its current session.
+    const noted = new Set(listSchedules().flatMap((s) => (s.enabled && s.sameSession && s.lastSessionId ? [s.lastSessionId] : [])));
+    // Done: parked within minutes, warm or not (park.ts `DONE_IDLE_MS`).
+    const done = (v: Session) => this.liveStatus.get(v.id) === "waiting" && endedDone(v.lastMessage) && !noted.has(v.id);
+    const idleOf = (v: Session) => (done(v) ? Math.min(idleMs, DONE_IDLE_MS) : idleMs);
     const candidates = [...this.views.values()].filter(
       (v) =>
         v.host === "tmux" &&
         v.tmux &&
         // Still warm, its next message costs less with the process up.
-        now > v.cacheWarmUntil &&
+        (now > v.cacheWarmUntil || done(v)) &&
         (this.liveStatus.get(v.id) === "waiting"
-          ? now - v.lastActivityAt >= idleMs
+          ? now - v.lastActivityAt >= idleOf(v)
           : this.liveStatus.get(v.id) === "running" && now - v.lastActivityAt >= Math.max(idleMs, STALE_TURN_MS)),
     );
     const holds = new Map<string, string>();
@@ -1519,7 +1530,7 @@ export class Fleet extends EventEmitter {
             holds.set(v.id, "the process table could not be read");
             continue;
           }
-          const check = await this.parkHold(v, table, panes.get(v.tmux!) ?? [], live, now, idleMs);
+          const check = await this.parkHold(v, table, panes.get(v.tmux!) ?? [], live, now, idleOf(v));
           if (typeof check === "string") {
             holds.set(v.id, check);
             continue;
@@ -1542,7 +1553,7 @@ export class Fleet extends EventEmitter {
           // Checked last and fresh: you may have sent it something, stopped
           // it or resumed it while the checks above ran.
           const touched = this.touched.get(v.id) ?? 0;
-          if (this.busy.has(v.id) || this.now() - touched < idleMs) {
+          if (this.busy.has(v.id) || this.now() - touched < idleOf(v)) {
             holds.set(v.id, `you acted on it ${minutes(this.now() - touched)} ago`);
             continue;
           }
@@ -1705,7 +1716,7 @@ export class Fleet extends EventEmitter {
       const owners = [`pid:${a.pid}`, ...(a.sessionId ? [a.sessionId] : []), ...family.map((m) => m.t.facts!.agentSessionId)];
       if (live.some((e) => owners.includes(e.owner))) return "MCP subagents are running";
       cpuTicks += subtreeCpuTicks(subtree(table, a.pid));
-      const found = shellWork(table, a.pid, v.provider, monitors, quiet, true);
+      const found = shellWork(table, a.pid, v.provider, monitors, quiet, true, this.stillness, now);
       shells.push(...found.shells);
       if (found.hold) return found.hold;
     }
@@ -1742,6 +1753,10 @@ export class Fleet extends EventEmitter {
     }
     const table = await sharedProcTable().catch(() => null);
     if (!table) return;
+    this.stillness.prune((key) => {
+      const [pid, start] = key.split(":").map(Number);
+      return table.byPid.get(pid!)?.startTicks === start;
+    });
     const live = readLive().filter((e) => subagentWorking(e.text));
     const work = new Map<string, string>();
     for (const v of idle) {
@@ -1785,7 +1800,7 @@ export class Fleet extends EventEmitter {
       for (const m of t.facts.monitors ?? []) monitors.add(m);
       if (this.subagentsWorking(t.ref, now)) return "its in-process subagents were working";
     }
-    return shellWork(table, pid, v.provider, monitors, now - (t?.facts?.lastWorkAt ?? v.lastActivityAt), false).hold;
+    return shellWork(table, pid, v.provider, monitors, now - (t?.facts?.lastWorkAt ?? v.lastActivityAt), false, this.stillness, now).hold;
   }
 
   /**
@@ -4036,7 +4051,16 @@ function sizeOf(path: string): number {
  * server counts: it holds a session up, but a crash that killed one is not a
  * reason to resume the session that started it.
  */
-function shellWork(table: ProcTable, pid: number, provider: ProviderId, monitors: ReadonlySet<string>, quietMs: number, services: boolean): { shells: number[]; hold: string | null } {
+function shellWork(
+  table: ProcTable,
+  pid: number,
+  provider: ProviderId,
+  monitors: ReadonlySet<string>,
+  quietMs: number,
+  services: boolean,
+  stillness: ShellStillness,
+  now: number,
+): { shells: number[]; hold: string | null } {
   const shells: number[] = [];
   // A CLI that starts itself again runs its shells under that copy: Codex's
   // launcher is `node …/bin/codex`, and the binary it starts owns every tool
@@ -4051,13 +4075,15 @@ function shellWork(table: ProcTable, pid: number, provider: ProviderId, monitors
     const label = describe({ ...table.byPid.get(kid)!, cmd });
     // A monitor's every line of output is a message to the session.
     if (monitors.has(normalCommand(command))) return { shells, hold: `a monitor is running (${label})` };
-    const running = subtree(table, kid)
+    const tree = subtree(table, kid);
+    const running = tree
       .filter((r) => r.pid !== kid)
       .map((r) => argvOf(r.pid)?.join(" ") ?? r.comm)
       .filter((c) => !bareShell(c));
     const kind = classifyShell(command, running);
     if (kind === "service" && !services) continue;
-    const hold = shellHold(kind, label, quietMs);
+    const stillMs = stillness.still(`${kid}:${table.byPid.get(kid)!.startTicks}`, subtreeCpuTicks(tree), now);
+    const hold = shellHold(kind, label, quietMs, stillMs);
     if (hold) return { shells, hold };
   }
   return { shells, hold: null };

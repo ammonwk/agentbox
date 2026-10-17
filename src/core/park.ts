@@ -21,9 +21,21 @@
  * as holds they would keep a session up until the machine reboots. Followers
  * and endless loops hold nothing; servers hold for `SERVICE_GRACE_MS`, since
  * you may be using one in a browser. Everything else is work and holds for as
- * long as it runs, with no cap: the first dry run found three `--prod` repair
- * scripts twenty hours in under a session silent for thirteen, and a stuck
- * command costing 2% of a core is cheap next to killing one of those.
+ * long as it uses any CPU at all: the first dry run found three `--prod`
+ * repair scripts twenty hours in under a session silent for thirteen, and a
+ * slow command costing 2% of a core is cheap next to killing one of those. One
+ * whose processes have not used a single clock tick in `STUCK_WORK_MS` is hung,
+ * not slow: xyiskn7f's `_owed57-observe.ts --prod` stopped writing its log on
+ * 2026-10-10 and held its finished session up for six and a half days.
+ *
+ * A session whose turn ended `STATUS: done` (the last line the fleet's rules
+ * ask every turn to end on) is parked after `DONE_IDLE_MS` rather than
+ * `parkIdleMin`, warm cache or not. Of 1,303 such turns from 2026-10-10 to
+ * 10-17, 69% were never followed by another and 5% by real work (a push, a
+ * merge, a production run), mostly a steward finding on a PR already
+ * landed; a cold resume for those costs less than a process each for the
+ * other 95%. A sameSession schedule's current session is the exception: its
+ * next note is coming, and keeping its cache warm is the point.
  */
 
 import { readdirSync, statSync } from "node:fs";
@@ -54,6 +66,13 @@ export const POLL_MAX_MS = 24 * 3_600_000;
  *  long, because one large generation (a big Write, long thinking) writes
  *  nothing until it ends. */
 export const SUBAGENT_QUIET_MS = 30 * 60_000;
+/** A background command none of whose processes has used any CPU for this
+ *  long is hung (a connection nobody closes, a promise nobody settles) and
+ *  holds nothing. Counted from when this server first saw it still, so a
+ *  restart starts the count over. */
+export const STUCK_WORK_MS = 24 * 3_600_000;
+/** How soon a session whose turn ended `STATUS: done` is parked. */
+export const DONE_IDLE_MS = 60_000;
 /** A wake this overdue is taken to have fired (or died). Wakeups land late
  *  on a loaded machine; the turn they start is activity anyway. */
 export const WAKE_GRACE_MS = 10 * 60_000;
@@ -201,8 +220,9 @@ export function classifyShell(command: string, running: string[]): ShellKind {
   return "work";
 }
 
-/** The hold a background shell puts on its session, or null for none. */
-export function shellHold(kind: ShellKind, label: string, quietMs: number): string | null {
+/** The hold a background shell puts on its session, or null for none.
+ *  `stillMs` is how long its processes have used no CPU (`ShellStillness`). */
+export function shellHold(kind: ShellKind, label: string, quietMs: number, stillMs = 0): string | null {
   if (kind === "follower") return null;
   if (kind === "service") {
     return quietMs < SERVICE_GRACE_MS ? `a server is running (${label}); it is stopped with the session after ${hours(SERVICE_GRACE_MS)} quiet` : null;
@@ -210,7 +230,39 @@ export function shellHold(kind: ShellKind, label: string, quietMs: number): stri
   if (kind === "poller") {
     return quietMs < POLL_MAX_MS ? `a background command is waiting (${label})` : null;
   }
-  return `a background command is running (${label})`;
+  return stillMs < STUCK_WORK_MS ? `a background command is running (${label})` : null;
+}
+
+/**
+ * When each background shell's processes last used CPU, across the checks
+ * that look at them. Keyed by pid and start time, so a recycled pid starts
+ * over; the subtree's ticks (`subtreeCpuTicks`) moving at all, either way,
+ * counts as use.
+ */
+export class ShellStillness {
+  private seen = new Map<string, { ticks: number; movedAt: number }>();
+
+  /** How long the shell `key` has sat on `ticks`, as of `now`. */
+  still(key: string, ticks: number, now: number): number {
+    const was = this.seen.get(key);
+    if (!was || was.ticks !== ticks) {
+      this.seen.set(key, { ticks, movedAt: now });
+      return 0;
+    }
+    return now - was.movedAt;
+  }
+
+  /** Forget shells for which `alive` says no. */
+  prune(alive: (key: string) => boolean): void {
+    for (const key of this.seen.keys()) if (!alive(key)) this.seen.delete(key);
+  }
+}
+
+/** Did this turn end `STATUS: done`? The last non-empty line of its last
+ *  message, bold or code markup allowed. */
+export function endedDone(lastMessage: string | null | undefined): boolean {
+  const last = (lastMessage ?? "").trimEnd().split("\n").at(-1)?.trim() ?? "";
+  return /^[*_`]*STATUS:[*_`]*\s*done\b/i.test(last);
 }
 
 /** Collapse whitespace, for matching a live shell to the Monitor call that
