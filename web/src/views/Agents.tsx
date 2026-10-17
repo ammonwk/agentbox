@@ -472,14 +472,160 @@ function BlockView({ block: b, act }: { block: SuperagentBlock; act: Act }) {
       return <Actions actions={b.actions} act={act} values={() => ({})} />;
     case "form":
       return <FormBlock form={b} act={act} />;
+    case "text":
+      return <TextBlock block={b} />;
+    case "split":
+      return <SplitBlock block={b} act={act} />;
+    case "switch":
+      return <SwitchBlock block={b} act={act} />;
     case "item":
-      return (
-        <article className={`ag-item ${b.status ?? ""}`}>
-          <header>
-            {b.status ? <span className={`ag-dot ${b.status}`} aria-label={b.status} /> : null}
-            <span className="ag-item-title">{b.title}</span>
-            {b.subtitle ? <span className="ag-item-sub">{b.subtitle}</span> : null}
-          </header>
+      return <ItemBlock block={b} act={act} />;
+    default:
+      return null;
+  }
+}
+
+/** A choice the browser keeps for a block across refreshes and tab changes: by the block's id, for this tab's life. */
+function useKept<T extends string | boolean>(id: string | undefined, initial: T): [T, (v: T) => void] {
+  const key = id ? `agentbox.block.${id}` : null;
+  const [v, setV] = useState<T>(() => {
+    const got = key ? sessionStorage.getItem(key) : null;
+    return got === null ? initial : (typeof initial === "boolean" ? got === "true" : got) as T;
+  });
+  return [
+    v,
+    (next: T) => {
+      setV(next);
+      if (key) sessionStorage.setItem(key, String(next));
+    },
+  ];
+}
+
+function TextBlock({ block: b }: { block: Extract<SuperagentBlock, { type: "text" }> }) {
+  const [wrap, setWrap] = useState(b.wrap ?? true);
+  const [copied, setCopied] = useState(false);
+  const lines = b.text ? b.text.split("\n").length : 0;
+  return (
+    <figure className="ag-text">
+      <figcaption>
+        <span className="ag-text-title">{b.title ?? ""}</span>
+        <span className="ag-text-size">
+          {lines.toLocaleString()} line{lines === 1 ? "" : "s"} · {b.text.length.toLocaleString()} chars
+        </span>
+        <button type="button" className="ag-text-btn" aria-pressed={wrap} onClick={() => setWrap(!wrap)} title="Wrap long lines">
+          wrap
+        </button>
+        <button
+          type="button"
+          className="ag-text-btn"
+          onClick={() => void navigator.clipboard?.writeText(b.text).then(() => (setCopied(true), setTimeout(() => setCopied(false), 1200)))}
+          title="Copy all of it"
+        >
+          {copied ? <Icon.check size={12} /> : <Icon.copy size={12} />}
+        </button>
+      </figcaption>
+      <pre className={wrap ? "wrap" : undefined} style={{ maxHeight: b.maxHeight ?? 480 }} tabIndex={0}>
+        {b.text}
+      </pre>
+    </figure>
+  );
+}
+
+function SplitBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type: "split" }>; act: Act }) {
+  const narrow = useIsNarrow();
+  const [chosen, choose] = useKept<string>(b.id, b.selected ?? b.items[0]?.id ?? "");
+  // On a phone the list comes first; choosing opens the pane, and back returns to the list.
+  const [open, setOpen] = useState(false);
+  const item = b.items.find((x) => x.id === chosen) ?? b.items[0];
+  if (!item) return null;
+  const showList = !narrow || !open;
+  const showPane = !narrow || open;
+  return (
+    <section className="ag-split" data-panes={narrow ? "one" : "two"}>
+      {showList ? (
+        <nav className="ag-split-list" aria-label={b.title ?? "Entries"}>
+          {b.title ? <h4 className="ag-split-head">{b.title}</h4> : null}
+          <ul>
+            {b.items.map((x) => (
+              <li key={x.id}>
+                <button
+                  type="button"
+                  className="ag-split-row"
+                  aria-current={x.id === item.id}
+                  onClick={() => {
+                    choose(x.id);
+                    setOpen(true);
+                  }}
+                >
+                  <span className="ag-split-top">
+                    {x.status ? <span className={`ag-dot ${x.status}`} aria-label={x.status} /> : null}
+                    <span className="ag-split-name">{x.title}</span>
+                    {x.badge != null && x.badge !== "" ? <span className="ag-split-badge">{x.badge}</span> : null}
+                  </span>
+                  {x.subtitle ? <span className="ag-split-sub">{x.subtitle}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      ) : null}
+      {showPane ? (
+        <div className="ag-split-pane" aria-label={item.title}>
+          {narrow ? (
+            <button type="button" className="ag-split-back" onClick={() => setOpen(false)}>
+              <Icon.chevronLeft size={14} /> {b.title ?? "All"}
+            </button>
+          ) : null}
+          <h3 className="ag-split-title">{item.title}</h3>
+          <Blocks key={item.id} blocks={item.blocks} act={act} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function SwitchBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type: "switch" }>; act: Act }) {
+  const [chosen, choose] = useKept<string>(b.id, b.selected ?? b.options[0]?.id ?? "");
+  const opt = b.options.find((o) => o.id === chosen) ?? b.options[0];
+  if (!opt) return null;
+  return (
+    <div className="ag-switch">
+      <div className="ag-switch-bar" role="tablist">
+        {b.options.map((o) => (
+          <button key={o.id} type="button" role="tab" aria-selected={o.id === opt.id} onClick={() => choose(o.id)}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <Blocks key={opt.id} blocks={opt.blocks} act={act} />
+    </div>
+  );
+}
+
+function ItemBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type: "item" }>; act: Act }) {
+  const folds = b.collapsed !== undefined;
+  const [folded, setFolded] = useKept<boolean>(folds ? b.id : undefined, b.collapsed ?? false);
+  const head = (
+    <>
+      {folds ? <Icon.chevronRight size={13} className={`ag-fold${folded ? "" : " open"}`} /> : null}
+      {b.status ? <span className={`ag-dot ${b.status}`} aria-label={b.status} /> : null}
+      <span className="ag-item-title">{b.title}</span>
+      {b.subtitle ? <span className="ag-item-sub">{b.subtitle}</span> : null}
+    </>
+  );
+  return (
+    <article className={`ag-item ${b.status ?? ""}${folds ? " folds" : ""}`}>
+      {folds ? (
+        <header>
+          <button type="button" className="ag-item-toggle" aria-expanded={!folded} onClick={() => setFolded(!folded)}>
+            {head}
+          </button>
+        </header>
+      ) : (
+        <header>{head}</header>
+      )}
+      {folded ? null : (
+        <>
           {b.body ? (
             <div className="ag-md">
               <Markdown text={b.body} />
@@ -507,11 +653,10 @@ function BlockView({ block: b, act }: { block: SuperagentBlock; act: Act }) {
             </div>
           ) : null}
           {b.actions?.length ? <Actions actions={b.actions} act={act} values={() => ({})} /> : null}
-        </article>
-      );
-    default:
-      return null;
-  }
+        </>
+      )}
+    </article>
+  );
 }
 
 function Actions({ actions, act, values }: { actions: SuperagentAction[]; act: Act; values: () => Record<string, unknown> }) {

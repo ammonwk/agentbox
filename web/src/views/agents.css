@@ -438,6 +438,231 @@
   overflow-wrap: anywhere;
 }
 
+/* The page is a flex column that scrolls: tall blocks keep their height instead of shrinking under each other. */
+.ag-page > *,
+.ag-split-pane > *,
+.ag-switch > *,
+.ag-item-children > * {
+  flex-shrink: 0;
+}
+
+/* Folding items: the header is the toggle. */
+.ag-item-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ag-item-toggle .ag-dot {
+  align-self: center;
+}
+.ag-fold {
+  align-self: center;
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+.ag-fold.open {
+  transform: rotate(90deg);
+}
+
+/* Text exactly as given. */
+.ag-text {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  min-width: 0;
+}
+.ag-text figcaption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.ag-text-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.ag-text-size {
+  font-variant-numeric: tabular-nums;
+}
+.ag-text-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.ag-text-btn[aria-pressed="true"] {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.ag-text pre {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  font: 12px/1.45 var(--mono);
+  white-space: pre;
+  tab-size: 4;
+}
+.ag-text pre.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A list beside the pane of what is chosen in it, as on the Skills page. */
+.ag-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  min-height: 0;
+}
+.ag-split[data-panes="two"] {
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+}
+.ag-split-list {
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.ag-split[data-panes="one"] .ag-split-list {
+  border-right: 0;
+}
+.ag-split-head {
+  margin: 0;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.ag-split-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 6px;
+}
+.ag-split-row {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ag-split-row:hover {
+  background: var(--hover);
+}
+.ag-split-row[aria-current="true"] {
+  background: var(--active);
+  border-left-color: var(--accent);
+}
+.ag-split-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ag-split-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ag-split-badge {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ag-split-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.ag-split-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 16px;
+  min-width: 0;
+}
+.ag-split-title {
+  margin: 0;
+  font-size: 15px;
+}
+.ag-split-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* Alternative views of one thing. */
+.ag-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.ag-switch-bar {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.ag-switch-bar button {
+  padding: 3px 10px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ag-switch-bar button[aria-selected="true"] {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
 /* A phone: the list, or the agent, one at a time. */
 @media (max-width: 900px) {
   .ag {

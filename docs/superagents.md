@@ -123,11 +123,25 @@ agentbox draws, on a phone too:
         { "name": "on", "label": "Enabled", "kind": "checkbox", "value": true } ],
       "actions": [{ "id": "create", "label": "Create", "style": "primary" }] },
     { "type": "actions", "actions": [{ "id": "refresh", "label": "Refresh" }] },
-    { "type": "divider" }
+    { "type": "divider" },
+    { "type": "text", "title": "prompt.txt", "text": "exactly as written\n  indentation kept", "wrap": true, "maxHeight": 480 },
+    { "type": "split", "id": "parts", "title": "Parts", "selected": "a", "items": [
+        { "id": "a", "title": "First part", "subtitle": "what it is", "badge": "2.1k", "status": "ok", "blocks": [] } ] },
+    { "type": "switch", "id": "how", "options": [
+        { "id": "rendered", "label": "Rendered", "blocks": [] }, { "id": "plain", "label": "Plain text", "blocks": [] } ] }
   ],
   "refresh": 10
 }
 ```
+
+`text` shows its text exactly, in a fixed-width font, with copy and wrap
+buttons; `split` is a list beside the pane of the entry chosen in it (as on
+the Skills page, one at a time on a phone); `switch` is alternative views of
+one thing behind a segmented control. An `item` with `collapsed` folds under
+its header (`true` starts folded). What a person chooses in a `split`,
+`switch` or folding `item` is kept in the browser by the block's `id` across
+refreshes, so a page that refreshes does not throw it away; nothing is sent
+to the program.
 
 A button posts `POST /agentbox/action` with `{action, values, tab, caller}`:
 `values` is the action's own `values` plus, inside a form, the form's fields.

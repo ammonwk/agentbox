@@ -1636,6 +1636,19 @@ export type SuperagentField =
   | { name: string; label: string; kind: "select"; value?: string; options: { value: string; label: string }[] }
   | { name: string; label: string; kind: "checkbox"; value?: boolean };
 
+export type SuperagentStatus = "ok" | "warn" | "bad" | "busy" | "idle";
+
+/** One entry of a `split` block's list, and what its pane shows when chosen. */
+export interface SuperagentPane {
+  id: string;
+  title: string;
+  subtitle?: string;
+  /** Shown at the row's right: a count, a size. */
+  badge?: string | number;
+  status?: SuperagentStatus;
+  blocks: SuperagentBlock[];
+}
+
 export type SuperagentBlock =
   | { type: "heading"; text: string }
   | { type: "markdown"; text: string }
@@ -1643,12 +1656,23 @@ export type SuperagentBlock =
   | { type: "divider" }
   | { type: "actions"; actions: SuperagentAction[] }
   | { type: "form"; id: string; fields: SuperagentField[]; actions: SuperagentAction[] }
+  /** Text shown exactly as given, in a fixed-width font: whitespace, blank
+   *  lines and markup characters kept. It scrolls past `maxHeight` pixels
+   *  (default 480), and has a copy button and a wrap toggle (`wrap`, default on). */
+  | { type: "text"; text: string; title?: string; wrap?: boolean; maxHeight?: number }
+  /** A list beside the pane of the entry chosen in it, as on the Skills page;
+   *  one at a time on a phone. The choice is the browser's, kept across
+   *  refreshes by `id`; `selected` is the first one shown. */
+  | { type: "split"; id: string; title?: string; items: SuperagentPane[]; selected?: string }
+  /** Alternative views of one thing, chosen with a segmented control in the
+   *  browser and kept across refreshes by `id`. */
+  | { type: "switch"; id: string; options: { id: string; label: string; blocks: SuperagentBlock[] }[]; selected?: string }
   | {
       type: "item";
       id?: string;
       title: string;
       subtitle?: string;
-      status?: "ok" | "warn" | "bad" | "busy" | "idle";
+      status?: SuperagentStatus;
       /** Markdown. */
       body?: string;
       /** Session ids, linked to their pages. */
@@ -1656,6 +1680,9 @@ export type SuperagentBlock =
       links?: { label: string; url: string }[];
       actions?: SuperagentAction[];
       children?: SuperagentBlock[];
+      /** Folds under its header, which opens and closes it: `true` starts it
+       *  folded, `false` open. Kept across refreshes by `id`. */
+      collapsed?: boolean;
     };
 
 // -------------------------------------------------------------------- hub
