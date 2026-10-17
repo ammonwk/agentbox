@@ -59,6 +59,8 @@ export interface LiveProcess {
   startedAt: number;
   /** The provider's own busy/idle flag, when it publishes one. */
   busy?: boolean;
+  /** When it last went idle, by its own word, while it is idle. */
+  idleSince?: number;
   /** The provider's own word that the process is waiting on a human — claude's
    *  session file says `status: "waiting", waitingFor: "dialog open"` while a
    *  permission prompt is up. Knowable even for sessions outside our tmux. */
@@ -263,6 +265,10 @@ export interface TranscriptReader {
   /** The id of the last record of the branch through one version of a
    *  message (`TimelineEvent.versions`), for a transcript that branches. */
   leafIdOf?(via: string): string | null;
+  /** The CLI has been idle since then (`LiveProcess.idleSince`; null: no
+   *  word): a message it never answered from before then was taken back.
+   *  True when that changes what the timeline shows. */
+  idleSince?(at: number | null): boolean;
   /** Take up a `saveState` from an earlier process, before the first
    *  `refresh`. False when it no longer fits the file; nothing is changed. */
   loadState?(saved: unknown): boolean;

@@ -1202,7 +1202,10 @@ function addBranch(branches: BranchFold, r: any, index: number): void {
   // Where a rewind or `/resume` pointed the conversation; Claude resumes from it.
   if (r.type === "last-prompt" && r.explicit === true && typeof r.leafUuid === "string") return branches.pin(index, r.leafUuid);
   if (typeof r.uuid !== "string") return;
-  branches.add(index, r.uuid, typeof r.parentUuid === "string" ? r.parentUuid : null, isRewindable(r));
+  // Attachments are Claude's notes on a message (memory, hooks), written before any reply.
+  const kind = isRewindable(r) ? "prompt" : r.type === "attachment" ? "other" : "reply";
+  const at = typeof r.timestamp === "string" ? Date.parse(r.timestamp) || 0 : 0;
+  branches.add(index, r.uuid, typeof r.parentUuid === "string" ? r.parentUuid : null, kind, at);
 }
 
 /** The format the generic reader drives. `extra` folds subagent tokens. */

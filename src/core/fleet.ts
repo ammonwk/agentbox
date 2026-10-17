@@ -663,6 +663,7 @@ export class Fleet extends EventEmitter {
     for (const [path, t] of this.tracked) {
       if (!t.facts || this.ignored.has(path)) continue;
       const id = this.recordFor(t, now);
+      if (t.reader?.idleSince?.(this.idleSince(t.ref))) changed.add(path);
       if (changed.has(path)) {
         this.persistFacts(id, t, now);
         this.collectMetrics(id, t, now);
@@ -2528,7 +2529,14 @@ export class Fleet extends EventEmitter {
   private readerOf(id: string): TranscriptReader {
     const t = this.trackedOf(id);
     t.usedAt = this.now();
-    return this.load(t);
+    const reader = this.load(t);
+    reader.idleSince?.(this.idleSince(t.ref));
+    return reader;
+  }
+
+  /** When a session's CLI went idle, by its own word: what it took back is not shown (`TranscriptReader.idleSince`). */
+  private idleSince(ref: TranscriptRef): number | null {
+    return this.live.get(`${ref.provider}:${ref.agentSessionId}`)?.idleSince ?? null;
   }
 
   private trackedOf(id: string): Tracked {

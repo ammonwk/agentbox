@@ -15,7 +15,7 @@
 import { statSync } from "node:fs";
 import type { TimelineEvent, TimelinePage } from "../types";
 import { JsonlTail, type JsonlTailState } from "./jsonl";
-import { branched, currentLeaf, hiddenRanges, isHidden, leafThrough, versionsOf, wentBack, type Branches, type PromptRows } from "./branches";
+import { branched, currentLeaf, hiddenRanges, isHidden, leafThrough, settled, versionsOf, wentBack, type Branches, type PromptRows } from "./branches";
 import type { TranscriptFacts, TranscriptReader, TranscriptRef } from "./types";
 
 export type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
@@ -108,6 +108,10 @@ export class JsonlTranscriptReader implements TranscriptReader {
   private ino = -1;
   /** callId -> [record index of the call, record index of its result or -1]. */
   private calls = new Map<string, [number, number]>();
+  /** When the CLI last went idle, by its own word (`idleSince`). */
+  private idle: number | null = null;
+  /** The newest message is shown as taken back. */
+  private takenBack = false;
 
   constructor(
     readonly ref: TranscriptRef,
@@ -121,6 +125,26 @@ export class JsonlTranscriptReader implements TranscriptReader {
     this.calls.clear();
     this.next = 0;
     this.resets++;
+  }
+
+  /**
+   * The CLI has been idle since `at` (null: no word, or not running). A
+   * message it never answered from before then was taken back, and is not
+   * shown. True when that changes what is shown; cursors from before then
+   * no longer hold, so a reader of them starts again from a fresh page.
+   */
+  idleSince(at: number | null): boolean {
+    this.idle = at;
+    return this.settle();
+  }
+
+  private settle(): boolean {
+    const b = this.format.branches?.();
+    const now = !!b && settled(b, this.idle);
+    if (now === this.takenBack) return false;
+    this.takenBack = now;
+    this.resets++;
+    return true;
   }
 
   private epoch(): string {
@@ -154,6 +178,8 @@ export class JsonlTranscriptReader implements TranscriptReader {
       this.resetState();
       changed = true;
     }
+    // A reply, or the next message, settles whether the last one was taken back.
+    if (changed) this.settle();
     if (reset || this.ino === -1) {
       try {
         this.ino = statSync(this.ref.path).ino;
@@ -282,9 +308,9 @@ export class JsonlTranscriptReader implements TranscriptReader {
   private pathOf(via?: string | null): Path {
     const b = this.format.branches?.() ?? null;
     const n = this.tail.recordCount;
-    if (!b || !branched(b)) return { branches: null, rows: null, hidden: null };
+    if (!b || (!branched(b) && !this.takenBack)) return { branches: null, rows: null, hidden: null };
     const at = via ? this.parse(via) : null;
-    const leaf = at === null ? currentLeaf(b, n) : leafThrough(b.prompts, at, n);
+    const leaf = at === null ? currentLeaf(b, n, this.takenBack) : leafThrough(b.prompts, at, n);
     return { branches: b, rows: b.prompts, hidden: hiddenRanges(b.prompts, leaf) };
   }
 

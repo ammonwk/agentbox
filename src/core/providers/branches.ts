@@ -14,6 +14,13 @@
  * later message can go back to. Claude can also be pointed back at an older
  * branch's last record (an explicit `last-prompt`, then `/resume`): until the
  * next message, that record is where the conversation stands.
+ *
+ * A message can also be taken back: Esc before any reply puts it back in the
+ * input box, and Claude carries on as if it was never sent, though the file
+ * keeps it. Nothing is written to say so. The next message continues from
+ * where the taken-back one did, which would read as a version of it: a
+ * message with no reply that the next one goes back past is dropped instead.
+ * Until then only the CLI can say it is idle again after it (`settled`).
  */
 
 /** Messages as the fold keeps them: [record, record it continues from, 1 when that is not the record just before it], flattened. */
@@ -25,6 +32,8 @@ export interface Branches {
   pinned: number | null;
   /** The record that pointed it there. */
   pinnedBy: number;
+  /** The newest message while nothing has answered it: [record, record it continued from, written at (ms)]. */
+  open: readonly [number, number, number] | null;
 }
 
 export class BranchFold {
@@ -34,22 +43,33 @@ export class BranchFold {
   anchors = new Map<string, number>();
   pinned: number | null = null;
   pinnedBy = -1;
+  /** See `Branches.open`. */
+  open: [number, number, number] | null = null;
+  /** The id the open message continued from. */
+  openParent: string | null = null;
   private lastId: string | null = null;
   private lastAt = -1;
 
   /**
    * One record of the conversation itself (not a side chain, not bookkeeping
-   * without an id). `prompt` says it is a message you could go back to.
-   * `parent` is the id it says it continues from, null for the first message.
+   * without an id). `kind` says it is a message you could go back to, or
+   * something that answers one (not the CLI's notes on it). `parent` is the
+   * id it says it continues from, null for the first message; `at` is when
+   * it was written (ms).
    */
-  add(index: number, id: string, parent: string | null, prompt: boolean): void {
-    if (prompt) {
+  add(index: number, id: string, parent: string | null, kind: "prompt" | "reply" | "other", at = 0): void {
+    if (kind === "prompt") {
+      // Going back past the open message: it was taken back, not a version.
+      const takenBack = this.open !== null && parent === this.openParent;
+      if (takenBack) this.prompts.length -= 3;
       const from = parent === null ? -1 : this.anchors.get(parent);
-      const jump = parent !== this.lastId && from !== undefined && (parent !== null || this.prompts.length > 0);
+      const jump = from !== undefined && (takenBack || (parent !== this.lastId && (parent !== null || this.prompts.length > 0)));
       if (this.lastId) this.anchors.set(this.lastId, this.lastAt);
       this.prompts.push(index, jump ? from! : this.lastAt, jump ? 1 : 0);
       this.pinned = null;
-    }
+      this.open = [index, this.prompts[this.prompts.length - 2]!, at];
+      this.openParent = parent;
+    } else if (kind === "reply") this.open = null;
     this.lastId = id;
     this.lastAt = index;
   }
@@ -77,7 +97,7 @@ export class BranchFold {
   }
 
   view(): Branches {
-    return { prompts: this.prompts, pinned: this.pinned, pinnedBy: this.pinnedBy };
+    return { prompts: this.prompts, pinned: this.pinned, pinnedBy: this.pinnedBy, open: this.open };
   }
 
   reset(): void {
@@ -85,6 +105,8 @@ export class BranchFold {
     this.anchors.clear();
     this.pinned = null;
     this.pinnedBy = -1;
+    this.open = null;
+    this.openParent = null;
     this.lastId = null;
     this.lastAt = -1;
   }
@@ -133,9 +155,16 @@ export function versionsOf(rows: PromptRows, at: number): number[] | null {
   return out.length > 1 ? out : null;
 }
 
-/** The leaf the conversation stands at: where it was pointed, else its newest record. */
-export function currentLeaf(b: Branches, records: number): number {
+/** The leaf the conversation stands at: where it was pointed, else its newest
+ *  record, or before the newest message when the CLI took it back. */
+export function currentLeaf(b: Branches, records: number, takenBack = false): number {
+  if (takenBack && b.open) return b.open[1];
   return b.pinned ?? records - 1;
+}
+
+/** Has the CLI, idle since `idleSince`, taken back the newest message: sent before then and never answered? */
+export function settled(b: Branches, idleSince: number | null): boolean {
+  return !!b.open && idleSince !== null && b.open[2] > 0 && b.open[2] < idleSince;
 }
 
 /** The newest branch through message `at`: the last record of the latest-

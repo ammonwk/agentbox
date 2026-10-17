@@ -279,6 +279,7 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
         startedAt: typeof rec.startedAt === "number" ? rec.startedAt : (startedAtOf(pid) ?? 0),
       };
       if (typeof rec.status === "string") p.busy = rec.status === "busy";
+      if ((rec.status === "idle" || rec.status === "shell") && typeof rec.statusUpdatedAt === "number") p.idleSince = rec.statusUpdatedAt;
       if (rec.status === "waiting") p.waitingOn = typeof rec.waitingFor === "string" ? rec.waitingFor : "waiting for input";
       out.push(p);
     }
