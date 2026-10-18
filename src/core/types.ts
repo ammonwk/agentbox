@@ -1758,8 +1758,9 @@ export interface NodeRepo {
 export interface HubNodeView {
   id: string;
   name: string;
+  /** Its tailnet IPv4, which its requests come from, and where it serves. */
   ip: string;
-  port: number;
+  url: string;
   /** Its tailnet device name, login (null for a tagged device) and tags. */
   device: string | null;
   login: string | null;
@@ -1783,7 +1784,7 @@ export interface HubStatus {
   /** Who asked. */
   person: Person;
   /** This machine on the tailnet, when the listener is up. */
-  self: { name: string; ip: string } | null;
+  self: { name: string; ip: string; url: string | null } | null;
   /** On a hub. */
   members?: HubMember[];
   nodes?: HubNodeView[];

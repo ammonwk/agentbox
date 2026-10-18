@@ -19,6 +19,14 @@ export function setTailnetSelf(t: Tailnet | null): void {
 }
 export const tailnetSelfNow = (): Tailnet | null => self;
 
+/** Where the tailnet listener serves now, as this machine tells a hub or a
+ *  node (`tailnetUrl`); null while it is not listening. */
+let url: string | null = null;
+export function setTailnetUrl(u: string | null): void {
+  url = u;
+}
+export const tailnetUrlNow = (): string | null => url;
+
 /** The machine's owner: the hub's owner on a hub, else this machine's own
  *  tailnet login, else who `user.env` says agentbox works for. */
 export function ownerPerson(): Person {

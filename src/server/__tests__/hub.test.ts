@@ -14,6 +14,13 @@
  * 127.0.0.6 (on the tailnet, not a member), another tagged box 127.0.0.7,
  * solo@team's phone 127.0.0.9.
  *
+ * TLS: the hub serves HTTPS on its tailnet listener from the start, as a box
+ * with `tailscale cert` does, and the node plain HTTP until it is started
+ * again with a certificate. The certificates are a test CA's, which every
+ * server trusts (NODE_EXTRA_CA_CERTS). Names do not resolve to 127.0.0.x on
+ * one computer, so each seam's MagicDNS name is its IP, which its
+ * certificate names.
+ *
  * Phase 2 (placement): both the hub and the node register acme/app, a clone
  * of a bare repo standing in for GitHub (each machine's ~/.gitconfig sends
  * github.com/acme/app there). Only the node can run codex: a stand-in `codex`
@@ -48,13 +55,36 @@ const PEERS = {
   "127.0.0.10": { userId: 30, login: "solo@team", displayName: "Solo", device: "solobox", tags: [] },
 };
 
-type Machine = { name: string; ip: string; port: number; env: Record<string, string>; home: string; proc: ReturnType<typeof Bun.spawn> | null; log: string };
+type Machine = { name: string; ip: string; port: number; env: Record<string, string>; home: string; proc: ReturnType<typeof Bun.spawn> | null; log: string; self: Record<string, unknown>; tls: boolean };
 
-function machine(name: string, ip: string, port: number, self: Record<string, unknown>, extra: Record<string, string> = {}): Machine {
+/** A test CA, and a certificate from it for each address that serves TLS. */
+const CA_KEY = join(ROOT, "ca.key");
+const CA = join(ROOT, "ca.crt");
+const openssl = (...args: string[]): void => {
+  const r = Bun.spawnSync(["openssl", ...args], { stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`openssl ${args[0]}: ${r.stderr.toString()}`);
+};
+openssl("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", CA_KEY, "-out", CA, "-days", "1", "-subj", "/CN=agentbox hub test CA", "-addext", "basicConstraints=critical,CA:TRUE");
+const caPem = readFileSync(CA, "utf8");
+function certFor(ip: string): { cert: string; key: string } {
+  const [key, csr, cert, ext] = ["key", "csr", "crt", "ext"].map((x) => join(ROOT, `${ip}.${x}`)) as [string, string, string, string];
+  openssl("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", key, "-out", csr, "-subj", `/CN=${ip}`);
+  writeFileSync(ext, `subjectAltName=IP:${ip}\n`);
+  openssl("x509", "-req", "-in", csr, "-CA", CA, "-CAkey", CA_KEY, "-CAcreateserial", "-out", cert, "-days", "1", "-extfile", ext);
+  return { cert, key };
+}
+
+/** The machine's seam: with `tls`, it serves HTTPS at its MagicDNS name. */
+function writeSeam(m: Pick<Machine, "name" | "ip" | "self" | "tls">): void {
+  const tls = m.tls ? { dnsName: m.ip, tls: certFor(m.ip) } : {};
+  writeFileSync(join(ROOT, `${m.name}-seam.json`), JSON.stringify({ self: { ip: m.ip, hostName: m.name, ...m.self, ...tls }, peers: PEERS }));
+}
+
+function machine(name: string, ip: string, port: number, self: Record<string, unknown>, extra: Record<string, string> = {}, tls = false): Machine {
   const home = join(ROOT, name);
   mkdirSync(join(home, "ab"), { recursive: true });
   const seam = join(ROOT, `${name}-seam.json`);
-  writeFileSync(seam, JSON.stringify({ self: { ip, hostName: name, ...self }, peers: PEERS }));
+  writeSeam({ name, ip, self, tls });
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined || /^(AGENTBOX_|XDG_|CLAUDE_|CODEX_|TMUX)/.test(k)) continue;
@@ -67,10 +97,14 @@ function machine(name: string, ip: string, port: number, self: Record<string, un
     AGENTBOX_TMUX_SOCKET: `agentbox-hubtest-${name}-${process.pid}`,
     AGENTBOX_TAILNET: "0",
     AGENTBOX_TAILNET_SEAM: seam,
+    NODE_EXTRA_CA_CERTS: CA,
     ...extra,
   });
-  return { name, ip, port, env, home, proc: null, log: join(ROOT, `${name}.log`) };
+  return { name, ip, port, env, home, proc: null, log: join(ROOT, `${name}.log`), self, tls };
 }
+
+/** The machine's tailnet door, as a device on the tailnet reaches it. */
+const door = (m: Machine): string => `${m.tls ? "https" : "http"}://${m.ip}:${m.port}`;
 
 async function start(m: Machine): Promise<void> {
   m.proc = Bun.spawn(["bun", BIN, "serve"], { env: m.env, stdout: Bun.file(m.log), stderr: Bun.file(`${m.log}.err`), stdin: "ignore" });
@@ -79,7 +113,7 @@ async function start(m: Machine): Promise<void> {
     const r = await fetch(`http://127.0.0.1:${m.port}/api/state`).catch(() => null);
     if (r?.ok) {
       // And the tailnet door, which opens beside the first pass.
-      const t = await fetch(`http://${m.ip}:${m.port}/api/health`, { headers: { "x-agentbox-seam-from": "127.0.0.250" } }).catch(() => null);
+      const t = await fetch(`${door(m)}/api/health`, { headers: { "x-agentbox-seam-from": "127.0.0.250" }, tls: { ca: caPem } }).catch(() => null);
       if (t) return;
     }
     await Bun.sleep(200);
@@ -107,10 +141,11 @@ async function local(m: Machine, method: string, path: string, body?: unknown): 
 
 /** A request over the tailnet door, from a device. */
 async function from(device: string, m: Machine, method: string, path: string, opts: { body?: unknown; headers?: Record<string, string> } = {}): Promise<{ status: number } & Env> {
-  const res = await fetch(`http://${m.ip}:${m.port}${path}`, {
+  const res = await fetch(`${door(m)}${path}`, {
     method,
     headers: { "content-type": "application/json", "x-agentbox": "1", "x-agentbox-seam-from": device, ...opts.headers },
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    tls: { ca: caPem },
   });
   const text = await res.text();
   try {
@@ -202,10 +237,7 @@ function plantCodex(m: Machine): string {
 const pushed = new Map<string, number>();
 let sink: ReturnType<typeof Bun.serve> | null = null;
 function startSink(): void {
-  const key = join(ROOT, "sink.key");
-  const cert = join(ROOT, "sink.crt");
-  const r = Bun.spawnSync(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=127.0.0.1"], { stderr: "pipe" });
-  if (r.exitCode !== 0) throw new Error(`openssl: ${r.stderr.toString()}`);
+  const { key, cert } = certFor("127.0.0.1");
   sink = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -237,8 +269,7 @@ function freePort(): number {
 }
 
 const NODE_BIN = join(ROOT, "nodebox-bin");
-// The hub posts to the sink's own certificate.
-const hub = machine("hubbox", "127.0.0.2", freePort(), { userId: 10, login: null, tags: ["tag:server"] }, { NODE_TLS_REJECT_UNAUTHORIZED: "0" });
+const hub = machine("hubbox", "127.0.0.2", freePort(), { userId: 10, login: null, tags: ["tag:server"] }, {}, true);
 const node = machine("nodebox", "127.0.0.3", freePort(), { userId: 10, login: null, tags: ["tag:server"] }, { PATH: `${NODE_BIN}:${process.env.PATH}` });
 const solo = machine("solobox", "127.0.0.10", freePort(), { userId: 30, login: "solo@team", displayName: "Solo" });
 let hubRepoId = "";
@@ -262,6 +293,28 @@ afterAll(async () => {
   for (const m of [hub, node, solo]) Bun.spawnSync(["tmux", "-L", m.env.AGENTBOX_TMUX_SOCKET!, "kill-server"], { stderr: "ignore" });
   if (!process.env.AGENTBOX_KEEP_HUB_TEST) rmSync(ROOT, { recursive: true, force: true });
 });
+
+/** A page on the hub watches a node's session and opens its terminal: both
+ *  relayed through the hub's sockets to the node. */
+async function relays(sessionId: string): Promise<void> {
+  const ws = new WebSocket(`ws://127.0.0.1:${hub.port}/ws`);
+  const frames: { type: string; sessionId?: string; events?: unknown[] }[] = [];
+  ws.onmessage = (e) => frames.push(JSON.parse(String(e.data)));
+  await new Promise((r) => (ws.onopen = r));
+  ws.send(JSON.stringify({ type: "watch", sessionId }));
+  const tl = await eventually("a timeline frame", async () => frames.find((f) => f.type === "timeline" && f.sessionId === sessionId));
+  expect(JSON.stringify(tl.events)).toContain("hello from the node");
+  ws.close();
+
+  // The session is in no tmux, so the node's terminal says so and closes
+  // with 4000; the hub passes both on.
+  const term = new WebSocket(`ws://127.0.0.1:${hub.port}/ws/term/${sessionId}`);
+  const said: string[] = [];
+  term.onmessage = (e) => said.push(typeof e.data === "string" ? e.data : new TextDecoder().decode(e.data as ArrayBuffer));
+  const closed = await new Promise<CloseEvent>((r) => (term.onclose = r));
+  expect(closed.code).toBe(4000);
+  expect(said.join("")).toContain("tmux");
+}
 
 describe("no hub configured: v2's rule", () => {
   test("the owner's own untagged device is admitted, as the owner", async () => {
@@ -325,10 +378,11 @@ describe("a hub and a node", () => {
   });
 
   test("join: the node asks, the owner approves, and the hub connects", async () => {
-    const joined = await local(node, "POST", "/api/hub/link", { hub: `http://${hub.ip}:${hub.port}` });
+    // A bare address is tried over HTTPS first: the hub serves only that.
+    const joined = await local(node, "POST", "/api/hub/link", { hub: `${hub.ip}:${hub.port}` });
     expect(joined.status).toBe(201);
     expect(joined.data.role).toBe("node");
-    expect(joined.data.link.hub.ip).toBe(hub.ip);
+    expect(joined.data.link.hub).toMatchObject({ ip: hub.ip, url: `https://${hub.ip}:${hub.port}` });
     expect(joined.data.link.token).toBeUndefined();
     const link = JSON.parse(readFileSync(join(node.home, "ab", "hub", "link.json"), "utf8"));
     token = link.token;
@@ -339,7 +393,8 @@ describe("a hub and a node", () => {
 
     const pending = await local(hub, "GET", "/api/hub");
     const n = pending.data.nodes.find((x: { name: string }) => x.name === "nodebox");
-    expect(n).toMatchObject({ ip: node.ip, port: node.port, approvedAt: null, tags: ["tag:server"] });
+    // Each side keeps the URL the other serves at.
+    expect(n).toMatchObject({ ip: node.ip, url: `http://${node.ip}:${node.port}`, approvedAt: null, tags: ["tag:server"] });
     expect(JSON.stringify(pending.data)).not.toContain(token);
 
     // A member cannot approve; the owner can.
@@ -382,24 +437,13 @@ describe("a hub and a node", () => {
     expect((await from("127.0.0.5", hub, "PATCH", `/api/sessions/${sessionId}`, { body: { label: "x" }, headers: { "x-agentbox": "" } })).status).toBe(403);
   });
 
-  test("the timeline and the terminal pass through over sockets", async () => {
-    const ws = new WebSocket(`ws://127.0.0.1:${hub.port}/ws`);
-    const frames: { type: string; sessionId?: string; events?: unknown[] }[] = [];
-    ws.onmessage = (e) => frames.push(JSON.parse(String(e.data)));
-    await new Promise((r) => (ws.onopen = r));
-    ws.send(JSON.stringify({ type: "watch", sessionId }));
-    const tl = await eventually("a timeline frame", async () => frames.find((f) => f.type === "timeline" && f.sessionId === sessionId));
-    expect(JSON.stringify(tl.events)).toContain("hello from the node");
-    ws.close();
+  test("the timeline and the terminal pass through over sockets", () => relays(sessionId));
 
-    // The session is in no tmux, so the node's terminal says so and closes
-    // with 4000; the hub passes both on.
-    const term = new WebSocket(`ws://127.0.0.1:${hub.port}/ws/term/${sessionId}`);
-    const said: string[] = [];
-    term.onmessage = (e) => said.push(typeof e.data === "string" ? e.data : new TextDecoder().decode(e.data as ArrayBuffer));
-    const closed = await new Promise<CloseEvent>((r) => (term.onclose = r));
-    expect(closed.code).toBe(4000);
-    expect(said.join("")).toContain("tmux");
+  test("a node says where it serves only as itself", async () => {
+    const said = (url: string) => from("127.0.0.3", hub, "POST", "/api/hub/node/url", { body: { url }, headers: { "x-agentbox-hub-token": token } });
+    expect((await said(`https://127.0.0.7:${node.port}`)).status).toBe(400);
+    expect((await said("ftp://127.0.0.3:21")).status).toBe(400);
+    expect((await said(`http://${node.ip}:${node.port}`)).status).toBe(200);
   });
 
   test("a tagged box is refused unless it is a joined node, and that only on node routes", async () => {
@@ -584,7 +628,7 @@ describe("a hub and a node", () => {
     expect((await local(solo, "POST", "/api/sessions", { provider: "codex", node: "auto", repo: "acme/app" })).status).toBe(409);
   }, 60_000);
 
-  test("a node that goes away stays listed, marked away, and comes back", async () => {
+  test("a node that goes away stays listed, marked away, and comes back on HTTPS", async () => {
     await stop(node);
     const row = await eventually("the session marked away", async () => {
       const s = await local(hub, "GET", "/api/state");
@@ -597,11 +641,19 @@ describe("a hub and a node", () => {
     expect(r.status).toBe(502);
     expect(r.error).toContain("nodebox");
 
+    // It comes back with a certificate, so it serves only HTTPS now: it tells
+    // the hub, which reaches it there, sockets and all.
+    node.tls = true;
+    writeSeam(node);
     await start(node);
     await eventually("the node back", async () => {
       const s = await local(hub, "GET", "/api/state");
       return s.data.sessions.find((x: { id: string; away?: unknown }) => x.id === sessionId && !x.away);
     }, 30_000);
+    const view = (await local(hub, "GET", "/api/hub")).data.nodes.find((x: { name: string }) => x.name === "nodebox");
+    expect(view).toMatchObject({ reachable: true, url: `https://${node.ip}:${node.port}` });
+    expect((await local(hub, "GET", `/api/sessions/${sessionId}/timeline`)).status).toBe(200);
+    await relays(sessionId);
   }, 60_000);
 
   test("leave: the node ends its link, and the hub forgets it", async () => {

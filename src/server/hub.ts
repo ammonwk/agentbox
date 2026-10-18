@@ -14,6 +14,7 @@ import {
   newToken,
   nodeName,
   parseLend,
+  peerUrl,
   readLink,
   readMembers,
   readNodes,
@@ -28,9 +29,9 @@ import {
 import { listRepos } from "../core/db";
 import type { AccountView, HotState, HubStatus, NodeHeadroom, NodeRepo, NodeState, Person, Repo } from "../core/types";
 import type { HubNodes } from "./hubnodes";
-import { parsePersonHeader, personOf, tailnetSelfNow } from "./person";
+import { parsePersonHeader, personOf, tailnetSelfNow, tailnetUrlNow } from "./person";
 import { HttpError, json, readBody, type Router } from "./router";
-import { SEAM_FROM, seamOn, type Peer } from "./tailnet";
+import { SEAM_FROM, seamOn, tailnetPeer, type Peer } from "./tailnet";
 
 type Row = HotState["sessions"][number];
 
@@ -148,7 +149,7 @@ export function hubStartRules(link: Link, b: Record<string, unknown>, placedOpen
 export function hubStatus(req: Request, deps: HubDeps): HubStatus {
   const role = hubRole();
   const self = tailnetSelfNow();
-  const status: HubStatus = { role, person: personOf(req), self: self ? { name: self.hostName, ip: self.ip } : null };
+  const status: HubStatus = { role, person: personOf(req), self: self ? { name: self.hostName, ip: self.ip, url: tailnetUrlNow() } : null };
   const error = hubFileError();
   if (error) status.error = error;
   if (role === "hub") {
@@ -161,19 +162,36 @@ export function hubStatus(req: Request, deps: HubDeps): HubStatus {
   return status;
 }
 
-/** `plaibook-box1`, `100.64.0.1:4479` or a URL, as the URL of the hub's API. */
-export function hubUrl(address: string, defaultPort: number): string {
+/**
+ * Where to ask a hub to join (docs/hub.md, Joining), in order: a URL as it
+ * is given; a tailnet name or IP (`plaibook-box1`, `100.64.0.1:4479`) as the
+ * peer `tailscale status` has under it, by its MagicDNS name over HTTPS and
+ * then by its IPv4 over HTTP, which is how its listener serves without a
+ * certificate.
+ */
+export async function hubCandidates(address: string, defaultPort: number): Promise<string[]> {
   const raw = address.trim();
   if (!raw) throw new HttpError(400, "name the hub: its tailnet name, IP or URL");
+  const given = /^[a-z]+:\/\//i.test(raw);
   let u: URL;
   try {
-    u = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `http://${raw}`);
+    u = new URL(given ? raw : `http://${raw}`);
   } catch {
     throw new HttpError(400, `not a hub address: ${raw}`);
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new HttpError(400, `not a hub address: ${raw}`);
-  if (!u.port) u.port = String(defaultPort);
-  return `${u.protocol}//${u.host}`;
+  const port = raw.match(/:(\d+)\/?$/)?.[1] ?? String(defaultPort);
+  if (given) return [`${u.protocol}//${u.hostname}:${port}`];
+  const peer = await tailnetPeer(u.hostname);
+  if (!peer) return [`https://${u.hostname}:${port}`, `http://${u.hostname}:${port}`];
+  return [...(peer.dnsName ? [`https://${peer.dnsName}:${port}`] : []), `http://${peer.ip}:${port}`];
+}
+
+/** A peer that did not answer at all, as against one that answered no. */
+class Unreached extends HttpError {
+  constructor(message: string) {
+    super(502, message);
+  }
 }
 
 /** A request this node makes to its hub. */
@@ -186,19 +204,55 @@ async function toHub(url: string, path: string, body: unknown, token?: string): 
   try {
     res = await fetch(`${url}${path}`, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
   } catch (e) {
-    throw new HttpError(502, `could not reach the hub at ${url}: ${(e as Error).message}`);
+    throw new Unreached(`could not reach the hub at ${url}: ${(e as Error).message}`);
   }
   const env = (await res.json().catch(() => null)) as { ok: boolean; data: unknown; error: string | null } | null;
   if (!env?.ok) throw new HttpError(502, `the hub at ${url} said: ${env?.error ?? `HTTP ${res.status}`}`);
   return env.data;
 }
 
-/** The hub's URL at its tailnet IPv4, which is the address it knows this
- *  node by: a MagicDNS name may resolve to IPv6. */
-function atHubIp(link: Link): string {
-  const u = new URL(link.hub.url);
-  u.hostname = link.hub.ip;
-  return `${u.protocol}//${u.host}`;
+/** A node's URL, when it is the node's own: at its IPv4, or at a MagicDNS
+ *  name `whois` gives the device the request came from. */
+function nodeUrl(raw: unknown, ip: string, dnsNames: (string | null | undefined)[]): string {
+  const url = peerUrl(raw);
+  const host = url ? new URL(url).hostname : null;
+  if (!url || !host || (host !== ip && !dnsNames.includes(host))) throw new HttpError(400, `a node serves at its own tailnet IPv4 or MagicDNS name, not ${JSON.stringify(raw)}`);
+  return url;
+}
+
+type JoinAnswer = { id?: unknown; name?: unknown; hub?: { name?: unknown; ip?: unknown; url?: unknown } };
+
+/** A join asked at each of a hub's candidate URLs until one answers. */
+async function askToJoin(urls: string[], body: unknown): Promise<{ url: string; out: JoinAnswer }> {
+  const unreached: string[] = [];
+  for (const url of urls) {
+    try {
+      return { url, out: ((await toHub(url, "/api/hub/join", body)) ?? {}) as JoinAnswer };
+    } catch (e) {
+      if (!(e instanceof Unreached)) throw e;
+      unreached.push(e.message);
+    }
+  }
+  throw new HttpError(502, unreached.join("; "));
+}
+
+let announcing: ReturnType<typeof setTimeout> | null = null;
+
+/** On a node: tell the hub where this machine serves, which changes when its
+ *  certificate comes or goes. Sent each time the listener starts; tried
+ *  again each minute while the hub cannot be reached. */
+export function announceUrl(): void {
+  if (announcing) clearTimeout(announcing);
+  announcing = null;
+  const link = readLink();
+  const url = tailnetUrlNow();
+  if (!link || !url) return;
+  toHub(link.hub.url, "/api/hub/node/url", { url }, link.token).catch((e: Error) => {
+    console.error(`agentbox: hub: could not tell ${link.hub.name} this node serves at ${url}: ${e.message}`);
+    if (!(e instanceof Unreached)) return;
+    announcing = setTimeout(announceUrl, 60_000);
+    announcing.unref?.();
+  });
 }
 
 /** The hub's side of a node's request: its token, from its own address. */
@@ -264,7 +318,7 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
         // Best effort: a node the hub has forgotten is never asked anything again.
         if (n.approvedAt !== null) {
           const headers = { ...deps.nodes.headers(n, personOf(req)), "x-agentbox": "1" };
-          await fetch(`http://${n.ip}:${n.port}/api/node/leave`, { method: "POST", headers, signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
+          await fetch(`${n.url}/api/node/leave`, { method: "POST", headers, signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
         }
         return json(hubStatus(req, deps));
       })
@@ -274,9 +328,8 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
         if (!peer) throw new HttpError(400, "a node joins over the tailnet");
         const b = await readBody(req);
         const token = typeof b.token === "string" && /^[a-f0-9]{64}$/.test(b.token) ? b.token : null;
-        const port = Number.isInteger(b.port) && (b.port as number) > 0 && (b.port as number) < 65536 ? (b.port as number) : null;
-        if (!token || !port) throw new HttpError(400, "a join carries the node's port and a 64-hex token");
-        // The address the hub will call it on: the IPv4 its listener binds,
+        if (!token) throw new HttpError(400, "a join carries the node's URL and a 64-hex token");
+        // The address its requests come from: the IPv4 its listener binds,
         // which it names, when that is the same device the request came
         // from (it may have come over IPv6).
         let ip = peer.ip;
@@ -285,6 +338,7 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
           if (!named || named.device !== peer.device || named.userId !== peer.userId) throw new HttpError(400, `${b.ip} is not the device this request came from`);
           ip = b.ip;
         }
+        const url = nodeUrl(b.url, ip, [peer.dnsName]);
         const nodes = readNodes().filter((n) => n.ip !== ip);
         if (nodes.filter((n) => n.approvedAt === null).length >= MAX_PENDING) throw new HttpError(429, "too many nodes are waiting for the owner already");
         let name = nodeName(typeof b.name === "string" ? b.name : (peer.device ?? peer.ip));
@@ -293,7 +347,7 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
           id: newToken().slice(0, 8),
           name,
           ip,
-          port,
+          url,
           token,
           device: peer.device,
           login: peer.login,
@@ -305,7 +359,17 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
         writeNodes([...nodes, rec]);
         deps.nodes.sync();
         const self = tailnetSelfNow();
-        return json({ id: rec.id, name: rec.name, hub: { name: self?.hostName ?? hostname(), ip: self?.ip ?? "" } });
+        return json({ id: rec.id, name: rec.name, hub: { name: self?.hostName ?? hostname(), ip: self?.ip ?? "", url: tailnetUrlNow() } });
+      })
+      .add("POST", "/api/hub/node/url", async ({ req }) => {
+        requireHub();
+        const n = joinedNode(req, deps);
+        const url = nodeUrl((await readBody(req)).url, n.ip, [deps.peerOf(req)?.dnsName]);
+        if (url !== n.url) {
+          writeNodes(readNodes().map((x) => (x.id === n.id ? { ...x, url } : x)));
+          deps.nodes.sync();
+        }
+        return json(null);
       })
       .add("POST", "/api/hub/node/leave", ({ req }) => {
         requireHub();
@@ -324,14 +388,13 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
         const self = tailnetSelfNow();
         if (!self) throw new HttpError(409, "this machine's tailnet listener is not up, so a hub could not reach it (is Tailscale running? AGENTBOX_TAILNET=0?)");
         const b = await readBody(req);
-        const url = hubUrl(typeof b.hub === "string" ? b.hub : "", deps.port);
         const token = newToken();
         const asked = nodeName(typeof b.name === "string" && b.name.trim() ? b.name : self.hostName);
-        const out = (await toHub(url, "/api/hub/join", { name: asked, port: deps.port, token, ip: self.ip })) as { id?: unknown; name?: unknown; hub?: { name?: unknown; ip?: unknown } };
-        const ip = typeof out?.hub?.ip === "string" ? out.hub.ip : "";
+        const { url, out } = await askToJoin(await hubCandidates(typeof b.hub === "string" ? b.hub : "", deps.port), { name: asked, token, ip: self.ip, url: tailnetUrlNow() });
+        const ip = typeof out.hub?.ip === "string" ? out.hub.ip : "";
         if (!ip) throw new HttpError(502, `the hub at ${url} did not say its tailnet address`);
         writeLink({
-          hub: { url, ip, name: typeof out.hub?.name === "string" ? out.hub.name : ip },
+          hub: { url: peerUrl(out.hub?.url) ?? url, ip, name: typeof out.hub?.name === "string" ? out.hub.name : ip },
           name: typeof out.name === "string" ? nodeName(out.name) : asked,
           token,
           joinedAt: Date.now(),
@@ -359,7 +422,7 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
         lastHubAt = null;
         deps.linkChanged();
         // Best effort: without link.json this node refuses the hub whatever it sends.
-        const told = await toHub(atHubIp(link), "/api/hub/node/leave", {}, link.token).then(() => true, () => false);
+        const told = await toHub(link.hub.url, "/api/hub/node/leave", {}, link.token).then(() => true, () => false);
         return json({ ...hubStatus(req, deps), told });
       })
   );
@@ -384,7 +447,11 @@ export function nodeGate(req: Request, url: URL, source: string | null): NodeVer
     return { ok: false, status: 403, reason: "not this node's hub" };
   }
   lastHubAt = Date.now();
-  return { ok: true, link, person: parsePersonHeader(req.headers.get("x-agentbox-person")), rest: url.pathname.slice("/api/node".length) };
+  // Where the hub serves now, which changes when its certificate comes or goes.
+  const said = peerUrl(req.headers.get("x-agentbox-hub-url"));
+  const now = said && said !== link.hub.url ? { ...link, hub: { ...link.hub, url: said } } : link;
+  if (now !== link) writeLink(now);
+  return { ok: true, link: now, person: parsePersonHeader(req.headers.get("x-agentbox-person")), rest: url.pathname.slice("/api/node".length) };
 }
 
 /** A hub request for `/api/sessions/:id/…`, made loopback-shaped so the

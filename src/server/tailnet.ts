@@ -12,6 +12,9 @@
  * Once HTTPS is enabled for the tailnet (admin console → DNS), `tailscale
  * cert` gives the MagicDNS name a real certificate and the listener serves
  * HTTPS instead — which a phone needs before it lets a page use the mic.
+ * It binds the IPv4 alone, so a peer that connects by the name (which
+ * resolves to IPv6 too) arrives over IPv4, from its own IPv4: the address a
+ * hub and its nodes know each other by (docs/hub.md, Transport).
  *
  * On a hub or a node (docs/hub.md) the door admits more, and only as
  * `admit` below says: a member's device on a hub, the hub on a node's
@@ -51,23 +54,25 @@ export type Peer = {
   userId: number | null;
   login: string | null;
   displayName: string | null;
-  /** The device's name on the tailnet. */
+  /** The device's name on the tailnet, and its MagicDNS name. */
   device: string | null;
+  dnsName: string | null;
   tags: string[];
 };
 
 /**
  * The stand-in for `tailscale`, for tests that run two servers on one
  * computer: `AGENTBOX_TAILNET_SEAM` names a JSON file
- * `{self: {ip, userId, login, displayName, hostName, tags?}, peers: {<ip>: {userId, login, displayName, device, tags}}}`,
+ * `{self: {ip, userId, login, displayName, hostName, tags?, dnsName?, tls?: {cert, key}}, peers: {<ip>: {userId, login, displayName, device, dnsName?, tags}}}`,
  * read on every lookup. The listener binds `self.ip` (another loopback
- * address), and a connection's source is the `x-agentbox-seam-from` header,
+ * address), and serves HTTPS with `self.tls` (PEM files) as it would with
+ * `tailscale cert`'s; a connection's source is the `x-agentbox-seam-from` header,
  * since one computer's connections all come from 127.0.0.1. Only with
  * `AGENTBOX_TAILNET=0`, so a server on a real tailnet never reads the header.
  */
 type Seam = {
-  self: { ip: string; userId: number; login: string | null; displayName?: string | null; hostName: string; tags?: string[] };
-  peers: Record<string, { userId?: number | null; login?: string | null; displayName?: string | null; device?: string | null; tags?: string[] }>;
+  self: { ip: string; userId: number; login: string | null; displayName?: string | null; hostName: string; tags?: string[]; dnsName?: string; tls?: { cert: string; key: string } };
+  peers: Record<string, { userId?: number | null; login?: string | null; displayName?: string | null; device?: string | null; dnsName?: string | null; tags?: string[] }>;
 };
 
 function seam(): Seam | null {
@@ -114,7 +119,8 @@ export async function tailnetSelf(): Promise<Tailnet | null> {
   if (process.env.AGENTBOX_TAILNET === "0") {
     const s = seam()?.self;
     if (!s) return null;
-    return { ip: s.ip, names: [s.ip, s.hostName.toLowerCase()], userId: s.userId, dnsName: null, login: s.tags?.length ? null : s.login, displayName: s.displayName ?? null, hostName: s.hostName.toLowerCase() };
+    const names = [...new Set([s.ip, s.hostName.toLowerCase(), ...(s.dnsName ? [s.dnsName] : [])])];
+    return { ip: s.ip, names, userId: s.userId, dnsName: s.dnsName ?? null, login: s.tags?.length ? null : s.login, displayName: s.displayName ?? null, hostName: s.hostName.toLowerCase() };
   }
   if (!Bun.which("tailscale")) return null;
   const st = (await tailscaleJson(["status", "--json"])) as {
@@ -144,7 +150,11 @@ export async function tailnetSelf(): Promise<Tailnet | null> {
  *  (which only goes to Let's Encrypt when the one it has is near expiry).
  *  Null while the tailnet has HTTPS turned off. */
 export async function tailnetCert(self: Tailnet): Promise<{ cert: string; key: string } | null> {
-  if (!self.dnsName || process.env.AGENTBOX_TAILNET === "0") return null;
+  if (process.env.AGENTBOX_TAILNET === "0") {
+    const tls = seam()?.self.tls;
+    return tls ? { cert: readFileSync(tls.cert, "utf8"), key: readFileSync(tls.key, "utf8") } : null;
+  }
+  if (!self.dnsName) return null;
   const dir = join(agentboxHome(), "tls");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const cert = join(dir, `${self.dnsName}.crt`);
@@ -161,6 +171,30 @@ export async function tailnetCert(self: Tailnet): Promise<{ cert: string; key: s
   }
 }
 
+/** Where the listener serves, as this machine tells a hub or a node: by its
+ *  MagicDNS name over HTTPS while it has a certificate, which names only that
+ *  name, else by its IPv4 over plain HTTP. */
+export function tailnetUrl(self: Tailnet, port: number, tls: boolean): string {
+  return tls && self.dnsName ? `https://${self.dnsName}:${port}` : `http://${self.ip}:${port}`;
+}
+
+/** Another device on the tailnet by its short name, MagicDNS name or an IP,
+ *  from `tailscale status`: its MagicDNS name and IPv4. Null off the tailnet
+ *  or when no peer answers to it. */
+export async function tailnetPeer(name: string): Promise<{ dnsName: string | null; ip: string } | null> {
+  if (process.env.AGENTBOX_TAILNET === "0" || !Bun.which("tailscale")) return null;
+  const st = (await tailscaleJson(["status", "--json"])) as { Peer?: Record<string, { DNSName?: string; HostName?: string; TailscaleIPs?: string[] }> } | null;
+  const want = name.toLowerCase().replace(/\.$/, "");
+  for (const p of Object.values(st?.Peer ?? {})) {
+    const dns = p.DNSName?.replace(/\.$/, "").toLowerCase() || null;
+    const ips = p.TailscaleIPs ?? [];
+    if (![dns, dns?.split(".")[0], p.HostName?.toLowerCase(), ...ips].includes(want)) continue;
+    const ip = ips.find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a));
+    return ip ? { dnsName: dns, ip } : null;
+  }
+  return null;
+}
+
 /** Who a source address is, by `tailscale whois`. Cached: five minutes
  *  for a device, ten seconds for an address it could not vouch for. */
 export class PeerCheck {
@@ -171,7 +205,7 @@ export class PeerCheck {
     const fake = seam();
     if (fake) {
       const p = fake.peers[ip];
-      return p ? { ip, userId: p.userId ?? null, login: p.login?.toLowerCase() ?? null, displayName: p.displayName ?? null, device: p.device ?? null, tags: p.tags ?? [] } : null;
+      return p ? { ip, userId: p.userId ?? null, login: p.login?.toLowerCase() ?? null, displayName: p.displayName ?? null, device: p.device ?? null, dnsName: p.dnsName ?? null, tags: p.tags ?? [] } : null;
     }
     const hit = this.cache.get(ip);
     if (hit && hit.until > Date.now()) return hit.peer;
@@ -187,6 +221,7 @@ export class PeerCheck {
           login: who.Node.Tags?.length ? null : (who.UserProfile?.LoginName?.toLowerCase() ?? null),
           displayName: who.Node.Tags?.length ? null : (who.UserProfile?.DisplayName ?? null),
           device: who.Node.ComputedName ?? who.Node.Name?.split(".")[0] ?? null,
+          dnsName: who.Node.Name?.replace(/\.$/, "").toLowerCase() || null,
           tags: who.Node.Tags ?? [],
         }
       : null;

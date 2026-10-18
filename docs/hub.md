@@ -49,6 +49,27 @@ what the local `tailscale` client answers either way:
 It never calls Tailscale's SaaS API and never needs `tailscale cert`, which
 Headscale may not offer. Without a certificate the tailnet listener serves
 plain HTTP, as it always has; WireGuard encrypts and authenticates the path.
+With one it serves HTTPS, under the MagicDNS name the certificate names.
+
+**A peer is addressed the way its listener serves.** Each side says where it
+serves, its URL: `https://<MagicDNS name>:<port>` while it has a certificate,
+`http://<IPv4>:<port>` otherwise. A node sends its URL in its join request and
+the hub keeps it in `nodes.json`; the hub sends its own in the join answer and
+the node keeps it in `link.json`. Neither side builds the other's URL from an
+IP. When a certificate comes or goes the URL changes, and the other side is
+told without joining again: a node tells its hub each time its listener
+starts (`POST /api/hub/node/url`), and a hub sends its URL on every request
+to a node (`x-agentbox-hub-url`), opening its sockets again when it changes.
+
+**Identity is the IPv4.** The hub knows a node by its tailnet IPv4 and token,
+and a node its hub by IPv4 and token, whatever the URL says. A connection by
+the MagicDNS name, which also resolves to the tailnet IPv6, still comes from
+the IPv4: the listener binds the IPv4 alone, so a connection can only be made
+over IPv4, from the caller's own. (Connecting to the IPv4 while checking the
+certificate for the name is not open to us: Bun's WebSocket checks the
+certificate against the URL's host and takes no other name.) A node's URL is
+taken only when its host is the node's IPv4 or the MagicDNS name `whois` gives
+the device the request came from.
 
 A source address on the tailnet cannot be forged by a peer, so "this request
 came from the hub's IP" and "this connection is that person's device" are as
@@ -141,7 +162,7 @@ There is always exactly one owner. Logins compare case-insensitively.
 
 ```json
 { "nodes": [
-  { "id": "k3v9x2", "name": "ammons-laptop", "ip": "100.64.0.7", "port": 4479,
+  { "id": "k3v9x2", "name": "ammons-laptop", "ip": "100.64.0.7", "url": "https://ammons-laptop.tail1234.ts.net:4479",
     "token": "<64 hex>", "device": "ammons-laptop", "login": "ammonwk@gmail.com", "tags": [],
     "requestedAt": 1760000000000, "approvedAt": 1760000060000, "approvedBy": "ammonwk@gmail.com" }
 ] }
@@ -150,7 +171,7 @@ There is always exactly one owner. Logins compare case-insensitively.
 `link.json`, on a node:
 
 ```json
-{ "hub": { "url": "http://plaibook-box1:4479", "ip": "100.64.0.1", "name": "plaibook-box1" },
+{ "hub": { "url": "https://plaibook-box1.tail1234.ts.net:4479", "ip": "100.64.0.1", "name": "plaibook-box1" },
   "name": "ammons-laptop", "token": "<64 hex>", "joinedAt": 1760000000000,
   "lend": { "maxSessions": null, "accounts": "all", "acceptStarts": false, "shareHeadroom": true } }
 ```
@@ -178,12 +199,15 @@ through: `{at, person, method, path}`.
 1. On the hub, once: `agentbox hub init [--owner <login>]` writes
    `members.json` with its owner (by default this machine's own tailnet
    login; a tagged machine has none and must name one).
-2. On the node: `agentbox hub join <hub address>` (a MagicDNS name, an IP, or
-   a URL; port 4479 unless given). The node makes a random 32-byte token, asks
-   the hub's `POST /api/hub/join` with it, and writes `link.json`. The hub
-   files the request in `nodes.json` with the device's `whois` (its name,
-   login and tags) and its IP, and answers with its own name and IP, which the
-   node keeps as the only address it accepts hub requests from.
+2. On the node: `agentbox hub join <hub address>` (a URL, used as it is; or
+   a name or IP, which `tailscale status` turns into the peer's MagicDNS name
+   and IPv4, tried over HTTPS by the name and then over HTTP by the IPv4;
+   port 4479 unless given). The node makes a random 32-byte token, asks the
+   hub's `POST /api/hub/join` with it and its own URL, and writes
+   `link.json`. The hub files the request in `nodes.json` with the device's
+   `whois` (its name, login and tags), its IP and its URL, and answers with
+   its own name, IP and URL; the node keeps the IP as the only address it
+   accepts hub requests from.
 3. On the hub, the owner presses Approve on Team › Nodes (or `agentbox hub
    approve <node>`). From then on the hub connects to the node. The CLI on the
    node waits for that first connection and says so.
@@ -207,14 +231,16 @@ Every response is the v2 envelope. On a machine with no hub configured,
 | PUT | /api/hub/members | owner | `{members: Member[]}` | `HubStatus` — exactly one owner; making another the owner hands it over |
 | POST | /api/hub/nodes/:id/approve | owner | | `HubStatus` |
 | DELETE | /api/hub/nodes/:id | owner | | `HubStatus` — ends the link, and tells the node |
-| POST | /api/hub/join | a tailnet peer allowed to (above) | `{name, port, token, ip?}` | `{id, name, hub: {name, ip}}` — a pending request. `ip` is the node's tailnet IPv4, which the hub calls it on; it is taken only when `whois` says it is the device the request came from (which may have come over IPv6) |
+| POST | /api/hub/join | a tailnet peer allowed to (above) | `{name, url, token, ip?}` | `{id, name, hub: {name, ip, url}}` — a pending request. `url` is where the node serves (Transport and identity). `ip` is the node's tailnet IPv4, which its requests come from; it is taken only when `whois` says it is the device the request came from (which may have come over IPv6) |
+| POST | /api/hub/node/url | the node, with its token | `{url}` | — where the node serves now; it sends this each time its listener starts |
 | POST | /api/hub/node/leave | the node, with its token | | — the node ends its link |
 | POST | /api/hub/link | loopback, on a machine not a hub | `{hub, name?}` | `HubStatus` — join (`agentbox hub join`) |
 | PATCH | /api/hub/link | loopback, on a node | `{lend}` | `HubStatus` |
 | DELETE | /api/hub/link | loopback, on a node | | `HubStatus` — leave, telling the hub |
 
 Requests the hub sends a node, from the hub's IP with
-`x-agentbox-hub-token` and `x-agentbox-person`:
+`x-agentbox-hub-token`, `x-agentbox-person` and `x-agentbox-hub-url` (where
+the hub serves, which the node keeps in `link.json` when it changed):
 
 | method | path | |
 |---|---|---|
@@ -431,6 +457,15 @@ tailnet listener binds the seam's IP (another loopback address, such as
 127.0.0.2), and reads a connection's source from `x-agentbox-seam-from`. The
 seam is read only with `AGENTBOX_TAILNET=0`, so a server on the real tailnet
 never honours the header.
+
+The seam's `self.tls` stands in for `tailscale cert`: the hub serves HTTPS
+from the start and the node plain HTTP, until it is started again with a
+certificate and tells the hub. Their certificates come from a test CA that
+every server trusts (`NODE_EXTRA_CA_CERTS`), and since a name cannot resolve
+to 127.0.0.x on one computer, each seam's MagicDNS name is its IP, which its
+certificate names. That covers joining over HTTPS by a bare address, the
+hub's socket to a node over WSS, the relay of a timeline and a terminal over
+it, and a node's URL changing from HTTP to HTTPS.
 
 For phase 2, both the hub and the node register `acme/app`, a clone of a bare
 repo that stands in for GitHub (each machine's `~/.gitconfig` sends

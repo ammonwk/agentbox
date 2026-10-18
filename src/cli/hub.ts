@@ -24,7 +24,7 @@ function lendLine(l: Lend): string {
 
 function nodeLine(n: HubNodeView): string {
   const state = n.approvedAt === null ? "waiting for approval" : n.reachable ? `reachable, ${n.sessions} sessions` : `away (last seen ${ago(n.lastSeen)}${n.error ? `: ${n.error}` : ""})`;
-  return `${n.id}\t${n.name}\t${n.ip}:${n.port}\t${n.login ?? (n.tags.join(",") || "-")}\t${state}`;
+  return `${n.id}\t${n.name}\t${n.url} (${n.ip})\t${n.login ?? (n.tags.join(",") || "-")}\t${state}`;
 }
 
 function print(s: HubStatus): void {
@@ -34,7 +34,7 @@ function print(s: HubStatus): void {
     return;
   }
   if (s.role === "hub") {
-    console.log(`hub${s.self ? ` ${s.self.name} (${s.self.ip})` : " (not on a tailnet yet)"}`);
+    console.log(`hub${s.self ? ` ${s.self.name} (${s.self.url ?? s.self.ip})` : " (not on a tailnet yet)"}`);
     for (const m of s.members ?? []) console.log(`member\t${m.login}\t${m.role}${m.name ? `\t${m.name}` : ""}`);
     for (const n of s.nodes ?? []) console.log(`node\t${nodeLine(n)}`);
     return;

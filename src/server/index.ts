@@ -60,11 +60,11 @@ import { completeDir, resolveDirs } from "../core/dirs";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
-import { PeerCheck, admit, admitted, sourceOf, tailnetCert, tailnetSelf, type Admission, type Peer } from "./tailnet";
+import { PeerCheck, admit, admitted, sourceOf, tailnetCert, tailnetSelf, tailnetUrl, type Admission, type Peer } from "./tailnet";
 import { addPlaced, hubRole, readLink, readMembers, readNodes, readPlaced, removeLink, type Link } from "../core/hub";
 import { HubNodes, type Target } from "./hubnodes";
-import { asLocalRequest, auditHubAction, headroomOf, hubRoutes, hubStartRules, lends, nodeGate, nodeState, repoNamed, repoNames, type HubDeps } from "./hub";
-import { ownerPerson, personOf, setPerson, setTailnetSelf, tailnetSelfNow } from "./person";
+import { announceUrl, asLocalRequest, auditHubAction, headroomOf, hubRoutes, hubStartRules, lends, nodeGate, nodeState, repoNamed, repoNames, type HubDeps } from "./hub";
+import { ownerPerson, personOf, setPerson, setTailnetSelf, setTailnetUrl, tailnetSelfNow, tailnetUrlNow } from "./person";
 import { choose, type Machine } from "./placement";
 import { requireOwnerOnHub, roleRefusal } from "./roles";
 import { accountProvider as accountsOf } from "../core/providers/account";
@@ -2308,7 +2308,14 @@ async function listenOnTailnet(
           return handle(req, srv, { hosts: self.names, admission: a, source: from });
         },
       });
-      console.log(`agentbox listening on ${tls ? "https" : "http"}://${self.dnsName ?? self.ip}:${PORT} (your Tailscale devices)`);
+      const url = tailnetUrl(self, PORT, !!tls);
+      console.log(`agentbox listening on ${url} (your Tailscale devices)`);
+      // A hub and its nodes reach each other where each says it serves.
+      if (url !== tailnetUrlNow()) {
+        setTailnetUrl(url);
+        hubNodes.reconnect();
+        announceUrl();
+      }
     } catch (err) {
       server = null;
       console.error(`agentbox: not listening on the tailnet (${self.ip}:${PORT}): ${(err as Error).message}`);

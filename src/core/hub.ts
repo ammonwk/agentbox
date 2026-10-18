@@ -21,12 +21,13 @@ const auditPath = (): string => join(hubDir(), "audit.jsonl");
 const placedPath = (): string => join(hubDir(), "placed.json");
 const parentsPath = (): string => join(hubDir(), "parents.json");
 
-/** A node that asked to join, approved or not. */
+/** A node that asked to join, approved or not. `ip` is who it is, the
+ *  address its requests come from; `url` is where it serves, as it says. */
 export interface NodeRecord {
   id: string;
   name: string;
   ip: string;
-  port: number;
+  url: string;
   token: string;
   device: string | null;
   login: string | null;
@@ -36,7 +37,7 @@ export interface NodeRecord {
   approvedBy: string | null;
 }
 
-/** A node's link to its hub. */
+/** A node's link to its hub: `hub.ip` is who it is, `hub.url` where it serves. */
 export interface Link {
   hub: { url: string; ip: string; name: string };
   name: string;
@@ -50,6 +51,22 @@ export const DEFAULT_LEND: Lend = { maxSessions: null, accounts: "all", acceptSt
 const LOGIN = /^[^\s@]+(@[^\s@]+)?$/;
 const TOKEN = /^[a-f0-9]{64}$/;
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/**
+ * Where a peer serves, as it says (docs/hub.md, Transport): `https://<MagicDNS
+ * name>:<port>` while it has a certificate, `http://<IPv4>:<port>` otherwise.
+ * Normalized to scheme, host and port; null when it is not such a URL.
+ */
+export function peerUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const u = new URL(raw);
+    if ((u.protocol !== "http:" && u.protocol !== "https:") || u.username || u.password) return null;
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
 
 /** A name fit for a badge and an id prefix: lowercase letters, digits, dashes. */
 export function nodeName(raw: string): string {
@@ -112,12 +129,13 @@ function parseNodes(v: unknown): NodeRecord[] {
   if (!Array.isArray(list)) throw new Error("nodes.json has no nodes list");
   return list.map((n: Record<string, unknown>) => {
     if (typeof n?.id !== "string" || typeof n.name !== "string" || !NAME.test(n.name)) throw new Error(`a node without a usable id or name: ${JSON.stringify(n?.name)}`);
-    if (typeof n.ip !== "string" || !Number.isInteger(n.port) || typeof n.token !== "string" || !TOKEN.test(n.token)) throw new Error(`node ${n.name} has no usable address or token`);
+    const url = peerUrl(n.url);
+    if (typeof n.ip !== "string" || !url || typeof n.token !== "string" || !TOKEN.test(n.token)) throw new Error(`node ${n.name} has no usable address, URL or token (one that joined before nodes said their URL joins again)`);
     return {
       id: n.id,
       name: n.name,
       ip: n.ip,
-      port: n.port as number,
+      url,
       token: n.token,
       device: typeof n.device === "string" ? n.device : null,
       login: typeof n.login === "string" ? n.login : null,
@@ -132,11 +150,12 @@ function parseNodes(v: unknown): NodeRecord[] {
 function parseLink(v: unknown): Link {
   const o = v as Record<string, unknown>;
   const hub = o?.hub as Record<string, unknown> | undefined;
-  if (!hub || typeof hub.url !== "string" || typeof hub.ip !== "string" || !hub.ip) throw new Error("link.json names no hub address");
+  const url = peerUrl(hub?.url);
+  if (!hub || !url || typeof hub.ip !== "string" || !hub.ip) throw new Error("link.json names no hub address");
   if (typeof o.token !== "string" || !TOKEN.test(o.token)) throw new Error("link.json has no usable token");
   if (typeof o.name !== "string" || !NAME.test(o.name)) throw new Error("link.json has no usable node name");
   return {
-    hub: { url: hub.url, ip: hub.ip, name: typeof hub.name === "string" ? hub.name : hub.ip },
+    hub: { url, ip: hub.ip, name: typeof hub.name === "string" ? hub.name : hub.ip },
     name: o.name,
     token: o.token,
     joinedAt: Number(o.joinedAt) || 0,

@@ -10,7 +10,7 @@
 import { readNodes, readParents, setParent, type NodeRecord } from "../core/hub";
 import type { HotState, HubNodeView, NodeState, Person, ServerMessage } from "../core/types";
 import type { Machine } from "./placement";
-import { personHeader, tailnetSelfNow } from "./person";
+import { personHeader, tailnetSelfNow, tailnetUrlNow } from "./person";
 import { SEAM_FROM, seamOn } from "./tailnet";
 
 type Row = HotState["sessions"][number];
@@ -72,7 +72,7 @@ export class HubNodes {
     let changed = false;
     for (const [id, r] of this.remotes) {
       const rec = want.get(id);
-      if (rec && rec.token === r.rec.token && rec.ip === r.rec.ip && rec.port === r.rec.port) {
+      if (rec && rec.token === r.rec.token && rec.ip === r.rec.ip && rec.url === r.rec.url) {
         r.rec = rec;
         continue;
       }
@@ -102,22 +102,29 @@ export class HubNodes {
     }
   }
 
-  private base(rec: NodeRecord): string {
-    return `http://${rec.ip.includes(":") ? `[${rec.ip}]` : rec.ip}:${rec.port}`;
+  /** The hub's own URL changed (its certificate came or went): open every
+   *  node's socket again, so each hears it (`x-agentbox-hub-url`). */
+  reconnect(): void {
+    for (const r of this.remotes.values()) {
+      this.drop(r);
+      r.retryMs = RETRY_FIRST_MS;
+      this.connect(r);
+    }
   }
 
-  /** What every request to a node carries: its token, who asked, and under
-   *  the test seam the hub's own address as the source. */
+  /** What every request to a node carries: its token, who asked, where the
+   *  hub serves, and under the test seam the hub's own address as the source. */
   headers(rec: NodeRecord, person: Person): Record<string, string> {
     const h: Record<string, string> = { "x-agentbox-hub-token": rec.token, "x-agentbox-person": personHeader(person) };
+    const url = tailnetUrlNow();
+    if (url) h["x-agentbox-hub-url"] = url;
     const self = tailnetSelfNow();
     if (seamOn() && self) h[SEAM_FROM] = self.ip;
     return h;
   }
 
   socket(rec: NodeRecord, path: string, person: Person): WebSocket {
-    const url = this.base(rec).replace(/^http/, "ws") + path;
-    return new WebSocket(url, { headers: this.headers(rec, person) } as unknown as string[]);
+    return new WebSocket(rec.url.replace(/^http/, "ws") + path, { headers: this.headers(rec, person) } as unknown as string[]);
   }
 
   private connect(r: Remote): void {
@@ -266,7 +273,7 @@ export class HubNodes {
         id: rec.id,
         name: rec.name,
         ip: rec.ip,
-        port: rec.port,
+        url: rec.url,
         device: rec.device,
         login: rec.login,
         tags: rec.tags,
@@ -313,7 +320,7 @@ export class HubNodes {
     const failed = (status: number, error: string, data: unknown = null) => Response.json({ ok: false, data, error: `node ${rec.name}: ${error}` }, { status });
     let res: Response;
     try {
-      res = await fetch(`${this.base(rec)}/api/node/sessions`, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(START_TIMEOUT_MS) });
+      res = await fetch(`${rec.url}/api/node/sessions`, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(START_TIMEOUT_MS) });
     } catch (e) {
       return failed(502, `could not be reached: ${this.remotes.get(rec.id)?.connected ? (e as Error).message : "it is away"}`);
     }
@@ -340,7 +347,7 @@ export class HubNodes {
       if (v) headers[h] = v;
     }
     const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer();
-    const target = `${this.base(t.rec)}/api/node/sessions/${encodeURIComponent(t.remoteId)}${rest}${url.search}`;
+    const target = `${t.rec.url}/api/node/sessions/${encodeURIComponent(t.remoteId)}${rest}${url.search}`;
     let res: Response;
     try {
       res = await fetch(target, { method: req.method, headers, body, redirect: "manual", signal: AbortSignal.timeout(PROXY_TIMEOUT_MS) });
