@@ -3107,7 +3107,7 @@ export class Fleet extends EventEmitter {
       account, agentSessionId: rec.agentSessionId!, cwd,
       prompt: typed ? undefined : prompt || undefined,
       ...(rec.effort ? { effort: rec.effort } : {}),
-      ...(resumeModel(rec) ? { model: unretired(resumeModel(rec)!) } : {}),
+      ...(resumeOn(rec) ? { model: resumeOn(rec)! } : {}),
       autoApprove: getSettings().autoApprove,
       ...(launch ? { carry: launch.args } : {}),
       ...(forkAs ? { forkAs } : {}),
@@ -4099,6 +4099,14 @@ function bareShell(c: string): boolean {
  *  it is retired (`settings.retiredModels`). */
 function unretired<T extends string | undefined>(model: T): T {
   return ((model && getSettings().retiredModels[model]) || model) as T;
+}
+
+/** `resumeModel`, unless the session is on a retired model: its replacement.
+ *  One started on the CLI's default has no model of its own, so the
+ *  transcript says what it runs on. */
+function resumeOn(rec: SessionRecord): string | null {
+  const on = resumeModel(rec) ?? (rec.facts as Partial<TranscriptFacts> | null)?.model ?? null;
+  return (on && getSettings().retiredModels[on]) || resumeModel(rec);
 }
 
 /**
