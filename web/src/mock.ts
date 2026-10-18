@@ -77,6 +77,7 @@ const settings: AgentSettings = {
   parkIdleMin: 60,
   reclaimNightly: false,
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "" },
+  retiredModels: {},
   balancer: {
     claimNormal: 1.5,
     shortWindowInWeekly: 24,

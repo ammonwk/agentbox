@@ -62,7 +62,7 @@ export function asObject(v: unknown, label: string): Record<string, unknown> {
  * setting nothing reads.
  */
 export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch {
-  const known = ["theme", "repoMark", "splitActive", "hideSteps", "boardDays", "autoApprove", "parkIdleMin", "reclaimNightly", "models", "balancer"];
+  const known = ["theme", "repoMark", "splitActive", "hideSteps", "boardDays", "autoApprove", "parkIdleMin", "reclaimNightly", "models", "retiredModels", "balancer"];
   for (const key of Object.keys(body)) {
     if (!known.includes(key)) throw new HttpError(400, `unknown setting: ${key}`);
   }
@@ -106,6 +106,15 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
       next[k as keyof typeof next] = v.trim();
     }
     patch.models = next;
+  }
+
+  if (body.retiredModels !== undefined) {
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(asObject(body.retiredModels, "retiredModels"))) {
+      if (typeof v !== "string" || !k.trim() || !v.trim()) throw new HttpError(400, `retiredModels.${k} must name the model that replaces it`);
+      next[k.trim()] = v.trim();
+    }
+    patch.retiredModels = next;
   }
 
   if (body.balancer !== undefined) {

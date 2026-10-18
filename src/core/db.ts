@@ -1436,6 +1436,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   parkIdleMin: 60,
   reclaimNightly: false,
   models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "" },
+  retiredModels: {},
   balancer: DEFAULT_BALANCER,
 };
 
@@ -1455,11 +1456,13 @@ export type SettingsPatch = {
  * ride along in the stored row forever.
  */
 export function mergeSettings(base: AgentSettings, patch: SettingsPatch): AgentSettings {
-  const { balancer, models, ...scalars } = patch;
+  const { balancer, models, retiredModels, ...scalars } = patch;
   return {
     ...base,
     ...defined(known(scalars, base)),
     models: { ...base.models, ...defined(known(models ?? {}, base.models)) },
+    // A whole map, not merged: a model taken off it has to be able to go.
+    retiredModels: (retiredModels as Record<string, string> | undefined) ?? base.retiredModels,
     balancer: { ...base.balancer, ...defined(known(balancer ?? {}, base.balancer)) },
   };
 }

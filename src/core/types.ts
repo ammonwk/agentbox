@@ -810,6 +810,9 @@ export interface AgentSettings {
   reclaimNightly: boolean;
   /** Default model per provider; empty means the provider's own default. */
   models: Record<ProviderId, string>;
+  /** Models no session runs on, each to the one that takes its place: a
+   *  start, resume or move asked for one runs on its replacement. */
+  retiredModels: Record<string, string>;
   balancer: BalancerSettings;
 }
 // ------------------------------------------------------------------ diff

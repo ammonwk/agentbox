@@ -373,6 +373,26 @@ function Models({
           );
         })}
       </div>
+      <Field label="Retired" hint="old=new, comma-separated: a session started, resumed or moved on the old model runs on the new one">
+        {(id) => (
+          <>
+            <CommitInput
+              id={id}
+              mono
+              value={Object.entries(settings.retiredModels ?? {}).map(([from, to]) => `${from}=${to}`).join(", ")}
+              placeholder="none"
+              onCommit={(v) =>
+                save("retiredModels", {
+                  retiredModels: Object.fromEntries(
+                    v.split(",").map((pair) => pair.split("=").map((s) => s.trim())).filter(([from, to]) => from && to),
+                  ),
+                })
+              }
+            />
+            <SaveMark state={saveStateOf("retiredModels")} />
+          </>
+        )}
+      </Field>
     </section>
   );
 }

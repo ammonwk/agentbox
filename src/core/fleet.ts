@@ -2777,7 +2777,7 @@ export class Fleet extends EventEmitter {
     if (!cwd) throw new FleetError(400, "say where the session should run: a repo or a directory");
     if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);
 
-    const model = req.model || settings.models[req.provider] || undefined;
+    const model = unretired(req.model || settings.models[req.provider] || undefined);
     const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
     const launched = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
     const cmd = req.readOnly ? launched : withGlobalMcp(req.provider, account, launched, [], cwd);
@@ -3107,7 +3107,7 @@ export class Fleet extends EventEmitter {
       account, agentSessionId: rec.agentSessionId!, cwd,
       prompt: typed ? undefined : prompt || undefined,
       ...(rec.effort ? { effort: rec.effort } : {}),
-      ...(resumeModel(rec) ? { model: resumeModel(rec)! } : {}),
+      ...(resumeModel(rec) ? { model: unretired(resumeModel(rec)!) } : {}),
       autoApprove: getSettings().autoApprove,
       ...(launch ? { carry: launch.args } : {}),
       ...(forkAs ? { forkAs } : {}),
@@ -4093,6 +4093,12 @@ function shellWork(
  *  a bare shell. `bash migrate.sh` is not — it is the work. */
 function bareShell(c: string): boolean {
   return isToolShell(c) || /^(\S*\/)?(ba|z|da)?sh((\s+-\S*)*\s*$|(\s+-\S+)*\s+-[a-z]*c\b)/.test(c);
+}
+
+/** The model a session asked to run on `model` runs on: its replacement when
+ *  it is retired (`settings.retiredModels`). */
+function unretired<T extends string | undefined>(model: T): T {
+  return ((model && getSettings().retiredModels[model]) || model) as T;
 }
 
 /**
