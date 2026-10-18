@@ -482,6 +482,8 @@ export interface Session {
   /** Tokens currently in the context window, and the window's size. */
   contextUsed: number | null;
   contextLimit: number | null;
+  /** Its conversation was compacted: it goes on from a summary. */
+  compacted?: boolean;
   tokens: TokenTotals;
 
   claim: number;

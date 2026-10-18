@@ -497,6 +497,7 @@ export class ClaudeFold {
   private contextUsed: number | null = null;
   private observedMax = 0;
   private autoCompactPre = 0;
+  private compacted = false;
   private hits: { at: number; detail: string }[] = [];
   /** The API error the turn ended on, until a prompt or a real answer follows. */
   private turnError: { at: number; kind: "output-cap" | "transient" | "fatal"; detail: string } | null = null;
@@ -600,6 +601,7 @@ export class ClaudeFold {
         }
         else if (r.subtype === "scheduled_task_fire") this.turnOpen = true;
         else if (r.subtype === "compact_boundary") {
+          this.compacted = true;
           const meta = r.compactMetadata ?? {};
           if (meta.trigger === "auto" && typeof meta.preTokens === "number") {
             this.autoCompactPre = Math.max(this.autoCompactPre, meta.preTokens);
@@ -939,6 +941,7 @@ export class ClaudeFold {
       lastTurnAt: this.lastTurnAt,
       cacheTtlMs: this.cacheTtlMs,
       turnOpen: this.turnOpen,
+      compacted: this.compacted,
       // Background-task notifications queue too; only messages are shown.
       queued: this.queue.filter((q) => classifyUserText(q.text) === "prompt").map((q) => ({ ...q })),
       // Still queued with no turn to take it: Claude never delivered it (an

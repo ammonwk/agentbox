@@ -486,6 +486,10 @@ function pastIt(s: Session, freshOver: number): string | null {
   if (s.status === "closed") return "it was closed";
   if (s.limitHit) return "it stopped at a usage limit";
   if ((s.contextUsed ?? 0) > freshOver) return `it held ${Math.round(s.contextUsed! / 1000)}k tokens of context, over the ${Math.round(freshOver / 1000)}k this schedule keeps one session to`;
+  // What the handover at freshOver is for: a session that grew past it between
+  // notes and compacted goes on from a summary, without the instructions it
+  // read at its start (the steward's ripatw5c, 274k to 7k on 2026-10-17).
+  if (s.compacted) return "it was compacted, so it goes on from a summary without what it read at its start";
   return null;
 }
 
