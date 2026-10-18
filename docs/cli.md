@@ -127,8 +127,10 @@ why). Arming the same wait twice is one wait.
                                     # started last instead of starting another, skips
                                     # the time while that one is mid-turn, and starts a
                                     # fresh one (closing the old) once it is gone or
-                                    # holds over --fresh-over tokens of context. Either
-                                    # flag works without the other
+                                    # holds over --fresh-over tokens of context. One
+                                    # compacted since the last note is kept, and that
+                                    # note carries the prompt again. Either flag works
+                                    # without the other
     agentbox schedules              # what is set to start: id  in  when · agent · title,
                                     # and for those: its session, its command, its last note
     agentbox unschedule <id>...     # it will not start

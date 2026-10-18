@@ -482,8 +482,8 @@ export interface Session {
   /** Tokens currently in the context window, and the window's size. */
   contextUsed: number | null;
   contextLimit: number | null;
-  /** Its conversation was compacted: it goes on from a summary. */
-  compacted?: boolean;
+  /** When its conversation was last compacted: it goes on from a summary. */
+  compactedAt?: number;
   tokens: TokenTotals;
 
   claim: number;
@@ -1466,6 +1466,7 @@ export interface Schedule {
    * typed into it. A new one is started, and the old one closed, when that
    * session is gone, closed, stopped at a limit, or holds more context than
    * `freshOver`. While it is mid-turn or showing a prompt, that time is skipped.
+   * The first note after it was compacted carries the prompt too.
    */
   sameSession: boolean;
   /** Tokens of context past which a `sameSession` schedule starts afresh;
