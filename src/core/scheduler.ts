@@ -26,7 +26,8 @@
  * session the schedule started last, so its prompt cache stays warm between
  * notes, until that one is gone or has grown past `freshOver`: then a new one
  * takes over and the old one is closed, so it never becomes one huge cold
- * context. An agent's message to the old one goes to the new one
+ * context. One compacted since the last note is kept, and the next note
+ * carries the prompt again, so it has what it read at its start. An agent's message to the old one goes to the new one
  * (`Fleet.heir`). A session mid-turn is never typed into or closed: that time
  * is skipped, and the command says what is still true the next time; one that
  * was replaced and then got busy before it could be closed is closed once its
@@ -359,7 +360,12 @@ export class Scheduler {
     if (last && (last.status === "running" || last.status === "blocked")) return busy;
     const over = last ? pastIt(last, s.freshOver ?? FRESH_OVER) : null;
     if (last && !over) {
-      const text = note ?? s.spec.prompt;
+      // Compacted since it was last spoken to, it goes on from a summary
+      // without what it read at its start: its prompt goes again, once.
+      const compacted = (last.compactedAt ?? 0) > (s.lastRunAt ?? 0);
+      const text = compacted && note && s.spec.prompt
+        ? `${note}\n\n[agentbox: you were compacted since this schedule last spoke to you, so here is what it started you with again]\n\n${s.spec.prompt}`
+        : note ?? s.spec.prompt;
       if (!text) return { quiet: "it has neither a note nor a prompt to say" };
       try {
         await this.fleet.note(last.id, `${scheduleSentMark(s.id)} ${text}`);

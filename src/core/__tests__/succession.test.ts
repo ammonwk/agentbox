@@ -130,6 +130,31 @@ describe("a schedule that keeps to one session", () => {
     expect(calls).toEqual(["handOver old→new", "handOver old→new", "close old"]);
     expect(getSchedule("st1")!.retiring).toBeNull();
   });
+
+  test("one compacted since its last note is kept, and that note carries the prompt again, once", async () => {
+    let now = NOW;
+    const steward = session("steward", { compactedAt: NOW + 30_000, contextUsed: 35_000 });
+    const notes: string[] = [];
+    const fleet = {
+      get: () => steward,
+      note: async (_id: string, text: string) => void notes.push(text),
+    } as unknown as Fleet;
+    insertSchedule({
+      id: "st2", rule: { kind: "every", minutes: 10, from: NOW }, spec: { provider: "claude", cwd: dir, worktree: false, prompt: "read the manual" } as Schedule["spec"],
+      label: "Steward", enabled: true, nextAt: NOW + 600_000, createdAt: NOW, lastRunAt: NOW, lastSessionId: "steward", lastError: null,
+      noteCmd: "echo 'PR 9 is red'", sameSession: true, freshOver: 600_000, retiring: null,
+    });
+    const scheduler = new Scheduler(fleet, () => {}, () => now);
+
+    now = NOW + 60_000;
+    expect(await scheduler.runNow("st2")).toBe("steward");
+    now = NOW + 120_000;
+    expect(await scheduler.runNow("st2")).toBe("steward");
+    expect(notes).toEqual([
+      "[via agentbox schedule st2] PR 9 is red\n\n[agentbox: you were compacted since this schedule last spoke to you, so here is what it started you with again]\n\nread the manual",
+      "[via agentbox schedule st2] PR 9 is red",
+    ]);
+  });
 });
 
 test("late pane discovery attaches only the proven new provider identity, preserving an alias", () => {

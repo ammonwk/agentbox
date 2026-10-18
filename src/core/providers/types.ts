@@ -163,6 +163,9 @@ export interface TranscriptFacts {
    * by the fleet; on its own it cannot tell a working agent from a killed one.
    */
   turnOpen: boolean;
+  /** When the conversation was last compacted: from then it goes on from a
+   *  summary, without what it read before. Absent when the provider does not say. */
+  compactedAt?: number | null;
   /**
    * The turn is over because the provider stopped it, not because it was
    * done: the reply cut off by the output cap, a transient API error, or
