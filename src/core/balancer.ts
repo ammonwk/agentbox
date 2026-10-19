@@ -89,18 +89,28 @@ export interface PlaceRequest {
 const HOUR = 3_600_000;
 const WEEK = 7 * 24 * HOUR;
 
-/** "402 … Insufficient account funds": the account cannot pay, whatever its
- *  usage windows say. Not a rate limit: waiting a few minutes changes nothing. */
+/** "402 … Insufficient account funds": the account cannot pay. OpenCode Go
+ *  answers this when one of its windows is spent (it falls back to the Zen
+ *  balance, which is empty), so the windows usually say it first. */
 const UNFUNDED = /\b402\b|insufficient (?:account )?(?:funds|balance|credits?)|payment required|out of credits/i;
 /** How long such a refusal rules the account out, when no window says when
  *  it resets: long enough not to feed it a session an hour, short enough that
  *  one topped up is tried again the same day. */
 export const UNFUNDED_HOLD_MS = 12 * HOUR;
 
-/** The newest refusal for want of funds among an account's limit stops, while it still holds. */
-export function unfundedSince(hits: { at: number; detail: string }[], now: number): { at: number; detail: string } | null {
+/** The newest refusal for want of funds among an account's limit stops, while
+ *  it still holds: until `UNFUNDED_HOLD_MS` has passed, or the provider's own
+ *  usage, read since, has no window at its limit (Go's 5-hour window reset). */
+export function unfundedSince(
+  hits: { at: number; detail: string }[],
+  now: number,
+  usage?: { at: number | null; windows: UsageWindow[] },
+): { at: number; detail: string } | null {
   const hit = hits.filter((h) => UNFUNDED.test(h.detail)).sort((a, b) => b.at - a.at)[0];
-  return hit && now - hit.at < UNFUNDED_HOLD_MS ? hit : null;
+  if (!hit || now - hit.at >= UNFUNDED_HOLD_MS) return null;
+  const readSince = usage?.at != null && usage.at > hit.at && usage.windows.length > 0;
+  if (readSince && usage!.windows.every((w) => w.scope || usedNow(w, now) < 100)) return null;
+  return hit;
 }
 
 /** A window longer than the week (omp's monthly) that is spent and has not
@@ -301,27 +311,33 @@ function evaluate(
 
   if (!state.account.enabled) {
     c.eligible = false;
+    c.wall = true;
     c.reason = "turned off for new sessions";
   } else if (state.loggedOut) {
     c.eligible = false;
+    c.wall = true;
     c.reason = "not logged in";
   } else if (state.refused) {
     // Whoever meters it: a route that answers nothing runs nothing.
     const r = state.refused;
     c.eligible = false;
     c.refused = true;
+    c.wall = true;
     c.reason = `${req.model ?? "its model"} is refused here: ${r.sessions} sessions stand refused, the last at ${clockOf(r.at)} (${r.detail.replace(/\s+/g, " ").slice(-80)}), and none has answered since; tried again ${clockOf(r.until)}`;
   } else if (req.unmetered) {
     // Nothing of this account's will be used: no limit of its is in the way.
   } else if (spentLongWindow(state.windows, now)) {
     const w = spentLongWindow(state.windows, now)!;
     c.eligible = false;
+    c.wall = true;
     c.reason = `${w.label.toLowerCase()} limit reached (${round1(usedNow(w, now))}%)${w.resetsAt ? `, resets ${dayOf(w.resetsAt)}` : ""}`;
   } else if (state.unfunded) {
     c.eligible = false;
+    c.wall = true;
     c.reason = `out of funds: its provider refused a session at ${clockOf(state.unfunded.at)} (${state.unfunded.detail.replace(/\s+/g, " ").slice(-80)}); tried again ${dayOf(state.unfunded.at + UNFUNDED_HOLD_MS)}`;
   } else if (atShortLimit(c)) {
     c.eligible = false;
+    c.wall = true;
     c.reason = `5-hour limit reached (${c.short}%)`;
   } else if (runsOut(c)) {
     c.eligible = false;
@@ -334,6 +350,7 @@ function evaluate(
         : `weekly limit reached (${c.weekly}%)`;
   } else if (scoped && usedNow(scoped, now) + outstanding >= 100) {
     c.eligible = false;
+    c.wall = usedNow(scoped, now) >= 100;
     c.reason = `${scoped.scope!.model} weekly limit reached (${round1(usedNow(scoped, now))}%)`;
   }
 
@@ -443,12 +460,12 @@ export function place(req: PlaceRequest): Placement {
     // Claims are estimates. When every account is spoken for but some still
     // has real weekly left, refusing outright would leave work undone that the
     // accounts could in fact do — so overflow onto the least-claimed one, and
-    // say so. Only a truly exhausted (or switched-off) fleet refuses — and
-    // an account at its 5-hour limit is exhausted for now, estimate or not.
-    // One on pace to run out goes last: overflow is for estimates that
+    // say so. Only what claims ruled out is open to it: an account behind a
+    // wall (`Candidate.wall`) stops a session on its first call, estimate or
+    // not. One on pace to run out goes last: overflow is for estimates that
     // overran, and a measured pace is not an estimate.
     const open = candidates
-      .filter((c) => req.accounts.find((a) => a.account.id === c.accountId)?.account.enabled && !c.refused && (c.weekly === null || c.weekly < 100) && !atShortLimit(c))
+      .filter((c) => !c.wall && (c.weekly ?? 0) < 100)
       .sort(
         (a, b) =>
           Number(runsOut(a)) - Number(runsOut(b)) ||
@@ -478,7 +495,7 @@ export function place(req: PlaceRequest): Placement {
       ...base,
       accountId: null,
       mode: "none",
-      why: `every ${req.provider} account is at its weekly or 5-hour limit, or turned off — pick one by hand to go anyway`,
+      why: `no ${req.provider} account can take a session (${ordered[0]!.label}: ${ordered[0]!.reason}) — pick one by hand to go anyway`,
     };
   }
 

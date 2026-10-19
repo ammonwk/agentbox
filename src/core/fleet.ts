@@ -41,6 +41,7 @@ import {
   insertAssignment,
   insertBtw,
   insertRateLimitHit,
+  accountAtTime,
   rateLimitHitsSince,
   windowSpentAt,
   modelOutcomesSince,
@@ -1425,8 +1426,13 @@ export class Fleet extends EventEmitter {
       last.turnOpen = f.turnOpen;
     }
 
+    // A hit is the account's it happened on: one read just after a move
+    // (the old process's last retry) is not the new account's.
     if (t.hitsSeen < 0) t.hitsSeen = 0;
-    for (const hit of f.rateLimitHits.slice(t.hitsSeen)) insertRateLimitHit(id, rec.accountId && this.ownerOf(rec.accountId), hit.at, hit.detail);
+    for (const hit of f.rateLimitHits.slice(t.hitsSeen)) {
+      const on = accountAtTime(id, hit.at) ?? rec.accountId;
+      insertRateLimitHit(id, on && this.ownerOf(on), hit.at, hit.detail);
+    }
     t.hitsSeen = f.rateLimitHits.length;
 
     if (f.usage && f.usage.at > t.lastUsageAt && rec.accountId) {
@@ -2671,7 +2677,8 @@ export class Fleet extends EventEmitter {
     );
     return mine
       .map((a) => {
-        const windows = this.deps.usage.usageOf(a.id)?.windows ?? [];
+        const usage = this.deps.usage.usageOf(a.id);
+        const windows = usage?.windows ?? [];
         const short = windows.find((w) => w.kind === "short" && !w.scope);
         return {
           account: a,
@@ -2684,7 +2691,7 @@ export class Fleet extends EventEmitter {
             : [],
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
-          unfunded: unfundedSince(hits.filter((h) => h.accountId === a.id), this.now()),
+          unfunded: unfundedSince(hits.filter((h) => h.accountId === a.id), this.now(), usage ?? undefined),
           refused: refused.get(a.id) ?? null,
         };
       });
