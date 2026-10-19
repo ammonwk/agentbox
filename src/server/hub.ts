@@ -87,9 +87,10 @@ export function headroomOf(views: AccountView[]): NodeHeadroom[] {
     provider: a.provider,
     label: a.label,
     eligible: a.placement?.eligible ?? false,
-    weekly: a.placement?.weekly ?? null,
+    // The budget that runs out first: the weekly, or Go's monthly with less left.
+    weekly: a.placement?.budget?.used ?? null,
     short: a.placement?.short ?? null,
-    weeklyResetsAt: a.placement?.weeklyResetsAt ?? null,
+    weeklyResetsAt: a.placement?.budget?.resetsAt ?? null,
     shortResetsAt: a.placement?.shortResetsAt ?? null,
   }));
 }

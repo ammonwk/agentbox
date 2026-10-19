@@ -392,8 +392,18 @@ function findingsOf(d: UsageInsights, titleOf: TitleOf): { tone?: "warn"; text: 
     out.push({
       text: (
         <>
-          A weekly point here was worth about <b>{money(w.perPoint)}</b> at API prices, so the whole week's allowance is roughly{" "}
+          A weekly point on this plan is worth about <b>{money(w.perPoint)}</b> at API prices, so the whole week's allowance is roughly{" "}
           {money(w.perPoint * 100)}.
+        </>
+      ),
+    });
+  }
+  if (w?.outside && w.outside >= 1) {
+    out.push({
+      text: (
+        <>
+          About <b>{Math.round(w.outside)} of the {Math.round(w.gained)} points</b> it rose by were spent where agentbox could not see: the
+          browser, another machine, a CLI it does not run.
         </>
       ),
     });
@@ -424,7 +434,7 @@ function Tiles({ data, total }: { data: UsageInsights; total: number }) {
         <Tile
           label="Weekly bar"
           value={`+${Math.round(w.gained)} pts`}
-          note={w.perPoint ? `≈ ${money(w.perPoint)} a point` : "too little movement to price a point"}
+          note={w.perPoint ? `≈ ${money(w.perPoint)} a point${w.outside ? ` · ${Math.round(w.outside)} outside agentbox` : ""}` : "its plan has no price yet"}
         />
       ) : null}
       {data.agents ? (
@@ -525,7 +535,7 @@ function Composition({ spend, provider }: { spend: Spend; provider: UsageInsight
 
 // ------------------------------------------------------------------ timeline
 
-function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
+export function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
   const ref = useRef<T>(null);
   const [w, setW] = useState(0);
   useLayoutEffect(() => {
@@ -540,7 +550,7 @@ function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] 
 }
 
 /** A tidy axis maximum and its ticks: 1, 2 or 5 times a power of ten. */
-function niceTicks(max: number, count = 3): number[] {
+export function niceTicks(max: number, count = 3): number[] {
   if (max <= 0) return [0];
   const raw = max / count;
   const mag = 10 ** Math.floor(Math.log10(raw));

@@ -25,8 +25,9 @@ import { basename, join } from "node:path";
 import { owners } from "./accounts/homes";
 import { elsewhere, place, type AccountState } from "./balancer";
 import { claimFor, listedClaim } from "./claim";
-import { Attributor, claimsByAccount, consumedBy, type ClaimInput } from "./claims";
+import { claimsByAccount, type ClaimInput } from "./claims";
 import { Forecaster } from "./forecast";
+import { Rates } from "./rates";
 import {
   attachDiscoveredSpawn,
   dismissBtw,
@@ -52,6 +53,7 @@ import {
   listClosedRecords,
   listOpenWaits,
   listSessionRecords,
+  tokenSampleAt,
   updateSessionRecord,
   usageSamplesSince,
   type SessionRecord,
@@ -122,7 +124,7 @@ import {
 } from "./recovery";
 import { agentboxHome } from "./paths";
 import { openReader, pruneReaderStates, saveReaderState } from "./readercache";
-import { UNFUNDED_HOLD_MS, unfundedSince, weeklyWindow } from "./balancer";
+import { UNFUNDED_HOLD_MS, unfundedSince } from "./balancer";
 import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusals";
 import { statedUntil, statedWaitMs } from "./retrywait";
 import { retryClock } from "./attention";
@@ -367,9 +369,9 @@ export class Fleet extends EventEmitter {
   private lastDiscovery = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking: Promise<void> | null = null;
-  private attributor = new Attributor();
-  readonly forecaster = new Forecaster();
-  private lastWeekly = new Map<string, string>();
+  /** What a percent of each account's limits is worth (rates.ts). */
+  readonly rates = new Rates(() => this.now());
+  readonly forecaster = new Forecaster((id) => this.rates.price(id));
   /** Providers whose sessions can wake on another account: the adapter can
    *  move a session, and there is another account to move it to. */
   private movable = new Set<ProviderId>();
@@ -683,7 +685,6 @@ export class Fleet extends EventEmitter {
     }
 
     this.linkParents(since);
-    this.observeUsage(now);
     this.reapDeadPanes(now);
     this.reapParked(now);
     this.rebuildViews(since, now);
@@ -1446,31 +1447,6 @@ export class Fleet extends EventEmitter {
     if (f.usage && f.usage.at > t.lastUsageAt && rec.accountId) {
       t.lastUsageAt = f.usage.at;
       this.deps.usage.ingestRollout?.(this.ownerOf(rec.accountId), f.usage);
-    }
-  }
-
-  /** Feed each account's newest weekly reading to the attributor once. */
-  private observeUsage(now: number): void {
-    const records = listSessionRecords(now - 8 * DAY);
-    const accounts = listAccounts();
-    const owner = owners(accounts);
-    for (const account of accounts) {
-      // A twin's rises are its owner's rises; attributing both would count
-      // every point twice. The owner takes the twin's sessions instead.
-      if (owner.get(account.id) !== account.id) continue;
-      const pool = new Set(accounts.filter((o) => owner.get(o.id) === account.id).map((o) => o.id));
-      const usage = this.deps.usage.usageOf(account.id);
-      const weekly = usage ? weeklyWindow(usage.windows) : null;
-      if (!usage?.at || !weekly) continue;
-      const key = `${usage.at}:${weekly.usedPct}`;
-      if (this.lastWeekly.get(account.id) === key) continue;
-      this.lastWeekly.set(account.id, key);
-      const ids = records.filter((r) => r.accountId && pool.has(r.accountId)).map((r) => r.id);
-      this.attributor.observe(
-        account.id,
-        { windowId: weekly.id, at: usage.at, usedPct: weekly.usedPct, resetsAt: weekly.resetsAt },
-        ids,
-      );
     }
   }
 
@@ -2636,7 +2612,29 @@ export class Fleet extends EventEmitter {
         expected: this.forecaster.expected({ sessionId: s.id, provider: s.provider, accountId: s.accountId, startedAt: s.startedAt, open: running }, now),
       });
     }
-    return claimsByAccount(inputs, consumedBy(inputs.map((i) => i.sessionId)), now);
+    this.refreshRates();
+    const consumed = new Map(inputs.map((i) => [i.sessionId, this.consumedOf(i.sessionId, i.accountId, i.since, now)]));
+    return claimsByAccount(inputs, consumed, now);
+  }
+
+  /** Weekly points a session has used on an account since `since`: what it
+   *  spent there, at the account's plan's price. 0 where there is no price yet. */
+  private consumedOf(sessionId: string, accountId: string, since: number, now: number): number {
+    const price = this.rates.price(accountId);
+    if (!price) return 0;
+    const spent = (tokenSampleAt(sessionId, now)?.costEquiv ?? 0) - (tokenSampleAt(sessionId, since)?.costEquiv ?? 0);
+    return Math.max(0, spent) * price;
+  }
+
+  /** Refit what each account's percent is worth, when it is due (rates.ts). */
+  refreshRates(): void {
+    const all = listAccounts();
+    const owner = owners(all);
+    const mine = all.filter((a) => owner.get(a.id) === a.id);
+    this.rates.refresh(
+      mine.map((a) => ({ id: a.id, provider: a.provider, label: a.label, plan: a.plan, windows: this.deps.usage.usageOf(a.id)?.windows ?? [] })),
+      (id) => owner.get(id) ?? id,
+    );
   }
 
   /** The accounts whose weekly points price a claim on `provider`. */
@@ -2701,6 +2699,7 @@ export class Fleet extends EventEmitter {
                 .map((r) => ({ at: r.at, usedPct: r.usedPct, resetsAt: r.resetsAt }))
             : [],
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
+          perWeekly: this.rates.perWeeklyOf(a.id, windows),
           loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
           unfunded: unfundedSince(hits.filter((h) => h.accountId === a.id), this.now(), usage ?? undefined),
           refused: refused.get(a.id) ?? null,
@@ -3027,7 +3026,7 @@ export class Fleet extends EventEmitter {
       }
     }
     const settings = getSettings();
-    const consumed = consumedBy([rec.id]).get(rec.id) ?? 0;
+    const consumed = this.consumedOf(rec.id, from.id, 0, this.now());
     // It claims afresh, and the claim is its model's: what it used before it
     // went cold was used, and the balancer should count what it is about to.
     const fresh = this.claimOf(rec.provider, view.model, rec.effort ?? null, false);

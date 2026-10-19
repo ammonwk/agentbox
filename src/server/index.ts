@@ -43,7 +43,7 @@ import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, write
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { contextDocs, readContextDoc, writeContextDoc } from "./context";
 import { briefingText } from "../core/providers/briefing";
-import { addRepo, deleteRepo, getDb, resolveSessionRefs, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
+import { addRepo, deleteRepo, getDb, getKv, resolveSessionRefs, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
@@ -1713,14 +1713,19 @@ const router = new Router(mapError)
         homes: mine.map((h) => h.home),
         days,
         known: (k) => known.get(k) ?? null,
+        weeklyId: accountViews().find((a) => a.id === id)?.usage.windows.find((w) => w.kind === "weekly" && !w.scope)?.id ?? null,
+        price: fleet.rates.price(id),
+        outside: (from, to) => fleet.rates.split(id, from, to)?.outside ?? null,
       }),
     );
   })
-  .add("GET", "/api/calibration", ({ url }) => {
+  .add("GET", "/api/calibration", async ({ url }) => {
     const days = Math.min(60, Math.max(1, Number(url.searchParams.get("days") ?? 7) || 7));
     const homes = accounts.list();
     const owner = owners(homes);
-    return json(calibrate(fleet.forecaster.report(homes.filter((a) => owner.get(a.id) === a.id), Date.now()), days));
+    fleet.refreshRates();
+    await fleet.rates.settled();
+    return json(calibrate(fleet.forecaster.report(homes.filter((a) => owner.get(a.id) === a.id), Date.now()), fleet.rates, days));
   })
 
   // ---- settings, repos, worktrees, skills
@@ -2291,6 +2296,7 @@ export async function startServer(): Promise<void> {
   setInterval(checkBuild, BUILD_POLL_MS).unref?.();
   watchPwaDesktop();
   startNightlyReclaim(() => fleet.sessions());
+  setInterval(() => void sayRateChanges(), RATE_CHANGES_MS).unref?.();
 
   fleet.on("sessions", () => {
     notifyBlocked(
@@ -2324,6 +2330,23 @@ export async function startServer(): Promise<void> {
   for (const ws of waiting) welcome(ws);
   waiting.clear();
   console.log(`agentbox ready in ${((performance.now() - bootStarted) / 1000).toFixed(1)}s (${phases.join(", ")})`);
+}
+
+/** How often what a percent of each plan is worth is checked for a change. */
+const RATE_CHANGES_MS = 60 * 60_000;
+
+/** A card for each change in what a plan's percent is worth (`Rates.changes`):
+ *  said once per change, not every day until it is the new normal. */
+async function sayRateChanges(): Promise<void> {
+  try {
+    fleet.refreshRates();
+    await fleet.rates.settled();
+    const { changes, seen } = fleet.rates.changes(getKv<Record<string, number>>("rate-changes") ?? {});
+    setKv("rate-changes", seen);
+    for (const c of changes) cards.add({ kind: "note", title: c.title, short: c.short, key: c.key });
+  } catch (e) {
+    console.error("agentbox: checking what the plans are worth failed:", e);
+  }
 }
 
 async function listenOnTailnet(

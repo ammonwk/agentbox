@@ -92,7 +92,7 @@ describe("what a transcript says of its model", () => {
 });
 
 describe("placing on a refused route", () => {
-  const settings: BalancerSettings = { claimNormal: 3, shortWindowInWeekly: 24, claimIdleMin: 60, resetHorizonMin: 60, shortLoadPct: 50 };
+  const settings: BalancerSettings = { claimNormal: 3, claimIdleMin: 60, resetHorizonMin: 60, shortLoadPct: 50 };
   const acct = (id: string, isRefused: boolean): AccountState => ({
     account: { id, label: id, enabled: true },
     windows: [{ id: "weekly", kind: "weekly", label: "weekly", usedPct: 10, resetsAt: NOW + 5 * 24 * 60 * M, windowMs: 7 * 24 * 60 * M }],

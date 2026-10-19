@@ -168,6 +168,7 @@ function AccountCard({
   const claims = a.claims;
   const outstanding = outstandingOf(claims);
   const windows = sortWindows(a.usage.windows);
+  const weeklyId = windows.find((w) => w.kind === "weekly" && !w.scope)?.id;
   const hue = accountHue(a.id, state.accounts);
   const c = a.placement;
 
@@ -288,7 +289,7 @@ function AccountCard({
               key={w.id}
               window={w}
               now={now}
-              outstanding={w.kind === "weekly" && !w.scope ? outstanding : 0}
+              outstanding={w.kind !== "short" && !w.scope ? outstanding * (c?.perWeekly[w.id] ?? (w.kind === "weekly" ? 1 : 0)) : 0}
               forecast={w.kind === "short" && !w.scope && c?.shortEffective != null ? { at: c.shortEffective, how: shortForecastHow(c.shortPace) } : null}
             />
           ))
@@ -390,7 +391,15 @@ function AccountCard({
                   · filling {fmtPts(c.shortPace)}%/h
                 </span>
               ) : null}
-              {c.weeklyPerHour != null ? <> · {c.weeklyPerHour.toFixed(2)} wk/h left</> : null}
+              {c.perHour != null ? (
+                <span title={`Weekly points left of its ${c.budget?.label.toLowerCase() ?? "budget"} per hour until it resets: the limit that runs out first, counting claims`}>
+                  {" "}
+                  · {c.perHour.toFixed(2)} wk/h left
+                  {c.budget && c.budget.id !== weeklyId
+                    ? ` (its ${c.budget.label.toLowerCase()} binds: ${fmtPts(Math.max(0, c.budget.left))} pts${c.budget.resetsAt ? ` until ${new Date(c.budget.resetsAt).toLocaleDateString([], { month: "short", day: "numeric" })}` : ""})`
+                    : null}
+                </span>
+              ) : null}
             </span>
           ) : (
             <span>

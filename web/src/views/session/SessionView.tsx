@@ -603,7 +603,7 @@ export function Detail({
   // on, and the usage of the account it spends. The rest is in the provider's
   // tooltip.
   const inBar = !!sysbarSlot && !phone;
-  const tokensTitle = `input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit usage is apportioned in.\nStarted ${new Date(session.startedAt).toLocaleString()}`;
+  const tokensTitle = `input ${session.tokens.input.toLocaleString()} · output ${session.tokens.output.toLocaleString()} · cache read ${session.tokens.cacheRead.toLocaleString()} · cache write ${session.tokens.cacheWrite.toLocaleString()}\nCost is what these tokens would cost at API prices — the common unit a plan's points are priced in.\nStarted ${new Date(session.startedAt).toLocaleString()}`;
   const barFacts = (
     <div className="sx-facts">
       <CopyButton className="fact mono sys-sid" text={session.id} label={session.id} />

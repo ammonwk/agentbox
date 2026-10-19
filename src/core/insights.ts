@@ -523,6 +523,12 @@ export interface InsightsInput {
   days: number;
   /** The board's session for a provider session id. */
   known: (agentSessionId: string) => Known | null;
+  /** Its unscoped weekly window's id, where it has one. */
+  weeklyId: string | null;
+  /** Weekly points per API-dollar on its plan (`Rates.price`), and how much
+   *  of a span's rise agentbox did not see (`Rates.split`). */
+  price: number | null;
+  outside: (from: number, to: number) => number | null;
 }
 
 export async function usageInsights(input: InsightsInput): Promise<UsageInsights> {
@@ -536,12 +542,12 @@ export async function usageInsights(input: InsightsInput): Promise<UsageInsights
     provider: input.account.provider,
     from,
     to,
-    weekly: weeklyOf(input.accountIds, from, to),
+    weekly: weeklyOf(input, from, to),
     limitHits: rateLimitHitsSince(from).filter((h) => h.accountId && input.accountIds.includes(h.accountId)).map((h) => h.at),
   };
   if (input.account.provider !== "claude" && input.account.provider !== "codex") {
     const r = fromSamples(input, from, hours);
-    return finish({ ...base, ...r, source: "samples", scan: { files: 0, bytes: 0, ms: Math.round(performance.now() - started) } });
+    return { ...base, ...r, source: "samples", scan: { files: 0, bytes: 0, ms: Math.round(performance.now() - started) } };
   }
 
   const stats = { files: 0, bytes: 0 };
@@ -665,7 +671,7 @@ export async function usageInsights(input: InsightsInput): Promise<UsageInsights
   }
   rebuilds.sort((a, b) => b.cost - a.cost);
 
-  return finish({
+  return {
     ...base,
     source: "transcripts",
     scan: { files: stats.files, bytes: stats.bytes, ms: Math.round(performance.now() - started) },
@@ -687,7 +693,7 @@ export async function usageInsights(input: InsightsInput): Promise<UsageInsights
     agents: agentFiles
       ? { count: agentFiles, spend: agentTotal, byType: [...byType].map(([type, b]) => ({ type, ...b })).sort((a, b) => b.cost - a.cost) }
       : null,
-  });
+  };
 }
 
 /** Five or more sessions rebuilding within ten minutes, after a wait of at
@@ -708,15 +714,12 @@ function burstsOf(rebuilds: Rebuild[]): { at: number; sessions: number; cost: nu
   return out.sort((a, b) => b.cost - a.cost).slice(0, 5);
 }
 
-/** Cost per weekly point, now that the total is known. */
-function finish(r: UsageInsights): UsageInsights {
-  if (r.weekly && r.weekly.gained >= 5) r.weekly.perPoint = costOf(r.total) / r.weekly.gained;
-  return r;
-}
-
-/** The account's unscoped weekly window over the span, and how far it rose. */
-function weeklyOf(accountIds: string[], from: number, to: number): UsageInsights["weekly"] {
-  const rows = accountIds.flatMap((id) => usageSamplesSince(from, id)).filter((r) => r.kind === "weekly" && !r.windowId.includes(":") && r.at <= to);
+/** The account's unscoped weekly window over the span, how far it rose, what
+ *  a point of it is worth on its plan, and how much of the rise agentbox did
+ *  not see. Its own total over its own rise would charge agentbox's sessions
+ *  with use in the browser: the plan's price leaves that out (rates.ts). */
+function weeklyOf(input: InsightsInput, from: number, to: number): UsageInsights["weekly"] {
+  const rows = input.accountIds.flatMap((id) => usageSamplesSince(from, id)).filter((r) => r.windowId === input.weeklyId && r.at <= to);
   if (rows.length === 0) return null;
   // One series: the home, window and source with the most readings. Two
   // homes of one login each record it, and codex's endpoint and rollouts can
@@ -754,7 +757,15 @@ function weeklyOf(accountIds: string[], from: number, to: number): UsageInsights
     }
   }
   gained += hi - (first ? lo : 0);
-  return { points: pts.map((p) => ({ at: p.at, pct: p.usedPct })), gained, perPoint: null, limitAt, limitResetAt, atLimit: { calls: 0, cost: 0 } };
+  return {
+    points: pts.map((p) => ({ at: p.at, pct: p.usedPct })),
+    gained,
+    perPoint: input.price ? 1 / input.price : null,
+    outside: input.outside(from, to),
+    limitAt,
+    limitResetAt,
+    atLimit: { calls: 0, cost: 0 },
+  };
 }
 
 /** devin and omp: per-session totals from the samples agentbox took as they

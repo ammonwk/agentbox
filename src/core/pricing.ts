@@ -1,12 +1,11 @@
 /** Token → "cost-equivalent" dollars.
  *
  * Subscriptions do not bill per token, so these are not costs. They are a
- * common unit for splitting an account's observed usage increase across the
- * sessions that caused it: a session that read a million cached tokens on
- * Haiku did not use the same share as one that wrote a million output tokens
- * on Fable. Only the ratios matter, and only between sessions on one account,
- * so approximate prices are fine — but they are the published API prices
- * (per million tokens, first-party, as of 2026-06) rather than guesses.
+ * common unit for what agentbox's sessions spend, which a plan's points are
+ * priced in (rates.ts): a session that read a million cached tokens on Haiku
+ * did not use what one that wrote a million output tokens on Fable did. They
+ * are the published API prices (per million tokens, first-party, as of
+ * 2026-06) rather than guesses.
  */
 
 import type { TokenTotals } from "./types";

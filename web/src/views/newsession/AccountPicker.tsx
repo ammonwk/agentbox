@@ -234,6 +234,8 @@ export function AccountPicker({
   );
 }
 
+const BUDGET_TAG: Record<string, string> = { weekly: "wk", monthly: "mo", daily: "day" };
+
 /** Dot, label, plan, and the two bars that decide placement. */
 function AccountLine({ account: a, all, candidate: c }: { account: AccountView; all: AccountView[]; candidate: Candidate | null }) {
   const hue = accountHue(a.id, all);
@@ -251,7 +253,12 @@ function AccountLine({ account: a, all, candidate: c }: { account: AccountView; 
         effective={c?.shortEffective ?? null}
         forecast={shortForecastHow(c?.shortPace)}
       />
-      <MiniBar label="wk" used={c?.weekly ?? weekly?.usedPct ?? null} effective={c?.weeklyEffective ?? null} />
+      {c?.budget ? (
+        // The limit that runs out first: the weekly, or Go's monthly with less left.
+        <MiniBar label={BUDGET_TAG[c.budget.label.toLowerCase()] ?? c.budget.label.toLowerCase()} used={c.budget.used} effective={c.budget.effective} />
+      ) : (
+        <MiniBar label="wk" used={weekly?.usedPct ?? null} effective={null} />
+      )}
     </span>
   );
 }

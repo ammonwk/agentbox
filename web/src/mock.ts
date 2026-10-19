@@ -80,7 +80,6 @@ const settings: AgentSettings = {
   retiredModels: {},
   balancer: {
     claimNormal: 1.5,
-    shortWindowInWeekly: 24,
     claimIdleMin: 60,
     resetHorizonMin: 60,
     shortLoadPct: 50,
@@ -636,7 +635,8 @@ function candidateFor(a: MockAccount, now: number): Candidate {
   const weekly = weeklyW?.usedPct ?? null;
   const weeklyEffective = weekly == null ? null : weekly + outstanding;
   const short = shortW?.usedPct ?? null;
-  const shortEffective = short == null ? null : short + (outstanding * 100) / b.shortWindowInWeekly;
+  const shortPerWeekly = a.provider === "omp" ? 2.5 : 100 / 24;
+  const shortEffective = short == null ? null : short + outstanding * shortPerWeekly;
   let legRoom: number | null = null;
   if (shortEffective != null) {
     legRoom = Math.max(0, 100 - shortEffective);
@@ -674,7 +674,13 @@ function candidateFor(a: MockAccount, now: number): Candidate {
     reason,
     weekly,
     weeklyEffective,
-    weeklyResetsAt: weeklyW?.resetsAt ?? null,
+    budget:
+      weekly == null || weeklyEffective == null
+        ? null
+        : { id: weeklyW!.id, label: weeklyW!.label, used: weekly, effective: weeklyEffective, resetsAt: weeklyW!.resetsAt, left: 100 - weeklyEffective },
+    perHour: weeklyPerHour,
+    perWeekly: Object.fromEntries(a.usage.windows.map((w) => [w.id, w.kind === "short" ? shortPerWeekly : w.kind === "monthly" ? 0.5 : 1])),
+    need: shortW ? Math.round(b.claimNormal * shortPerWeekly * 10) / 10 : null,
     shortPace: null,
     shortRunsOutAt: null,
     short,
@@ -682,7 +688,6 @@ function candidateFor(a: MockAccount, now: number): Candidate {
     shortResetsAt: shortW?.resetsAt ?? null,
     legRoom,
     shortLoadTo: legRoom == null ? null : b.shortLoadPct,
-    weeklyPerHour,
     outstanding,
     score: eligible ? score : score - 1000,
   };
@@ -751,7 +756,7 @@ function placementFor(provider: ProviderId, manual?: string): Placement {
       ? second && second.legRoom != null && best.legRoom >= 12.5 && second.legRoom >= 12.5
         ? `${best.label} has the most weekly to use before it resets, and room in its 5-hour window.`
         : `${best.label} has the most 5-hour room after claims (${Math.round(best.legRoom)} vs ${second?.legRoom != null ? Math.round(second.legRoom) : "—"}).`
-      : `${best.label} has the most weekly left per hour until its reset (${best.weeklyPerHour?.toFixed(2)}/h).`;
+      : `${best.label} has the most weekly left per hour until its reset (${best.perHour?.toFixed(2)}/h).`;
   return { provider, accountId: best.accountId, mode: "auto", claim, candidates, why };
 }
 
@@ -1236,7 +1241,7 @@ function insights(accountId: string, days: number): UsageInsights {
     accountId, provider: "claude", from, to, source: "transcripts", scan: { files: 473, bytes: 77_635, ms: 508 }, total, hours,
     weekly: {
       points: Array.from({ length: n }, (_, i) => ({ at: from + i * H, pct: Math.min(100, (i / n) * 140) })),
-      gained: 100, perPoint: 45.2, limitAt: from + Math.round(n / 1.4) * H, limitResetAt: to + 2 * H, atLimit: { calls: 9435, cost: 1040 },
+      gained: 100, perPoint: 45.2, outside: 6, limitAt: from + Math.round(n / 1.4) * H, limitResetAt: to + 2 * H, atLimit: { calls: 9435, cost: 1040 },
     },
     models: [{ model: "claude-opus-5-5", calls: total.calls, cost: 3448 }],
     context: [
@@ -1267,11 +1272,31 @@ function insights(accountId: string, days: number): UsageInsights {
 function calibration(days: number): CalibrationReport {
   return {
     days,
-    shortWindowInWeekly: { estimate: 21.4, samples: 312 * (days / 7), r2: 0.83 },
+    rates: {
+      fittedAt: T0 - H,
+      plans: [
+        {
+          plan: "claude · max 20x",
+          provider: "claude",
+          weeklyId: "seven_day",
+          windows: [
+            { id: "five_hour", label: "5-hour", kind: "short", perWeekly: 4.13, samples: 127, r2: 0.98, cold: 100 / 24 },
+            { id: "seven_day", label: "Weekly", kind: "weekly", perWeekly: 1, samples: 0, r2: null, cold: null },
+          ],
+          price: 0.0383,
+          priceUnits: 140,
+          accounts: [
+            { id: "acc-work", label: "work", split: { ours: 82.8, outside: 0, units: 12 } },
+            { id: "acc-personal", label: "personal", split: { ours: 41.2, outside: 18.5, units: 9 } },
+          ],
+          history: Array.from({ length: 21 }, (_, i) => ({ at: T0 - (20 - i) * 24 * H, price: 1 / (26 + Math.sin(i / 3) * 2.5), perWeekly: { five_hour: 4.13 } })),
+        },
+      ],
+    },
     sessionUse: { p50: 3.1, p75: 5.8, p90: 9.4, samples: 73 },
     placements: 73,
     hitAfterPlacement: 4,
-    suggested: { shortWindowInWeekly: 21.4, claimNormal: 6 },
+    suggested: { claimNormal: 6 },
     current: structuredClone(settings.balancer) as BalancerSettings,
     forecast: {
       fittedAt: T0 - 3 * H,
@@ -1289,7 +1314,6 @@ function calibration(days: number): CalibrationReport {
     },
   };
 }
-
 // --------------------------------------------------------------- context
 
 const RULES_MAX = 4096;

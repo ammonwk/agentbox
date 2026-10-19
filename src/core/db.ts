@@ -424,6 +424,16 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE cards ADD COLUMN decided_by TEXT;
   ALTER TABLE superagents ADD COLUMN node TEXT;
   `,
+  // 31 — what a session consumed is what it spent at its plan's price
+  // (src/core/rates.ts), not a share of each rise of its account's weekly:
+  // a share charged it with use in the browser. And a 5-hour window's worth
+  // in weekly points is measured, not a setting.
+  `
+  DROP TABLE attributions;
+  UPDATE settings SET value = json_remove(value, '$.balancer.shortWindowInWeekly') WHERE key = 'agent' AND json_valid(value);
+  `,
+  // 32 — a plan is priced from its accounts' spending, read by time.
+  `CREATE INDEX IF NOT EXISTS token_samples_at ON token_samples (at);`,
 ];
 
 function migrate(d: Database) {
@@ -1147,13 +1157,6 @@ export function tokenSamplesSince(sinceMs: number): { sessionId: string; provide
     .all(sinceMs) as { sessionId: string; provider: string; model: string | null; placed: number; startedAt: number; at: number; costEquiv: number }[];
 }
 
-/** Weekly points attributed on `accountId` since `sinceMs`, per session. */
-export function attributionsSince(sinceMs: number, accountId: string): { sessionId: string; points: number }[] {
-  return getDb()
-    .query("SELECT session_id AS sessionId, SUM(points) AS points FROM attributions WHERE account_id = ? AND at >= ? GROUP BY session_id")
-    .all(accountId, sinceMs) as { sessionId: string; points: number }[];
-}
-
 /** A session's token samples after `sinceMs`, oldest first. */
 export function tokenSamplesAfter(sessionId: string, sinceMs: number): TokenSampleRow[] {
   const rows = getDb()
@@ -1162,24 +1165,27 @@ export function tokenSamplesAfter(sessionId: string, sinceMs: number): TokenSamp
   return rows.map((r) => ({ sessionId: r.session_id, at: r.at, input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, costEquiv: r.cost_equiv }));
 }
 
-export function insertAttribution(sessionId: string, accountId: string, at: number, points: number): void {
-  getDb().run("INSERT INTO attributions (session_id,account_id,at,points) VALUES (?,?,?,?)", [
-    sessionId, accountId, at, points,
-  ]);
+/** Every token sample in [`fromMs`, `toMs`), oldest first, as
+ *  `[session, at, cumulative cost-equivalent]`: what agentbox saw spent
+ *  (rates.ts). Read a day at a time, so it is never one long stall. */
+export function spendBetween(fromMs: number, toMs: number): [string, number, number][] {
+  return getDb()
+    .query("SELECT session_id, at, cost_equiv FROM token_samples WHERE at >= ? AND at < ? ORDER BY at")
+    .values(fromMs, toMs) as [string, number, number][];
 }
 
-/** Weekly points attributed to each session, summed. */
-export function attributedPoints(sessionIds: string[]): Map<string, number> {
-  const out = new Map<string, number>();
-  if (sessionIds.length === 0) return out;
-  const rows = getDb()
-    .query(
-      `SELECT session_id, SUM(points) AS points FROM attributions
-        WHERE session_id IN (${sessionIds.map(() => "?").join(",")}) GROUP BY session_id`,
-    )
-    .all(...sessionIds) as { session_id: string; points: number }[];
-  for (const r of rows) out.set(r.session_id, r.points);
-  return out;
+/** Every session's account (its home's owner) and start, by id. */
+export function sessionAccounts(): Map<string, { accountId: string | null; startedAt: number }> {
+  const rows = getDb().query("SELECT id, account_id, started_at FROM sessions").values() as [string, string | null, number][];
+  return new Map(rows.map(([id, accountId, startedAt]) => [id, { accountId, startedAt }]));
+}
+
+/** Every move of a session onto an account (its placements, wakes and
+ *  hops), oldest first. */
+export function sessionMoves(): { sessionId: string; at: number; accountId: string }[] {
+  return getDb()
+    .query("SELECT session_id AS sessionId, at, account_id AS accountId FROM assignments WHERE session_id IS NOT NULL AND account_id IS NOT NULL ORDER BY session_id, at")
+    .all() as { sessionId: string; at: number; accountId: string }[];
 }
 
 export interface AssignmentRow {
@@ -1428,7 +1434,6 @@ function remoteDefaultBranch(slug: string): string {
 
 export const DEFAULT_BALANCER: BalancerSettings = {
   claimNormal: 1.5,
-  shortWindowInWeekly: 24,
   claimIdleMin: 60,
   resetHorizonMin: 60,
   shortLoadPct: 50,

@@ -8,7 +8,6 @@ const NOW = 1_800_000_000_000;
 
 const settings: BalancerSettings = {
   claimNormal: 3,
-  shortWindowInWeekly: 24,
   claimIdleMin: 60,
   resetHorizonMin: 60,
   shortLoadPct: 50,
@@ -89,7 +88,7 @@ test("the account whose weekly resets soonest is used up first, however little i
   const b = acct("B", { short: 5, weekly: 25, weeklyResetsIn: 5 * D });
   const p = run([a, b]);
   expect(p.accountId).toBe("A");
-  expect(p.why).toContain("A's weekly resets soonest (in 1d 14h; B in 5d 0h), with 7 of it still to use");
+  expect(p.why).toContain("A's weekly resets soonest (in 1d 14h; B's in 5d 0h), with 7% of it still to use");
 });
 
 test("it is loaded until its 5-hour window is forecast half full, then the next to reset takes over", () => {

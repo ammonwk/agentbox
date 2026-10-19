@@ -174,8 +174,6 @@ export interface ClaimView {
 export interface BalancerSettings {
   /** Weekly points a normal session is assumed to use. */
   claimNormal: number;
-  /** Weekly points one full short (5-hour) window is worth. */
-  shortWindowInWeekly: number;
   /** A claim lapses after this long with no activity. */
   claimIdleMin: number;
   /** A short window this close to resetting is treated as partly fresh. */
@@ -196,13 +194,23 @@ export interface Candidate {
    *  (core/refusals.ts). */
   refused?: boolean;
   /** Not eligible on a fact rather than on claims (turned off, logged out,
-   *  refused, out of funds, a window other than the week spent): overflow,
-   *  which only overrides estimates, does not go there, nor to a spent week. */
+   *  refused, out of funds, a window spent): overflow, which only overrides
+   *  estimates, does not go there. */
   wall?: boolean;
   /** Weekly used, and with outstanding claims added. */
   weekly: number | null;
   weeklyEffective: number | null;
-  weeklyResetsAt: number | null;
+  /** The budget that runs out first with the claims on it: of the windows
+   *  longer than the 5-hour one (the weekly, Go's monthly, the model's own
+   *  weekly), the one with the fewest weekly points left. `used` and
+   *  `effective` are its own percent, `left` weekly points. Null with no
+   *  such window. */
+  budget: { id: string; label: string; used: number; effective: number; resetsAt: number | null; left: number } | null;
+  /** Weekly points left of `budget` per hour until it resets. */
+  perHour: number | null;
+  /** How many of each window's points one weekly point is here (rates.ts),
+   *  by window id: what claims were turned into each window's points with. */
+  perWeekly: Record<string, number>;
   /** Short window used (claude), and where it is headed: with a pace, where
    *  it stands at its reset if it keeps filling that fast, plus the claims of
    *  sessions too new for the pace to have seen; without one, with every
@@ -210,15 +218,15 @@ export interface Candidate {
   short: number | null;
   shortEffective: number | null;
   shortResetsAt: number | null;
+  /** This session's claim in the 5-hour window's points. */
+  need: number | null;
   /** 0–100: short-window room left by `shortEffective`, raised by reset
    *  proximity. */
   legRoom: number | null;
   /** How full the balancer will load the 5-hour window: `shortLoadPct`, or
-   *  more when its weekly needs more to be used up before it resets. A
+   *  more when its budget needs more to be used up before it resets. A
    *  session has room here while the window stays under that. */
   shortLoadTo: number | null;
-  /** Weekly points left per hour until the weekly reset. */
-  weeklyPerHour: number | null;
   /** 5-hour points an hour at the pace of the last readings; null when there
    *  are too few to say. */
   shortPace: number | null;
@@ -249,7 +257,7 @@ export interface Placement {
 export interface CalibrationReport {
   /** How many days of samples this is built from. */
   days: number;
-  shortWindowInWeekly: { estimate: number | null; samples: number; r2: number | null };
+  rates: RatesReport;
   sessionUse: Percentiles & { samples: number };
   placements: number;
   /** Placements followed by a rate-limit hit on the chosen account. */
@@ -257,6 +265,31 @@ export interface CalibrationReport {
   suggested: Partial<BalancerSettings>;
   current: BalancerSettings;
   forecast: ForecastReport;
+}
+
+/** What a percent of each limit is worth, per plan (src/core/rates.ts). */
+export interface RatesReport {
+  fittedAt: number;
+  plans: {
+    /** "claude · max 20x": the provider and its tier. */
+    plan: string;
+    provider: string;
+    weeklyId: string;
+    /** Its unscoped windows, the finest first. `perWeekly`: how many of the
+     *  window's points one weekly point is, measured; null where it is not
+     *  yet, and `cold` is in use. */
+    windows: { id: string; label: string; kind: WindowKind; perWeekly: number | null; samples: number; r2: number | null; cold: number | null }[];
+    /** Weekly points per API-dollar of agentbox's spending: the low edge of
+     *  what its stretches of work showed. Null until enough has been spent. */
+    price: number | null;
+    priceUnits: number;
+    /** Each account over the last seven days, in weekly points: what agentbox's
+     *  sessions spent at the price, and the rise it did not see. Null where
+     *  there is no price, or the finest window is the week (too coarse to tell). */
+    accounts: { id: string; label: string; split: { ours: number; outside: number; units: number } | null }[];
+    /** One per day, fitted over the week up to it. */
+    history: { at: number; price: number | null; perWeekly: Record<string, number> }[];
+  }[];
 }
 
 /** The table sessions' outstanding claims are forecast from (forecast.ts). */
@@ -385,8 +418,12 @@ export interface UsageInsights {
     points: { at: number; pct: number }[];
     /** Points it rose by (across a reset too). */
     gained: number;
-    /** API-equivalent dollars per weekly point, when it rose enough to say. */
+    /** API-equivalent dollars per weekly point on its plan (rates.ts); null
+     *  until the plan has a price. */
     perPoint: number | null;
+    /** Points of the rise agentbox's sessions did not spend (the browser,
+     *  another machine); null where that cannot be told. */
+    outside: number | null;
     /** When it first read 100%, and when that window reset. */
     limitAt: number | null;
     limitResetAt: number | null;
@@ -621,7 +658,7 @@ export interface TokenTotals {
   cacheRead: number;
   cacheWrite: number;
   /** What these tokens would have cost at API prices — the common unit that
-   *  lets usage be apportioned across sessions on different models. */
+   *  sessions on different models are priced in against a plan (rates.ts). */
   costEquiv: number;
 }
 
@@ -1773,7 +1810,8 @@ export interface NodeHeadroom {
   provider: AccountProvider;
   label: string;
   eligible: boolean;
-  /** Weekly and short-window use, percent. */
+  /** Its budget's use (`Candidate.budget`: the weekly, or a longer window
+   *  running out first) and the short window's, percent. */
   weekly: number | null;
   short: number | null;
   weeklyResetsAt: number | null;

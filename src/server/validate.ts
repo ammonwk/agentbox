@@ -122,7 +122,6 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
     const next: NonNullable<SettingsPatch["balancer"]> = {};
     const ranges: Record<string, [number, number]> = {
       claimNormal: [0, 100],
-      shortWindowInWeekly: [1, 100],
       claimIdleMin: [1, 24 * 60],
       resetHorizonMin: [0, 300],
       shortLoadPct: [1, 100],

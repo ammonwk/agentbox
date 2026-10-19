@@ -20,15 +20,14 @@
  * session wakes wherever there is room (claims.ts). It is fitted per
  * provider, since a dollar-equivalent of codex is not one of claude, from the
  * token samples the fleet records anyway (cost-equivalent, pricing.ts), and
- * turned into the account's weekly points by what that account's points have
- * lately cost.
+ * turned into the account's weekly points at its plan's price (rates.ts).
  *
  * Idle time, the spend of the last half hour and hour, the stretch's age, the
  * hour of day, the model and who started it were tried too; none adds to
  * these two.
  */
 
-import { attributionsSince, tokenSampleAt, tokenSamplesAfter, tokenSamplesSince } from "./db";
+import { tokenSampleAt, tokenSamplesAfter, tokenSamplesSince } from "./db";
 import { familyOf } from "./claim";
 import type { ForecastReport, ProviderId } from "./types";
 
@@ -225,10 +224,6 @@ export function expectedCost(table: ForecastTable, provider: string, r: Reading)
 /** The table is refitted this often, from this much history. */
 const REFIT_MS = DAY;
 const HISTORY_MS = 60 * DAY;
-/** What a weekly point costs is measured over this long, and needs this many points to say. */
-const RATE_SPAN_MS = 14 * DAY;
-const RATE_MIN_POINTS = 5;
-const RATE_TTL_MS = 60 * MIN;
 /** A session's forecast is recomputed this often. */
 const MEMO_MS = MIN;
 /** How far back a session's samples are read for its stretch. One running
@@ -246,15 +241,16 @@ export interface ForecastInput {
 
 /**
  * Forecasts for live sessions, from the database: the table refitted daily,
- * each account's weekly points per cost-equivalent hourly, each session's
- * answer for a minute.
+ * each session's answer for a minute, priced by `price` (`Rates.price`).
  */
 export class Forecaster {
   private table: ForecastTable = new Map();
   private starts: StartTable = new Map();
   private fittedAt = 0;
-  private rates = new Map<string, { at: number; perCost: number | null }>();
   private memo = new Map<string, { at: number; points: number | null }>();
+
+  /** Weekly points per cost-equivalent on an account; null where there is no price yet. */
+  constructor(private readonly rate: (accountId: string) => number | null) {}
 
   private fit(now: number): void {
     if (this.fittedAt && now - this.fittedAt < REFIT_MS) return;
@@ -266,9 +262,9 @@ export class Forecaster {
   }
 
   /** Weekly points per cost-equivalent on the median of `accountIds` that has a price. */
-  private medianRate(accountIds: string[], now: number): number | null {
+  private medianRate(accountIds: string[]): number | null {
     const rates = accountIds
-      .map((id) => this.rate(id, now))
+      .map((id) => this.rate(id))
       .filter((r): r is number => r !== null)
       .sort((a, b) => a - b);
     return rates.length ? rates[Math.floor((rates.length - 1) / 2)]! : null;
@@ -284,30 +280,8 @@ export class Forecaster {
   claim(s: { provider: ProviderId; model?: string | null; first: boolean; accountIds: string[] }, now: number): number | null {
     this.fit(now);
     const cost = startCost(this.starts, s.provider, s.first, s.model);
-    const perCost = cost === null ? null : this.medianRate(s.accountIds, now);
+    const perCost = cost === null ? null : this.medianRate(s.accountIds);
     return cost === null || perCost === null ? null : Math.round(cost * perCost * 100) / 100;
-  }
-
-  /**
-   * Weekly points per cost-equivalent on `accountId`: what was attributed to
-   * its sessions over the last two weeks, over what those sessions spent in
-   * that time. Null until enough points have been attributed to say.
-   */
-  private rate(accountId: string, now: number): number | null {
-    const hit = this.rates.get(accountId);
-    if (hit && now - hit.at < RATE_TTL_MS) return hit.perCost;
-    const since = now - RATE_SPAN_MS;
-    let points = 0;
-    let cost = 0;
-    for (const a of attributionsSince(since, accountId)) {
-      const last = tokenSampleAt(a.sessionId, now);
-      if (!last) continue;
-      points += a.points;
-      cost += last.costEquiv - (tokenSampleAt(a.sessionId, since)?.costEquiv ?? 0);
-    }
-    const perCost = points >= RATE_MIN_POINTS && cost > 0 ? points / cost : null;
-    this.rates.set(accountId, { at: now, perCost });
-    return perCost;
   }
 
   /**
@@ -327,7 +301,7 @@ export class Forecaster {
 
   private compute(s: ForecastInput, now: number): number | null {
     if (this.table.size === 0) return null;
-    const perCost = this.rate(s.accountId, now);
+    const perCost = this.rate(s.accountId);
     if (perCost === null) return null;
     const from = now - LOOKBACK_MS;
     const before = tokenSampleAt(s.sessionId, from);
@@ -344,7 +318,7 @@ export class Forecaster {
     this.fit(now);
     const providers: ForecastReport["providers"] = [];
     for (const provider of [...new Set(accounts.map((a) => a.provider))]) {
-      const perCost = this.medianRate(accounts.filter((a) => a.provider === provider).map((a) => a.id), now);
+      const perCost = this.medianRate(accounts.filter((a) => a.provider === provider).map((a) => a.id));
       const cells: ForecastReport["providers"][number]["cells"] = [];
       for (let r = 0; r <= RECENT_EDGES.length; r++) {
         for (let c = 0; c <= SO_FAR_EDGES.length; c++) {
