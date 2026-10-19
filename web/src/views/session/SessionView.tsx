@@ -310,8 +310,10 @@ export function SessionView({
   const [railW, setRailW] = useRailWidth();
   const showRail = !narrow || !id;
   const showMain = !narrow || !!id;
-  // One found outside the state (the closed list, a link) may be another project's.
-  if (session && scope.project && sessionProject(repos, session) !== scope.project) {
+  // One found outside the state (the closed list, a link) may be another
+  // project's. One the list shows opens here, though its checkout is
+  // another's: the list keeps a project's sessions under the leads they run under.
+  if (session && scope.project && !visible.sessions.some((s) => s.id === session.id) && sessionProject(repos, session) !== scope.project) {
     return (
       <Empty
         title="This session belongs to another project"
