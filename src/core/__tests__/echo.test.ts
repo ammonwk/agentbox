@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { landed, type Echo } from "../../../web/src/views/session/echo";
 
 const at = 1_000_000;
-const echo = (text: string): Echo => ({ sessionId: "s", text, at });
+const echo = (text: string): Echo => ({ id: "e", sessionId: "s", text, at });
 
 describe("landed", () => {
   test("a message recorded as it was typed", () => {

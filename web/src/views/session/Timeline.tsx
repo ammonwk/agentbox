@@ -481,7 +481,7 @@ export function Timeline({ session }: { session: Session }) {
             <UserRow key={`q${i}:${q.at}`} ev={{ id: `queued:${q.at}`, at: q.at, kind: "user", text: q.text }} queued />
           ))}
           {echoes.map((e) => (
-            <Bubble key={e.at} at={e.at} className="tl-echo" note="Sending…" title="Sent; the agent has not recorded it yet" copy={e.text}>
+            <Bubble key={e.id} at={e.at} className="tl-echo" note="Sending…" title="The agent has not recorded it yet" copy={e.text}>
               <Markdown text={e.text} />
             </Bubble>
           ))}
@@ -562,7 +562,14 @@ const Me = createContext<{ name: string; github: string }>({ name: "", github: "
 /** Messages sent from here that the transcript has not caught up with. */
 function useEchoes(sessionId: string, events: readonly TimelineEvent[], queued: readonly QueuedMessage[]): Echo[] {
   const [sent, setSent] = useState<Echo[]>([]);
-  useEffect(() => onEcho((e) => e.sessionId === sessionId && setSent((xs) => [...xs, e])), [sessionId]);
+  useEffect(
+    () =>
+      onEcho(
+        (e) => e.sessionId === sessionId && setSent((xs) => [...xs, e]),
+        (id) => setSent((xs) => xs.filter((e) => e.id !== id)),
+      ),
+    [sessionId],
+  );
   const [, tick] = useState(0);
   useEffect(() => {
     if (sent.length === 0) return;

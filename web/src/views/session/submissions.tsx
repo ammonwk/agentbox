@@ -4,7 +4,7 @@ import { api } from "../../api";
 import { Button } from "../../components";
 import { dropPasteTags } from "../../../../src/core/sent";
 import { beginSend, draftSnapshot, forgetPending, onDraftWork, pendingSends, uniqueSubmission, updatePending, type PendingSend } from "./drafts";
-import { echoSent } from "./echo";
+import { dropEcho, echoSent } from "./echo";
 
 const active = new Set<string>();
 
@@ -12,22 +12,26 @@ export async function deliverPending(p: PendingSend): Promise<void> {
   active.add(p.id);
   try {
     await beginSend(p);
+    // The timeline shows it as sending at once; only a send that goes wrong
+    // comes back to the composer, as a note with what to do about it.
+    if (p.kind !== "btw" && p.body.trim()) echoSent(p.id, p.sessionId, p.body);
     try {
       const receipt = await api.submit(p.sessionId, p.id, p.kind, p.body);
-      if (receipt.state === "sent") {
-        if (p.kind === "send") echoSent(p.sessionId, p.body);
-        await forgetPending(p.sessionId, p.id);
-      } else await updatePending(p.id, { state: receipt.state, error: receipt.error });
+      if (receipt.state === "sent") await forgetPending(p.sessionId, p.id);
+      else {
+        dropEcho(p.id);
+        await updatePending(p.id, { state: receipt.state, error: receipt.error });
+      }
     } catch (e) {
       // A disconnected response says nothing about whether the server typed
       // the message. It stays out of the draft until delivery is resolved.
+      dropEcho(p.id);
       await updatePending(p.id, { state: "unconfirmed", error: e instanceof Error ? e.message : String(e) });
     }
   } finally { active.delete(p.id); }
 }
 
-/** A send that lands quickly never shows its note: it would only flash. */
-const QUIET_MS = 500;
+/** One on its way shows in the timeline; this note is for one that went wrong. */
 const sending = (p: PendingSend) => p.state === "pending" || p.state === "attempting";
 
 const normalized = (text: string) => dropPasteTags(text).replace(/\r\n/g, "\n").trim();
@@ -72,15 +76,7 @@ export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }
   const snapshot = useSyncExternalStore(onDraftWork, draftSnapshot);
   const all = useMemo(() => pendingSends(sessionId), [sessionId, snapshot]);
   const ids = all.map((p) => p.id).join(",");
-  const [now, setNow] = useState(Date.now);
-  const pending = all.filter((p) => !sending(p) || now - p.at >= QUIET_MS);
-  // Re-render when the next quiet send has waited long enough to be shown.
-  const reveal = Math.min(...all.filter((p) => sending(p) && now - p.at < QUIET_MS).map((p) => p.at + QUIET_MS));
-  useEffect(() => {
-    if (!Number.isFinite(reveal)) return;
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, reveal - Date.now()));
-    return () => clearTimeout(timer);
-  }, [reveal]);
+  const pending = all.filter((p) => !sending(p));
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -113,7 +109,7 @@ export function PendingSends({ sessionId, onRestore, reconcileSend = reconcile }
   return <div className="cmp-pending">
     {pending.map((p) => <div className="cmp-note" key={p.id} role="status">
       <div className="cmp-pending-body">
-        <strong>{p.state === "failed" ? "Not sent" : p.state === "unconfirmed" ? "Delivery unconfirmed" : "Sending…"}</strong>
+        <strong>{p.state === "failed" ? "Not sent" : "Delivery unconfirmed"}</strong>
         <div className="cmp-pending-text">{p.draft.text || "Resume session"}</div>
         {p.error ? <div>{p.error}</div> : null}
         {p.state === "unconfirmed" ? <div>Check the timeline or terminal before sending this again.</div> : null}
