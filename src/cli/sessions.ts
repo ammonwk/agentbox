@@ -56,20 +56,26 @@ export async function me(api: Api): Promise<string | null> {
 /** An id, and "(you)" after it when it is the caller's. */
 export const idYou = (id: string, you: string | null): string => (id === you ? `${id} (you)` : id);
 
-async function state(api: Api): Promise<AppState> {
-  return api<AppState>("GET", "/api/state");
+/** The board, or with `all` every session there has been: thousands, and
+ *  megabytes the server builds and this parses, so only when asked for. */
+async function state(api: Api, all = false): Promise<AppState> {
+  return api<AppState>("GET", all ? "/api/state" : "/api/state?open=1");
 }
 
 /** Ids from args, or from stdin when an arg is `-`: the first word of each line,
  *  so `agentbox ls ... | agentbox close -` works on ls's own output. Unique
  *  prefixes are accepted. */
-export async function resolveIds(api: Api, args: string[]): Promise<{ ids: string[]; sessions: Row[] }> {
+export async function resolveIds(api: Api, args: string[], all = false): Promise<{ ids: string[]; sessions: Row[]; state: AppState }> {
   let raw = args.filter((a) => a !== "-");
   if (args.includes("-")) {
     const text = await new Response(Bun.stdin.stream()).text();
     raw = raw.concat(text.split("\n").map((l) => l.trim().split(/\s+/)[0] ?? "").filter(Boolean));
   }
-  const s = await state(api);
+  // On the board first; a closed one, and a prefix the board alone would
+  // read as unique, are settled by every session there has been.
+  const board = await state(api, all);
+  const onBoard = all || raw.every((r) => board.sessions.some((x) => x.id === r));
+  const s = onBoard ? board : await state(api, true);
   const ids = raw.map((r) => {
     const exact = s.sessions.find((x) => x.id === r);
     if (exact) return exact.id;
@@ -77,7 +83,7 @@ export async function resolveIds(api: Api, args: string[]): Promise<{ ids: strin
     if (pre.length === 1) return pre[0]!.id;
     throw new Error(pre.length ? `"${r}" matches ${pre.length} sessions` : `no session "${r}"`);
   });
-  return { ids, sessions: s.sessions };
+  return { ids, sessions: s.sessions, state: s };
 }
 
 // -------------------------------------------------------------- formatting
@@ -157,7 +163,7 @@ export async function ls(api: Api, args: string[]): Promise<number> {
   const idle = str(flags.get("idle")) ? idleTest(str(flags.get("idle"))!) : null;
   const repo = str(flags.get("repo"))?.toLowerCase();
   const provider = oneOf("provider", str(flags.get("provider"))?.split(","), PROVIDERS);
-  const s = await state(api);
+  const s = await state(api, flags.has("all"));
   const now = s.serverTime;
   const board = s.sessions.filter((x) => flags.has("all") || x.status !== "closed");
   const onBoard = new Set(board.map((x) => x.id));
@@ -191,8 +197,8 @@ export async function ls(api: Api, args: string[]): Promise<number> {
 
 /** `agentbox show <id>...` */
 export async function show(api: Api, args: string[]): Promise<number> {
-  const { ids, sessions } = await resolveIds(api, args);
-  const s0 = await state(api);
+  // Every session there has been: its children are listed closed or not.
+  const { ids, sessions, state: s0 } = await resolveIds(api, args, true);
   const acct = new Map(s0.accounts.map((a) => [a.id, a.label]));
   const now = s0.serverTime;
   const waits = await api<Wait[]>("GET", "/api/waits");
@@ -434,8 +440,7 @@ export async function move(api: Api, args: string[]): Promise<number> {
   const { flags, rest } = parseArgs(args, ["account"], ["force"]);
   const [target, ...words] = rest;
   if (!target) throw new Error("move needs a session id");
-  const { ids } = await resolveIds(api, [target]);
-  const s = await state(api);
+  const { ids, state: s } = await resolveIds(api, [target]);
   const row = s.sessions.find((x) => x.id === ids[0]);
   const mine = s.accounts.filter((a) => row && a.provider === accountProvider(row.provider));
   const wanted = str(flags.get("account"));
