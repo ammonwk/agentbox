@@ -1,10 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Repo } from "../../core/types";
 import { RULES_MAX_BYTES, readRules } from "../../core/rules";
-import { contextDocPath } from "../context";
+import { contextDocPath, writeContextDoc } from "../context";
 
 /**
  * The id → path mapping is the only thing standing between a browser and
@@ -60,4 +60,32 @@ test("a rules file over the cap is cut at a whole line and says so", () => {
   expect(cut.split("\n").at(-3)).toBe("x".repeat(100));
 
   expect(readRules(join(dir, "missing.md"))).toBe("");
+});
+
+test("a save writes the catalogued file, making the rules directory if it is new", () => {
+  const home = mkdtempSync(join(tmpdir(), "ab-context-home-"));
+  const was = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  try {
+    const checkout = join(home, "checkout");
+    mkdirSync(checkout);
+    const here = [repo("one", checkout)];
+
+    const rules = writeContextDoc("rules:repo:one", "keep it short\n", here);
+    expect(rules?.path).toBe(join(home, "rules", "one.md"));
+    expect(readFileSync(rules!.path, "utf8")).toBe("keep it short\n");
+    // What a session would be given from it.
+    expect(rules!.injected).toBe("keep it short");
+
+    const file = writeContextDoc("instructions:repo:one:CLAUDE.md", "# hi\n", here);
+    expect(file?.path).toBe(join(checkout, "CLAUDE.md"));
+    expect(readFileSync(file!.path, "utf8")).toBe("# hi\n");
+
+    // A doc id that names nothing writes nothing.
+    expect(writeContextDoc("rules:repo:nope", "x", here)).toBeNull();
+  } finally {
+    if (was === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = was;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
