@@ -300,7 +300,8 @@ function ValueChart({ plan: p }: { plan: RatesReport["plans"][number] }) {
           ))}
           {days.map((day, i) =>
             i % labelEvery === 0 ? (
-              <text key={day.at} className="ins-axis" x={xOf(i)} y={H - 6} textAnchor="middle">
+              // The last day's label ends at the edge rather than running off it.
+              <text key={day.at} className="ins-axis" x={xOf(i)} y={H - 6} textAnchor={i === days.length - 1 ? "end" : i === 0 ? "start" : "middle"}>
                 {DAY_FMT.format(day.at)}
               </text>
             ) : null,
