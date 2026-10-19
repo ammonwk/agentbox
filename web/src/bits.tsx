@@ -338,7 +338,7 @@ export function UsageBar({
  *  clipboard API is refused (plain http on a non-loopback host). */
 /** `navigator.clipboard` exists only in a secure context, and a phone on the
  *  tailnet reaches us over plain http; the old selection copy still works there. */
-function copyText(text: string): Promise<void> {
+export function copyText(text: string): Promise<void> {
   if (navigator.clipboard) return navigator.clipboard.writeText(text);
   const ta = document.createElement("textarea");
   ta.value = text;

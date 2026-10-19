@@ -5,7 +5,7 @@
 
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
-import { PROVIDER_LABEL, ProviderBadge, ShapeMark, StatusDot } from "../../bits";
+import { copyText, PROVIDER_LABEL, ProviderBadge, ShapeMark, StatusDot } from "../../bits";
 import { Icon, RelativeTime, Spinner } from "../../components";
 import {
   descendantsOf,
@@ -652,7 +652,7 @@ function RowState({ s }: { s: SessionRow }) {
         // Inside the row's link: copy, do not open.
         e.preventDefault();
         e.stopPropagation();
-        void navigator.clipboard.writeText(s.id).then(() => setCopied(true));
+        void copyText(s.id).then(() => setCopied(true));
       }}
     >
       {copied ? <Icon.check size={13} /> : st.icon}

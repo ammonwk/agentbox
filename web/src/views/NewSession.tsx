@@ -458,9 +458,9 @@ export function NewSession({
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             void submit();
-          } else if (e.altKey && /^[1-4]$/.test(e.key)) {
-            // Alt+1..4 picks the agent without leaving the prompt.
-            const p = PROVIDERS[Number(e.key) - 1];
+          } else if (e.altKey && /^Digit[1-9]$/.test(e.code)) {
+            // Alt+1… picks the agent, in the list's order, without leaving the prompt.
+            const p = PROVIDERS[Number(e.code.slice(5)) - 1];
             if (p && installed.includes(p)) {
               e.preventDefault();
               setProvider(p);

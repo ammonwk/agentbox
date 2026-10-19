@@ -13,7 +13,7 @@ import { ECHO_TTL_MS, landed, onEcho, type Echo } from "./echo";
 import { MessageRail, useTurns } from "./MessageRail";
 import { takeJump } from "./jump";
 import { useFamily } from "./family";
-import { PROVIDER_LABEL, StatusDot } from "../../bits";
+import { copyText, PROVIDER_LABEL, StatusDot } from "../../bits";
 import { shownStatus, titleOf } from "../../lib/board";
 import { hrefOf } from "../../route";
 import { dropPasteTags, readSent, splitPastes } from "../../../../src/core/sent";
@@ -731,7 +731,7 @@ function CopyIcon({ text }: { text: string }) {
       className="tl-me-copy"
       aria-label={done ? "Copied" : "Copy the message"}
       title={done ? "Copied" : "Copy"}
-      onClick={() => void navigator.clipboard.writeText(text).then(() => setDone(true))}
+      onClick={() => void copyText(text).then(() => setDone(true))}
     >
       {done ? <Icon.check size={14} /> : <Icon.copy size={14} />}
     </button>

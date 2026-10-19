@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { api, type SuperagentActionReply } from "../api";
 import type { AppState, SuperagentAction, SuperagentBlock, SuperagentField, SuperagentInfo, SuperagentView } from "../../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, RelativeTime } from "../components";
+import { copyText } from "../bits";
 import { go, hrefOf, SESSION_TABS, type SessionTab } from "../route";
 import { titleOf } from "../lib/board";
 import { Detail } from "./session/SessionView";
@@ -518,7 +519,7 @@ function TextBlock({ block: b }: { block: Extract<SuperagentBlock, { type: "text
         <button
           type="button"
           className="ag-text-btn"
-          onClick={() => void navigator.clipboard?.writeText(b.text).then(() => (setCopied(true), setTimeout(() => setCopied(false), 1200)))}
+          onClick={() => void copyText(b.text).then(() => (setCopied(true), setTimeout(() => setCopied(false), 1200)))}
           title="Copy all of it"
         >
           {copied ? <Icon.check size={12} /> : <Icon.copy size={12} />}

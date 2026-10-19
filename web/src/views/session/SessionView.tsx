@@ -57,6 +57,9 @@ const NONE: SessionRow[] = [];
 const PinOn: IconComponent = (p) => <Icon.pin {...p} weight="fill" />;
 const BookmarkOn: IconComponent = (p) => <Icon.bookmark {...p} weight="fill" />;
 
+/** The digit keys that pick a tab, as KeyboardEvent.code. */
+const TAB_KEY = new RegExp(`^Digit[1-${SESSION_TABS.length}]$`);
+
 const TAB_LABEL: Record<SessionTab, string> = {
   terminal: "Terminal",
   timeline: "Timeline",
@@ -247,12 +250,24 @@ export function SessionView({
           e.preventDefault();
           e.stopPropagation();
           reopenLast();
+        } else if (!app && !e.shiftKey && (e.code === "KeyJ" || e.code === "KeyK")) {
+          // j/k, from the composer or the terminal too.
+          const next = neighbourId(ordered, id, e.code === "KeyJ" ? 1 : -1);
+          if (!next || next === id) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onOpen(next);
+        } else if (!app && !e.shiftKey && id && TAB_KEY.test(e.code)) {
+          e.preventDefault();
+          e.stopPropagation();
+          onTab(SESSION_TABS[Number(e.code.slice(5)) - 1]);
         }
       }
     };
     // j/k switch sessions and l/h fold within this page, outside text fields
-    // and the terminal; 1–4 pick a tab. Tab reaches controls normally, except
-    // Shift+Tab in the terminal, which is reserved above. Pane navigation
+    // and the terminal (Alt+J/K and Alt+1–3 work from those too); 1–3 pick a
+    // tab. Tab reaches controls normally, except Shift+Tab in the terminal,
+    // which is reserved above. Pane navigation
     // lives in the shared keyboard handler.
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || e.isComposing) return;
@@ -278,7 +293,7 @@ export function SessionView({
           e.preventDefault();
           onOpen(row.parent);
         }
-      } else if (id && /^[1-4]$/.test(e.key)) {
+      } else if (id && TAB_KEY.test(`Digit${e.key}`)) {
         onTab(SESSION_TABS[Number(e.key) - 1]);
       }
     };
