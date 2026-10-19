@@ -31,14 +31,23 @@ const BOX_ID = "[2-9a-km-z]{8}";
 /** One segment of a path: enough for `~/.local/share/…/worktrees/<id>`. */
 const PATH_SEG = "[\\w.~@$+-]+";
 
+let grown: SessionIndex = { ids: new Set(), provider: new Map() };
+
+/** Every session the page has seen on the board, the same object until one
+ *  it has not seen comes: the board is rebuilt every frame, and what prose
+ *  links to (and the regex below) is worked out again only when this
+ *  changes. A session that left the board stays: it is still a session, and
+ *  its link still opens it. */
 export function buildSessionIndex(sessions: readonly Pick<Session, "id" | "agentSessionId">[]): SessionIndex {
-  const ids = new Set<string>();
-  const provider = new Map<string, string>();
+  if (sessions.every((s) => grown.ids.has(s.id) && (!s.agentSessionId || grown.provider.get(s.agentSessionId) === s.id))) return grown;
+  const ids = new Set(grown.ids);
+  const provider = new Map(grown.provider);
   for (const s of sessions) {
     ids.add(s.id);
     if (s.agentSessionId) provider.set(s.agentSessionId, s.id);
   }
-  return { ids, provider };
+  grown = { ids, provider };
+  return grown;
 }
 
 const compiled = new WeakMap<SessionIndex, RegExp>();

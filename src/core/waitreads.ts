@@ -208,15 +208,23 @@ export interface JobRead {
   running: boolean;
 }
 
-export function readJob(spec: JobSpec): JobRead {
+/** Asked without blocking: every job wait is looked at every two seconds,
+ *  and a loaded machine can take a while to answer. */
+export async function readJob(spec: JobSpec): Promise<JobRead> {
   if (existsSync(spec.result)) {
     const [result = "", code = "", status = ""] = readFileSync(spec.result, "utf8").trim().split(/\s+/);
     return { result: { result, code, status }, running: false };
   }
-  const p = Bun.spawnSync(["systemctl", "--user", "is-active", spec.unit], { timeout: 10_000, env: { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}` } });
-  const state = p.stdout.toString().trim();
+  const p = Bun.spawn(["systemctl", "--user", "is-active", spec.unit], {
+    timeout: 10_000,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}` },
+  });
+  const [out, err, exit] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  const state = out.trim();
   // Only systemd's own word says a unit is gone: no answer is a look that failed.
-  if (!["active", "activating", "deactivating", "reloading", "inactive", "failed"].includes(state)) throw new Error(`systemctl would not say whether ${spec.unit} runs: ${p.stderr.toString().trim() || `exit ${p.exitCode}`}`);
+  if (!["active", "activating", "deactivating", "reloading", "inactive", "failed"].includes(state)) throw new Error(`systemctl would not say whether ${spec.unit} runs: ${err.trim() || `exit ${exit}`}`);
   return { result: null, running: state !== "inactive" && state !== "failed" };
 }
 

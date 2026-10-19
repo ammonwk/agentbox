@@ -480,10 +480,12 @@ class Wire {
 
   getStatus = (): Connection => this.status;
 
-  /** Follow one session's timeline, or `null` to stop. Replaces any previous watch. */
-  watch(sessionId: string | null): void {
+  /** Follow one session's timeline, or `null` to stop. Replaces any previous
+   *  watch. `cursor` goes on from a copy already held; a reconnect starts
+   *  over with the newest page. */
+  watch(sessionId: string | null, cursor?: string): void {
     this.watching = sessionId;
-    this.send({ type: "watch", sessionId });
+    this.send(cursor && sessionId ? { type: "watch", sessionId, cursor } : { type: "watch", sessionId });
   }
 
   watchingId(): string | null {
@@ -776,6 +778,8 @@ interface CachedTimeline {
   events: readonly TimelineEvent[];
   before: string | null | undefined;
   exhausted: boolean;
+  /** The last live frame's: where the server goes on from when it is watched again. */
+  cursor: string | undefined;
 }
 
 /** Most recently used last. */
@@ -824,6 +828,7 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
     setSt(cur);
   }
   const before = useRef<string | null | undefined>(undefined);
+  const live = useRef<string | undefined>(undefined);
   const busy = useRef(false);
   const eventsRef = useRef<readonly TimelineEvent[]>([]);
   const exhaustedRef = useRef(false);
@@ -834,13 +839,16 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
     const cached = recentTimelines.get(sessionId);
     let fromCache = !!cached;
     before.current = cached?.before;
+    live.current = cached?.cursor;
     busy.current = false;
     eventsRef.current = cached?.events ?? [];
     exhaustedRef.current = cached?.exhausted ?? false;
-    const remember = () => rememberTimeline(sessionId, { events: eventsRef.current, before: before.current, exhausted: exhaustedRef.current });
+    const remember = () =>
+      rememberTimeline(sessionId, { events: eventsRef.current, before: before.current, exhausted: exhaustedRef.current, cursor: live.current });
 
     const off = wire.onMessage((msg) => {
       if (msg.type !== "timeline" || msg.sessionId !== sessionId) return;
+      live.current = msg.cursor || undefined;
       if (msg.reset) {
         const held = eventsRef.current;
         // Over the cached copy only where the two meet: a session that ran
@@ -866,7 +874,8 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
       }
       remember();
     });
-    wire.watch(sessionId);
+    // What it said since we were last here, or the newest page if that copy is gone.
+    wire.watch(sessionId, cached?.cursor);
     return () => {
       off();
       if (eventsRef.current.length > 0) remember();
@@ -894,7 +903,7 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
           loadingOlder: false,
           exhausted: exhaustedRef.current,
         }));
-        rememberTimeline(sessionId, { events: eventsRef.current, before: before.current, exhausted: exhaustedRef.current });
+        rememberTimeline(sessionId, { events: eventsRef.current, before: before.current, exhausted: exhaustedRef.current, cursor: live.current });
       })
       .catch((e: unknown) => {
         setSt((s) => ({ ...s, loadingOlder: false, error: e instanceof Error ? e.message : String(e) }));

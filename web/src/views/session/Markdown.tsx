@@ -1,9 +1,9 @@
-import { useContext, useMemo, useState, type ComponentPropsWithoutRef } from "react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import { memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type ReactElement } from "react";
+import renderMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Parent, PhrasingContent, Root, RootContent } from "mdast";
 import { prRefs, prUrl } from "../../lib/prlinks";
-import { sessionCandidates, sessionRefs } from "../../lib/sessionrefs";
+import { sessionCandidates, sessionRefs, type SessionIndex } from "../../lib/sessionrefs";
 import { resolveSessions } from "../../lib/sessionresolve";
 import { PrBase } from "./prbase";
 import { SessionLinks, type SessionLinksValue } from "./sessionlinks";
@@ -29,7 +29,7 @@ import { turnStatus, type TurnStatus } from "../../../../src/core/turnstatus";
 const BLOCKS = ["h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "hr", "table", "thead", "tbody", "tr", "th", "td"];
 const Inline = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
 
-export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
+export const Markdown = memo(function Markdown({ text, inline }: { text: string; inline?: boolean }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);
   const { byName } = useFamily();
@@ -42,21 +42,17 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
     for (const [n, s] of byName) if (isLinkableName(n) && s.id !== links.self) m.set(n, hrefOf({ page: "session", id: s.id, tab: "timeline" }));
     return m;
   }, [local.names, byName, links.self]);
-  const plugins = useMemo(
-    () => [remarkGfm, remarkFileRefs(), remarkWaitRefs(), remarkImagePaths(), remarkLocalPaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
-    [base, links, names],
-  );
   const status = inline ? null : turnStatus(text);
-  const md = (
-      <ReactMarkdown
-        remarkPlugins={plugins}
-        disallowedElements={inline ? BLOCKS : undefined}
-        unwrapDisallowed={inline}
-        urlTransform={keepOurUrls}
-        components={inline ? INLINE : BLOCK}
-      >
-        {status ? status.body : text}
-      </ReactMarkdown>
+  const body = status ? status.body : text;
+  const md = rendered(body, `${envOf(base, links.self, names)} ${refsIn(body, links.index)} ${inline ? "i" : "b"}`, () =>
+    renderMarkdown({
+      children: body,
+      remarkPlugins: [remarkGfm, remarkFileRefs(), remarkWaitRefs(), remarkImagePaths(), remarkLocalPaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
+      disallowedElements: inline ? BLOCKS : undefined,
+      unwrapDisallowed: inline,
+      urlTransform: keepOurUrls,
+      components: inline ? INLINE : BLOCK,
+    }),
   );
   if (inline) {
     return (
@@ -71,6 +67,66 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
       {status && status.kind !== "done" ? <StatusLine status={status} /> : null}
     </div>
   );
+});
+
+/**
+ * Parsed prose, kept across renders and across sessions. Parsing is most of
+ * what drawing a timeline costs, and the board re-renders it on every hot
+ * frame: a text drawn once under the same links is the same elements, which
+ * React then skips. By text, then by what the link passes depend on.
+ */
+const RENDERED_MAX = 3000;
+const renderedCache = new Map<string, Map<string, ReactElement>>();
+function rendered(text: string, env: string, make: () => ReactElement): ReactElement {
+  let byEnv = renderedCache.get(text);
+  if (byEnv) {
+    renderedCache.delete(text);
+    renderedCache.set(text, byEnv);
+  } else {
+    renderedCache.set(text, (byEnv = new Map()));
+    if (renderedCache.size > RENDERED_MAX) renderedCache.delete(renderedCache.keys().next().value!);
+  }
+  let out = byEnv.get(env);
+  if (!out) {
+    if (byEnv.size > 8) byEnv.clear();
+    byEnv.set(env, (out = make()));
+  }
+  return out;
+}
+
+/** The sessions a text names, as the board's index stands. The index grows
+ *  whenever a session starts or one named in prose is found, and a text that
+ *  names none of the new ones need not be parsed again for it. */
+const refsCache = new WeakMap<SessionIndex, Map<string, string>>();
+function refsIn(text: string, index: SessionIndex): string {
+  let byText = refsCache.get(index);
+  if (!byText || byText.size > RENDERED_MAX) refsCache.set(index, (byText = new Map()));
+  let refs = byText.get(text);
+  if (refs === undefined) byText.set(text, (refs = sessionRefs(text, index).map((r) => `${r.start}:${r.id}`).join()));
+  return refs;
+}
+
+/** The rest of what the link passes depend on, by content, not by which
+ *  objects hold it: the names are rebuilt with the board. */
+function envOf(base: string | null, self: string | null, names: ReadonlyMap<string, string>): string {
+  return `${base ?? ""} ${self ?? ""} ${namesId(names)}`;
+}
+
+const namesIds = new WeakMap<ReadonlyMap<string, string>, number>();
+const idOfNames = new Map<string, number>();
+let lastNamesId = 0;
+function namesId(names: ReadonlyMap<string, string>): number {
+  let id = namesIds.get(names);
+  if (id !== undefined) return id;
+  const content = [...names].join("\n");
+  id = idOfNames.get(content);
+  if (id === undefined) {
+    // Never reused, so clearing cannot hand an old number to other names.
+    if (idOfNames.size > 500) idOfNames.clear();
+    idOfNames.set(content, (id = ++lastNamesId));
+  }
+  namesIds.set(names, id);
+  return id;
 }
 
 const STATUS_ICON = { done: Icon.check, waiting: Icon.clock, needs: Icon.user, other: Icon.chevronRight };

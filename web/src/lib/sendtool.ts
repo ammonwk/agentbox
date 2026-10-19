@@ -24,7 +24,17 @@ export interface SendCall {
 
 const MCP_SEND = /(?:^|__|\.|\/)send(?:_message)?$/i;
 
+/** Read once per event: every render of a timeline groups all of it again,
+ *  and reading a call means parsing its input. */
+const sends = new WeakMap<ToolEvent, SendCall | null>();
+
 export function sendOf(ev: ToolEvent): SendCall | null {
+  let send = sends.get(ev);
+  if (send === undefined) sends.set(ev, (send = readSend(ev)));
+  return send;
+}
+
+function readSend(ev: ToolEvent): SendCall | null {
   if (ev.name === "SendMessage") {
     const to = field(ev.input, "to");
     return to ? { to, text: field(ev.input, "message"), via: "SendMessage" } : null;

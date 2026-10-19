@@ -475,7 +475,7 @@ export class Waits {
         if (now < this.githubHeldUntil || (w.checkedAt !== null && now - w.checkedAt < RUN_EVERY_MS && w.deadline > now)) return;
         return this.looked(w, lookRun(spec, await readRun(spec.repo, spec.run)), now);
       case "job":
-        return this.looked(w, lookJob(spec, w.memo, readJob(spec), now), now);
+        return this.looked(w, lookJob(spec, w.memo, await readJob(spec), now), now);
       case "session":
         return this.looked(w, lookSessions(spec, w.memo, (id) => this.sessionOf({ ...w, sessionId: id }), now), now);
       case "until":

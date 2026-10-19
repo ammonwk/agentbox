@@ -1592,7 +1592,10 @@ export type ServerMessage =
 
 /** Client → server. A client watches at most one session's timeline. */
 export type ClientMessage =
-  | { type: "watch"; sessionId: string | null }
+  /** `cursor`: the last timeline frame's, from a copy the client still
+   *  holds. The server goes on from there instead of sending the newest page
+   *  again, or sends the page with `reset` if the cursor no longer holds. */
+  | { type: "watch"; sessionId: string | null; cursor?: string }
   | { type: "ping" };
 
 /** A superagent as the Agents page shows it (`GET /api/superagents`, src/core/superagents.ts). */

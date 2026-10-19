@@ -44,7 +44,9 @@ export function parseClientMessage(raw: unknown): ParseResult {
       if (sessionId === "") {
         return { ok: false, error: "watch.sessionId must not be empty — use null to stop watching" };
       }
-      return { ok: true, message: { type: "watch", sessionId } };
+      const cursor = msg.cursor;
+      if (cursor !== undefined && typeof cursor !== "string") return { ok: false, error: "watch.cursor must be a string" };
+      return { ok: true, message: cursor && sessionId ? { type: "watch", sessionId, cursor } : { type: "watch", sessionId } };
     }
 
     default:

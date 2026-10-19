@@ -907,10 +907,15 @@ function Clamp({
   const ref = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [over, setOver] = useState(false);
+  // Measured when its size settles, not on every render: a read after each
+  // render made the browser lay the whole timeline out again, once per clamp.
   useLayoutEffect(() => {
     const el = ref.current;
-    if (el && !open) setOver(el.scrollHeight > el.clientHeight + 4);
-  });
+    if (!el || open) return;
+    const ro = new ResizeObserver(() => setOver(el.scrollHeight > el.clientHeight + 4));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open]);
   return (
     <div className={`tl-clamp${className ? ` ${className}` : ""}`}>
       {label ? <div className="tl-clamp-label">{label}</div> : null}

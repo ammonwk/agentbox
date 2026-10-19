@@ -450,7 +450,21 @@ async function detectProviders(): Promise<void> {
   );
 }
 
+/**
+ * The accounts as the board shows them, a few seconds old at most. Their
+ * claims and placements move with every pass, and working them out — a
+ * forecast per session, the balancer per provider — was a sixth of what the
+ * server did; a change made here (`scheduleCold`) drops it at once.
+ */
+let views: { at: number; views: AccountView[] } | null = null;
+const ACCOUNT_VIEWS_MS = 5_000;
 function accountViews(): AccountView[] {
+  if (views && Date.now() - views.at < ACCOUNT_VIEWS_MS) return views.views;
+  views = { at: Date.now(), views: buildAccountViews() };
+  return views.views;
+}
+
+function buildAccountViews(): AccountView[] {
   const claims = fleet.claims();
   const placements = new Map<string, ReturnType<Fleet["placement"]>>();
   const homes = accounts.list();
@@ -626,19 +640,21 @@ function broadcast(msg: ServerMessage): void {
 }
 
 /**
- * `GET /api/state`'s body, built once for everyone who asks before the board
- * or the cold state next moves, and at most a second old. Every
- * `agentbox watch` polled it every 2s; eight of them were rebuilding and
- * serializing 3 MB four times a second.
+ * `GET /api/state`'s bodies, the board's and the whole of history's, each
+ * built once for everyone who asks before the board or the cold state next
+ * moves, and at most a second old. Every `agentbox watch` polled it every
+ * 2s; eight of them were rebuilding and serializing 3 MB four times a second.
  */
-let stateBody: { at: number; open: boolean; body: string } | null = null;
+const stateBodies = new Map<boolean, { at: number; body: string }>();
 const STATE_BODY_MS = 1_000;
 function stateResponse(open: boolean): Response {
   const now = Date.now();
-  if (!stateBody || stateBody.open !== open || now - stateBody.at > STATE_BODY_MS) {
-    stateBody = { at: now, open, body: JSON.stringify({ ok: true, data: { ...hotState(open), ...coldState() }, error: null }) };
+  let b = stateBodies.get(open);
+  if (!b || now - b.at > STATE_BODY_MS) {
+    b = { at: now, body: JSON.stringify({ ok: true, data: { ...hotState(open), ...coldState() }, error: null }) };
+    stateBodies.set(open, b);
   }
-  return new Response(stateBody.body, { headers: { "content-type": "application/json" } });
+  return new Response(b.body, { headers: { "content-type": "application/json" } });
 }
 
 function changeRows(only: Set<string> | null): ChangeRow[] {
@@ -674,7 +690,7 @@ function boardChange(ms: number): Promise<void> {
 
 let hotTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleHot(): void {
-  stateBody = null;
+  stateBodies.clear();
   for (const wake of [...changeWaiters]) wake();
   if (hotTimer) return;
   hotTimer = setTimeout(() => {
@@ -690,9 +706,26 @@ function scheduleHot(): void {
  *  whole of cold state (the PRs, the skills) every two seconds. */
 let sentCold = new Map<string, string>();
 let coldTimer: ReturnType<typeof setTimeout> | null = null;
+let coldDue = 0;
+/** Something cold state shows changed: tell the sockets within half a second. */
 function scheduleCold(): void {
-  stateBody = null;
-  if (coldTimer) return;
+  views = null;
+  coldIn(COLD_DEBOUNCE_MS);
+}
+
+/** Sessions move every pass, and what cold state shows of them — the claims
+ *  on each account, who holds which PR — can be seconds behind. */
+const SESSIONS_COLD_MS = 5_000;
+function coldFromSessions(): void {
+  coldIn(SESSIONS_COLD_MS);
+}
+
+function coldIn(ms: number): void {
+  stateBodies.clear();
+  const due = Date.now() + ms;
+  if (coldTimer && coldDue <= due) return;
+  if (coldTimer) clearTimeout(coldTimer);
+  coldDue = due;
   coldTimer = setTimeout(() => {
     coldTimer = null;
     if (clients.size === 0) return;
@@ -705,7 +738,7 @@ function scheduleCold(): void {
       (changed as Record<string, unknown>)[key] = value;
     }
     if (Object.keys(changed).length > 0) broadcast({ type: "coldDelta", state: changed });
-  }, COLD_DEBOUNCE_MS);
+  }, ms);
 }
 
 /**
@@ -780,7 +813,9 @@ function handleAppMessage(ws: Socket, raw: string | Buffer): void {
   ws.data.remote?.();
   ws.data.remote = null;
   ws.data.watching = msg.sessionId;
-  ws.data.cursor = null;
+  // A copy the page still holds goes on from where it ends: a session you go
+  // back to costs what it said since, not its newest page again.
+  ws.data.cursor = msg.cursor ?? null;
   // Before the first pass no transcript is known; `welcome` pumps it after.
   if (!booted) return;
   // A hub's page watching a node's session: the node sends the timeline.
@@ -2258,7 +2293,7 @@ export async function startServer(): Promise<void> {
     );
     scheduleHot();
     // Claims move with sessions, and claims are on the Accounts page.
-    scheduleCold();
+    coldFromSessions();
   });
   fleet.on("transcript", onTranscript);
   // A hub keeps a socket to each joined node; a node tells its hub's
