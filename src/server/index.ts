@@ -2296,6 +2296,8 @@ export async function startServer(): Promise<void> {
   setInterval(checkBuild, BUILD_POLL_MS).unref?.();
   watchPwaDesktop();
   startNightlyReclaim(() => fleet.sessions());
+  // Soon after a start as well as hourly: the server is restarted more often than that.
+  setTimeout(() => void sayRateChanges(), 2 * 60_000).unref?.();
   setInterval(() => void sayRateChanges(), RATE_CHANGES_MS).unref?.();
 
   fleet.on("sessions", () => {
