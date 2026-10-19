@@ -11,6 +11,7 @@
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { keepClipboard } from "./clipboard";
 import type { Runtime } from "./fleet";
 import { readBtwPanel, showsQuestion } from "./providers/claude-btw";
 
@@ -44,17 +45,24 @@ export async function awaitAnswer(rt: Runtime, pane: string, question: string | 
   throw new BtwError(`no answer within ${Math.round(timeoutMs / 60_000)} minutes`);
 }
 
-/** Press `c` on the answered panel and take what Claude copied into tmux. */
+/** Press `c` on the answered panel and take what Claude copied into tmux.
+ *  It copies to the desktop clipboard too: what you had there is put back. */
 export async function copyAnswer(rt: Runtime, pane: string): Promise<string> {
   if (!rt.bufferNames || !rt.takeBuffer) throw new BtwError("cannot read tmux's paste buffers here");
   const before = new Set(rt.bufferNames());
+  const restore = keepClipboard();
   rt.sendKeys(pane, ["c"]);
   for (let t = 0; t < 3_000; t += 50) {
     await Bun.sleep(50);
     const added = rt.bufferNames().find((b) => !before.has(b));
     const text = added ? rt.takeBuffer(added) : null;
-    if (text !== null) return text.replace(/\s+$/, "");
+    if (text !== null) {
+      const answer = text.replace(/\s+$/, "");
+      await restore(answer);
+      return answer;
+    }
   }
+  await restore("");
   throw new BtwError("pressing c did not copy the answer");
 }
 
