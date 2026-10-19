@@ -1445,6 +1445,10 @@ const router = new Router(mapError)
     if (spec.kind === "run" && !spec.repo) spec.repo = (cwd ? repoFullNameOf(cwd) : null) ?? undefined;
     return json(waits.arm(fleet.heir(who), parseSpec(spec), b.timeoutMs as number | undefined), 201);
   })
+  .add("GET", "/api/waits/:id", ({ params }) => {
+    if (!/^\d{1,9}$/.test(params.id!)) throw new HttpError(400, "a wait's id is a number");
+    return json(waits.view(Number(params.id)));
+  })
   .add("DELETE", "/api/waits/:id", ({ params }) => {
     if (!/^\d{1,9}$/.test(params.id!)) throw new HttpError(400, "a wait's id is a number");
     return json(waits.cancel(Number(params.id)));

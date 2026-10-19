@@ -1441,6 +1441,13 @@ export interface Wait {
   memo: { feedback?: string; failedChecks?: string[]; head?: string; readyAt?: number; headWrongAt?: number; goneAt?: number; idle?: Record<string, number>; absentAt?: number; failures?: number; error?: string };
 }
 
+/** One wait as the board shows it (GET /api/waits/:id): what it is for in a
+ *  line, and while a job runs, the end of its log. */
+export interface WaitView extends Wait {
+  what: string;
+  tail: string | null;
+}
+
 // ------------------------------------------------------------- schedules
 
 /** What a scheduled session starts with: the new-session request, as asked. */

@@ -34,7 +34,7 @@ import { getWait, insertWait, listOpenWaits, listWaits, updateWait } from "./db"
 import { assignedPrHolder, prReleased, prReleaseNotice } from "./prclaims";
 import { FleetError, type Fleet } from "./fleet";
 import { Held, logTail, prKey, readJob, readPrs, readRun, readUntil, type JobRead, type PrRead, type RunRead } from "./waitreads";
-import type { Session, Wait, WaitEnd, WaitSpec } from "./types";
+import type { Session, Wait, WaitEnd, WaitSpec, WaitView } from "./types";
 
 const TICK_MS = 15_000;
 /** How often the pull requests waited on are read: one request for all of them. */
@@ -376,6 +376,15 @@ export class Waits {
     if (w.ended) throw new FleetError(409, `wait ${id} already ended (${w.ended})`);
     updateWait(id, { ended: "cancelled", endedAt: this.now(), outcome: "cancelled by hand" });
     return getWait(id)!;
+  }
+
+  /** One wait for the board: a job still running shows the end of its log
+   *  (once it ends, its outcome carries that). */
+  view(id: number): WaitView {
+    const w = getWait(id);
+    if (!w) throw new FleetError(404, `no wait ${id}`);
+    const tail = w.spec.kind === "job" && !w.ended ? logTail(w.spec.log, 12, 1500) : null;
+    return { ...w, what: describe(w.spec), tail };
   }
 
   /** Still going, untold, or ended in the last day; one session's when named. */

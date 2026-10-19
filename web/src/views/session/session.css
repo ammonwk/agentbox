@@ -1024,15 +1024,6 @@ button.rail-state:hover {
   scrollbar-gutter: stable;
 }
 
-.sx-error {
-  border: 1px solid var(--danger);
-  border-radius: var(--radius-sm);
-  padding: 9px 11px;
-  font-size: 12.5px;
-  color: var(--danger);
-  background: var(--raised);
-}
-
 .linkish {
   border: 0;
   background: none;
@@ -2145,10 +2136,14 @@ a.tl-sender:hover .tl-sender-name {
 .sx-del {
   color: var(--danger);
   border-color: var(--danger);
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 .sx-add {
   color: var(--success);
   border-color: var(--success);
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 .sx-del + .sx-add {
   margin-top: 4px;
@@ -2235,53 +2230,6 @@ a.tl-sender:hover .tl-sender-name {
 /* A path to an image, anywhere in the timeline: click to view it. */
 a.sx-imgpath { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; cursor: zoom-in; }
 a.sx-imgpath:hover { color: var(--accent); }
-
-/* -------------------------------------------------------------------- diff */
-
-.sx-diff-summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 12.5px;
-  color: var(--muted);
-  margin-bottom: 12px;
-}
-.sx-file { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; background: var(--panel); }
-.sx-file-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: var(--tap);
-  padding: 7px 11px;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 12.5px;
-  text-align: left;
-  cursor: pointer;
-}
-.sx-file-head:hover { background: var(--hover); }
-.sx-file-head:focus-visible { outline-offset: -2px; }
-.sx-file-path { font-family: var(--mono); flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.sx-file-tag { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-.sx-add { color: var(--success); font-family: var(--mono); font-size: 11.5px; }
-.sx-del { color: var(--danger); font-family: var(--mono); font-size: 11.5px; }
-.sx-patch {
-  border-top: 1px solid var(--border);
-  overflow-x: auto;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.5;
-  background: var(--sunken);
-}
-.sx-patch-line { padding: 0 11px; white-space: pre; }
-.sx-patch-line.add { background: color-mix(in srgb, var(--success) 14%, transparent); }
-.sx-patch-line.del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
-.sx-patch-line.hunk { color: var(--info); background: var(--hover); }
-.sx-patch-line.meta { color: var(--faint); }
-.sx-note { font-size: 12px; color: var(--muted); padding: 8px 11px; border-top: 1px solid var(--border); }
 
 /* ---------------------------------------------------------------- composer */
 
@@ -3740,3 +3688,77 @@ a.wk-item:hover {
   color: var(--muted);
 }
 .sx-status[data-kind="needs"] > svg { color: var(--warning); }
+
+/* `agentbox wait N` in prose, live (WaitRef.tsx): a quiet chip — what it
+ * watches, its clock, and a running job's last line of output. */
+.sx-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(100%, 560px);
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  color: var(--muted);
+  font: inherit;
+  line-height: 1.6;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+.sx-wait:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.sx-wait > svg { flex: none; }
+.sx-wait[data-ended="happened"] > svg { color: var(--success); }
+.sx-wait[data-ended="stuck"] > svg,
+.sx-wait[data-ended="timeout"] > svg,
+.sx-wait[data-ended="broken"] > svg { color: var(--warning); }
+.sx-wait .wk-pulse { width: 6px; height: 6px; }
+.sx-wait-what {
+  flex: 0 0 auto;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-wait-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.sx-md .sx-wait-peek {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  padding: 0;
+  color: var(--faint);
+}
+.sx-wait-pop {
+  z-index: 60;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  box-shadow: var(--shadow-lg);
+  font-size: 12px;
+  color: var(--muted);
+}
+.sx-wait-pop-head {
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.sx-wait-pop pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}

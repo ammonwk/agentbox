@@ -46,7 +46,6 @@ import type {
   Schedule,
   ServerMessage,
   Session,
-  SessionDiff,
   SkillResult,
   TimelineEvent,
   TimelinePage,
@@ -56,6 +55,7 @@ import type {
   McpCheck,
   McpServerInput,
   McpState,
+  WaitView,
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
@@ -228,6 +228,8 @@ export const api = {
   superagentRestart: (name: string) => post<SuperagentInfo>(`/api/superagents/${enc(name)}/restart`),
   superagentLog: (name: string) => get<{ text: string }>(`/api/superagents/${enc(name)}/log`),
 
+  /** One `agentbox wait`, and the end of its job's log while that runs. */
+  wait: (id: number) => get<WaitView>(`/api/waits/${id}`),
   /** The board's open sessions and cold state; the closed ones page from `closed`. */
   state: () => get<AppState>("/api/state?open=1"),
   /** Opening prompts you wrote, newest first, for the new-session box's ↑. */
@@ -323,7 +325,6 @@ export const api = {
     post<{ found: true; row: number } | { found: false; reason: string }>(`/api/sessions/${enc(id)}/term/seek`, { turnId }),
   termBottom: (id: string) => post<null>(`/api/sessions/${enc(id)}/term/bottom`),
   termWhere: (id: string) => get<{ turnId: string | null; bottom: boolean }>(`/api/sessions/${enc(id)}/term/where`),
-  diff: (id: string) => get<SessionDiff>(`/api/sessions/${enc(id)}/diff`),
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
   load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
   work: (id: string) => get<SessionWork>(`/api/sessions/${enc(id)}/work`),

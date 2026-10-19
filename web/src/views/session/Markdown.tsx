@@ -1,4 +1,4 @@
-import { useContext, useMemo, useState } from "react";
+import { useContext, useMemo, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Parent, PhrasingContent, Root, RootContent } from "mdast";
@@ -18,6 +18,7 @@ import { shownImageUrl } from "../../api";
 import { ImagePath, imagePathRefs, isImagePath } from "./imagepaths";
 import { localFileLink } from "../../../../src/core/filelinks";
 import { FileLink } from "./FileLink";
+import { WaitRef } from "./WaitRef";
 import { turnStatus, type TurnStatus } from "../../../../src/core/turnstatus";
 
 /** Agent prose. External links open in a new tab: this page is a live
@@ -31,7 +32,6 @@ const Inline = ({ children }: { children?: React.ReactNode }) => <>{children}</>
 export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);
-  const board = useBoardSessions();
   const { byName, tab } = useFamily();
   const local = useLocalAgents();
   // Names, not ids: the teammates around this session, and the agents it
@@ -43,7 +43,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
     return m;
   }, [local.names, byName, tab, links.self]);
   const plugins = useMemo(
-    () => [remarkGfm, remarkFileRefs(), remarkImagePaths(), remarkLocalPaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
+    () => [remarkGfm, remarkFileRefs(), remarkWaitRefs(), remarkImagePaths(), remarkLocalPaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
     [base, links, names],
   );
   const status = inline ? null : turnStatus(text);
@@ -53,62 +53,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
         disallowedElements={inline ? BLOCKS : undefined}
         unwrapDisallowed={inline}
         urlTransform={keepOurUrls}
-        components={{
-          ...(inline ? { p: Inline } : {}),
-          img: inline ? ShownImageChip : ShownImage,
-          a: ({ node: _node, children, href, ...rest }) => {
-            if (href?.startsWith("imgpath:")) return <ImagePath path={href.slice("imgpath:".length)}>{children}</ImagePath>;
-            if (href?.startsWith("fileref:")) {
-              const file = href.slice("fileref:".length);
-              if (isImagePath(file)) {
-                return (
-                  <ImagePath path={file}>
-                    <code className="sx-fileref">{children}</code>
-                  </ImagePath>
-                );
-              }
-              return <FileLink path={file}><code className="sx-fileref">{children}</code></FileLink>;
-            }
-            if (href?.startsWith("#ev:")) {
-              const id = href.slice(4);
-              return (
-                <a
-                  {...rest}
-                  href={href}
-                  className="sx-agentlink"
-                  title="An agent this session started; go to where it was started"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    local.jump(id);
-                  }}
-                >
-                  {children}
-                </a>
-              );
-            }
-            if (href?.startsWith("#/")) {
-              // Another session: say what it is and what it is doing, not just its id.
-              const r = parseHash(href);
-              const s = r.page === "session" ? board.get(r.id) : undefined;
-              if (s) {
-                return (
-                  <a {...rest} href={href} className="sx-sesslink" title={`${titleOf(s)} (${s.id})`}>
-                    <StatusDot status={shownStatus(s)} />
-                    {children}
-                  </a>
-                );
-              }
-              return <a {...rest} href={href}>{children}</a>;
-            }
-            const file = href && !/^\/(?:api|assets|ws)(?:\/|$)/.test(href) && localFileLink(href);
-            if (file) {
-              if (isImagePath(file.path)) return <ImagePath path={file.path}>{children}</ImagePath>;
-              return <FileLink path={href!}>{children}</FileLink>;
-            }
-            return <a {...rest} href={href} target="_blank" rel="noreferrer">{children}</a>;
-          },
-        }}
+        components={inline ? INLINE : BLOCK}
       >
         {status ? status.body : text}
       </ReactMarkdown>
@@ -142,11 +87,73 @@ function StatusLine({ status: { kind, text } }: { status: TurnStatus }) {
   );
 }
 
+/** A link in agent prose. Module-level, like ShownImage below: one made in
+ *  render is a new component type each time, so everything under it — a
+ *  live wait's open popover — would be remade on every hot frame. */
+function MdLink({ node: _node, children, href, ...rest }: ComponentPropsWithoutRef<"a"> & { node?: unknown }) {
+  const board = useBoardSessions();
+  const local = useLocalAgents();
+  if (href?.startsWith("wait:")) return <WaitRef id={Number(href.slice(5))}>{children}</WaitRef>;
+  if (href?.startsWith("imgpath:")) return <ImagePath path={href.slice("imgpath:".length)}>{children}</ImagePath>;
+  if (href?.startsWith("fileref:")) {
+    const file = href.slice("fileref:".length);
+    if (isImagePath(file)) {
+      return (
+        <ImagePath path={file}>
+          <code className="sx-fileref">{children}</code>
+        </ImagePath>
+      );
+    }
+    return <FileLink path={file}><code className="sx-fileref">{children}</code></FileLink>;
+  }
+  if (href?.startsWith("#ev:")) {
+    const id = href.slice(4);
+    return (
+      <a
+        {...rest}
+        href={href}
+        className="sx-agentlink"
+        title="An agent this session started; go to where it was started"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          local.jump(id);
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
+  if (href?.startsWith("#/")) {
+    // Another session: say what it is and what it is doing, not just its id.
+    const r = parseHash(href);
+    const s = r.page === "session" ? board.get(r.id) : undefined;
+    if (s) {
+      return (
+        <a {...rest} href={href} className="sx-sesslink" title={`${titleOf(s)} (${s.id})`}>
+          <StatusDot status={shownStatus(s)} />
+          {children}
+        </a>
+      );
+    }
+    return <a {...rest} href={href}>{children}</a>;
+  }
+  const file = href && !/^\/(?:api|assets|ws)(?:\/|$)/.test(href) && localFileLink(href);
+  if (file) {
+    if (isImagePath(file.path)) return <ImagePath path={file.path}>{children}</ImagePath>;
+    return <FileLink path={href!}>{children}</FileLink>;
+  }
+  return <a {...rest} href={href} target="_blank" rel="noreferrer">{children}</a>;
+}
+
+const BLOCK = { img: ShownImage, a: MdLink };
+const INLINE = { p: Inline, img: ShownImageChip, a: MdLink };
+
 /** react-markdown blanks any URL whose scheme it does not know, which would
- *  blank the links the passes here make (`fileref:`, `imgpath:`) and an image
+ *  blank the links the passes here make (`fileref:`, `imgpath:`, `wait:`) and an image
  *  named by `file://`, one way an agent shows you one. */
 function keepOurUrls(url: string, key: string): string {
-  if (/^(?:fileref|imgpath):/.test(url)) return url;
+  if (/^(?:fileref|imgpath|wait):/.test(url)) return url;
   return url.startsWith("file://") && (key === "src" || localFileLink(url)) ? url : defaultUrlTransform(url);
 }
 
@@ -212,6 +219,18 @@ function remarkPrLinks(base: string) {
   return () => (tree: Root) => {
     rewrite(tree, true, (text, code) =>
       splitRefs(text, code, (t) => prRefs(t, code).map((r) => ({ start: r.start, end: r.end, url: prUrl(base, r.number, r.repo) }))),
+    );
+  };
+}
+
+/** `agentbox wait 22849` (or `wait job 22849`) in prose or inline code
+ *  becomes the wait itself, live (WaitRef.tsx). */
+function remarkWaitRefs() {
+  return () => (tree: Root) => {
+    rewrite(tree, true, (text, code) =>
+      splitRefs(text, code, (t) =>
+        [...t.matchAll(/\bagentbox wait (?:job )?(\d{1,9})\b/g)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, url: `wait:${m[1]}` })),
+      ),
     );
   };
 }
