@@ -177,8 +177,9 @@ export function runningDescendants<T extends Pick<Session, "id" | "parent" | "st
 }
 
 /** A row placed in the tree: how deep it sits under the session that started
- *  it, how many sessions it started are here under it, and whether they show. */
-export type Nested<T> = T & { depth: number; kids: number; open: boolean };
+ *  it, how many sessions it started are here under it (`kids`, and `all` at
+ *  any depth), and whether they show. */
+export type Nested<T> = T & { depth: number; kids: number; all: number; open: boolean };
 
 /** What is folded in the list. Each is asked with `auto`, what the row would
  *  be left alone, and says what you made of it. */
@@ -201,10 +202,10 @@ const NO_FOLDS: Folds = { open: () => true, quiet: () => true, keep: new Set(), 
  *  change is the same object, so its row in the list need not draw again. */
 const placed = new WeakMap<object, Nested<SessionRow>>();
 
-function nest<T extends SessionRow>(s: T, depth: number, kids: number, open: boolean): Nested<T> {
+function nest<T extends SessionRow>(s: T, depth: number, kids: number, all: number, open: boolean): Nested<T> {
   const was = placed.get(s) as Nested<T> | undefined;
-  if (was && was.depth === depth && was.kids === kids && was.open === open) return was;
-  const row = { ...s, depth, kids, open };
+  if (was && was.depth === depth && was.kids === kids && was.all === all && was.open === open) return was;
+  const row = { ...s, depth, kids, all, open };
   placed.set(s, row);
   return row;
 }
@@ -296,10 +297,11 @@ export function sectionsOf<T extends SessionRow>(
     }
     return b;
   };
+  const under = (s: T): number => (kids.get(s.id) ?? []).reduce((n, c) => n + 1 + under(c), 0);
   const place = (s: T, depth: number, out: Nested<T>[], quiet: Map<string, Quiet[]>) => {
     const k = kids.get(s.id) ?? [];
     const open = k.length > 0 && folds.open(s.id, k.some((c) => folds.keep.has(c.id)));
-    out.push(nest(s, depth, k.length, open));
+    out.push(nest(s, depth, k.length, under(s), open));
     if (!open) return;
     const awake = k.filter(active);
     for (const c of awake) place(c, depth + 1, out, quiet);

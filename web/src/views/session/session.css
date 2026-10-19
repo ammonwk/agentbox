@@ -677,6 +677,12 @@
   color: var(--text);
   background: var(--active);
 }
+/* Everything under it at any depth, when that is more than it started itself. */
+.rail-kids-all {
+  margin-left: 3px;
+  font-weight: 500;
+  opacity: 0.75;
+}
 /* On a hub (docs/hub.md): the node a session runs on, and whether it is away. */
 .rail-node {
   flex: 0 1 auto;

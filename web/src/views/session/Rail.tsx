@@ -629,7 +629,7 @@ const Row = memo(function Row({
           type="button"
           className="rail-kids"
           aria-expanded={s.open}
-          title={`${s.open ? "Hide" : "Show"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started (← →)`}
+          title={`${s.open ? "Hide" : "Show"} the ${s.kids === 1 ? "session" : `${s.kids} sessions`} it started${s.all > s.kids ? `, ${s.all} with theirs` : ""} (← →)`}
           onClick={(e) => {
             // Keep expansion separate from opening the session.
             e.preventDefault();
@@ -639,6 +639,7 @@ const Row = memo(function Row({
         >
           {s.open ? <Icon.chevronDown size={10} /> : <Icon.chevronRight size={10} />}
           {s.kids}
+          {s.all > s.kids ? <span className="rail-kids-all">({s.all})</span> : null}
         </button>
       ) : null}
       {s.node ? (
