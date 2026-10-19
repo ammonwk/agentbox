@@ -506,77 +506,88 @@ export class Rates {
   }
 
   /**
-   * What moved: each plan's ratios and price over the last three days against
-   * the two weeks before. A ratio cannot be moved by use agentbox does not
-   * see, so one that moves is the provider's doing. The price can: an
-   * account used heavily in the browser looks dear. So a price change counts
-   * only where most of the plan's accounts with recent work moved the same
-   * way, which a provider's change does and your own use of one does not.
-   * `seen` is what was last reported per plan and number, so a change is said
-   * once rather than every day until the baseline catches up.
+   * What moved: each plan's ratios and price over the last three days
+   * against the two weeks before (a step), and over the last week against the
+   * week two weeks and a month before (a slide too slow for the first: Claude's
+   * week went from $2,930 to $2,500 over twelve days without tripping it). A
+   * ratio cannot be moved by use agentbox does not see, so one that moves is
+   * the provider's doing. The price can: an account used heavily in the
+   * browser looks dear. So a dearer point counts only where most of the
+   * plan's accounts with recent work moved the same way, which a provider's
+   * change does and your own use of one does not. `seen` is what was last
+   * reported per plan and number, so a change is said once, by whichever
+   * comparison sees it first, rather than every day until the baseline
+   * catches up.
    */
   changes(seen: Record<string, number>): { changes: RateChange[]; seen: Record<string, number> } {
     const now = this.now();
     const out: RateChange[] = [];
     const next = { ...seen };
-    const recentFrom = now - 3 * DAY;
-    const baseFrom = now - 17 * DAY;
+    const comparisons = [
+      { recentFrom: now - 3 * DAY, baseFrom: now - 17 * DAY, baseTo: now - 3 * DAY, recent: "the last three days", base: "the two weeks before" },
+      { recentFrom: now - 7 * DAY, baseFrom: now - 21 * DAY, baseTo: now - 14 * DAY, recent: "the last week", base: "the week two weeks before" },
+      { recentFrom: now - 7 * DAY, baseFrom: now - 35 * DAY, baseTo: now - 28 * DAY, recent: "the last week", base: "the week a month before" },
+    ];
     for (const p of this.plans.values()) {
-      const recentUnits = p.units.filter((u) => u.to > recentFrom);
-      const recent = fitUnits(recentUnits, p);
-      const base = fitUnits(p.units.filter((u) => u.to > baseFrom && u.to <= recentFrom), p);
-      const say = (metric: string, a: Measure, b: Measure, title: (is: number) => string, short: (is: number, was: number) => string): void => {
-        // Said in what a person reads: a full window's weekly points, a
-        // week's dollars. Both are 100 over the measure.
-        const was = 100 / a.value;
-        const is = 100 / b.value;
-        const k = `${p.plan}|${metric}`;
-        const ref = seen[k] ?? was;
-        if (!differ(a, b) || Math.abs(is / was - 1) < MIN_CHANGE || Math.abs(is / ref - 1) < MIN_CHANGE) return;
-        next[k] = is;
-        out.push({ key: `rates:${k}:${new Date(now).toISOString().slice(0, 10)}`, title: title(is), short: short(is, was) });
-      };
-      for (const w of p.windows) {
-        const a = base.perWeekly[w.id];
-        const b = recent.perWeekly[w.id];
-        if (w.id === p.weekly.id || !a || !b) continue;
-        const name = w.label.toLowerCase();
+      for (const c of comparisons) {
+        const recentUnits = p.units.filter((u) => u.to > c.recentFrom);
+        const recent = fitUnits(recentUnits, p);
+        const base = fitUnits(p.units.filter((u) => u.to > c.baseFrom && u.to <= c.baseTo), p);
+        const say = (metric: string, a: Measure, b: Measure, title: (is: number) => string, short: (is: number, was: number) => string): void => {
+          // Said in what a person reads: a full window's weekly points, a
+          // week's dollars. Both are 100 over the measure.
+          const was = 100 / a.value;
+          const is = 100 / b.value;
+          const k = `${p.plan}|${metric}`;
+          const ref = next[k] ?? was;
+          if (!differ(a, b) || Math.abs(is / was - 1) < MIN_CHANGE || Math.abs(is / ref - 1) < MIN_CHANGE) return;
+          next[k] = is;
+          out.push({ key: `rates:${k}:${new Date(now).toISOString().slice(0, 10)}`, title: title(is), short: short(is, was) });
+        };
+        for (const w of p.windows) {
+          const a = base.perWeekly[w.id];
+          const b = recent.perWeekly[w.id];
+          if (w.id === p.weekly.id || !a || !b) continue;
+          const name = w.label.toLowerCase();
+          say(
+            w.id,
+            a,
+            b,
+            (is) => `${p.plan}: a full ${name} window is now ${fmt(is)} weekly points`,
+            (is, was) =>
+              `Over ${c.recent} one full ${name} window of ${p.plan} took ${fmt(is)} weekly points; over ${c.base}, ${fmt(was)}. Every window counts the same use, whoever spent it, so this is the provider's doing. The balancer already uses the new number.`,
+          );
+        }
+        const a = base.price;
+        const b = recent.price;
+        if (!a || !b) continue;
+        // Dearer points are a smaller week, which use agentbox does not see
+        // looks like too; a bigger week it cannot fake. A smaller one counts
+        // where most accounts with recent work moved with it, as a provider's
+        // change moves them all and your use of one account in the browser
+        // moves that one. Each by half the change at least: one account's
+        // week is noisier than the plan's (Claude's slide of 14% was 5–34%
+        // on its five accounts).
+        const smaller = b.value > a.value;
+        const moved = p.accounts
+          .map((acct) => recentUnits.filter((u) => u.accountId === acct.id && !u.capped && u.cost > 0))
+          .filter((us) => us.length >= 3)
+          .map((us) => us.reduce((n, u) => n + u.dBase, 0) / (p.fit.perWeekly[p.base.id]?.value ?? 1) / us.reduce((n, u) => n + u.cost, 0));
+        const agree = moved.filter((x) => x > a.value === smaller && Math.abs(x / a.value - 1) >= MIN_CHANGE / 2).length;
+        if (smaller && (moved.length < 2 || agree * 2 <= moved.length)) continue;
         say(
-          w.id,
+          "price",
           a,
           b,
-          (is) => `${p.plan}: a full ${name} window is now ${fmt(is)} weekly points`,
+          (is) => `${p.plan}: a week is now worth about $${Math.round(is).toLocaleString("en-US")} at API prices`,
           (is, was) =>
-            `Over the last three days one full ${name} window of ${p.plan} took ${fmt(is)} weekly points; over the two weeks before, ${fmt(was)}. Every window counts the same use, whoever spent it, so this is the provider's doing. The balancer already uses the new number.`,
+            `Over ${c.recent} a full week of ${p.plan} bought about $${Math.round(is).toLocaleString("en-US")} of API-priced work, against $${Math.round(was).toLocaleString("en-US")} over ${c.base}. ` +
+            (smaller
+              ? `${agree} of the ${moved.length} accounts with recent work moved the same way, so it is the provider's doing rather than one account used where agentbox cannot see. `
+              : "Use agentbox does not see can only make a week look smaller, so a bigger one is the provider's doing. ") +
+            "Which models ran moves this too: a model that costs more against the plan than at API prices makes a week look smaller.",
         );
       }
-      const a = base.price;
-      const b = recent.price;
-      if (!a || !b) continue;
-      // Dearer points are a smaller week, which use agentbox does not see
-      // looks like too; a bigger week it cannot fake. A smaller one counts
-      // where most accounts with recent work moved with it, as a provider's
-      // change moves them all and your use of one account in the browser
-      // moves that one.
-      const smaller = b.value > a.value;
-      const moved = p.accounts
-        .map((acct) => recentUnits.filter((u) => u.accountId === acct.id && !u.capped && u.cost > 0))
-        .filter((us) => us.length >= 3)
-        .map((us) => us.reduce((n, u) => n + u.dBase, 0) / (p.fit.perWeekly[p.base.id]?.value ?? 1) / us.reduce((n, u) => n + u.cost, 0));
-      const agree = moved.filter((x) => x > a.value === smaller && Math.abs(x / a.value - 1) >= MIN_CHANGE).length;
-      if (smaller && (moved.length < 2 || agree * 2 <= moved.length)) continue;
-      say(
-        "price",
-        a,
-        b,
-        (is) => `${p.plan}: a week is now worth about $${Math.round(is)} at API prices`,
-        (is, was) =>
-          `Over the last three days a full week of ${p.plan} bought about $${Math.round(is)} of API-priced work, against $${Math.round(was)} over the two weeks before. ` +
-          (smaller
-            ? `${agree} of the ${moved.length} accounts with recent work moved the same way, so it is the provider's doing rather than one account used where agentbox cannot see. `
-            : "Use agentbox does not see can only make a week look smaller, so a bigger one is the provider's doing. ") +
-          "Which models ran moves this too: a model that costs more against the plan than at API prices makes a week look smaller.",
-      );
     }
     return { changes: out, seen: next };
   }
