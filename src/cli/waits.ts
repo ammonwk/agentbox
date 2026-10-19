@@ -3,7 +3,8 @@
 
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Api } from "../client";
+import { ApiError, type Api } from "../client";
+import { isLaunchdJob, startLaunchdJob, stopLaunchdJob } from "../core/job-launchd";
 import { agentboxHome } from "../core/paths";
 import { describe, span } from "../core/waits";
 import type { Wait, WaitSpec } from "../core/types";
@@ -67,7 +68,7 @@ export async function wait(api: Api, args: string[]): Promise<number> {
       break;
     }
     case "job":
-      spec = startJob(rest, str(flags.get("name")));
+      spec = await startJob(rest, str(flags.get("name")));
       break;
     case "session":
       if (rest.length === 0) throw new Error("wait session needs the ids of the sessions to wait on");
@@ -90,15 +91,35 @@ export async function wait(api: Api, args: string[]): Promise<number> {
   let made: { wait: Wait; already: boolean };
   try {
     made = await api<{ wait: Wait; already: boolean }>("POST", "/api/waits", { ...body, spec });
+    if (spec.kind === "job" && spec.unit && isLaunchdJob(spec.unit)) {
+      const w = made?.wait;
+      if (!w || !Number.isInteger(w.id) || typeof w.sessionId !== "string" || !Number.isFinite(w.deadline) || !Number.isFinite(w.createdAt) ||
+        w.spec?.kind !== "job" || w.spec.unit !== spec.unit || w.spec.log !== spec.log || w.spec.result !== spec.result) {
+        throw new Error("the server did not return this job's wait receipt");
+      }
+    }
   } catch (e) {
-    // Nothing would say how it ended: do not leave it running unwatched.
-    if (spec.kind === "job" && spec.unit) Bun.spawnSync(["systemctl", "--user", "stop", spec.unit]);
+    if (spec.kind === "job" && spec.unit) {
+      if (isLaunchdJob(spec.unit)) {
+        const job = spec as Extract<WaitSpec, { kind: "job" }>;
+        // The route validates and arm() refuses before inserting. Transport,
+        // malformed replies and 5xx can instead follow a committed wait.
+        if (e instanceof ApiError && e.status !== null && [400, 401, 403, 404, 409, 422, 429].includes(e.status)) {
+          try { await stopLaunchdJob(job); }
+          catch (stop) { throw new Error(`${(e as Error).message}; ${(stop as Error).message}. ${jobEvidence(job)}`); }
+          throw new Error(`${e.message}; the job was stopped after registration was refused. It may have run. ${jobEvidence(job)}`);
+        }
+        throw new Error(`wait registration is unconfirmed: ${(e as Error).message}. The job may still run and the wait may be armed. Do not rerun the command; inspect agentbox waits and ${job.unit}. ${jobEvidence(job)}`);
+      }
+      // Preserve the systemd launcher's existing refusal behavior.
+      Bun.spawnSync(["systemctl", "--user", "stop", spec.unit]);
+    }
     throw e;
   }
   const w = made.wait;
   const by = new Date(w.deadline).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
   console.log(`${w.id}  ${made.already ? "already armed" : "armed"}  ${describe(w.spec)}`);
-  if (w.spec.kind === "job") console.log(`${w.id}  its output goes to ${w.spec.log}; stop it with: systemctl --user stop ${w.spec.unit}`);
+  if (w.spec.kind === "job") console.log(`${w.id}  ${jobEvidence(w.spec)}`);
   console.log(
     w.spec.kind === "time"
       ? `${w.id}  ${w.sessionId} is told at ${by}. End your turn or carry on with other work.`
@@ -112,15 +133,22 @@ const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 /** One argument is a shell command line; several are an argv, each quoted, so `bash -c '<script>'` reaches sh whole. */
 export const commandLine = (argv: string[]): string => (argv.length === 1 ? argv[0]! : argv.map(shq).join(" "));
 
+const stopCommand = (spec: Extract<WaitSpec, { kind: "job" }>) => isLaunchdJob(spec.unit) ? `launchctl bootout ${spec.unit}` : `systemctl --user stop ${spec.unit}`;
+const jobEvidence = (spec: Extract<WaitSpec, { kind: "job" }>) => `Output: ${spec.log}; result: ${spec.result}; stop with: ${stopCommand(spec)}`;
+
 /**
- * Start the command as a systemd service of the user's own, in this
- * directory and environment. It is no part of the session's process tree, so
- * parking, stopping or moving the session leaves it running, and its
- * `ExecStopPost` writes how it ended (also when it was killed) where the
- * server reads it. One argument is a shell command line; several are an argv.
+ * Start the command as a service of its own: a systemd user service on Linux,
+ * a one-shot launchd agent on macOS, in this directory and environment. It is
+ * no part of the session's process tree, so parking, stopping or moving the
+ * session leaves it running, and how it ended is written where the server
+ * reads it. One argument is a shell command line; several are an argv.
  */
-function startJob(argv: string[], name: string | undefined): Extract<WaitSpec, { kind: "job" }> {
+async function startJob(argv: string[], name: string | undefined): Promise<Extract<WaitSpec, { kind: "job" }>> {
   if (argv.length === 0) throw new Error("wait job needs the command to run, after --: agentbox wait job -- 'npx tsx scripts/census.ts --prod > census.log 2>&1'");
+  if (process.platform === "darwin") {
+    const command = commandLine(argv);
+    return startLaunchdJob(argv.length === 1 ? `exec bash -c ${shq(command)}` : `exec ${command}`, name ? `${name}: ${command}` : command);
+  }
   if (process.platform !== "linux" || !Bun.which("systemd-run")) throw new Error("wait job runs the command as a systemd user service, which this machine does not have");
   const id = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   const unit = `agentbox-job-${id}.service`;
@@ -176,7 +204,7 @@ export async function unwait(api: Api, args: string[]): Promise<number> {
   for (const id of rest) {
     try {
       const w = await api<Wait>("DELETE", `/api/waits/${encodeURIComponent(id)}`);
-      console.log(`${id}  cancelled${w.spec.kind === "job" ? `; its job still runs (systemctl --user stop ${w.spec.unit})` : ""}`);
+      console.log(`${id}  cancelled${w.spec.kind === "job" ? `; its job still runs (${stopCommand(w.spec)})` : ""}`);
     } catch (e) {
       failed++;
       console.error(`${id}  unwait failed: ${(e as Error).message}`);

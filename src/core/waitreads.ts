@@ -13,6 +13,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } fro
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { WaitSpec } from "./types";
+import { isLaunchdJob, readLaunchdJob, stopLaunchdJob } from "./job-launchd";
 
 type PrSpec = Extract<WaitSpec, { kind: "pr" }>;
 type JobSpec = Extract<WaitSpec, { kind: "job" }>;
@@ -202,7 +203,7 @@ export async function readRun(repo: string, id: number): Promise<RunRead> {
 }
 
 export interface JobRead {
-  /** What systemd said of its end (`SERVICE_RESULT EXIT_CODE EXIT_STATUS`), once it has ended. */
+  /** The command's end (`SERVICE_RESULT EXIT_CODE EXIT_STATUS`), once known. */
   result: { result: string; code: string; status: string } | null;
   /** Its unit is still there and has not finished. */
   running: boolean;
@@ -213,8 +214,16 @@ export interface JobRead {
 export async function readJob(spec: JobSpec): Promise<JobRead> {
   if (existsSync(spec.result)) {
     const [result = "", code = "", status = ""] = readFileSync(spec.result, "utf8").trim().split(/\s+/);
+    if (isLaunchdJob(spec.unit)) {
+      if (!((result === "success" && code === "exited" && status === "0") ||
+        (["exit-code", "launch-error"].includes(result) && code === "exited" && /^-?\d+$/.test(status) && Number(status) !== 0) ||
+        (result === "signal" && code === "killed" && status))) throw new Error(`the job's result is incomplete or invalid: ${spec.result}`);
+      // Completion evidence survives cleanup. A cleanup failure must not hide it.
+      try { await stopLaunchdJob(spec); } catch { /* an inactive one-shot cannot rerun work */ }
+    }
     return { result: { result, code, status }, running: false };
   }
+  if (isLaunchdJob(spec.unit)) return readLaunchdJob(spec);
   const p = Bun.spawn(["systemctl", "--user", "is-active", spec.unit], {
     timeout: 10_000,
     stdout: "pipe",

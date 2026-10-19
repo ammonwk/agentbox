@@ -15,7 +15,9 @@ export function serverBase(): string {
 
 /** A refusal or failure from the server. `data` is whatever came with it — a
  *  refused spawn sends the placement, so the caller can show why. `status` is
- *  the HTTP status, null when the server could not be reached at all. */
+ *  the HTTP status of a parsed refusal; it is null when the server could not
+ *  be reached or answered something that is not its envelope, which leaves
+ *  whether a mutation committed unknown. */
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -41,8 +43,8 @@ export function apiClient(base: string): Api {
       throw new ApiError(`agentbox server is not running at ${base} — start it with \`agentbox serve\` (${(e as Error).message})`);
     }
     const env = (await res.json().catch(() => null)) as { ok: boolean; data: T; error: string | null } | null;
-    if (!env) throw new ApiError(`agentbox answered ${path} with HTTP ${res.status} and no JSON`, null, res.status);
-    if (!env.ok) throw new ApiError(env.error ?? `HTTP ${res.status}`, env.data, res.status);
+    if (!env) throw new ApiError(`agentbox answered ${path} with HTTP ${res.status} and no JSON`);
+    if (!res.ok || env.ok !== true) throw new ApiError(env.error ?? `HTTP ${res.status}`, env.data, env.ok === false ? res.status : null);
     return env.data;
   };
 }
