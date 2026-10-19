@@ -173,15 +173,16 @@ function AccountCard({
   const now = useNow(30_000);
   const claims = a.claims;
   const outstanding = outstandingOf(claims);
-  // The heaviest users: the top 5% of the sessions listed, rounded up. A row
-  // tied with one below that line is left out, so when every session has used
-  // the same none of them stands out and none is marked. A lapsed claim no
-  // longer counts, so it is not ranked.
+  // The sessions expected to use the most: the 90th percentile of the card's
+  // predicted totals, rounded up, so the top tenth. A row tied with one below
+  // that line is left out: when every session expects the same, none of them
+  // stands out and none is marked. A lapsed claim no longer counts, so it is
+  // not ranked.
   const top = useMemo(() => {
     const live = claims.filter((x) => !x.lapsed);
-    const used = live.map((x) => x.consumed).sort((x, y) => y - x);
-    const line = used[Math.ceil(used.length * 0.05)] ?? -Infinity;
-    return new Set(live.filter((x) => x.consumed > line).map((x) => x.sessionId));
+    const totals = live.map((x) => x.consumed + x.outstanding).sort((x, y) => y - x);
+    const line = totals[Math.ceil(totals.length * 0.1)] ?? -Infinity;
+    return new Set(live.filter((x) => x.consumed + x.outstanding > line).map((x) => x.sessionId));
   }, [claims]);
   const windows = sortWindows(a.usage.windows);
   const weeklyId = windows.find((w) => w.kind === "weekly" && !w.scope)?.id;
@@ -359,7 +360,7 @@ function AccountCard({
             <thead>
               <tr>
                 <th>Session</th>
-                <th className="num" title="Weekly points it has used so far, of what it is expected to use here by the time it is done: a forecast of the rest once it has spent anything, else what is left of its claim at placement. The heaviest 5% of the sessions listed (rounded up) are underlined">Used</th>
+                <th className="num" title="Weekly points it has used so far, of what it is expected to use here by the time it is done: a forecast of the rest once it has spent anything, else what is left of its claim at placement. The 10% of the sessions listed expected to use the most (the 90th percentile, rounded up) are underlined">Used</th>
               </tr>
             </thead>
             <tbody>
