@@ -38,6 +38,21 @@ const FIRST_ROWS = 40;
  *  takes little room, and a page at a time of it is many round trips. */
 const FILL_PAGE = 400;
 
+/** Where you were in each timeline you left above its end (the first row in
+ *  view, and how far its top was from the view's), and the traces you opened
+ *  or folded: coming back to it, from another tab or session, puts you there. */
+interface Place {
+  at: { ev: string; offset: number } | null;
+  flipped: ReadonlySet<string>;
+}
+const places = new Map<string, Place>();
+function remember(sessionId: string, patch: Partial<Place>): void {
+  const p = { at: null, flipped: new Set<string>(), ...places.get(sessionId), ...patch };
+  places.delete(sessionId);
+  places.set(sessionId, p);
+  if (places.size > 50) places.delete(places.keys().next().value!);
+}
+
 /**
  * The conversation as the provider's transcript records it, folded into
  * provider-neutral events. Newest at the bottom; scrolling to the top pages
@@ -64,7 +79,8 @@ export function Timeline({ session }: { session: Session }) {
   // Whether a trace is open is the setting's, until you open or fold it.
   const { state } = useAppState();
   const hideSteps = state?.settings.hideSteps ?? "always";
-  const [flipped, setFlipped] = useState<ReadonlySet<string>>(new Set());
+  const [flipped, setFlipped] = useState<ReadonlySet<string>>(() => places.get(session.id)?.flipped ?? new Set());
+  useEffect(() => remember(session.id, { flipped }), [session.id, flipped]);
   const isOpen = (r: Extract<TimelineRow, { type: "trace" }>) =>
     flipped.has(r.id) !== (hideSteps === "never" || (hideSteps === "done" && r.live));
   const toggleTrace = useCallback((id: string) => {
@@ -130,7 +146,8 @@ export function Timeline({ session }: { session: Session }) {
   const thinkDur = useThinkDur(events);
 
   const boxRef = useRef<HTMLDivElement>(null);
-  const [pinned, setPinned] = useState(true);
+  const [pinned, setPinned] = useState(() => !places.get(session.id)?.at);
+  const [restore, setRestore] = useState(() => places.get(session.id)?.at ?? null);
   const prev = useRef({ count: 0, firstId: "", scrollTop: 0, scrollHeight: 0, initial: true });
 
   useLayoutEffect(() => {
@@ -241,6 +258,17 @@ export function Timeline({ session }: { session: Session }) {
     else if (!loadingOlder) loadOlder(1000);
   }, [jump, ready, staged, events, exhausted, error, loadingOlder, loadOlder, rowOf, traceOf, flipped, hideSteps, toggleTrace]);
 
+  // Back where you left it, once its rows are all in; a jump wins, and a row
+  // no longer held leaves you at the end.
+  useLayoutEffect(() => {
+    if (!restore || (!jump && (!ready || staged))) return;
+    setRestore(null);
+    const box = boxRef.current;
+    const el = jump ? null : rowOf(restore.ev);
+    if (box && el) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - restore.offset;
+    else if (!jump) toLatest();
+  }, [restore, jump, ready, staged, rowOf]);
+
   const local = useMemo(() => ({ names: agentNames, jump: (id: string) => setJump(id) }), [agentNames]);
 
   // ---- editing a message, and its versions
@@ -318,13 +346,36 @@ export function Timeline({ session }: { session: Session }) {
     }
   };
 
+  const placeFrame = useRef(0);
+  const notePlace = () => {
+    cancelAnimationFrame(placeFrame.current);
+    placeFrame.current = requestAnimationFrame(() => {
+      const box = boxRef.current;
+      if (!box || restore) return;
+      let at: Place["at"] = null;
+      if (!isPinnedToBottom(box)) {
+        const top = box.getBoundingClientRect().top;
+        for (const el of box.querySelectorAll<HTMLElement>("[data-ev]")) {
+          const r = el.getBoundingClientRect();
+          if (r.bottom > top) {
+            at = { ev: el.dataset.ev!, offset: r.top - top };
+            break;
+          }
+        }
+      }
+      remember(session.id, { at });
+    });
+  };
+
   const onScroll = () => {
     const el = boxRef.current;
     if (!el) return;
+    notePlace();
     prev.current.scrollTop = el.scrollTop;
     prev.current.scrollHeight = el.scrollHeight;
+    // The first paint's scroll to the end is not the reader leaving their place.
     const nowPinned = isPinnedToBottom(el);
-    if (nowPinned !== pinned) setPinned(nowPinned);
+    if (nowPinned !== pinned && !restore) setPinned(nowPinned);
     // A screenful from the top, so the next page is in before you reach it.
     if (isAtTop(el, el.clientHeight) && !exhausted && !loadingOlder && !error) loadOlder();
     findCurrent();

@@ -8,6 +8,7 @@ import { AccountPicker } from "../newsession/AccountPicker";
 import { useSkillComplete } from "../newsession/skillcomplete";
 import { hrefOf } from "../../route";
 import { shownStatus } from "../../lib/board";
+import { useRecall } from "./recall";
 import { draftTaken, loadDraft, newRevision, onDraftWork, restorePending, saveDraft, submissionHash, type PendingSend } from "./drafts";
 import { PendingSends, deliverPending } from "./submissions";
 import "../newsession.css";
@@ -73,6 +74,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   const provider = PROVIDER_LABEL[session.provider];
   const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images, at: session.node ? session.id : undefined });
   const skill = useSkillComplete({ value: text, onChange: setText, skills, textareaRef: ref });
+  const recall = useRecall(session.id, text, setText);
   /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
   const btw = mode.kind === "send" && session.provider === "claude" ? BTW.exec(text) : null;
   /** Esc on the keyboard stops the turn: a session at its prompt has nothing to stop. */
@@ -289,14 +291,14 @@ export function Composer({ session, accounts, skills, textareaRef }: {
           value={text}
           placeholder={placeholder}
           enterKeyHint="send"
-          title="Enter sends · Shift+Enter for a new line · / for skills · Esc stops a running turn"
+          title="Enter sends · Shift+Enter for a new line · ↑ for what you said before · / for skills · Esc stops a running turn"
           {...skill.props}
           onChange={(e) => {
             setText(e.target.value);
             skill.onEdit(e.target);
           }}
           onKeyDown={(e) => {
-            if (skill.onKeyDown(e) || images.onKeyDown(e)) return;
+            if (skill.onKeyDown(e) || images.onKeyDown(e) || recall(e)) return;
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void submit();

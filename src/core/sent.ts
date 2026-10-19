@@ -59,9 +59,10 @@ export interface Sent {
 }
 
 /** A note agentbox itself typed into a session, the whole of the message: a
- *  nudge, a keep-warm, a recovery notice. A note put before your own message
+ *  nudge, a keep-warm, a recovery notice, or several of them delivered
+ *  together. A note put before your own message
  *  (`[agentbox: …]\n\nwhat you wrote`, waking a parked session) is yours. */
-const FLEET_NOTE = /^\s*\[agentbox: (?:(?!\]\n)[\s\S])*\]\s*$/;
+const FLEET_NOTE = /^\s*(?:\[agentbox: (?:(?!\]\n)[\s\S])*\]\s*)+$/;
 
 export function readSent(raw: string): Sent {
   const text = unwrapPaste(raw);
