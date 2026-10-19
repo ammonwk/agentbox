@@ -10,7 +10,6 @@ import { Button, Icon, Modal } from "../components";
 import {
   forgetFolder,
   loadFolderChoices,
-  loadForgottenFolders,
   loadPrefs,
   loadRepoChoices,
   noteFolderChoice,
@@ -283,7 +282,6 @@ export function NewSession({
   // A folder picked in the Where menu. It is remembered once a session
   // starts there (submit), so a guess that went nowhere is not kept.
   const [folderChoices, setFolderChoices] = useState<Record<string, number>>(loadFolderChoices);
-  const [forgotten, setForgotten] = useState<Record<string, number>>(loadForgottenFolders);
   function pickFolder(p: string) {
     setWherePicked(true);
     setWhere("path");
@@ -292,17 +290,13 @@ export function NewSession({
   function dropFolder(p: string) {
     forgetFolder(p);
     setFolderChoices(loadFolderChoices);
-    setForgotten(loadForgottenFolders);
   }
 
   // Once per opening, the server says which remembered folders are still
   // folders: `~/x` and `/home/me/x` become one, and the rest leave the menu
   // (and the choices, for good).
-  const [missing, setMissing] = useState<Record<string, number>>({});
   useEffect(() => {
-    const paths = [
-      ...new Set([...Object.keys(folderChoices), ...state.sessions.flatMap((s) => (s.cwd && !s.worktree ? [s.cwd] : []))]),
-    ];
+    const paths = Object.keys(folderChoices);
     if (paths.length === 0) return;
     let live = true;
     api
@@ -312,14 +306,12 @@ export function NewSession({
         const tidy = tidyFolderChoices(loadFolderChoices(), r);
         saveFolderChoices(tidy);
         setFolderChoices(tidy);
-        setMissing(Object.fromEntries(Object.keys(r).flatMap((p) => (r[p] === null ? [[p, Infinity]] : []))));
       })
       .catch(() => {});
     return () => {
       live = false;
     };
   }, []);
-  const hidden = useMemo(() => ({ ...forgotten, ...missing }), [forgotten, missing]);
 
   // "Add repository …" in the Where menu: register a repo the list does not
   // know — a local path or an owner/repo slug — and run against it from now
@@ -371,13 +363,13 @@ export function NewSession({
   }, [worktree, wt.kind]);
   const skills = useMemo(() => skillsFor(state.skills, provider, where === "repo" ? repo : null), [state.skills, provider, where, repo]);
   const folders = useMemo(
-    () => recentFolders(state.sessions, folderChoices, knownRepos.map((r) => r.ref), 12, hidden),
-    [state.sessions, folderChoices, knownRepos, hidden],
+    () => recentFolders(folderChoices, knownRepos.map((r) => r.ref), 12),
+    [folderChoices, knownRepos],
   );
 
   const projectMatches = useMemo(
-    () => promptProjects(prompt, knownRepos, recentFolders(state.sessions, folderChoices, knownRepos.map((r) => r.ref), Infinity, hidden)),
-    [prompt, knownRepos, state.sessions, folderChoices, hidden],
+    () => promptProjects(prompt, knownRepos, recentFolders(folderChoices, knownRepos.map((r) => r.ref), Infinity)),
+    [prompt, knownRepos, folderChoices],
   );
   const promptProject = projectMatches.length === 1 ? projectMatches[0] : null;
   useEffect(() => {

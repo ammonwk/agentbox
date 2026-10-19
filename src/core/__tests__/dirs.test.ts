@@ -41,9 +41,10 @@ test("remembered folders resolve to one absolute path each, and a guess that is 
   });
 });
 
-test("a forgotten folder stays out of the menu until the dialog starts a session there again", () => {
-  const sessions = [{ cwd: "/w/a", lastActivityAt: 50, worktree: null }];
-  expect(recentFolders(sessions, { "/w/b": 10 }, [], 12, { "/w/a": 20, "/w/b": 20 })).toEqual([]);
-  expect(recentFolders(sessions, { "/w/b": 30 }, [], 12, { "/w/a": 20, "/w/b": 20 })).toEqual(["/w/b"]);
-  expect(recentFolders(sessions, {}, [], 12, {})).toEqual(["/w/a"]);
+test("the menu's folders are the ones picked in the dialog, most recent first, bounded", () => {
+  expect(recentFolders({ "/w/a": 20, "/w/b": 10, "/w/c": 30 })).toEqual(["/w/c", "/w/a", "/w/b"]);
+  // A registered repo's checkout stands for itself.
+  expect(recentFolders({ "/w/a": 20, "/w/repo": 10 }, ["/w/repo"])).toEqual(["/w/a"]);
+  expect(recentFolders({ "/w/a": 20, "/w/b": 10 }, [], 1)).toEqual(["/w/a"]);
+  expect(recentFolders({})).toEqual([]);
 });
