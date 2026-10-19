@@ -2667,7 +2667,7 @@ export class Fleet extends EventEmitter {
    * session's `accountId` is its home's owner).
    */
   accountStates(provider: ProviderId, model?: string | null): AccountState[] {
-    const claims = this.claims();
+    const claims = this.claimsNow ?? this.claims();
     const all = listAccounts(accountProvider(provider));
     const owner = owners(all);
     const since = this.now() - 90 * 60_000;
@@ -2716,6 +2716,30 @@ export class Fleet extends EventEmitter {
     }
     return out;
   }
+
+  /** What the Accounts page shows: the claims on each account, and where a
+   *  session of each provider would go now — the claims worked out once for
+   *  all of them, not once per provider. A provider that cannot place is left out. */
+  accountsBoard(providers: readonly ProviderId[]): { claims: Map<string, ClaimView[]>; placements: Map<ProviderId, Placement> } {
+    const claims = this.claims();
+    const placements = new Map<ProviderId, Placement>();
+    this.claimsNow = claims;
+    try {
+      for (const p of new Set(providers)) {
+        try {
+          placements.set(p, this.placement(p));
+        } catch {
+          // Shown without one.
+        }
+      }
+    } finally {
+      this.claimsNow = null;
+    }
+    return { claims, placements };
+  }
+
+  /** Set only inside `accountsBoard`, which places every provider in one go. */
+  private claimsNow: Map<string, ClaimView[]> | null = null;
 
   placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true, only?: readonly string[]): Placement {
     const adapter = this.adapter(provider);

@@ -465,29 +465,17 @@ function accountViews(): AccountView[] {
 }
 
 function buildAccountViews(): AccountView[] {
-  const claims = fleet.claims();
-  const placements = new Map<string, ReturnType<Fleet["placement"]>>();
   const homes = accounts.list();
   const owner = owners(homes);
-  return homes.filter((a) => owner.get(a.id) === a.id).map((a) => {
-    let p = placements.get(a.provider);
-    if (!p) {
-      try {
-        p = fleet.placement(a.provider);
-      } catch {
-        p = undefined;
-      }
-      if (p) placements.set(a.provider, p);
-    }
-    return {
-      ...a,
-      // Lapsed claims weigh nothing; listing every session of the last few
-      // days under its account would bury the handful that do.
-      claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
-      placement: p?.candidates.find((c) => c.accountId === a.id) ?? null,
-      alsoAt: homes.filter((h) => h.id !== a.id && owner.get(h.id) === a.id).map((h) => ({ id: h.id, home: h.home, isDefault: h.isDefault })),
-    };
-  });
+  const { claims, placements } = fleet.accountsBoard(homes.map((a) => a.provider));
+  return homes.filter((a) => owner.get(a.id) === a.id).map((a) => ({
+    ...a,
+    // Lapsed claims weigh nothing; listing every session of the last few
+    // days under its account would bury the handful that do.
+    claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
+    placement: placements.get(a.provider)?.candidates.find((c) => c.accountId === a.id) ?? null,
+    alsoAt: homes.filter((h) => h.id !== a.id && owner.get(h.id) === a.id).map((h) => ({ id: h.id, home: h.home, isDefault: h.isDefault })),
+  }));
 }
 
 /** Who has which pull request, now (src/core/prclaims.ts). */
