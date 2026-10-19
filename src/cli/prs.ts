@@ -38,7 +38,8 @@ export async function pr(api: Api, args: string[]): Promise<number> {
     }
     case "release": {
       const { released } = await api<{ released: number }>("POST", "/api/prs/release", body);
-      console.log(released ? `released ${released}` : "no explicit claim removed; named PR waits and branch ownership are released");
+      const waits = "the waits that act on it are cancelled; a --merged wait stays armed";
+      console.log(released ? `released ${released}; ${waits}` : `no explicit claim removed; branch ownership goes, and ${waits}`);
       return 0;
     }
     case "who": {

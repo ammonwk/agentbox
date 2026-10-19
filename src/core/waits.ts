@@ -338,7 +338,9 @@ export class Waits {
     if (s.host === "external" || s.host === "subagent") {
       throw new FleetError(409, `${sessionId} ${s.host === "subagent" ? "is a subagent" : "runs in a terminal of the user's own"}: agentbox cannot type into it, so it could never be told how the wait ended. A subagent hands the waiting to its parent session or to a session of its own (agentbox claude --detach).`);
     }
-    if (spec.kind === "pr" && prReleased(sessionId, spec)) throw new FleetError(409, prReleaseNotice(sessionId));
+    // Ownership is the right to act on the PR, which the checks forms and
+    // --feedback are; a --merged wait only waits, so a release does not end it.
+    if (spec.kind === "pr" && !spec.merged && prReleased(sessionId, spec)) throw new FleetError(409, prReleaseNotice(sessionId));
     const ms = timeoutMs ?? DEFAULT_TIMEOUT_MS[spec.kind];
     if (!Number.isFinite(ms) || ms < MIN_TIMEOUT_MS || ms > MAX_TIMEOUT_MS) throw new FleetError(400, `a wait's timeout is between ${span(MIN_TIMEOUT_MS)} and ${span(MAX_TIMEOUT_MS)}`);
     const going = listOpenWaits(0).filter((w) => w.sessionId === sessionId && !w.ended);
@@ -523,7 +525,9 @@ export class Waits {
     w = getWait(w.id)!;
     if (w.ended === "cancelled" || w.toldAt !== null) return;
     const s = this.sessionOf(w);
-    if (w.spec.kind === "pr" && prReleased(s?.id ?? w.sessionId, w.spec)) {
+    // Not for a --merged wait: a released session's merge wait is still waiting
+    // for a merge, which needs no ownership, and ends as it always would.
+    if (w.spec.kind === "pr" && !w.spec.merged && prReleased(s?.id ?? w.sessionId, w.spec)) {
       updateWait(w.id, { ended: "cancelled", endedAt: now, outcome: prReleaseNotice(s?.id ?? w.sessionId), untold: null });
       return;
     }

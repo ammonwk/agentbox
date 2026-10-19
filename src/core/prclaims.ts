@@ -58,7 +58,11 @@ export function prReleaseNotice(sessionId: string): string {
     const holder = assignedPrHolder(p);
     return `${p.repo}#${p.number}${holder ? ` (assigned to ${holder})` : " (released)"}`;
   });
-  return `[agentbox: PR ownership changed. You no longer hold ${names.join(", ")}. Earlier prompts, waits, messages and schedules do not restore ownership. Do not edit, merge, push or use the successor's worktree for these PRs. Only a successful explicit agentbox pr claim can give one back to you.]`;
+  return `[agentbox: PR ownership changed. You no longer hold ${names.join(", ")}. `
+    + `Its checks, --require/--only and --feedback waits are cancelled; a --merged wait on it stays armed, `
+    + `since waiting for a merge needs no ownership. `
+    + `Earlier prompts, waits, messages and schedules do not restore ownership. `
+    + `Do not edit, merge, push or use the successor's worktree for these PRs. Only a successful explicit agentbox pr claim can give one back to you.]`;
 }
 
 const holds = (s: Session | undefined): s is Session =>
@@ -137,8 +141,8 @@ export function claimPr(claims: readonly PrClaim[], sessions: readonly Session[]
 /** An explicit handoff, including a hold inferred from a startup branch.
  * The caller must be the expected holder. Read/check/write are synchronous
  * in the server's single writer, so competing transfers cannot both win. The
- * holder lets go as on `releasePr` (its PR waits cancelled, a notice on its
- * next prompt) and the successor holds it as on `claimPr`. */
+ * holder lets go as on `releasePr` (its ownership waits cancelled, a notice on
+ * its next prompt) and the successor holds it as on `claimPr`. */
 export function transferPr(claims: readonly PrClaim[], sessions: readonly Session[], repo: string, number: number, actor: string, expected: string, to: string, now: number): PrClaim {
   const held = holderOf(claims, repo, number);
   if (!held || held.sessionId !== expected) throw new Error(`ownership changed: expected ${expected}, found ${held?.sessionId ?? "nobody"}; read pr who again`);
@@ -155,7 +159,12 @@ export function transferPr(claims: readonly PrClaim[], sessions: readonly Sessio
   return { repo: held.repo, number, sessionId: to, how: "said", at: now };
 }
 
-/** Cancel both armed waits and results still waiting to be delivered, atomically with release. */
+/** Cancel the ownership waits and results still waiting to be delivered,
+ *  atomically with release: there is no owner left to act on the PR, and no
+ *  one to tell. Acting on it is what those waits are — checks, --require,
+ *  --only, --feedback. A `--merged` wait is the wait for a PR yours is
+ *  stacked on, which needs no ownership: it outlives the release and is told
+ *  as usual when the PR merges, naming whoever holds it by then. */
 export function releasePr(sessionId: string, pr: PrRef | null): number {
   const db = getDb();
   return db.transaction(() => {
@@ -165,6 +174,7 @@ export function releasePr(sessionId: string, pr: PrRef | null): number {
       db.run("INSERT OR IGNORE INTO pr_releases (session_id, repo, number) VALUES (?,?,?)", [sessionId, ref.repo, ref.number]);
       db.run(`UPDATE waits SET ended = 'cancelled', ended_at = ?, outcome = ?, untold = NULL
         WHERE session_id = ? AND told_at IS NULL AND json_extract(spec, '$.kind') = 'pr'
+        AND json_extract(spec, '$.merged') IS NOT 1
         AND lower(json_extract(spec, '$.repo')) = lower(?) AND json_extract(spec, '$.number') = ?`,
         [Date.now(), `PR ownership released: ${ref.repo}#${ref.number}; this session no longer holds it.`, sessionId, ref.repo, ref.number]);
       released += db.run("DELETE FROM pr_claims WHERE session_id = ? AND number = ? AND lower(repo) = lower(?)", [sessionId, ref.number, ref.repo]).changes;
