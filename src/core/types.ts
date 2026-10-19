@@ -1456,6 +1456,9 @@ export interface ScheduleSpec {
   effort?: string;
   /** `auto` or none: the balancer picks when it starts, not when it was asked. */
   accountId?: string | null;
+  /** Tried in order when no account of `provider` has room, each on its own
+   *  default model, effort and account. */
+  fallbacks?: ProviderId[];
 }
 
 /**

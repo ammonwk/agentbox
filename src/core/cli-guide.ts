@@ -119,7 +119,9 @@ why). Arming the same wait twice is one wait.
     agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.
-                                    # Prints the id and when it was understood to start
+                                    # Prints the id and when it was understood to start.
+                                    # --fallback omp,codex: started on those, in order,
+                                    # when --agent has no account with room
     agentbox schedule 'every 10 minutes' --note-cmd './whats-open.sh' --same-session [--fresh-over 150k] 'prompt'
                                     # a recurring one that speaks only when there is
                                     # something to say, and to one session. Each time
@@ -130,8 +132,10 @@ why). Arming the same wait twice is one wait.
                                     # started last instead of starting another, skips
                                     # the time while that one is mid-turn, and starts a
                                     # fresh one (closing the old) once it is gone or
-                                    # holds over --fresh-over tokens of context. Either
-                                    # flag works without the other
+                                    # holds over --fresh-over tokens of context. One
+                                    # compacted since the last note is kept, and that
+                                    # note carries the prompt again. Either flag works
+                                    # without the other
     agentbox schedules              # what is set to start: id  in  when · agent · title,
                                     # and for those: its session, its command, its last note
     agentbox unschedule <id>...     # it will not start

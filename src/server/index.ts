@@ -908,6 +908,11 @@ const provider = (v: unknown): ProviderId => {
   return v as ProviderId;
 };
 
+const providers = (v: unknown): ProviderId[] => {
+  if (!Array.isArray(v)) throw new HttpError(400, "fallbacks is a list of providers");
+  return v.map(provider);
+};
+
 /** A provider that holds accounts: opencode runs on omp's. */
 const accountProvider = (v: unknown): AccountProvider => {
   const p = provider(v);
@@ -1388,6 +1393,7 @@ const router = new Router(mapError)
         model: optionalString(spec, "model"),
         effort: optionalString(spec, "effort"),
         accountId: optionalString(spec, "accountId") ?? null,
+        fallbacks: spec.fallbacks === undefined ? undefined : providers(spec.fallbacks),
       },
       noteCmd: noteCmdOf(req, b),
       sameSession: b.sameSession === true,
@@ -1408,6 +1414,7 @@ const router = new Router(mapError)
     if (b.repoId !== undefined) edit.repoId = requireString(b, "repoId");
     if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : (requireOwnerOnHub(req, "a schedule's note command runs as the hub's user"), requireString(b, "noteCmd"));
     if (b.sameSession !== undefined) edit.sameSession = requireBoolean(b, "sameSession");
+    if (b.fallbacks !== undefined) edit.fallbacks = providers(b.fallbacks);
     if (b.freshOver !== undefined) {
       if (b.freshOver !== null && typeof b.freshOver !== "number") throw new HttpError(400, "freshOver must be a number of tokens");
       edit.freshOver = b.freshOver as number | null;
