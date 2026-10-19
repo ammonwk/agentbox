@@ -32,6 +32,11 @@
  * is skipped, and the command says what is still true the next time; one that
  * was replaced and then got busy before it could be closed is closed once its
  * turn is over (`retire`).
+ *
+ * A session a schedule starts and no longer speaks to closes itself an hour
+ * after its last message: it was started to do one thing, and the board is not
+ * where it lives afterwards. A session kept by a `sameSession` schedule is
+ * never closed this way, since its next note is going to it.
  */
 
 import { existsSync } from "node:fs";
@@ -43,6 +48,7 @@ import { FleetError, newSessionId, type Fleet, type SpawnRequest } from "./fleet
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
 import { defaultBranch, findWorkflow, readRuns, redNote, redStreak } from "./redwatch";
 import { describeRule, FRESH_OVER, isRecurring, nextRun, onEvent, parseWhen, type ScheduleRule } from "./schedule";
+import { listScheduledSessions, markScheduled } from "./schedule-sessions";
 import { scheduleSentMark } from "./sent";
 import type { ProviderId, Schedule, ScheduleSpec, Session } from "./types";
 
@@ -61,6 +67,8 @@ const FRESH_OVER_MIN = 20_000;
 const NOTE_TIMEOUT_S = 120;
 /** How much of what it prints is said: it is typed into a session. */
 const NOTE_MAX = 16_000;
+/** A scheduled session's last message is this old before it closes itself. */
+const CLOSE_FINISHED_MS = 60 * 60_000;
 
 /** What a note command or a one-session schedule did when it came due: the
  *  session spoken to or started, or why there is none this time. */
@@ -94,6 +102,8 @@ export class Scheduler {
   private ticking = false;
   private mergesCheckedAt = 0;
   private redsCheckedAt = 0;
+  /** When finished scheduled sessions were last looked for. */
+  private closesCheckedAt = 0;
   /** A red one whose session did not start: not tried again before this. */
   private redHeldUntil = new Map<string, number>();
   /** Schedules whose note command is running, or whose note is being said. */
@@ -231,6 +241,10 @@ export class Scheduler {
         this.redsCheckedAt = now;
         await this.checkReds(now);
       }
+      if (now - this.closesCheckedAt >= TICK_MS) {
+        this.closesCheckedAt = now;
+        await this.closeFinished(now);
+      }
     } catch (e) {
       console.error("agentbox: scheduler:", e);
     } finally {
@@ -303,6 +317,41 @@ export class Scheduler {
         this.changed();
       }
     }
+  }
+
+  /**
+   * Close sessions a schedule started once their last message is an hour old.
+   * A session that is mid-turn, has a prompt to answer, is waiting on a limit
+   * or an automatic resume, or still holds a wait or background work is left
+   * alone: it has not finished. A session a `sameSession` schedule will speak
+   * to next is not closed at all.
+   */
+  private async closeFinished(now: number): Promise<void> {
+    const kept = new Set(listSchedules().flatMap((s) => (s.enabled && s.sameSession && s.lastSessionId ? [s.lastSessionId] : [])));
+    let closed = false;
+    for (const { sessionId } of listScheduledSessions()) {
+      if (kept.has(sessionId)) continue;
+      let s: Session;
+      try {
+        s = this.fleet.get(sessionId);
+      } catch {
+        continue;
+      }
+      if (s.closedAt !== null) continue;
+      // You pinned or bookmarked it: it is not clutter to you.
+      if (s.pinOrder !== null || s.bookmarkedAt !== null) continue;
+      if (now - s.lastActivityAt < CLOSE_FINISHED_MS) continue;
+      if (s.status !== "waiting" && s.status !== "stopped") continue;
+      if (s.question || s.limitHit || s.turnError || s.autoResume || s.waits.length > 0 || s.parkHold || s.background) continue;
+      try {
+        await this.fleet.close(sessionId, true, true);
+        closed = true;
+        console.log(`agentbox: closed scheduled session ${sessionId} (${s.title}) after ${Math.round((now - s.lastActivityAt) / 60_000)}m idle`);
+      } catch (e) {
+        console.error(`agentbox: closing scheduled session ${sessionId} failed:`, e);
+      }
+    }
+    if (closed) this.changed();
   }
 
   /** Mid-turn, or showing a prompt it needs answered. */
@@ -456,6 +505,12 @@ export class Scheduler {
         { ...asked, accountId: accountId && accountId !== "auto" ? accountId : null },
         ...(fallbacks ?? []).map((provider) => ({ ...asked, provider, model: undefined, effort: undefined, accountId: null })),
       ]);
+      try {
+        markScheduled(session.id, s.id, now);
+      } catch (e) {
+        // It runs; only the automatic close will not know it was scheduled.
+        console.error(`agentbox: schedule ${s.id}: could not note ${session.id} as scheduled:`, e);
+      }
       // Its first prompt is the note, which makes a poor title.
       if (note && s.label) await this.fleet.patch(session.id, { label: s.label }).catch(() => {});
       if (once) deleteSchedule(s.id);
