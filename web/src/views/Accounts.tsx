@@ -173,6 +173,16 @@ function AccountCard({
   const now = useNow(30_000);
   const claims = a.claims;
   const outstanding = outstandingOf(claims);
+  // The heaviest users: the top 5% of the sessions listed, rounded up. A row
+  // tied with one below that line is left out, so when every session has used
+  // the same none of them stands out and none is marked. A lapsed claim no
+  // longer counts, so it is not ranked.
+  const top = useMemo(() => {
+    const live = claims.filter((x) => !x.lapsed);
+    const used = live.map((x) => x.consumed).sort((x, y) => y - x);
+    const line = used[Math.ceil(used.length * 0.05)] ?? -Infinity;
+    return new Set(live.filter((x) => x.consumed > line).map((x) => x.sessionId));
+  }, [claims]);
   const windows = sortWindows(a.usage.windows);
   const weeklyId = windows.find((w) => w.kind === "weekly" && !w.scope)?.id;
   const hue = accountHue(a.id, state.accounts);
@@ -349,7 +359,7 @@ function AccountCard({
             <thead>
               <tr>
                 <th>Session</th>
-                <th className="num" title="Weekly points it has used so far, of what it is expected to use here by the time it is done: a forecast of the rest once it has spent anything, else what is left of its claim at placement">Used</th>
+                <th className="num" title="Weekly points it has used so far, of what it is expected to use here by the time it is done: a forecast of the rest once it has spent anything, else what is left of its claim at placement. The heaviest 5% of the sessions listed (rounded up) are underlined">Used</th>
               </tr>
             </thead>
             <tbody>
@@ -358,7 +368,7 @@ function AccountCard({
                 // nothing left to forecast, so it is shown against its claim.
                 const total = cl.lapsed ? cl.claim : cl.consumed + cl.outstanding;
                 return (
-                  <tr key={cl.sessionId} data-lapsed={cl.lapsed || undefined}>
+                  <tr key={cl.sessionId} data-lapsed={cl.lapsed || undefined} data-top={top.has(cl.sessionId) || undefined}>
                     <td>
                       <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "timeline" })} className="ac-claim-title">
                         {cl.title}

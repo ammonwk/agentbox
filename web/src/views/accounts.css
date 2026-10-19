@@ -399,6 +399,12 @@
 .ac-claims tr[data-lapsed] .ac-claim-title {
   color: var(--faint);
 }
+/* The heaviest 5% of the list: a quiet dotted underline, since the mark is a
+   rank that moves as they spend. */
+.ac-claims tr[data-top] .ac-claim-title {
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 3px;
+}
 .ac-lapsed {
   font-size: 10px;
   border: 1px solid var(--border-strong);
