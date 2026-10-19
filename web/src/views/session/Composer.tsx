@@ -100,6 +100,14 @@ export function Composer({ session, accounts, skills, textareaRef }: {
     el.style.height = "auto";
     el.style.height = `${Math.min(200, el.scrollHeight + 2)}px`;
   }, [text]);
+  // A draft left here last time is picked up where it ended: the caret at
+  // its end, not its start, whenever the box is next focused.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.setSelectionRange(el.value.length, el.value.length);
+    el.scrollTop = el.scrollHeight;
+  }, [session.id]);
 
   // Remember the draft as it changes; sending empties the box, which deletes it.
   const savedImages = images.saved();
