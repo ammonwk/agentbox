@@ -22,7 +22,7 @@ export function Context({ state }: { state: AppState }) {
   const [briefing, setBriefing] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [scope, setScope] = useState("global");
-  const [bodies, setBodies] = useState<Record<string, string>>({});
+  const [bodies, setBodies] = useState<Record<string, string | null>>({});
   const asked = useRef(new Set<string>());
 
   const load = useCallback(() => {
@@ -66,17 +66,19 @@ export function Context({ state }: { state: AppState }) {
     return [...own, ...everywhere];
   }, [docs, here, repo]);
 
-  // Bodies are read once per doc, for the previews.
+  // Bodies are read once per doc, for the previews. The lists change with the
+  // scope, not only with `docs`: a repo's files are first asked for when that
+  // repo is picked, so they are dependencies too.
   useEffect(() => {
     for (const doc of [...rules, ...inherited, ...instructions]) {
       if (asked.current.has(doc.id)) continue;
       asked.current.add(doc.id);
       api.contextDoc(doc.id).then(
         (r) => setBodies((b) => ({ ...b, [doc.id]: r.body })),
-        () => setBodies((b) => ({ ...b, [doc.id]: "" })),
+        () => setBodies((b) => ({ ...b, [doc.id]: null })),
       );
     }
-  }, [docs]);
+  }, [rules, inherited, instructions]);
 
   const saved = (next: ContextDoc[], id: string, body: string): void => {
     setDocs(next);
@@ -190,7 +192,8 @@ function DocCard({
   inherited,
 }: {
   doc: ContextDoc;
-  body: string | undefined;
+  /** undefined until it is asked for, null when the read failed. */
+  body: string | null | undefined;
   home: string | null;
   onSaved: (docs: ContextDoc[], id: string, body: string) => void;
   /** Shown under a repo, but read everywhere. */
@@ -208,7 +211,7 @@ function DocCard({
     setEditing(true);
     setDraft(body ?? "");
     setNote(null);
-    if (body !== undefined) return;
+    if (body != null) return;
     try {
       const r = await api.contextDoc(doc.id);
       setDraft(r.body);
@@ -281,6 +284,10 @@ function DocCard({
         </div>
       ) : body === undefined ? (
         <p className="cx-hint">Reading…</p>
+      ) : body === null ? (
+        <p className="cx-error" role="alert">
+          Could not read this file.
+        </p>
       ) : body.trim() === "" ? (
         <p className="cx-empty">{doc.kind === "rules" ? "No rules here yet." : "No such file yet."}</p>
       ) : (
