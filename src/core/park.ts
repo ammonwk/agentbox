@@ -42,6 +42,8 @@ import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Wake } from "./providers/types";
 
+export { endedDone } from "./turnstatus";
+
 /** How often the fleet looks for sessions to park. */
 export const PARK_CHECK_MS = 60_000;
 /** Nothing is parked this soon after the server starts: the first passes are
@@ -256,13 +258,6 @@ export class ShellStillness {
   prune(alive: (key: string) => boolean): void {
     for (const key of this.seen.keys()) if (!alive(key)) this.seen.delete(key);
   }
-}
-
-/** Did this turn end `STATUS: done`? The last non-empty line of its last
- *  message, bold or code markup allowed. */
-export function endedDone(lastMessage: string | null | undefined): boolean {
-  const last = (lastMessage ?? "").trimEnd().split("\n").at(-1)?.trim() ?? "";
-  return /^[*_`]*STATUS:[*_`]*\s*done\b/i.test(last);
 }
 
 /** Collapse whitespace, for matching a live shell to the Monitor call that

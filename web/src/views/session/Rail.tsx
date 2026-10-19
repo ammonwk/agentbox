@@ -37,6 +37,7 @@ import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
 import { movePin, toggleBookmark, togglePin } from "./pins";
 import { ScheduledRow } from "./Scheduled";
+import { endedDone, turnStatus } from "../../../../src/core/turnstatus";
 
 // ------------------------------------------------------------------- state
 
@@ -626,8 +627,8 @@ const Row = memo(function Row({
 
 /**
  * What it is doing, as one icon at the row's right end: a spinner while it
- * works, a pulse while it waits on work it left running, a clock when it is
- * your turn, and an alert while it waits for your approval or your answer, or
+ * works, a pulse while it waits on work it left running, a check once its
+ * turn ended `STATUS: done`, a clock when it is otherwise your turn, and an alert while it waits for your approval or your answer, or
  * when its turn failed. Nothing once it is stopped. A click copies its id.
  */
 function RowState({ s }: { s: SessionRow }) {
@@ -672,7 +673,9 @@ function stateOf(s: SessionRow): { kind: string; label: string; icon: ReactNode 
   }
   if (s.status !== "waiting") return null;
   if (s.turnError) return { kind: "error", label: `Its turn failed: ${s.turnError.detail}`, icon: <Icon.alert size={13} /> };
-  return { kind: "waiting", label: s.parkedAt ? "Your turn (parked: a message resumes it)" : "Your turn", icon: <Icon.clock size={13} /> };
+  const parked = s.parkedAt ? " (parked: a message resumes it)" : "";
+  if (endedDone(s.lastMessage)) return { kind: "done", label: `Done${parked}`, icon: <Icon.check size={13} /> };
+  return { kind: "waiting", label: `Your turn${parked}`, icon: <Icon.clock size={13} /> };
 }
 
 /**
@@ -778,7 +781,9 @@ function snippetOf(s: SessionRow): string {
   const said =
     s.status === "blocked" || (s.status === "waiting" && (s.subagent?.answerWaiting || s.turnError))
       ? s.attention.reason
-      : s.lastMessage ?? s.lastPrompt ?? s.firstPrompt;
+      : s.lastMessage
+        ? turnStatus(s.lastMessage)?.body || s.lastMessage
+        : s.lastPrompt ?? s.firstPrompt;
   return said ? said.replace(/\s+/g, " ").trim() : "";
 }
 

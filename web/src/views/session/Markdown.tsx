@@ -18,6 +18,7 @@ import { shownImageUrl } from "../../api";
 import { ImagePath, imagePathRefs, isImagePath } from "./imagepaths";
 import { localFileLink } from "../../../../src/core/filelinks";
 import { FileLink } from "./FileLink";
+import { turnStatus, type TurnStatus } from "../../../../src/core/turnstatus";
 
 /** Agent prose. External links open in a new tab: this page is a live
  *  terminal, and navigating away from it drops the attach. A link to another
@@ -45,6 +46,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
     () => [remarkGfm, remarkFileRefs(), remarkImagePaths(), remarkLocalPaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
     [base, links, names],
   );
+  const status = inline ? null : turnStatus(text);
   const md = (
       <ReactMarkdown
         remarkPlugins={plugins}
@@ -108,7 +110,7 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
           },
         }}
       >
-        {text}
+        {status ? status.body : text}
       </ReactMarkdown>
   );
   if (inline) {
@@ -118,7 +120,25 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
       </span>
     );
   }
-  return <div className="sx-md">{md}</div>;
+  return (
+    <div className="sx-md">
+      {md}
+      {status ? <StatusLine status={status} /> : null}
+    </div>
+  );
+}
+
+const STATUS_ICON = { done: Icon.check, waiting: Icon.clock, needs: Icon.user, other: Icon.chevronRight };
+
+/** The turn's closing `STATUS:` line, as a quiet footer rather than prose. */
+function StatusLine({ status: { kind, text } }: { status: TurnStatus }) {
+  const Glyph = STATUS_ICON[kind];
+  return (
+    <div className="sx-status" data-kind={kind} title={`STATUS: ${text}`}>
+      <Glyph size={12} weight="bold" />
+      <Markdown inline text={text.charAt(0).toUpperCase() + text.slice(1)} />
+    </div>
+  );
 }
 
 /** react-markdown blanks any URL whose scheme it does not know, which would
