@@ -427,27 +427,18 @@ export function reposByRecency(repos: readonly Repo[], sessions: readonly Pick<S
 }
 
 /**
- * The Where menu's folders, most recent first: the ones picked in the dialog
- * (`chosen`, path → when) and the ones past sessions ran in. The board drops
- * closed sessions, so only the first remembers a folder whose sessions all
- * ended. A registered repo's checkout is left out: the repo stands for it.
+ * The Where menu's folders, most recent first: only the ones picked in the
+ * dialog (`chosen`, path → when). Sessions do not feed it — a folder an agent
+ * happened to run in is not somewhere you chose. A registered repo's checkout
+ * is left out: the repo stands for it.
  */
 export function recentFolders(
-  sessions: readonly Pick<Session, "cwd" | "lastActivityAt" | "worktree">[],
-  chosen: Record<string, number> = {},
+  chosen: Record<string, number>,
   repoRefs: readonly string[] = [],
   limit = 12,
-  forgotten: Record<string, number> = {},
 ): string[] {
-  const last = new Map<string, number>(Object.entries(chosen));
-  for (const s of sessions) {
-    // A worktree agentbox cut is not somewhere you would start a new session.
-    if (!s.cwd || s.worktree) continue;
-    last.set(s.cwd, Math.max(last.get(s.cwd) ?? 0, s.lastActivityAt));
-  }
-  return [...last]
-    // A forgotten folder stays out until a session is started there from the dialog again.
-    .filter(([p]) => !repoRefs.includes(p) && (forgotten[p] === undefined || (chosen[p] ?? -Infinity) > forgotten[p]))
+  return Object.entries(chosen)
+    .filter(([p]) => !repoRefs.includes(p))
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([p]) => p);
@@ -487,19 +478,9 @@ export function saveFolderChoices(choices: Record<string, number>): void {
   saveChoices(FOLDERS_KEY, choices);
 }
 
-const FORGOTTEN_KEY = "agentbox.folderForgotten";
-
-/** Folder → when its × in the Where menu was pressed. */
-export function loadForgottenFolders(): Record<string, number> {
-  return loadChoices(FORGOTTEN_KEY);
-}
-
-/** Out of the menu, even while sessions run there, until the dialog starts one there again. */
-export function forgetFolder(path: string, at = Date.now()): void {
+/** Out of the menu until the dialog starts a session there again. */
+export function forgetFolder(path: string): void {
   const choices = loadChoices(FOLDERS_KEY);
   delete choices[path];
   saveChoices(FOLDERS_KEY, choices);
-  const forgotten = loadChoices(FORGOTTEN_KEY);
-  forgotten[path] = at;
-  saveChoices(FORGOTTEN_KEY, forgotten);
 }
