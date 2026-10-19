@@ -78,7 +78,10 @@ for (const [args, says] of REFUSES) {
 for (const verb of ["claude", "codex", "devin", "omp", "opencode", "card", "pr", "schedule", "send", "ls"]) {
   test(`agentbox ${verb} --help prints help and does nothing`, async () => {
     const r = await agentbox(verb, "--help");
-    expect(r.out).toContain("claude|codex|devin|omp|opencode");
+    // Its own lines of the usage: the providers share one line and `ls` has
+    // none of its own, so those print the whole of it.
+    expect(r.out).toContain("usage: agentbox");
+    expect(r.out).toMatch(new RegExp(`(^|[\\s|])${verb}([\\s|\\[])`, "m"));
     expect(r.asked).toEqual([]);
   });
 }
