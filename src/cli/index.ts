@@ -100,48 +100,35 @@ async function ensureServer(): Promise<void> {
   throw new ApiError(`the server did not come up; see ${join(logDir, "server.log")}`);
 }
 
-/** Hand this terminal to tmux until you detach or the agent exits. */
-async function attach(argv: string[]): Promise<number> {
+/** Hand this terminal to tmux until you detach or the agent exits, then say
+ *  how to get back: a detached terminal leaves no trace of which one it was. */
+async function attach(id: string, argv: string[]): Promise<number> {
   const env = { ...process.env } as Record<string, string>;
   // Attaching from inside your own tmux would otherwise refuse to nest; ours
   // is a different server, so nesting is exactly what is wanted.
   delete env.TMUX;
   const p = Bun.spawn(argv, { stdio: ["inherit", "inherit", "inherit"], env });
-  return await p.exited;
+  const code = await p.exited;
+  // tmux has said why it could not attach.
+  if (code !== 0) return code;
+  const s = await api<Session>("GET", `/api/sessions/${id}`).catch(() => null);
+  if (s && s.status !== "stopped" && s.status !== "closed") process.stderr.write(`detached from ${id} — agentbox attach ${id} to return\n`);
+  else process.stderr.write(`${id} exited — agentbox resume ${id} to start it again\n`);
+  return code;
 }
 
 // ----------------------------------------------------------------- commands
 
-function parseFlags(args: string[]): { flags: Map<string, string | true>; rest: string[] } {
-  const flags = new Map<string, string | true>();
-  const rest: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "--") {
-      rest.push(...args.slice(i + 1));
-      break;
-    }
-    const m = a.match(/^--([a-z-]+)(?:=(.*))?$/);
-    if (!m) {
-      rest.push(a);
-      continue;
-    }
-    const [, key, inline] = m;
-    const takesValue = key === "account" || key === "model" || key === "claim" || key === "parent" || key === "node" || key === "repo" || key === "ref";
-    if (inline !== undefined) flags.set(key!, inline);
-    else if (takesValue && args[i + 1] !== undefined) flags.set(key!, args[++i]!);
-    else flags.set(key!, true);
-  }
-  return { flags, rest };
-}
-
-/** `agentbox claude [--account X] [--model M] [--parent ID] [--node N|auto] [--repo R] [--ref REF] [--detach] [prompt…]` */
+/** `agentbox claude [--account X] [--model M] [--claim PR] [--parent ID] [--node N|auto] [--repo R] [--ref REF] [--detach] [prompt…]`
+ *
+ *  A mistyped option is refused, not taken for a switch: `--acount work`
+ *  would otherwise start on the balancer's pick with "work" in the prompt. */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
-  const { flags, rest } = parseFlags(args);
+  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "claim", "parent", "node", "repo", "ref"], ["detach", "help", "h"]);
   const str = (k: string): string | undefined => (typeof flags.get(k) === "string" ? (flags.get(k) as string) : undefined);
   // Asking how is not asking to start one.
-  if (flags.has("help")) {
-    console.log(USAGE);
+  if (flags.has("help") || flags.has("h")) {
+    console.log(usageOf(provider));
     return 0;
   }
   await ensureServer();
@@ -168,18 +155,18 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       // A named repo is where it runs, not this directory.
       cwd: str("repo") ? undefined : process.cwd(),
       prompt: rest.join(" ") || undefined,
-      model: typeof flags.get("model") === "string" ? flags.get("model") : undefined,
+      model: str("model"),
       accountId,
       // On a hub (docs/hub.md): another machine, or the one with the most room;
       // a repo by its owner/name, and a ref to read it at in a worktree of its own.
       node: str("node"),
       repo: str("repo"),
       ref: str("ref"),
-      claim: typeof flags.get("claim") === "string" ? flags.get("claim") : undefined,
+      claim: str("claim"),
       // Started from inside another session, it is that session's child;
       // `--parent` names it outright, for a program no session runs.
       callerPid: process.pid,
-      parent: typeof flags.get("parent") === "string" ? flags.get("parent") : undefined,
+      parent: str("parent"),
     });
   } catch (e) {
     const err = e as ApiError;
@@ -203,7 +190,7 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
     return 0;
   }
   const { argv } = await api<{ argv: string[] }>("GET", `/api/sessions/${session.id}/attach`);
-  return attach(argv);
+  return attach(session.id, argv);
 }
 
 function printPlacement(p: Placement): void {
@@ -234,17 +221,19 @@ async function usage(): Promise<number> {
   return 0;
 }
 
-async function onSession(verb: "attach" | "resume" | "adopt", id: string | undefined): Promise<number> {
-  if (!id) {
+async function onSession(verb: "attach" | "resume" | "adopt", given: string | undefined): Promise<number> {
+  if (!given) {
     console.error(`agentbox ${verb}: a session id is required (see \`agentbox ls\`)`);
     return 2;
   }
   await ensureServer();
   try {
+    // A unique prefix, as `show` and `close` take.
+    const id = (await verbs.resolveIds(api, [given])).ids[0]!;
     if (verb === "resume") await api("POST", `/api/sessions/${id}/resume`, {});
     if (verb === "adopt") await api("POST", `/api/sessions/${id}/adopt`, {});
     const { argv } = await api<{ argv: string[] }>("GET", `/api/sessions/${id}/attach`);
-    return attach(argv);
+    return await attach(id, argv);
   } catch (e) {
     console.error(`agentbox ${verb}: ${(e as Error).message}`);
     return 1;
@@ -505,6 +494,45 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
   guide                 how an agent drives the fleet with this CLI
   version               print the version`;
 
+/** Other names for commands USAGE lists, which it does not mention itself. */
+const ALIASES: Record<string, string> = { list: "ls", cards: "card", prs: "pr", superagents: "superagent", archive: "close", unarchive: "reopen" };
+
+/** USAGE's entries for one command: each line that starts with it (`resume|adopt`
+ *  counts for both) and the lines indented under it. All of USAGE when it has none. */
+function usageOf(cmd: string): string {
+  const name = ALIASES[cmd] ?? cmd;
+  const out: string[] = [];
+  let taking = false;
+  for (const line of USAGE.split("\n")) {
+    const m = /^  (\S+)/.exec(line);
+    if (m) taking = m[1]!.split("|").includes(name);
+    else if (!line.startsWith("   ")) taking = false;
+    if (taking) out.push(line);
+  }
+  return out.length ? `usage: agentbox\n${out.join("\n")}` : USAGE;
+}
+
+/** The command USAGE lists that is fewest edits from a mistyped one, if any is close. */
+function closest(cmd: string): string | null {
+  const names = new Set([...USAGE.split("\n").flatMap((l) => /^  (\S+)/.exec(l)?.[1]!.split("|") ?? []), ...Object.keys(ALIASES)]);
+  const edits = (a: string, b: string): number => {
+    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const next = [i];
+      for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+      row = next;
+    }
+    return row[b.length]!;
+  };
+  let best: string | null = null;
+  let least = Math.max(2, Math.floor(cmd.length / 3)) + 1;
+  for (const n of names) {
+    const d = edits(cmd, n);
+    if (d < least) [best, least] = [n, d];
+  }
+  return best;
+}
+
 /** `agentbox devin-bridge [status|start|restart|check|run]`. */
 async function devinBridge(verb = "status"): Promise<number | null> {
   const service = await import("../bridge/service");
@@ -560,7 +588,7 @@ export async function main(argv: string[]): Promise<number | null> {
   const cmd = argv[0] ?? "serve";
   // `agentbox <any verb> --help` asks how, and does nothing.
   if (argv[1] === "--help" || argv[1] === "-h") {
-    console.log(USAGE);
+    console.log(usageOf(cmd));
     return 0;
   }
   try {
@@ -698,10 +726,11 @@ export async function main(argv: string[]): Promise<number | null> {
       case "-h":
         console.log(USAGE);
         return 0;
-      default:
-        console.error(`agentbox: unknown command "${cmd}"\n`);
-        console.error(USAGE);
+      default: {
+        const near = closest(cmd);
+        console.error(`agentbox: unknown command "${cmd}"${near ? ` — did you mean ${near}?` : ""}\nsee \`agentbox --help\` for every command`);
         return 2;
+      }
     }
   } catch (e) {
     // An API refusal or a bad argument is a message, not a stack trace.
