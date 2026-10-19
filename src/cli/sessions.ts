@@ -2,7 +2,7 @@
  *  the fleet with pipes: plain text out, the session id first on every line,
  *  and every verb that takes ids also reads them from stdin with `-`. */
 
-import type { Api } from "../client";
+import { ApiError, type Api } from "../client";
 import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, type ChangeRow } from "../core/changes";
 import { accountProvider } from "../core/providers/account";
 import { agentAncestor, stillRunning } from "../core/providers/procs";
@@ -63,7 +63,7 @@ async function state(api: Api): Promise<AppState> {
 /** Ids from args, or from stdin when an arg is `-`: the first word of each line,
  *  so `agentbox ls ... | agentbox close -` works on ls's own output. Unique
  *  prefixes are accepted. */
-async function resolveIds(api: Api, args: string[]): Promise<{ ids: string[]; sessions: Row[] }> {
+export async function resolveIds(api: Api, args: string[]): Promise<{ ids: string[]; sessions: Row[] }> {
   let raw = args.filter((a) => a !== "-");
   if (args.includes("-")) {
     const text = await new Response(Bun.stdin.stream()).text();
@@ -232,7 +232,9 @@ export async function show(api: Api, args: string[]): Promise<number> {
   return 0;
 }
 
-async function allEvents(api: Api, id: string, max = Infinity): Promise<TimelineEvent[]> {
+/** Its events, paged back from the end until `turns` user turns are held
+ *  (all of them by default): `log -n 3` of a week-long session reads a page. */
+async function allEvents(api: Api, id: string, turns = Infinity): Promise<TimelineEvent[]> {
   const pages: TimelineEvent[][] = [];
   let before: string | null = null;
   let n = 0;
@@ -240,9 +242,9 @@ async function allEvents(api: Api, id: string, max = Infinity): Promise<Timeline
     const q: string = before ? `&before=${encodeURIComponent(before)}` : "";
     const page: TimelinePage = await api<TimelinePage>("GET", `/api/sessions/${id}/timeline?limit=1000${q}`);
     pages.unshift(page.events);
-    n += page.events.length;
+    n += page.events.filter((e) => e.kind === "user").length;
     before = page.before;
-  } while (before && n < max);
+  } while (before && n < turns);
   return pages.flat();
 }
 
@@ -251,9 +253,9 @@ export async function log(api: Api, args: string[]): Promise<number> {
   const { flags, rest } = parseArgs(args, ["n"], ["tools", "thinking"]);
   const { ids } = await resolveIds(api, rest);
   if (ids.length !== 1) throw new Error("log takes one session id");
-  let events = await allEvents(api, ids[0]!);
   const turns = str(flags.get("n"));
   if (turns && !/^[1-9]\d*$/.test(turns)) throw new Error(`-n: expected a number of turns, got "${turns}"`);
+  let events = await allEvents(api, ids[0]!, turns ? Number(turns) : Infinity);
   if (turns) {
     // The last N user turns and everything after each.
     const starts = events.flatMap((e, i) => (e.kind === "user" ? [i] : []));
@@ -337,19 +339,29 @@ export async function watch(api: Api, args: string[]): Promise<number> {
   // A watch an agent armed is for that agent: once it is gone, no one reads the lines.
   const owner = agentAncestor();
   let after: string | null = null;
+  // What the last request failed with, said once rather than every 5s.
+  let failing: string | null = null;
   for (;;) {
     if (owner && !stillRunning(owner)) return 0;
     let rows: ChangeRow[] | null = null;
     try {
       const q = [query, after === null ? "" : `after=${after}`].filter(Boolean).join("&");
       rows = await api<ChangeRow[]>("GET", `/api/sessions/changes${q ? `?${q}` : ""}`);
-    } catch {
-      // The server restarting is not the end of a watch.
+    } catch (e) {
+      // A refusal is not going to change by asking again; the server
+      // restarting (no answer, or a 5xx) is not the end of a watch.
+      const status = e instanceof ApiError ? e.status : null;
+      if (status !== null && status < 500) throw e;
+      const why = (e as Error).message;
+      if (why !== failing) console.error(`agentbox watch: ${why}; retrying every 5s`);
+      failing = why;
     }
     if (!rows) {
       await Bun.sleep(5_000);
       continue;
     }
+    if (failing) console.error("agentbox watch: reconnected");
+    failing = null;
     for (const c of watcher.next(rows)) {
       if (!kinds.includes(c.kind)) continue;
       console.log(changeLine(c));
@@ -440,6 +452,8 @@ export async function label(api: Api, args: string[]): Promise<number> {
   const [target, ...words] = args;
   if (!target) throw new Error("label needs a session id and a name (empty clears it)");
   const { ids } = await resolveIds(api, [target]);
-  await api("PATCH", `/api/sessions/${ids[0]}`, { label: words.join(" ") || null });
+  const name = words.join(" ");
+  await api("PATCH", `/api/sessions/${ids[0]}`, { label: name || null });
+  console.log(name ? `${ids[0]}  labelled "${name}"` : `${ids[0]}  label cleared`);
   return 0;
 }
