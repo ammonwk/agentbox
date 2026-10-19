@@ -123,14 +123,15 @@ export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
   return (
     <div className="sx-md">
       {md}
-      {status ? <StatusLine status={status} /> : null}
+      {status && status.kind !== "done" ? <StatusLine status={status} /> : null}
     </div>
   );
 }
 
 const STATUS_ICON = { done: Icon.check, waiting: Icon.clock, needs: Icon.user, other: Icon.chevronRight };
 
-/** The turn's closing `STATUS:` line, as a quiet footer rather than prose. */
+/** The turn's closing `STATUS:` line, as a quiet footer rather than prose.
+ *  A `done` one is only dropped: the list's check already says it. */
 function StatusLine({ status: { kind, text } }: { status: TurnStatus }) {
   const Glyph = STATUS_ICON[kind];
   return (

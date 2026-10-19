@@ -3739,5 +3739,4 @@ a.wk-item:hover {
   top: 1.5px;
   color: var(--muted);
 }
-.sx-status[data-kind="done"] > svg { color: var(--success); }
 .sx-status[data-kind="needs"] > svg { color: var(--warning); }
