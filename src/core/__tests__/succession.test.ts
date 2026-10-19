@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, insertAccount, getSessionRecord, getSchedule, insertSchedule, insertSessionRecord, type SessionRecord } from "../db";
-import { Fleet } from "../fleet";
+import { Fleet, FleetError, type SpawnRequest } from "../fleet";
 import { Scheduler } from "../scheduler";
 import { sendAsAgent } from "../sendguard";
-import type { Schedule, Session } from "../types";
+import type { Placement, ProviderId, Schedule, Session } from "../types";
 
 const dir = mkdtempSync(join(tmpdir(), "agentbox-succession-"));
 const saved = { home: process.env.HOME, box: process.env.AGENTBOX_HOME };
@@ -38,7 +38,7 @@ function record(id: string, successor: string | null = null): SessionRecord {
 
 /** Only what the send rules and the scheduler read of a session. */
 function session(id: string, over: Partial<Session> = {}): Session {
-  return { id, host: "tmux", status: "waiting", cold: false, cacheWarmUntil: NOW + 3_600_000, contextUsed: 30_000, limitHit: null, ...over } as Session;
+  return { id, provider: "claude", host: "tmux", status: "waiting", cold: false, cacheWarmUntil: NOW + 3_600_000, contextUsed: 30_000, limitHit: null, ...over } as Session;
 }
 
 describe("a session another has taken over", () => {
@@ -154,6 +154,49 @@ describe("a schedule that keeps to one session", () => {
       "[via agentbox schedule st2] PR 9 is red\n\n[agentbox: you were compacted since this schedule last spoke to you, so here is what it started you with again]\n\nread the manual",
       "[via agentbox schedule st2] PR 9 is red",
     ]);
+  });
+
+  test("with no account with room, its fallbacks are tried in order, and it goes back once its own has room", async () => {
+    let room: ProviderId[] = ["omp"];
+    const sessions = new Map<string, Session>([["home", session("home", { provider: "claude", limitHit: { at: NOW } as Session["limitHit"] })]]);
+    const asked: SpawnRequest[] = [];
+    const notes: string[] = [];
+    const fleet = {
+      get: (id: string) => sessions.get(id)!,
+      placement: (provider: ProviderId) => ({ accountId: room.includes(provider) ? "acct" : null }),
+      spawn: async (req: SpawnRequest) => {
+        asked.push(req);
+        if (!room.includes(req.provider)) throw new FleetError(409, `every ${req.provider} account is at its limit`, {} as Placement);
+        const id = `s${asked.length}`;
+        sessions.set(id, session(id, { provider: req.provider, contextUsed: 0 }));
+        return { session: sessions.get(id)! };
+      },
+      note: async (_id: string, text: string) => void notes.push(text),
+      patch: async () => {},
+      startedBy: () => [],
+      handOver: async () => {},
+      close: async () => {},
+    } as unknown as Fleet;
+    insertSchedule({
+      id: "st3", rule: { kind: "every", minutes: 10, from: NOW }, spec: { provider: "claude", cwd: dir, worktree: false, prompt: "steward", model: "claude-opus-5-5", effort: "high", fallbacks: ["codex", "omp"] } as Schedule["spec"],
+      label: "Steward", enabled: true, nextAt: NOW + 600_000, createdAt: NOW, lastRunAt: NOW, lastSessionId: "home", lastError: null,
+      noteCmd: null, sameSession: true, freshOver: 600_000, retiring: null,
+    });
+    const scheduler = new Scheduler(fleet, () => {}, () => NOW);
+
+    expect(await scheduler.runNow("st3")).toBe("s3");
+    expect(asked.map((r) => [r.provider, r.model, r.effort])).toEqual([["claude", "claude-opus-5-5", "high"], ["codex", undefined, undefined], ["omp", undefined, undefined]]);
+    expect(await scheduler.runNow("st3")).toBe("s3");
+    expect(notes).toEqual(["[via agentbox schedule st3] steward"]);
+
+    room = ["claude"];
+    expect(await scheduler.runNow("st3")).toBe("s4");
+    expect(asked.at(-1)!.provider).toBe("claude");
+    expect(asked.at(-1)!.prompt).toContain("it ran on omp while claude had no account with room, and claude has room again");
+
+    room = [];
+    sessions.set("s4", session("s4", { provider: "claude", status: "closed" }));
+    await expect(scheduler.runNow("st3")).rejects.toThrow("claude: every claude account is at its limit; codex: every codex account is at its limit; omp: every omp account is at its limit");
   });
 });
 

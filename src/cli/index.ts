@@ -481,10 +481,12 @@ cards (what a session hands the user to decide or to know; the app's Review page
   card close <id> <why> withdraw it: the question went away
 
 scheduled sessions (one-time ones show in the app as sessions; recurring ones in Settings):
-  schedule <when> [--agent claude] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N] <prompt…|->
+  schedule <when> [--agent claude] [--fallback omp,codex] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N] <prompt…|->
                         start one later, in DIR (default: here). <when> is one quoted
                         argument: "in 4 hours", "tomorrow at 9am", "friday 5pm",
-                        "every weekday at 8:30", "every 2 hours"
+                        "every weekday at 8:30", "every 2 hours"; --fallback: the
+                        providers to start it on, in order, when --agent has no
+                        account with room
            [--note-cmd CMD] [--same-session [--fresh-over 150k]]
                         for a recurring one: run CMD in DIR each time it comes due and
                         say what it prints before the prompt, nothing when it prints

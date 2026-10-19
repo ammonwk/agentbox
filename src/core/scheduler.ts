@@ -39,12 +39,12 @@ import { homedir } from "node:os";
 import { moveCards } from "./cards";
 import { movePrClaims, prReleaseNotice } from "./prclaims";
 import { deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
-import { FleetError, newSessionId, type Fleet } from "./fleet";
+import { FleetError, newSessionId, type Fleet, type SpawnRequest } from "./fleet";
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
 import { defaultBranch, findWorkflow, readRuns, redNote, redStreak } from "./redwatch";
 import { describeRule, FRESH_OVER, isRecurring, nextRun, onEvent, parseWhen, type ScheduleRule } from "./schedule";
 import { scheduleSentMark } from "./sent";
-import type { Schedule, ScheduleSpec, Session } from "./types";
+import type { ProviderId, Schedule, ScheduleSpec, Session } from "./types";
 
 const TICK_MS = 15_000;
 /** How often a PR waited on is looked at: the copy it reads syncs once a
@@ -78,6 +78,8 @@ export interface ScheduleEdit {
   noteCmd?: string | null;
   sameSession?: boolean;
   freshOver?: number | null;
+  /** [] takes them away. */
+  fallbacks?: ProviderId[];
 }
 
 /** What a new schedule may say beyond when and what. */
@@ -150,6 +152,10 @@ export class Scheduler {
       // The same kind of checkout there: a worktree stays a worktree. A branch
       // or PR named for the old repo means nothing in the new one.
       spec = { ...spec, repoId: edit.repoId, cwd: undefined, branch: undefined, pr: undefined, worktree: spec.worktree || !!spec.branch };
+      checkSpec(spec);
+    }
+    if (edit.fallbacks !== undefined) {
+      spec = { ...spec, fallbacks: edit.fallbacks.length ? edit.fallbacks : undefined };
       checkSpec(spec);
     }
     if (spec !== s.spec) patch.spec = spec;
@@ -358,7 +364,7 @@ export class Scheduler {
     if (!s || (!s.enabled && !early)) return { quiet: "it was deleted or paused meanwhile" };
     const last = s.sameSession && s.lastSessionId ? this.session(s.lastSessionId) : null;
     if (last && (last.status === "running" || last.status === "blocked")) return busy;
-    const over = last ? pastIt(last, s.freshOver ?? FRESH_OVER) : null;
+    const over = last ? (pastIt(last, s.freshOver ?? FRESH_OVER) ?? this.backHome(s, last)) : null;
     if (last && !over) {
       // Compacted since it was last spoken to, it goes on from a summary
       // without what it read at its start: its prompt goes again, once.
@@ -418,6 +424,14 @@ export class Scheduler {
     }
   }
 
+  /** Why a session started on a fallback gives way: its schedule's own
+   *  provider has room again. */
+  private backHome(s: Schedule, last: Session): string | null {
+    const { provider, model, accountId, effort } = s.spec;
+    if (last.provider === provider || !this.fleet.placement(provider, model, accountId, effort).accountId) return null;
+    return `it ran on ${last.provider} while ${provider} had no account with room, and ${provider} has room again`;
+  }
+
   private session(id: string): Session | null {
     try {
       return this.fleet.get(id);
@@ -430,15 +444,18 @@ export class Scheduler {
    *  `note` goes before what it was asked, `after` behind it. */
   private async fire(s: Schedule, now: number, early: boolean, note?: string, after?: string): Promise<string | null> {
     const once = !isRecurring(s.rule);
-    const { accountId, ...spec } = s.spec;
+    const { accountId, fallbacks, ...spec } = s.spec;
+    const asked = {
+      ...spec,
+      // What set it off, before what it was asked.
+      ...(note || after ? { prompt: [note, spec.prompt, after].filter(Boolean).join("\n\n") } : {}),
+      ...(once ? { id: s.id } : {}),
+    };
     try {
-      const { session } = await this.fleet.spawn({
-        ...spec,
-        // What set it off, before what it was asked.
-        ...(note || after ? { prompt: [note, spec.prompt, after].filter(Boolean).join("\n\n") } : {}),
-        accountId: accountId && accountId !== "auto" ? accountId : null,
-        ...(once ? { id: s.id } : {}),
-      });
+      const session = await this.startFirstWithRoom([
+        { ...asked, accountId: accountId && accountId !== "auto" ? accountId : null },
+        ...(fallbacks ?? []).map((provider) => ({ ...asked, provider, model: undefined, effort: undefined, accountId: null })),
+      ]);
       // Its first prompt is the note, which makes a poor title.
       if (note && s.label) await this.fleet.patch(session.id, { label: s.label }).catch(() => {});
       if (once) deleteSchedule(s.id);
@@ -483,6 +500,25 @@ export class Scheduler {
       this.changed();
       return null;
     }
+  }
+
+  /** The first of these that has an account with room. Anything but no room
+   *  is thrown as it is; no room anywhere is thrown saying each one's why. */
+  private async startFirstWithRoom(tries: SpawnRequest[]): Promise<Session> {
+    const whys: string[] = [];
+    let last: FleetError | null = null;
+    for (const req of tries) {
+      try {
+        const { session } = await this.fleet.spawn(req);
+        if (whys.length) console.log(`agentbox: ${whys.join("; ")}: started on ${req.provider} instead`);
+        return session;
+      } catch (e) {
+        if (!(e instanceof FleetError && e.placement)) throw e;
+        whys.push(tries.length > 1 ? `${req.provider}: ${e.message}` : e.message);
+        last = e;
+      }
+    }
+    throw new FleetError(409, whys.join("; "), last!.placement);
   }
 }
 
@@ -633,6 +669,8 @@ function repoOf(spec: ScheduleSpec): string | null {
 
 /** Wrong now is wrong later: say so while you are still here to fix it. */
 function checkSpec(spec: ScheduleSpec): void {
+  const fallbacks = spec.fallbacks ?? [];
+  if (new Set([spec.provider, ...fallbacks]).size !== fallbacks.length + 1) throw new FleetError(400, "a fallback is another provider than the schedule's own, named once");
   if (spec.repoId) {
     if (!getRepoById(spec.repoId)) throw new FleetError(404, `no repo ${spec.repoId}`);
   } else if (spec.cwd) {

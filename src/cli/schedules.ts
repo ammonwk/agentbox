@@ -18,14 +18,16 @@ function tokens(v: string): number {
   return Math.round(Number(m[1]) * (m[2]!.toLowerCase() === "k" ? 1e3 : m[2] ? 1e6 : 1));
 }
 
-/** `agentbox schedule <when> [--agent claude] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N]
+/** `agentbox schedule <when> [--agent claude] [--fallback omp,codex] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N]
  *  [--note-cmd CMD] [--same-session [--fresh-over 150k]] <prompt…|->` */
 export async function schedule(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["agent", "cwd", "account", "model", "effort", "name", "note-cmd", "fresh-over"], ["same-session"]);
+  const { flags, rest } = parseArgs(args, ["agent", "fallback", "cwd", "account", "model", "effort", "name", "note-cmd", "fresh-over"], ["same-session"]);
   const [when, ...words] = rest;
   if (!when) throw new Error('schedule needs a time and a prompt: agentbox schedule "tomorrow at 9am" fix the flaky test');
   const agent = (str(flags.get("agent")) ?? "claude") as ProviderId;
   if (!PROVIDERS.includes(agent)) throw new Error(`--agent must be one of ${PROVIDERS.join(", ")}`);
+  const fallbacks = str(flags.get("fallback"))?.split(",").map((p) => p.trim()).filter(Boolean) as ProviderId[] | undefined;
+  for (const p of fallbacks ?? []) if (!PROVIDERS.includes(p)) throw new Error(`--fallback takes providers from ${PROVIDERS.join(", ")}`);
   const prompt = words.length === 1 && words[0] === "-" ? (await new Response(Bun.stdin.stream()).text()).trim() : words.join(" ").trim();
   const noteCmd = str(flags.get("note-cmd"));
   if (!prompt && !noteCmd) throw new Error("a scheduled session needs a prompt (the words after the time, or - to read it from stdin)");
@@ -53,6 +55,7 @@ export async function schedule(api: Api, args: string[]): Promise<number> {
       model: str(flags.get("model")),
       effort: str(flags.get("effort")),
       accountId,
+      fallbacks,
     },
   });
   console.log(line(sc));
@@ -92,7 +95,7 @@ function line(sc: Schedule): string {
   const next = !sc.enabled ? "paused" : sc.nextAt ? until(sc.nextAt) : sc.rule.kind === "merge" ? "on merge" : sc.rule.kind === "red" ? "on red" : "—";
   const rule = isRecurring(sc.rule) ? `${describeRule(sc.rule)}, repeating` : describeRule(sc.rule);
   const failed = sc.lastError ? `  [last time: ${sc.lastError}]` : "";
-  return `${sc.id}  ${next.padEnd(7)} ${rule} · ${sc.spec.provider} · ${title}${kind(sc)}${failed}`;
+  return `${sc.id}  ${next.padEnd(7)} ${rule} · ${[sc.spec.provider, ...(sc.spec.fallbacks ?? [])].join(" → ")} · ${title}${kind(sc)}${failed}`;
 }
 
 /** What sets a note-command or one-session schedule apart, and when it last
