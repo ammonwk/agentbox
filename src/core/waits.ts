@@ -266,7 +266,10 @@ export function lookJob(spec: Extract<WaitSpec, { kind: "job" }>, memo: Wait["me
   const log = `Its output: ${spec.log}`;
   if (job.result) {
     const { result, code, status } = job.result;
-    const how = result === "success" ? "finished (exit 0)" : `FAILED: ${result}${code ? `, ${code} ${status}` : ""}`.trim();
+    // systemd calls a unit it stopped with SIGTERM a success ("success killed TERM"): only an exit 0 is one.
+    const how = code === "exited" && status === "0" ? "finished (exit 0)"
+      : code === "killed" ? `was killed (${status}) before it finished, by a stop, a close or another session`
+      : `FAILED: ${result}${code ? `, ${code} ${status}` : ""}`.trim();
     const tail = logTail(spec.log);
     return { end: { how: "happened", text: `The job ${how}. ${log}${tail ? `, which ends:\n${tail}` : " (empty)"}` } };
   }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { commandLine, wait as armWait, line } from "../../cli/waits";
-import { lookPr, parseSpec } from "../waits";
+import { lookJob, lookPr, parseSpec } from "../waits";
 import { readUntil, type PrRead } from "../waitreads";
 import type { Wait, WaitSpec } from "../types";
 
@@ -26,6 +26,20 @@ describe("wait until", () => {
     await expect(until(["bash", "-c", "exit 3"])).rejects.toThrow("exited 3");
     // 400+ characters of stderr are still an error, however little of them is kept.
     await expect(until(["bash", "-c", "printf 'failure%400s' '' >&2; exit 1"])).rejects.toThrow("exited 1");
+  });
+});
+
+describe("wait job", () => {
+  const spec = { kind: "job", unit: "agentbox-job-x.service", log: "/nonexistent/x.log", result: "/nonexistent/x.result" } as Extract<WaitSpec, { kind: "job" }>;
+  const ended = (result: string, code: string, status: string) => {
+    const look = lookJob(spec, {}, { result: { result, code, status }, running: false }, 0);
+    return "end" in look ? look.end.text : look.seen;
+  };
+
+  test("only an exit 0 reads as finished: a job stopped with SIGTERM did not complete", () => {
+    expect(ended("success", "exited", "0")).toStartWith("The job finished (exit 0).");
+    expect(ended("success", "killed", "TERM")).toStartWith("The job was killed (TERM) before it finished");
+    expect(ended("exit-code", "exited", "1")).toStartWith("The job FAILED: exit-code, exited 1.");
   });
 });
 
