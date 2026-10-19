@@ -193,8 +193,12 @@ export interface Candidate {
   /** Why not, in a sentence, when not eligible. */
   reason: string | null;
   /** Not eligible because the provider is refusing the model here
-   *  (core/refusals.ts): no estimate, so overflow does not go there either. */
+   *  (core/refusals.ts). */
   refused?: boolean;
+  /** Not eligible on a fact rather than on claims (turned off, logged out,
+   *  refused, out of funds, a window other than the week spent): overflow,
+   *  which only overrides estimates, does not go there, nor to a spent week. */
+  wall?: boolean;
   /** Weekly used, and with outstanding claims added. */
   weekly: number | null;
   weeklyEffective: number | null;

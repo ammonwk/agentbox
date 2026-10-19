@@ -1217,6 +1217,14 @@ export function assignmentsSince(sinceMs: number): AssignmentRow[] {
   }));
 }
 
+/** The account a session was on at `at`: its last placement or move by then. */
+export function accountAtTime(sessionId: string, at: number): string | null {
+  const row = getDb()
+    .query("SELECT account_id FROM assignments WHERE session_id = ? AND at <= ? ORDER BY at DESC LIMIT 1")
+    .get(sessionId, at) as { account_id: string | null } | null;
+  return row?.account_id ?? null;
+}
+
 export function insertRateLimitHit(sessionId: string, accountId: string | null, at: number, detail: string): void {
   getDb().run(
     "INSERT OR IGNORE INTO rate_limit_hits (session_id,account_id,at,detail) VALUES (?,?,?,?)",
