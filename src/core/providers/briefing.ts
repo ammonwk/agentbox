@@ -1,6 +1,4 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { agentboxHome } from "../paths";
+import { repoRulesFor, rulesPath, standingRules } from "../rules";
 
 /**
  * What an agent agentbox launches is told about where it runs, appended to its
@@ -21,36 +19,20 @@ const BRIEFING = [
   "To wait on anything outside your own turn (a pull request's checks or its merge, a GitHub Actions run, another session, a condition, a length of time), arm `agentbox wait …` and end your turn or carry on; `agentbox wait` alone lists the forms. You are told here the moment it happens, can no longer happen, cannot be watched any longer, or times out, each saying which, also when this session was parked meanwhile. Start a command that runs longer than a few minutes with `agentbox wait job -- <command>`. A background command, loop, sleep or watcher of your own stops with your process and can end without saying anything, so never wait with one.",
 ].join("\n\n");
 
-/** The user's standing rules, `<agentbox home>/rules.md`: theirs to write,
- *  never the repo's. */
-export const rulesPath = (): string => join(agentboxHome(), "rules.md");
-
-/** How much of the rules file is read: it is in every session's prompt, so a
- *  mistake (a log redirected into it, a pasted document) must not be. */
-export const RULES_MAX_BYTES = 4096;
-
-/** The rules file's text, cut at the last whole line inside the cap, with a
- *  line saying so when it was cut; "" when there is none. */
-export function standingRules(): string {
-  let raw: Buffer;
-  try {
-    raw = readFileSync(rulesPath());
-  } catch {
-    return "";
-  }
-  if (raw.length <= RULES_MAX_BYTES) return raw.toString("utf8").trim();
-  const head = raw.subarray(0, RULES_MAX_BYTES).toString("utf8");
-  const whole = head.slice(0, Math.max(head.lastIndexOf("\n"), 0)).trim();
-  return `${whole}\n\n[The rest of this file was not read: it is over ${RULES_MAX_BYTES / 1024} KB.]`.trim();
-}
+/** The exact text a session is given, for the Context page: briefing only. */
+export const briefingText = (): string => BRIEFING;
 
 /**
- * The briefing with the user's standing rules after it. Read each time a
- * session is launched or resumed, so an edit reaches the next one started
- * without a restart of the server — and, like any change here, spends the
- * prompt cache of each session resumed after it once.
+ * The briefing with the user's standing rules after it, and then the rules of
+ * the repo the session runs in, when it runs in one. Read each time a session
+ * is launched or resumed, so an edit reaches the next one started without a
+ * restart of the server; `cwd` is what picks the repo (`core/rules.ts`).
  */
-export function briefing(): string {
+export function briefing(cwd?: string): string {
+  const parts = [BRIEFING];
   const rules = standingRules();
-  return rules ? `${BRIEFING}\n\nThe user's standing rules for every session (${rulesPath()}):\n\n${rules}` : BRIEFING;
+  if (rules) parts.push(`The user's standing rules for every session (${rulesPath()}):\n\n${rules}`);
+  const repo = cwd ? repoRulesFor(cwd) : null;
+  if (repo) parts.push(`The user's standing rules for the ${repo.repo.displayName} repo (${repo.path}):\n\n${repo.text}`);
+  return parts.join("\n\n");
 }

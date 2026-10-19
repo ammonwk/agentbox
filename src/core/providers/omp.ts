@@ -691,7 +691,7 @@ function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoA
   if (opts.model && !(c && setsFlag(c, "--model"))) a.push("--model", opts.model);
   if (opts.effort && !(c && setsFlag(c, "--thinking"))) a.push(`--thinking=${opts.effort}`);
   if (!c && opts.autoApprove) a.push("--auto-approve");
-  if (!(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${briefing()}`);
+  if (!(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${briefing(opts.cwd)}`);
   // omp silently moves a session started in ~ to a temp dir unless told not to.
   if (canonical(opts.cwd) === canonical(homedir()) && !(c && setsFlag(c, "--allow-home"))) a.push("--allow-home");
   return a;

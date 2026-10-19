@@ -463,7 +463,7 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
  *  timeline has nothing to show. */
 const THINKING = ["--thinking-display", "summarized"];
 
-const told = (): string[] => ["--append-system-prompt", briefing()];
+const told = (cwd: string): string[] => ["--append-system-prompt", briefing(cwd)];
 
 /** A subagent's own subagents are told who started them, or they take "main"
  *  for their coordinator and write to the conversation the user is reading
@@ -497,7 +497,7 @@ function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | 
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-  argv.push(...THINKING, ...told(), ...HOOKED);
+  argv.push(...THINKING, ...told(opts.cwd), ...HOOKED);
   if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: id };
 }
@@ -512,13 +512,13 @@ function resumeCommand(opts: ResumeOptions): Command {
     if (!setsFlag(opts.carry, "--thinking-display")) argv.push(...THINKING);
     // One it was launched with is its own, or ours from an earlier launch; a
     // second would replace it.
-    if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...told());
+    if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...told(opts.cwd));
     if (!setsFlag(opts.carry, "--settings")) argv.push(...HOOKED);
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-    argv.push(...THINKING, ...told(), ...HOOKED);
+    argv.push(...THINKING, ...told(opts.cwd), ...HOOKED);
   }
   if (opts.forkAs) argv.push("--fork-session", "--session-id", opts.forkAs);
   if (opts.prompt) argv.push(promptArg(opts.prompt));

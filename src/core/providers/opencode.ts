@@ -38,6 +38,7 @@ import { cliVersion } from "./cli-version";
 import { carryFlags, type Arity } from "../launch";
 import { cwdOf, findProcesses, runsCli, startedAtOf } from "./procs";
 import { briefing } from "./briefing";
+import { repoForCwd } from "../rules";
 import { ensureBridge } from "../../bridge/service";
 import { bridgeUrl } from "../../bridge/models";
 import { anthropicGoModels } from "../accounts/gomodels";
@@ -385,11 +386,18 @@ export function modelRef(model: string | null | undefined, variant?: string | nu
   return ref;
 }
 
-/** The briefing goes in as an instructions file, through the config opencode
- *  reads from its environment; written when it differs. */
-function briefingFile(): string {
-  const path = join(agentboxHome(), "opencode-briefing.md");
-  const told = briefing();
+/**
+ * The briefing goes in as an instructions file, through the config opencode
+ * reads from its environment; written when it differs.
+ *
+ * One file per repo, because the text now carries that repo's rules: a single
+ * file would be rewritten under whichever session last started. A session
+ * outside every repo shares the plain one.
+ */
+function briefingFile(cwd: string): string {
+  const repo = repoForCwd(cwd);
+  const path = join(agentboxHome(), repo ? `opencode-briefing-${repo.id}.md` : "opencode-briefing.md");
+  const told = briefing(cwd);
   try {
     if (!existsSync(path) || readFileSync(path, "utf8") !== told) writeFileSync(path, told);
   } catch {
@@ -409,14 +417,14 @@ const objectOr = (v: unknown): Record<string, unknown> =>
  *  its own stored login whatever its config says, and signed into a Console
  *  workspace it bills that one. The models with an endpoint of their own
  *  (accounts/gomodels.ts) are each pointed at the bridge as well. */
-function configEnv(account: Pick<Account, "id">): Record<string, string> {
+function configEnv(account: Pick<Account, "id">, cwd: string): Record<string, string> {
   let cfg: Record<string, unknown> = {};
   const own = process.env.OPENCODE_CONFIG_CONTENT;
   if (own) {
     const parsed = parseData(own);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) cfg = parsed;
   }
-  const brief = briefingFile();
+  const brief = briefingFile(cwd);
   const instructions = Array.isArray(cfg.instructions) ? cfg.instructions.filter((x) => x !== brief) : [];
   cfg = { ...cfg, instructions: [...instructions, brief] };
   ensureBridge();
@@ -553,7 +561,7 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Pro
       if (model) body.model = model;
       return {
         argv: ["sh", "-c", SPAWN_SCRIPT, "opencode", JSON.stringify(body), id, ...tuiFlags(opts)],
-        env: configEnv(opts.account),
+        env: configEnv(opts.account, opts.cwd),
         agentSessionId: id,
       };
     },
@@ -568,11 +576,11 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Pro
         if (want && (want.id !== current?.id || want.providerID !== current?.providerID || (want.variant ?? null) !== (current?.variant ?? null))) {
           return {
             argv: ["sh", "-c", RESUME_SCRIPT, "opencode", opts.agentSessionId, JSON.stringify({ model: want }), ...flags],
-            env: configEnv(opts.account),
+            env: configEnv(opts.account, opts.cwd),
           };
         }
       }
-      return { argv: ["opencode", "-s", opts.agentSessionId, ...flags], env: configEnv(opts.account) };
+      return { argv: ["opencode", "-s", opts.agentSessionId, ...flags], env: configEnv(opts.account, opts.cwd) };
     },
 
     carryOver: (argv) => carryFlags(argv, CARRIED),

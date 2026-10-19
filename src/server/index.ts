@@ -23,7 +23,8 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { DEFAULT_PORT, webDist } from "../core/paths";
-import { Fleet, FleetError, repoRootOf } from "../core/fleet";
+import { Fleet, FleetError } from "../core/fleet";
+import { repoRootOf } from "../core/git";
 import { sessionProject } from "../core/projects";
 import * as tmux from "../core/tmux";
 import { attentionOf, byAttention, retrying } from "../core/attention";
@@ -40,6 +41,8 @@ import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
 import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushTo, removeSubscription, subscriptionsOf, type PushTo } from "../core/push";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
+import { contextDocs, readContextDoc, writeContextDoc } from "./context";
+import { briefingText } from "../core/providers/briefing";
 import { addRepo, deleteRepo, getDb, resolveSessionRefs, getRepoById, getSettings, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
@@ -1892,6 +1895,22 @@ const router = new Router(mapError)
     const r = demoteSkill(requireString(b, "name"));
     void refreshSlow();
     return json(r);
+  })
+  // The Context page (src/server/context.ts): the user's rules, global and
+  // per repo, and the instruction files each CLI reads for itself.
+  .add("GET", "/api/context", () => json({ docs: contextDocs(), briefing: briefingText() }))
+  .add("GET", "/api/context/doc", ({ url }) => {
+    const doc = readContextDoc(url.searchParams.get("id") ?? "");
+    if (!doc) throw new HttpError(404, "no such context file");
+    return json(doc);
+  })
+  .add("POST", "/api/context/doc", async ({ req }) => {
+    const b = await readBody(req);
+    const id = requireString(b, "id");
+    if (typeof b.body !== "string") throw new HttpError(400, "body must be a string");
+    const saved = writeContextDoc(id, b.body);
+    if (!saved) throw new HttpError(404, "no such context file");
+    return json({ docs: contextDocs(), ...saved });
   });
 const hubDeps: HubDeps = {
   port: PORT,

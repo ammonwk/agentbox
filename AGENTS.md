@@ -161,6 +161,13 @@ once: commit your own files by path, never `git add -A`.
   MCPs page): agentbox's own list, and the layer each CLI is launched with
   so that every agent gets it. Never edit a CLI's own config for it.
   `docs/v2.md` "Global MCP servers" is how each CLI takes it.
+- `src/core/rules.ts`, `src/server/context.ts`, `web/src/views/Context.tsx` —
+  the Context page: your rules (`<agentbox home>/rules.md`, and one file per
+  repo under `rules/<repo id>.md`) and the instruction files each CLI reads
+  itself (AGENTS.md and CLAUDE.md, global and per repo). The browser names a
+  document by id, never a path. Rules are read at every launch and resume
+  (`providers/briefing.ts`), so an edit reaches the next session without a
+  restart — and spends a kept-warm session's prompt cache once when it resumes.
 - `src/core/user.ts` — who agentbox works for, derived from the machine (git,
   gh, the passwd entry, the timezone) into `<agentbox home>/user.env` by
   `agentbox onboard`, and re-derived at boot when that file is missing. The

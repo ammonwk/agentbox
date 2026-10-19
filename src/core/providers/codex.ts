@@ -707,7 +707,7 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
 }
 
 /** A JSON string is a TOML basic string, which is what `-c` parses. */
-const told = (): string[] => ["-c", `developer_instructions=${JSON.stringify(briefing())}`];
+const told = (cwd: string): string[] => ["-c", `developer_instructions=${JSON.stringify(briefing(cwd))}`];
 
 /** clap reads a leading `-` as a flag. */
 const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
@@ -744,7 +744,7 @@ const isHeadless = (argv: string[]): boolean => ["exec", "e", "review"].includes
  * The flags a session starts with. A carried launch decides model and
  * permissions (ResumeOptions.carry); what it does not set is ours.
  */
-function sessionFlags(opts: { model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
+function sessionFlags(opts: { cwd: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
   const c = opts.carry;
   const a: string[] = [...(c ?? [])];
   const configs = (c ?? []).filter((x, i) => c![i - 1] === "-c" || c![i - 1] === "--config" || x.startsWith("--config="));
@@ -752,7 +752,7 @@ function sessionFlags(opts: { model?: string; effort?: string; autoApprove: bool
   if (opts.effort && !configs.some((x) => /(^|=)model_reasoning_effort=/.test(x))) a.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (opts.readOnly) a.push(...READ_ONLY);
   else if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox");
-  if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told());
+  if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told(opts.cwd));
   return a;
 }
 

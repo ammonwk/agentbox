@@ -13,7 +13,8 @@ export type Route =
   | { page: "accounts"; sub: "accounts" | "calibration" }
   /** One account's usage insights. */
   | { page: "accounts"; sub: "insights"; account: string }
-  | { page: "skills" }
+  /** What agents are told: rules, instruction files and skills. */
+  | { page: "context" }
   /** The global MCP servers every agent is given. */
   | { page: "mcps" }
   /** The cards sessions handed you: to decide, or to know. */
@@ -23,7 +24,7 @@ export type Route =
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "agents" | "sessions" | "review" | "voice" | "accounts" | "skills" | "mcps" | "team" | "settings";
+export type NavId = "agents" | "sessions" | "review" | "voice" | "accounts" | "context" | "mcps" | "team" | "settings";
 
 export function navOf(route: Route): NavId {
   return route.page === "session" ? "sessions" : route.page;
@@ -50,7 +51,8 @@ export function parseHash(hash: string): Route {
     return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
   }
   if (head === "agents") return { page: "agents", name: a ?? null, tab: a && b ? b : null };
-  if (head === "skills") return { page: "skills" };
+  // `#/skills` is the page before it became Context; old links keep working.
+  if (head === "context" || head === "skills") return { page: "context" };
   if (head === "mcps") return { page: "mcps" };
   if (head === "voice") return { page: "voice" };
   if (head === "review") return { page: "review" };

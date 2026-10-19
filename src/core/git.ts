@@ -1,5 +1,5 @@
-import { dirname, join, resolve } from "node:path";
-import { mkdirSync, existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { repoRoot, worktreeRoot } from "./paths";
 import type { Repo } from "./types";
 
@@ -511,6 +511,43 @@ export function branchOnDisk(dir: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** The repository a directory belongs to: for a linked worktree, the main
+ *  checkout it was made from, so worktree sessions group, filter and name
+ *  under their repo rather than under their worktree directory. */
+const roots = new Map<string, string | null>();
+export function repoRootOf(cwd: string): string | null {
+  if (!cwd) return null;
+  if (roots.has(cwd)) return roots.get(cwd)!;
+  let root = existsSync(cwd) ? mainRootOf(cwd) : null;
+  // A worktree's `.git` file holds physical paths, while the main checkout may
+  // have been registered through a symlink (macOS `/var` is `/private/var`).
+  // Without this, such a session's worktree maps to no repository at all.
+  if (root) { try { root = realpathSync(root); } catch { /* removed meanwhile */ } }
+  roots.set(cwd, root);
+  return root;
+}
+
+/**
+ * `git rev-parse --show-toplevel --git-common-dir`, read off the disk rather
+ * than run: the first pass asked it of every session's cwd, a process each,
+ * seconds of a restart. A linked worktree or submodule's git dir names the
+ * common one in `commondir`; a common dir not named .git (bare repo,
+ * --separate-git-dir, a submodule's) has no main checkout to point at, and
+ * the top itself is the answer.
+ */
+function mainRootOf(dir: string): string | null {
+  const c = checkoutAt(dir);
+  if (!c) return null;
+  if (c.gitDir === join(c.top, ".git")) return c.top;
+  let common = c.gitDir;
+  try {
+    common = resolve(c.gitDir, readFileSync(join(c.gitDir, "commondir"), "utf8").trim());
+  } catch {
+    /* no commondir: the git dir is its own */
+  }
+  return basename(common) === ".git" ? dirname(common) : c.top;
 }
 
 /** The branch a checkout is on, or null when detached or unreadable. */

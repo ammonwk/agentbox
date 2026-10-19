@@ -18,6 +18,7 @@ import type {
   AgentSettings,
   AskAnswer,
   AppState,
+  ContextDoc,
   SendReceipt,
   Attention,
   AttentionKind,
@@ -328,8 +329,8 @@ const skills: SkillInfo[] = [
   { name: "humanizer", description: "Rewrite AI-sounding text so it reads like the writer.", source: "agents", path: `${HOME}/.agents/skills/humanizer`, lines: 97, modelInvocable: true },
   { name: "rollout-reader", description: "Read a Codex rollout JSONL and summarise the turns.", source: "codex", path: `${HOME}/.codex/skills/rollout-reader`, lines: 41, modelInvocable: true },
   { name: "transcript-grep", description: "Search omp session transcripts for a phrase and list the sessions that matched.", source: "omp", path: `${HOME}/.omp/agent/skills/transcript-grep`, lines: 120, modelInvocable: true },
-  { name: "release", description: "Cut a release: bump, changelog, tag, publish.", source: "project", repo: "agentbox", path: `${HOME}/Documents/agentbox/.claude/skills/release`, lines: 58, modelInvocable: false },
-  { name: "schema-migrate", description: "Write and verify a sqlite migration for agentbox's db.", source: "project", repo: "agentbox", path: `${HOME}/Documents/agentbox/.claude/skills/schema-migrate`, lines: 77, modelInvocable: true },
+  { name: "release", description: "Cut a release: bump, changelog, tag, publish.", source: "project", repo: `${HOME}/Documents/agentbox`, path: `${HOME}/Documents/agentbox/.claude/skills/release`, lines: 58, modelInvocable: false },
+  { name: "schema-migrate", description: "Write and verify a sqlite migration for agentbox's db.", source: "project", repo: `${HOME}/Documents/agentbox`, path: `${HOME}/Documents/agentbox/.claude/skills/schema-migrate`, lines: 77, modelInvocable: true },
 ];
 
 // ------------------------------------------------------------- sessions
@@ -1288,12 +1289,116 @@ function calibration(days: number): CalibrationReport {
   };
 }
 
+// --------------------------------------------------------------- context
+
+const RULES_MAX = 4096;
+const RULED: ProviderId[] = ["claude", "codex", "omp", "opencode"];
+const GLOBAL_INSTRUCTIONS = [
+  { key: "claude", name: "CLAUDE.md", dir: `${HOME}/.claude`, providers: ["claude"] as ProviderId[] },
+  { key: "codex", name: "AGENTS.md", dir: `${HOME}/.codex`, providers: ["codex"] as ProviderId[] },
+  { key: "opencode", name: "AGENTS.md", dir: `${HOME}/.config/opencode`, providers: ["omp", "opencode"] as ProviderId[] },
+];
+const REPO_INSTRUCTIONS = [
+  { key: "AGENTS.md", name: "AGENTS.md", providers: ["codex", "omp", "opencode"] as ProviderId[] },
+  { key: "CLAUDE.md", name: "CLAUDE.md", providers: ["claude"] as ProviderId[] },
+];
+const MOCK_BRIEFING = [
+  "You are running in agentbox, whose web UI shows the user your replies as Markdown and displays images in them.",
+  "Sessions and pull requests go one to one; anything that would be a PR of its own goes to a session of its own.",
+  "To wait on anything outside your own turn, arm `agentbox wait …` and end your turn.",
+].join("\n\n");
+const contextBodies: Record<string, string> = {
+  "rules:global":
+    "- Take your own recommended option when the change is reversible; say what you chose.\n- Finish through to a pull request that is green and clean.\n",
+  "rules:repo:r-agentbox": "- This repo ships from main; keep `bun run typecheck` clean before you commit.\n",
+  "instructions:global:opencode": "# Global Rules\n\nWhat an agent working on this machine is told, whichever project it is in.\n",
+  "instructions:repo:r-agentbox:AGENTS.md": "# agentbox\n\nRead `docs/v2.md` first. Restart the service after changing `src/`.\n",
+  "instructions:repo:r-agentbox:CLAUDE.md": "# agentbox\n\nSame rules as AGENTS.md; this file is for claude.\n",
+};
+
+function mockContextDocs(): ContextDoc[] {
+  const docs: ContextDoc[] = [];
+  const add = (doc: Omit<ContextDoc, "exists" | "bytes">): void => {
+    const body = contextBodies[doc.id] ?? "";
+    docs.push({ ...doc, exists: doc.id in contextBodies, bytes: body.length });
+  };
+  add({
+    id: "rules:global",
+    kind: "rules",
+    scope: "global",
+    scopeLabel: "Every session",
+    label: "Rules",
+    read: "every session, after the briefing",
+    providers: RULED,
+    path: `${HOME}/.local/share/agentbox/rules.md`,
+    cap: RULES_MAX,
+  });
+  for (const r of repos) {
+    add({
+      id: `rules:repo:${r.id}`,
+      kind: "rules",
+      scope: r.id,
+      scopeLabel: r.displayName,
+      label: "Rules",
+      read: `every session in ${r.displayName}`,
+      providers: RULED,
+      path: `${HOME}/.local/share/agentbox/rules/${r.id}.md`,
+      cap: RULES_MAX,
+    });
+  }
+  for (const g of GLOBAL_INSTRUCTIONS) {
+    add({
+      id: `instructions:global:${g.key}`,
+      kind: "instructions",
+      scope: "global",
+      scopeLabel: "Every session",
+      label: g.name,
+      read: `${g.providers.join(", ")}, in every directory`,
+      providers: g.providers,
+      path: `${g.dir}/${g.name}`,
+    });
+  }
+  for (const r of repos) {
+    const at = r.kind === "local" ? r.ref : `${HOME}/.local/share/agentbox/repos/${r.ref.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+    for (const ri of REPO_INSTRUCTIONS) {
+      add({
+        id: `instructions:repo:${r.id}:${ri.key}`,
+        kind: "instructions",
+        scope: r.id,
+        scopeLabel: r.displayName,
+        label: ri.name,
+        read: `${ri.providers.join(", ")}, in ${r.displayName}`,
+        providers: ri.providers,
+        path: `${at}/${ri.name}`,
+      });
+    }
+  }
+  return docs;
+}
+
+function mockContext(method: string, url: URL, b: unknown): unknown {
+  if (method === "GET") {
+    const id = url.searchParams.get("id");
+    if (!id) return { docs: mockContextDocs(), briefing: MOCK_BRIEFING };
+    return { path: mockContextDocs().find((d) => d.id === id)?.path ?? "", body: contextBodies[id] ?? "" };
+  }
+  const body = (b ?? {}) as { id?: unknown; body?: unknown };
+  if (typeof body.id !== "string" || typeof body.body !== "string") throw new Error("id and body are required");
+  contextBodies[body.id] = body.body;
+  return {
+    docs: mockContextDocs(),
+    path: mockContextDocs().find((d) => d.id === body.id)?.path ?? "",
+    injected: body.body.slice(0, RULES_MAX),
+  };
+}
+
 async function handle(method: string, path: string, b: unknown): Promise<unknown> {
   const url = new URL(path, "http://mock");
   const p = url.pathname.split("/").filter(Boolean).map(decodeURIComponent); // ["api", ...]
   const [, head, id, action] = p;
 
   if (head === "mcp") return mockMcp(method, p.slice(2), b);
+  if (head === "context") return mockContext(method, url, b);
   if (method === "GET") {
     if (head === "sessions" && action === "submissions") return submissions.get(p[4]!) ?? null;
     if (head === "state") return appState();

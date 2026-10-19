@@ -18,7 +18,7 @@ import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
 import { Shortcuts } from "./views/Shortcuts";
-import { Skills } from "./views/Skills";
+import { Context } from "./views/Context";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
@@ -78,7 +78,7 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
   { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
-  { id: "skills", label: "Skills", icon: Icon.folder, to: { page: "skills" } },
+  { id: "context", label: "Context", icon: Icon.context, to: { page: "context" } },
   { id: "team", label: "Team", icon: Icon.link, to: { page: "team" } },
   { id: "mcps", label: "MCPs", icon: Icon.plugs, to: { page: "mcps" } },
   { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
@@ -86,7 +86,7 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
 
 /** Pages a project filters; the rest are the machine's, whatever is selected. */
 const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions", "review"]);
-const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "skills", "mcps", "team", "voice"]);
+const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "context", "mcps", "team", "voice"]);
 
 const PAGE_TITLE: Record<NavId, string> = {
   agents: "Agents",
@@ -94,7 +94,7 @@ const PAGE_TITLE: Record<NavId, string> = {
   review: "Review",
   voice: "Voice",
   accounts: "Accounts",
-  skills: "Skills",
+  context: "Context",
   mcps: "MCPs",
   team: "Team",
   settings: "Settings",
@@ -279,7 +279,11 @@ export function App() {
             <span>{projectName}</span>
             <Icon.chevronDown size={12} />
           </button>
-          {GLOBAL_PAGES.has(route.page) ? <span className="hint">{route.page === "team" ? "Workspace settings" : "Global settings and tools"}</span> : null}
+          {GLOBAL_PAGES.has(route.page) ? (
+            <span className="hint">
+              {route.page === "team" ? "Workspace settings" : route.page === "context" ? "What agents are told" : "Global settings and tools"}
+            </span>
+          ) : null}
         </div>
         {/* The sessions pages carry their own header — the board's filter bar,
             the session's title — so a page title above them is a second one. */}
@@ -311,7 +315,7 @@ export function App() {
         <StaleBanner />
 
         <SysbarSlot.Provider value={sysbarSlot}>
-        <main className={`content ${(flush || route.page === "skills" || route.page === "mcps") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
+        <main className={`content ${(flush || route.page === "mcps") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
@@ -352,8 +356,8 @@ export function App() {
               </Suspense>
             ) : route.page === "review" ? (
               <Review key={scope.project ?? "all"} state={scoped!} />
-            ) : route.page === "skills" ? (
-              <Skills skills={state.skills} />
+            ) : route.page === "context" ? (
+              <Context state={state} />
             ) : route.page === "team" ? (
               <Suspense fallback={<Empty title="Loading…" />}><Team state={state} /></Suspense>
             ) : route.page === "mcps" ? (
@@ -411,7 +415,7 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, skills: 0, mcps: 0, team: 0, settings: 0 };
+  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, context: 0, mcps: 0, team: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
@@ -421,7 +425,7 @@ function countsOf(state: AppState | null): Record<NavId, number> {
     review: state.cards.filter((c) => c.state === "open").length,
     voice: 0,
     accounts: Math.max(loginsOpen, authBad),
-    skills: 0,
+    context: 0,
     mcps: 0,
     team: 0,
     settings: 0,

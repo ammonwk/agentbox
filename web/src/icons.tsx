@@ -72,6 +72,13 @@ export const Icon = {
       <path d="M3 18h7M20 5l-7 7 7 7" />
     </svg>
   ),
+  /** Context: a page with lines — rules and instructions an agent is given. */
+  context: ({ size = 16, className }: IconProps) => (
+    <svg width={size} height={size} className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M5 3h9l5 5v13H5z" />
+      <path d="M14 3v5h5M8.5 12h7M8.5 16h5" />
+    </svg>
+  ),
   settings: icon(GearSix),
   keyboard: icon(Keyboard),
   cards: icon(Stack),

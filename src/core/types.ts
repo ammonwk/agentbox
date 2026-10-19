@@ -1051,6 +1051,31 @@ export interface SkillResult {
   error?: string;
 }
 
+// ----------------------------------------------------------------- context
+
+/**
+ * One file an agent's context comes from, as the Context page shows it: the
+ * user's rules (global or a repo's), and the instruction files the CLIs read
+ * for themselves. `id` is what the write endpoint takes — never a path.
+ */
+export interface ContextDoc {
+  id: string;
+  kind: "rules" | "instructions";
+  /** "global", or the id of the repo it applies to. */
+  scope: string;
+  scopeLabel: string;
+  /** "Rules" | "AGENTS.md" | "CLAUDE.md" */
+  label: string;
+  /** Who reads it, in words: "every session" | "codex, in this repo". */
+  read: string;
+  providers: ProviderId[];
+  path: string;
+  exists: boolean;
+  bytes: number;
+  /** Rules only: how many bytes of the file a session is actually given. */
+  cap?: number;
+}
+
 // ----------------------------------------------------------------- metrics
 
 export interface TempReading {

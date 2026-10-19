@@ -41,6 +41,7 @@ import type {
   NightlyReclaim,
   ReclaimResult,
   Repo,
+  ContextDoc,
   SuperagentInfo,
   SuperagentView,
   Schedule,
@@ -373,6 +374,11 @@ export const api = {
     post<ReclaimResult>("/api/worktrees/reclaim", { paths, force }),
 
   // skills
+  // the Context page (rules, instructions and skills)
+  context: () => get<{ docs: ContextDoc[]; briefing: string }>("/api/context"),
+  contextDoc: (id: string) => get<{ path: string; body: string }>(`/api/context/doc?id=${enc(id)}`),
+  saveContextDoc: (id: string, body: string) =>
+    post<{ docs: ContextDoc[]; path: string; injected: string }>("/api/context/doc", { id, body }),
   // global MCP servers
   mcp: () => get<McpState>("/api/mcp"),
   addMcp: (s: McpServerInput) => post<McpState>("/api/mcp/servers", s),
