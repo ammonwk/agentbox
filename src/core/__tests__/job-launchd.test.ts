@@ -38,6 +38,8 @@ test("an attempt without completion cannot replay or manufacture success", () =>
     expect(run().exitCode).toBe(125);
     expect(existsSync(join(dir, "effects"))).toBe(false);
     expect(existsSync(join(dir, "result"))).toBe(false);
+    // The environment snapshot holds credentials and can never be used now.
+    expect(existsSync(join(dir, "payload.json"))).toBe(false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

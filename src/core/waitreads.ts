@@ -219,7 +219,7 @@ export async function readJob(spec: JobSpec): Promise<JobRead> {
         (["exit-code", "launch-error"].includes(result) && code === "exited" && /^-?\d+$/.test(status) && Number(status) !== 0) ||
         (result === "signal" && code === "killed" && status))) throw new Error(`the job's result is incomplete or invalid: ${spec.result}`);
       // Completion evidence survives cleanup. A cleanup failure must not hide it.
-      try { stopLaunchdJob(spec); } catch { /* an inactive one-shot cannot rerun work */ }
+      try { await stopLaunchdJob(spec); } catch { /* an inactive one-shot cannot rerun work */ }
     }
     return { result: { result, code, status }, running: false };
   }

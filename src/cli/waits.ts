@@ -68,7 +68,7 @@ export async function wait(api: Api, args: string[]): Promise<number> {
       break;
     }
     case "job":
-      spec = startJob(rest, str(flags.get("name")));
+      spec = await startJob(rest, str(flags.get("name")));
       break;
     case "session":
       if (rest.length === 0) throw new Error("wait session needs the ids of the sessions to wait on");
@@ -105,7 +105,7 @@ export async function wait(api: Api, args: string[]): Promise<number> {
         // The route validates and arm() refuses before inserting. Transport,
         // malformed replies and 5xx can instead follow a committed wait.
         if (e instanceof ApiError && e.status !== null && [400, 401, 403, 404, 409, 422, 429].includes(e.status)) {
-          try { stopLaunchdJob(job); }
+          try { await stopLaunchdJob(job); }
           catch (stop) { throw new Error(`${(e as Error).message}; ${(stop as Error).message}. ${jobEvidence(job)}`); }
           throw new Error(`${e.message}; the job was stopped after registration was refused. It may have run. ${jobEvidence(job)}`);
         }
@@ -137,13 +137,13 @@ const stopCommand = (spec: Extract<WaitSpec, { kind: "job" }>) => isLaunchdJob(s
 const jobEvidence = (spec: Extract<WaitSpec, { kind: "job" }>) => `Output: ${spec.log}; result: ${spec.result}; stop with: ${stopCommand(spec)}`;
 
 /**
- * Start the command as a systemd service of the user's own, in this
- * directory and environment. It is no part of the session's process tree, so
- * parking, stopping or moving the session leaves it running, and its
- * `ExecStopPost` writes how it ended (also when it was killed) where the
- * server reads it. One argument is a shell command line; several are an argv.
+ * Start the command as a service of its own: a systemd user service on Linux,
+ * a one-shot launchd agent on macOS, in this directory and environment. It is
+ * no part of the session's process tree, so parking, stopping or moving the
+ * session leaves it running, and how it ended is written where the server
+ * reads it. One argument is a shell command line; several are an argv.
  */
-function startJob(argv: string[], name: string | undefined): Extract<WaitSpec, { kind: "job" }> {
+async function startJob(argv: string[], name: string | undefined): Promise<Extract<WaitSpec, { kind: "job" }>> {
   if (argv.length === 0) throw new Error("wait job needs the command to run, after --: agentbox wait job -- 'npx tsx scripts/census.ts --prod > census.log 2>&1'");
   if (process.platform === "darwin") {
     const command = commandLine(argv);

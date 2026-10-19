@@ -24,7 +24,7 @@ try {
   const fd = openSync(join(dir, "attempted"), "wx", 0o600);
   fsyncSync(fd); closeSync(fd);
   const parent = openSync(dir, "r"); fsyncSync(parent); closeSync(parent);
-} catch { process.exit(125); }
+} catch { rmSync(payload, { force: true }); process.exit(125); }
 let finished = false;
 function finish(word) {
   if (finished) return;
@@ -49,13 +49,20 @@ try {
 process.exit(0);
 `;
 
-function launchctl(args: string[]) {
-  return Bun.spawnSync(["/bin/launchctl", ...args], { timeout: 10_000 });
+interface LaunchctlReply {
+  out: string;
+  err: string;
+  exit: number;
+}
+async function launchctl(args: string[]): Promise<LaunchctlReply> {
+  const p = Bun.spawn(["/bin/launchctl", ...args], { timeout: 10_000, stdout: "pipe", stderr: "pipe" });
+  const [out, err, exit] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { out, err, exit };
 }
 
 /** Only launchd's explicit missing-service reply proves absence. */
-function missing(p: ReturnType<typeof launchctl>, unit: string): boolean {
-  return p.exitCode === 113 && p.stderr.toString().includes(`Could not find service "${unit.split("/").at(-1)}"`);
+function missing(p: LaunchctlReply, unit: string): boolean {
+  return p.exit === 113 && p.err.includes(`Could not find service "${unit.split("/").at(-1)}"`);
 }
 
 /** Do not let a supplied wait spec turn cleanup into arbitrary file deletion. */
@@ -73,17 +80,17 @@ function clearPayload(spec: JobSpec): void {
 
 /** Refusal cleanup, also used once the server has durable completion evidence.
  * Keep the attempt marker and evidence; reloading a leftover plist cannot replay. */
-export function stopLaunchdJob(spec: JobSpec): void {
+export async function stopLaunchdJob(spec: JobSpec): Promise<void> {
   if (!isLaunchdJob(spec.unit) || Number(target.exec(spec.unit)![1]) !== process.getuid?.()) throw new Error("not this user's agentbox job");
-  const p = launchctl(["bootout", spec.unit]);
-  if (p.exitCode !== 0) {
-    const state = launchctl(["print", spec.unit]);
+  const p = await launchctl(["bootout", spec.unit]);
+  if (p.exit !== 0) {
+    const state = await launchctl(["print", spec.unit]);
     if (!missing(state, spec.unit)) throw new Error(`could not confirm the job stopped; inspect ${spec.unit}`);
   }
   clearPayload(spec);
 }
 
-export function startLaunchdJob(command: string, description: string): JobSpec {
+export async function startLaunchdJob(command: string, description: string): Promise<JobSpec> {
   const jobs = join(agentboxHome(), "jobs");
   mkdirSync(jobs, { recursive: true, mode: 0o700 });
   // mkdtemp creates 0700 even when the existing jobs directory is permissive.
@@ -93,7 +100,7 @@ export function startLaunchdJob(command: string, description: string): JobSpec {
   // A logged-in Mac's agents belong to its GUI bootstrap domain. Select the
   // domain before launch; never retry a bootstrap in another domain.
   const uid = process.getuid!();
-  const domain = launchctl(["print", `gui/${uid}`]).exitCode === 0 ? `gui/${uid}` : `user/${uid}`;
+  const domain = (await launchctl(["print", `gui/${uid}`])).exit === 0 ? `gui/${uid}` : `user/${uid}`;
   const spec: JobSpec = { kind: "job", unit: `${domain}/${label}`, command: description, log: join(dir, "output.log"), result: join(dir, "result") };
   const plist = join(dir, `${label}.plist`);
   try {
@@ -116,26 +123,26 @@ export function startLaunchdJob(command: string, description: string): JobSpec {
     rmSync(dir, { recursive: true, force: true });
     throw e;
   }
-  const p = launchctl(["bootstrap", domain, plist]);
-  if (p.exitCode !== 0) {
-    try { stopLaunchdJob(spec); }
+  const p = await launchctl(["bootstrap", domain, plist]);
+  if (p.exit !== 0) {
+    try { await stopLaunchdJob(spec); }
     catch { throw new Error(`job launch is unconfirmed; do not rerun it. Inspect ${spec.unit}; output: ${spec.log}; result: ${spec.result}. Stop with: launchctl bootout ${spec.unit}`); }
-    throw new Error(`launchd refused the job or its reply was lost (exit ${p.exitCode}); it has been stopped. It may have run: inspect ${spec.log} and ${spec.result} before retrying`);
+    throw new Error(`launchd refused the job or its reply was lost (exit ${p.exit}); it has been stopped. It may have run: inspect ${spec.log} and ${spec.result} before retrying`);
   }
   return spec;
 }
 
 /** Nonzero wrapper exits/signals are evidence of failure. A wrapper's exit 0
  * without a result is NOT evidence that the command succeeded. */
-export function readLaunchdJob(spec: JobSpec): { running: boolean; result: { result: string; code: string; status: string } | null } {
+export async function readLaunchdJob(spec: JobSpec): Promise<{ running: boolean; result: { result: string; code: string; status: string } | null }> {
   if (process.platform !== "darwin") throw new Error("this launchd job can only be watched on macOS");
-  const p = launchctl(["print", spec.unit]);
+  const p = await launchctl(["print", spec.unit]);
   if (missing(p, spec.unit)) {
     clearPayload(spec);
     return { running: false, result: null };
   }
-  if (p.exitCode !== 0) throw new Error(`launchctl could not read ${spec.unit} (exit ${p.exitCode})`);
-  const out = p.stdout.toString();
+  if (p.exit !== 0) throw new Error(`launchctl could not read ${spec.unit} (exit ${p.exit})`);
+  const out = p.out;
   const state = /^\s*state = (.+)$/m.exec(out)?.[1];
   if (/^\s*pid = \d+$/m.test(out) || ["running", "spawn scheduled", "spawning", "waiting", "pending", "xpcproxy"].includes(state ?? "")) return { running: true, result: null };
   if (state !== "not running" && state !== "exited") throw new Error(`launchctl returned an unknown job state for ${spec.unit}`);
@@ -148,7 +155,7 @@ export function readLaunchdJob(spec: JobSpec): { running: boolean; result: { res
     if (dir) {
       writeFileSync(spec.result + ".tmp", `${result.result} ${result.code} ${result.status.replaceAll(/\s+/g, "_")}\n`, { mode: 0o600 });
       renameSync(spec.result + ".tmp", spec.result);
-      stopLaunchdJob(spec);
+      await stopLaunchdJob(spec);
     }
   }
   return { running: false, result };
