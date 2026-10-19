@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountView, ProviderId, SessionHost, UsageWindow } from "../../src/core/types";
 import { Icon } from "./components";
-import { contextPct, type Shape, type ShownStatus } from "./lib/board";
+import { contextPct, type Shape, type ShownStatus, type WaitingOn } from "./lib/board";
 import { fmtTokens } from "./lib/format";
 import { barSegments, resetText, usageTone, usedNow, windowElapsed, windowLabel } from "./lib/usage";
 
@@ -118,6 +118,14 @@ export function AccountChip({
 }
 
 // ----------------------------------------------------------------- status
+
+const WAIT_GLYPH: Record<WaitingOn, typeof Icon.clock> = { github: Icon.prs, armed: Icon.clock, you: Icon.alert };
+
+/** What a finished turn waits on (`waitingOn`), as one icon wherever it is drawn. */
+export function WaitGlyph({ on, size, weight }: { on: WaitingOn; size: number; weight?: "bold" }) {
+  const Glyph = WAIT_GLYPH[on];
+  return <Glyph size={size} weight={weight} />;
+}
 
 const STATUS_LABEL: Record<ShownStatus, string> = {
   retrying: "Retrying",

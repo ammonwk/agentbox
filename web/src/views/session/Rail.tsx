@@ -5,7 +5,7 @@
 
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
-import { copyText, PROVIDER_LABEL, ProviderBadge, ShapeMark, StatusDot } from "../../bits";
+import { copyText, PROVIDER_LABEL, ProviderBadge, ShapeMark, StatusDot, WaitGlyph } from "../../bits";
 import { Icon, RelativeTime, Spinner } from "../../components";
 import {
   descendantsOf,
@@ -19,6 +19,7 @@ import {
   shownStatus,
   titleOf,
   usualProvider,
+  waitingOn,
   type BoardFilter,
   type Nested,
   type Quiet,
@@ -662,12 +663,15 @@ const Row = memo(function Row({
 /**
  * What it is doing, as one icon at the row's right end: a spinner while it
  * works, a pulse while it waits on work it left running, a check once its
- * turn ended `STATUS: done`, a pull request while a wait it armed is on a PR
- * or a CI run and a clock while one is on anything else, a gray alert when
+ * turn ended `STATUS: done` (with a small dial while a session it started
+ * works), a pull request while a wait it armed is on a PR or an Actions run
+ * and a clock while one is on anything else (`waitingOn`), a gray alert when
  * it is otherwise your turn, and an amber one while it waits for your
- * approval or your answer, or a red one when its turn failed. Nothing once it is stopped. A click copies its id.
+ * approval or your answer, or a red one when its turn failed. Nothing once
+ * it is stopped. A click copies its id. Under the pointer it moves left into
+ * the load's place, and the ✕ takes its own.
  */
-function RowState({ s }: { s: SessionRow }) {
+function RowState({ s }: { s: Nested<SessionRow> }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -696,7 +700,7 @@ function RowState({ s }: { s: SessionRow }) {
   );
 }
 
-function stateOf(s: SessionRow): { kind: string; label: string; icon: ReactNode } | null {
+function stateOf(s: Nested<SessionRow>): { kind: string; label: string; icon: ReactNode } | null {
   // An error agentbox retries by itself is work, not something for you to fix.
   if (shownStatus(s) === "retrying") return { kind: "working", label: "Retrying: agentbox retries it by itself", icon: <Spinner size={12} /> };
   if (s.status === "blocked") {
@@ -710,13 +714,15 @@ function stateOf(s: SessionRow): { kind: string; label: string; icon: ReactNode 
   if (s.status !== "waiting") return null;
   if (s.turnError) return { kind: "error", label: `Its turn failed: ${s.turnError.detail}`, icon: <Icon.alert size={13} /> };
   const parked = s.parkedAt ? " (parked: a message resumes it)" : "";
-  if (endedDone(s.lastMessage)) return { kind: "done", label: `Done${parked}`, icon: <Icon.check size={13} /> };
-  // A wait it armed wakes it by itself, unless its turn ended asking you.
-  if (s.waits.length && turnStatus(s.lastMessage)?.kind !== "needs") {
-    const ci = s.waits.some((w) => w.kind === "pr" || w.kind === "run");
-    return { kind: "armed", label: `Waiting on ${s.waits.map((w) => w.what).join("; ")}${parked}`, icon: ci ? <Icon.prs size={13} /> : <Icon.clock size={13} /> };
+  if (endedDone(s.lastMessage)) {
+    // Done itself, with what it started still going: a small dial in the check's corner.
+    return s.working
+      ? { kind: "done", label: `Done; a session it started is still working${parked}`, icon: <span className="rail-done-busy"><Icon.check size={13} /><Spinner size={7} /></span> }
+      : { kind: "done", label: `Done${parked}`, icon: <Icon.check size={13} /> };
   }
-  return { kind: "waiting", label: `Your turn${parked}`, icon: <Icon.alert size={13} /> };
+  const on = waitingOn(s);
+  if (on === "you") return { kind: "waiting", label: `Your turn${parked}`, icon: <WaitGlyph on={on} size={13} /> };
+  return { kind: "armed", label: `Waiting on ${s.waits.map((w) => w.what).join("; ")}${parked}`, icon: <WaitGlyph on={on} size={13} /> };
 }
 
 /**

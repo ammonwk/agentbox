@@ -10,8 +10,8 @@ import { SessionLinks, type SessionLinksValue } from "./sessionlinks";
 import { hrefOf, parseHash } from "../../route";
 import { isLinkableName, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { useFamily } from "./family";
-import { StatusDot } from "../../bits";
-import { shownStatus, titleOf } from "../../lib/board";
+import { StatusDot, WaitGlyph } from "../../bits";
+import { shownStatus, statusWaitingOn, titleOf } from "../../lib/board";
 import { Icon } from "../../components";
 import { Lightbox } from "../../attachments";
 import { shownImageUrl } from "../../api";
@@ -129,15 +129,19 @@ function namesId(names: ReadonlyMap<string, string>): number {
   return id;
 }
 
-const STATUS_ICON = { done: Icon.check, waiting: Icon.clock, needs: Icon.user, other: Icon.chevronRight };
-
-/** The turn's closing `STATUS:` line, as a quiet footer rather than prose.
- *  A `done` one is only dropped: the list's check already says it. */
+/** The turn's closing `STATUS:` line, as a quiet footer rather than prose,
+ *  under the icon the list gives what it waits on (`waitingOn`). A `done`
+ *  one is only dropped: the list's check already says it. */
 function StatusLine({ status: { kind, text } }: { status: TurnStatus }) {
-  const Glyph = STATUS_ICON[kind];
   return (
     <div className="sx-status" data-kind={kind} title={`STATUS: ${text}`}>
-      <Glyph size={12} weight="bold" />
+      {kind === "done" ? (
+        <Icon.check size={12} weight="bold" />
+      ) : kind === "other" ? (
+        <Icon.chevronRight size={12} weight="bold" />
+      ) : (
+        <WaitGlyph on={kind === "needs" ? "you" : statusWaitingOn(text)} size={12} weight="bold" />
+      )}
       <Markdown inline text={text.charAt(0).toUpperCase() + text.slice(1)} />
     </div>
   );

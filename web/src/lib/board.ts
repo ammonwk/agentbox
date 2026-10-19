@@ -5,6 +5,7 @@
  * sorts and buckets by it. */
 
 import { retrying } from "../../../src/core/attention";
+import { turnStatus } from "../../../src/core/turnstatus";
 import type { Attention, AttentionKind, ProviderId, Session, SessionStatus } from "../../../src/core/types";
 import { baseName } from "./format";
 
@@ -178,8 +179,9 @@ export function runningDescendants<T extends Pick<Session, "id" | "parent" | "st
 
 /** A row placed in the tree: how deep it sits under the session that started
  *  it, how many sessions it started are here under it (`kids`, and `all` at
- *  any depth), and whether they show. */
-export type Nested<T> = T & { depth: number; kids: number; all: number; open: boolean };
+ *  any depth), whether they show, and whether one of them, at any depth, is
+ *  working (`working`). */
+export type Nested<T> = T & { depth: number; kids: number; all: number; open: boolean; working: boolean };
 
 /** What is folded in the list. Each is asked with `auto`, what the row would
  *  be left alone, and says what you made of it. */
@@ -202,10 +204,10 @@ const NO_FOLDS: Folds = { open: () => true, quiet: () => true, keep: new Set(), 
  *  change is the same object, so its row in the list need not draw again. */
 const placed = new WeakMap<object, Nested<SessionRow>>();
 
-function nest<T extends SessionRow>(s: T, depth: number, kids: number, all: number, open: boolean): Nested<T> {
+function nest<T extends SessionRow>(s: T, depth: number, kids: number, all: number, open: boolean, working: boolean): Nested<T> {
   const was = placed.get(s) as Nested<T> | undefined;
-  if (was && was.depth === depth && was.kids === kids && was.all === all && was.open === open) return was;
-  const row = { ...s, depth, kids, all, open };
+  if (was && was.depth === depth && was.kids === kids && was.all === all && was.open === open && was.working === working) return was;
+  const row = { ...s, depth, kids, all, open, working };
   placed.set(s, row);
   return row;
 }
@@ -298,10 +300,11 @@ export function sectionsOf<T extends SessionRow>(
     return b;
   };
   const under = (s: T): number => (kids.get(s.id) ?? []).reduce((n, c) => n + 1 + under(c), 0);
+  const working = (s: T): boolean => (kids.get(s.id) ?? []).some((c) => c.status === "running" || working(c));
   const place = (s: T, depth: number, out: Nested<T>[], quiet: Map<string, Quiet[]>) => {
     const k = kids.get(s.id) ?? [];
     const open = k.length > 0 && folds.open(s.id, k.some((c) => folds.keep.has(c.id)));
-    out.push(nest(s, depth, k.length, under(s), open));
+    out.push(nest(s, depth, k.length, under(s), open, working(s)));
     if (!open) return;
     const awake = k.filter(active);
     for (const c of awake) place(c, depth + 1, out, quiet);
@@ -391,11 +394,35 @@ export function contextPct(s: Pick<Session, "contextUsed" | "contextLimit">): nu
   return Math.min(100, (s.contextUsed / s.contextLimit) * 100);
 }
 
+/**
+ * What a session whose turn is over waits on: a wait it armed on GitHub (a
+ * PR's checks or merge, an Actions run), another wait it armed (a timer, a
+ * command, a session), or you, when it armed none or its turn ended `needs`.
+ * The one rule for the list's icon, the nav badge and the turn's footer.
+ */
+export type WaitingOn = "github" | "armed" | "you";
+
+const GITHUB_WAITS: ReadonlySet<string> = new Set(["pr", "run"]);
+
+export function waitingOn(s: Pick<Session, "waits" | "lastMessage">): WaitingOn {
+  if (!s.waits.length || turnStatus(s.lastMessage)?.kind === "needs") return "you";
+  return s.waits.some((w) => GITHUB_WAITS.has(w.kind)) ? "github" : "armed";
+}
+
+/** The same for a `STATUS: waiting on …` line read on its own (an earlier
+ *  turn's footer, whose waits are long gone), from what it names. */
+export function statusWaitingOn(text: string): WaitingOn {
+  const on = text.replace(/^waiting\s+on\b/i, "");
+  if (!/\bwait|\bwatch/i.test(on)) return "you";
+  return /\bwaits?\s+(?:pr|run)\b|\bPRs?\b|pull request|\bchecks?\b|\bCI\b|merg|\breview|\brun\s+\d/i.test(on) ? "github" : "armed";
+}
+
 /** Counts for the nav badge and the tab title: things that want a human. A
- *  helper waiting on the session that started it is waiting on that session. */
+ *  helper waiting on the session that started it is waiting on that session,
+ *  and one waiting on a wait it armed is waiting on that. */
 export function needsYou(rows: readonly SessionRow[]): number {
   const up = parentsOf(rows.filter((s) => s.status !== "closed"));
-  return rows.filter((s) => s.attention.kind === "blocked" || (s.attention.kind === "waiting" && !up.has(s.id))).length;
+  return rows.filter((s) => s.attention.kind === "blocked" || (s.attention.kind === "waiting" && !up.has(s.id) && waitingOn(s) === "you")).length;
 }
 
 /**

@@ -745,8 +745,9 @@
 .rail-load[data-hot] > :first-child {
   color: var(--warning);
 }
-/* Close from the list: the ✕ takes the time's place under the pointer. Not on
-   touch screens, which have no hover to reveal it. */
+/* Close from the list: under the pointer the ✕ takes the state icon's place
+   at the row's end, and the icon takes the load's. Not on touch screens,
+   which have no hover to reveal it. */
 .rail-x {
   display: none;
   flex: none;
@@ -772,15 +773,29 @@
   display: inline-flex;
   color: var(--danger);
 }
-.rail-row:has(.rail-x[data-armed]) .rail-when {
+/* The state widens into what the load and its own end margin took, less the
+   ✕'s width: the time stays put. */
+.rail-row:has(.rail-x[data-armed]) .rail-load {
   display: none;
 }
+.rail-row:has(.rail-x[data-armed]) .rail-x {
+  order: 1;
+}
+.rail-row:has(.rail-x[data-armed]) .rail-state {
+  width: 25px;
+  margin-right: 0;
+}
 @media (hover: hover) {
-  .rail-row:hover .rail-when {
+  .rail-row:hover:has(.rail-x) .rail-load {
     display: none;
   }
   .rail-row:hover .rail-x {
     display: inline-flex;
+    order: 1;
+  }
+  .rail-row:hover:has(.rail-x) .rail-state {
+    width: 25px;
+    margin-right: 0;
   }
 }
 .rail-row .prov {
@@ -789,7 +804,8 @@
   box-shadow: none;
 }
 /* What the session is doing, at the row's right end: a spinner in the accent
-   while it works, a check once its turn ended done, a pull request or a
+   while it works, a check once its turn ended done (with a small dial while
+   a session it started works), a pull request or a
    clock while a wait it armed runs, a gray alert when it is otherwise your
    turn, amber while it waits for your approval, red when its turn failed.
    A click copies its id. */
@@ -826,6 +842,20 @@ button.rail-state:hover {
 }
 .rail-state[data-state="error"] {
   color: var(--danger);
+}
+.rail-done-busy {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+/* In the check's empty bottom-right corner, in the working accent. */
+.rail-done-busy .spinner {
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  border-width: 1.5px;
+  color: var(--accent);
+  opacity: 1;
 }
 .rail-pulse {
   width: 7px;
