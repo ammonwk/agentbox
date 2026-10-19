@@ -605,6 +605,9 @@ export interface Session {
    *  turn is over and it is waiting on teammates, background agents or
    *  shells, not thinking. */
   background: boolean;
+  /** The waits it has armed (`agentbox wait`) and still going: what each is
+   *  on, and that in a line (`PR #8883: every check on 0ab9de7654`). */
+  waits: { kind: WaitSpec["kind"]; what: string }[];
   /** On a hub (docs/hub.md): the node it runs on, null for the hub's own.
    *  Absent on a machine that is not a hub. */
   node?: string | null;

@@ -58,6 +58,7 @@ import {
 } from "./db";
 import { branchOnDisk, createWorktree, detachedWorktree, repoRootOf, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
+import { describe as describeWait } from "./waits";
 import { prReleaseNotice, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
@@ -330,6 +331,8 @@ export class Fleet extends EventEmitter {
   private openIds = new Set<string>();
   /** What each session has going, as of this pass (`workHeld`). */
   private holding = new Map<string, string[]>();
+  /** Each session's waits still going, as of this pass (`Session.waits`). */
+  private waitsOf = new Map<string, Session["waits"]>();
   /** `${provider}:${agentSessionId}` → session id. */
   private byAgentId = new Map<string, string>();
   private views = new Map<string, Session>();
@@ -2131,6 +2134,8 @@ export class Fleet extends EventEmitter {
     const records = listSessionRecords(since);
     this.openIds = new Set(records.filter((r) => !r.archivedAt).map((r) => r.id));
     this.holding = this.workHeld();
+    this.waitsOf = new Map();
+    for (const w of listOpenWaits(0)) if (!w.ended) this.waitsOf.set(w.sessionId, [...(this.waitsOf.get(w.sessionId) ?? []), { kind: w.spec.kind, what: describeWait(w.spec) }]);
     const seen = new Set<string>();
     let dirty = false;
     for (const rec of records) {
@@ -2188,7 +2193,7 @@ export class Fleet extends EventEmitter {
     const parentRuns = !!rec.parent && this.openIds.has(rec.parent) && this.views.get(rec.parent)?.host !== "none";
     // A limit it stopped at ends when its account's usage says so, not when the view was drawn.
     const hit = f ? limitStop({ ...f, lastActivityAt: f.lastActivityAt ?? rec.lastActivityAt }) : null;
-    return `${cold}|${parentRuns}|${this.holding.has(rec.id)}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}|${hit ? this.limitEnd(rec.accountId, hit, now) : ""}`;
+    return `${cold}|${parentRuns}|${this.holding.has(rec.id)}|${JSON.stringify(this.waitsOf.get(rec.id) ?? [])}|${this.poolAgentOf(rec)?.name ?? ""}|${rec.accountId ? this.ownerOf(rec.accountId) : ""}|${hit ? this.limitEnd(rec.accountId, hit, now) : ""}`;
   }
 
   private viewOf(rec: SessionRecord, now: number): Session | null {
@@ -2397,6 +2402,7 @@ export class Fleet extends EventEmitter {
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
+      waits: this.waitsOf.get(rec.id) ?? [],
     };
   }
 

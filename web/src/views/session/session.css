@@ -789,9 +789,10 @@
   box-shadow: none;
 }
 /* What the session is doing, at the row's right end: a spinner in the accent
-   while it works, a check once its turn ended done, a clock when it is
-   otherwise your turn, amber while it waits for your
-   approval, red when its turn failed. A click copies its id. */
+   while it works, a check once its turn ended done, a pull request or a
+   clock while a wait it armed runs, a gray alert when it is otherwise your
+   turn, amber while it waits for your approval, red when its turn failed.
+   A click copies its id. */
 .rail-state {
   flex: none;
   display: grid;
@@ -816,6 +817,7 @@ button.rail-state:hover {
   color: var(--accent);
 }
 .rail-state[data-state="waiting"],
+.rail-state[data-state="armed"],
 .rail-state[data-state="done"] {
   color: var(--muted);
 }

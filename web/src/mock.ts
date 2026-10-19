@@ -380,6 +380,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     parkedAt: null,
     parkHold: null,
     background: false,
+    waits: [],
     ...p,
     lastPromptAt: p.lastPromptAt ?? p.lastActivityAt ?? T0 - 5 * M,
     cacheWarmUntil: p.cacheWarmUntil ?? (p.lastActivityAt ?? T0 - 5 * M) + H,

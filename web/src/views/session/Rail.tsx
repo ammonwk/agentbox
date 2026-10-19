@@ -662,8 +662,10 @@ const Row = memo(function Row({
 /**
  * What it is doing, as one icon at the row's right end: a spinner while it
  * works, a pulse while it waits on work it left running, a check once its
- * turn ended `STATUS: done`, a clock when it is otherwise your turn, and an alert while it waits for your approval or your answer, or
- * when its turn failed. Nothing once it is stopped. A click copies its id.
+ * turn ended `STATUS: done`, a pull request while a wait it armed is on a PR
+ * or a CI run and a clock while one is on anything else, a gray alert when
+ * it is otherwise your turn, and an amber one while it waits for your
+ * approval or your answer, or a red one when its turn failed. Nothing once it is stopped. A click copies its id.
  */
 function RowState({ s }: { s: SessionRow }) {
   const [copied, setCopied] = useState(false);
@@ -709,7 +711,12 @@ function stateOf(s: SessionRow): { kind: string; label: string; icon: ReactNode 
   if (s.turnError) return { kind: "error", label: `Its turn failed: ${s.turnError.detail}`, icon: <Icon.alert size={13} /> };
   const parked = s.parkedAt ? " (parked: a message resumes it)" : "";
   if (endedDone(s.lastMessage)) return { kind: "done", label: `Done${parked}`, icon: <Icon.check size={13} /> };
-  return { kind: "waiting", label: `Your turn${parked}`, icon: <Icon.clock size={13} /> };
+  // A wait it armed wakes it by itself, unless its turn ended asking you.
+  if (s.waits.length && turnStatus(s.lastMessage)?.kind !== "needs") {
+    const ci = s.waits.some((w) => w.kind === "pr" || w.kind === "run");
+    return { kind: "armed", label: `Waiting on ${s.waits.map((w) => w.what).join("; ")}${parked}`, icon: ci ? <Icon.prs size={13} /> : <Icon.clock size={13} /> };
+  }
+  return { kind: "waiting", label: `Your turn${parked}`, icon: <Icon.alert size={13} /> };
 }
 
 /**
