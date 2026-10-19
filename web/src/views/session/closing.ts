@@ -8,8 +8,9 @@ import { api } from "../../api";
 
 /** Ids asked to close whose close the app state does not show yet. */
 let pending: ReadonlySet<string> = new Set();
-/** The last thing that could not be done, and to what: "close" unless said. */
-let failure: { id: string; title: string; message: string; verb?: string } | null = null;
+/** The last thing that could not be done, said whole, and the session it was done to. */
+let failure: { id: string; text: string } | null = null;
+const couldNot = (id: string, title: string, verb: string, message: string) => ({ id, text: `Could not ${verb} “${title}”: ${message}` });
 const listeners = new Set<() => void>();
 
 function set(next: ReadonlySet<string>, f = failure): void {
@@ -43,7 +44,7 @@ export function closeNow(id: string, title: string, family: readonly string[] = 
     },
     (e: Error) => {
       ids.forEach(forget);
-      set(pending, { id, title, message: e.message });
+      set(pending, couldNot(id, title, "close", e.message));
     },
   );
 }
@@ -55,14 +56,19 @@ export function hideWhile(id: string, title: string, verb: string, act: Promise<
     () => setTimeout(() => forget(id), 5000),
     (e: Error) => {
       forget(id);
-      set(pending, { id, title, message: e.message, verb });
+      set(pending, couldNot(id, title, verb, e.message));
     },
   );
 }
 
 /** Say that `verb` could not be done to it, where a refused close is said. */
 export function reportFailure(id: string, title: string, verb: string, message: string): void {
-  set(pending, { id, title, message, verb });
+  set(pending, couldNot(id, title, verb, message));
+}
+
+/** Say something that was not done there, in a sentence of its own. */
+export function reportNote(text: string): void {
+  set(pending, { id: "", text });
 }
 
 /** No longer hidden: it closed, failed, or is being reopened. */

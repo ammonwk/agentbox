@@ -19,7 +19,7 @@ import {
   type SessionRow,
 } from "../../lib/board";
 import { closedSessions, Rail, shownBy, useListState } from "./Rail";
-import { closeNow, forget, hideWhile, useClosing } from "./closing";
+import { closeNow, forget, hideWhile, reportFailure, reportNote, useClosing } from "./closing";
 import { toggleBookmark, togglePin, usePinned } from "./pins";
 import { justStarted } from "./started";
 import { ScheduledDetail, scheduleTitle } from "./Scheduled";
@@ -105,6 +105,8 @@ export function SessionView({
   // Not started yet: the same id, before there is a session under it.
   const sched = id && !session ? state.schedules.find((s) => s.id === id && !isRecurring(s.rule)) ?? null : null;
   const missing = !!id && !session && !sched;
+  /** Why the lookup by id found nothing; until it says, it is still looking. */
+  const [notFound, setNotFound] = useState<{ id: string; why: string } | null>(null);
   useEffect(() => {
     if (!missing || !id) return;
     let live = true;
@@ -115,7 +117,7 @@ export function SessionView({
           found((n) => n + 1);
         }
       },
-      () => undefined,
+      (e: Error) => live && setNotFound({ id, why: e.message }),
     );
     return () => {
       live = false;
@@ -204,13 +206,13 @@ export function SessionView({
   const reopenLast = () => {
     api.closed("", 0, 1, scope.project).then((page) => {
       const s = page.sessions[0];
-      if (!s) return;
+      if (!s) return reportNote("Nothing closed to reopen.");
       forget(s.id);
       api.close(s.id, false).then(
         () => onOpen(s.id),
-        () => undefined,
+        (e: Error) => reportFailure(s.id, titleOf(s), "reopen", e.message),
       );
-    }, () => undefined);
+    }, (e: Error) => reportNote(`Could not list the closed sessions: ${e.message}`));
   };
 
   // Alt+W closes the open session and Alt+Shift+T reopens the most recently
@@ -327,12 +329,15 @@ export function SessionView({
         <ScheduledDetail key={sched.id} sc={sched} state={state} onCancel={cancelSchedule} />
       ) : id ? (
         <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main">
-          <Empty title="No such session" action={<a className="btn" href={hrefOf({ page: "sessions" })}>Back to sessions</a>}>
-            <p>
-              Nothing on the board has the id <code>{id}</code>. It may have been older than the board&apos;s{" "}
-              {state.settings.boardDays}-day window, or the link is from another machine.
-            </p>
-          </Empty>
+          {notFound?.id !== id ? (
+            <Empty title="Looking up the session…" />
+          ) : (
+            <Empty title="No such session" action={<a className="btn" href={hrefOf({ page: "sessions" })}>Back to sessions</a>}>
+              <p>
+                Looking up <code>{id}</code> said “{notFound.why}”. The link may be from another machine.
+              </p>
+            </Empty>
+          )}
         </div>
       ) : (
         <div data-nav-region="detail" tabIndex={-1} aria-label="Session" className="sv-main sv-none">
@@ -707,6 +712,7 @@ export function Detail({
             On a computer the list's right-click menu renames. */}
         {narrow ? (
           <div className="sx-title-row">
+            <Button variant="ghost" size="sm" icon={Icon.chevronLeft} aria-label="Back to the list" title="Back to the list" data-nav-back onClick={() => go({ page: "sessions" })} />
             <TitleEdit session={session} />
             {marks}
           </div>

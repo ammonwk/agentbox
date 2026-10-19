@@ -124,6 +124,9 @@ export function NewSession({
   }, []);
   const [perProvider, setPerProvider] = useState(prefs.perProvider ?? {});
   const [catalog, setCatalog] = useState<ModelOption[]>([]);
+  /** Why the account's models could not be listed: the picker offers Default and typing one. */
+  const [catalogErr, setCatalogErr] = useState<string | null>(null);
+  const [catalogTry, setCatalogTry] = useState(0);
   // A model remembered from an earlier visit that the account no longer lists
   // (a plan without it, a retired id) runs as Default: the CLI would refuse
   // every turn. One picked or typed in this visit goes through as asked.
@@ -194,16 +197,21 @@ export function NewSession({
   const target = manual ?? accounts.find((a) => a.id === placement?.accountId) ?? accounts[0] ?? null;
 
   useEffect(() => {
+    setCatalogErr(null);
     if (!target) return setCatalog([]);
     let cancelled = false;
-    api
-      .models(target.id, provider)
-      .then((m) => !cancelled && setCatalog(m))
-      .catch(() => !cancelled && setCatalog([]));
+    api.models(target.id, provider).then(
+      (m) => !cancelled && setCatalog(m),
+      (e: unknown) => {
+        if (cancelled) return;
+        setCatalog([]);
+        setCatalogErr(e instanceof Error ? e.message : String(e));
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [target?.id, provider]);
+  }, [target?.id, provider, catalogTry]);
 
   const models = useMemo(
     () => rankModels(catalog, state.sessions, provider),
@@ -391,11 +399,26 @@ export function NewSession({
 
   // Later, the balancer places it when it starts: no account with room now is
   // not a reason not to schedule it.
-  const whenOk = mode === "now" || (!!when.trim() && !("error" in parseWhen(when)));
-  const canSubmit =
-    whereOk && !busy && installed.includes(provider) && (mode === "now" ? !noEligible : whenOk && prompt.trim().length > 0);
+  const parsedWhen = mode === "schedule" && when.trim() ? parseWhen(when) : null;
+  /** What stops Start, said on its tooltip and, if you press it anyway, under the form. */
+  const whyNot = !installed.includes(provider)
+    ? `${PROVIDER_LABEL[provider]} is not installed on this machine`
+    : !whereOk
+      ? where === "repo" ? "Pick a repository" : "Give it a folder to work in"
+      : mode === "now"
+        ? noEligible ? placement?.why || `No ${PROVIDER_LABEL[provider]} account has room` : null
+        : !when.trim()
+          ? "Say when to start it"
+          : parsedWhen && "error" in parsedWhen
+            ? parsedWhen.error
+            : !prompt.trim() ? "A scheduled session needs a prompt" : null;
+  const canSubmit = !busy && !whyNot;
+
+  /** Start was pressed while something stopped it: say what, until it no longer does. */
+  const [tried, setTried] = useState(false);
 
   async function submit() {
+    if (whyNot) setTried(true);
     if (!canSubmit) return;
     setBusy(true);
     setError(null);
@@ -486,7 +509,7 @@ export function NewSession({
           {where === "repo" && repo ? (
             <WorktreeField on={worktree} onToggle={setWorktree} text={wtText} onText={setWtText} prs={repoPrs} hint={hint} fromPrompt={wtFromPrompt} note={wtNote} />
           ) : null}
-          <StartButton mode={mode} onMode={setMode} busy={busy} disabled={!canSubmit} />
+          <StartButton mode={mode} onMode={setMode} busy={busy} disabled={!canSubmit} why={whyNot} />
         </div>
 
         {!wherePicked && projectMatches.length > 0 ? (
@@ -533,9 +556,18 @@ export function NewSession({
 
         {mode === "schedule" ? <WhenField value={when} onChange={setWhen} inputRef={whenRef} /> : null}
 
-        {otherErr || error ? (
+        {catalogErr ? (
+          <p className="ns-foot-hint faint" role="status">
+            Could not list {PROVIDER_LABEL[provider]}&apos;s models: {catalogErr}.{" "}
+            <button type="button" className="linkish" onClick={() => setCatalogTry((n) => n + 1)}>
+              Try again
+            </button>
+          </p>
+        ) : null}
+
+        {otherErr || error || (tried && whyNot) ? (
           <p className="error-line" role="alert">
-            {otherErr ? `Could not add the repository: ${otherErr}` : error}
+            {otherErr ? `Could not add the repository: ${otherErr}` : error ?? `${whyNot}.`}
           </p>
         ) : null}
 
@@ -585,11 +617,13 @@ function StartButton({
   onMode,
   busy,
   disabled,
+  why,
 }: {
   mode: "now" | "schedule";
   onMode: (m: "now" | "schedule") => void;
   busy: boolean;
   disabled: boolean;
+  why: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -601,7 +635,7 @@ function StartButton({
     setOpen(false);
   };
   return (
-    <div className="ns-split" ref={wrap} data-busy={busy || undefined}>
+    <div className="ns-split" ref={wrap} data-busy={busy || undefined} title={why ?? undefined}>
       <Button type="submit" variant="primary" icon={mode === "now" ? Icon.play : Icon.clock} loading={busy} disabled={disabled}>
         {mode === "now" ? "Start" : "Schedule"}
       </Button>

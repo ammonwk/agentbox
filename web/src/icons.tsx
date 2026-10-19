@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import type { Icon as PhosphorIcon, IconWeight } from "@phosphor-icons/react";
 import { GearSix } from "@phosphor-icons/react/dist/csr/GearSix";
+import { Keyboard } from "@phosphor-icons/react/dist/csr/Keyboard";
 import { Stack } from "@phosphor-icons/react/dist/csr/Stack";
 import { Plus } from "@phosphor-icons/react/dist/csr/Plus";
 import { Play } from "@phosphor-icons/react/dist/csr/Play";
@@ -72,6 +73,7 @@ export const Icon = {
     </svg>
   ),
   settings: icon(GearSix),
+  keyboard: icon(Keyboard),
   cards: icon(Stack),
   plus: icon(Plus),
   play: icon(Play),

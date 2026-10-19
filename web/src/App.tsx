@@ -8,7 +8,7 @@ import type { AgentSettings, AppState } from "../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./components";
 import { needsYou, titleOf } from "./lib/board";
 import { go, hrefOf, navOf, onGo, parseHash, restoreScope, scopeOf, selectScope, type NavId, type Route } from "./route";
-import { isInstalledApp, isPhone, openingTab } from "./lib/phone";
+import { isInstalledApp, isPhone, openingTab, pickedTab } from "./lib/phone";
 import { useUpdateReady } from "./lib/update";
 import { useKeyboardNavigation } from "./lib/keyboard";
 import { SystemBar } from "./SystemBar";
@@ -17,6 +17,7 @@ import { SessionView } from "./views/session/SessionView";
 import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
+import { Shortcuts } from "./views/Shortcuts";
 import { Skills } from "./views/Skills";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
@@ -108,6 +109,7 @@ export function App() {
   }, []);
   const theme = useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   // The selected project (lib/projects.tsx): the lists, badges and the
   // new-session dialog see the board through it. Accounts, MCPs, settings
@@ -148,6 +150,9 @@ export function App() {
       if (e.key === "n") {
         e.preventDefault();
         setNewOpen(true);
+      } else if (e.key === "?") {
+        e.preventDefault();
+        setKeysOpen(true);
       } else if (e.key === "/") {
         const search = document.querySelector<HTMLInputElement>("[data-search]");
         if (search) {
@@ -253,6 +258,11 @@ export function App() {
           </nav>
 
           <div className="spacer" />
+          <button type="button" className="nav-item nav-keys" title="Keyboard shortcuts (?)" onClick={() => setKeysOpen(true)}>
+            <Icon.keyboard size={20} />
+            <span className="nav-label">Shortcuts</span>
+            <kbd className="nav-label">?</kbd>
+          </button>
           <UpdateReady />
           <InboxBell state={state} themeError={theme.error} />
           <ConnectionChip />
@@ -321,14 +331,11 @@ export function App() {
                 visible={scoped!}
                 id={route.page === "session" ? route.id : null}
                 tab={route.page === "session" ? route.tab : "timeline"}
-                onTab={(tab) => route.page === "session" && navigate({ page: "session", id: route.id, tab }, true)}
-                onOpen={(id) =>
-                  navigate({
-                    page: "session",
-                    id,
-                    tab: route.page === "session" ? route.tab : openingTab(state.sessions.find((s) => s.id === id)),
-                  })
-                }
+                onTab={(tab) => {
+                  pickedTab(tab);
+                  if (route.page === "session") navigate({ page: "session", id: route.id, tab }, true);
+                }}
+                onOpen={(id) => navigate({ page: "session", id, tab: openingTab(state.sessions.find((s) => s.id === id)) })}
                 onNew={() => setNewOpen(true)}
               />
             ) : route.page === "agents" ? (
@@ -363,6 +370,7 @@ export function App() {
         </ErrorBoundary>
       </div>
 
+      {keysOpen ? <Shortcuts onClose={() => setKeysOpen(false)} /> : null}
       {switcherOpen && state ? <ProjectSwitcher repos={state.repos} selected={scope.project} onClose={() => setSwitcherOpen(false)} /> : null}
       {newOpen && state ? (
         <ErrorBoundary label="The new-session dialog">

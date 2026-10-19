@@ -29,7 +29,7 @@ import {
   type SortKey,
 } from "../../lib/board";
 import { baseName, fmtBytes } from "../../lib/format";
-import { openingTab } from "../../lib/phone";
+import { openingTab, usePickedTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
 import { useScope } from "../../lib/projects";
@@ -62,12 +62,28 @@ function readView(): RailView {
   }
 }
 
-/** Survive a trip to Accounts and back: a list that forgets its search every
- *  time you look away is a list you stop searching. One per project ("" is
- *  All projects): a search in one is not what another list is narrowed by.
- *  The sort and the Active/Inactive tab are preferences, so they outlive the
- *  browser tab too. */
-const rememberedFilters = new Map<string, BoardFilter>();
+function readStored(store: () => Storage, key: string): unknown {
+  try {
+    return JSON.parse(store().getItem(key) ?? "null");
+  } catch {
+    return null;
+  }
+}
+function writeStored(store: () => Storage, key: string, value: unknown): void {
+  try {
+    store().setItem(key, JSON.stringify(value));
+  } catch {
+    /* private mode: this tab remembers it */
+  }
+}
+
+/** Survive a trip to Accounts and back, and a reload: a list that forgets its
+ *  search every time you look away is a list you stop searching. One per
+ *  project ("" is All projects): a search in one is not what another list is
+ *  narrowed by. Per browser tab; the sort and the Active/Inactive tab are
+ *  preferences, so they outlive the browser tab too. */
+const FILTERS_KEY = "agentbox.railFilters";
+const rememberedFilters = new Map<string, BoardFilter>(Object.entries((readStored(() => sessionStorage, FILTERS_KEY) ?? {}) as Record<string, BoardFilter>));
 
 /** Rows you expanded or folded by hand. One in neither is as it would be left
  *  alone (`Folds` in lib/board.ts). */
@@ -75,7 +91,6 @@ interface ByHand {
   open: ReadonlySet<string>;
   shut: ReadonlySet<string>;
 }
-const NO_HAND: ByHand = { open: new Set(), shut: new Set() };
 export const shownBy = (h: ByHand, id: string, auto: boolean): boolean => h.open.has(id) || (auto && !h.shut.has(id));
 /** Fold it when it shows, else unfold it. */
 function flip(h: ByHand, id: string, shown: boolean): ByHand {
@@ -90,9 +105,18 @@ function flip(h: ByHand, id: string, shown: boolean): ByHand {
   }
   return { open, shut };
 }
-/** Whether each row's children show, and each row's inactive children. */
-let kidsByHand = NO_HAND;
-let quietByHand = NO_HAND;
+/** Whether each row's children show, and each row's inactive children. Kept
+ *  across reloads, the newest few hundred of each. */
+const FOLDS_KEY = "agentbox.railFolds";
+type StoredHand = { open?: string[]; shut?: string[] } | undefined;
+const storedFolds = readStored(() => localStorage, FOLDS_KEY) as { kids?: StoredHand; quiet?: StoredHand } | null;
+const handOf = (v: StoredHand): ByHand => ({ open: new Set(v?.open ?? []), shut: new Set(v?.shut ?? []) });
+let kidsByHand = handOf(storedFolds?.kids);
+let quietByHand = handOf(storedFolds?.quiet);
+function saveFolds(): void {
+  const out = (h: ByHand) => ({ open: [...h.open].slice(-300), shut: [...h.shut].slice(-300) });
+  writeStored(() => localStorage, FOLDS_KEY, { kids: out(kidsByHand), quiet: out(quietByHand) });
+}
 /** How far down the list was scrolled. On a phone the list is not mounted
  *  while a session is open, and going back to it should find it where it was. */
 let railTop = 0;
@@ -104,18 +128,26 @@ export function useListState() {
   const [view, setViewState] = useState<RailView>(readView);
   const [kids, setKids] = useState(kidsByHand);
   const [quiet, setQuiet] = useState(quietByHand);
-  const toggleKids = useCallback((id: string, shown: boolean) => setKids((kidsByHand = flip(kidsByHand, id, shown))), []);
-  const toggleQuiet = useCallback((id: string, shown: boolean) => setQuiet((quietByHand = flip(quietByHand, id, shown))), []);
+  const toggleKids = useCallback((id: string, shown: boolean) => {
+    setKids((kidsByHand = flip(kidsByHand, id, shown)));
+    saveFolds();
+  }, []);
+  const toggleQuiet = useCallback((id: string, shown: boolean) => {
+    setQuiet((quietByHand = flip(quietByHand, id, shown)));
+    saveFolds();
+  }, []);
   /** Unfold what you folded above these, so the open session is in sight. */
   const reveal = useCallback((ids: readonly string[]) => {
     const unshut = (h: ByHand): ByHand => (ids.some((id) => h.shut.has(id)) ? { open: h.open, shut: new Set([...h.shut].filter((id) => !ids.includes(id))) } : h);
     setKids((kidsByHand = unshut(kidsByHand)));
     setQuiet((quietByHand = unshut(quietByHand)));
+    saveFolds();
   }, []);
   return {
     filter,
     setFilter: (f: BoardFilter) => {
       rememberedFilters.set(project ?? "", f);
+      writeStored(() => sessionStorage, FILTERS_KEY, Object.fromEntries(rememberedFilters));
       setFilterState(f);
     },
     sort,
@@ -541,6 +573,7 @@ const Row = memo(function Row({
   /** A dragged row is over this one, and may go under it, or before or after it. */
   target: "under" | DropPos | null;
 }) {
+  usePickedTab(); // its link opens on the tab you last picked
   const said = snippetOf(s);
   // A repo's shape is tinted with the provider's colour, so only a row without one needs the badge.
   const shape = useRowShape(s);
@@ -740,8 +773,7 @@ function CloseFailure() {
   if (!failure) return null;
   return (
     <p className="rail-err" role="alert">
-      {`Could not ${failure.verb ?? "close"} “${failure.title}”: `}
-      {failure.message}{" "}
+      {failure.text}{" "}
       <button type="button" className="linkish" onClick={dismiss}>
         dismiss
       </button>
@@ -999,6 +1031,7 @@ function ClosedList({
   onMenu: (s: SessionRow, x: number, y: number) => void;
 }) {
   const [open, setOpenState] = useState(closedOpen);
+  usePickedTab();
   const { project } = useScope();
   const shown = closedShown?.query === query && closedShown.project === project ? closedShown : null;
   const [rows, setRows] = useState<SessionRow[]>(shown?.rows ?? []);
@@ -1007,12 +1040,15 @@ function ClosedList({
   const keep = useRef(shown?.rows.length ?? 0);
   const [error, setError] = useState<string | null>(null);
   const loading = useRef(false);
+  /** A page is on its way: said under the rows, the first page's and the next ones'. */
+  const [busy, setBusy] = useState(false);
   const gen = useRef(0);
   const end = useRef<HTMLDivElement>(null);
 
   const load = async (offset: number, limit = PAGE) => {
     if (loading.current) return;
     loading.current = true;
+    setBusy(true);
     const mine = gen.current;
     try {
       const page = await api.closed(query.trim(), offset, limit, project);
@@ -1024,7 +1060,10 @@ function ClosedList({
     } catch (e) {
       if (mine === gen.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      loading.current = false;
+      if (mine === gen.current) {
+        loading.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -1103,6 +1142,7 @@ function ClosedList({
               </span>
             </a>
           ))}
+          {busy ? <p className="rail-none">Loading…</p> : null}
           {error ? <p className="rail-none">Could not load closed sessions: {error}</p> : null}
           {total === 0 ? <p className="rail-none">{query ? "No closed session matches." : "Nothing closed yet."}</p> : null}
           <div ref={end} className="rail-closed-end" aria-hidden="true" />
