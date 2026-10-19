@@ -12,6 +12,12 @@ import { Insights } from "./Insights";
 import { useAction } from "./session/useAction";
 import "./accounts.css";
 
+/** Points in a claim row: a spend too small to round to a tenth is not "0". */
+function fmtPoint(n: number): string {
+  const s = fmtPts(n);
+  return s === "0" && n > 0 ? "<0.1" : s;
+}
+
 /**
  * Every login agentbox can place sessions on, grouped by provider: how much of
  * each rate-limit window is used, what the running sessions still claim, and
@@ -343,30 +349,37 @@ function AccountCard({
             <thead>
               <tr>
                 <th>Session</th>
-                <th className="num" title="Weekly points it claimed when it started or last woke: what sessions of its model have gone on to use">Claim</th>
-                <th className="num" title="Weekly points attributed to it so far">Used</th>
-                <th className="num" title="Weekly points it is expected to still use here: forecast from what it spent in the last ten minutes and so far this stretch, or what is left of its claim until it has spent anything">Held</th>
+                <th className="num" title="Weekly points it has used so far, of what it is expected to use here by the time it is done: a forecast of the rest once it has spent anything, else what is left of its claim at placement">Used</th>
               </tr>
             </thead>
             <tbody>
-              {claims.map((cl) => (
-                <tr key={cl.sessionId} data-lapsed={cl.lapsed || undefined}>
-                  <td>
-                    <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "timeline" })} className="ac-claim-title">
-                      {cl.title}
-                    </a>
-                    {cl.lapsed ? <span className="ac-lapsed" title="Idle long enough that its claim no longer counts">lapsed</span> : null}
-                  </td>
-                  <td className="num">{fmtPts(cl.claim)}</td>
-                  <td className="num">{fmtPts(cl.consumed)}</td>
-                  <td
-                    className="num"
-                    title={cl.basis === "forecast" ? "Forecast from what it has been spending" : "What is left of its claim: nothing to forecast from yet"}
-                  >
-                    {fmtPts(cl.outstanding)}
-                  </td>
-                </tr>
-              ))}
+              {claims.map((cl) => {
+                // What it is expected to use here in all. A lapsed claim has
+                // nothing left to forecast, so it is shown against its claim.
+                const total = cl.lapsed ? cl.claim : cl.consumed + cl.outstanding;
+                return (
+                  <tr key={cl.sessionId} data-lapsed={cl.lapsed || undefined}>
+                    <td>
+                      <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "timeline" })} className="ac-claim-title">
+                        {cl.title}
+                      </a>
+                      {cl.lapsed ? <span className="ac-lapsed" title="Idle long enough that its claim no longer counts">lapsed</span> : null}
+                    </td>
+                    <td
+                      className="num"
+                      title={
+                        cl.lapsed
+                          ? `${fmtPoint(cl.consumed)} of the ${fmtPoint(cl.claim)} it claimed; idle long enough that the claim no longer counts`
+                          : cl.basis === "forecast"
+                            ? `${fmtPoint(cl.consumed)} used; forecast to use ${fmtPoint(cl.outstanding)} more here`
+                            : `${fmtPoint(cl.consumed)} used; ${fmtPoint(cl.outstanding)} of its claim left, with nothing to forecast from yet`
+                      }
+                    >
+                      {fmtPoint(cl.consumed)} of {fmtPoint(total)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
