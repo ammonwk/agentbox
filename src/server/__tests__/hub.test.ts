@@ -80,6 +80,14 @@ function writeSeam(m: Pick<Machine, "name" | "ip" | "self" | "tls">): void {
   writeFileSync(join(ROOT, `${m.name}-seam.json`), JSON.stringify({ self: { ip: m.ip, hostName: m.name, ...m.self, ...tls }, peers: PEERS }));
 }
 
+/** A stand-in `claude` on every machine's PATH: a Claude account is made only
+ *  for a CLI that is installed, and its transcripts are read only then, so
+ *  without it the sessions planted here exist only where the host has Claude. */
+const CLAUDE_BIN = join(ROOT, "claude-bin");
+mkdirSync(CLAUDE_BIN, { recursive: true });
+writeFileSync(join(CLAUDE_BIN, "claude"), '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "2.1.0 (Claude Code)"; exit 0; fi\nexec sleep 600\n');
+chmodSync(join(CLAUDE_BIN, "claude"), 0o755);
+
 function machine(name: string, ip: string, port: number, self: Record<string, unknown>, extra: Record<string, string> = {}, tls = false): Machine {
   const home = join(ROOT, name);
   mkdirSync(join(home, "ab"), { recursive: true });
@@ -99,6 +107,7 @@ function machine(name: string, ip: string, port: number, self: Record<string, un
     AGENTBOX_TAILNET_SEAM: seam,
     NODE_EXTRA_CA_CERTS: CA,
     ...extra,
+    PATH: `${CLAUDE_BIN}:${extra.PATH ?? process.env.PATH}`,
   });
   return { name, ip, port, env, home, proc: null, log: join(ROOT, `${name}.log`), self, tls };
 }
