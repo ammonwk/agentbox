@@ -755,7 +755,8 @@ export class Fleet extends EventEmitter {
    * after, it is told to go on. Whatever lifted it: the 5-hour window's
    * reset, a reset redeemed at the provider, a bigger plan. Only when that
    * comes within `CARRY_ON_WITHIN_MS` of the hit: a weekly limit that runs
-   * its days out is left to you.
+   * its days out is left to you. A session parked while it waited is resumed
+   * by that message; one you wrote to in the last minute is answering you.
    *
    * Once per hit, and what has lifted is read from the account each pass, so
    * a restart in the middle of a wait picks it back up.
@@ -765,7 +766,11 @@ export class Fleet extends EventEmitter {
       const v = this.views.get(id);
       if (!v) this.lifted.delete(id);
       // Still sitting at that hit's message: nobody has written to it since.
-      if (!v || l.seen || now - l.since < 60_000 || v.status !== "waiting" || v.host !== "tmux" || this.busy.has(id)) continue;
+      // Parked while it waited is no reason to leave it there: the message
+      // resumes it.
+      const here = v?.host === "tmux" || (v?.host === "none" && v.parkedAt);
+      if (!v || l.seen || now - l.since < 60_000 || v.status !== "waiting" || !here || this.busy.has(id)) continue;
+      if (now - (this.touched.get(id) ?? 0) < 60_000) continue;
       l.seen = true;
       if (l.since - l.hitAt > CARRY_ON_WITHIN_MS) continue;
       console.log(`agentbox: ${id} (${v.title}): the usage limit it stopped at has lifted; telling it to carry on`);
