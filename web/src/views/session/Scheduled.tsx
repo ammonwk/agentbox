@@ -31,7 +31,7 @@ export function ScheduledRow({ sc, current, onCancel }: { sc: Schedule; current:
   return (
     <a
       className="rail-row rail-sched"
-      href={hrefOf({ page: "session", id: sc.id, tab: "terminal" })}
+      href={hrefOf({ page: "session", id: sc.id, tab: "timeline" })}
       aria-current={current ? "page" : undefined}
       data-nav-item
       data-nav-id={`session:${sc.id}`}

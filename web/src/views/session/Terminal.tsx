@@ -177,7 +177,7 @@ export default function Terminal({
           text: text.slice(r.start, r.end),
           decorations: { pointerCursor: true, underline: true },
           activate: () => {
-            go({ page: "session", id: r.id, tab: "terminal" });
+            go({ page: "session", id: r.id, tab: "timeline" });
           },
         }));
       return found.length ? found : undefined;

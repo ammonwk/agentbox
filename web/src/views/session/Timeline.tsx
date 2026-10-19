@@ -742,7 +742,7 @@ function CopyIcon({ text }: { text: string }) {
  *  its name as given when it is not on the board. */
 function Party({ name }: { name: string | null }) {
   const board = useBoardSessions();
-  const { byName, tab } = useFamily();
+  const { byName } = useFamily();
   const local = useLocalAgents();
   const s = name ? senderOf(name, board, byName) : null;
   const started = !s && name ? local.names.get(name) : undefined;
@@ -772,7 +772,7 @@ function Party({ name }: { name: string | null }) {
     );
   }
   return (
-    <a className="tl-sender" href={hrefOf({ page: "session", id: s.id, tab })} title={`Open ${titleOf(s)} (${s.id})`}>
+    <a className="tl-sender" href={hrefOf({ page: "session", id: s.id, tab: "timeline" })} title={`Open ${titleOf(s)} (${s.id})`}>
       <StatusDot status={shownStatus(s)} />
       <span className="tl-sender-name">{titleOf(s)}</span>
       <span className="tl-sender-id">{s.id}</span>
@@ -1009,7 +1009,7 @@ function NowDoing({ rows }: { rows: Flat[] }) {
  */
 function MateRow({ id, mate }: { id: string; mate: MateMessage }) {
   const [open, setOpen] = useState(false);
-  const { byName, tab } = useFamily();
+  const { byName } = useFamily();
   const local = useLocalAgents();
   const to = byName.get(mate.name) ?? null;
   // Not a session: an agent started inside this one. Its name goes to where it started.
@@ -1020,7 +1020,7 @@ function MateRow({ id, mate }: { id: string; mate: MateMessage }) {
     <span className="tl-mate-who" data-color={mate.color}>
       {to ? <StatusDot status={shownStatus(to)} /> : <span className="tl-mate-swatch" aria-hidden="true" />}
       {to ? (
-        <a href={hrefOf({ page: "session", id: to.id, tab })} title={`Open ${titleOf(to)}`} onClick={(e) => e.stopPropagation()}>
+        <a href={hrefOf({ page: "session", id: to.id, tab: "timeline" })} title={`Open ${titleOf(to)}`} onClick={(e) => e.stopPropagation()}>
           {name}
         </a>
       ) : started && started !== id ? (
@@ -1116,7 +1116,7 @@ function BtwCard({ btw, sessionId }: { btw: Btw; sessionId: string }) {
 
 /** Teammates that finished a turn with nothing to say, each named once and linked. */
 function IdleRow({ events }: { events: { at: number; mate: MateMessage }[] }) {
-  const { byName, tab } = useFamily();
+  const { byName } = useFamily();
   const names = [...new Set(events.map((e) => e.mate.name))];
   return (
     <div className="tl-mate tl-mate-quiet">
@@ -1126,7 +1126,7 @@ function IdleRow({ events }: { events: { at: number; mate: MateMessage }[] }) {
           return (
             <span key={n}>
               {i ? ", " : null}
-              {to ? <a href={hrefOf({ page: "session", id: to.id, tab })}>{n}</a> : n}
+              {to ? <a href={hrefOf({ page: "session", id: to.id, tab: "timeline" })}>{n}</a> : n}
             </span>
           );
         })}{" "}

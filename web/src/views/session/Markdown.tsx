@@ -32,16 +32,16 @@ const Inline = ({ children }: { children?: React.ReactNode }) => <>{children}</>
 export function Markdown({ text, inline }: { text: string; inline?: boolean }) {
   const base = useContext(PrBase);
   const links = useContext(SessionLinks);
-  const { byName, tab } = useFamily();
+  const { byName } = useFamily();
   const local = useLocalAgents();
   // Names, not ids: the teammates around this session, and the agents it
   // started inside itself. A session's own id is linked by the pass before.
   const names = useMemo(() => {
     const m = new Map<string, string>();
     for (const [n, id] of local.names) if (isLinkableName(n)) m.set(n, `#ev:${id}`);
-    for (const [n, s] of byName) if (isLinkableName(n) && s.id !== links.self) m.set(n, hrefOf({ page: "session", id: s.id, tab }));
+    for (const [n, s] of byName) if (isLinkableName(n) && s.id !== links.self) m.set(n, hrefOf({ page: "session", id: s.id, tab: "timeline" }));
     return m;
-  }, [local.names, byName, tab, links.self]);
+  }, [local.names, byName, links.self]);
   const plugins = useMemo(
     () => [remarkGfm, remarkFileRefs(), remarkWaitRefs(), remarkImagePaths(), remarkLocalPaths(), ...(base ? [remarkPrLinks(base)] : []), remarkSessionLinks(links), remarkNameLinks(names)],
     [base, links, names],
@@ -273,7 +273,7 @@ function remarkSessionLinks({ index, self }: SessionLinksValue) {
         void resolveSessions(sessionCandidates(t, index, code));
         return sessionRefs(t, index)
           .filter((r) => r.id !== self)
-          .map((r) => ({ start: r.start, end: r.end, url: hrefOf({ page: "session", id: r.id, tab: "terminal" }) }));
+          .map((r) => ({ start: r.start, end: r.end, url: hrefOf({ page: "session", id: r.id, tab: "timeline" }) }));
       }),
     );
   };

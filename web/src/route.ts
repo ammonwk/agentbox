@@ -1,9 +1,9 @@
 /** URL ↔ route. Selection lives in the hash so every screen is linkable and
  *  the back button works; go() is how the app moves between them. */
 
-export type SessionTab = "terminal" | "timeline" | "diff" | "load";
+export type SessionTab = "terminal" | "timeline" | "load";
 /** The tabs as they appear, left to right. The first is the default. */
-export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "diff", "load"];
+export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "load"];
 
 export type Route =
   | { page: "sessions" }

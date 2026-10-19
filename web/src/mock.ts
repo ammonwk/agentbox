@@ -43,7 +43,6 @@ import type {
   Repo,
   ServerMessage,
   Session,
-  SessionDiff,
   SkillInfo,
   SystemState,
   TimelineEvent,
@@ -1173,23 +1172,6 @@ function mustAccount(id: string): MockAccount {
   return a;
 }
 
-const diff: SessionDiff = {
-  base: "v2",
-  additions: 31,
-  deletions: 9,
-  unavailable: false,
-  files: [
-    {
-      path: "src/core/balancer.ts", status: "modified", additions: 22, deletions: 7,
-      patch: "diff --git a/src/core/balancer.ts b/src/core/balancer.ts\nindex 3f2a1b0..8c9d4e2 100644\n--- a/src/core/balancer.ts\n+++ b/src/core/balancer.ts\n@@ -84,12 +84,20 @@ export function place(accounts: AccountState[], cfg: BalancerSettings): Placement {\n   const best = Math.max(...eligible.map((c) => c.legRoom ?? 0));\n   const band = cfg.tieBand;\n   const tied = eligible.filter((c) => (c.legRoom ?? 0) >= best - band);\n-  tied.sort((a, b) => a.weekly - b.weekly);\n-  const chosen = tied[0];\n+  // Use it or lose it: the tie goes to the account with the most weekly left\n+  // per hour until its weekly reset, not the one with the least used.\n+  tied.sort((a, b) => (b.weeklyPerHour ?? 0) - (a.weeklyPerHour ?? 0));\n+  const chosen = tied[0];\n+  const runnerUp = tied[1] ?? null;\n   return {\n     accountId: chosen.accountId,\n-    why: `${chosen.label} has the most room.`,\n+    why: runnerUp\n+      ? `${chosen.label} and ${runnerUp.label} are tied on 5-hour room; ${chosen.label} has more weekly left per hour.`\n+      : `${chosen.label} has the most 5-hour room after claims.`,\n",
-    },
-    {
-      path: "src/core/__tests__/balancer.test.ts", status: "modified", additions: 9, deletions: 2,
-      patch: "--- a/src/core/__tests__/balancer.test.ts\n+++ b/src/core/__tests__/balancer.test.ts\n@@ -40,6 +40,13 @@ describe(\"place\", () => {\n+  test(\"tie goes to most weekly per hour\", () => {\n+    const a = acct(\"A\", { weekly: 60, weeklyResetsIn: 12 * H, short: 10 });\n+    const b = acct(\"B\", { weekly: 40, weeklyResetsIn: 6 * D, short: 12 });\n+    expect(place([a, b], cfg).accountId).toBe(\"A\");\n+  });\n",
-    },
-  ],
-};
-
 const procs: ProcDetail[] = [
   { pid: 48211, ppid: 48200, name: "claude", cmd: "claude --resume 1d8e…", role: "agent", cpuPct: 38, rssBytes: 612 * 1024 ** 2, pssBytes: 540 * 1024 ** 2, depth: 0, ageMs: 48 * M },
   { pid: 48230, ppid: 48211, name: "node", cmd: "node ~/.claude/mcp/github/index.js", role: "mcp", cpuPct: 0.4, rssBytes: 96 * 1024 ** 2, pssBytes: 71 * 1024 ** 2, depth: 1, ageMs: 48 * M },
@@ -1356,7 +1338,6 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       await sleep(350);
       return pageBefore(id, url.searchParams.get("before"), Number(url.searchParams.get("limit") ?? PAGE));
     }
-    if (head === "sessions" && action === "diff") return diff;
     if (head === "sessions" && action === "load") return procs;
     if (head === "sessions" && action === "work") return workOf(id);
     if (head === "sessions" && action === "agents" && p[5] === "timeline") {

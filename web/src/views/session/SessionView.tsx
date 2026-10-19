@@ -27,7 +27,6 @@ import { isRecurring } from "../../../../src/core/schedule";
 import { go, hrefOf, SESSION_TABS, type SessionTab } from "../../route";
 import { Composer } from "./Composer";
 import { WorkStrip } from "./WorkStrip";
-import { DiffPanel } from "./DiffPanel";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
@@ -61,7 +60,6 @@ const BookmarkOn: IconComponent = (p) => <Icon.bookmark {...p} weight="fill" />;
 const TAB_LABEL: Record<SessionTab, string> = {
   terminal: "Terminal",
   timeline: "Timeline",
-  diff: "Diff",
   load: "Load",
 };
 
@@ -554,7 +552,7 @@ export function Detail({
   const prBase = useMemo(() => prBaseFor(session, state), [session, state]);
   const flashRow = useRef<((row: number) => void) | null>(null);
   const [termScrolled, setTermScrolled] = useState(0);
-  const family = useFamilyOf(session, state.sessions, tab);
+  const family = useFamilyOf(session, state.sessions);
   // The list beside the session shows the family as a tree; a phone has no room for it.
   const narrow = useIsNarrow();
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -823,8 +821,6 @@ export function Detail({
           <Suspense fallback={<Empty title="Loading the timeline…" />}>
             <Timeline session={session} />
           </Suspense>
-        ) : tab === "diff" ? (
-          <DiffPanel sessionId={session.id} active={session.status === "running"} />
         ) : (
           <LoadPanel sessionId={session.id} />
         )}

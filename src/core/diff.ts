@@ -19,7 +19,7 @@ const MAX_PATCH_FILES = 400;
 export function baseFor(session: Session): string {
   const root = session.repoRoot;
   if (!root) return "main";
-  // Cached: resolving can ask the remote, and the diff tab re-asks on every open.
+  // Cached: resolving can ask the remote, and `agentbox diff` may be asked often.
   let base = bases.get(root);
   if (!base) {
     try {

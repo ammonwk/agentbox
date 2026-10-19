@@ -351,7 +351,7 @@ function AccountCard({
               {claims.map((cl) => (
                 <tr key={cl.sessionId} data-lapsed={cl.lapsed || undefined}>
                   <td>
-                    <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "terminal" })} className="ac-claim-title">
+                    <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "timeline" })} className="ac-claim-title">
                       {cl.title}
                     </a>
                     {cl.lapsed ? <span className="ac-lapsed" title="Idle long enough that its claim no longer counts">lapsed</span> : null}

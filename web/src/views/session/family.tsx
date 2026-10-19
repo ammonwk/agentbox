@@ -3,7 +3,7 @@ import type { SessionStatus } from "../../../../src/core/types";
 import { StatusDot } from "../../bits";
 import { Icon } from "../../components";
 import { shownStatus, titleOf, type SessionRow } from "../../lib/board";
-import { hrefOf, type SessionTab } from "../../route";
+import { hrefOf } from "../../route";
 
 /**
  * The sessions around the open one: the session that started it, the ones it
@@ -18,18 +18,16 @@ export interface Family {
   kids: SessionRow[];
   /** A teammate's name (its session's title or label) to its session; `team-lead` is the parent. */
   byName: Map<string, SessionRow>;
-  /** Links keep the tab you are on. */
-  tab: SessionTab;
 }
 
-const NO_FAMILY: Family = { parent: null, kids: [], byName: new Map(), tab: "timeline" };
+const NO_FAMILY: Family = { parent: null, kids: [], byName: new Map() };
 export const FamilyContext = createContext<Family>(NO_FAMILY);
 export const useFamily = () => useContext(FamilyContext);
 
 /** Needing you first, then working, then the rest; newest first within each. */
 const RANK: Record<SessionStatus, number> = { blocked: 0, running: 1, waiting: 2, stopped: 3, closed: 4 };
 
-export function useFamilyOf(session: SessionRow, sessions: readonly SessionRow[], tab: SessionTab): Family {
+export function useFamilyOf(session: SessionRow, sessions: readonly SessionRow[]): Family {
   return useMemo(() => {
     const parent = session.parent ? sessions.find((s) => s.id === session.parent) ?? null : null;
     const kids = sessions
@@ -42,18 +40,18 @@ export function useFamilyOf(session: SessionRow, sessions: readonly SessionRow[]
       for (const n of [s.title, s.label]) if (n?.trim()) byName.set(n.trim(), s);
     }
     if (parent) byName.set("team-lead", parent);
-    return { parent, kids, byName, tab };
-  }, [session.id, session.parent, sessions, tab]);
+    return { parent, kids, byName };
+  }, [session.id, session.parent, sessions]);
 }
 
 /** One line under the tabs, phones only: up to the lead, across to what it started. Scrolls sideways. */
 export function FamilyStrip() {
-  const { parent, kids, tab } = useFamily();
+  const { parent, kids } = useFamily();
   if (!parent && kids.length === 0) return null;
   return (
     <nav className="fam" aria-label="Related sessions">
       {parent ? (
-        <a className="fam-chip fam-up" href={hrefOf({ page: "session", id: parent.id, tab })} title={`Started by ${titleOf(parent)}`}>
+        <a className="fam-chip fam-up" href={hrefOf({ page: "session", id: parent.id, tab: "timeline" })} title={`Started by ${titleOf(parent)}`}>
           <Icon.chevronUp size={12} />
           <StatusDot status={shownStatus(parent)} />
           <span>{titleOf(parent)}</span>
@@ -65,7 +63,7 @@ export function FamilyStrip() {
         </span>
       ) : null}
       {kids.map((k) => (
-        <a key={k.id} className="fam-chip" href={hrefOf({ page: "session", id: k.id, tab })} data-status={k.status}>
+        <a key={k.id} className="fam-chip" href={hrefOf({ page: "session", id: k.id, tab: "timeline" })} data-status={k.status}>
           <StatusDot status={shownStatus(k)} />
           <span>{titleOf(k)}</span>
         </a>

@@ -244,7 +244,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
                 : "Finished, and its answer is waiting to be collected. "
               : null}
             A subagent its{" "}
-            {session.parent ? <a href={hrefOf({ page: "session", id: session.parent, tab: "terminal" })}>parent session</a> : "parent session"} runs
+            {session.parent ? <a href={hrefOf({ page: "session", id: session.parent, tab: "timeline" })}>parent session</a> : "parent session"} runs
             through its subagent MCP, so it is read-only here: steer or stop it through the parent. It stops when the parent does,
             and can be resumed here after that.
           </span>

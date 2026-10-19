@@ -143,7 +143,7 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
             {sc.lastSessionId && !sc.lastError ? (
               <>
                 {" "}
-                (<a href={hrefOf({ page: "session", id: sc.lastSessionId, tab: "terminal" })}>{sc.lastSessionId}</a>)
+                (<a href={hrefOf({ page: "session", id: sc.lastSessionId, tab: "timeline" })}>{sc.lastSessionId}</a>)
               </>
             ) : null}
           </>
