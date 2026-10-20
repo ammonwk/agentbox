@@ -835,8 +835,9 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
         Every session keeps its worktree when it stops or is closed, because the checkout
         is what Resume comes back to. They add up — a worktree of a large repo is
         a gigabyte — so this is where you get the space back. Removing a worktree
-        never touches its branch: a session whose worktree is gone still resumes,
-        it just checks the branch out again first.
+        never touches its branch, and a detached checkout goes only when every commit
+        in it is on a branch or remote. A session whose worktree is gone needs its
+        branch checked out again (<code>git worktree add</code>) before it can resume.
       </p>
 
       <ToggleRow
@@ -894,9 +895,9 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
         <p className="warn">
           <Icon.alert size={15} /> The pull requests of a repo here are not loaded
           from GitHub yet (see the warnings if <code>gh</code> is the reason), so no
-          branch could be checked for a merged or closed pull request. Only
-          worktrees that are clean <em>and</em> have nothing their base branch is
-          missing count as safe below.
+          branch could be checked for a merged or closed pull request. Branch
+          worktrees are kept; only detached checkouts whose commits are elsewhere,
+          or anything untouched for 14 days, count as safe below.
         </p>
       )}
 
@@ -917,7 +918,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
                 title={
                   safe.length === 0
                     ? "Nothing is safe to delete — every worktree below has changes, an open PR, or could not be checked."
-                    : "Removes worktrees nobody is coming back to: clean ones that are merged, closed, or hold no commits their base branch lacks; the same with only untracked files once 3 days idle; and anything untouched for 14 days, whatever is in it. Nothing is saved first."
+                    : "Removes worktrees nobody is coming back to: merged or closed PRs; clean branches GitHub holds no PR for; detached checkouts whose commits are all on a branch or remote; the same with only untracked files once 3 days idle; and anything untouched for 14 days, whatever is in it. Nothing is saved first."
                 }
                 onClick={() => void reclaim("safe", safe.map((w) => w.path), false)}
               >

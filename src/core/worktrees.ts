@@ -4,7 +4,6 @@ import { listRepos } from "./db";
 import {
   type Dirt,
   branchAt,
-  commitsAhead,
   commitsHeldOnlyHere,
   diskBytesOf,
   dirtOf,
@@ -70,9 +69,14 @@ export interface WorktreeFacts {
   /** Days since anything happened here: HEAD moved, an uncommitted file was
    *  written, a session in it did something. 0 when that cannot be read. */
   idleDays: number;
-  /** Commits HEAD has that the base branch does not; for an orphan, that
-   *  nothing else has. -1 when unanswerable. */
-  ahead: number;
+  /** Commits HEAD holds that neither a branch nor a remote has. Only a
+   *  detached HEAD or an orphan can hold one: a linked worktree's branch lives
+   *  in the common repo and survives the checkout's removal. -1 when git
+   *  cannot say. */
+  heldOnly: number;
+  /** HEAD is not on a branch, so nothing but this checkout may keep a commit
+   *  alive. */
+  detached: boolean;
   pr: PrState;
   /** On disk under the worktree root, but no registered repo lists it. */
   orphan: boolean;
@@ -127,34 +131,49 @@ export function verdictFor(input: WorktreeFacts): WorktreeVerdict {
   // no base branch left to compare against either. What it can still hold is
   // commits no branch or remote has, which removing it would leave unreachable.
   if (input.orphan) {
-    if (input.ahead > 0) {
-      const n = input.ahead;
+    if (input.heldOnly < 0) {
+      return { safe: false, reason: "unknown", detail: "could not tell whether its commits are held elsewhere" };
+    }
+    if (input.heldOnly > 0) {
+      const n = input.heldOnly;
       return { safe: false, reason: "ahead", detail: `${n} commit${n === 1 ? "" : "s"} that nothing else has` };
     }
     return { safe: true, reason: "orphan", detail: "its repo is no longer registered" };
   }
 
   // A merged or closed PR is the branch's own author saying they are finished
-  // with it, and it outranks unpushed commits: whatever is on the branch has
+  // with it, and it outranks uncommitted work: whatever is on the branch has
   // either landed or been rejected.
   if (input.pr === "merged") return { safe: true, reason: "merged", detail: "its PR was merged" };
   if (input.pr === "closed") return { safe: true, reason: "closed", detail: "its PR was closed" };
   if (input.pr === "open") {
     return { safe: false, reason: "open-pr", detail: "its PR is still open" };
   }
+  // No answer from GitHub: a branch could be an open PR, so leave it alone.
+  if (input.pr === "unknown") {
+    return { safe: false, reason: "unknown", detail: "GitHub has not said what became of its branch" };
+  }
 
-  if (input.ahead < 0) {
-    return { safe: false, reason: "unknown", detail: "could not be compared to its base branch" };
+  // A detached HEAD is the one checkout whose removal can orphan a commit: it
+  // is on no branch, and `git worktree remove` keeps branches, not this. Ask
+  // what no branch or remote already holds, rather than what the base branch
+  // lacks — a review checkout sits on the PR's own commits and would otherwise
+  // look like unpushed work for a fortnight.
+  if (input.detached) {
+    if (input.heldOnly < 0) {
+      return { safe: false, reason: "unknown", detail: "could not tell whether its commits are held elsewhere" };
+    }
+    if (input.heldOnly > 0) {
+      const n = input.heldOnly;
+      return { safe: false, reason: "ahead", detail: `${n} commit${n === 1 ? "" : "s"} that no branch or remote has` };
+    }
+    return { safe: true, reason: "detached", detail: "detached, and every commit is on a branch or remote" };
   }
-  if (input.ahead > 0) {
-    const n = input.ahead;
-    return {
-      safe: false,
-      reason: "ahead",
-      detail: `${n} commit${n === 1 ? "" : "s"} not on the base branch`,
-    };
-  }
-  return { safe: true, reason: "clean", detail: "clean, and nothing its base branch does not have" };
+
+  // A branch's commits live in the common repo, so removing the checkout
+  // leaves them and the branch intact; a resume only needs the checkout cut
+  // again. Clean is enough.
+  return { safe: true, reason: "clean", detail: "clean; its branch keeps the commits" };
 }
 
 /** Days since the last sign of life, 0 when there is none to read. A directory
@@ -328,10 +347,12 @@ export async function scanWorktrees(
     // three subprocesses. Sizing main is still worth it: it is usually the
     // largest thing listed, and hiding that would misreport the disk.
     const inspect = !c.missing && !c.isMain;
-    const [dirt, moved, ahead, bytes, branch] = await Promise.all([
+    const [dirt, moved, heldOnly, bytes, branch] = await Promise.all([
       inspect ? dirtOf(c.path) : Promise.resolve<Dirt>({ level: "none", newestAt: null }),
       inspect ? headMovedAt(c.path) : Promise.resolve(null),
-      !inspect ? Promise.resolve(0) : c.orphan ? commitsHeldOnlyHere(c.path) : c.defaultBranch ? commitsAhead(c.path, c.defaultBranch) : Promise.resolve(0),
+      // A linked worktree's branch ref outlives its checkout, so only a
+      // detached HEAD or an orphan can hold commits removal would orphan.
+      !inspect || (!c.orphan && c.branch !== null) ? Promise.resolve(0) : commitsHeldOnlyHere(c.path),
       c.missing || opts.sizes === false ? Promise.resolve(0) : diskBytesOf(c.path),
       c.branch === null && c.orphan ? branchAt(c.path) : Promise.resolve(c.branch),
     ]);
@@ -355,7 +376,8 @@ export async function scanWorktrees(
         live: c.live,
         dirt: dirt.level,
         idleDays: idleDays(c.path, moved, dirt, activeAt.get(c.path) ?? 0),
-        ahead,
+        heldOnly,
+        detached: branch === null,
         pr: c.pr,
         orphan: c.orphan,
       }),

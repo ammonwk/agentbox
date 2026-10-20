@@ -597,29 +597,12 @@ export async function dirtOf(worktreePath: string): Promise<Dirt> {
 }
 
 /** Commits on HEAD that no branch and no remote has: what removing a detached
- *  worktree, or one whose repo is gone, would leave unreachable. 0 where git
- *  cannot say, which is a directory git knows nothing about. */
+ *  worktree, or one whose repo is gone, would leave unreachable. -1 where git
+ *  cannot say, which callers must not read as "nothing is held here". */
 export async function commitsHeldOnlyHere(worktreePath: string): Promise<number> {
   const r = await runAsync(["git", "rev-list", "--count", "HEAD", "--not", "--branches", "--remotes"], worktreePath);
   const n = Number(r.stdout.trim());
-  return r.code === 0 && Number.isInteger(n) ? n : 0;
-}
-
-/**
- * Commits on this worktree's HEAD that `base` does not have.
- *
- * -1 when the question cannot be answered (no such base, unreadable repo), which
- * callers treat the same way as "yes, there is work here".
- */
-export async function commitsAhead(worktreePath: string, base: string): Promise<number> {
-  for (const ref of [base, `origin/${base}`]) {
-    const r = await runAsync(["git", "rev-list", "--count", `${ref}..HEAD`], worktreePath);
-    if (r.code === 0) {
-      const n = Number(r.stdout.trim());
-      if (Number.isInteger(n)) return n;
-    }
-  }
-  return -1;
+  return r.code === 0 && Number.isInteger(n) ? n : -1;
 }
 
 /**

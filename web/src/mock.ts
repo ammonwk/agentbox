@@ -1200,7 +1200,7 @@ const worktreeScan = (): WorktreeScan => ({
     { path: AB, repoId: "r-agentbox", repoName: "agentbox", branch: "v2", bytes: 412 * 1024 ** 2, isMain: true, ours: false, missing: false, sessionId: null, sessionTitle: null, live: false, pr: "none", verdict: { safe: false, reason: "main", detail: "The repo's own checkout — never removed." } },
     { path: `${AB}/.worktrees/balancer-ties`, repoId: "r-agentbox", repoName: "agentbox", branch: "feat/balancer-ties", bytes: 388 * 1024 ** 2, isMain: false, ours: true, missing: false, sessionId: "7fk2", sessionTitle: "Refactor balancer tie-break", live: true, pr: "none", verdict: { safe: false, reason: "live", detail: "A running session is using it." } },
     { path: `${AB}/.worktrees/old-router`, repoId: "r-agentbox", repoName: "agentbox", branch: "feat/router", bytes: 402 * 1024 ** 2, isMain: false, ours: true, missing: false, sessionId: null, sessionTitle: null, live: false, pr: "merged", verdict: { safe: true, reason: "merged", detail: "PR #188 merged; the worktree is clean." } },
-    { path: `${SY}/.worktrees/vite7`, repoId: "r-switchyard", repoName: "switchyard", branch: "chore/vite-7", bytes: 520 * 1024 ** 2, isMain: false, ours: true, missing: false, sessionId: "m3n5", sessionTitle: "Bump vite", live: false, pr: "none", verdict: { safe: false, reason: "ahead", detail: "3 commits not on main and not pushed." } },
+    { path: `${SY}/.worktrees/vite7`, repoId: "r-switchyard", repoName: "switchyard", branch: null, bytes: 520 * 1024 ** 2, isMain: false, ours: true, missing: false, sessionId: "m3n5", sessionTitle: "Bump vite", live: false, pr: "none", verdict: { safe: false, reason: "ahead", detail: "3 commits that no branch or remote has." } },
   ],
 });
 

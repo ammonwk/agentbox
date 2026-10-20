@@ -112,9 +112,9 @@ export const repoSlugOf = (root: string): string | null => slugOf(root);
  * Null — not an empty map — until the repo's open PRs are loaded, because the
  * two mean opposite things: an empty map says "no PRs, so nothing is finished
  * on GitHub", and null says "we do not know". While the history walk is still
- * going, an old merged PR may be missing and its branch reads "none": that
- * only costs a reclaim, since "none" still has to prove it has nothing the
- * base branch lacks.
+ * going, an old merged PR may be missing and its branch reads "none": a late
+ * answer can only turn a keep into a reclaim, since a clean branch worktree is
+ * safe once it has no open PR.
  */
 export function branchStatesOf(repo: string): Map<string, PrState> | null {
   if (!getPrSync(repo)?.openAt) return null;
