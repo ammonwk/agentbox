@@ -4,9 +4,10 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AccountsService } from "../accounts";
-import { GO_ACCOUNT_BEARER, goHomeForAccount, hasGoCredential, writeGoLogin, type GoLogin } from "../accounts/gocred";
+import { GO_ACCOUNT_BEARER, goHomeForAccount, goLoginHomes, hasGoCredential, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { ensureDefaultAccounts } from "../accounts/homes";
 import { identify } from "../accounts/identity";
+import { orgAccountsRoot } from "../org/config";
 import { closeDb, getAccount, getSessionRecord, insertAccount, listAccounts, MIGRATIONS } from "../db";
 import { accountHomeFor, dbPath } from "../paths";
 import { ompAdapter } from "../providers/omp";
@@ -59,6 +60,16 @@ describe("OpenCode Go accounts", () => {
     expect(cmd.unset).not.toContain("OPENCODE_GO_API_KEY");
     expect(goHomeForAccount("go1")).toBe(accountHomeFor("go1"));
     expect(goHomeForAccount("../etc")).toBeNull();
+  });
+
+  test("a pooled sign-in is found in the org's homes, where its account lives", () => {
+    // The bridge is told only an account id: a home under accounts/ that does
+    // not exist must not hide the one under org/accounts/.
+    const orgHome = join(orgAccountsRoot(), "orggo1");
+    mkdirSync(orgHome, { recursive: true });
+    writeGoLogin(orgHome, login);
+    expect(goHomeForAccount("orggo1")).toBe(orgHome);
+    expect(goLoginHomes()).toContain(orgHome);
   });
 
   test("any account can be forgotten", () => {
