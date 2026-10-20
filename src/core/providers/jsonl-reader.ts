@@ -79,10 +79,14 @@ const RESET_PAGE = 100;
 export const OUTPUT_CAP = 8 * 1024;
 export const INPUT_CAP = 4 * 1024;
 
-/** Keep the head of long tool output; the tail is usually repetition. */
+/** Keep both ends of long tool output: the command is at the start and the
+ *  verdict, error or test summary is at the end, and either is what a reader
+ *  — or `agentbox grep` — is looking for. */
 export function cap(s: string, max: number): string {
   if (s.length <= max) return s;
-  return `${s.slice(0, max)}\n… [${s.length - max} more chars]`;
+  const head = Math.floor(max / 2);
+  const tail = max - head;
+  return `${s.slice(0, head)}\n… [${s.length - head - tail} more chars] …\n${s.slice(-tail)}`;
 }
 
 /**
