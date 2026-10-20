@@ -9,7 +9,7 @@
  */
 
 import { adapterFor } from "./providers";
-import type { TranscriptRef } from "./providers/types";
+import { transcriptFile, type TranscriptRef } from "./providers/types";
 import { openReader } from "./readercache";
 import type { GrepHit, TimelineEvent, TimelinePage } from "./types";
 
@@ -44,6 +44,39 @@ function slices<T>(items: readonly T[], n: number): T[][] {
     at += size;
   }
   return out;
+}
+
+/** How many files the readers parse once ripgrep has narrowed the board. */
+const NARROWED_FILES = 64;
+
+/** Let ripgrep find the transcript files that can match before the readers
+ *  parse them. `-l` stops at the first match in each file, so this is a byte
+ *  scan over the board instead of a timeline fold of every session. Null when
+ *  the prefilter cannot be trusted — no `rg`, or a pattern Rust's regex reads
+ *  differently (lookaround, backreferences, a quote JSONL escapes) — and the
+ *  readers scan everything. */
+async function narrow(job: GrepJob, signal: AbortSignal): Promise<GrepJob["sessions"] | null> {
+  const rg = Bun.which("rg");
+  if (!rg || /\(\?|\\[1-9]|\\k<|"/.test(job.pattern)) return null;
+  const paths = [...new Set(job.sessions.map(({ ref }) => transcriptFile(ref.path)))];
+  if (paths.length === 0 || paths.length > 2000) return null;
+  const threads = Math.min(8, globalThis.navigator?.hardwareConcurrency ?? 8);
+  const proc = Bun.spawn(
+    [rg, "--files-with-matches", "--null", "--no-ignore", "--text", "--threads", String(threads), ...(job.flags.includes("i") ? ["-i"] : []), "-e", job.pattern, ...paths],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  const abort = () => proc.kill();
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    const out = await new Response(proc.stdout).arrayBuffer();
+    const code = await proc.exited;
+    if (signal.aborted) throw new Error("grep: the client went away");
+    if (code !== 0 && code !== 1) return null; // ripgrep failed: scan everything
+    const found = new Set(new TextDecoder().decode(out).split("\0").filter(Boolean));
+    return job.sessions.filter(({ ref }) => found.has(transcriptFile(ref.path))).slice(0, NARROWED_FILES);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
 }
 
 export async function grepTimelines(job: GrepJob): Promise<GrepHit[]> {
@@ -107,8 +140,11 @@ function grepInOneWorker(job: GrepJob, signal: AbortSignal): Promise<GrepHit[]> 
 export async function grepInWorker(job: GrepJob, signal: AbortSignal): Promise<GrepHit[]> {
   if (signal.aborted) throw new Error("grep: the client went away");
   if (job.sessions.length === 0) return [];
+  const narrowed = await narrow(job, signal);
+  if (narrowed !== null && narrowed.length === 0) return [];
+  const sessions = narrowed ?? job.sessions;
   const cpus = globalThis.navigator?.hardwareConcurrency ?? MAX_WORKERS;
-  const n = Math.max(1, Math.min(MAX_WORKERS, cpus, job.sessions.length));
-  const all = await Promise.all(slices(job.sessions, n).map((part) => grepInOneWorker({ ...job, sessions: part }, signal)));
+  const n = Math.max(1, Math.min(MAX_WORKERS, cpus, sessions.length));
+  const all = await Promise.all(slices(sessions, n).map((part) => grepInOneWorker({ ...job, sessions: part }, signal)));
   return all.flat().slice(0, MAX_HITS);
 }
