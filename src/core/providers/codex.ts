@@ -32,6 +32,7 @@ import { deserialize, serialize } from "bun:jsc";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { agentboxHome, userHome } from "../paths";
+import { agentAwsSettings } from "../agent-aws";
 import { cliVersion } from "./cli-version";
 import type { Account } from "../types";
 import { codexFormat, codexLineage, type CodexLineage } from "./codex-transcript";
@@ -760,6 +761,12 @@ function sessionFlags(opts: { cwd: string; model?: string; effort?: string; auto
   // more than the agent can.
   else if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust");
   if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told(opts.cwd));
+  // `inherit = "core"` drops the process's AWS defaults from tool shells.
+  // Per-key overrides preserve the rest of the person's policy and set map;
+  // append after carried config so an adopt/resume cannot restore old paths.
+  for (const [key, value] of Object.entries(agentAwsSettings())) {
+    a.push("-c", `shell_environment_policy.set.${key}=${JSON.stringify(value)}`);
+  }
   return a;
 }
 

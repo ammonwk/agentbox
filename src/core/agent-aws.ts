@@ -37,6 +37,18 @@ const credentials = ["aws_access_key_id", "aws_secret_access_key", "aws_session_
 const ini = (name: string, values: Record<string, string>): string =>
   `[${name}]\n${Object.entries(values).map(([k, v]) => `${k} = ${v}\n`).join("")}\n`;
 
+/** The same fence for the agent process and a CLI's explicit tool environment.
+ * Reading the paths must not refresh credential files a second time. */
+export function agentAwsSettings(): Record<string, string> {
+  const dir = join(agentboxHome(), "agent-aws");
+  return {
+    AWS_PROFILE: "agent-readonly",
+    AWS_CONFIG_FILE: join(dir, "config"),
+    AWS_SHARED_CREDENTIALS_FILE: join(dir, "credentials"),
+    AWS_EC2_METADATA_DISABLED: "true",
+  };
+}
+
 /** Refresh at launch from the person's files, never their AWS_* overrides.
  * Missing read-only credentials yield empty files, never the normal defaults.
  * Only a static source key is supported; no SSO, process or ambient sources. */
@@ -60,10 +72,5 @@ export function agentAwsEnv(): Record<string, string> {
     writeFileSync(temp, text, { mode: 0o600 });
     renameSync(temp, path);
   }
-  return {
-    AWS_PROFILE: "agent-readonly",
-    AWS_CONFIG_FILE: join(dir, "config"),
-    AWS_SHARED_CREDENTIALS_FILE: join(dir, "credentials"),
-    AWS_EC2_METADATA_DISABLED: "true",
-  };
+  return agentAwsSettings();
 }

@@ -11,6 +11,22 @@ Explicit `--profile mfa`, `personal` or `plaibook-root` cannot resolve there.
 Existing processes acquire this environment on their next resume, not on a
 server restart. CLIs started outside agentbox are not covered.
 
+Codex also receives `AWS_PROFILE`, `AWS_CONFIG_FILE`,
+`AWS_SHARED_CREDENTIALS_FILE` and `AWS_EC2_METADATA_DISABLED` as command-local
+`-c shell_environment_policy.set.<NAME>=...` overrides, after any carried
+configuration on new, resumed and adopted sessions. This keeps an
+`inherit = "core"` policy from dropping them from tool commands without
+changing inheritance or other personal `set` keys. Building these flags only
+reads the shared path policy; tmux still refreshes the credential files once.
+
+Codex's [shell environment policy](https://learn.chatgpt.com/docs/config-file/config-advanced#shell-environment-policy)
+applies include allowlists after `set`: `include_only` or `filters` include
+patterns must admit all four AWS variables. Agentbox preserves those filters;
+it does not guarantee this fence for configurations that filter these values
+out or explicitly inject credentials through other personal `set` keys.
+Verify the actual tool environment when changing that policy, not just the
+Codex process's environment.
+
 This is an environment fence, not isolation from an agent running as the
 same Unix user: it can read `~/.aws/credentials` directly or override these
 paths. It also does not constrain product API tokens or database access.
