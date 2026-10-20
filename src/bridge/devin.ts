@@ -492,20 +492,55 @@ async function goProxy(req: Request, url: URL, log: (line: string) => void): Pro
   return refuse("unreachable");
 }
 
+/**
+ * How long Go may send nothing, headers or bytes, before the bridge gives the
+ * request up. A reasoning model can be quiet for minutes, but a CLI never
+ * gives up on an open connection that says nothing: on 2026-10-19 Go sent no
+ * headers to an omp request for three hours and the turn hung that long.
+ * Failing it hands the CLI an error it retries.
+ */
+const GO_QUIET_MS = 10 * 60_000;
+
 async function goSend(target: string, req: Request, headers: Headers, body: ArrayBuffer | undefined, log: (line: string) => void, who: string): Promise<Response> {
+  const path = new URL(target).pathname;
+  const quiet = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const heard = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      log(`go ${who} ${req.method} ${path}: nothing from Go for ${GO_QUIET_MS / 60_000} min, given up`);
+      quiet.abort(new Error(`OpenCode Go sent nothing for ${GO_QUIET_MS / 60_000} min`));
+    }, GO_QUIET_MS);
+  };
+  req.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+  heard();
   const res = await fetch(target, {
     method: req.method,
     headers,
     body,
-    signal: req.signal,
-    // A reasoning model can be quiet for minutes; the CLI does the giving up.
+    signal: AbortSignal.any([req.signal, quiet.signal]),
     timeout: false,
-  } as RequestInit);
-  if (!res.ok) log(`go ${who} ${req.method} ${new URL(target).pathname} -> ${res.status}`);
+  } as RequestInit).catch((e) => {
+    clearTimeout(timer);
+    throw e;
+  });
+  if (!res.ok) log(`go ${who} ${req.method} ${path} -> ${res.status}`);
   const out = new Headers(res.headers);
   for (const h of HOP) out.delete(h);
   out.delete("content-encoding");
-  return new Response(res.body, { status: res.status, headers: out });
+  if (!res.body) {
+    clearTimeout(timer);
+    return new Response(null, { status: res.status, headers: out });
+  }
+  heard();
+  const watched = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      heard();
+      controller.enqueue(chunk);
+    },
+    flush: () => clearTimeout(timer),
+  }));
+  return new Response(watched, { status: res.status, headers: out });
 }
 
 /** The unary responses the bridge adds its models to, by method. */
