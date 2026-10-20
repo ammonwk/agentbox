@@ -131,7 +131,7 @@ export function fileResponse(root: string, filePath: string, req: Request): Resp
     }
   }
   // Text gzipped once per build: the bundle is ~870 KB raw, ~250 KB gzipped,
-  // which matters to a phone, or at the public door over the box's uplink.
+  // which matters to a phone on the tailnet.
   if (COMPRESSIBLE.test(filePath) && /\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
     let hit = gzipped.get(filePath);
     if (hit?.mtimeMs !== mtimeMs) {

@@ -58,8 +58,7 @@ forgets it and leaves the directory and its state alone.
     "start": { "provider": "claude", "model": "…", "cwd": "." },  // a POST /api/sessions body; cwd is from the directory, ~ is home
     "instructions": "MAIN.md",       // said before the first message; {{dir}}, {{home}}, {{agentbox}} (the checkout) and {{bin}} are filled in
     "schedule": "7w4wvcfm"           // instead of start: the session this schedule spoke to last
-  },
-  "node": "auto"                    // optional, on a hub: where the SDK's start puts a session that does not say (docs/hub.md)
+  }
   // Any other field is the superagent's own: agentbox ignores it.
 }
 ```
@@ -149,16 +148,11 @@ The answer may carry `message` (shown), `view` (drawn instead), `open` (an
 app link to go to, such as `#/agents/janus`), and `compose` (text put in the
 chat's message box, for "give guidance").
 
-**Who asked.** `caller` is `{session, via, person}`: `via` is `app` when a
-browser sent it and `api` otherwise, `session` is the session that proved
+**Who asked.** `caller` is `{session, via}`: `via` is `app` when a
+browser sent it and `api` otherwise, and `session` is the session that proved
 itself with its capability (`agentbox superagent call` from inside a session
-does), or null, and `person` is who made the request (`{login, name, role,
-via}`: the machine's owner on loopback, a member's tailnet login on a hub,
-docs/hub.md). It is how a program lets only its writer publish, or only a
-person create, or on a hub only one person approve. A decision a person
-makes on a superagent's page is theirs: record `caller.person` with it, and
-pass it as `by` when closing the card the decision settles
-(`agentbox.closeCard(id, why, caller.person)`), so the card says who decided. Like every loopback rule here it holds against mistakes and other
+does), or null. It is how a program lets only its writer publish, or only a
+person create. Like every loopback rule here it holds against mistakes and other
 sites, not against code running as you on purpose (docs/v2.md, Security).
 
 **Being called.** A session the program started calls it with `agentbox
@@ -183,11 +177,7 @@ lean on:
   superagent watches and shows on its own page; the board still shows it.
   `repo` and `ref` run it in a registered repo at that branch, tag or
   commit, in a detached worktree agentbox cuts where the session runs, and
-  `close` with `removeWorktree` removes it after. On a hub, `node` puts it on
-  a joined node or wherever has the most room (`"auto"`, docs/hub.md); the
-  SDK's `start` sends the superagent's own default when it does not say: the
-  `node` its settings (`PATCH /api/superagents/:name {node}`, the owner's)
-  or its manifest give, and the hub itself unless one of them opts in.
+  `close` with `removeWorktree` removes it after.
 - `POST /api/sessions/:id/send` with `from: "agent"`: type into one, under
   the send guard.
 - `GET /api/sessions/:id/timeline`: read what a session said, from its

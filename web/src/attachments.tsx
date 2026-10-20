@@ -62,17 +62,14 @@ export function useAttachments({
   setText,
   textareaRef,
   initial,
-  at,
 }: {
   text: string;
   setText: (t: string) => void;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   initial?: readonly SavedAttachment[];
-  /** The session whose machine keeps the images, when that is not this one (a hub's node's). */
-  at?: string;
 }) {
   const [atts, setAtts] = useState<Attachment[]>(() =>
-    (initial ?? []).filter((a) => tokensIn(text).has(a.n)).map((a) => ({ n: a.n, url: uploadUrl(a.name, at), state: "ready", error: null })),
+    (initial ?? []).filter((a) => tokensIn(text).has(a.n)).map((a) => ({ n: a.n, url: uploadUrl(a.name), state: "ready", error: null })),
   );
   /** Uploads, by image number: read at send time without waiting on a render. */
   const saved = useRef(new Map<number, { name: string; path: string }>((initial ?? []).map((a) => [a.n, { name: a.name, path: a.path }])));
@@ -108,7 +105,7 @@ export function useAttachments({
     // paste; the old upload landing late must not claim it.
     const current = () => pending.current.get(n) === p;
     const p: Promise<void> = api
-      .upload(file, at)
+      .upload(file)
       .then((u) => {
         if (!current()) return;
         saved.current.set(n, u);
@@ -174,7 +171,7 @@ export function useAttachments({
    *  chosen by the composer so they do not collide with its newer input. */
   function restore(uploaded: readonly SavedAttachment[]) {
     for (const a of uploaded) saved.current.set(a.n, { name: a.name, path: a.path });
-    setAtts((xs) => [...xs, ...uploaded.map((a): Attachment => ({ n: a.n, url: uploadUrl(a.name, at), state: "ready", error: null }))]);
+    setAtts((xs) => [...xs, ...uploaded.map((a): Attachment => ({ n: a.n, url: uploadUrl(a.name), state: "ready", error: null }))]);
   }
 
   /** Backspace right after a token deletes the whole token, not its `]`. */

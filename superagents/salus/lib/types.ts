@@ -88,8 +88,6 @@ export type Crash = {
   /** What the page should say about where it stands, when the state alone does not. */
   note?: string;
   card?: number;
-  /** The person who decided it (Fix or Dismiss), as the action's `caller.person` said. */
-  decidedBy?: { login: string; name: string };
   createdAt: number;
   updatedAt: number;
 };

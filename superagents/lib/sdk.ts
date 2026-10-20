@@ -68,13 +68,9 @@ export const agentbox = {
   state: (open = true) => call<AppState>("GET", `/api/state${open ? "?open=1" : ""}`),
   session: async (id: string): Promise<Session | null> => (await agentbox.state(false)).sessions.find((s) => s.id === id) ?? null,
   /** Start a session: a `POST /api/sessions` body. `parent` puts it under
-   *  that session on the board. On a hub (docs/hub.md), `node` starts it on
-   *  a joined node, or wherever has the most room ("auto"); without one it
-   *  starts where this superagent's settings or manifest say (`node`), which
-   *  is the hub itself unless they opt in. A session on a node runs in a repo
-   *  registered there: name it with `repo` (its `owner/name`), and `ref` to
-   *  run at that point of it, in a worktree of its own cut there. */
-  start: async (spec: {
+   *  that session on the board. `repo` names a registered repo (its
+   *  `owner/name`), and `ref` runs it at that point, in a worktree of its own. */
+  start: (spec: {
     provider: string;
     prompt?: string;
     cwd?: string;
@@ -95,12 +91,7 @@ export const agentbox = {
     readOnly?: boolean;
     /** False: its stops are not pushed to the phone; its page shows them instead. */
     notify?: boolean;
-    /** On a hub: a node's name, or "auto". */
-    node?: string;
-  }): Promise<Session> => {
-    const node = spec.node ?? (await agentbox.self()).node ?? undefined;
-    return call<{ session: Session }>("POST", "/api/sessions", { ...spec, ...(node ? { node } : {}) }).then((r) => r.session);
-  },
+  }): Promise<Session> => call<{ session: Session }>("POST", "/api/sessions", spec).then((r) => r.session),
   /** Type into a session as an agent: the send guard applies (docs/v2.md, Messages between sessions). */
   send: (id: string, text: string, opts: { wake?: boolean; from?: string } = {}) =>
     call<{ to?: string } | null>("POST", `/api/sessions/${id}/send`, { text, from: "agent", wake: opts.wake, fromSession: opts.from }),
@@ -112,11 +103,10 @@ export const agentbox = {
   close: (id: string, opts: { removeWorktree?: boolean } = {}) => call("POST", `/api/sessions/${id}/close`, { closed: true, ...(opts.removeWorktree ? { removeWorktree: true } : {}) }),
   /** What `from` holds goes to `to`: its children, cards, PRs and their waits, and messages to it. */
   handover: (from: string, to: string, close = false) => call("POST", `/api/sessions/${from}/handover`, { to, close }),
-  /** `person`, on a hub: the member it is for (a login), whose devices alone it is pushed to. */
-  card: (c: { kind: "decision" | "note" | "merged"; title: string; short: string; long?: string; pr?: string; recommend?: string; default?: string; defaultAt?: number; key?: string; session?: string; about?: string; notify?: boolean; person?: string }) =>
+  card: (c: { kind: "decision" | "note" | "merged"; title: string; short: string; long?: string; pr?: string; recommend?: string; default?: string; defaultAt?: number; key?: string; session?: string; about?: string; notify?: boolean }) =>
     call<Card>("POST", "/api/cards", c),
-  /** Withdraw a card; `by` is the person whose decision settled it (an action's `caller.person`). */
-  closeCard: (id: number, why: string, by?: { login: string; name: string } | null) => call<Card>("POST", `/api/cards/${id}/close`, { why, ...(by?.login ? { by: { login: by.login, name: by.name } } : {}) }),
+  /** Withdraw a card. */
+  closeCard: (id: number, why: string) => call<Card>("POST", `/api/cards/${id}/close`, { why }),
   cards: (q = "") => call<Card[]>("GET", `/api/cards${q}`),
   /** A wait told to `session` (docs/v2.md, Waits): `{pr: {...}}`, `{run: ...}`, `{session: ...}`, `{until: ...}`, `{time: ...}`. */
   wait: (session: string, spec: Record<string, unknown>, opts: { pr?: string; cwd?: string; timeoutMs?: number } = {}) =>
@@ -124,7 +114,7 @@ export const agentbox = {
   claimPr: (pr: string, session: string, cwd?: string) => call("POST", "/api/prs/claim", { pr, session, cwd }),
   prWho: (pr: string, cwd?: string) => call<{ repo: string; number: number; claim: { sessionId: string } | null }>("POST", "/api/prs/who", { pr, cwd }),
   /** This superagent, as the Agents page shows it. */
-  self: () => call<{ main: string | null; previous: string[]; node?: string | null }>("GET", `/api/superagents/${me.name}`),
+  self: () => call<{ main: string | null; previous: string[] }>("GET", `/api/superagents/${me.name}`),
   /** Say which session is this superagent's main conversation. */
   setMain: (id: string | null) => call("PATCH", `/api/superagents/${me.name}`, { main: id }),
 };
@@ -160,14 +150,8 @@ export function store(file = "state.db"): Database {
   return db;
 }
 
-/** Who an action came from, as agentbox saw it. `person` is who made the
- *  request (the machine's owner on loopback, a member's tailnet login on a
- *  hub); an older agentbox does not send it. */
-export type Caller = {
-  session: string | null;
-  via: "app" | "api";
-  person?: { login: string; name: string; role: "owner" | "member" | null; via: "local" | "tailnet" | "hub" };
-};
+/** Who an action came from, as agentbox saw it. */
+export type Caller = { session: string | null; via: "app" | "api" };
 export type ActionRequest = { action: string; values: Record<string, unknown>; tab: string | null; caller: Caller };
 /** What an action answers: words for the page, a page to show, or where to go. */
 export type ActionReply = { message?: string; view?: SuperagentView; open?: string } & Record<string, unknown>;

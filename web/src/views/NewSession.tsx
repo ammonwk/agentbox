@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppState, HubNodeView, ModelOption, Placement, PrInfo, ProviderId, Repo, Schedule } from "../../../src/core/types";
+import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Repo, Schedule } from "../../../src/core/types";
 import { parseWhen } from "../../../src/core/schedule";
 import { accountProvider } from "../../../src/core/providers/account";
 import { api, type NewSessionInput } from "../api";
@@ -35,7 +35,6 @@ import { EffortPicker } from "./newsession/EffortPicker";
 import { PromptBox } from "./newsession/PromptBox";
 import { WorktreeField } from "./newsession/WorktreeField";
 import { WherePicker } from "./newsession/WherePicker";
-import { NodePicker } from "./newsession/NodePicker";
 import { WhenField } from "./newsession/WhenField";
 import { Dropdown } from "./newsession/Dropdown";
 import { useDismiss, useFloating } from "./newsession/popover";
@@ -102,19 +101,6 @@ export function NewSession({
     let live = true;
     api.prompts().then(
       (h) => live && setHistory(h),
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-  }, []);
-  // On a hub, its joined nodes: a session in a repo may start on one (docs/hub.md).
-  const [nodes, setNodes] = useState<HubNodeView[] | null>(null);
-  const [node, setNode] = useState("");
-  useEffect(() => {
-    let live = true;
-    api.hub().then(
-      (h) => live && setNodes(h.role === "hub" ? (h.nodes ?? []) : null),
       () => undefined,
     );
     return () => {
@@ -384,9 +370,7 @@ export function NewSession({
     if (!prompt.trim()) setWherePicked(false);
   }, [prompt]);
 
-  // Elsewhere, that machine's balancer places it, among the accounts it lends.
-  const placedElsewhere = !!nodes && where === "repo" && mode === "now" && node !== "";
-  const noEligible = !manual && !placedElsewhere && placement?.mode === "none";
+  const noEligible = !manual && placement?.mode === "none";
   const whereOk = where === "repo" ? !!repoId : path.trim().length > 0;
 
   // Later, the balancer places it when it starts: no account with room now is
@@ -434,8 +418,7 @@ export function NewSession({
       ...(text ? { prompt: text } : {}),
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
-      // An account is this machine's; a node picks among its own.
-      ...(placedElsewhere ? { node } : { accountId }),
+      accountId,
     };
     try {
       if (mode === "schedule") {
@@ -497,7 +480,6 @@ export function NewSession({
             onForgetFolder={dropFolder}
             onAddRepo={(v) => void addOther(v)}
           />
-          {nodes && nodes.some((n) => n.approvedAt !== null) && where === "repo" && mode === "now" ? <NodePicker nodes={nodes} value={node} onChange={setNode} /> : null}
           {where === "repo" && repo ? (
             <WorktreeField on={worktree} onToggle={setWorktree} text={wtText} onText={setWtText} prs={repoPrs} hint={hint} fromPrompt={wtFromPrompt} note={wtNote} />
           ) : null}

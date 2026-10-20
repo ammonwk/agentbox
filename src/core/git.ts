@@ -315,8 +315,7 @@ export function worktreeForBranch(repo: Repo, id: string, branch: string, pr?: n
 /**
  * A checkout of `ref` (a branch, a tag or a commit) as origin has it now, at
  * worktreeRoot/<id>, with a detached HEAD: for a session that reads the code
- * at that point and makes no branch of its own (docs/hub.md, a start's `repo`
- * and `ref`). The ref is fetched first, so where it is cut does not depend on
+ * at that point and makes no branch of its own (a start's `repo` and `ref`). The ref is fetched first, so where it is cut does not depend on
  * how stale this machine's clone is; offline, a ref the clone already has is
  * used as it is. `sha` is the commit it was cut at.
  */

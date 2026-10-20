@@ -114,8 +114,7 @@ why). Arming the same wait twice is one wait.
     agentbox label <id> 'name'      # rename it on the board
     agentbox claude|codex|omp|opencode|devin|muse --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
                                     # --repo owner/name [--ref REF]: in that registered repo instead,
-                                    # at REF in a detached worktree of its own; on a hub, --node NAME|auto
-                                    # starts it on a node (auto: the machine with the most room)
+                                    # at REF in a detached worktree of its own
     agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.

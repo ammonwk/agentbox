@@ -10,9 +10,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
-  HubMember,
-  HubStatus,
-  Lend,
   Btw,
   Account,
   AccountUsage,
@@ -111,8 +108,6 @@ async function request<T>(method: Method, path: string, body?: unknown, signal?:
     // it is usually the only description of what actually went wrong.
     throw new Error(`${path}: ${res.status} ${res.statusText} — ${text.slice(0, 200)}`);
   }
-  // At the public door a session that ran out signs in again (src/server/public.ts).
-  if (res.status === 401 && env.error === "sign in first") location.assign(`/auth/login?next=${enc(location.pathname + location.search + location.hash)}`);
   if (!env.ok) throw new Error(env.error || `${path}: ${res.status} ${res.statusText}`);
   return env.data as T;
 }
@@ -146,8 +141,6 @@ export interface NewSessionInput {
   model?: string;
   effort?: string;
   accountId?: string;
-  /** On a hub: a node's name, or "auto" (docs/hub.md). */
-  node?: string;
 }
 
 /** An image saved for a prompt to name: agents read it from `path`. */
@@ -157,11 +150,11 @@ export interface Upload {
 }
 
 /** Raw bytes, not JSON, so it skips `request`; same header and envelope. */
-async function upload(file: Blob, sessionId?: string): Promise<Upload> {
+async function upload(file: Blob): Promise<Upload> {
   if (MOCK) return { name: "mock.png", path: `/tmp/agentbox-mock/${Math.random().toString(36).slice(2)}.png` };
   let res: Response;
   try {
-    res = await fetch(sessionId ? `/api/sessions/${enc(sessionId)}/uploads` : "/api/uploads", { method: "POST", headers: { "x-agentbox": "1", "content-type": file.type }, body: file });
+    res = await fetch("/api/uploads", { method: "POST", headers: { "x-agentbox": "1", "content-type": file.type }, body: file });
   } catch (err) {
     throw new Error(`/api/uploads: cannot reach agentbox (${(err as Error).message})`);
   }
@@ -184,9 +177,7 @@ async function transcribe(audio: Blob): Promise<string> {
   return env.data.text;
 }
 
-/** `sessionId` for an image saved where that session runs: a hub's node's session (docs/hub.md). */
-export const uploadUrl = (name: string, sessionId?: string): string =>
-  sessionId ? `/api/sessions/${encodeURIComponent(sessionId)}/uploads/${encodeURIComponent(name)}` : `/api/uploads/${encodeURIComponent(name)}`;
+export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComponent(name)}`;
 
 /** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
  *  is the session's directory's. */
@@ -392,13 +383,6 @@ export const api = {
   saveSkillBody: (path: string, body: string) => post<{ ok: boolean }>("/api/skill/body", { path, body }),
   promoteSkill: (name: string) => post<SkillResult>("/api/skill/promote", { name }),
   demoteSkill: (name: string) => post<SkillResult>("/api/skill/demote", { name }),
-
-  // a hub and its nodes (docs/hub.md)
-  hub: () => get<HubStatus>("/api/hub"),
-  hubMembers: (members: HubMember[]) => request<HubStatus>("PUT", "/api/hub/members", { members }),
-  hubApprove: (node: string) => post<HubStatus>(`/api/hub/nodes/${enc(node)}/approve`),
-  hubRemove: (node: string) => request<HubStatus>("DELETE", `/api/hub/nodes/${enc(node)}`),
-  hubLend: (lend: Partial<Lend>) => request<HubStatus>("PATCH", "/api/hub/link", { lend }),
 
 };
 

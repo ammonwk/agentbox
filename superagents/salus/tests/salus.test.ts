@@ -42,7 +42,6 @@ test("a crash above the threshold is triaged read-only in a checkout agentbox cu
   expect(w.gh.asked).toContain("GET repos/acme/app/commits/main");
   expect(w.box.starts[0]).toMatchObject({ provider: "codex", readOnly: true, notify: false, parent: MAIN, repo: REPO, ref: SHA });
   expect(w.box.starts[0]!.cwd).toBeUndefined();
-  expect(w.box.starts[0]!.node).toBeUndefined();
   const c = w.ctx.store.crash("crash-a");
   expect(c.triage).toMatchObject({ base: SHA, cwd: "/worktrees/t1", session: "t1" });
   expect(w.git.calls.some((x) => x.includes("worktree"))).toBe(false);
@@ -50,11 +49,10 @@ test("a crash above the threshold is triaged read-only in a checkout agentbox cu
   expect(String(w.box.starts[0]!.prompt)).toContain("<crash-evidence>\nType: TypeError\nMessage: x is undefined");
 });
 
-test("where its superagent's settings put its sessions (a hub's node) is where a triage starts; a start never answered is found, not asked again", async () => {
-  w.box.node = "auto";
+test("a start never answered is found, not asked again", async () => {
   w.src.add("crash-a", Date.now() - H, 5);
   await tick(w.ctx);
-  expect(w.box.starts[0]).toMatchObject({ node: "auto", repo: REPO, ref: SHA });
+  expect(w.box.starts[0]).toMatchObject({ repo: REPO, ref: SHA });
   // As if the answer to that start were lost: the crash still says it is waiting on it.
   const c = w.ctx.store.crash("crash-a");
   w.ctx.store.save({ ...c, triage: { ...c.triage!, session: null } });
@@ -113,13 +111,6 @@ test("Fix is a person's: a session or the API cannot", async () => {
   await expect(fix(w.ctx, id, { session: "someone", via: "api" })).rejects.toThrow("A person decides this");
   await expect(fix(w.ctx, id, { session: null, via: "api" })).rejects.toThrow("A person decides this");
   expect(w.gh.issues).toHaveLength(0);
-});
-
-test("a decision records the person agentbox says made it", async () => {
-  const id = await triaged();
-  const owner = { ...APP, person: { login: "member@team", name: "Member", role: "member" as const, via: "tailnet" as const } };
-  await action(w.ctx, { action: "dismiss", values: { id }, tab: null, caller: owner });
-  expect(w.ctx.store.crash(id)).toMatchObject({ state: "dismissed", decidedBy: { login: "member@team", name: "Member" } });
 });
 
 test("Fix files one issue with no exception text, writes the family, and hands it to the main conversation once", async () => {

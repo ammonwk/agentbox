@@ -38,7 +38,7 @@ import { McpError, addServer, importServer, readRegistry, removeServer, setEnabl
 import { checkServer, discover, foundDefinition, publicFound, reachAll, viewOf } from "../core/mcp-reach";
 import { lastNightlyReclaim, startNightlyReclaim } from "../core/nightly";
 import { watchPwaDesktop, pwaInstalled } from "../core/pwa";
-import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushTo, removeSubscription, subscriptionsOf, type PushTo } from "../core/push";
+import { addSubscription, notifyBlocked, parseSubscription, pushPublicKey, pushSubscriptions, pushToAll, removeSubscription } from "../core/push";
 import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, writeSkillBody } from "../core/skills";
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { contextDocs, readContextDoc, writeContextDoc } from "./context";
@@ -63,15 +63,8 @@ import { completeDir, resolveDirs } from "../core/dirs";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
-import { PeerCheck, admit, admitted, sourceOf, tailnetCert, tailnetSelf, tailnetUrl, type Admission, type Peer } from "./tailnet";
-import { addPlaced, hubRole, readLink, readMembers, readNodes, readPlaced, removeLink, type Link } from "../core/hub";
-import { HubNodes, type Target } from "./hubnodes";
-import { announceUrl, asLocalRequest, auditHubAction, headroomOf, hubRoutes, hubStartRules, lends, nodeGate, nodeState, repoNamed, repoNames, type HubDeps } from "./hub";
-import { ownerPerson, personOf, setPerson, setTailnetSelf, setTailnetUrl, tailnetSelfNow, tailnetUrlNow } from "./person";
-import { choose, type Machine } from "./placement";
+import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { otherUserRefusal } from "./peeruid";
-import { PublicDoor, publicConfig } from "./public";
-import { accountProvider as accountsOf } from "../core/providers/account";
 import { VoiceHub } from "../voice/hub";
 import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
 import { transcribe } from "../voice/deepgram";
@@ -99,7 +92,6 @@ import type {
   Health,
   HotState,
   MetricsState,
-  Person,
   PrClaim,
   PrInfo,
   AccountProvider,
@@ -179,134 +171,30 @@ export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
-export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`, undefined, () => hubRole() === "hub");
-/** On a hub, its joined nodes and their sessions (docs/hub.md); on any
- *  other machine it has none and does nothing. */
-export const hubNodes = new HubNodes(
-  () => {
-    scheduleHot();
-    attachRemoteWatches();
-  },
-  () => new Set(fleet.sessions().map((s) => s.id)),
-);
-/** A page watching a node's session from before the hub heard of it (a
- *  restart of the hub): its watch goes to the node once the node is back. */
-function attachRemoteWatches(): void {
-  for (const ws of clients) {
-    const d = ws.data;
-    if (d.kind !== "app" || !d.watching || d.remote || d.hub) continue;
-    const target = remoteTarget(d.watching);
-    if (target) watchRemote(ws, target, d.watching);
-  }
+export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`);
+/** The registered repo a start names: its id, its GitHub `owner/name`, or its ref. */
+function repoNamed(name: string): Repo | null {
+  const lower = name.trim().toLowerCase();
+  const all = listRepos();
+  return all.find((r) => r.id === name) ?? all.find((r) => r.fullName?.toLowerCase() === lower) ?? all.find((r) => r.ref === name) ?? null;
 }
 
-/** A page's watch of a node's session, through the node; when the node
- *  ends it, the next word from the node (`attachRemoteWatches`) starts it again. */
-function watchRemote(ws: Socket, target: Target, id: string): void {
-  const d = ws.data;
-  if (d.kind !== "app") return;
-  const stop = hubNodes.watch(target, id, d.person ?? ownerPerson(), (m) => send(ws, m), () => {
-    if (d.remote === stop) d.remote = null;
-  });
-  d.remote = stop;
-}
-/** Who each tailnet connection is, for the hub's routes. */
-const peerOfReq = new WeakMap<Request, Peer>();
-let peerCheck: PeerCheck | null = null;
-/** On a node: whether it shares this session with its hub. */
-function sharedHere(id: string): boolean {
-  const link = readLink();
-  const s = link ? fleet.sessions().find((x) => x.id === id) : undefined;
-  return !!link && !!s && lends(link, s.accountId);
-}
-/** On a hub: the node a session it shows runs on, or null for its own. */
-const remoteTarget = (id: string) => (hubRole() === "hub" ? hubNodes.resolve(id) : null);
-/** On a node: the starts its hub asked for, with the link they came under. */
-const startsForHub = new WeakMap<Request, Link>();
-/** On a node: the sessions its hub started here that are still open. */
-function placedOpen(): number {
-  const placed = new Set(readPlaced());
-  return placed.size ? fleet.sessions().filter((s) => placed.has(s.id) && s.status !== "closed").length : 0;
-}
-
-/** The repo a start names, as every machine knows it: its GitHub `owner/name`. */
-function startRepoName(b: Record<string, unknown>): string | null {
-  if (typeof b.repo === "string" && b.repo.trim()) return repoNamed(b.repo)?.fullName ?? b.repo.trim();
-  if (typeof b.repoId === "string") return getRepoById(b.repoId)?.fullName ?? null;
-  if (typeof b.cwd === "string" && b.cwd) return repoFullNameOf(b.cwd);
-  return null;
-}
-
-/**
- * On a hub, a start that names `node` (docs/hub.md, Placement): a joined
- * node's name, or "auto" for the machine with the most room that may take
- * it, the hub among them. The answer is the node's, or null when the session
- * starts here: the hub was named, or chosen.
- */
-async function placeOnNode(req: Request, b: Record<string, unknown>): Promise<Response | null> {
-  if (typeof b.node !== "string" || !b.node.trim()) throw new HttpError(400, 'node is a node\'s name, or "auto"');
-  if (hubRole() !== "hub") throw new HttpError(409, "only a hub starts sessions on other machines (docs/hub.md), and this machine is not one");
-  const want = b.node.trim().toLowerCase();
-  if (want === tailnetSelfNow()?.hostName) return null;
-  const prov = provider(b.provider);
-  // Named outright, a node may take a start from a checkout here, in a new
-  // worktree of the same repo there; "auto" never moves a start that names
-  // a directory rather than a repo, which only this machine has.
-  const named = typeof b.repo === "string" || typeof b.repoId === "string";
-  const repo = want === "auto" && !named ? null : startRepoName(b);
-  let target = want;
-  if (want === "auto") {
-    const hub: Machine = { node: null, reachable: true, lend: { acceptStarts: true, maxSessions: null }, headroom: headroomOf(accountViews()), repos: repoNames(), placed: 0 };
-    const choice = choose([hub, ...hubNodes.machines()], { provider: accountsOf(prov), repo });
-    if (!choice.ok) return Response.json({ ok: false, data: { considered: choice.considered }, error: choice.why }, { status: 409 });
-    if (choice.node === null) return null;
-    target = choice.node;
-  }
-  const rec = hubNodes.named(target);
-  if (!rec) throw new HttpError(404, `no node ${target} is joined to this hub`);
-  if (!repo) throw new HttpError(400, `a session on ${target} runs in a repo registered there: name it (repo, as owner/name), or start from a checkout whose origin is on GitHub`);
-  if (b.claim !== undefined) throw new HttpError(400, "a session on a node cannot be started with a PR claim; claim it once it runs");
-  const body: Record<string, unknown> = { provider: prov, repo };
-  for (const k of ["prompt", "model", "effort", "accountId", "readOnly", "notify", "ref", "branch", "pr", "worktree"]) if (b[k] !== undefined) body[k] = b[k];
-  const caller = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? fleet.callerOf(b.callerPid) : null;
-  return hubNodes.startOn(rec, body, personOf(req), optionalString(b, "parent") ?? caller);
-}
 function cardId(raw: string): number {
   if (!/^\d{1,9}$/.test(raw)) throw new HttpError(400, "a card's id is a number");
   return Number(raw);
 }
 
-/** Whose devices a card goes to (docs/hub.md): on a hub, the member it
- *  names; anything else, the owner's. */
-function cardPushTo(person: string | null): PushTo {
-  const member = person && hubRole() === "hub" ? readMembers()?.find((m) => m.login === person) : undefined;
-  return member && member.role !== "owner" ? { owner: false, login: member.login } : { owner: true };
-}
-
-/** A person's own devices. */
-const pushToPerson = (p: Person): PushTo => (p.role === "owner" ? { owner: true, login: p.login } : { owner: false, login: p.login });
-
-/** One push for a batch of new decisions, never for what merely happened:
- *  one per person the batch is for. */
 export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
-  const byPerson = new Map<string, { to: PushTo; cards: typeof batch }>();
-  for (const c of batch) {
-    const to = cardPushTo(c.person);
-    const k = to.owner ? "" : to.login;
-    byPerson.set(k, { to, cards: [...(byPerson.get(k)?.cards ?? []), c] });
-  }
-  for (const { to, cards: mine } of byPerson.values()) {
-    if (subscriptionsOf(to).length === 0) continue;
-    const [first] = mine;
-    void pushTo(to, {
-      title: mine.length === 1 ? "A decision for you" : `${mine.length} decisions for you`,
-      body: mine.length === 1 ? first!.title : `${first!.title}, and ${mine.length - 1} more`,
-      url: "/#/review",
-      tag: "cards",
-    }).then((r) => {
-      for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
-    });
-  }
+  if (pushSubscriptions().length === 0) return;
+  const [first] = batch;
+  void pushToAll({
+    title: batch.length === 1 ? "A decision for you" : `${batch.length} decisions for you`,
+    body: batch.length === 1 ? first!.title : `${first!.title}, and ${batch.length - 1} more`,
+    url: "/#/review",
+    tag: "cards",
+  }).then((r) => {
+    for (const f of r.failed) console.error(`agentbox: push for cards failed — ${f}`);
+  });
 });
 const turnIndex = new TurnIndex(fleet, {
   load: (id) => loadTurnState(fleet.get(id).provider, id),
@@ -350,9 +238,6 @@ function hotState(open = false): HotState {
       return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
     .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }));
-  // A hub shows its nodes' sessions beside its own (docs/hub.md); nothing
-  // else does, and its own sessions say they are its own.
-  if (hubRole() === "hub") return { sessions: [...sessions.map((s) => ({ ...s, node: null })), ...hubNodes.sessions()].sort(byAttention), serverTime: Date.now(), closedStamp };
   return { sessions: sessions.sort(byAttention), serverTime: Date.now(), closedStamp };
 }
 
@@ -545,15 +430,6 @@ type SocketData =
       cursor: string | null;
       busy: boolean;
       again: boolean;
-      /** Who opened it, for the watches a hub passes through to a node. */
-      person?: Person;
-      /** On a node, a socket of its hub's: `state` gets the shared sessions
-       *  and `node` frames, `watch` only its watch (docs/hub.md). */
-      hub?: "state" | "watch";
-      /** The link token it was opened with. */
-      hubToken?: string;
-      /** On a hub, the watch of a remote session, passed through to its node. */
-      remote?: (() => void) | null;
     }
   | {
       kind: "term";
@@ -561,12 +437,8 @@ type SocketData =
       cols: number;
       rows: number;
       proc?: ReturnType<typeof Bun.spawn>;
-      /** On a node, the link token a hub opened it with. */
-      hubToken?: string;
     }
-  | { kind: "voice"; convId: string; conv?: Conversation }
-  /** On a hub, a remote session's terminal, relayed to its node. */
-  | { kind: "relay"; target: Target; person: Person; cols: number; rows: number; peer?: WebSocket; queue: (string | Uint8Array)[] };
+  | { kind: "voice"; convId: string; conv?: Conversation };
 type Socket = ServerWebSocket<SocketData>;
 
 const clients = new Set<Socket>();
@@ -576,43 +448,10 @@ function dropClient(ws: Socket): void {
   setMetricsWatchers(clients.size);
 }
 
-/** What a hub's socket on this node is sent of a frame: the sessions this
- *  node shares, the watched timeline, and nothing of its cold state or load. */
-function forHub(msg: ServerMessage, mode: "state" | "watch"): ServerMessage | null {
-  const link = readLink();
-  if (!link) return null;
-  switch (msg.type) {
-    case "hot":
-      return mode === "state" ? { ...msg, state: { ...msg.state, sessions: msg.state.sessions.filter((s) => lends(link, s.accountId)) } } : null;
-    case "hotDelta":
-      return mode === "state" ? { ...msg, sessions: msg.sessions.filter((s) => lends(link, s.accountId)) } : null;
-    case "timeline":
-    case "btw":
-    case "error":
-    case "starting":
-    case "restarting":
-      return msg;
-    case "node":
-      return mode === "state" ? msg : null;
-    default:
-      return null;
-  }
-}
-
 function send(ws: Socket, msg: ServerMessage): void {
   if (ws.readyState !== WebSocket.OPEN) {
     dropClient(ws);
     return;
-  }
-  if (ws.data.kind === "app" && ws.data.hub) {
-    if (readLink()?.token !== ws.data.hubToken) {
-      ws.close(1008, "the link to this node ended");
-      dropClient(ws);
-      return;
-    }
-    const shown = forHub(msg, ws.data.hub);
-    if (!shown) return;
-    msg = shown;
   }
   try {
     ws.send(JSON.stringify(msg));
@@ -735,7 +574,7 @@ function coldIn(ms: number): void {
  */
 async function pumpTimeline(ws: Socket): Promise<void> {
   const d = ws.data;
-  if (d.kind !== "app" || !d.watching || d.remote) return;
+  if (d.kind !== "app" || !d.watching) return;
   if (d.busy) {
     d.again = true;
     return;
@@ -791,25 +630,12 @@ function handleAppMessage(ws: Socket, raw: string | Buffer): void {
   }
   const msg = parsed.message;
   if (msg.type === "ping" || ws.data.kind !== "app") return;
-  // The hub watches only what this node shares.
-  if (ws.data.hub && msg.sessionId && !sharedHere(msg.sessionId)) {
-    send(ws, { type: "error", message: `no session ${msg.sessionId}` });
-    return;
-  }
-  ws.data.remote?.();
-  ws.data.remote = null;
   ws.data.watching = msg.sessionId;
   // A copy the page still holds goes on from where it ends: a session you go
   // back to costs what it said since, not its newest page again.
   ws.data.cursor = msg.cursor ?? null;
   // Before the first pass no transcript is known; `welcome` pumps it after.
   if (!booted) return;
-  // A hub's page watching a node's session: the node sends the timeline.
-  const target = msg.sessionId ? remoteTarget(msg.sessionId) : null;
-  if (target && msg.sessionId) {
-    watchRemote(ws, target, msg.sessionId);
-    return;
-  }
   if (msg.sessionId) send(ws, { type: "btw", sessionId: msg.sessionId, items: listBtw(msg.sessionId) });
   void pumpTimeline(ws);
 }
@@ -819,7 +645,6 @@ function handleAppMessage(ws: Socket, raw: string | Buffer): void {
 function openTerminal(ws: Socket): void {
   const d = ws.data;
   if (d.kind !== "term") return;
-  if (d.hubToken !== undefined) hubTerms.add(ws);
   let name: string;
   try {
     name = fleet.tmuxOf(d.sessionId);
@@ -848,24 +673,6 @@ function openTerminal(ws: Socket): void {
   });
 }
 
-/** Terminals a hub opened on this node, closed with its link. */
-const hubTerms = new Set<Socket>();
-
-/** The link ended or changed: every socket a hub opened with it goes. The
- *  hub opens new ones with the link as it is now, if it still has one. */
-function dropHubSockets(): void {
-  const token = readLink()?.token;
-  for (const ws of [...clients, ...hubTerms]) {
-    const t = ws.data.kind === "app" || ws.data.kind === "term" ? ws.data.hubToken : undefined;
-    if (t === undefined) continue;
-    // A terminal stays while its session is still lent.
-    if (t === token && ws.data.kind === "term" && sharedHere(ws.data.sessionId)) continue;
-    ws.close(1008, "the link to this node changed");
-    if (ws.data.kind === "app") dropClient(ws);
-    else hubTerms.delete(ws);
-  }
-}
-
 /** When you last typed into each session's terminal: a panel that opens
  *  there at once is yours, and is not pushed (`notifyBlocked`). */
 const typedAt = new Map<string, number>();
@@ -880,10 +687,6 @@ function termOf(d: SocketData): { write(s: string): void; resize(c: number, r: n
 function handleTermMessage(ws: Socket, raw: string | Buffer): void {
   const t = termOf(ws.data);
   if (!t) return;
-  if (ws.data.kind === "term" && ws.data.hubToken !== undefined && readLink()?.token !== ws.data.hubToken) {
-    ws.close(1008, "the link to this node ended");
-    return;
-  }
   let msg: unknown;
   try {
     msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
@@ -904,7 +707,6 @@ function handleTermMessage(ws: Socket, raw: string | Buffer): void {
 function closeTerminal(ws: Socket): void {
   const d = ws.data;
   if (d.kind !== "term") return;
-  hubTerms.delete(ws);
   termOf(d)?.close();
   d.proc?.kill();
 }
@@ -983,19 +785,10 @@ const router = new Router(mapError)
   })
   .add("POST", "/api/sessions", async ({ req }) => {
     const b = await readBody(req);
-    // On a hub, `node` places it on a joined node (docs/hub.md, Placement);
-    // null from `placeOnNode` is this machine.
-    if (b.node !== undefined && b.node !== null) {
-      const placed = await placeOnNode(req, b);
-      if (placed) return placed;
-    }
     // Started to work a pull request: it has it from its first moment, or
     // does not start, so two are never sent to the same one.
     const claim = b.claim !== undefined ? prNamed({ pr: b.claim, cwd: b.cwd }, null) : null;
     const key = claim ? `${claim.repo.toLowerCase()}#${claim.number}` : "";
-    // On a node, a start its hub asked for: within what the node lends.
-    const forHub = startsForHub.get(req);
-    const rules = forHub ? hubStartRules(forHub, b, placedOpen()) : null;
     let holding = false;
     try {
       if (claim) {
@@ -1005,8 +798,8 @@ const router = new Router(mapError)
         startingOn.add(key);
         holding = true;
       }
-      // A repo by name (its id, `owner/name` or ref), as a hub's start names it.
-      const named = rules?.repo ?? (typeof b.repo === "string" && b.repo ? repoNamed(b.repo) : null);
+      // A repo by name: its id, `owner/name` or ref.
+      const named = typeof b.repo === "string" && b.repo ? repoNamed(b.repo) : null;
       if (typeof b.repo === "string" && b.repo && !named) throw new HttpError(404, `no repo ${b.repo} is registered here`);
       const ref = optionalString(b, "ref");
       const branch = optionalString(b, "branch");
@@ -1014,10 +807,9 @@ const router = new Router(mapError)
         provider: provider(b.provider),
         readOnly: b.readOnly === true,
         notify: b.notify === false ? false : undefined,
-        cwd: rules ? undefined : optionalString(b, "cwd"),
+        cwd: optionalString(b, "cwd"),
         repoId: named?.id ?? optionalString(b, "repoId"),
-        // The hub's sessions on a node never run in its owner's own checkout.
-        worktree: b.worktree === true || (!!rules && !ref && !branch),
+        worktree: b.worktree === true,
         branch,
         ref,
         pr: typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0 ? b.pr : undefined,
@@ -1025,16 +817,12 @@ const router = new Router(mapError)
         model: optionalString(b, "model"),
         effort: optionalString(b, "effort"),
         accountId: optionalString(b, "accountId") ?? null,
-        accounts: rules?.accounts,
-        callerPid: !rules && typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
-        parent: rules ? undefined : optionalString(b, "parent"),
+        callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
+        parent: optionalString(b, "parent"),
       });
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
-      if (rules) addPlaced(out.session.id);
       scheduleHot();
       scheduleCold();
-      // To the hub, the row it shows, with its attention.
-      if (rules) return json({ ...out, session: hotState(true).sessions.find((s) => s.id === out.session.id) ?? out.session }, 201);
       return json(out, 201);
     } catch (e) {
       // A refusal carries the placement, so the dialog can show why.
@@ -1046,7 +834,6 @@ const router = new Router(mapError)
       }
       throw e;
     } finally {
-      rules?.done();
       if (holding) startingOn.delete(key);
     }
   })
@@ -1254,16 +1041,6 @@ const router = new Router(mapError)
     return json(s);
   })
   .add("POST", "/api/uploads", ({ req }) => uploaded(req))
-  // The same, on the machine the session runs on: a hub passes a node's
-  // session's image through to that node, where its agent can read it.
-  .add("POST", "/api/sessions/:id/uploads", ({ req, params }) => {
-    fleet.get(params.id!);
-    return uploaded(req);
-  })
-  .add("GET", "/api/sessions/:id/uploads/:name", ({ params }) => {
-    fleet.get(params.id!);
-    return uploadResponse(params.name!);
-  })
   .add("POST", "/api/transcribe", async ({ req }) => {
     const mime = req.headers.get("content-type") ?? "";
     if (!/^audio\//i.test(mime)) throw new HttpError(400, `not a recording: ${mime || "no content type"}`);
@@ -1363,8 +1140,7 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
     const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
-    const node = b.node === null ? null : typeof b.node === "string" ? b.node : undefined;
-    return json(await superagents.patch(params.name!, { main, enabled, node }));
+    return json(await superagents.patch(params.name!, { main, enabled }));
   })
   .add("DELETE", "/api/superagents/:name", ({ params }) => {
     superagents.remove(params.name!);
@@ -1380,7 +1156,7 @@ const router = new Router(mapError)
     const b = await readBody(req);
     requireString(b, "action");
     // Who asked: a session proves itself with its capability; a page in a browser sends an Origin.
-    const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const), person: personOf(req) };
+    const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const) };
     return json(await superagents.action(params.name!, b, caller));
   })
   .add("POST", "/api/superagents/:name/chat", async ({ req, params }) => {
@@ -1483,9 +1259,6 @@ const router = new Router(mapError)
     if (!CARD_KINDS.includes(kind)) throw new HttpError(400, `kind is one of ${CARD_KINDS.join(", ")}`);
     const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
     const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,64}$/.test(v) ? v : null);
-    // On a hub, the member it is for (docs/hub.md); anywhere else there is only the owner.
-    const person = optionalString(b, "person")?.trim().toLowerCase() || null;
-    if (person && hubRole() === "hub" && !readMembers()?.some((m) => m.login === person)) throw new HttpError(400, `${person} is not a member of this hub`);
     return json(
       cards.add({
         kind,
@@ -1501,7 +1274,6 @@ const router = new Router(mapError)
         about: id(b.about),
         at: typeof b.at === "number" && b.at > 0 ? b.at : null,
         notify: b.notify !== false,
-        person,
       }),
       201,
     );
@@ -1510,18 +1282,14 @@ const router = new Router(mapError)
   .add("POST", "/api/cards/:id/answer", async ({ req, params }) => {
     const b = await readBody(req);
     if (typeof b.text !== "string") throw new HttpError(400, "text must be a string");
-    const p = personOf(req);
-    return json(cards.answer(cardId(params.id!), b.text, p.login ? { login: p.login, name: p.name } : null));
+    return json(cards.answer(cardId(params.id!), b.text));
   })
   .add("POST", "/api/cards/:id/later", ({ params }) => json(cards.later(cardId(params.id!))))
   .add("POST", "/api/cards/:id/undo", ({ params }) => json(cards.undo(cardId(params.id!))))
   .add("POST", "/api/cards/:id/ack", ({ params }) => json(cards.ack(cardId(params.id!))))
   .add("POST", "/api/cards/:id/close", async ({ req, params }) => {
     const b = await readBody(req);
-    // Settled by a person's decision elsewhere, a superagent's page: who (its `caller.person`).
-    const by = b.by as { login?: unknown; name?: unknown } | undefined;
-    const decided = by && typeof by.login === "string" && by.login ? { login: by.login.slice(0, 200), name: typeof by.name === "string" ? by.name.slice(0, 200) : by.login.slice(0, 200) } : null;
-    return json(cards.close(cardId(params.id!), typeof b.why === "string" ? b.why : "", decided));
+    return json(cards.close(cardId(params.id!), typeof b.why === "string" ? b.why : ""));
   })
   // What `agentbox watch` needs of each session, closed ones too (it must see
   // a reopen as one), and nothing else. With `after`, the rows it already has,
@@ -1731,15 +1499,13 @@ const router = new Router(mapError)
     return json(next);
   })
   // ---- notifications (src/core/push.ts)
-  .add("GET", "/api/push", async ({ req }) =>
-    json({ publicKey: await pushPublicKey(), devices: subscriptionsOf(pushToPerson(personOf(req))).map((d) => ({ endpoint: d.endpoint, userAgent: d.userAgent, createdAt: d.createdAt })) }),
+  .add("GET", "/api/push", async () =>
+    json({ publicKey: await pushPublicKey(), devices: pushSubscriptions().map((d) => ({ endpoint: d.endpoint, userAgent: d.userAgent, createdAt: d.createdAt })) }),
   )
   .add("POST", "/api/push/subscribe", async ({ req }) => {
     let sub;
-    // The device is the person's who turned it on: their cards come to it (docs/hub.md).
-    const p = personOf(req);
     try {
-      sub = parseSubscription(await readBody(req), req.headers.get("user-agent"), { login: p.login, owner: p.role === "owner" });
+      sub = parseSubscription(await readBody(req), req.headers.get("user-agent"));
     } catch (e) {
       throw e instanceof HttpError ? e : new HttpError(400, (e as Error).message);
     }
@@ -1750,10 +1516,9 @@ const router = new Router(mapError)
     removeSubscription(requireString(await readBody(req), "endpoint"));
     return json(null);
   })
-  .add("POST", "/api/push/test", async ({ req }) => {
-    const to = pushToPerson(personOf(req));
-    if (subscriptionsOf(to).length === 0) throw new HttpError(409, "no device of yours has notifications turned on");
-    return json(await pushTo(to, { title: "agentbox", body: "Notifications work on this device.", url: "/#/sessions", tag: "test" }));
+  .add("POST", "/api/push/test", async () => {
+    if (pushSubscriptions().length === 0) throw new HttpError(409, "no device has notifications turned on");
+    return json(await pushToAll({ title: "agentbox", body: "Notifications work on this device.", url: "/#/sessions", tag: "test" }));
   })
   // The new-session dialog's folder field (src/core/dirs.ts).
   .add("GET", "/api/dirs", ({ url }) => json(completeDir(url.searchParams.get("path") ?? "")))
@@ -1909,17 +1674,7 @@ const router = new Router(mapError)
     if (!saved) throw new HttpError(404, "no such context file");
     return json({ docs: contextDocs(), ...saved });
   });
-const hubDeps: HubDeps = {
-  port: PORT,
-  linkChanged: () => dropHubSockets(),
-  nodes: hubNodes,
-  openSessions: () => hotState(true).sessions,
-  accountViews,
-  placedOpen,
-  peerOf: (req) => peerOfReq.get(req) ?? null,
-  whois: (ip) => peerCheck?.whois(ip) ?? Promise.resolve(null),
-};
-hubRoutes(router, hubDeps).otherwise(({ req, url }) => {
+router.otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
     if (found.kind === "notBuilt") return notBuiltPage();
@@ -1979,51 +1734,12 @@ function welcome(ws: Socket): void {
   send(ws, { type: "cold", state: coldState() });
   send(ws, { type: "metrics", state: metricsSnapshot() });
   send(ws, { type: "build", entry: uiBuild });
-  const link = ws.data.kind === "app" && ws.data.hub === "state" ? readLink() : null;
-  if (link) send(ws, { type: "node", state: nodeState(hubDeps, link, false) });
   setMetricsWatchers(clients.size);
   // A watch sent while it waited.
-  const remote = ws.data.kind === "app" && ws.data.watching ? remoteTarget(ws.data.watching) : null;
-  if (remote && ws.data.kind === "app" && ws.data.watching) {
-    watchRemote(ws, remote, ws.data.watching);
-  } else if (ws.data.kind === "app" && ws.data.watching) {
+  if (ws.data.kind === "app" && ws.data.watching) {
     send(ws, { type: "btw", sessionId: ws.data.watching, items: listBtw(ws.data.watching) });
     void pumpTimeline(ws);
   }
-}
-
-/** How a request came in: the tailnet door's names for this machine, who it
- *  admitted, and the source address. Loopback has none of these. */
-type Door = { hosts?: readonly string[]; admission?: Admission; source?: string; person?: Person };
-
-/** A hub's page on a node's terminal: frames both ways, the node's close passed on. */
-function openRelay(ws: Socket): void {
-  const d = ws.data;
-  if (d.kind !== "relay") return;
-  const { rec, remoteId } = d.target;
-  let peer: WebSocket;
-  try {
-    peer = hubNodes.socket(rec, `/api/node/ws/term/${encodeURIComponent(remoteId)}?cols=${d.cols}&rows=${d.rows}`, d.person);
-  } catch (e) {
-    ws.close(1011, `node ${rec.name}: ${(e as Error).message}`.slice(0, 120));
-    return;
-  }
-  peer.binaryType = "arraybuffer";
-  d.peer = peer;
-  peer.onopen = () => {
-    for (const m of d.queue) peer.send(m);
-    d.queue = [];
-  };
-  peer.onmessage = (e) => {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    if (typeof e.data === "string") ws.send(e.data);
-    else ws.sendBinary(new Uint8Array(e.data as ArrayBuffer));
-  };
-  peer.onclose = (e) => {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    const passed = e.code === 1000 || (e.code >= 4000 && e.code < 5000);
-    ws.close(passed ? e.code : 1011, (e.reason || `node ${rec.name} is away`).slice(0, 120));
-  };
 }
 
 export async function startServer(): Promise<void> {
@@ -2059,7 +1775,6 @@ export async function startServer(): Promise<void> {
     scheduler.stop();
     waits.stop();
     superagents.stopAll();
-    hubNodes.stop();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -2072,10 +1787,6 @@ export async function startServer(): Promise<void> {
     open(ws) {
       if (ws.data.kind === "term") {
         openTerminal(ws);
-        return;
-      }
-      if (ws.data.kind === "relay") {
-        openRelay(ws);
         return;
       }
       if (ws.data.kind === "voice") {
@@ -2105,53 +1816,37 @@ export async function startServer(): Promise<void> {
         return;
       }
       if (ws.data.kind === "term") handleTermMessage(ws, raw);
-      else if (ws.data.kind === "relay") {
-        const d = ws.data;
-        const m = typeof raw === "string" ? raw : new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
-        if (d.peer?.readyState === WebSocket.OPEN) d.peer.send(m);
-        else if (!d.peer || d.peer.readyState === WebSocket.CONNECTING) d.queue.push(m);
-      } else handleAppMessage(ws, raw);
+      else handleAppMessage(ws, raw);
     },
     close(ws) {
       if (ws.data.kind === "voice") ws.data.conv?.detach();
       else if (ws.data.kind === "term") closeTerminal(ws);
-      else if (ws.data.kind === "relay") ws.data.peer?.close();
       else {
-        ws.data.remote?.();
-        ws.data.remote = null;
         waiting.delete(ws);
         dropClient(ws);
       }
     },
   };
 
-  const handle = (req: Request, srv: Server<SocketData>, door: Door = {}): Response | undefined | Promise<Response> => {
+  const handle = (req: Request, srv: Server<SocketData>, hosts?: readonly string[]): Response | undefined | Promise<Response> => {
     const url = new URL(req.url);
-    const hosts = door.hosts;
     const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
-    // The public door checked its own request (src/server/public.ts).
-    const verdict = door.person ? ({ ok: true } as const) : checkRequest(req, PORT, { upgrade, hosts });
+    const verdict = checkRequest(req, PORT, { upgrade, hosts });
     if (!verdict.ok) return fail(verdict.reason, 403);
     // The loopback listener, or the tailnet one reached at this machine's own address.
-    if (!door.person && (!hosts || srv.requestIP(req)?.address === hosts[0])) fromThisMachine.add(req);
-    // Who asked: loopback is the machine's owner; the tailnet and public doors say who else.
-    if (door.person) setPerson(req, door.person);
-    else if (!hosts) setPerson(req, ownerPerson());
-    else if (door.admission?.kind === "person") setPerson(req, door.admission.person);
+    if (!hosts || srv.requestIP(req)?.address === hosts[0]) fromThisMachine.add(req);
 
     if (url.pathname === "/ws") {
       if (!upgrade) return fail("/ws requires a WebSocket upgrade", 426);
-      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false, person: personOf(req) } })
+      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false } })
         ? undefined
         : fail("websocket upgrade failed", 500);
     }
     // Terminals and voice need the board; a page's socket may wait for it.
     if (!booted && (url.pathname.startsWith("/ws/") || url.pathname.startsWith("/api/")) && url.pathname !== "/api/health") {
       if (upgrade) return fail("agentbox is starting", 503);
-      return untilBooted.then(() => (url.pathname.startsWith("/api/node/") ? nodeRequest(req, url, srv, door.source ?? null, upgrade) : dispatch(req, url)) as Response | Promise<Response>);
+      return untilBooted.then(() => router.handle(req));
     }
-    // The hub, on this node (docs/hub.md): its own gate, whatever the door let in.
-    if (url.pathname.startsWith("/api/node/")) return nodeRequest(req, url, srv, door.source ?? null, upgrade);
     if (url.pathname === "/ws/voice") {
       if (!upgrade) return fail("voice requires a WebSocket upgrade", 426);
       const convId = url.searchParams.get("c") ?? "";
@@ -2163,79 +1858,12 @@ export async function startServer(): Promise<void> {
       if (!upgrade) return fail("terminal requires a WebSocket upgrade", 426);
       const cols = Math.max(20, Math.min(500, Number(url.searchParams.get("cols")) || 120));
       const rows = Math.max(5, Math.min(200, Number(url.searchParams.get("rows")) || 40));
-      const target = remoteTarget(term[1]!);
-      const data: SocketData = target ? { kind: "relay", target, person: personOf(req), cols, rows, queue: [] } : { kind: "term", sessionId: term[1]!, cols, rows };
-      return srv.upgrade(req, { data }) ? undefined : fail("websocket upgrade failed", 500);
+      return srv.upgrade(req, { data: { kind: "term", sessionId: term[1]!, cols, rows } }) ? undefined : fail("websocket upgrade failed", 500);
     }
     // A search reads every transcript, minutes on a loaded machine, and sends
     // nothing until it is done: the idle timeout would cut it.
     if (url.pathname === "/api/grep") srv.timeout(req, 0);
-    return dispatch(req, url);
-  };
-
-  /** On a hub, a request for a node's session goes to that node; everything else is this machine's. */
-  const dispatch = (req: Request, url: URL): Promise<Response> => {
-    const m = hubRole() === "hub" ? url.pathname.match(/^\/api\/sessions\/([^/]+)(\/.*)?$/) : null;
-    let target: ReturnType<typeof remoteTarget> = null;
-    try {
-      target = m ? remoteTarget(decodeURIComponent(m[1]!)) : null;
-    } catch {
-      /* not an id: the router answers it */
-    }
-    if (target) return hubNodes.proxy(req, url, target, m![2] ?? "", personOf(req));
     return router.handle(req);
-  };
-
-  /** A request from the hub on this node: its gate, then only what it may reach. */
-  const nodeRequest = (req: Request, url: URL, srv: Server<SocketData>, source: string | null, upgrade: boolean): Response | undefined | Promise<Response> => {
-    const v = nodeGate(req, url, source);
-    if (!v.ok) return fail(v.reason, v.status);
-    const { rest, person, link } = v;
-    if (rest === "/state" && req.method === "GET") return json(nodeState(hubDeps, link, true));
-    if (rest === "/leave" && req.method === "POST") {
-      auditHubAction(person, req.method, url.pathname);
-      removeLink();
-      dropHubSockets();
-      console.log(`agentbox: hub: ${link.hub.name} ended this node's link`);
-      return json(null);
-    }
-    if (rest === "/ws") {
-      if (!upgrade) return fail("/api/node/ws requires a WebSocket upgrade", 426);
-      const hub = url.searchParams.get("watch") ? ("watch" as const) : ("state" as const);
-      return srv.upgrade(req, { data: { kind: "app", watching: null, cursor: null, busy: false, again: false, person, hub, hubToken: link.token } }) ? undefined : fail("websocket upgrade failed", 500);
-    }
-    // A session the hub starts here, on this node's own start path and rules.
-    if (rest === "/sessions" && req.method === "POST") {
-      const local = asLocalRequest(req, url, "/api/sessions", PORT);
-      const ok = checkRequest(local, PORT);
-      if (!ok.ok) return fail(ok.reason, 403);
-      setPerson(local, person);
-      startsForHub.set(local, link);
-      auditHubAction(person, req.method, url.pathname);
-      return router.handle(local);
-    }
-    const term = rest.match(/^\/ws\/term\/([a-z0-9]+)$/);
-    if (term) {
-      if (!upgrade) return fail("terminal requires a WebSocket upgrade", 426);
-      if (!sharedHere(term[1]!)) return fail(`no session ${term[1]}`, 404);
-      auditHubAction(person, "TERM", url.pathname);
-      const cols = Math.max(20, Math.min(500, Number(url.searchParams.get("cols")) || 120));
-      const rows = Math.max(5, Math.min(200, Number(url.searchParams.get("rows")) || 40));
-      return srv.upgrade(req, { data: { kind: "term", sessionId: term[1]!, cols, rows, hubToken: link.token } }) ? undefined : fail("websocket upgrade failed", 500);
-    }
-    const sess = rest.match(/^\/sessions\/([^/]+)(\/.*)?$/);
-    if (sess) {
-      const id = decodeURIComponent(sess[1]!);
-      if (!sharedHere(id)) return fail(`no session ${id}`, 404);
-      const local = asLocalRequest(req, url, `/api/sessions/${encodeURIComponent(id)}${sess[2] ?? ""}`, PORT);
-      // The node's own guards: the same CSRF rule as any local request.
-      const ok = checkRequest(local, PORT);
-      if (!ok.ok) return fail(ok.reason, 403);
-      setPerson(local, person);
-      auditHubAction(person, req.method, url.pathname);
-      return router.handle(local);
-    }
-    return fail(`no route for ${req.method} ${url.pathname}`, 404);
   };
 
   // Serve from the start, before the accounts and the first pass, which on
@@ -2256,7 +1884,6 @@ export async function startServer(): Promise<void> {
   });
   console.log(`agentbox listening on http://${HOST}:${PORT}`);
   void listenOnTailnet(websocket, handle);
-  listenInPublic(websocket, handle);
   const progress = setInterval(() => {
     for (const ws of waiting) send(ws, { type: "starting", ...startupProgress() });
   }, STARTING_PUSH_MS);
@@ -2309,16 +1936,6 @@ export async function startServer(): Promise<void> {
     coldFromSessions();
   });
   fleet.on("transcript", onTranscript);
-  // A hub keeps a socket to each joined node; a node tells its hub's
-  // sockets what it lends, which is also how the hub knows it is there.
-  hubNodes.start();
-  setInterval(() => {
-    const link = readLink();
-    const hubs = [...clients].filter((ws) => ws.data.kind === "app" && ws.data.hub === "state");
-    if (!link || hubs.length === 0) return;
-    const state = nodeState(hubDeps, link, false);
-    for (const ws of hubs) send(ws, { type: "node", state });
-  }, 5_000).unref?.();
   fleet.on("btw", onBtw);
   voice = new VoiceHub(fleet);
   accounts.on("change", scheduleCold);
@@ -2349,33 +1966,9 @@ async function sayRateChanges(): Promise<void> {
   }
 }
 
-/** The public door (src/server/public.ts), when this machine has one: its
- *  own loopback port, which only the proxy in front should reach. */
-function listenInPublic(
-  websocket: WebSocketHandler<SocketData>,
-  handle: (req: Request, srv: Server<SocketData>, door?: Door) => Response | undefined | Promise<Response>,
-): void {
-  const cfg = publicConfig();
-  if (!cfg) return;
-  const door = new PublicDoor(cfg);
-  Bun.serve<SocketData>({
-    port: cfg.port,
-    hostname: "127.0.0.1",
-    idleTimeout: 60,
-    websocket,
-    async fetch(req, srv) {
-      const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
-      const who = await door.gate(req, upgrade);
-      if (who instanceof Response) return who;
-      return handle(req, srv, { person: who });
-    },
-  });
-  console.log(`agentbox listening on http://127.0.0.1:${cfg.port} for ${cfg.url.origin} (sign-in at ${cfg.issuer.host})`);
-}
-
 async function listenOnTailnet(
   websocket: WebSocketHandler<SocketData>,
-  handle: (req: Request, srv: Server<SocketData>, door?: Door) => Response | undefined | Promise<Response>,
+  handle: (req: Request, srv: Server<SocketData>, hosts?: readonly string[]) => Response | undefined | Promise<Response>,
 ): Promise<void> {
   const self = await tailnetSelf();
   if (!self) {
@@ -2383,8 +1976,6 @@ async function listenOnTailnet(
     return;
   }
   const peers = new PeerCheck(self);
-  peerCheck = peers;
-  setTailnetSelf(self);
   let server: Server<SocketData> | null = null;
   let tls: { cert: string; key: string } | null = null;
   const listen = () => {
@@ -2397,30 +1988,16 @@ async function listenOnTailnet(
         websocket,
         ...(tls ? { tls } : {}),
         async fetch(req, srv) {
-          const from = sourceOf(req, srv.requestIP(req)?.address);
+          const from = srv.requestIP(req)?.address;
           // This machine at its own tailnet address is loopback by another name.
           if (from === self.ip) {
             const other = otherUserRefusal(srv.requestIP(req)?.port, PORT);
             if (other) return fail(other, 403);
-          }
-          const peer = from ? await peers.whois(from) : null;
-          // With no hub or link this is v2's rule: the owner's own untagged devices.
-          const a = admit(peer, peers.isOwnDevice(peer), { members: readMembers(), nodes: readNodes(), link: readLink() });
-          if (!admitted(a, req.method, new URL(req.url).pathname)) {
-            return fail(a.kind === "refused" ? a.reason : "not on this route", 403);
-          }
-          if (peer) peerOfReq.set(req, peer);
-          return handle(req, srv, { hosts: self.names, admission: a, source: from });
+          } else if (!from || !(await peers.isOwner(from))) return fail("only your own Tailscale devices may connect", 403);
+          return handle(req, srv, self.names);
         },
       });
-      const url = tailnetUrl(self, PORT, !!tls);
-      console.log(`agentbox listening on ${url} (your Tailscale devices)`);
-      // A hub and its nodes reach each other where each says it serves.
-      if (url !== tailnetUrlNow()) {
-        setTailnetUrl(url);
-        hubNodes.reconnect();
-        announceUrl();
-      }
+      console.log(`agentbox listening on ${tls ? "https" : "http"}://${self.dnsName ?? self.ip}:${PORT} (your Tailscale devices)`);
     } catch (err) {
       server = null;
       console.error(`agentbox: not listening on the tailnet (${self.ip}:${PORT}): ${(err as Error).message}`);

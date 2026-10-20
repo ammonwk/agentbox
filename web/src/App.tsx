@@ -28,7 +28,6 @@ import { ProjectSwitcher } from "./ProjectSwitcher";
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
 // heaviest thing in the bundle.)
-const Team = lazy(() => import("./views/Team").then((m) => ({ default: m.Team })));
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
 const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice })));
 const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
@@ -79,14 +78,13 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
   { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
   { id: "context", label: "Context", icon: Icon.context, to: { page: "context" } },
-  { id: "team", label: "Team", icon: Icon.link, to: { page: "team" } },
   { id: "mcps", label: "MCPs", icon: Icon.plugs, to: { page: "mcps" } },
   { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
 ];
 
 /** Pages a project filters; the rest are the machine's, whatever is selected. */
 const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions", "review"]);
-const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "context", "mcps", "team", "voice"]);
+const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "context", "mcps", "voice"]);
 
 const PAGE_TITLE: Record<NavId, string> = {
   agents: "Agents",
@@ -96,7 +94,6 @@ const PAGE_TITLE: Record<NavId, string> = {
   accounts: "Accounts",
   context: "Context",
   mcps: "MCPs",
-  team: "Team",
   settings: "Settings",
 };
 
@@ -278,7 +275,7 @@ export function App() {
           </button>
           {GLOBAL_PAGES.has(route.page) ? (
             <span className="hint">
-              {route.page === "team" ? "Workspace settings" : route.page === "context" ? "What agents are told" : "Global settings and tools"}
+              {route.page === "context" ? "What agents are told" : "Global settings and tools"}
             </span>
           ) : null}
         </div>
@@ -355,8 +352,6 @@ export function App() {
               <Review key={scope.project ?? "all"} state={scoped!} />
             ) : route.page === "context" ? (
               <Context state={state} />
-            ) : route.page === "team" ? (
-              <Suspense fallback={<Empty title="Loading…" />}><Team /></Suspense>
             ) : route.page === "mcps" ? (
               <Mcps />
             ) : (
@@ -412,7 +407,7 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, context: 0, mcps: 0, team: 0, settings: 0 };
+  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, context: 0, mcps: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
@@ -424,7 +419,6 @@ function countsOf(state: AppState | null): Record<NavId, number> {
     accounts: Math.max(loginsOpen, authBad),
     context: 0,
     mcps: 0,
-    team: 0,
     settings: 0,
   };
 }

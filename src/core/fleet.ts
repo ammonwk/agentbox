@@ -295,8 +295,7 @@ export interface SpawnRequest {
   /** One of the adapter's `efforts`. */
   effort?: string;
   accountId?: string | null;
-  /** Only these accounts may take it: a node's lent ones, for a start its
-   *  hub asked for (docs/hub.md). The balancer picks among them as ever. */
+  /** Only these accounts may take it. The balancer picks among them as ever. */
   accounts?: readonly string[];
   /** The process asking (the CLI, the fleet MCP). A session it runs under
    *  becomes the new session's parent. */

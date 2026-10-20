@@ -23,8 +23,6 @@ export class FakeAgentbox {
   closed: string[] = [];
   /** Each close's body, by session. */
   closes = new Map<string, Record<string, unknown>>();
-  /** Where the superagent's sessions start when it does not say (a hub's `node`). */
-  node: string | null = null;
   chats: { text: string; sendId: string }[] = [];
   cards: { id: number; key: string | null; kind: string; title: string; notify: boolean }[] = [];
   timelines = new Map<string, { kind: string; text: string }[]>();
@@ -58,7 +56,7 @@ export class FakeAgentbox {
     const body = req.method === "GET" ? {} : ((await req.json().catch(() => ({}))) as Record<string, unknown>);
     let m: RegExpExecArray | null;
     if (req.method === "GET" && path === "/api/state") return this.json({ sessions: this.sessions, repos: [{ id: REPO_ID, ref: this.checkout, kind: "local", displayName: "app", fullName: REPO, defaultBranch: "main" }] });
-    if (req.method === "GET" && path === "/api/superagents/salus") return this.json({ name: "salus", main: this.main, previous: [], node: this.node });
+    if (req.method === "GET" && path === "/api/superagents/salus") return this.json({ name: "salus", main: this.main, previous: [] });
     if (req.method === "POST" && path === "/api/superagents/salus/chat") {
       if (!this.chats.some((c) => c.sendId === body.sendId)) this.chats.push({ text: String(body.text), sendId: String(body.sendId) });
       return this.json({ session: MAIN, started: false });

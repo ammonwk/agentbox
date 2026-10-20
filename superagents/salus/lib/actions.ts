@@ -2,7 +2,7 @@
  *  Deciding about a crash and changing settings are a person's, on the page. */
 import { ActionError, type ActionReply, type ActionRequest } from "../../lib/sdk";
 import type { Ctx } from "./ctx";
-import { decider, fix, person } from "./fix";
+import { fix, person } from "./fix";
 import { Settings, writeSettings } from "./settings";
 import { tick } from "./tick";
 
@@ -25,7 +25,7 @@ export async function action(ctx: Ctx, req: ActionRequest): Promise<ActionReply>
     case "dismiss": {
       person(caller);
       const id = idOf(values);
-      const c = await ctx.lock(id, async () => ctx.store.save({ ...ctx.store.crash(id), ...decider(caller), state: "dismissed", note: undefined }));
+      const c = await ctx.lock(id, async () => ctx.store.save({ ...ctx.store.crash(id), state: "dismissed", note: undefined }));
       return { message: "Dismissed.", crash: c };
     }
     case "retriage": {
@@ -34,7 +34,7 @@ export async function action(ctx: Ctx, req: ActionRequest): Promise<ActionReply>
       const c = await ctx.lock(id, async () => {
         const old = ctx.store.crash(id);
         if (!["triaged", "dismissed", "recurred"].includes(old.state)) throw new ActionError(`This crash is ${old.state}`, 409);
-        const { triage: _t, family: _f, issue: _i, pr: _p, verify: _v, card: _c, decidedBy: _d, ...rest } = old;
+        const { triage: _t, family: _f, issue: _i, pr: _p, verify: _v, card: _c, ...rest } = old;
         const why = old.state === "recurred" ? `It came back after #${old.pr?.number}.` : undefined;
         return ctx.store.save({ ...rest, state: "new", note: why });
       });

@@ -645,11 +645,6 @@ export interface Session {
   /** The waits it has armed (`agentbox wait`) and still going: what each is
    *  on, and that in a line (`PR #8883: every check on 0ab9de7654`). */
   waits: { kind: WaitSpec["kind"]; what: string }[];
-  /** On a hub (docs/hub.md): the node it runs on, null for the hub's own.
-   *  Absent on a machine that is not a hub. */
-  node?: string | null;
-  /** On a hub: its node cannot be reached, and was last heard from then. */
-  away?: { lastSeen: number };
 }
 
 export interface TokenTotals {
@@ -1398,11 +1393,6 @@ export interface Card {
   sessionId: string | null;
   /** The session it is about, when that is another. */
   about: string | null;
-  /** On a hub (docs/hub.md): the member it is for, whose devices it is
-   *  pushed to; null for the owner's. */
-  person: string | null;
-  /** Who answered or decided it, when a person did. */
-  decidedBy: { login: string; name: string } | null;
   state: CardState;
   /** The user's words; "" when it was only seen. */
   answer: string | null;
@@ -1670,9 +1660,6 @@ export type ServerMessage =
   /** The server is about to exit to be restarted; the socket closes next
    *  (code 1012). Reconnect promptly rather than backing off. */
   | { type: "restarting" }
-  /** To a hub's socket on a node (`/api/node/ws`, docs/hub.md): what the
-   *  node lends, on connect and every few seconds. */
-  | { type: "node"; state: NodeState }
   | { type: "error"; message: string };
 
 /** Client → server. A client watches at most one session's timeline. */
@@ -1701,10 +1688,6 @@ export interface SuperagentInfo {
   canStart: boolean;
   /** It has a program (run, or a url) that answers for its page. */
   hasPage: boolean;
-  /** On a hub: where its sessions start when it does not say (`node` in a
-   *  start, docs/hub.md), from its settings or its manifest; null for the hub
-   *  itself, and always null on a machine that is not a hub. */
-  node: string | null;
   /** The program agentbox keeps running for it, when its manifest has `run`. */
   process: {
     state: "running" | "starting" | "backoff" | "stopped";
@@ -1789,114 +1772,3 @@ export type SuperagentBlock =
        *  folded, `false` open. Kept across refreshes by `id`. */
       collapsed?: boolean;
     };
-
-// -------------------------------------------------------------------- hub
-
-/** The person behind a request (docs/hub.md, Trust model): the machine's
- *  owner on loopback, the tailnet login on the tailnet, and on a node the
- *  person the hub says made it. */
-export interface Person {
-  login: string;
-  name: string;
-  /** Their role in the hub's members.json; `owner` for the machine's own
-   *  user; null for a person a hub vouches for on a node. It says whose
-   *  cards and pushes are whose, not what they may do: everyone admitted
-   *  may do everything (docs/hub.md, Trust model). */
-  role: "owner" | "member" | null;
-  /** The public door's signed-in member is `web` (src/server/public.ts). */
-  via: "local" | "tailnet" | "hub" | "web";
-}
-
-export interface HubMember {
-  login: string;
-  role: "owner" | "member";
-  name?: string;
-}
-
-/** What a node lets the hub use (`link.json`'s `lend`). */
-export interface Lend {
-  /** Most sessions the hub may have open here at once that it started
-   *  itself; null for no limit. */
-  maxSessions: number | null;
-  /** Account ids the hub may use, or every one. Only sessions on these are
-   *  shared, and a session the hub starts here runs on one of them. */
-  accounts: "all" | string[];
-  /** Whether the hub may start sessions here; false until the node's owner says so. */
-  acceptStarts: boolean;
-  /** Whether the lent accounts' usage is shown on the hub. */
-  shareHeadroom: boolean;
-}
-
-/** One lent account's room, as a node shares it. */
-export interface NodeHeadroom {
-  id: string;
-  provider: AccountProvider;
-  label: string;
-  eligible: boolean;
-  /** Its budget's use (`Candidate.budget`: the weekly, or a longer window
-   *  running out first) and the short window's, percent. */
-  weekly: number | null;
-  short: number | null;
-  weeklyResetsAt: number | null;
-  shortResetsAt: number | null;
-}
-
-/** `GET /api/node/state`, and the `node` frame without `sessions`. */
-export interface NodeState {
-  name: string;
-  lend: Lend;
-  headroom: NodeHeadroom[] | null;
-  /** The repos registered here, by the names a start may give them. */
-  repos: NodeRepo[];
-  /** Sessions the hub started here that are still open: what `maxSessions` counts. */
-  placed: number;
-  sessions?: HotState["sessions"];
-}
-
-/** A repo a node has registered, as the hub matches a start's `repo` against it. */
-export interface NodeRepo {
-  /** Its GitHub `owner/name`, when it has one: the name it goes by on every machine. */
-  fullName: string | null;
-  displayName: string;
-}
-
-/** A node as the hub shows it on Team › Nodes. No token, ever. */
-export interface HubNodeView {
-  id: string;
-  name: string;
-  /** Its tailnet IPv4, which its requests come from, and where it serves. */
-  ip: string;
-  url: string;
-  /** Its tailnet device name, login (null for a tagged device) and tags. */
-  device: string | null;
-  login: string | null;
-  tags: string[];
-  requestedAt: number;
-  approvedAt: number | null;
-  approvedBy: string | null;
-  reachable: boolean;
-  lastSeen: number | null;
-  error: string | null;
-  sessions: number;
-  lend: Lend | null;
-  headroom: NodeHeadroom[] | null;
-  repos: NodeRepo[] | null;
-  placed: number | null;
-}
-
-/** `GET /api/hub`. */
-export interface HubStatus {
-  role: "none" | "hub" | "node";
-  /** Who asked. */
-  person: Person;
-  /** This machine on the tailnet, when the listener is up. */
-  self: { name: string; ip: string; url: string | null } | null;
-  /** On a hub. */
-  members?: HubMember[];
-  nodes?: HubNodeView[];
-  /** On a node: its link, without the token. `lastHubAt` is when the hub
-   *  last asked it anything, since this server started. */
-  link?: { hub: { url: string; ip: string; name: string }; name: string; joinedAt: number; lend: Lend; lastHubAt: number | null };
-  /** Why a hub file could not be read, when one could not. */
-  error?: string;
-}

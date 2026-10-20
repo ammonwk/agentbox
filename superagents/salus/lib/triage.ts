@@ -1,8 +1,7 @@
 /** A triage: one read-only Codex session per crash, in a checkout of the base
  *  as GitHub has it now, whose last word is a verdict Salus reads from its
- *  transcript. Agentbox cuts the checkout where the session runs (a repo and a
- *  ref in its start), which on a hub may be any node that has the repo
- *  (docs/hub.md); Salus touches no disk of its own for it. */
+ *  transcript. Agentbox cuts the checkout (a repo and a ref in its start);
+ *  Salus touches no disk of its own for it. */
 import { createHash } from "node:crypto";
 import { ActionError, agentbox, transcript } from "../../lib/sdk";
 import type { Ctx } from "./ctx";
