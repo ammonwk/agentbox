@@ -80,7 +80,9 @@ readable.
   warm?"; nothing else should keep its own) resume and adopt use its pinned
   account. After that it is shown unpinned, and a resume or a
   message wakes it on the balancer's pick (`Fleet.wake`, which moves — never
-  copies — the transcript into that account's home; claude and devin only).
+  copies — a transcript that lives in the account's home: claude and codex;
+  omp, opencode and devin keep one store across accounts, and muse has no
+  move at all).
   The one exception: a session stopped at its account's limit is moved once
   in its life to an account that can take it (`Fleet.continueStalled`);
   after that the UI offers a button. Transcripts are not shared between account homes, so a plain
