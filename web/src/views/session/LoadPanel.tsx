@@ -136,7 +136,7 @@ export function LoadPanel({ sessionId }: { sessionId: string }) {
           <col style={{ width: "70px" }} />
           <col style={{ width: "136px" }} />
           <col style={{ width: "56px" }} />
-          <col style={{ width: "62px" }} />
+          <col style={{ width: "74px" }} />
           <col style={{ width: "76px" }} />
         </colgroup>
         <thead>

@@ -1756,6 +1756,7 @@ textarea,
 .proc-table .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .proc-table .truncate {
   overflow: hidden;
