@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { AccountView, AppState, LoginFlow, ProviderId, ResetConsumeResult } from "../../../src/core/types";
 import { api, useNow } from "../api";
-import { accountProvider } from "../../../src/core/providers/account";
+import { accountProvider, ORG_PROVIDERS } from "../../../src/core/providers/account";
 import { accountHue, CopyButton, PROVIDER_LABEL, PROVIDERS, ProviderBadge, UsageBar } from "../bits";
 import { Button, Confirm, Empty, Field, Icon, Modal, RelativeTime, Spinner, Toggle } from "../components";
 import { fmtCountdown, fmtPts, guessHome, tildify } from "../lib/format";
@@ -173,7 +173,7 @@ function AccountCard({
   const [moving, setMoving] = useState(false);
   const org = state.org?.name ?? null;
   const pooled = a.scope === "org";
-  const movable = !!org && !pooled && (a.provider === "claude" || a.provider === "codex") && a.auth.state === "ok";
+  const movable = !!org && !pooled && ORG_PROVIDERS.includes(a.provider) && a.auth.state === "ok";
   const now = useNow(30_000);
   const claims = a.claims;
   const outstanding = outstandingOf(claims);

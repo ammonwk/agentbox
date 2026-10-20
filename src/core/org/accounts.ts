@@ -15,28 +15,25 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deleteAccount, getAccount, insertAccount, listAccounts, updateAccount } from "../db";
-import { claudeJsonPath, credentialsPath, newAccountId, resyncShared, createAccountHome } from "../accounts/homes";
+import { claudeJsonPath, credentialsPath, newAccountId, resyncShared, createAccountHome, sameLogin } from "../accounts/homes";
+import { POOLED, readGoLogin, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { decodeJwtPayload } from "../accounts/identity";
+import { exchangeGoRefresh, REFRESH_AHEAD_MS } from "../accounts/godevice";
 import type { Account, AccountProvider } from "../types";
+import { ORG_PROVIDERS } from "../providers/account";
 import { machineName, orgAccountsRoot, personName, readOrg } from "./config";
 import { seal, unseal } from "./seal";
 import { linkSkills } from "./skills";
 import { storeAccounts, type StoreAccount } from "./store";
 
-/** What a home's file says in place of the org's refresh token. */
-export const POOLED = "pooled";
-
-/** The providers whose logins move into an org. omp's Go sign-ins are
- *  refreshed by the bridge, which knows nothing of the store yet. */
-export const ORG_PROVIDERS: readonly AccountProvider[] = ["claude", "codex"];
-
 export const isOrgHome = (home: string): boolean => home.startsWith(orgAccountsRoot() + "/");
 export const isOrgAccount = (a: Pick<Account, "home">): boolean => isOrgHome(a.home);
 
-/** A login as the store keeps it: claude's credentials and account, or codex's auth.json. */
+/** A login as the store keeps it: claude's credentials and account, codex's
+ *  auth.json, or an omp account's OpenCode Go Console sign-in. */
 type ClaudeLogin = { claudeAiOauth: Record<string, unknown>; oauthAccount: Record<string, unknown> | null };
 type CodexLogin = { tokens: Record<string, unknown>; last_refresh?: string } & Record<string, unknown>;
-type Login = ClaudeLogin | CodexLogin;
+type Login = ClaudeLogin | CodexLogin | GoLogin;
 
 export class OrgAccountError extends Error {
   constructor(
@@ -79,6 +76,10 @@ function loginIn(a: Pick<Account, "provider" | "home" | "isDefault">): Login | n
     if (!auth || !t || typeof t.refresh_token !== "string" || !t.refresh_token || t.refresh_token === POOLED) return null;
     return auth as CodexLogin;
   }
+  if (a.provider === "omp") {
+    const login = readGoLogin(a.home);
+    return login && login.refresh !== POOLED ? login : null;
+  }
   return null;
 }
 
@@ -89,6 +90,10 @@ function refreshDue(provider: AccountProvider, login: Login, refreshedAt: Date |
   if (provider === "claude") {
     const exp = Number((login as ClaudeLogin).claudeAiOauth.expiresAt);
     return !Number.isFinite(exp) || exp - now < 60 * 60_000;
+  }
+  if (provider === "omp") {
+    const exp = (login as GoLogin).expires;
+    return !Number.isFinite(exp) || exp - now < REFRESH_AHEAD_MS;
   }
   const t = (login as CodexLogin).tokens;
   const exp = typeof t.access_token === "string" ? Number(decodeJwtPayload(t.access_token)?.exp) * 1000 : NaN;
@@ -101,6 +106,7 @@ function homeFile(provider: AccountProvider, login: Login): Record<string, unkno
     const { refreshTokenExpiresAt: _r, ...o } = (login as ClaudeLogin).claudeAiOauth;
     return { claudeAiOauth: { ...o, refreshToken: POOLED } };
   }
+  if (provider === "omp") return { ...(login as GoLogin), refresh: POOLED };
   const l = login as CodexLogin;
   return { ...l, tokens: { ...l.tokens, refresh_token: POOLED } };
 }
@@ -111,6 +117,13 @@ const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.str
  *  refresh blanks its file ("Login expired"); this puts the login back, and
  *  its next prompt goes through. */
 function writeHome(a: Account, login: Login): void {
+  if (a.provider === "omp") {
+    const want = homeFile("omp", login) as unknown as GoLogin;
+    const cur = readGoLogin(a.home);
+    // Only what the store moves on: rewriting a file per pass would be churn.
+    if (!cur || cur.refresh !== POOLED || cur.access !== want.access || cur.expires !== want.expires || cur.orgID !== want.orgID) writeGoLogin(a.home, want);
+    return;
+  }
   const path = credentialsPath(a.provider, a.home)!;
   const want = homeFile(a.provider, login);
   if (!same(readJson(path), want)) writeJson(path, want);
@@ -132,6 +145,7 @@ const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 /** The provider's answer to a refresh: the new login, or why it was refused
  *  for good (`refused`: log in again), or a failure worth retrying. */
 async function refreshLogin(provider: AccountProvider, login: Login, now: number): Promise<{ login: Login } | { refused: string } | { retry: string }> {
+  if (provider === "omp") return exchangeGoRefresh(login as GoLogin, fetch, now);
   const body =
     provider === "claude"
       ? {
@@ -286,8 +300,7 @@ export type InUse = (accountIds: readonly string[]) => string | null;
 
 /** The homes on this machine logged in as the same login as `a`, `a` among them. */
 function copiesOf(a: Account): Account[] {
-  const email = a.email?.toLowerCase();
-  return listAccounts(a.provider).filter((o) => !isOrgAccount(o) && (o.id === a.id || (!!email && o.email?.toLowerCase() === email)));
+  return listAccounts(a.provider).filter((o) => !isOrgAccount(o) && (o.id === a.id || sameLogin(a, o)));
 }
 
 /** Move an account's login into the org: every copy of it on this machine
@@ -300,21 +313,31 @@ export async function moveIntoOrg(accountId: string, inUse: InUse): Promise<{ ac
   if (isOrgAccount(a)) throw new OrgAccountError(409, `${a.label} is already ${org.name}'s`);
   if (!ORG_PROVIDERS.includes(a.provider)) throw new OrgAccountError(400, `${a.provider} accounts stay on their machine (docs/org.md)`);
   if (a.provider === "claude" && process.platform === "darwin") throw new OrgAccountError(400, "on macOS claude keeps its login in the Keychain, which agentbox cannot move yet");
+  const login = loginIn(a);
+  if (!login) throw new OrgAccountError(409, `${a.label} is not logged in here`);
   const copies = copiesOf(a);
   const busy = inUse(copies.map((c) => c.id));
   if (busy) throw new OrgAccountError(409, `${a.label} is in use: ${busy}. Close it first.`);
-  const login = loginIn(a);
-  if (!login) throw new OrgAccountError(409, `${a.label} is not logged in here`);
   const col = await storeAccounts();
   if (!col) throw new OrgAccountError(409, "the org's store cannot be reached");
   const email = a.email?.toLowerCase() ?? null;
-  if (email && (await col.findOne({ provider: a.provider, email }))) throw new OrgAccountError(409, `${org.name} already has ${email}`);
+  // A Go sign-in's identity is one account in one workspace: an email can
+  // hold several, each its own refresh token.
+  const externalId = a.provider === "omp" ? `${(login as GoLogin).accountID}:${(login as GoLogin).orgID ?? ""}` : null;
+  const held =
+    a.provider === "omp" && externalId
+      ? await col.findOne({ provider: "omp", externalId })
+      : email
+        ? await col.findOne({ provider: a.provider, email })
+        : null;
+  if (held) throw new OrgAccountError(409, `${org.name} already has ${a.label}${email ? ` (${email})` : ""}`);
   const doc: StoreAccount = {
     _id: newAccountId(),
     provider: a.provider,
     label: a.label,
     email,
     plan: a.plan,
+    externalId,
     login: seal(org.key, login),
     version: 1,
     refreshedAt: null,
@@ -351,7 +374,8 @@ export async function takeFromOrg(accountId: string, liveElsewhere: (id: string)
   const home = createAccountHome(doc.provider, id);
   const account: Account = { id, provider: doc.provider, label: doc.label, email: doc.email, plan: doc.plan, home, isDefault: false, enabled: true, createdAt: Date.now() };
   // The whole login, refresh token and all: this home is its only holder now.
-  writeJson(credentialsPath(doc.provider, home)!, doc.provider === "claude" ? { claudeAiOauth: (login as ClaudeLogin).claudeAiOauth } : login);
+  if (doc.provider === "omp") writeGoLogin(home, login as GoLogin);
+  else writeJson(credentialsPath(doc.provider, home)!, doc.provider === "claude" ? { claudeAiOauth: (login as ClaudeLogin).claudeAiOauth } : login);
   if (doc.provider === "claude" && (login as ClaudeLogin).oauthAccount) {
     const cj = readJson(join(home, ".claude.json")) ?? {};
     writeJson(join(home, ".claude.json"), { ...cj, oauthAccount: (login as ClaudeLogin).oauthAccount });

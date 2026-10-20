@@ -27,6 +27,11 @@ import type { Account } from "../types";
 
 export const GO_LOGIN_FILE = "opencode-console.json";
 
+/** What a home's file says in place of the org's refresh token: the org's
+ *  store refreshes that sign-in, and no machine may (a refresh rotates the
+ *  token for every holder). */
+export const POOLED = "pooled";
+
 /** Go by an API key the caller sent itself (omp in your own terminal), and by
  *  an account's Console sign-in (OpenAI- and Anthropic-shaped). */
 export const GO_KEY_UPSTREAM = "https://opencode.ai/zen/go/v1";

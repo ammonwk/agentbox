@@ -20,6 +20,7 @@ import {
   newAccountId,
   placeholderLabel,
   resyncShared,
+  sameLogin,
   type CliInfo,
 } from "./homes";
 import { identify, IdentityCache, type Identity } from "./identity";
@@ -292,7 +293,7 @@ export class AccountsService extends EventEmitter {
     // A CLI login that matches an account is the expected shape (see
     // `twinOf`); only two agentbox homes on one login are a mistake.
     const twin = listAccounts(account.provider).find(
-      (o) => o.id !== account.id && !o.isDefault && !account.isDefault && o.email?.toLowerCase() === id.email!.toLowerCase(),
+      (o) => o.id !== account.id && !o.isDefault && !account.isDefault && sameLogin(account, o),
     );
     return twin
       ? `logged in as ${id.email}, which is also account "${twin.label}" — both share one usage pool; forget one of them`

@@ -13,12 +13,13 @@
  *   GET  <server>/api/user, /api/orgs   who and which workspace
  */
 
-import { readGoLogin, writeGoLogin, type GoLogin } from "./gocred";
+import { POOLED, readGoLogin, writeGoLogin, type GoLogin } from "./gocred";
 
 export const CONSOLE = "https://opencode.ai/console";
 const CLIENT_ID = "opencode-cli";
-/** Refresh this long before the access token runs out. */
-const REFRESH_AHEAD_MS = 24 * 3_600_000;
+/** Refresh this long before the access token runs out. The org's store
+ *  refreshes a pooled sign-in on the same clock (org/accounts.ts). */
+export const REFRESH_AHEAD_MS = 24 * 3_600_000;
 
 type Fetch = typeof fetch;
 
@@ -119,23 +120,53 @@ export async function finishDeviceLogin(
   throw new Error("the sign-in code expired before it was approved");
 }
 
+/** The provider's answer to a refresh: the new login, or why it was refused
+ *  for good (`refused`: log in again), or a failure worth retrying. */
+export type GoRefreshReply = { login: GoLogin } | { refused: string } | { retry: string };
+
 /** Exchange the refresh token. The reply's refresh token replaces it. */
-export async function refreshGoLogin(login: GoLogin, f: Fetch = fetch, now = Date.now()): Promise<GoLogin> {
-  const r = await post<Partial<TokenReply> & { error?: string }>(f, `${login.server}/auth/device/token`, {
-    grant_type: "refresh_token",
-    refresh_token: login.refresh,
-    client_id: CLIENT_ID,
-  });
-  if (!r.access_token || !r.refresh_token || !r.expires_in) throw new Error(`OpenCode Console would not refresh the sign-in${r.error ? `: ${r.error}` : ""} — log the account in again`);
+export async function exchangeGoRefresh(login: GoLogin, f: Fetch = fetch, now = Date.now()): Promise<GoRefreshReply> {
+  let res: Response;
+  try {
+    res = await f(`${login.server}/auth/device/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ grant_type: "refresh_token", refresh_token: login.refresh, client_id: CLIENT_ID }),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (e) {
+    return { retry: (e as Error).message };
+  }
+  const text = await res.text();
+  if (res.status === 400 || res.status === 401 || res.status === 403) return { refused: `${res.status} ${text.slice(0, 200)}` };
+  if (!res.ok) return { retry: `${res.status} ${text.slice(0, 200)}` };
+  let r: Partial<TokenReply> & { error?: string };
+  try {
+    r = JSON.parse(text) as Partial<TokenReply> & { error?: string };
+  } catch {
+    return { retry: `OpenCode Console answered something that is not JSON: ${text.slice(0, 200)}` };
+  }
+  if (!r.access_token || !r.refresh_token || !r.expires_in) return { refused: r.error ?? "no token in the reply" };
   const orgID = r.org_id ?? login.orgID;
   return {
-    ...login,
-    access: r.access_token,
-    refresh: r.refresh_token,
-    expires: now + r.expires_in * 1000,
-    orgID,
-    orgName: orgID === login.orgID ? login.orgName : orgID,
+    login: {
+      ...login,
+      access: r.access_token,
+      refresh: r.refresh_token,
+      expires: now + r.expires_in * 1000,
+      orgID,
+      orgName: orgID === login.orgID ? login.orgName : orgID,
+    },
   };
+}
+
+/** Exchange the refresh token, or throw: the sign-in as the provider now has it. */
+export async function refreshGoLogin(login: GoLogin, f: Fetch = fetch, now = Date.now()): Promise<GoLogin> {
+  if (login.refresh === POOLED) throw new Error("this sign-in belongs to the org; its store refreshes it");
+  const r = await exchangeGoRefresh(login, f, now);
+  if ("login" in r) return r.login;
+  if ("refused" in r) throw new Error(`OpenCode Console would not refresh the sign-in: ${r.refused} — log the account in again`);
+  throw new Error(`OpenCode Console could not refresh the sign-in: ${r.retry}`);
 }
 
 const refreshing = new Map<string, Promise<GoLogin>>();
@@ -144,11 +175,17 @@ const refreshing = new Map<string, Promise<GoLogin>>();
  * A home's sign-in with an access token that works, refreshed (and saved)
  * when it is about to run out or `force` says it was refused. For the bridge
  * alone: one process, one refresh at a time per home, written before use.
+ *
+ * A pooled sign-in is the org's: the server refreshes it in the store and
+ * writes each machine's copy, so this hands back what the file holds — an
+ * expired token shows as a 401 the CLI retries, never as a refresh that would
+ * rotate the token out from under every other member.
  */
 export async function freshGoLogin(home: string, opts: { force?: boolean; fetch?: Fetch; now?: () => number } = {}): Promise<GoLogin | null> {
   const now = (opts.now ?? Date.now)();
   const login = readGoLogin(home);
   if (!login) return null;
+  if (login.refresh === POOLED) return login;
   if (!opts.force && login.expires - now > REFRESH_AHEAD_MS) return login;
   let pending = refreshing.get(home);
   if (!pending) {

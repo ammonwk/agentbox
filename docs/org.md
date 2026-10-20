@@ -53,9 +53,8 @@ with, or takes the default when it starts. Scope decides:
 
 ## Org accounts
 
-Claude and Codex only. omp's OpenCode Go logins are Console sign-ins the devin
-bridge refreshes, not static keys, and devin and muse are per-person: they stay
-personal.
+Claude, Codex, and omp's OpenCode Go sign-ins. devin and muse are per-person:
+they stay personal.
 
 An account lives in one place: on one machine, or in the org. Two holders of a
 login log each other out at the next refresh, so **moving** is the only
@@ -63,11 +62,13 @@ operation, and it moves every copy:
 
 - `agentbox org add-account <account>` (Accounts › Move to Plaibook) is
   refused while a session runs on it or on a copy (another personal home of
-  the same provider and email, usually the CLI's own), and when the org
-  already has that email. It seals the login into `accounts`, then removes the
-  login file from the home and every copy and clears their email, so they are
-  not taken for the same account again. The homes stay, logged out, for their
-  old transcripts. Linux only: on macOS claude keeps its login in the
+  the same login, usually the CLI's own), and when the org already has that
+  login. It seals the login into `accounts`, then removes the login file from
+  the home and every copy and clears their email, so they are not taken for
+  the same account again. The homes stay, logged out, for their old
+  transcripts. A copy is one email for claude and codex, and one OpenCode
+  account in one workspace for omp — an email can hold several workspaces,
+  each its own sign-in. Linux only: on macOS claude keeps its login in the
   Keychain.
 - `agentbox org take-account <account>` (Accounts › Take back) is the
   reverse: refused while a session here or a live row on another machine is
@@ -81,16 +82,20 @@ operation, and it moves every copy:
 each org account (`syncOrgAccounts`, every 60 s) and writes the store's current
 login into it: claude `.credentials.json` with `refreshToken: "pooled"` and
 `.claude.json`'s `oauthAccount`, codex `auth.json` with `refresh_token:
-"pooled"`. The CLI runs on it as on any account, so subscription features,
-identity, the usage fetchers, limit detection and moving a session between
-accounts work unchanged. The placeholder refresh token can never rotate the
-pool's login. Both CLIs were checked to pick up a rewritten file: claude
-re-reads it when its token is near expiry, codex reloads `auth.json` on a 401
-(also its per-home app-server daemon).
+"pooled"`, omp `opencode-console.json` with `refresh: "pooled"`. The CLI runs
+on it as on any account, so subscription features, identity, the usage
+fetchers, limit detection and moving a session between accounts work
+unchanged. The placeholder refresh token can never rotate the pool's login.
+Both CLIs were checked to pick up a rewritten file: claude re-reads it when its
+token is near expiry, codex reloads `auth.json` on a 401 (also its per-home
+app-server daemon). omp never reads the sign-in itself: the devin bridge does,
+on every request, and a pooled sign-in tells it not to refresh (`freshGoLogin`).
+It picks up the store's rewrite on its next request.
 
 **Refreshing** happens in the store, about an hour before a claude access
-token expires and a day before a codex one does (or five days after codex's
-last refresh), so a CLI never reaches its own refresh point. A machine that
+token expires, a day before a codex one does (or five days after codex's last
+refresh), and a day before an OpenCode Go one does — the same lead the bridge
+uses, so no member's bridge ever reaches its own refresh point. A machine that
 sees one due takes the account's lease (`findOneAndUpdate` on `version` where
 the lease is free or past, 60 s), refreshes at the provider's token endpoint
 with the CLI's own client id, writes the new login to a local pending file

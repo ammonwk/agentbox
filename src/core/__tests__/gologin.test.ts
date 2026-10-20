@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GO_LOGIN_FILE, readGoLogin, writeGoLogin, type GoLogin } from "../accounts/gocred";
+import { GO_LOGIN_FILE, POOLED, readGoLogin, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { finishDeviceLogin, freshGoLogin, refreshGoLogin, startDeviceLogin } from "../accounts/godevice";
 import { anthropicGoModelsIn } from "../accounts/gomodels";
 import { loginCommand, parseLoginOutput } from "../accounts/login";
@@ -81,6 +81,24 @@ describe("OpenCode Go sign-in", () => {
   test("a refresh the Console refuses says to log in again", async () => {
     const { f } = consoleServer();
     await expect(refreshGoLogin({ ...login, refresh: "stale" }, f)).rejects.toThrow(/log the account in again/);
+  });
+
+  test("a pooled sign-in is never refreshed here: the org's store owns it", async () => {
+    const home = join(dir, "pooled");
+    mkdirSync(home);
+    writeGoLogin(home, { ...login, refresh: POOLED, expires: 0 });
+    const asked: string[] = [];
+    const f = (async () => {
+      asked.push("the bridge refreshed it");
+      return json({ access_token: "a9", refresh_token: "r9", expires_in: 3600 });
+    }) as unknown as typeof fetch;
+    // Expired, and forced after a 401: still the file's, for the server's rewrite.
+    for (const force of [false, true]) {
+      const got = await freshGoLogin(home, { force, fetch: f, now: () => 10 });
+      expect(got).toMatchObject({ access: "a0", refresh: POOLED });
+    }
+    expect(asked).toEqual([]);
+    await expect(refreshGoLogin(readGoLogin(home)!, f, 10)).rejects.toThrow(/belongs to the org/);
   });
 
   test("the login manager runs agentbox's own sign-in and reads its link and code", () => {

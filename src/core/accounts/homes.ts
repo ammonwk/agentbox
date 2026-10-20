@@ -33,7 +33,7 @@ import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
 import { orgAccountsRoot } from "../org/config";
 import { adapterFor } from "../providers";
-import { GO_LOGIN_FILE } from "./gocred";
+import { GO_LOGIN_FILE, readGoLogin } from "./gocred";
 import type { Account, AccountProvider, ProviderId } from "../types";
 
 /** The providers that hold accounts; opencode runs on omp's (see AccountProvider). */
@@ -139,8 +139,23 @@ export function isAutoLabel(a: Pick<Account, "label" | "provider">): boolean {
 }
 
 /**
+ * Whether two homes hold the same login. For claude and codex that is the
+ * email; for omp it is one OpenCode account in one workspace, because one
+ * email can hold several workspaces and each is its own refresh token.
+ */
+export function sameLogin(a: Pick<Account, "provider" | "email" | "home">, b: Pick<Account, "provider" | "email" | "home">): boolean {
+  if (a.provider !== b.provider) return false;
+  if (a.provider === "omp") {
+    const x = readGoLogin(a.home);
+    const y = readGoLogin(b.home);
+    return !!x && !!y && !!x.accountID && x.accountID === y.accountID && x.orgID === y.orgID;
+  }
+  return !!a.email && a.email.toLowerCase() === b.email?.toLowerCase();
+}
+
+/**
  * The account this one is a second copy of: same provider, logged in as the
- * same email. Two homes on one login share one usage pool, and counting it
+ * same login. Two homes on one login share one usage pool, and counting it
  * twice is how a balancer ends up placing onto a full account it thinks is
  * someone else. This happens without anyone registering anything: `/login` in
  * the default home replaces whoever was there.
@@ -154,8 +169,6 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
   a: A,
   all: readonly A[],
 ): A | null {
-  if (!a.email) return null;
-  const email = a.email.toLowerCase();
   const rank = (x: A) => [x.isDefault ? 1 : 0, x.createdAt, x.id] as const;
   const before = (x: A, y: A) => {
     const [p, q] = [rank(x), rank(y)];
@@ -163,9 +176,7 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
   };
   // An org's home and yours are never one login (docs/org.md): moving it took every copy.
   const org = (x: A) => x.home.startsWith(orgAccountsRoot() + "/");
-  const primary = all
-    .filter((o) => o.provider === a.provider && o.email?.toLowerCase() === email && org(o) === org(a))
-    .sort(before)[0];
+  const primary = all.filter((o) => sameLogin(a, o) && org(o) === org(a)).sort(before)[0];
   return primary && primary.id !== a.id ? primary : null;
 }
 
