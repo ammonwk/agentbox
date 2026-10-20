@@ -17,6 +17,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentboxHome, tmuxSocket } from "./paths";
+import { agentAwsEnv, AWS_CREDENTIAL_ENV } from "./agent-aws";
 
 export interface TmuxResult {
   code: number;
@@ -99,11 +100,12 @@ export function newSession(s: NewSession): number {
   // `env -u` rather than tmux's `-e`: tmux can add variables but not remove
   // one the server inherited, and a stray CLAUDE_CONFIG_DIR from the shell
   // that started agentbox would put the session on the wrong account.
-  const unset = [...new Set([...INHERITED_IDENTITY.filter((v) => !(v in (s.env ?? {}))), ...(s.unset ?? [])])];
+  const unset = [...new Set([...INHERITED_IDENTITY.filter((v) => !(v in (s.env ?? {}))), ...(s.unset ?? []), ...AWS_CREDENTIAL_ENV])];
   const argv = process.platform === "linux" && Bun.which("systemd-run")
     ? ["/usr/bin/python3", fileURLToPath(new URL("./session-owner.py", import.meta.url)), "launch", ...s.argv]
     : s.argv;
-  const env = { ...(process.env.BASH_ENV ? { BASH_ENV: process.env.BASH_ENV } : {}), ...s.env };
+  const env: Record<string, string> = { ...(process.env.BASH_ENV ? { BASH_ENV: process.env.BASH_ENV } : {}), ...s.env, ...agentAwsEnv() };
+  for (const key of AWS_CREDENTIAL_ENV) delete env[key];
   let cmd = ["env", ...unset.flatMap((v) => ["-u", v]), ...Object.entries(env).map(([k, v]) => `${k}=${v}`), ...argv];
   const launcher = cmd.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0) > MAX_INLINE ? writeLauncher(s.name, cmd) : null;
   if (launcher) cmd = ["sh", launcher];
