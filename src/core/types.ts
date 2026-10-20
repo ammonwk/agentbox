@@ -852,8 +852,16 @@ export interface AgentSettings {
   /** Models no session runs on, each to the one that takes its place: a
    *  start, resume or move asked for one runs on its replacement. */
   retiredModels: Record<string, string>;
+  /** Where a session starts when it does not say and has no parent to
+   *  follow: on your own accounts, or on the org's (docs/org.md). */
+  scope: Scope;
   balancer: BalancerSettings;
 }
+
+/** Whose accounts a session runs on, which is also who can see it: yours,
+ *  or the org's (docs/org.md). A session's is its account's, so a move
+ *  never crosses it. */
+export type Scope = "personal" | "org";
 // ------------------------------------------------------------------ diff
 
 export interface DiffFile {
@@ -1428,6 +1436,42 @@ export interface ColdState {
   prClaims: PrClaim[];
   /** Who agentbox works for and what is still unsetup, for the first-run card. */
   onboarding: Onboarding;
+  /** The org this machine is in (docs/org.md), or null. */
+  org: OrgStatus | null;
+}
+
+/** Another member's org session, as the board shows it (docs/org.md). */
+export interface OrgSessionView {
+  id: string;
+  person: string;
+  machine: string;
+  provider: ProviderId;
+  title: string;
+  repo: string | null;
+  branch: string | null;
+  status: string;
+  accountId: string | null;
+  /** Its account's label. */
+  account: string | null;
+  /** The PRs it holds, `owner/repo#n`. */
+  prs: string[];
+  seenAt: number;
+  /** Its machine has not been heard from for three minutes. */
+  away: boolean;
+}
+
+/** The org as this machine takes part in it: `GET /api/org`, and cold state's `org`. */
+export interface OrgStatus {
+  name: string;
+  /** This machine and its person, as the others see them. */
+  machine: string;
+  person: string;
+  skills: string | null;
+  /** When the store last answered, and what has gone wrong since, if anything. */
+  reachedAt: number | null;
+  error: string | null;
+  accounts: { id: string; provider: AccountProvider; label: string; problem: string | null; refreshedAt: number | null; addedBy: string }[];
+  sessions: OrgSessionView[];
 }
 
 /** What onboarding knows, all of it probed from the machine — never assumed.

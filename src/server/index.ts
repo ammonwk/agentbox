@@ -85,6 +85,8 @@ import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import { Superagents } from "../core/superagents";
+import { Org } from "../core/org";
+import { moveIntoOrg, OrgAccountError, takeFromOrg } from "../core/org/accounts";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -97,6 +99,7 @@ import type {
   AccountProvider,
   ProviderId,
   Repo,
+  Scope,
   RepoSetup,
   ServerMessage,
   SkillInfo,
@@ -179,11 +182,25 @@ function repoNamed(name: string): Repo | null {
   return all.find((r) => r.id === name) ?? all.find((r) => r.fullName?.toLowerCase() === lower) ?? all.find((r) => r.ref === name) ?? null;
 }
 
+/** A start's `scope`, when it names one (docs/org.md). */
+function scopeOf(b: Record<string, unknown>): Scope | undefined {
+  if (b.scope === undefined || b.scope === null) return undefined;
+  if (b.scope !== "personal" && b.scope !== "org") throw new HttpError(400, "scope is personal or org");
+  return b.scope;
+}
+
 function cardId(raw: string): number {
   if (!/^\d{1,9}$/.test(raw)) throw new HttpError(400, "a card's id is a number");
   return Number(raw);
 }
 
+/** This machine's part in its org (docs/org.md); idle outside one. */
+export const org = new Org({
+  sessions: () => fleet.sessions(),
+  prsOf: (id) => prClaimsNow().filter((c) => c.sessionId === id).map((c) => `${c.repo}#${c.number}`),
+  deliver: (to, from, text, wake) => sendAsAgent(fleet, to, text, { from: from || null, wake }, Date.now()),
+  changed: () => scheduleCold(),
+});
 export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
   if (pushSubscriptions().length === 0) return;
   const [first] = batch;
@@ -418,6 +435,7 @@ function coldState(): ColdState {
       lingering: slow.lingering,
       pwaInstalled: slow.pwaInstalled,
     },
+    org: org.status(),
   };
 }
 
@@ -781,7 +799,7 @@ const router = new Router(mapError)
   // ---- sessions
   .add("POST", "/api/placement", async ({ req }) => {
     const b = await readBody(req);
-    return json(fleet.placement(provider(b.provider), optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null, optionalString(b, "effort") ?? null));
+    return json(fleet.placement(provider(b.provider), optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null, optionalString(b, "effort") ?? null, true, scopeOf(b)));
   })
   .add("POST", "/api/sessions", async ({ req }) => {
     const b = await readBody(req);
@@ -817,6 +835,7 @@ const router = new Router(mapError)
         model: optionalString(b, "model"),
         effort: optionalString(b, "effort"),
         accountId: optionalString(b, "accountId") ?? null,
+        scope: scopeOf(b),
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
       });
@@ -855,6 +874,9 @@ const router = new Router(mapError)
     const sessions = fleet.sessions();
     if (!sessions.some((s) => s.id === who)) throw new HttpError(404, `no session ${who}`);
     const pr = prNamed(b, who);
+    // An org session's claim holds across the org: refused while another member's has it.
+    const held = org.isOrgSession(who) ? org.holderOf(`${pr.repo}#${pr.number}`) : null;
+    if (held) throw new HttpError(409, `not claimed: ${held.person}'s session ${held.id} on ${held.machine} has ${pr.repo}#${pr.number} ("${held.title}")`);
     try {
       const claims = prClaimsNow();
       const before = holderOf(claims, pr.repo, pr.number);
@@ -924,6 +946,14 @@ const router = new Router(mapError)
     // one to a session another has taken over goes to that one
     // (src/core/sendguard.ts). Yours never is, and goes where you send it.
     if (b.from === "agent") {
+      // Not a session here: an org session on another member's machine, from one of ours.
+      const there = !fleet.sessions().some((s) => s.id === params.id || s.id.startsWith(params.id!)) ? await org.find(params.id!) : null;
+      if (there) {
+        if (!fromSession || !org.isOrgSession(fromSession)) throw new HttpError(409, `${there._id} is ${there.person}'s, on ${there.machine}: only an org session may write to it`);
+        const sent = await org.send(there, fromSession, text, b.wake === true);
+        if ("refused" in sent) throw new HttpError(409, sent.refused);
+        return json(sent);
+      }
       const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true }, Date.now());
       if ("refused" in sent) throw new HttpError(409, sent.refused);
       return json(sent);
@@ -1133,6 +1163,37 @@ const router = new Router(mapError)
   })
 
   // ----- superagents (src/core/superagents.ts, docs/superagents.md)
+  // ---- the org (docs/org.md)
+  .add("GET", "/api/org", () => json(org.status()))
+  .add("POST", "/api/org/accounts", async ({ req }) => {
+    const id = requireString(await readBody(req), "accountId");
+    const inUse = (ids: readonly string[]) => {
+      const s = fleet.sessions().find((x) => x.status !== "closed" && x.host !== "none" && !!x.accountId && ids.includes(x.accountId));
+      return s ? `session ${s.id} (${s.title}) runs on it` : null;
+    };
+    try {
+      const moved = await moveIntoOrg(id, inUse);
+      await org.syncAccounts();
+      scheduleCold();
+      return json({ id: moved.account._id, label: moved.account.label, loggedOut: moved.loggedOut }, 201);
+    } catch (e) {
+      throw e instanceof OrgAccountError ? new HttpError(e.status, e.message) : e;
+    }
+  })
+  .add("DELETE", "/api/org/accounts/:id", async ({ params }) => {
+    const inUse = (ids: readonly string[]) => {
+      const s = fleet.sessions().find((x) => x.status !== "closed" && !!x.accountId && ids.includes(x.accountId));
+      return s ? `session ${s.id} (${s.title}) is on it` : null;
+    };
+    try {
+      const a = await takeFromOrg(params.id!, (id) => org.liveElsewhere(id), inUse);
+      await org.syncAccounts();
+      scheduleCold();
+      return json(a);
+    } catch (e) {
+      throw e instanceof OrgAccountError ? new HttpError(e.status, e.message) : e;
+    }
+  })
   .add("GET", "/api/superagents", () => json(superagents.list()))
   .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))
   .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(params.name!)))
@@ -1775,6 +1836,7 @@ export async function startServer(): Promise<void> {
     scheduler.stop();
     waits.stop();
     superagents.stopAll();
+    org.stop();
     fleet.stop();
     accounts.stop();
     // Long enough for the close frames to leave.
@@ -1906,6 +1968,7 @@ export async function startServer(): Promise<void> {
   waits.start();
   superagents.start();
   cards.start();
+  org.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
   // sessions and in your own terminals alike, and Go's usage is asked through
   // it (accounts/usage.ts), so it is up from the start.

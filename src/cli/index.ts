@@ -30,6 +30,7 @@ import * as waits from "./waits";
 import * as cards from "./cards";
 import * as prs from "./prs";
 import { handover, superagent, SUPERAGENT_USAGE } from "./superagents";
+import { orgCommand, ORG_USAGE } from "./org";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
@@ -117,12 +118,12 @@ async function attach(id: string, argv: string[]): Promise<number> {
 
 // ----------------------------------------------------------------- commands
 
-/** `agentbox claude [--account X] [--model M] [--claim PR] [--parent ID] [--repo R] [--ref REF] [--detach] [prompt…]`
+/** `agentbox claude [--account X] [--model M] [--claim PR] [--parent ID] [--org|--personal] [--repo R] [--ref REF] [--detach] [prompt…]`
  *
  *  A mistyped option is refused, not taken for a switch: `--acount work`
  *  would otherwise start on the balancer's pick with "work" in the prompt. */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
-  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "claim", "parent", "repo", "ref"], ["detach", "help", "h"]);
+  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "claim", "parent", "repo", "ref"], ["detach", "org", "personal", "help", "h"]);
   const str = (k: string): string | undefined => (typeof flags.get(k) === "string" ? (flags.get(k) as string) : undefined);
   // Asking how is not asking to start one.
   if (flags.has("help") || flags.has("h")) {
@@ -155,6 +156,8 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       prompt: rest.join(" ") || undefined,
       model: str("model"),
       accountId,
+      // In the org or on your own accounts; absent, its parent's, else your default.
+      scope: flags.has("org") ? "org" : flags.has("personal") ? "personal" : undefined,
       // A repo by its owner/name, and a ref to read it at in a worktree of its own.
       repo: str("repo"),
       ref: str("ref"),
@@ -374,10 +377,12 @@ async function recover(args: string[]): Promise<number> {
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
   claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--parent ID] [--detach]
-         [--repo OWNER/NAME [--ref REF]] [prompt…]
+         [--org|--personal] [--repo OWNER/NAME [--ref REF]] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d);
                         --parent puts it under that session (default: the one this runs in);
+                        --org runs it on the org's accounts, where its members see it, --personal
+                        on yours (default: its parent's, else \`agentbox org default\`);
                         --repo runs in that registered repo instead of here, --ref at that
                         branch, tag or commit in a worktree of its own (detached)
   usage                 each account's limits and what running sessions claim
@@ -428,6 +433,9 @@ timeout, each saying which; a parked session is resumed to hear it):
   wait time <45m>       nothing but the time
   waits [--session ID | --mine] [--all] [--json]   what is waited on, and how the rest ended
   unwait <id>...        cancel one; its session is not told
+
+org (a team's shared accounts and skills, its members' sessions on their own machines: docs/org.md):
+${ORG_USAGE.replace(/^agentbox /gm, "  ")}
 
 superagents (programs that run on agentbox: docs/superagents.md):
 ${SUPERAGENT_USAGE.replace(/^agentbox /gm, "  ")}
@@ -642,6 +650,8 @@ export async function main(argv: string[]): Promise<number | null> {
       case "handover":
         await ensureServer();
         return await handover(api, argv.slice(1));
+      case "org":
+        return await orgCommand(api, ensureServer, argv.slice(1));
       case "wait":
         await ensureServer();
         return await waits.wait(api, argv.slice(1));

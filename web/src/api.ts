@@ -686,6 +686,7 @@ export function useAppState(): { state: AppState | null; connected: boolean } {
               schedules: s.schedules,
               cards: s.cards,
               onboarding: s.onboarding,
+              org: s.org,
             },
         );
       },

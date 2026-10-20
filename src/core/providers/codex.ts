@@ -39,6 +39,7 @@ import { JsonlTranscriptReader } from "./jsonl-reader";
 import { cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf, type ProcMatch } from "./procs";
 import { pickOption, plainScreen, underInput } from "./tui-screen";
 import { briefing } from "./briefing";
+import { moveInto } from "./move";
 import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
@@ -778,6 +779,18 @@ function refOf(account: Account, r: Rollout): TranscriptRef {
   return { provider: "codex", accountId: account.id, agentSessionId: r.id, path: r.path, mtimeMs: r.mtimeMs, size: r.size };
 }
 
+/** A thread's rollout into another home, at the same day path: `codex
+ *  resume` there finds it by its id. Returns where it went. */
+function moveSession(opts: { from: Account; to: Account; agentSessionId: string; transcriptPath: string }): string {
+  const fromHome = codexHome(opts.from);
+  if (homeOfRollout(opts.transcriptPath) !== fromHome || !opts.transcriptPath.includes(opts.agentSessionId)) {
+    throw new Error(`the rollout is not where ${opts.from.label} keeps it: ${opts.transcriptPath}`);
+  }
+  const dest = join(codexHome(opts.to), opts.transcriptPath.slice(fromHome.length + 1));
+  moveInto(opts.transcriptPath, dest);
+  return dest;
+}
+
 /** The home a rollout path lives in: everything before `/sessions/YYYY/`. */
 function homeOfRollout(path: string): string | null {
   const m = /^(.*)\/sessions\/\d{4}\/\d{2}\/\d{2}\/[^/]+$/.exec(path);
@@ -825,6 +838,7 @@ export const codexAdapter: ProviderAdapter = {
   readOnly: READ_ONLY,
   spawnCommand,
   resumeCommand,
+  moveSession,
   carryOver: (argv) => carryFlags(codexArgs(argv), CARRIED),
   headless: isHeadless,
   autoAnswer: codexAutoAnswer,

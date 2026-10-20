@@ -78,6 +78,7 @@ const settings: AgentSettings = {
   reclaimNightly: false,
   models: { claude: "claude-fable-5-1", codex: "gpt-5.4-codex", devin: "", omp: "", opencode: "", muse: "" },
   retiredModels: {},
+  scope: "personal",
   balancer: {
     claimNormal: 1.5,
     claimIdleMin: 60,
@@ -805,6 +806,7 @@ function cold(): ColdState {
       lingering: null,
       pwaInstalled: false,
     },
+    org: null,
   };
 }
 

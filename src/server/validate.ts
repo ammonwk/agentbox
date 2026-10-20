@@ -62,7 +62,7 @@ export function asObject(v: unknown, label: string): Record<string, unknown> {
  * setting nothing reads.
  */
 export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch {
-  const known = ["theme", "repoMark", "splitActive", "hideSteps", "boardDays", "autoApprove", "parkIdleMin", "reclaimNightly", "models", "retiredModels", "balancer"];
+  const known = ["theme", "repoMark", "splitActive", "hideSteps", "boardDays", "autoApprove", "parkIdleMin", "reclaimNightly", "models", "retiredModels", "scope", "balancer"];
   for (const key of Object.keys(body)) {
     if (!known.includes(key)) throw new HttpError(400, `unknown setting: ${key}`);
   }
@@ -85,6 +85,10 @@ export function parseSettingsPatch(body: Record<string, unknown>): SettingsPatch
       throw new HttpError(400, "hideSteps must be always, done or never");
     }
     patch.hideSteps = body.hideSteps;
+  }
+  if (body.scope !== undefined) {
+    if (body.scope !== "personal" && body.scope !== "org") throw new HttpError(400, "scope must be personal or org");
+    patch.scope = body.scope;
   }
   if (body.boardDays !== undefined) patch.boardDays = requirePositiveInt(body, "boardDays");
   if (body.autoApprove !== undefined) patch.autoApprove = requireBoolean(body, "autoApprove");

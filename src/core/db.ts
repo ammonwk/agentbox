@@ -1450,6 +1450,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   reclaimNightly: false,
   models: { claude: "", codex: "", devin: "", omp: "", opencode: "", muse: "" },
   retiredModels: {},
+  scope: "personal",
   balancer: DEFAULT_BALANCER,
 };
 

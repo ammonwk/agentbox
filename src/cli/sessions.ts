@@ -389,7 +389,15 @@ export async function send(api: Api, args: string[]): Promise<number> {
   const wake = at !== undefined;
   const [target, ...words] = wake ? args.filter((_, i) => i !== at) : args;
   if (!target) throw new Error("send needs a session id and text");
-  const { ids } = await resolveIds(api, [target]);
+  // Not one of this machine's: perhaps an org session on another member's
+  // (docs/org.md), which the server finds in the org's store.
+  const ids = await resolveIds(api, [target]).then(
+    (r) => r.ids,
+    (e: Error) => {
+      if (!/^no session/.test(e.message)) throw e;
+      return [target];
+    },
+  );
   const text = words.length === 1 && words[0] === "-" ? (await new Response(Bun.stdin.stream()).text()).trim() : words.join(" ");
   if (!text) throw new Error("nothing to send");
   // Agents are who use this; you type in the app or the terminal. Voice mode

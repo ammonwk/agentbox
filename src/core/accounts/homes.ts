@@ -31,6 +31,7 @@ import {
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
+import { orgAccountsRoot } from "../org/config";
 import { adapterFor } from "../providers";
 import { GO_LOGIN_FILE } from "./gocred";
 import type { Account, AccountProvider, ProviderId } from "../types";
@@ -149,7 +150,7 @@ export function isAutoLabel(a: Pick<Account, "label" | "provider">): boolean {
  * home — your plain CLI login — is a twin of whichever account you last logged
  * the CLI into, and re-logging the CLI changes only that.
  */
-export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt">>(
+export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt" | "home">>(
   a: A,
   all: readonly A[],
 ): A | null {
@@ -160,8 +161,10 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
     const [p, q] = [rank(x), rank(y)];
     return p[0] - q[0] || p[1] - q[1] || p[2].localeCompare(q[2]);
   };
+  // An org's home and yours are never one login (docs/org.md): moving it took every copy.
+  const org = (x: A) => x.home.startsWith(orgAccountsRoot() + "/");
   const primary = all
-    .filter((o) => o.provider === a.provider && o.email?.toLowerCase() === email)
+    .filter((o) => o.provider === a.provider && o.email?.toLowerCase() === email && org(o) === org(a))
     .sort(before)[0];
   return primary && primary.id !== a.id ? primary : null;
 }
@@ -174,7 +177,7 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
  * A session stays pinned to its home (that is where its transcript is and
  * what resumes it); it belongs to the home's owner.
  */
-export function owners<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt">>(
+export function owners<A extends Pick<Account, "id" | "provider" | "email" | "isDefault" | "createdAt" | "home">>(
   all: readonly A[],
 ): Map<string, string> {
   return new Map(all.map((a) => [a.id, twinOf(a, all)?.id ?? a.id]));
@@ -502,7 +505,9 @@ export function resyncShared(account: Pick<Account, "provider" | "home" | "isDef
   const { provider, home } = account;
   const made: string[] = [];
   if (provider === "claude" || provider === "codex") {
-    made.push(...linkShared(defaultHome(provider), home, SHARED[provider]));
+    // An org home's skills are its own directory (org/skills.ts): the org's beside yours.
+    const spec = home.startsWith(orgAccountsRoot() + "/") ? { ...SHARED[provider], names: SHARED[provider].names.filter((n) => n !== "skills") } : SHARED[provider];
+    made.push(...linkShared(defaultHome(provider), home, spec));
     if (provider === "claude") {
       made.push(...linkMemory(defaultHome(provider), home));
       if (syncClaudeJson(home)) made.push(".claude.json");
