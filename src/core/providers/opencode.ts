@@ -438,7 +438,12 @@ function configEnv(account: Pick<Account, "id">, cwd: string): Record<string, st
   }
   cfg = { ...cfg, provider: { ...providers, "opencode-go": { ...go, options: { ...objectOr(go.options), baseURL: `${base}/v1` }, models } } };
   // The user's own shell runs opencode with fewer GC marker threads.
-  return { OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg), JSC_numberOfGCMarkers: process.env.JSC_numberOfGCMarkers || "2" };
+  return {
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg),
+    JSC_numberOfGCMarkers: process.env.JSC_numberOfGCMarkers || "2",
+    // Repo watchers cost 77k–130k watches/session, exhausting the user's 1,048,576; agents edit files themselves.
+    OPENCODE_DISABLE_FILEWATCHER: "1",
+  };
 }
 
 /**
