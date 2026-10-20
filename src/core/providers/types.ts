@@ -370,6 +370,10 @@ export interface ProviderAdapter {
 
   reader(ref: TranscriptRef): TranscriptReader;
 
+  /** Window from the CLI's model settings/catalog, when the transcript
+   *  does not supply it. Also used for dormant sessions' saved facts. */
+  modelContextLimit?(model: string | null): number | null;
+
   /** Where a session's in-process subagents write their logs. They leave no
    *  child process to find, but they write as they work. Absent when the CLI
    *  keeps none. */
