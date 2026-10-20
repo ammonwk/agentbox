@@ -1788,6 +1788,65 @@ textarea,
   border-color: var(--border-strong);
 }
 
+/* A state worth naming beside the process: running, disk wait, zombie. */
+.proc-state {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--faint);
+}
+.proc-state[data-state="R"] {
+  color: var(--info);
+}
+.proc-state[data-state="D"],
+.proc-state[data-state="Z"],
+.proc-state[data-state="T"],
+.proc-state[data-state="t"] {
+  color: var(--warning);
+  font-weight: 650;
+}
+
+/* A tool call that has done nothing for a minute or more. */
+.proc-table [data-stale="true"] {
+  color: var(--warning);
+  font-weight: 650;
+}
+
+/* Two strips per process, CPU over reads; see Activity in LoadPanel.tsx. */
+.activity {
+  display: block;
+  width: 100%;
+  height: 13px;
+  cursor: crosshair;
+}
+.activity .track {
+  fill: var(--sunken);
+}
+.activity .cpu {
+  fill: var(--info);
+}
+.activity .read {
+  fill: var(--p-devin);
+}
+.activity .cursor {
+  fill: var(--text);
+  opacity: 0.5;
+}
+
+.cpu-spark {
+  display: block;
+  width: 100%;
+  height: 24px;
+  margin-top: 4px;
+}
+.cpu-spark polygon {
+  fill: color-mix(in srgb, var(--info) 14%, transparent);
+}
+.cpu-spark polyline {
+  fill: none;
+  stroke: var(--info);
+  stroke-width: 1.5;
+}
+
 /* A share-of-subtree bar behind the figure, so the one process holding most of
  * the memory is findable without reading every row. */
 .membar {

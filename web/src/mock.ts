@@ -873,7 +873,6 @@ function metrics(): MetricsState {
       memBytes: (busy ? 900 : 420) * 1024 ** 2 + (s.id.charCodeAt(0) % 7) * 80 * 1024 ** 2,
       memKind: "pss",
       procs: busy ? 6 + (s.id.charCodeAt(1) % 5) : 3,
-      history: h.slice(),
     };
   }
   return { at: Date.now(), system: sys, load };
@@ -1179,11 +1178,19 @@ function mustAccount(id: string): MockAccount {
   return a;
 }
 
+const spark = (n: number, hi: number, quietTail = 0): number[] =>
+  Array.from({ length: n }, (_, i) => (i >= n - quietTail ? 0 : Math.random() * hi));
+const procRow = (p: Omit<ProcDetail, "readBps" | "cpuHistory" | "readHistory"> & { cpuHistory?: number[]; readHistory?: number[] }): ProcDetail => {
+  const cpuHistory = p.cpuHistory ?? spark(150, p.cpuPct * 1.4);
+  const readHistory = p.readHistory ?? spark(150, 0);
+  return { ...p, cpuHistory, readHistory, readBps: readHistory.at(-1) ?? 0 };
+};
 const procs: ProcDetail[] = [
-  { pid: 48211, ppid: 48200, name: "claude", cmd: "claude --resume 1d8e…", role: "agent", cpuPct: 38, rssBytes: 612 * 1024 ** 2, pssBytes: 540 * 1024 ** 2, depth: 0, ageMs: 48 * M },
-  { pid: 48230, ppid: 48211, name: "node", cmd: "node ~/.claude/mcp/github/index.js", role: "mcp", cpuPct: 0.4, rssBytes: 96 * 1024 ** 2, pssBytes: 71 * 1024 ** 2, depth: 1, ageMs: 48 * M },
-  { pid: 49102, ppid: 48211, name: "bash", cmd: "bash -c bun test src/core", role: "tool", cpuPct: 4, rssBytes: 6 * 1024 ** 2, pssBytes: 3 * 1024 ** 2, depth: 1, ageMs: 9000 },
-  { pid: 49103, ppid: 49102, name: "bun", cmd: "bun test src/core", role: "tool", cpuPct: 187, rssBytes: 310 * 1024 ** 2, pssBytes: 288 * 1024 ** 2, depth: 2, ageMs: 8800 },
+  procRow({ pid: 48211, ppid: 48200, name: "claude", cmd: "claude --resume 1d8e…", role: "agent", state: "S", cpuPct: 38, cpuMs: 9 * M, quietMs: 0, watchedMs: 5 * M, rssBytes: 612 * 1024 ** 2, pssBytes: 540 * 1024 ** 2, depth: 0, ageMs: 48 * M, readHistory: spark(150, 30_000) }),
+  procRow({ pid: 48230, ppid: 48211, name: "node", cmd: "node ~/.claude/mcp/github/index.js", role: "mcp", state: "S", cpuPct: 0, cpuMs: 4200, quietMs: null, watchedMs: 5 * M, rssBytes: 96 * 1024 ** 2, pssBytes: 71 * 1024 ** 2, depth: 1, ageMs: 48 * M, cpuHistory: spark(150, 0) }),
+  procRow({ pid: 49102, ppid: 48211, name: "bash", cmd: "bash -c bun test src/core", role: "tool", state: "S", cpuPct: 0, cpuMs: 30, quietMs: 6 * M, watchedMs: 5 * M, rssBytes: 6 * 1024 ** 2, pssBytes: 3 * 1024 ** 2, depth: 1, ageMs: 9 * M, cpuHistory: spark(150, 0) }),
+  procRow({ pid: 49103, ppid: 49102, name: "gh pr checks --watch", cmd: "gh pr checks --watch", role: "tool", state: "S", cpuPct: 0, cpuMs: 410, quietMs: 4 * M, watchedMs: 5 * M, rssBytes: 40 * 1024 ** 2, pssBytes: 31 * 1024 ** 2, depth: 2, ageMs: 9 * M, cpuHistory: spark(150, 6, 120), readHistory: spark(150, 9000, 120) }),
+  procRow({ pid: 49140, ppid: 48211, name: "bun test src/core", cmd: "bun test src/core", role: "tool", state: "R", cpuPct: 187, cpuMs: 41_000, quietMs: 0, watchedMs: 24_000, rssBytes: 310 * 1024 ** 2, pssBytes: 288 * 1024 ** 2, depth: 1, ageMs: 24_000, cpuHistory: spark(12, 220) }),
 ];
 
 const worktreeScan = (): WorktreeScan => ({
@@ -1468,7 +1475,7 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       await sleep(350);
       return pageBefore(id, url.searchParams.get("before"), Number(url.searchParams.get("limit") ?? PAGE));
     }
-    if (head === "sessions" && action === "load") return procs;
+    if (head === "sessions" && action === "load") return { history: loadHist.get(id) ?? [], procs };
     if (head === "sessions" && action === "work") return workOf(id);
     if (head === "sessions" && action === "agents" && p[5] === "timeline") {
       await sleep(120);

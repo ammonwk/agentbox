@@ -48,6 +48,8 @@ export interface ProcRow {
   rssKb: number;
   /** Clock ticks since boot when this process started; used for age and identity. */
   startTicks: number;
+  /** The kernel's scheduler state letter (R, S, D, Z, T…); empty where unknown (macOS). */
+  state: string;
   cmd?: string;
 }
 
@@ -116,6 +118,7 @@ export function parseStat(pid: number, s: string): ProcRow | null {
     pid,
     ppid: Number(f[1]),
     comm,
+    state: f[0] ?? "",
     // Fields 14-17 (1-based utime, stime, cutime, cstime), here 0-based 11-14.
     cpuTicks: Number(f[11]) + Number(f[12]) + Number(f[13]) + Number(f[14]),
     ownTicks: Number(f[11]) + Number(f[12]),
@@ -148,6 +151,7 @@ export function darwinRow(pid: number): ProcRow | null {
     ownTicks: ticks,
     rssKb: p.rssBytes / 1024,
     startTicks: ((p.startMs - bootTimeMs()) / 1000) * clockHz(),
+    state: "",
   };
 }
 
@@ -242,8 +246,9 @@ export function subtreeCpuTicks(rows: ProcRow[]): number {
   return t;
 }
 
-/** How many samples of per-session CPU history to keep, for the sparkline. */
-const HISTORY = 60;
+/** Samples of history kept, per session and per process: five minutes at the
+ *  metrics poll's 2s. Long enough to see a stall, short enough to send whole. */
+export const HISTORY = 150;
 
 interface Prior {
   ticks: number;
@@ -292,8 +297,12 @@ export class LoadMeter {
       memBytes: measured ? measured.bytes : rssBytes,
       memKind: measured ? "pss" : "rss",
       procs: rows.length,
-      history,
     };
+  }
+
+  /** Recent subtree CPU samples for a session's agent pid, oldest first. */
+  history(pid: number): number[] {
+    return this.prior.get(pid)?.history ?? [];
   }
 
   /** Drop meters for pids that are gone, so the maps do not grow forever. */
@@ -333,6 +342,104 @@ export async function subtreePss(rows: ProcRow[]): Promise<number | undefined> {
     }
   }
   return got > 0 ? total : undefined;
+}
+
+/**
+ * Bytes this process has read through read() and friends: sockets, pipes and
+ * files alike. Undefined where unreadable (macOS, another user's process).
+ *
+ * Reads rather than writes, because reads are the half that says work is
+ * arriving. An agent's spinner writes to its terminal all through a turn,
+ * including one hung on a model request that will never answer; what stops
+ * then is the socket, and only reads see that.
+ */
+async function readRchar(pid: number): Promise<number | undefined> {
+  if (darwin.isDarwin) return undefined;
+  try {
+    const m = /^rchar: (\d+)/m.exec(await readFile(`/proc/${pid}/io`, "utf8"));
+    return m ? Number(m[1]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Above either of these in a sample, a process is doing something. An idle
+ *  agent reads ~150 B/s (event-loop wakeups) and uses no CPU; a streaming
+ *  reply reads several KB/s. */
+const ACTIVE_CPU_PCT = 1;
+const ACTIVE_READ_BPS = 2048;
+
+interface Watched {
+  startTicks: number;
+  at: number;
+  ownTicks: number;
+  rchar: number | undefined;
+  seenAt: number;
+  activeAt: number | null;
+  cpu: number[];
+  read: number[];
+}
+
+/** What one process has been doing lately, as `breakdown` reports it. */
+export interface ProcActivity {
+  cpuPct: number;
+  readBps: number;
+  activeAt: number | null;
+  seenAt: number;
+  cpu: number[];
+  read: number[];
+}
+
+/**
+ * Per-process history for every process in a session's subtree, on the
+ * metrics poll. Keyed by pid and checked against start time, because pids are
+ * recycled and a new process must not inherit an old one's counters.
+ *
+ * It only knows what it has watched: the poll runs while a browser is
+ * connected, so a process that was busy before anyone looked and quiet since
+ * reads as quiet for as long as it has been watched, and no longer.
+ */
+export class ProcWatch {
+  private procs = new Map<number, Watched>();
+
+  async sample(table: ProcTable, rows: ProcRow[]): Promise<void> {
+    const rchars = await Promise.all(rows.map((r) => readRchar(r.pid)));
+    const live = new Set<number>();
+    rows.forEach((r, i) => {
+      live.add(r.pid);
+      const rchar = rchars[i];
+      const w = this.procs.get(r.pid);
+      if (!w || w.startTicks !== r.startTicks) {
+        const fresh = { startTicks: r.startTicks, at: table.at, ownTicks: r.ownTicks, rchar, seenAt: table.at, activeAt: null, cpu: [], read: [] };
+        this.procs.set(r.pid, fresh);
+        return;
+      }
+      const secs = (table.at - w.at) / 1000;
+      if (secs <= 0) return;
+      const cpuPct = Math.max(0, ((r.ownTicks - w.ownTicks) / (secs * clockHz())) * 100);
+      const readBps = rchar !== undefined && w.rchar !== undefined ? Math.max(0, (rchar - w.rchar) / secs) : 0;
+      w.cpu = [...w.cpu, cpuPct].slice(-HISTORY);
+      w.read = [...w.read, readBps].slice(-HISTORY);
+      if (cpuPct >= ACTIVE_CPU_PCT || readBps >= ACTIVE_READ_BPS) w.activeAt = table.at;
+      w.at = table.at;
+      w.ownTicks = r.ownTicks;
+      w.rchar = rchar;
+    });
+    for (const pid of this.procs.keys()) if (!live.has(pid)) this.procs.delete(pid);
+  }
+
+  get(row: ProcRow): ProcActivity | undefined {
+    const w = this.procs.get(row.pid);
+    if (!w || w.startTicks !== row.startTicks) return undefined;
+    return {
+      cpuPct: w.cpu.at(-1) ?? 0,
+      readBps: w.read.at(-1) ?? 0,
+      activeAt: w.activeAt,
+      seenAt: w.seenAt,
+      cpu: w.cpu,
+      read: w.read,
+    };
+  }
 }
 
 // ─── Naming and classifying ─────────────────────────────────────────────────
@@ -470,9 +577,9 @@ function squash(s: string, max = 44): string {
  * That is why the summary can legitimately exceed the rows beneath it.
  */
 export async function breakdown(
-  prev: ProcTable | undefined,
   cur: ProcTable,
   agentPid: number,
+  watch: ProcWatch,
   opts: { pss?: boolean } = {},
 ): Promise<ProcDetail[]> {
   const rows = withCmdlines(subtree(cur, agentPid));
@@ -480,33 +587,33 @@ export async function breakdown(
   const agent = byPid.get(agentPid);
   if (!agent) return [];
 
+  const now = Date.now();
+  const boot = bootTimeMs();
   const out: ProcDetail[] = [];
   const walk = async (pid: number, depth: number, parentRole?: ProcRole) => {
     const row = byPid.get(pid);
     if (!row) return;
     const role = classify(row, agent, parentRole);
+    const seen = watch.get(row);
 
-    let cpuPct = 0;
-    const before = prev?.byPid.get(pid);
-    // Same pid *and* same start time: pids are recycled, and charging a new
-    // process with an old one's counters would show a wild spike.
-    if (before && before.startTicks === row.startTicks && prev && cur.at > prev.at) {
-      const elapsed = ((cur.at - prev.at) / 1000) * clockHz();
-      cpuPct = Math.max(0, ((row.ownTicks - before.ownTicks) / elapsed) * 100);
-    }
-
-    const boot = bootTimeMs();
     out.push({
       pid,
       ppid: row.ppid,
       name: describe(row),
       cmd: row.cmd ?? row.comm,
       role,
-      cpuPct,
+      state: row.state,
+      cpuPct: seen?.cpuPct ?? 0,
+      cpuMs: (row.ownTicks / clockHz()) * 1000,
+      readBps: seen?.readBps ?? 0,
+      quietMs: seen?.activeAt != null ? now - seen.activeAt : null,
+      watchedMs: seen ? now - seen.seenAt : 0,
+      cpuHistory: seen?.cpu ?? [],
+      readHistory: seen?.read ?? [],
       rssBytes: row.rssKb * 1024,
       pssBytes: opts.pss ? await readPss(pid) : undefined,
       depth,
-      ageMs: boot ? Date.now() - (boot + (row.startTicks / clockHz()) * 1000) : 0,
+      ageMs: boot ? now - (boot + (row.startTicks / clockHz()) * 1000) : 0,
     });
 
     for (const kid of (cur.children.get(pid) ?? []).slice().sort((a, b) => a - b)) {

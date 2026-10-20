@@ -35,7 +35,7 @@ import type {
   MetricsState,
   ModelOption,
   Placement,
-  ProcDetail,
+  LoadDetail,
   ProviderId,
   ResetConsumeResult,
   NightlyReclaim,
@@ -63,7 +63,7 @@ import { byAttention } from "../../src/core/attention";
 import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
-export type { DepState, DepStatus, Health, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
+export type { DepState, DepStatus, Health, LoadDetail, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
 import type { AgentTimeline, SessionWork } from "../../src/core/work";
 export type { AgentTimeline, SessionWork, WorkAgent, WorkShell } from "../../src/core/work";
 export * from "./lib/format";
@@ -326,7 +326,7 @@ export const api = {
   termBottom: (id: string) => post<null>(`/api/sessions/${enc(id)}/term/bottom`),
   termWhere: (id: string) => get<{ turnId: string | null; bottom: boolean }>(`/api/sessions/${enc(id)}/term/where`),
   /** The per-process drilldown. Expensive server-side — only behind an opened tab. */
-  load: (id: string) => get<ProcDetail[]>(`/api/sessions/${enc(id)}/load`),
+  load: (id: string) => get<LoadDetail>(`/api/sessions/${enc(id)}/load`),
   work: (id: string) => get<SessionWork>(`/api/sessions/${enc(id)}/work`),
   /** One of its in-process agents' transcript: the newest page, or what came after `since`. */
   agentTimeline: (id: string, agentId: string, since: string | null) =>

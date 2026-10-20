@@ -1201,8 +1201,6 @@ export interface LoadSample {
   memKind: "pss" | "rss";
   /** Processes in the subtree, the agent included. */
   procs: number;
-  /** Recent cpuPct samples, oldest first, for the sparkline. */
-  history: number[];
 }
 
 /** What a process in a session's subtree is doing there. */
@@ -1214,13 +1212,35 @@ export interface ProcDetail {
   name: string;
   cmd: string;
   role: ProcRole;
-  /** Percent of one core, over the interval between the two process tables. */
+  /** The kernel's scheduler state letter: R running, S sleeping, D waiting on
+   *  disk, Z exited but not reaped, T stopped. Empty where unknown. */
+  state: string;
+  /** Percent of one core, over the last metrics sample. */
   cpuPct: number;
+  /** CPU time it has used itself since it started. Against `ageMs`, the
+   *  difference between waiting and working. */
+  cpuMs: number;
+  /** Bytes per second it read over the last sample: sockets, pipes, files. */
+  readBps: number;
+  /** How long since it last used CPU or read anything; null if it has done
+   *  neither in the `watchedMs` it has been watched. */
+  quietMs: number | null;
+  watchedMs: number;
+  /** cpuPct and readBps on the metrics cadence (2s), oldest first. */
+  cpuHistory: number[];
+  readHistory: number[];
   rssBytes: number;
   pssBytes?: number;
   /** Depth below the agent, for indenting the tree. */
   depth: number;
   ageMs: number;
+}
+
+/** `GET /api/sessions/:id/load`: the subtree's CPU history and its processes. */
+export interface LoadDetail {
+  /** Subtree cpuPct on the metrics cadence (2s), oldest first. */
+  history: number[];
+  procs: ProcDetail[];
 }
 
 /**

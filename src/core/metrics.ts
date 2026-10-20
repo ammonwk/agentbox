@@ -2,14 +2,16 @@ import { EventEmitter } from "node:events";
 import { SystemMeter, metricsAvailable } from "./system";
 import {
   LoadMeter,
+  ProcWatch,
   breakdown,
   readProcTable,
   sharedProcTable,
   subtree,
   subtreePss,
+  type ProcRow,
   type ProcTable,
 } from "./proc";
-import type { MetricsState, ProcDetail } from "./types";
+import type { LoadDetail, MetricsState } from "./types";
 
 /**
  * The machine, and what each session is taking from it.
@@ -51,14 +53,13 @@ const PSS_BUDGET = 0.05;
 class Metrics {
   private sys = new SystemMeter();
   private meter = new LoadMeter();
+  private watch = new ProcWatch();
   private fast: ReturnType<typeof setInterval> | null = null;
   private slow: ReturnType<typeof setTimeout> | null = null;
   /** Guards against a slow filesystem queueing polls on top of each other. */
   private polling = false;
   private measuringPss = false;
 
-  /** The last two tables, so the drilldown has an interval to divide by. */
-  private prev: ProcTable | undefined;
   private cur: ProcTable | undefined;
 
   private state: MetricsState = { at: 0, system: null, load: {} };
@@ -85,12 +86,11 @@ class Metrics {
   }
 
   /** The live process table, for `GET /api/sessions/:id/load`. */
-  async detail(pid: number): Promise<ProcDetail[]> {
+  async detail(pid: number): Promise<LoadDetail> {
     // On demand rather than from the poll: this is the one caller that wants
     // per-process PSS, and it is the most expensive read in the product.
     const cur = await readProcTable();
-    const detail = await breakdown(this.cur ?? this.prev, cur, pid, { pss: true });
-    return detail;
+    return { history: this.meter.history(pid), procs: await breakdown(cur, pid, this.watch, { pss: true }) };
   }
 
   private async poll(): Promise<void> {
@@ -104,14 +104,13 @@ class Metrics {
       // The same table as the last poll (the fleet's, shared): nothing new to divide.
       if (table && table === this.cur) return;
 
-      if (table) {
-        this.prev = this.cur;
-        this.cur = table;
-      }
+      if (table) this.cur = table;
 
       const load: MetricsState["load"] = {};
       if (table) {
         const live = new Set<number>();
+        // A subagent's subtree sits inside its caller's: each process once.
+        const watched = new Map<number, ProcRow>();
         // Closed sessions are excluded: one that still holds a pid is a leak to
         // fix elsewhere, not a row on this bar.
         for (const s of source()) {
@@ -120,8 +119,10 @@ class Metrics {
           const sample = this.meter.sample(table, s.pid);
           if (!sample) continue;
           load[s.id] = sample;
+          for (const r of subtree(table, s.pid)) watched.set(r.pid, r);
         }
         this.meter.retain(live);
+        await this.watch.sample(table, [...watched.values()]);
       }
 
       this.state = {
@@ -198,4 +199,4 @@ export function setMetricsWatchers(n: number): void {
 }
 
 export const metricsSnapshot = (): MetricsState => metrics.snapshot();
-export const procDetail = (pid: number): Promise<ProcDetail[]> => metrics.detail(pid);
+export const procDetail = (pid: number): Promise<LoadDetail> => metrics.detail(pid);
