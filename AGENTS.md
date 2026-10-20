@@ -56,7 +56,10 @@ and each recovery's report in `recovery/`.
 
 The server runs from the checkout it was started in, so a change only
 reaches it once it is there. Several agents may be editing that checkout at
-once: commit your own files by path, never `git add -A`.
+once: commit your own files by path, never `git add -A`. A commit's subject
+is one line of at most 72 characters saying what changed; why, and what it
+fixes, go in the body after a blank line, so `git log --oneline` stays
+readable.
 
 ## Rules that are easy to break
 

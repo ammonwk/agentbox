@@ -134,7 +134,7 @@ function Members({ status, reload }: { status: HubStatus; reload: () => Promise<
       </table>
       {owner ? (
         <form className="input-row" onSubmit={add}>
-          <input className="input" placeholder="teammate@example.com (their tailnet login)" value={login} onChange={(e) => setLogin(e.target.value)} />
+          <input className="input" placeholder="teammate@example.com (what they sign in with)" value={login} onChange={(e) => setLogin(e.target.value)} />
           <Button type="submit" loading={r.busy}>
             Add member
           </Button>
