@@ -229,6 +229,9 @@ export interface FleetDeps {
    *  session that asked for it rather than a session of its own. */
   poolAgents?: () => ReadonlyMap<string, PoolAgent>;
   now?: () => number;
+  /** What org sessions on other machines claim on a pooled account: the
+   *  store's, so two members do not count one account as free twice. */
+  remoteClaims?: () => ReadonlyMap<string, ClaimView[]>;
 }
 
 /** What a close took with it, and what it left open, to follow "closed <id>". */
@@ -459,6 +462,13 @@ export class Fleet extends EventEmitter {
     this.nextParkCheck = this.now() + PARK_STARTUP_MS;
     this.ready = new Promise((r) => (this.markReady = r));
   }
+
+  /** Set once the org exists (server/index.ts): what org sessions on other
+   *  machines claim on a pooled account, from the store. */
+  setRemoteClaims(f: () => ReadonlyMap<string, ClaimView[]>): void {
+    this.deps.remoteClaims = f;
+  }
+
 
   start(): void {
     if (this.timer) return;
@@ -2618,7 +2628,13 @@ export class Fleet extends EventEmitter {
     }
     this.refreshRates();
     const consumed = new Map(inputs.map((i) => [i.sessionId, this.consumedOf(i.sessionId, i.accountId, i.since, now)]));
-    return claimsByAccount(inputs, consumed, now);
+    const claims = claimsByAccount(inputs, consumed, now);
+    for (const [accountId, list] of this.deps.remoteClaims?.() ?? []) {
+      const here = claims.get(accountId);
+      if (here) here.push(...list);
+      else claims.set(accountId, [...list]);
+    }
+    return claims;
   }
 
   /** Weekly points a session has used on an account since `since`: what it

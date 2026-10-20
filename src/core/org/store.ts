@@ -3,7 +3,7 @@
  *  its live sessions with their mailboxes. */
 
 import { MongoClient, type Collection, type Db } from "mongodb";
-import type { AccountProvider, ProviderId } from "../types";
+import type { AccountProvider, ClaimView, ProviderId } from "../types";
 import { readOrg } from "./config";
 
 /** An org account. Its id is its account id on every member's machine. */
@@ -56,6 +56,8 @@ export interface OrgSessionRow {
   accountId: string | null;
   /** The PRs it holds: `owner/repo#n`. */
   prs: string[];
+  /** What it still claims on its account, as its machine works it out. */
+  claim?: ClaimView | null;
   seenAt: Date;
   inbox: OrgMessage[];
 }

@@ -14,7 +14,7 @@
  *  on every member's machine, the sharer's own among them, is a mirror. */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { deleteAccount, getAccount, insertAccount, listAccounts } from "../db";
 import { claudeJsonPath, credentialsPath, newAccountId, resyncShared } from "../accounts/homes";
 import { POOLED, readGoLogin, writeGoLogin, type GoLogin } from "../accounts/gocred";
@@ -22,19 +22,20 @@ import { decodeJwtPayload } from "../accounts/identity";
 import { exchangeGoRefresh, REFRESH_AHEAD_MS } from "../accounts/godevice";
 import type { Account, AccountProvider } from "../types";
 import { ORG_PROVIDERS } from "../providers/account";
-import { machineName, orgAccountsRoot, personName, readOrg } from "./config";
+import { isOrgHome, machineName, orgAccountsRoot, personName, readOrg } from "./config";
 import { seal, unseal } from "./seal";
 import { linkSkills } from "./skills";
 import { storeAccounts, type StoreAccount } from "./store";
 
-export const isOrgHome = (home: string): boolean => home.startsWith(orgAccountsRoot() + "/");
 export const isOrgAccount = (a: Pick<Account, "home">): boolean => isOrgHome(a.home);
 
 /** A login as the store keeps it: claude's credentials and account, codex's
- *  auth.json, or an omp account's OpenCode Go Console sign-in. */
+ *  auth.json, an omp account's OpenCode Go Console sign-in, or a devin/muse
+ *  credential file whose token does not rotate (`text`). */
 type ClaudeLogin = { claudeAiOauth: Record<string, unknown>; oauthAccount: Record<string, unknown> | null };
 type CodexLogin = { tokens: Record<string, unknown>; last_refresh?: string } & Record<string, unknown>;
-type Login = ClaudeLogin | CodexLogin | GoLogin;
+type StaticLogin = { text: string };
+type Login = ClaudeLogin | CodexLogin | GoLogin | StaticLogin;
 
 export class OrgAccountError extends Error {
   constructor(
@@ -49,11 +50,31 @@ export class OrgAccountError extends Error {
 
 function readJson(path: string): Record<string, unknown> | null {
   try {
-    const v = JSON.parse(readFileSync(path, "utf8"));
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    return rec(JSON.parse(readFileSync(path, "utf8")));
   } catch {
     return null;
   }
+}
+
+function rec(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function readText(path: string): string | null {
+  try {
+    const text = readFileSync(path, "utf8");
+    return text.trim() ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeText(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = `${path}.agentbox-${process.pid}.tmp`;
+  writeFileSync(tmp, text, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -81,6 +102,18 @@ function loginIn(a: Pick<Account, "provider" | "home" | "isDefault">): Login | n
     const login = readGoLogin(a.home);
     return login && login.refresh !== POOLED ? login : null;
   }
+  if (a.provider === "devin") {
+    // WINDSURF_API_KEY: a static key, so a copy is not a second refresher.
+    const text = readText(join(a.home, "devin", "credentials.toml"));
+    return text && /^\s*windsurf_api_key\s*=\s*["'][^"']+["']/m.test(text) ? { text } : null;
+  }
+  if (a.provider === "muse") {
+    // Only a static api_key: an access token may rotate, and the default
+    // home's login lives in the Keychain, which has no file to read.
+    const text = readText(join(a.home, "muse", "auth.json"));
+    const meta = text ? rec(rec(readJson(join(a.home, "muse", "auth.json"))?.providers)?.meta) : null;
+    return text && typeof meta?.api_key === "string" && meta.api_key ? { text } : null;
+  }
   return null;
 }
 
@@ -88,14 +121,17 @@ function loginIn(a: Pick<Account, "provider" | "home" | "isDefault">): Login | n
 function expiryOf(provider: AccountProvider, login: Login): number {
   if (provider === "claude") return Number((login as ClaudeLogin).claudeAiOauth.expiresAt);
   if (provider === "omp") return (login as GoLogin).expires;
+  if (provider === "devin" || provider === "muse") return NaN;
   const t = (login as CodexLogin).tokens;
   return typeof t.access_token === "string" ? Number(decodeJwtPayload(t.access_token)?.exp) * 1000 : NaN;
 }
 
 /** When the store should refresh a login: an hour before claude's access
  *  token runs out (they last about eight), a day before codex's (about ten
- *  days), and codex's at least every five days, inside the CLI's own reach. */
+ *  days), and codex's at least every five days, inside the CLI's own reach.
+ *  devin's key and muse's api_key do not rotate, so neither is ever refreshed. */
 function refreshDue(provider: AccountProvider, login: Login, refreshedAt: Date | null, now: number): boolean {
+  if (provider === "devin" || provider === "muse") return false;
   const exp = expiryOf(provider, login);
   if (!Number.isFinite(exp)) return true;
   if (provider === "claude") return exp - now < 60 * 60_000;
@@ -110,6 +146,7 @@ function homeFile(provider: AccountProvider, login: Login): Record<string, unkno
     return { claudeAiOauth: { ...o, refreshToken: POOLED } };
   }
   if (provider === "omp") return { ...(login as GoLogin), refresh: POOLED };
+  if (provider === "devin" || provider === "muse") return login as StaticLogin;
   const l = login as CodexLogin;
   return { ...l, tokens: { ...l.tokens, refresh_token: POOLED } };
 }
@@ -125,6 +162,12 @@ function writeHome(a: Account, login: Login): void {
     const cur = readGoLogin(a.home);
     // Only what the store moves on: rewriting a file per pass would be churn.
     if (!cur || cur.refresh !== POOLED || cur.access !== want.access || cur.expires !== want.expires || cur.orgID !== want.orgID) writeGoLogin(a.home, want);
+    return;
+  }
+  if (a.provider === "devin" || a.provider === "muse") {
+    const path = credentialsPath(a.provider, a.home)!;
+    const text = (login as StaticLogin).text;
+    if (readText(path) !== text) writeText(path, text);
     return;
   }
   const path = credentialsPath(a.provider, a.home)!;
@@ -148,6 +191,7 @@ const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 /** The provider's answer to a refresh: the new login, or why it was refused
  *  for good (`refused`: log in again), or a failure worth retrying. */
 async function refreshLogin(provider: AccountProvider, login: Login, now: number): Promise<{ login: Login } | { refused: string } | { retry: string }> {
+  if (provider === "devin" || provider === "muse") return { refused: `${provider}'s login does not refresh` };
   if (provider === "omp") return exchangeGoRefresh(login as GoLogin, fetch, now);
   const body =
     provider === "claude"
@@ -247,9 +291,15 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
     // refreshing its own before it saw the store's) goes to the store when it
     // is newer than the store's; an older one is only a stale copy.
     const held = doc.login ? unseal<Login>(org.key, doc.login) : null;
-    const age = (l: Login) => expiryOf(doc.provider, l) || 0;
-    const newest = homes.flatMap((h) => loginIn(h) ?? []).sort((x, y) => age(y) - age(x))[0];
-    if (newest && (!held || age(newest) > age(held))) {
+    // NaN for a login that does not expire: devin's key, muse's api_key.
+    const age = (l: Login) => expiryOf(doc.provider, l);
+    const found = homes.flatMap((h) => loginIn(h) ?? []);
+    // A login with an expiry is newest when it lasts longest. A static one
+    // (devin's key, muse's api_key) has no expiry to compare: the login a
+    // mirror holds that differs from the store's is one made there since.
+    const newest = !held || Number.isFinite(age(held)) ? found.sort((x, y) => (age(y) || 0) - (age(x) || 0))[0] : found.find((l) => !same(l, held));
+    const newer = !!newest && (!held || !Number.isFinite(age(held)) || age(newest) > age(held));
+    if (newer) {
       const login = seal(org.key, newest);
       await col.updateOne({ _id: doc._id }, { $set: { login, version: doc.version + 1, refreshedAt: new Date(now), problem: null } });
       Object.assign(doc, { login, version: doc.version + 1, refreshedAt: new Date(now), problem: null });
@@ -345,7 +395,14 @@ export async function shareWithOrg(accountId: string): Promise<StoreAccount> {
   if (!ORG_PROVIDERS.includes(a.provider)) throw new OrgAccountError(400, `${a.provider} accounts stay on their machine (docs/org.md)`);
   if (a.provider === "claude" && process.platform === "darwin") throw new OrgAccountError(400, "on macOS claude keeps its login in the Keychain, which agentbox cannot share yet");
   const login = loginIn(a);
-  if (!login) throw new OrgAccountError(409, `${a.label} is not logged in here`);
+  if (!login) {
+    throw new OrgAccountError(
+      409,
+      a.provider === "muse"
+        ? `${a.label} can be shared only with a static api_key login: its token login (or the Keychain) rotates and would log every sharer out`
+        : `${a.label} is not logged in here`,
+    );
+  }
   const col = await storeAccounts();
   if (!col) throw new OrgAccountError(409, "the org's store cannot be reached");
   const existing = await sharedAs(a);
@@ -396,6 +453,7 @@ export async function unshareFromOrg(accountId: string): Promise<void> {
 /** A whole login, refresh token and all, into one of your homes. */
 function writeLogin(a: Account, login: Login): void {
   if (a.provider === "omp") return writeGoLogin(a.home, login as GoLogin);
+  if (a.provider === "devin" || a.provider === "muse") return writeText(credentialsPath(a.provider, a.home)!, (login as StaticLogin).text);
   writeJson(credentialsPath(a.provider, a.home)!, a.provider === "claude" ? { claudeAiOauth: (login as ClaudeLogin).claudeAiOauth } : login);
   const oa = a.provider === "claude" ? (login as ClaudeLogin).oauthAccount : null;
   if (oa) writeJson(claudeJsonPath(a), { ...(readJson(claudeJsonPath(a)) ?? {}), oauthAccount: oa });

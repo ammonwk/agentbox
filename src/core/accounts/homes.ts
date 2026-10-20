@@ -31,7 +31,7 @@ import {
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
-import { orgAccountsRoot } from "../org/config";
+import { isOrgHome } from "../org/config";
 import { adapterFor } from "../providers";
 import { GO_LOGIN_FILE, readGoLogin } from "./gocred";
 import type { Account, AccountProvider, ProviderId } from "../types";
@@ -175,7 +175,7 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
     return p[0] - q[0] || p[1] - q[1] || p[2].localeCompare(q[2]);
   };
   // An org's home and yours are never one account, even of a shared login: they place in different scopes (docs/org.md).
-  const org = (x: A) => x.home.startsWith(orgAccountsRoot() + "/");
+  const org = (x: A) => isOrgHome(x.home);
   const primary = all.filter((o) => sameLogin(a, o) && org(o) === org(a)).sort(before)[0];
   return primary && primary.id !== a.id ? primary : null;
 }
@@ -517,7 +517,7 @@ export function resyncShared(account: Pick<Account, "provider" | "home" | "isDef
   const made: string[] = [];
   if (provider === "claude" || provider === "codex") {
     // An org home's skills are its own directory (org/skills.ts): the org's beside yours.
-    const spec = home.startsWith(orgAccountsRoot() + "/") ? { ...SHARED[provider], names: SHARED[provider].names.filter((n) => n !== "skills") } : SHARED[provider];
+    const spec = isOrgHome(home) ? { ...SHARED[provider], names: SHARED[provider].names.filter((n) => n !== "skills") } : SHARED[provider];
     made.push(...linkShared(defaultHome(provider), home, spec));
     if (provider === "claude") {
       made.push(...linkMemory(defaultHome(provider), home));
@@ -558,7 +558,6 @@ export async function importHome(
   path: string,
   deps: ImportDeps,
 ): Promise<{ account: Account; email: string | null }> {
-  if (provider === "omp") throw new AccountError(400, "an OpenCode Go account has no home to import — add one and sign in to it");
   const home = canonical(expandHome(path.trim()));
   if (!existsSync(home) || !statSync(home).isDirectory()) throw new AccountError(400, `${home} is not a directory`);
   const cred = credentialsPath(provider, home)!;
@@ -566,7 +565,9 @@ export async function importHome(
     throw new AccountError(400, `${home} has no ${provider} login (expected ${basename(cred)}${provider === "devin" ? " under devin/" : ""})`);
   }
 
-  const isDefault = samePath(home, defaultHome(provider));
+  // omp has no CLI home of its own to adopt: what is imported is another
+  // agentbox account home (a copy, a backup), whose Console sign-in is the login.
+  const isDefault = provider !== "omp" && samePath(home, defaultHome(provider));
   const existing = listAccounts(provider);
   const clash = existing.find((a) => samePath(a.home, home));
   if (clash) throw new AccountError(409, `${home} is already registered as "${clash.label}"`);
@@ -575,16 +576,15 @@ export async function importHome(
   }
 
   const email = await deps.identifyEmail({ provider, home, isDefault });
-  if (email) {
-    for (const a of existing) {
-      const theirs = a.email ?? (await deps.identifyEmail(a).catch(() => null));
-      if (theirs && theirs.toLowerCase() === email.toLowerCase()) {
-        throw new AccountError(
-          409,
-          `${home} is logged in as ${email}, which is already account "${a.label}" (${a.home}). ` +
-            "Two homes on one login share a refresh token and log each other out — log this home into a different account, or use the existing one.",
-        );
-      }
+  for (const a of existing) {
+    // The DB's email is kept fresh; only a missing one costs a probe.
+    const theirs = provider === "omp" || a.email ? a : { ...a, email: await deps.identifyEmail(a).catch(() => null) };
+    if (sameLogin({ provider, email, home }, theirs)) {
+      throw new AccountError(
+        409,
+        `${home} is logged in as ${email ?? "the same login"}, which is already account "${a.label}" (${a.home}). ` +
+          "Two homes on one login share a refresh token and log each other out — log this home into a different account, or use the existing one.",
+      );
     }
   }
 

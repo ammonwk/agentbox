@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { getAccount } from "../db";
-import type { Account, OrgSessionView, OrgStatus, Session } from "../types";
+import type { Account, ClaimView, OrgSessionView, OrgStatus, Session } from "../types";
 import { machineName, personName, readOrg } from "./config";
 import { isOrgAccount, loginKey, storeKey, syncOrgAccounts } from "./accounts";
 import { orgSkillsDir, syncOrgSkills } from "./skills";
@@ -27,6 +27,8 @@ export interface OrgDeps {
   sessions: () => readonly Session[];
   /** The PRs each of its sessions holds, `owner/repo#n`. */
   prsOf: (sessionId: string) => string[];
+  /** What each account's sessions here still claim (`Fleet.claims`). */
+  claims: () => ReadonlyMap<string, ClaimView[]>;
   /** Deliver a message from another machine, as an agent's: what came of it. */
   deliver: (to: string, from: string, text: string, wake: boolean) => Promise<{ to: string } | { refused: string }>;
   /** Something the board shows changed. */
@@ -39,6 +41,8 @@ export class Org {
   private error: string | null = null;
   private others: OrgSessionView[] = [];
   private accounts: StoreAccount[] = [];
+  /** What org sessions on other machines still claim, by account. */
+  private remote = new Map<string, ClaimView[]>();
 
   constructor(private deps: OrgDeps) {}
 
@@ -93,12 +97,14 @@ export class Org {
     const col = await storeSessions();
     if (!col) {
       this.others = [];
+      this.remote = new Map();
       return;
     }
     const me = machineName();
     const person = personName();
     const now = new Date();
     const mine = this.mine();
+    const claims = this.deps.claims();
     if (mine.length) {
       await col.bulkWrite(
         mine.map((s) => ({
@@ -115,6 +121,7 @@ export class Org {
                 status: s.status,
                 accountId: s.accountId,
                 prs: this.deps.prsOf(s.id),
+                claim: claims.get(s.accountId!)?.find((c) => c.sessionId === s.id) ?? null,
                 seenAt: now,
               },
               $setOnInsert: { inbox: [] },
@@ -128,11 +135,27 @@ export class Org {
     const rows = await col.find({ machine: { $ne: me } }, { projection: { inbox: 0 } }).toArray();
     const labels = new Map(this.accounts.map((a) => [a._id, a.label]));
     const next = rows.map((r) => viewOf(r, labels, now.getTime())).sort((a, b) => b.seenAt - a.seenAt);
+    // Claims move every pass, so they are read here rather than compared:
+    // a row unseen past AWAY_MS is a machine that is off, and holds nothing.
+    const remote = new Map<string, ClaimView[]>();
+    for (const r of rows) {
+      if (!r.claim || !r.accountId || now.getTime() - r.seenAt.getTime() > AWAY_MS) continue;
+      const list = remote.get(r.accountId) ?? [];
+      list.push({ ...r.claim, machine: r.machine });
+      remote.set(r.accountId, list);
+    }
+    this.remote = remote;
     this.reached();
     if (JSON.stringify(next) !== JSON.stringify(this.others)) {
       this.others = next;
       this.deps.changed();
     }
+  }
+
+  /** What org sessions on other machines still claim, by account. The
+   *  balancer counts these too: a pooled account is one pool for everyone. */
+  remoteClaims(): ReadonlyMap<string, ClaimView[]> {
+    return this.remote;
   }
 
   /** Messages for this machine's org sessions: each taken once, delivered as

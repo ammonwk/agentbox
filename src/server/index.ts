@@ -197,10 +197,12 @@ function cardId(raw: string): number {
 /** This machine's part in its org (docs/org.md); idle outside one. */
 export const org = new Org({
   sessions: () => fleet.sessions(),
+  claims: () => fleet.claims(),
   prsOf: (id) => prClaimsNow().filter((c) => c.sessionId === id).map((c) => `${c.repo}#${c.number}`),
   deliver: (to, from, text, wake) => sendAsAgent(fleet, to, text, { from: from || null, wake }, Date.now()),
   changed: () => scheduleCold(),
 });
+fleet.setRemoteClaims(() => org.remoteClaims());
 export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
   if (pushSubscriptions().length === 0) return;
   const [first] = batch;

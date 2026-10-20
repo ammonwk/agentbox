@@ -171,6 +171,9 @@ export interface ClaimView {
   /** Since when it has been spending on this account: started, or woken
    *  there. A 5-hour pace measured before then has not seen it. */
   since: number;
+  /** The machine running it, when the claim came from the org's store: it
+   *  has no session on this board to open. */
+  machine?: string;
 }
 
 // ------------------------------------------------------------- balancer

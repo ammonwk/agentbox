@@ -53,8 +53,10 @@ with, or takes the default when it starts. Scope decides:
 
 ## Org accounts
 
-Claude, Codex, and omp's OpenCode Go sign-ins. devin and muse are per-person:
-they stay personal.
+Claude, Codex, omp's OpenCode Go sign-ins, devin and muse. The last two share
+only a credential that does not rotate: devin's `windsurf_api_key` and a muse
+`api_key`. A muse login kept as an access token (or in the macOS Keychain)
+stays personal, since every sharer refreshing it would log the others out.
 
 A login is shared or not, and you flip it either way at any time
 (Accounts › the card's "Shared with Plaibook" toggle, `agentbox org share
@@ -66,8 +68,8 @@ while a login is shared the store holds its only one. **Every home of it** on
 every member's machine is a mirror: the org's home of it under
 `org/accounts/<id>` on each machine, and the sharer's own homes (the account
 and any copy logged in as the same login, the CLI's own home usually). A
-login's name across machines is its email for claude and codex, and one
-OpenCode account in one workspace for omp — an email can hold several
+login's name across machines is its email for claude, codex, devin and muse,
+and one OpenCode account in one workspace for omp — an email can hold several
 workspaces, each its own sign-in.
 
 - **Sharing** seals the login into `accounts`. At the next sync (at once,
@@ -86,16 +88,19 @@ workspaces, each its own sign-in.
   token until it runs out. Unsharing is done from a machine with a personal
   home of the login: the org's own card has no switch.
 
-Linux only for claude: on macOS it keeps its login in the Keychain.
+Linux only for claude: on macOS it keeps its login in the Keychain, and a
+muse default home may keep its login there too.
 
 **Credential files.** Each member's machine keeps an ordinary local home for
 each org account (`syncOrgAccounts`, every 60 s) and writes the store's current
 login into it: claude `.credentials.json` with `refreshToken: "pooled"` and
 `.claude.json`'s `oauthAccount`, codex `auth.json` with `refresh_token:
-"pooled"`, omp `opencode-console.json` with `refresh: "pooled"`. The CLI runs
-on it as on any account, so subscription features, identity, the usage
-fetchers, limit detection and moving a session between accounts work
-unchanged. The placeholder refresh token can never rotate the pool's login.
+"pooled"`, omp `opencode-console.json` with `refresh: "pooled"`, and devin's
+`devin/credentials.toml` and muse's `muse/auth.json` whole (their key does not
+rotate, so a mirror needs no placeholder). The CLI runs on it as on any
+account, so subscription features, identity, the usage fetchers, limit
+detection and moving a session between accounts work unchanged. The
+placeholder refresh token can never rotate the pool's login.
 Both CLIs were checked to pick up a rewritten file: claude re-reads it when its
 token is near expiry, codex reloads `auth.json` on a 401 (also its per-home
 app-server daemon). omp never reads the sign-in itself: the devin bridge does,
@@ -105,7 +110,8 @@ It picks up the store's rewrite on its next request.
 **Refreshing** happens in the store, about an hour before a claude access
 token expires, a day before a codex one does (or five days after codex's last
 refresh), and a day before an OpenCode Go one does — the same lead the bridge
-uses, so no member's bridge ever reaches its own refresh point. A machine that
+uses, so no member's bridge ever reaches its own refresh point. devin's key
+and muse's `api_key` are never refreshed. A machine that
 sees one due takes the account's lease (`findOneAndUpdate` on `version` where
 the lease is free or past, 60 s), refreshes at the provider's token endpoint
 with the CLI's own client id, writes the new login to a local pending file
@@ -114,10 +120,12 @@ mirrors' files when the login changes. A machine that dies between the
 provider's answer and the store's write recovers from its pending file.
 
 **Usage** is read by each machine for itself, with its home's access token, as
-for any account; the balancer counts this machine's own claims. An org session
-at its limit moves to another org account as any session does
-(`Fleet.continueStalled`); codex now has a `moveSession` (the rollout moves to
-the same day's path in the other home).
+for any account. **Claims are shared**: each machine publishes what its org
+sessions still claim in their rows, and every member's balancer counts them,
+so two members do not both place onto one pooled account as if it were free.
+An org session at its limit moves to another org account as any session does
+(`Fleet.continueStalled`); codex has a `moveSession` (the rollout moves to the
+same day's path in the other home).
 
 ## Seeing and messaging
 
@@ -143,10 +151,14 @@ holds the PR.
 
 Each member's machine keeps a clone of the skills repo in
 `<agentbox home>/org/skills` (`gh repo clone`, else `git clone`) and pulls it
-every 10 minutes. Org homes get a `skills` directory of their own (not the link
-to the personal one that other homes have) holding a link to each org skill
-and each personal skill, a personal skill winning a name clash. Publishing is
-a pull request or a push to the repo.
+every 10 minutes. Claude and codex org homes get a `skills` directory of their
+own (not the link to the personal one that other homes have) holding a link to
+each org skill and each personal skill, a personal skill winning a name clash.
+omp and opencode read one user-level skills directory for every account
+(`~/.omp/agent/skills`, `~/.config/opencode/skills`), so the org's skills are
+linked there too — and so they reach personal sessions of those CLIs, which is
+the price of a CLI that has one directory. Publishing is a pull request or a
+push to the repo.
 
 ## When things fail
 

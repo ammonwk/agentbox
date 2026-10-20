@@ -24,6 +24,9 @@ export const orgConfigPath = (): string => join(agentboxHome(), "org.json");
 export const orgDir = (): string => join(agentboxHome(), "org");
 export const orgAccountsRoot = (): string => join(orgDir(), "accounts");
 
+/** Whether a credential home is the org's own (under org/accounts). */
+export const isOrgHome = (home: string): boolean => home.startsWith(orgAccountsRoot() + "/");
+
 let cached: { mtimeMs: number; org: OrgConfig | null } | null = null;
 
 /** The org this machine is in, or null. Read again when the file changes. */
