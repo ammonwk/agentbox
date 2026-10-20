@@ -86,7 +86,7 @@ import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import { Superagents } from "../core/superagents";
 import { Org } from "../core/org";
-import { moveIntoOrg, OrgAccountError, takeFromOrg } from "../core/org/accounts";
+import { OrgAccountError, shareWithOrg, unshareFromOrg } from "../core/org/accounts";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -371,6 +371,7 @@ function buildAccountViews(): AccountView[] {
   return homes.filter((a) => owner.get(a.id) === a.id).map((a) => ({
     ...a,
     scope: fleet.scopeOf(a.id),
+    shared: org.shares(a),
     // Lapsed claims weigh nothing; listing every session of the last few
     // days under its account would bury the handful that do.
     claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
@@ -1166,34 +1167,18 @@ const router = new Router(mapError)
   // ----- superagents (src/core/superagents.ts, docs/superagents.md)
   // ---- the org (docs/org.md)
   .add("GET", "/api/org", () => json(org.status()))
-  .add("POST", "/api/org/accounts", async ({ req }) => {
-    const id = requireString(await readBody(req), "accountId");
-    const inUse = (ids: readonly string[]) => {
-      const s = fleet.sessions().find((x) => x.status !== "closed" && x.host !== "none" && !!x.accountId && ids.includes(x.accountId));
-      return s ? `session ${s.id} (${s.title}) runs on it` : null;
-    };
+  .add("PUT", "/api/org/shared/:id", async ({ req, params }) => {
+    const b = await readBody(req);
+    if (typeof b.shared !== "boolean") throw new HttpError(400, "shared must be true or false");
     try {
-      const moved = await moveIntoOrg(id, inUse);
-      await org.syncAccounts();
-      scheduleCold();
-      return json({ id: moved.account._id, label: moved.account.label, loggedOut: moved.loggedOut }, 201);
+      if (b.shared) await shareWithOrg(params.id!);
+      else await unshareFromOrg(params.id!);
     } catch (e) {
       throw e instanceof OrgAccountError ? new HttpError(e.status, e.message) : e;
     }
-  })
-  .add("DELETE", "/api/org/accounts/:id", async ({ params }) => {
-    const inUse = (ids: readonly string[]) => {
-      const s = fleet.sessions().find((x) => x.status !== "closed" && !!x.accountId && ids.includes(x.accountId));
-      return s ? `session ${s.id} (${s.title}) is on it` : null;
-    };
-    try {
-      const a = await takeFromOrg(params.id!, (id) => org.liveElsewhere(id), inUse);
-      await org.syncAccounts();
-      scheduleCold();
-      return json(a);
-    } catch (e) {
-      throw e instanceof OrgAccountError ? new HttpError(e.status, e.message) : e;
-    }
+    await org.syncAccounts();
+    scheduleCold();
+    return json(null);
   })
   .add("GET", "/api/superagents", () => json(superagents.list()))
   .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))

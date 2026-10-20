@@ -1,5 +1,5 @@
 /** `agentbox org …` (docs/org.md): start or join an org, hand on its invite,
- *  move accounts in and out, and see the other members' org sessions. */
+ *  share accounts with it or stop, and see the other members' org sessions. */
 
 import { existsSync } from "node:fs";
 import type { Api } from "../client";
@@ -16,8 +16,8 @@ agentbox org init <name> --store <mongodb uri> [--skills owner/repo]
 agentbox org join <invite>                   join the org an invite is for
 agentbox org default org|personal            where a session starts when it does not say (--org, --personal) and has no parent
 agentbox org invite                          the invite for the next member: it is the org's store and key, send it privately
-agentbox org add-account <account>           move an account's login into the org: every copy of it on this machine is logged out
-agentbox org take-account <account>          move an org account's login back onto this machine, as your own`;
+agentbox org share <account>                 share an account's login with the org; it stays yours
+agentbox org unshare <account>               stop sharing it: the org's members lose it, you keep it`;
 
 async function reach(org: OrgConfig): Promise<void> {
   try {
@@ -80,8 +80,8 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       console.log(inviteOf(org));
       return 0;
     }
-    case "add-account":
-    case "take-account": {
+    case "share":
+    case "unshare": {
       await ensureServer();
       const want = words[0];
       if (!want) throw new Error(`org ${verb} <account>`);
@@ -89,13 +89,8 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       const match = state.accounts.filter((a) => a.id === want || a.label === want || a.email === want);
       if (match.length !== 1) throw new Error(match.length ? `${want} is ${match.length} accounts here: name it by id` : `no account ${want}`);
       const a = match[0]!;
-      if (verb === "add-account") {
-        const r = await api<{ id: string; label: string; loggedOut: string[] }>("POST", "/api/org/accounts", { accountId: a.id });
-        console.log(`${r.label} is the org's now (${r.id}). Logged out here: ${r.loggedOut.join(", ")}.`);
-      } else {
-        const r = await api<{ id: string; label: string }>("DELETE", `/api/org/accounts/${encodeURIComponent(a.id)}`);
-        console.log(`${r.label} is yours again, on this machine (${r.id}).`);
-      }
+      await api("PUT", `/api/org/shared/${encodeURIComponent(a.id)}`, { shared: verb === "share" });
+      console.log(verb === "share" ? `${a.label} is shared with ${readOrg()?.name ?? "the org"}.` : `${a.label} is no longer shared; it is still yours.`);
       return 0;
     }
     case "ls":
@@ -115,7 +110,7 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
         console.log(`${s.name}: ${s.person} on ${s.machine}; the store answered ${ago(s.reachedAt)}${s.error ? ` (since then: ${s.error})` : ""}`);
         if (s.skills) console.log(`skills: github.com/${s.skills}`);
         for (const a of s.accounts) console.log(`  ${a.provider.padEnd(6)} ${a.label.padEnd(30)} ${a.problem ?? `refreshed ${ago(a.refreshedAt)}`}  (from ${a.addedBy})`);
-        if (!s.accounts.length) console.log("  no accounts yet: agentbox org add-account <account>");
+        if (!s.accounts.length) console.log("  no accounts yet: agentbox org share <account>");
         console.log("");
       }
       for (const x of s.sessions) {

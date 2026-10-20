@@ -150,6 +150,8 @@ export interface AccountView extends Account {
   alsoAt: { id: string; home: string; isDefault: boolean }[];
   /** Yours, or the org's (docs/org.md). */
   scope: Scope;
+  /** One of yours whose login is shared with the org too. */
+  shared: boolean;
 }
 
 export interface ClaimView {

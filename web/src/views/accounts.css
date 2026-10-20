@@ -134,7 +134,8 @@
   margin-left: auto;
   flex: none;
 }
-.ac-toggle .toggle {
+.ac-toggle .toggle,
+.ac-share .toggle {
   font-size: 12px;
   color: var(--muted);
   min-height: 26px;
@@ -439,6 +440,7 @@
 
 .ac-foot {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   border-top: 1px solid var(--border);
   padding-top: 6px;
@@ -446,6 +448,15 @@
 }
 .ac-forget {
   margin-left: auto;
+}
+.ac-share {
+  margin-left: auto;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+.ac-share + .ac-forget {
+  margin-left: 4px;
 }
 .ac-forget:hover:not(:disabled) {
   color: var(--danger);

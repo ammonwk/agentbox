@@ -7,9 +7,9 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { getAccount } from "../db";
-import type { OrgSessionView, OrgStatus, Session } from "../types";
+import type { Account, OrgSessionView, OrgStatus, Session } from "../types";
 import { machineName, personName, readOrg } from "./config";
-import { isOrgAccount, syncOrgAccounts } from "./accounts";
+import { isOrgAccount, loginKey, storeKey, syncOrgAccounts } from "./accounts";
 import { orgSkillsDir, syncOrgSkills } from "./skills";
 import { storeAccounts, storeSessions, type OrgMessage, type OrgSessionRow, type StoreAccount } from "./store";
 
@@ -71,7 +71,7 @@ export class Org {
     this.error = null;
   }
 
-  /** The org's accounts made to match the store here; at once after a move. */
+  /** The org's accounts made to match the store here; at once after a share. */
   async syncAccounts(): Promise<void> {
     if (!readOrg()) return;
     const changed = await syncOrgAccounts();
@@ -202,11 +202,10 @@ export class Org {
     return this.others.find((s) => !s.away && s.prs.some((p) => p.toLowerCase() === key)) ?? null;
   }
 
-  /** Whether an org account has a live session on another machine. */
-  async liveElsewhere(accountId: string): Promise<string | null> {
-    await this.publish();
-    const s = this.others.find((o) => !o.away && o.accountId === accountId);
-    return s ? `${s.person}'s session ${s.id} on ${s.machine}` : null;
+  /** Whether one of your accounts is shared with the org, as of the last sync. */
+  shares(a: Pick<Account, "provider" | "email" | "home">): boolean {
+    const key = !isOrgAccount(a) && readOrg() ? loginKey(a) : null;
+    return !!key && this.accounts.some((d) => storeKey(d) === key);
   }
 
   status(): OrgStatus | null {

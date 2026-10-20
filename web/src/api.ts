@@ -334,10 +334,8 @@ export const api = {
     request<Account>("PATCH", `/api/accounts/${enc(id)}`, patch),
   forgetAccount: (id: string) => request<unknown>("DELETE", `/api/accounts/${enc(id)}`),
   login: (id: string) => post<LoginFlow>(`/api/accounts/${enc(id)}/login`),
-  /** Its login into the org's pool: every copy of it here is logged out. */
-  moveToOrg: (accountId: string) => post<{ id: string; label: string; loggedOut: string[] }>("/api/org/accounts", { accountId }),
-  /** An org account's login back onto this machine, as a personal account. */
-  takeFromOrg: (id: string) => request<{ id: string; label: string }>("DELETE", `/api/org/accounts/${enc(id)}`),
+  /** Share one of your accounts' logins with the org, or stop: it stays yours either way. */
+  shareWithOrg: (id: string, shared: boolean) => request<null>("PUT", `/api/org/shared/${enc(id)}`, { shared }),
   refreshUsage: (id: string) => post<AccountUsage>(`/api/accounts/${enc(id)}/usage`),
   /** Spend one of a codex account's usage-limit resets; `creditId` picks one. */
   useResetCredit: (id: string, creditId?: string) =>

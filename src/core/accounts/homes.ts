@@ -174,7 +174,7 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
     const [p, q] = [rank(x), rank(y)];
     return p[0] - q[0] || p[1] - q[1] || p[2].localeCompare(q[2]);
   };
-  // An org's home and yours are never one login (docs/org.md): moving it took every copy.
+  // An org's home and yours are never one account, even of a shared login: they place in different scopes (docs/org.md).
   const org = (x: A) => x.home.startsWith(orgAccountsRoot() + "/");
   const primary = all.filter((o) => sameLogin(a, o) && org(o) === org(a)).sort(before)[0];
   return primary && primary.id !== a.id ? primary : null;

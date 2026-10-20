@@ -9,13 +9,14 @@
  *  token's expiry re-reads the file (claude) or re-reads it on a 401 before
  *  refreshing (codex), and so picks up the new one.
  *
- *  Two holders of a Claude or Codex login log each other out at the next
- *  refresh, so moving is the only operation, and it takes every copy. */
+ *  Two holders of a refresh token log each other out at the next refresh,
+ *  so while a login is shared the store holds its only one: every home of it
+ *  on every member's machine, the sharer's own among them, is a mirror. */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { deleteAccount, getAccount, insertAccount, listAccounts, updateAccount } from "../db";
-import { claudeJsonPath, credentialsPath, newAccountId, resyncShared, createAccountHome, sameLogin } from "../accounts/homes";
+import { deleteAccount, getAccount, insertAccount, listAccounts } from "../db";
+import { claudeJsonPath, credentialsPath, newAccountId, resyncShared } from "../accounts/homes";
 import { POOLED, readGoLogin, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { decodeJwtPayload } from "../accounts/identity";
 import { exchangeGoRefresh, REFRESH_AHEAD_MS } from "../accounts/godevice";
@@ -83,21 +84,23 @@ function loginIn(a: Pick<Account, "provider" | "home" | "isDefault">): Login | n
   return null;
 }
 
+/** When a login's access token runs out, NaN when it does not say. */
+function expiryOf(provider: AccountProvider, login: Login): number {
+  if (provider === "claude") return Number((login as ClaudeLogin).claudeAiOauth.expiresAt);
+  if (provider === "omp") return (login as GoLogin).expires;
+  const t = (login as CodexLogin).tokens;
+  return typeof t.access_token === "string" ? Number(decodeJwtPayload(t.access_token)?.exp) * 1000 : NaN;
+}
+
 /** When the store should refresh a login: an hour before claude's access
  *  token runs out (they last about eight), a day before codex's (about ten
  *  days), and codex's at least every five days, inside the CLI's own reach. */
 function refreshDue(provider: AccountProvider, login: Login, refreshedAt: Date | null, now: number): boolean {
-  if (provider === "claude") {
-    const exp = Number((login as ClaudeLogin).claudeAiOauth.expiresAt);
-    return !Number.isFinite(exp) || exp - now < 60 * 60_000;
-  }
-  if (provider === "omp") {
-    const exp = (login as GoLogin).expires;
-    return !Number.isFinite(exp) || exp - now < REFRESH_AHEAD_MS;
-  }
-  const t = (login as CodexLogin).tokens;
-  const exp = typeof t.access_token === "string" ? Number(decodeJwtPayload(t.access_token)?.exp) * 1000 : NaN;
-  return !Number.isFinite(exp) || exp - now < 24 * 3_600_000 || !refreshedAt || now - refreshedAt.getTime() > 5 * 86_400_000;
+  const exp = expiryOf(provider, login);
+  if (!Number.isFinite(exp)) return true;
+  if (provider === "claude") return exp - now < 60 * 60_000;
+  if (provider === "omp") return exp - now < REFRESH_AHEAD_MS;
+  return exp - now < 24 * 3_600_000 || !refreshedAt || now - refreshedAt.getTime() > 5 * 86_400_000;
 }
 
 /** The file a member's home holds for a login: everything but the refresh token. */
@@ -197,9 +200,30 @@ const pendingPath = (id: string): string => join(orgAccountsRoot(), `${id}.pendi
 
 // ------------------------------------------------------------------- syncing
 
-/** One pass over the org's accounts: this machine's homes made to match the
- *  store, a new login found in one of them taken to the store, and a login
- *  that is due refreshed. Returns whether anything here changed. */
+/** A login's name on every machine: one email for claude and codex, one
+ *  OpenCode account in one workspace for omp (an email can hold several,
+ *  each its own sign-in). */
+export function loginKey(a: Pick<Account, "provider" | "email" | "home">): string | null {
+  if (a.provider === "omp") {
+    const l = readGoLogin(a.home);
+    return l?.accountID ? `omp:${l.accountID}:${l.orgID ?? ""}` : null;
+  }
+  return a.email ? `${a.provider}:${a.email.toLowerCase()}` : null;
+}
+
+export const storeKey = (d: Pick<StoreAccount, "provider" | "email" | "externalId">): string | null =>
+  d.provider === "omp" ? (d.externalId ? `omp:${d.externalId}` : null) : d.email ? `${d.provider}:${d.email}` : null;
+
+/** Every home here that holds a shared login: the org's own, and each of
+ *  yours logged in as it. */
+function homesOf(doc: StoreAccount): Account[] {
+  const key = storeKey(doc);
+  return listAccounts(doc.provider).filter((a) => a.id === doc._id || (!isOrgAccount(a) && key !== null && loginKey(a) === key));
+}
+
+/** One pass over the org's accounts: this machine's homes of each made to
+ *  match the store, a newer login found in one of them taken to the store,
+ *  and a login that is due refreshed. Returns whether anything here changed. */
 export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
   const org = readOrg();
   const col = await storeAccounts();
@@ -208,9 +232,8 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
   const docs = await col.find().toArray();
   const ids = new Set(docs.map((d) => d._id));
   for (const doc of docs) {
-    let local = getAccount(doc._id);
-    if (!local) {
-      local = { id: doc._id, provider: doc.provider, label: doc.label, email: doc.email, plan: doc.plan, home: join(orgAccountsRoot(), doc._id), isDefault: false, enabled: true, createdAt: doc.addedAt.getTime() };
+    if (!getAccount(doc._id)) {
+      const local: Account = { id: doc._id, provider: doc.provider, label: doc.label, email: doc.email, plan: doc.plan, home: join(orgAccountsRoot(), doc._id), isDefault: false, enabled: true, createdAt: doc.addedAt.getTime() };
       mkdirSync(local.home, { recursive: true, mode: 0o700 });
       chmodSync(local.home, 0o700);
       resyncShared(local);
@@ -218,28 +241,36 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
       insertAccount(local);
       changed = true;
     }
-    // A login made here (logging an org account in again) goes to the store.
-    const fresh = loginIn(local);
-    if (fresh) {
-      const login = seal(org.key, fresh);
+    await recoverPending(doc);
+    const homes = homesOf(doc);
+    // A login made in one of them (logging in again, or the sharer's CLI
+    // refreshing its own before it saw the store's) goes to the store when it
+    // is newer than the store's; an older one is only a stale copy.
+    const held = doc.login ? unseal<Login>(org.key, doc.login) : null;
+    const age = (l: Login) => expiryOf(doc.provider, l) || 0;
+    const newest = homes.flatMap((h) => loginIn(h) ?? []).sort((x, y) => age(y) - age(x))[0];
+    if (newest && (!held || age(newest) > age(held))) {
+      const login = seal(org.key, newest);
       await col.updateOne({ _id: doc._id }, { $set: { login, version: doc.version + 1, refreshedAt: new Date(now), problem: null } });
       Object.assign(doc, { login, version: doc.version + 1, refreshedAt: new Date(now), problem: null });
-      console.log(`agentbox: org: ${doc.label} logged in here; its login is the org's now`);
+      console.log(`agentbox: org: ${doc.label}: took this machine's newer login to the store`);
       changed = true;
-    } else await recoverPending(doc);
+    }
     if (!doc.login) {
-      const path = credentialsPath(local.provider, local.home)!;
-      if (existsSync(path)) {
+      for (const h of homes) {
+        const path = credentialsPath(h.provider, h.home)!;
+        if (!existsSync(path)) continue;
         rmSync(path);
         changed = true;
       }
       continue;
     }
     const login = unseal<Login>(org.key, doc.login);
-    writeHome(local, login);
+    for (const h of homes) writeHome(h, login);
     if (refreshDue(doc.provider, login, doc.refreshedAt, now)) changed = (await refreshOne(doc, login, org.key, now)) || changed;
   }
-  // Taken back to someone's machine: its homes here go with it.
+  // No longer shared: the org's home of it here goes. Yours were given the
+  // login back by the machine that stopped sharing it.
   for (const a of listAccounts()) {
     if (!isOrgAccount(a) || ids.has(a.id)) continue;
     deleteAccount(a.id);
@@ -287,57 +318,45 @@ async function refreshOne(doc: StoreAccount, login: Login, key: string, now: num
   writeJson(pendingPath(doc._id), { version: doc.version, login: sealed, at: now });
   await col.updateOne({ _id: doc._id, version: doc.version }, { $set: { login: sealed, version: doc.version + 1, refreshedAt: new Date(now), lease: null, problem: null } });
   rmSync(pendingPath(doc._id), { force: true });
-  const local = getAccount(doc._id);
-  if (local) writeHome(local, r.login);
+  for (const h of homesOf(doc)) writeHome(h, r.login);
   console.log(`agentbox: org: refreshed ${doc.label}`);
   return true;
 }
 
-// ------------------------------------------------------------------ moving
+// ----------------------------------------------------------------- sharing
 
-/** Whether an account is in use: a live session on it, here. */
-export type InUse = (accountIds: readonly string[]) => string | null;
-
-/** The homes on this machine logged in as the same login as `a`, `a` among them. */
-function copiesOf(a: Account): Account[] {
-  return listAccounts(a.provider).filter((o) => !isOrgAccount(o) && (o.id === a.id || sameLogin(a, o)));
+/** The org's account of a login you hold here, if it is shared. */
+async function sharedAs(a: Account): Promise<StoreAccount | null> {
+  const key = loginKey(a);
+  const col = await storeAccounts();
+  if (!key || !col) return null;
+  return (await col.find({ provider: a.provider }).toArray()).find((d) => storeKey(d) === key) ?? null;
 }
 
-/** Move an account's login into the org: every copy of it on this machine
- *  is logged out, so the org's refreshes are the only ones. */
-export async function moveIntoOrg(accountId: string, inUse: InUse): Promise<{ account: StoreAccount; loggedOut: string[] }> {
+/** Share an account's login with the org. It stays yours: from now on the
+ *  store refreshes it, and your homes of it get each new login as everyone
+ *  else's do. */
+export async function shareWithOrg(accountId: string): Promise<StoreAccount> {
   const org = readOrg();
   if (!org) throw new OrgAccountError(409, "this machine is in no org: agentbox org join <invite>");
   const a = getAccount(accountId);
   if (!a) throw new OrgAccountError(404, `no account ${accountId}`);
-  if (isOrgAccount(a)) throw new OrgAccountError(409, `${a.label} is already ${org.name}'s`);
+  if (isOrgAccount(a)) throw new OrgAccountError(409, `${a.label} is ${org.name}'s own home of a shared login`);
   if (!ORG_PROVIDERS.includes(a.provider)) throw new OrgAccountError(400, `${a.provider} accounts stay on their machine (docs/org.md)`);
-  if (a.provider === "claude" && process.platform === "darwin") throw new OrgAccountError(400, "on macOS claude keeps its login in the Keychain, which agentbox cannot move yet");
+  if (a.provider === "claude" && process.platform === "darwin") throw new OrgAccountError(400, "on macOS claude keeps its login in the Keychain, which agentbox cannot share yet");
   const login = loginIn(a);
   if (!login) throw new OrgAccountError(409, `${a.label} is not logged in here`);
-  const copies = copiesOf(a);
-  const busy = inUse(copies.map((c) => c.id));
-  if (busy) throw new OrgAccountError(409, `${a.label} is in use: ${busy}. Close it first.`);
   const col = await storeAccounts();
   if (!col) throw new OrgAccountError(409, "the org's store cannot be reached");
-  const email = a.email?.toLowerCase() ?? null;
-  // A Go sign-in's identity is one account in one workspace: an email can
-  // hold several, each its own refresh token.
-  const externalId = a.provider === "omp" ? `${(login as GoLogin).accountID}:${(login as GoLogin).orgID ?? ""}` : null;
-  const held =
-    a.provider === "omp" && externalId
-      ? await col.findOne({ provider: "omp", externalId })
-      : email
-        ? await col.findOne({ provider: a.provider, email })
-        : null;
-  if (held) throw new OrgAccountError(409, `${org.name} already has ${a.label}${email ? ` (${email})` : ""}`);
+  const existing = await sharedAs(a);
+  if (existing) return existing;
   const doc: StoreAccount = {
     _id: newAccountId(),
     provider: a.provider,
     label: a.label,
-    email,
+    email: a.email?.toLowerCase() ?? null,
     plan: a.plan,
-    externalId,
+    externalId: a.provider === "omp" ? loginKey(a)!.slice("omp:".length) : null,
     login: seal(org.key, login),
     version: 1,
     refreshedAt: null,
@@ -347,41 +366,37 @@ export async function moveIntoOrg(accountId: string, inUse: InUse): Promise<{ ac
     addedAt: new Date(),
   };
   await col.insertOne(doc);
-  // Only once the store has it: a failure before here leaves the login where it was.
-  const loggedOut: string[] = [];
-  for (const c of copies) {
-    rmSync(credentialsPath(c.provider, c.home)!, { force: true });
-    // Kept for its transcripts; its email goes, or it would pass for the login it no longer holds.
-    updateAccount(c.id, c.isDefault ? { email: null } : { email: null, label: `${c.label} (moved to ${org.name})` });
-    loggedOut.push(c.isDefault ? `your plain ${c.provider} (${c.home})` : c.label);
-  }
-  console.log(`agentbox: org: ${a.label} moved into ${org.name}; logged out here: ${loggedOut.join(", ")}`);
-  return { account: doc, loggedOut };
+  console.log(`agentbox: org: ${a.label} shared with ${org.name}`);
+  return doc;
 }
 
-/** Take an org account back onto this machine, as a personal account with its own home. */
-export async function takeFromOrg(accountId: string, liveElsewhere: (id: string) => Promise<string | null>, inUse: InUse): Promise<Account> {
+/** Stop sharing an account's login: your homes of it get the whole login
+ *  back, refresh token and all, and the org's homes of it go at each
+ *  machine's next sync. A session there already on it keeps its access
+ *  token until it runs out. */
+export async function unshareFromOrg(accountId: string): Promise<void> {
   const org = readOrg();
   const col = await storeAccounts();
   if (!org || !col) throw new OrgAccountError(409, "this machine is in no org, or its store cannot be reached");
-  const doc = await col.findOne({ _id: accountId });
-  if (!doc) throw new OrgAccountError(404, `${org.name} has no account ${accountId}`);
-  if (!doc.login) throw new OrgAccountError(409, `${doc.label} needs logging in again before it can be taken`);
-  const busy = inUse([accountId]) ?? (await liveElsewhere(accountId));
-  if (busy) throw new OrgAccountError(409, `${doc.label} is in use: ${busy}`);
-  const login = unseal<Login>(org.key, doc.login);
-  const id = newAccountId();
-  const home = createAccountHome(doc.provider, id);
-  const account: Account = { id, provider: doc.provider, label: doc.label, email: doc.email, plan: doc.plan, home, isDefault: false, enabled: true, createdAt: Date.now() };
-  // The whole login, refresh token and all: this home is its only holder now.
-  if (doc.provider === "omp") writeGoLogin(home, login as GoLogin);
-  else writeJson(credentialsPath(doc.provider, home)!, doc.provider === "claude" ? { claudeAiOauth: (login as ClaudeLogin).claudeAiOauth } : login);
-  if (doc.provider === "claude" && (login as ClaudeLogin).oauthAccount) {
-    const cj = readJson(join(home, ".claude.json")) ?? {};
-    writeJson(join(home, ".claude.json"), { ...cj, oauthAccount: (login as ClaudeLogin).oauthAccount });
+  const a = getAccount(accountId);
+  if (!a) throw new OrgAccountError(404, `no account ${accountId}`);
+  const doc = await sharedAs(a);
+  if (!doc) return;
+  // Only the version read: a refresh landing in between would be lost with it.
+  if (!(await col.deleteOne({ _id: doc._id, version: doc.version })).deletedCount) {
+    throw new OrgAccountError(409, `${a.label}'s login was just refreshed: try again`);
   }
-  insertAccount(account);
-  await col.deleteOne({ _id: accountId });
-  console.log(`agentbox: org: ${doc.label} taken from ${org.name} onto this machine`);
-  return account;
+  if (doc.login) {
+    const login = unseal<Login>(org.key, doc.login);
+    for (const h of homesOf(doc)) if (!isOrgAccount(h)) writeLogin(h, login);
+  }
+  console.log(`agentbox: org: ${a.label} no longer shared with ${org.name}`);
+}
+
+/** A whole login, refresh token and all, into one of your homes. */
+function writeLogin(a: Account, login: Login): void {
+  if (a.provider === "omp") return writeGoLogin(a.home, login as GoLogin);
+  writeJson(credentialsPath(a.provider, a.home)!, a.provider === "claude" ? { claudeAiOauth: (login as ClaudeLogin).claudeAiOauth } : login);
+  const oa = a.provider === "claude" ? (login as ClaudeLogin).oauthAccount : null;
+  if (oa) writeJson(claudeJsonPath(a), { ...(readJson(claudeJsonPath(a)) ?? {}), oauthAccount: oa });
 }

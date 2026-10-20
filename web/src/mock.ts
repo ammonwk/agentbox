@@ -113,7 +113,7 @@ function usage(accountId: string, windows: UsageWindow[], extra: Partial<Account
   return { accountId, at: T0 - 2 * M, windows, stale: null, source: "endpoint", notes: [], ...extra };
 }
 
-type MockAccount = Omit<AccountView, "claims" | "placement" | "alsoAt" | "scope">;
+type MockAccount = Omit<AccountView, "claims" | "placement" | "alsoAt" | "scope" | "shared">;
 
 const accounts: MockAccount[] = [
   {
@@ -763,7 +763,7 @@ function placementFor(provider: ProviderId, manual?: string): Placement {
 
 function accountViews(): AccountView[] {
   const now = Date.now();
-  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, now), alsoAt: [], scope: "personal" as const }));
+  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, now), alsoAt: [], scope: "personal" as const, shared: false }));
 }
 
 // ------------------------------------------------------------- state

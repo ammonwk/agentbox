@@ -56,27 +56,37 @@ with, or takes the default when it starts. Scope decides:
 Claude, Codex, and omp's OpenCode Go sign-ins. devin and muse are per-person:
 they stay personal.
 
-An account lives in one place: on one machine, or in the org. Two holders of a
-login log each other out at the next refresh, so **moving** is the only
-operation, and it moves every copy:
+A login is shared or not, and you flip it either way at any time
+(Accounts › the card's "Shared with Plaibook" toggle, `agentbox org share
+<account>` / `unshare <account>`). Nothing has to be idle and nothing is
+logged out: the account stays yours, and the org gets it too.
 
-- `agentbox org add-account <account>` (Accounts › Move to Plaibook) is
-  refused while a session runs on it or on a copy (another personal home of
-  the same login, usually the CLI's own), and when the org already has that
-  login. It seals the login into `accounts`, then removes the login file from
-  the home and every copy and clears their email, so they are not taken for
-  the same account again. The homes stay, logged out, for their old
-  transcripts. A copy is one email for claude and codex, and one OpenCode
-  account in one workspace for omp — an email can hold several workspaces,
-  each its own sign-in. Linux only: on macOS claude keeps its login in the
-  Keychain.
-- `agentbox org take-account <account>` (Accounts › Take back) is the
-  reverse: refused while a session here or a live row on another machine is
-  on it, it makes a personal home with the full login and deletes the store's
-  document. Every other machine drops its local org account at its next sync.
-- A login made in an org home (Accounts › Log in again) is uploaded to the
-  store; a refresh the provider refuses sets `problem` and clears the login,
-  and every machine's home is then logged out until someone logs in again.
+Two holders of a refresh token log each other out at the next refresh, so
+while a login is shared the store holds its only one. **Every home of it** on
+every member's machine is a mirror: the org's home of it under
+`org/accounts/<id>` on each machine, and the sharer's own homes (the account
+and any copy logged in as the same login, the CLI's own home usually). A
+login's name across machines is its email for claude and codex, and one
+OpenCode account in one workspace for omp — an email can hold several
+workspaces, each its own sign-in.
+
+- **Sharing** seals the login into `accounts`. At the next sync (at once,
+  here) the sharer's homes get the placeholder refresh token like everyone
+  else's. A session already running on it goes on: its CLI re-reads the file
+  near its token's expiry and finds the store's.
+- **A newer login in any mirror** (logging in again, or a CLI that refreshed
+  before it saw the store's) goes to the store when its access token outlives
+  the store's; an older one is a stale copy and is overwritten. A refresh the
+  provider refuses sets `problem` and clears the login, and every mirror is
+  logged out until someone logs in again.
+- **Unsharing** deletes the store's document (only at the version read, so a
+  refresh landing in between is not lost) and writes the whole login, refresh
+  token and all, into the sharer's homes of it here. The org's homes go at
+  each machine's next sync; a session there already on it keeps its access
+  token until it runs out. Unsharing is done from a machine with a personal
+  home of the login: the org's own card has no switch.
+
+Linux only for claude: on macOS it keeps its login in the Keychain.
 
 **Credential files.** Each member's machine keeps an ordinary local home for
 each org account (`syncOrgAccounts`, every 60 s) and writes the store's current
@@ -100,7 +110,7 @@ sees one due takes the account's lease (`findOneAndUpdate` on `version` where
 the lease is free or past, 60 s), refreshes at the provider's token endpoint
 with the CLI's own client id, writes the new login to a local pending file
 first and then to the store with `version + 1`. Every machine rewrites its
-homes' files when the login changes. A machine that dies between the
+mirrors' files when the login changes. A machine that dies between the
 provider's answer and the store's write recovers from its pending file.
 
 **Usage** is read by each machine for itself, with its home's access token, as

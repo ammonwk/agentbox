@@ -11,5 +11,5 @@ export function accountProvider(p: ProviderId): AccountProvider {
 
 /** The providers whose logins an org can pool (docs/org.md): the ones with a
  *  refresh token the store can own and no machine-local state a second member
- *  would need. Shared with the board, which offers Move to <org> for these. */
+ *  would need. Shared with the board, which offers sharing these with the org. */
 export const ORG_PROVIDERS: readonly AccountProvider[] = ["claude", "codex", "omp"];
