@@ -29,8 +29,7 @@
  * an empty list, never an error — the picker still takes free text.
  */
 
-import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome, userHome } from "./paths";
 import { exec } from "./accounts/exec";
@@ -39,6 +38,7 @@ import { codexHome } from "./providers/codex";
 import { devinAdapter } from "./providers/devin";
 import { BRIDGED } from "../bridge/models";
 import { agentDir } from "./providers/omp";
+import { ompModelCatalog, ompModelsConfig } from "./providers/omp-models";
 import type { Account, ModelOption, ProviderId } from "./types";
 import { museModels } from "./providers/muse";
 
@@ -220,32 +220,11 @@ const OMP_DEV_PROVIDER: Record<string, string> = { "opencode-zen": "opencode", "
 
 function ompModels(dev: ModelsDev): ModelOption[] {
   const dir = agentDir();
-  const yml = readCached(join(dir, "models.yml"), (t) => Bun.YAML.parse(t) as { providers?: Record<string, { models?: { id: string; name?: string }[] }> });
+  const yml = ompModelsConfig(dir);
   const providers = Object.entries(yml?.providers ?? {});
   if (providers.length === 0) return [];
 
-  // omp keys its catalog `provider` or `provider:models-v1:<hash>`; the newest
-  // row per provider wins.
-  const catalog = new Map<string, { id: string; name?: string }[]>();
-  const dbPath = join(dir, "models.db");
-  if (existsSync(dbPath)) {
-    let db: Database | null = null;
-    try {
-      db = new Database(dbPath, { readonly: true });
-      const rows = db.query("SELECT provider_id, models FROM model_cache ORDER BY updated_at").all() as { provider_id: string; models: string }[];
-      for (const r of rows) {
-        try {
-          catalog.set(r.provider_id.split(":")[0]!, JSON.parse(r.models));
-        } catch {
-          // one bad row is not the whole catalog
-        }
-      }
-    } catch {
-      // locked or a schema we do not know: declared models only
-    } finally {
-      db?.close();
-    }
-  }
+  const catalog = ompModelCatalog(dir);
 
   const out: ModelOption[] = [];
   for (const [provider, p] of providers) {
