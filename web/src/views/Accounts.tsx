@@ -170,6 +170,10 @@ function AccountCard({
   const [label, setLabel] = useState(a.label);
   const [forget, setForget] = useState(false);
   const [forgetHome, setForgetHome] = useState<AccountView["alsoAt"][number] | null>(null);
+  const [moving, setMoving] = useState(false);
+  const org = state.org?.name ?? null;
+  const pooled = a.scope === "org";
+  const movable = !!org && !pooled && (a.provider === "claude" || a.provider === "codex") && a.auth.state === "ok";
   const now = useNow(30_000);
   const claims = a.claims;
   const outstanding = outstandingOf(claims);
@@ -231,6 +235,11 @@ function AccountCard({
         {a.isDefault ? (
           <span className="src ac-default" title={`Your plain ${a.provider} CLI's own login. Logging the CLI in or out changes this card only.`}>
             CLI login
+          </span>
+        ) : null}
+        {pooled ? (
+          <span className="src ac-org" title={`${org ?? "The org"}'s account: its login is shared through the org, and sessions on it are the org's`}>
+            {org ?? "Org"}
           </span>
         ) : null}
         <span className="ac-toggle">
@@ -464,12 +473,43 @@ function AccountCard({
         </Button>
         {/* The CLI's own home cannot be forgotten: it is re-registered at the
             next start, and sessions started from the CLI live in it. */}
-        {a.isDefault ? null : (
+        {movable || pooled ? (
+          <Button size="sm" variant="ghost" icon={Icon.users} disabled={busy} onClick={() => setMoving(true)}>
+            {pooled ? "Take back" : `Move to ${org}`}
+          </Button>
+        ) : null}
+        {/* An org account goes by taking it back: forgotten, it would be back at the next sync. */}
+        {a.isDefault || pooled ? null : (
           <Button size="sm" variant="ghost" icon={Icon.trash} className="ac-forget" disabled={busy} onClick={() => setForget(true)}>
             Forget
           </Button>
         )}
       </footer>
+
+      {moving ? (
+        <Confirm
+          title={pooled ? `Take ${a.label} back from ${org}?` : `Move ${a.label} to ${org}?`}
+          confirmLabel={pooled ? "Take back" : "Move"}
+          body={
+            pooled ? (
+              <p>
+                Its login comes back to this machine as your own account, and {org}&apos;s other members lose it. Nothing may be running on it,
+                here or on their machines.
+              </p>
+            ) : (
+              <p>
+                Its login goes into {org}&apos;s pool, for every member&apos;s org sessions. Every copy of it on this machine is logged out, so
+                nothing here uses it but org sessions. Nothing may be running on it.
+              </p>
+            )
+          }
+          onCancel={() => setMoving(false)}
+          onConfirm={() => {
+            setMoving(false);
+            void run(() => (pooled ? api.takeFromOrg(a.id) : api.moveToOrg(a.id)));
+          }}
+        />
+      ) : null}
 
       {forgetHome ? (
         <Confirm

@@ -328,7 +328,8 @@ export async function moveIntoOrg(accountId: string, inUse: InUse): Promise<{ ac
   const loggedOut: string[] = [];
   for (const c of copies) {
     rmSync(credentialsPath(c.provider, c.home)!, { force: true });
-    updateAccount(c.id, { email: null });
+    // Kept for its transcripts; its email goes, or it would pass for the login it no longer holds.
+    updateAccount(c.id, c.isDefault ? { email: null } : { email: null, label: `${c.label} (moved to ${org.name})` });
     loggedOut.push(c.isDefault ? `your plain ${c.provider} (${c.home})` : c.label);
   }
   console.log(`agentbox: org: ${a.label} moved into ${org.name}; logged out here: ${loggedOut.join(", ")}`);

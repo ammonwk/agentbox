@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Repo, Schedule } from "../../../src/core/types";
+import type { AppState, ModelOption, Placement, PrInfo, ProviderId, Repo, Schedule, Scope } from "../../../src/core/types";
 import { parseWhen } from "../../../src/core/schedule";
 import { accountProvider } from "../../../src/core/providers/account";
 import { api, type NewSessionInput } from "../api";
@@ -152,7 +152,12 @@ export function NewSession({
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
 
-  const accounts = useMemo(() => state.accounts.filter((a) => a.provider === accountProvider(provider)), [state.accounts, provider]);
+  // In an org, the org's accounts or your own; out of one, your own.
+  const [scope, setScope] = useState<Scope>(state.org ? state.settings.scope : "personal");
+  const accounts = useMemo(
+    () => state.accounts.filter((a) => a.provider === accountProvider(provider) && a.scope === scope),
+    [state.accounts, provider, scope],
+  );
   // A remembered pin to an account that is gone is not a pin.
   useEffect(() => {
     if (accountId !== "auto" && !accounts.some((a) => a.id === accountId)) setChoice({ accountId: "auto" });
@@ -166,7 +171,7 @@ export function NewSession({
     setPlaceErr(null);
     const t = setTimeout(() => {
       api
-        .placement({ provider, ...(model ? { model } : {}) })
+        .placement({ provider, scope, ...(model ? { model } : {}) })
         .then((p) => !cancelled && setPlacement(p))
         .catch((e: unknown) => !cancelled && setPlaceErr(e instanceof Error ? e.message : String(e)))
         .finally(() => !cancelled && setPlacing(false));
@@ -175,7 +180,7 @@ export function NewSession({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [provider, model]);
+  }, [provider, model, scope]);
 
   const manual = accountId !== "auto" ? accounts.find((a) => a.id === accountId) ?? null : null;
   // The account whose models to offer: the pin, else where Auto would go.
@@ -419,6 +424,7 @@ export function NewSession({
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
       accountId,
+      scope,
     };
     try {
       if (mode === "schedule") {
@@ -506,6 +512,7 @@ export function NewSession({
           footer={
             <div className="ns-bar">
               <AttachButton a={images} />
+              {state.org ? <ScopePicker org={state.org.name} value={scope} onChange={setScope} /> : null}
               <AccountPicker
                 pill
                 accounts={accounts}
@@ -581,6 +588,29 @@ function AgentPicker({ state, value, onChange }: { state: AppState; value: Provi
           ),
         };
       })}
+    />
+  );
+}
+
+/** Whose accounts it runs on: the org's, where the org sees it, or your own. */
+function ScopePicker({ org, value, onChange }: { org: string; value: Scope; onChange: (s: Scope) => void }) {
+  const name = (s: Scope) => (s === "org" ? org : "Personal");
+  return (
+    <Dropdown
+      label="Accounts from"
+      width={300}
+      selected={value}
+      onPick={(k) => onChange(k as Scope)}
+      trigger={<span className="ns-pill-text">{name(value)}</span>}
+      items={(["personal", "org"] as const).map((s) => ({
+        key: s,
+        children: (
+          <>
+            <span className="ns-item-main">{name(s)}</span>
+            <span className="ns-item-sub">{s === "org" ? "shared; its members see it" : "your own accounts"}</span>
+          </>
+        ),
+      }))}
     />
   );
 }

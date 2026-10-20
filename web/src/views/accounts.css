@@ -127,6 +127,9 @@
 .ac-default {
   color: var(--muted);
 }
+.ac-org {
+  color: var(--accent);
+}
 .ac-toggle {
   margin-left: auto;
   flex: none;

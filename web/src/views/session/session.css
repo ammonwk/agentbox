@@ -3780,3 +3780,17 @@ a.wk-item:hover {
   overflow-wrap: anywhere;
   color: var(--text);
 }
+.rail-org {
+  width: calc(100% - 16px);
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: copy;
+}
+.rail-org .rail-title {
+  color: var(--muted);
+}
+.rail-org[data-away] {
+  opacity: 0.55;
+}

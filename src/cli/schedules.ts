@@ -19,9 +19,9 @@ function tokens(v: string): number {
 }
 
 /** `agentbox schedule <when> [--agent claude] [--fallback omp,codex] [--cwd DIR] [--account A] [--model M] [--effort E] [--name N]
- *  [--note-cmd CMD] [--same-session [--fresh-over 150k]] <prompt…|->` */
+ *  [--note-cmd CMD] [--same-session [--fresh-over 150k]] [--org|--personal] <prompt…|->` */
 export async function schedule(api: Api, args: string[]): Promise<number> {
-  const { flags, rest } = parseArgs(args, ["agent", "fallback", "cwd", "account", "model", "effort", "name", "note-cmd", "fresh-over"], ["same-session"]);
+  const { flags, rest } = parseArgs(args, ["agent", "fallback", "cwd", "account", "model", "effort", "name", "note-cmd", "fresh-over"], ["same-session", "org", "personal"]);
   const [when, ...words] = rest;
   if (!when) throw new Error('schedule needs a time and a prompt: agentbox schedule "tomorrow at 9am" fix the flaky test');
   const agent = (str(flags.get("agent")) ?? "claude") as ProviderId;
@@ -56,6 +56,7 @@ export async function schedule(api: Api, args: string[]): Promise<number> {
       effort: str(flags.get("effort")),
       accountId,
       fallbacks,
+      scope: flags.has("org") ? "org" : flags.has("personal") ? "personal" : undefined,
     },
   });
   console.log(line(sc));

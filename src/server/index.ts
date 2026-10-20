@@ -370,10 +370,11 @@ function buildAccountViews(): AccountView[] {
   const { claims, placements } = fleet.accountsBoard(homes.map((a) => a.provider));
   return homes.filter((a) => owner.get(a.id) === a.id).map((a) => ({
     ...a,
+    scope: fleet.scopeOf(a.id),
     // Lapsed claims weigh nothing; listing every session of the last few
     // days under its account would bury the handful that do.
     claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
-    placement: placements.get(a.provider)?.candidates.find((c) => c.accountId === a.id) ?? null,
+    placement: placements.get(`${a.provider}/${fleet.scopeOf(a.id)}`)?.candidates.find((c) => c.accountId === a.id) ?? null,
     alsoAt: homes.filter((h) => h.id !== a.id && owner.get(h.id) === a.id).map((h) => ({ id: h.id, home: h.home, isDefault: h.isDefault })),
   }));
 }
@@ -1250,6 +1251,7 @@ const router = new Router(mapError)
         effort: optionalString(spec, "effort"),
         accountId: optionalString(spec, "accountId") ?? null,
         fallbacks: spec.fallbacks === undefined ? undefined : providers(spec.fallbacks),
+        scope: scopeOf(spec),
       },
       noteCmd: noteCmdOf(b),
       sameSession: b.sameSession === true,

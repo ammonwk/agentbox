@@ -35,6 +35,7 @@ import type {
   LoadDetail,
   ProviderId,
   ResetConsumeResult,
+  Scope,
   NightlyReclaim,
   ReclaimResult,
   Repo,
@@ -141,6 +142,8 @@ export interface NewSessionInput {
   model?: string;
   effort?: string;
   accountId?: string;
+  /** Whose accounts: absent, the default (settings.scope). */
+  scope?: Scope;
 }
 
 /** An image saved for a prompt to name: agents read it from `path`. */
@@ -238,7 +241,7 @@ export const api = {
   pushTest: () => post<{ sent: number; failed: string[] }>("/api/push/test"),
 
   // sessions
-  placement: (input: { provider: ProviderId; model?: string }) =>
+  placement: (input: { provider: ProviderId; model?: string; scope?: Scope }) =>
     post<Placement>("/api/placement", input),
   /** What `--model` can be on this account, newest release first. */
   models: (accountId: string, provider?: ProviderId) =>
@@ -331,6 +334,10 @@ export const api = {
     request<Account>("PATCH", `/api/accounts/${enc(id)}`, patch),
   forgetAccount: (id: string) => request<unknown>("DELETE", `/api/accounts/${enc(id)}`),
   login: (id: string) => post<LoginFlow>(`/api/accounts/${enc(id)}/login`),
+  /** Its login into the org's pool: every copy of it here is logged out. */
+  moveToOrg: (accountId: string) => post<{ id: string; label: string; loggedOut: string[] }>("/api/org/accounts", { accountId }),
+  /** An org account's login back onto this machine, as a personal account. */
+  takeFromOrg: (id: string) => request<{ id: string; label: string }>("DELETE", `/api/org/accounts/${enc(id)}`),
   refreshUsage: (id: string) => post<AccountUsage>(`/api/accounts/${enc(id)}/usage`),
   /** Spend one of a codex account's usage-limit resets; `creditId` picks one. */
   useResetCredit: (id: string, creditId?: string) =>

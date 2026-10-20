@@ -2727,18 +2727,21 @@ export class Fleet extends EventEmitter {
   }
 
   /** What the Accounts page shows: the claims on each account, and where a
-   *  session of each provider would go now — the claims worked out once for
-   *  all of them, not once per provider. A provider that cannot place is left out. */
-  accountsBoard(providers: readonly ProviderId[]): { claims: Map<string, ClaimView[]>; placements: Map<ProviderId, Placement> } {
+   *  session of each provider would go now in each scope (`provider/scope`)
+   *  — the claims worked out once for all of them, not once per provider. A
+   *  provider that cannot place is left out. */
+  accountsBoard(providers: readonly ProviderId[]): { claims: Map<string, ClaimView[]>; placements: Map<string, Placement> } {
     const claims = this.claims();
-    const placements = new Map<ProviderId, Placement>();
+    const placements = new Map<string, Placement>();
     this.claimsNow = claims;
     try {
       for (const p of new Set(providers)) {
-        try {
-          placements.set(p, this.placement(p));
-        } catch {
-          // Shown without one.
+        for (const scope of readOrg() ? (["personal", "org"] as const) : (["personal"] as const)) {
+          try {
+            placements.set(`${p}/${scope}`, this.placement(p, undefined, undefined, undefined, true, scope));
+          } catch {
+            // Shown without one.
+          }
         }
       }
     } finally {

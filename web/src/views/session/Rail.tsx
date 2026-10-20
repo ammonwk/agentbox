@@ -38,6 +38,7 @@ import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
 import { movePin, toggleBookmark, togglePin } from "./pins";
 import { ScheduledRow } from "./Scheduled";
+import { OrgSessions } from "./OrgSessions";
 import { endedDone, turnStatus } from "../../../../src/core/turnstatus";
 
 // ------------------------------------------------------------------- state
@@ -438,6 +439,7 @@ export function Rail({
             ))}
           </div>
         ))}
+        {state.org && (!split || view === "active") ? <OrgSessions org={state.org} query={filter.query} /> : null}
         {!split || view === "inactive" ? <ClosedList query={filter.query} current={current} stamp={closedStamp} onMenu={onMenu} /> : null}
       </div>
       {drag ? (

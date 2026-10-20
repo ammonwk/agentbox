@@ -148,6 +148,8 @@ export interface AccountView extends Account {
   placement: Candidate | null;
   /** Other homes logged in as this login. */
   alsoAt: { id: string; home: string; isDefault: boolean }[];
+  /** Yours, or the org's (docs/org.md). */
+  scope: Scope;
 }
 
 export interface ClaimView {
@@ -1589,6 +1591,8 @@ export interface ScheduleSpec {
   /** Tried in order when no account of `provider` has room, each on its own
    *  default model, effort and account. */
   fallbacks?: ProviderId[];
+  /** Whose accounts it starts on; none: the default when it starts. */
+  scope?: Scope;
 }
 
 /**

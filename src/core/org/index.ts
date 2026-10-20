@@ -168,7 +168,9 @@ export class Org {
 
   /** The other machine's org session an id (or a unique prefix of one) names. */
   async find(id: string): Promise<OrgSessionRow | null> {
-    const col = await storeSessions();
+    const col = await storeSessions().catch((e: Error) => {
+      throw new Error(`no session ${id} here, and the org's store cannot be reached to look there: ${e.message}`);
+    });
     if (!col) return null;
     const rows = await col.find({ _id: { $regex: `^${id.replace(/[^\w-]/g, "")}` }, machine: { $ne: machineName() } }, { projection: { inbox: 0 } }).limit(2).toArray();
     return rows.length === 1 ? (rows[0] as OrgSessionRow) : null;

@@ -476,8 +476,8 @@ export class Scheduler {
   /** Why a session started on a fallback gives way: its schedule's own
    *  provider has room again. */
   private backHome(s: Schedule, last: Session): string | null {
-    const { provider, model, accountId, effort } = s.spec;
-    if (last.provider === provider || !this.fleet.placement(provider, model, accountId, effort).accountId) return null;
+    const { provider, model, accountId, effort, scope } = s.spec;
+    if (last.provider === provider || !this.fleet.placement(provider, model, accountId, effort, true, scope).accountId) return null;
     return `it ran on ${last.provider} while ${provider} had no account with room, and ${provider} has room again`;
   }
 
