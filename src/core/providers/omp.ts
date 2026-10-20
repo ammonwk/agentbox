@@ -765,6 +765,8 @@ export const ompAdapter: ProviderAdapter = {
   label: "omp",
   efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
 
+  modelContextLimit: (model) => ompContextLimit(agentDir(), model),
+
   detect() {
     return cliVersion(["omp", "--version"]);
   },
