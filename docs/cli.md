@@ -17,7 +17,7 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox show <id>              # the header: where, model, context, first/last prompt, last reply
     agentbox log <id> | tail -60    # the conversation as text, oldest first
     agentbox log <id> --tools       # with tool calls and their output
-    agentbox grep <regex> [-i] [--all]   # search every conversation: id  time  who  line
+    agentbox grep <regex> [-i] [--all]   # text, thinking, tool calls and tool output: id time who line
     agentbox screen <id>            # what its terminal shows right now (tmux sessions)
     agentbox diff <id>              # its worktree's changes
     agentbox usage                  # each account's limits

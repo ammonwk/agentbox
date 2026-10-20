@@ -60,6 +60,12 @@ once: commit your own files by path, never `git add -A`.
 
 ## Rules that are easy to break
 
+- **Search the tree, not the machine.** `grep -r` or `find` in `$HOME`, `/`,
+  `/tmp`, `~/.local/share/agentbox`, or `~/Documents` reads hundreds of GB and
+  millions of files, on one core and for minutes. Scope it to the worktree,
+  use `rg` with `-g '!node_modules'`, bound it with `-m1` or `-maxdepth`, and
+  remember `| head` does not stop the scan. `agentbox grep --all` is for
+  conversations.
 - **The provider's transcript is the record.** Never write a copy of a
   conversation. The database holds only what the provider cannot know: the
   account pin, the claim, the tmux session, a label, when it was closed, metrics.
