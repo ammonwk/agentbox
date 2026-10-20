@@ -27,9 +27,13 @@ export function connectionUid(clientPort: number, serverPort: number): number | 
       continue;
     }
     any = true;
-    for (const line of text.split("\n")) {
+    // Only lines naming the port are split: test runs leave the table
+    // thousands of rows long, and splitting every one took 10 ms a request.
+    for (let i = text.indexOf(`${want} `); i >= 0; i = text.indexOf(`${want} `, i + 1)) {
+      const start = text.lastIndexOf("\n", i) + 1;
+      const end = text.indexOf("\n", i);
       // sl local_address rem_address st tx:rx tr:when retrnsmt uid ...
-      const c = line.trim().split(/\s+/);
+      const c = text.slice(start, end < 0 ? undefined : end).trim().split(/\s+/);
       if (c.length > 7 && c[1]!.endsWith(want) && c[2]!.endsWith(peer)) return Number(c[7]);
     }
   }
