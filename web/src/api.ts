@@ -60,9 +60,6 @@ import type {
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
-import type { CloudStatus, OutboundResult } from "../../src/core/cloud/bridge";
-import type { AgentIdentity, Directory, InstallationSettings, PublishedSkill } from "../../src/cloud/protocol";
-import type { InstallResult, SkillManifest } from "../../src/cloud/skillbundle";
 import { noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
@@ -114,6 +111,8 @@ async function request<T>(method: Method, path: string, body?: unknown, signal?:
     // it is usually the only description of what actually went wrong.
     throw new Error(`${path}: ${res.status} ${res.statusText} — ${text.slice(0, 200)}`);
   }
+  // At the public door a session that ran out signs in again (src/server/public.ts).
+  if (res.status === 401 && env.error === "sign in first") location.assign(`/auth/login?next=${enc(location.pathname + location.search + location.hash)}`);
   if (!env.ok) throw new Error(env.error || `${path}: ${res.status} ${res.statusText}`);
   return env.data as T;
 }
@@ -401,18 +400,6 @@ export const api = {
   hubRemove: (node: string) => request<HubStatus>("DELETE", `/api/hub/nodes/${enc(node)}`),
   hubLend: (lend: Partial<Lend>) => request<HubStatus>("PATCH", "/api/hub/link", { lend }),
 
-  // this machine and the agentbox cloud (docs/cloud.md)
-  cloud: () => get<CloudStatus>("/api/cloud"),
-  cloudRegister: (secret: string) => post<CloudStatus>("/api/cloud/installation", { secret }),
-  cloudForget: (revoke: boolean) => request<CloudStatus>("DELETE", `/api/cloud/installation${revoke ? "?revoke=1" : ""}`),
-  cloudSettings: (patch: Partial<InstallationSettings>) => request<InstallationSettings>("PUT", "/api/cloud/settings", patch),
-  cloudSync: () => post<CloudStatus>("/api/cloud/sync"),
-  cloudDirectory: (fresh = false) => get<Directory>(`/api/cloud/directory${fresh ? "?fresh=1" : ""}`),
-  cloudShare: (sessionId: string, listed: boolean) => post<AgentIdentity>(`/api/cloud/agents/${enc(sessionId)}`, { listed }),
-  cloudSend: (body: { to: string; text: string; wake?: boolean; clientId?: string }) => post<OutboundResult>("/api/cloud/messages", body),
-  cloudInstallSkill: (name: string, rev: number, force: boolean) => post<InstallResult>(`/api/cloud/skills/${enc(name)}/install`, { rev, force }),
-  cloudInstalledSkills: () => get<{ dir: string; manifest: SkillManifest }[]>("/api/cloud/installed-skills"),
-  cloudPublishSkill: (name: string, summary?: string) => post<PublishedSkill>("/api/cloud/skills/publish", { name, summary }),
 };
 
 // --------------------------------------------------------------- the wire

@@ -361,7 +361,7 @@ describe("a hub and a node", () => {
   let token = "";
   let sessionId = "";
 
-  test("the hub is made and its members set, by its owner only", async () => {
+  test("the hub is made and its members set", async () => {
     // The hub is a tagged box, which belongs to no person: it must be told its owner.
     expect((await local(hub, "POST", "/api/hub/init", {})).status).toBe(400);
     const init = await local(hub, "POST", "/api/hub/init", { owner: "owner@team" });
@@ -377,8 +377,8 @@ describe("a hub and a node", () => {
     const asMember = await from("127.0.0.5", hub, "GET", "/api/hub");
     expect(asMember.status).toBe(200);
     expect(asMember.data.person).toMatchObject({ login: "member@team", role: "member", via: "tailnet" });
-    // A member cannot change the members.
-    expect((await from("127.0.0.5", hub, "PUT", "/api/hub/members", { body: { members: [{ login: "member@team", role: "owner" }] } })).status).toBe(403);
+    // A member may change the members too.
+    expect((await from("127.0.0.5", hub, "PUT", "/api/hub/members", { body: { members } })).status).toBe(200);
   });
 
   test("a non-member is refused", async () => {
@@ -386,7 +386,7 @@ describe("a hub and a node", () => {
     expect((await from("127.0.0.6", hub, "POST", "/api/hub/join", { body: {} })).status).toBe(403);
   });
 
-  test("join: the node asks, the owner approves, and the hub connects", async () => {
+  test("join: the node asks, a member approves, and the hub connects", async () => {
     // A bare address is tried over HTTPS first: the hub serves only that.
     const joined = await local(node, "POST", "/api/hub/link", { hub: `${hub.ip}:${hub.port}` });
     expect(joined.status).toBe(201);
@@ -406,9 +406,7 @@ describe("a hub and a node", () => {
     expect(n).toMatchObject({ ip: node.ip, url: `http://${node.ip}:${node.port}`, approvedAt: null, tags: ["tag:server"] });
     expect(JSON.stringify(pending.data)).not.toContain(token);
 
-    // A member cannot approve; the owner can.
-    expect((await from("127.0.0.5", hub, "POST", `/api/hub/nodes/${n.id}/approve`)).status).toBe(403);
-    expect((await from("127.0.0.4", hub, "POST", `/api/hub/nodes/${n.id}/approve`)).status).toBe(200);
+    expect((await from("127.0.0.5", hub, "POST", `/api/hub/nodes/${n.id}/approve`)).status).toBe(200);
     await eventually("the hub to reach the node", async () => (await local(node, "GET", "/api/hub")).data.link.lastHubAt);
   });
 
@@ -606,31 +604,9 @@ describe("a hub and a node", () => {
     expect(answered.data.decidedBy).toEqual({ login: "member@team", name: "Member" });
   }, 60_000);
 
-  test("what is the owner's alone is refused to a member; a member still starts and reads", async () => {
-    const refused: [string, string, unknown?][] = [
-      ["PUT", "/api/settings", {}],
-      ["POST", "/api/superagents", { dir: "/tmp" }],
-      ["DELETE", "/api/superagents/salus"],
-      ["PATCH", "/api/superagents/salus", { node: null }],
-      ["POST", "/api/accounts", { provider: "codex" }],
-      ["PATCH", "/api/accounts/anything", { enabled: false }],
-      ["POST", "/api/mcp/servers", { name: "x", command: "true" }],
-      ["PATCH", `/api/repos/${hubRepoId}`, { setup: { copy: [], run: "touch /tmp/pwned" } }],
-      ["POST", "/api/worktrees/reclaim", { paths: [] }],
-      ["POST", "/api/waits", { session: "abc123", spec: { kind: "until", cmd: "true", cwd: "/" } }],
-      ["POST", "/api/schedules", { when: "in 4 hours", spec: { provider: "codex", cwd: "/tmp" }, noteCmd: "true" }],
-    ];
-    for (const [method, path, body] of refused) {
-      const r = await from("127.0.0.5", hub, method, path, { body });
-      expect({ method, path, status: r.status }).toEqual({ method, path, status: 403 });
-      expect(r.error).toContain("only the hub's owner");
-    }
-    expect((await from("127.0.0.5", hub, "GET", "/ws/voice?c=abcdefgh", { headers: { upgrade: "websocket", connection: "upgrade", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", "sec-websocket-version": "13" } })).status).toBe(403);
-    // Reads stay open, and the owner may.
+  test("a member may do what the owner may: everyone admitted is trusted with the box", async () => {
+    expect((await from("127.0.0.5", hub, "PUT", "/api/settings", { body: {} })).status).toBe(200);
     expect((await from("127.0.0.5", hub, "GET", "/api/accounts")).status).toBe(200);
-    expect((await from("127.0.0.5", hub, "GET", "/api/settings")).status).toBe(200);
-    expect((await from("127.0.0.4", hub, "PUT", "/api/settings", { body: {} })).status).toBe(200);
-    expect((await from("127.0.0.4", hub, "PATCH", "/api/superagents/salus", { body: { node: "local" } })).data.node).toBeNull();
     // With no hub, the machine's owner on the tailnet is refused nothing.
     expect((await from("127.0.0.9", solo, "PUT", "/api/settings", { body: {} })).status).toBe(200);
     // And a start with a node is a hub's alone.

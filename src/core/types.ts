@@ -1779,9 +1779,12 @@ export interface Person {
   login: string;
   name: string;
   /** Their role in the hub's members.json; `owner` for the machine's own
-   *  user; null for a person a hub vouches for on a node. */
+   *  user; null for a person a hub vouches for on a node. It says whose
+   *  cards and pushes are whose, not what they may do: everyone admitted
+   *  may do everything (docs/hub.md, Trust model). */
   role: "owner" | "member" | null;
-  via: "local" | "tailnet" | "hub";
+  /** The public door's signed-in member is `web` (src/server/public.ts). */
+  via: "local" | "tailnet" | "hub" | "web";
 }
 
 export interface HubMember {

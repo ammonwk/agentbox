@@ -25,10 +25,10 @@ end.
   lets the hub show its sessions and pass requests for them through to it. A
   machine is a node when `<agentbox home>/hub/link.json` exists (`agentbox
   hub join`). A machine is a hub or a node, not both.
-- **Member.** A person on the tailnet whose login is in the hub's
-  `members.json`, with a role: `owner` or `member`. The owner edits the member
-  list, approves nodes, and changes what the hub is (Roles on a hub, below); a
-  member starts, reads and types into sessions.
+- **Member.** A person whose login (a tailnet login, or the email they sign
+  in with at the public door) is in the hub's `members.json`, with a role:
+  `owner` or `member`. Both may do everything (Trust is per machine, below);
+  the owner is whose the unaddressed cards and pushes are.
 
 **Sessions are static.** A session lives on one node for its whole life. The
 hub lists it, records which node owns it, and passes its routes and its
@@ -78,7 +78,12 @@ strong as the tailnet's own key exchange.
 ## Trust model
 
 Loopback stays the trust boundary for everything on one machine
-(`src/server/csrf.ts`). The tailnet listener (`src/server/tailnet.ts`) widens
+(`src/server/csrf.ts`), and means the machine's Unix user: on Linux a
+connection from this machine (to 127.0.0.1, or to its own tailnet address) is
+refused unless the socket is agentbox's own user's (`src/server/peeruid.ts`,
+from `/proc/net/tcp`), since on a shared box (a CI box whose runners run
+pull requests' code as other users) anyone can connect to loopback. The
+public door (below) widens it for a team's browsers. The tailnet listener (`src/server/tailnet.ts`) widens
 it, and the hub widens it further. Every tailnet connection's source is looked
 up with `whois` before routing (cached five minutes for a known device, ten
 seconds for an address it could not vouch for), and is the first row that
@@ -123,15 +128,51 @@ Routes read it with `personOf(req)`. A superagent's action is sent
 in a browser, `api` anything else), so existing programs keep working, and a
 program that cares who can read `caller.person.login`.
 
-**What a member can do.** Start sessions, on the hub and on any node that
-takes starts; read them; type into them, on every node that joined, where
-agents may run without permission prompts. What changes the hub itself, and
-anything that runs a command as the hub's user outside a session, is the
-owner's (Roles on a hub, below). So: a member is still trusted with the hub's
-Unix user through the sessions they start (why the hub runs under one of its
-own), and a node's owner who joins a hub trusts its members with the sessions
-the node shares and, once it takes starts, with sessions in the repos it has
+**What a member can do.** Everything (Trust is per machine, below): start
+sessions, on the hub and on any node that takes starts; read them; type into
+them, on every node that joined, where agents may run without permission
+prompts; change the hub's accounts, settings, superagents and member list. A
+node's owner who joins a hub trusts its members with the sessions the node
+shares and, once it takes starts, with sessions in the repos it has
 registered. A node shares only the sessions on the accounts it lends.
+
+## The public door
+
+A team whose browsers are not on a tailnet opens a hub at an https URL
+(`src/server/public.ts`). A proxy in front holds the name and its certificate
+and forwards to a loopback port of the door's own; what arrives there is never
+this machine or its owner, whatever its address. It is on when all three are
+set, in the service's environment:
+
+| variable | |
+|---|---|
+| `AGENTBOX_PUBLIC_URL` | where people open it: `https://agents.plaibook.tech` |
+| `AGENTBOX_PUBLIC_PORT` | the loopback port the proxy forwards to |
+| `AGENTBOX_SIGNIN_ISSUER` | an OAuth 2.1 server with dynamic client registration and an MCP endpoint with a `whoami` tool: `https://internal.plaibook.tech` |
+
+Signing in: `/auth/login` sends the browser to the issuer's `/authorize`
+(PKCE), which signs the person in its own way (Plaibook Internal: its login
+and MFA, and only its users with internal access); the code comes back to
+`/auth/callback`, is exchanged for a token, and the MCP `whoami` tool says
+whose it is. The refresh token is revoked at once: only the email and name
+are kept. The issuer decides who may sign in; the door admits only an email
+in `members.json` (a signed-in person who is not gets a page saying so). The
+session is a random `__Host-` cookie, `HttpOnly`, `Secure`, `SameSite=Lax`,
+twelve hours, kept here only as its SHA-256 (`<agentbox home>/public/`, with
+the door's client registration). `/auth/logout` ends it. A member taken off
+the list is refused at their next request.
+
+The same CSRF rules as loopback, with the public origin in its place: Host is
+the public name, Origin (always sent on a WebSocket upgrade) is the public
+origin, mutations carry `x-agentbox: 1`. A request without a session is a
+redirect to sign in (a page) or a 401 `sign in first` (the API, which the app
+answers by signing in again).
+
+The plaibook deployment: `agents.plaibook.tech` is an A record for the
+Headscale box (54.84.189.218), where Caddy holds both names' certificates
+and forwards `agents.plaibook.tech` to `127.0.0.1:4491`, an SSH reverse
+tunnel that plaibook-box1 keeps open to it (box1 is behind NAT and accepts
+nothing). On box1, agentbox runs as the Unix user `agentbox`, not a person's.
 
 **What a node trusts.** Requests from the hub's tailnet IP that carry the
 link's token, on `/api/node/*` only. Nothing else the hub could send reaches
@@ -393,35 +434,17 @@ settled it, which the superagent passes as `by` when it closes the card
 (`agentbox.closeCard(id, why, caller.person)` in the SDK). Vulcan's Feed and
 Salus's Fix and Dismiss record `caller.person` as `decidedBy` the same way.
 
-## Roles on a hub
+## Trust is per machine
 
-On a hub, a member is refused (403, `only the hub's owner may do that: …`)
-what changes the hub itself or runs a command as its user outside any
-session (`src/server/roles.ts`, before routing):
-
-| what | routes |
-|---|---|
-| registering, changing or removing a superagent | `POST /api/superagents`, `PATCH`/`DELETE /api/superagents/:name` |
-| the hub's accounts | anything but a read under `/api/accounts` and `/api/logins` |
-| the hub's settings | `PUT /api/settings` |
-| the global MCP servers, which every agent runs | anything but a read under `/api/mcp` |
-| the registered repos, and the setup command a new worktree runs | anything but a read under `/api/repos` |
-| the skills every agent reads | `POST /api/skill/*` |
-| installing the hub's service | `POST /api/onboarding/*` |
-| deleting worktrees | `POST /api/worktrees/reclaim` |
-| acting as the hub on the agentbox cloud | anything but a read under `/api/cloud` |
-| hands-free mode, an agent with a shell | `/ws/voice` |
-| a command run on a timer | a wait whose kind is `until`; a schedule's `noteCmd` |
-
-Editing the members and approving or removing nodes were the owner's in
-phase 1 and still are. A member keeps everything else: starting sessions
-(here or placed), schedules without a command, reading, typing into and
-closing sessions, cards, waits, PR claims, a superagent's page and its
-actions (where the superagent decides who may do what, with
-`caller.person`), restarting a superagent. Reads stay open, settings and
-accounts included. Loopback is the owner, so the CLI and every program and
-session on the hub are too. On a machine that is not a hub every request is
-its owner's and none of this refuses anything.
+Everyone a machine admits may do everything there, the member list
+included: a member's sessions run as the machine's Unix user, without
+permission prompts, so a member already holds everything that user holds
+(its accounts, its settings, `hub/members.json` itself). A line between the
+owner and a member would stop a click, not a person, so there is none. The
+owner (`role: "owner"`) is only whose the cards and pushes that name nobody
+are, and who loopback is. Who may be trusted with a machine is decided by who
+is on its list, and a box for a team runs as a Unix user of its own, holding
+only what the team shares.
 
 **When the link ends or changes**, the node closes every socket the hub
 opened with it (state, watches, terminals): on `agentbox hub leave` either
@@ -492,5 +515,4 @@ order by room and every reason a machine is not a candidate.
   schedule.
 - **Placement from the hub's settings.** Who may place on which node is the
   node owner's `lend` alone; the hub has no per-member say.
-- **Setting up Headscale**, and the tailnet ACLs that should back the trust
-  table above.
+- **The tailnet ACLs** that should back the trust table above.

@@ -104,9 +104,6 @@ export function App() {
   useKeyboardNavigation();
   const { state } = useAppState();
   const [route, navigate] = useRoute();
-  useEffect(() => {
-    if (new URLSearchParams(location.search).has("cloud") && route.page !== "team") navigate({ page: "team" }, true);
-  }, []);
   const theme = useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
@@ -359,7 +356,7 @@ export function App() {
             ) : route.page === "context" ? (
               <Context state={state} />
             ) : route.page === "team" ? (
-              <Suspense fallback={<Empty title="Loading…" />}><Team state={state} /></Suspense>
+              <Suspense fallback={<Empty title="Loading…" />}><Team /></Suspense>
             ) : route.page === "mcps" ? (
               <Mcps />
             ) : (

@@ -28,11 +28,6 @@ export interface NewSessionPrefs {
 }
 
 const PREFS_KEY = "agentbox.newSession";
-/** Your personal defaults from the agentbox cloud, kept here by the Team
- *  page while you are signed in (lib/cloud.ts): what a browser that has not
- *  picked anything yet starts with. */
-export const CLOUD_DEFAULTS_KEY = "agentbox.cloud.defaults";
-
 /** Each project's dialog remembers on its own, under its own key, so a draft
  *  for one is not what another opens on; All projects is the key as it was,
  *  so what was there stays there. */
@@ -46,39 +41,17 @@ export function loadPrefs(project: string | null = null): NewSessionPrefs {
     const raw = localStorage.getItem(prefsKey(project));
     if (project && !raw) {
       const global = loadPrefs();
-      return withCloudDefaults({ provider: global.provider, perProvider: global.perProvider, where: "repo", repoId: project });
+      return { provider: global.provider, perProvider: global.perProvider, where: "repo", repoId: project };
     }
     const v = JSON.parse(raw ?? "{}") as unknown;
     const prefs = v && typeof v === "object" ? (v as NewSessionPrefs) : {};
     if (project && !prefs.wherePicked && !prefs.draft?.trim() && !prefs.draftImages?.length) {
-      return withCloudDefaults({ ...prefs, where: "repo", repoId: project });
+      return { ...prefs, where: "repo", repoId: project };
     }
-    return withCloudDefaults(prefs);
+    return prefs;
   } catch {
     return {};
   }
-}
-
-function readCloudDefaults(): { provider?: string; models?: Record<string, string> } | null {
-  try {
-    const v = JSON.parse(localStorage.getItem(CLOUD_DEFAULTS_KEY) ?? "null") as unknown;
-    return v && typeof v === "object" ? (v as { provider?: string; models?: Record<string, string> }) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** What was picked in this browser wins; the defaults fill what was not. A
- *  model the account's catalog does not list still runs as Default. */
-function withCloudDefaults(local: NewSessionPrefs): NewSessionPrefs {
-  const d = readCloudDefaults();
-  if (!d) return local;
-  const perProvider = { ...local.perProvider };
-  for (const [p, model] of Object.entries(d.models ?? {})) {
-    const id = p as ProviderId;
-    if (typeof model === "string" && model && !perProvider[id]?.model) perProvider[id] = { ...perProvider[id], model };
-  }
-  return { ...local, provider: local.provider ?? (d.provider as ProviderId | undefined), perProvider };
 }
 
 export function savePrefs(p: NewSessionPrefs, project: string | null = null): void {

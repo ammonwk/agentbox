@@ -116,9 +116,8 @@ export function countSend(from: string | null, to: string, now: number): void {
  */
 /**
  * Where an agent's message to `id` goes (`to`: `id`, or whoever took over
- * from it) and why it may not, before anything is typed. The one check,
- * for a local agent's `agentbox send` and for a message from another
- * installation alike (src/core/cloud/deliver.ts).
+ * from it) and why it may not, before anything is typed: the one check for
+ * an agent's `agentbox send`.
  */
 export function agentRefusal(
   fleet: Pick<Fleet, "get" | "heir">,

@@ -58,11 +58,6 @@ const MAX_PENDING = 20;
 /** When the hub last asked this node anything, since this server started. */
 let lastHubAt: number | null = null;
 
-const requireOwner = (req: Request): Person => {
-  const p = personOf(req);
-  if (p.role !== "owner") throw new HttpError(403, "only the hub's owner may do that");
-  return p;
-};
 const requireLocal = (req: Request): void => {
   if (personOf(req).via !== "local") throw new HttpError(403, "only from this machine: run it with the agentbox CLI here");
 };
@@ -285,7 +280,6 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
       })
       .add("PUT", "/api/hub/members", async ({ req }) => {
         requireHub();
-        requireOwner(req);
         const b = await readBody(req);
         try {
           writeMembers(b.members as never);
@@ -296,7 +290,7 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
       })
       .add("POST", "/api/hub/nodes/:id/approve", ({ req, params }) => {
         requireHub();
-        const who = requireOwner(req);
+        const who = personOf(req);
         const nodes = readNodes();
         const n = nodes.find((x) => x.id === params.id || x.name === params.id);
         if (!n) throw new HttpError(404, `no node ${params.id}`);
@@ -310,7 +304,6 @@ export function hubRoutes(router: Router, deps: HubDeps): Router {
       })
       .add("DELETE", "/api/hub/nodes/:id", async ({ req, params }) => {
         requireHub();
-        requireOwner(req);
         const nodes = readNodes();
         const n = nodes.find((x) => x.id === params.id || x.name === params.id);
         if (!n) throw new HttpError(404, `no node ${params.id}`);

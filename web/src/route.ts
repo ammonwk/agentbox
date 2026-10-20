@@ -79,12 +79,11 @@ function routePath(route: Route): string {
 
 /**
  * What the board is looking at, beside where: the selected project (a repo
- * id; "" is an explicit All projects) and the Team page's cloud workspace,
- * as `#/route?project=…&workspace=…`. Part of each history entry, so Back,
+ * id; "" is an explicit All projects), as `#/route?project=…`. Part of each history entry, so Back,
  * a reload and separate tabs cannot silently change the context a draft or
  * a list is in. Selecting one is navigation only: no process starts or stops.
  */
-export type ScopeKey = "project" | "workspace";
+export type ScopeKey = "project";
 
 export function scopeOf(hash = location.hash): URLSearchParams {
   return new URLSearchParams(hash.split("?")[1] ?? "");

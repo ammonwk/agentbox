@@ -1,12 +1,41 @@
 /** Team › Members and Team › Nodes on a hub, and the hub link on a node
- *  (docs/hub.md). Nothing at all on a machine that is neither. The owner
- *  edits the members and approves nodes; everyone else sees them. */
+ *  (docs/hub.md). Nothing at all on a machine that is neither. Every member
+ *  edits the members and approves nodes. */
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { HubMember, HubNodeView, HubStatus, Lend } from "../../../src/core/types";
 import { api } from "../api";
 import { Button, Field, RelativeTime, Toggle } from "../components";
-import { useLoad } from "../lib/cloud";
+
+/** `fn`'s answer, loaded again when `deps` change or on `reload`. */
+function useLoad<T>(fn: () => Promise<T>, deps: readonly unknown[]) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const ref = useRef(fn);
+  ref.current = fn;
+  const seq = useRef(0);
+  const reload = useCallback(async () => {
+    const mine = ++seq.current;
+    setLoading(true);
+    try {
+      const v = await ref.current();
+      if (mine === seq.current) {
+        setData(v);
+        setError(null);
+      }
+    } catch (e) {
+      if (mine === seq.current) setError((e as Error).message);
+    } finally {
+      if (mine === seq.current) setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return { data, error, loading, reload };
+}
 
 const POLL_MS = 5_000;
 
@@ -55,7 +84,8 @@ export function HubTeam() {
 // ---------------------------------------------------------------- members
 
 function Members({ status, reload }: { status: HubStatus; reload: () => Promise<void> }) {
-  const owner = status.person.role === "owner";
+  // Everyone admitted may do everything here (docs/hub.md, Trust model).
+  const owner = status.person.role !== null;
   const members = status.members ?? [];
   const [login, setLogin] = useState("");
   const [run, r] = useRun();
@@ -71,8 +101,8 @@ function Members({ status, reload }: { status: HubStatus; reload: () => Promise<
     <section className="card">
       <h3>Members</h3>
       <p className="hint">
-        The people whose tailnet logins may open this hub, from their own (untagged) devices. A member can do anything here but change this list or approve
-        nodes, including typing into sessions on every joined node. {owner ? "You are the owner." : `You are ${status.person.name} (${status.person.role ?? "not a member"}).`}
+        The people who may open this hub: by their tailnet login from their own (untagged) devices, or by their email at its public address. Every member
+        can do everything here, this list included, and runs commands as this machine&apos;s user through the sessions they start. You are {status.person.name}.
       </p>
       <table className="team-table">
         <tbody>
@@ -133,7 +163,7 @@ function headroomText(h: NonNullable<HubNodeView["headroom"]>): string {
 }
 
 function Nodes({ status, reload }: { status: HubStatus; reload: () => Promise<void> }) {
-  const owner = status.person.role === "owner";
+  const owner = status.person.role !== null;
   const nodes = status.nodes ?? [];
   const [run, r] = useRun();
   return (

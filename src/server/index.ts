@@ -69,7 +69,8 @@ import { HubNodes, type Target } from "./hubnodes";
 import { announceUrl, asLocalRequest, auditHubAction, headroomOf, hubRoutes, hubStartRules, lends, nodeGate, nodeState, repoNamed, repoNames, type HubDeps } from "./hub";
 import { ownerPerson, personOf, setPerson, setTailnetSelf, setTailnetUrl, tailnetSelfNow, tailnetUrlNow } from "./person";
 import { choose, type Machine } from "./placement";
-import { requireOwnerOnHub, roleRefusal } from "./roles";
+import { otherUserRefusal } from "./peeruid";
+import { PublicDoor, publicConfig } from "./public";
 import { accountProvider as accountsOf } from "../core/providers/account";
 import { VoiceHub } from "../voice/hub";
 import { deepgramKey, voiceConfig, voiceEnvPath } from "../voice/config";
@@ -90,9 +91,7 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
-import { CloudBridge } from "../core/cloud/bridge";
 import { Superagents } from "../core/superagents";
-import { cloudHttpError, cloudRoutes } from "./cloud";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -272,8 +271,6 @@ async function placeOnNode(req: Request, b: Record<string, unknown>): Promise<Re
   const caller = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? fleet.callerOf(b.callerPid) : null;
   return hubNodes.startOn(rec, body, personOf(req), optionalString(b, "parent") ?? caller);
 }
-/** This machine's link to the agentbox cloud, when one is set up (docs/cloud.md). */
-export const cloud = new CloudBridge(fleet, VERSION);
 function cardId(raw: string): number {
   if (!/^\d{1,9}$/.test(raw)) throw new HttpError(400, "a card's id is a number");
   return Number(raw);
@@ -328,11 +325,9 @@ function seekable(id: string): { io: SeekIO; claude: boolean } {
   const io: SeekIO = { capture: () => fleet.screen(id), keys: (k) => fleet.keys(id, k), sleep: (ms) => Bun.sleep(ms) };
   return { io, claude: s.provider === "claude" };
 }
-/** A schedule's note command: a command it runs as this machine's user, so on a hub the owner's to set. */
-function noteCmdOf(req: Request, b: Record<string, unknown>): string | null {
-  const cmd = optionalString(b, "noteCmd") ?? null;
-  if (cmd) requireOwnerOnHub(req, "a schedule's note command runs as the hub's user");
-  return cmd;
+/** A schedule's note command: a command it runs as this machine's user. */
+function noteCmdOf(b: Record<string, unknown>): string | null {
+  return optionalString(b, "noteCmd") ?? null;
 }
 /** A held-to-talk message: an hour of phone audio is well under this. */
 const MAX_AUDIO_BYTES = 40 * 1024 * 1024;
@@ -920,8 +915,6 @@ function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
   // A schema refusal is the request's shape, not the server's fault.
   if (e instanceof ZodError) return new HttpError(400, e.message);
-  const c = cloudHttpError(e);
-  if (c) return c;
   if (e instanceof DesktopError) return new HttpError(e.status, e.message);
   if (e instanceof FleetError || e instanceof AccountError || e instanceof McpError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
@@ -1421,7 +1414,7 @@ const router = new Router(mapError)
         accountId: optionalString(spec, "accountId") ?? null,
         fallbacks: spec.fallbacks === undefined ? undefined : providers(spec.fallbacks),
       },
-      noteCmd: noteCmdOf(req, b),
+      noteCmd: noteCmdOf(b),
       sameSession: b.sameSession === true,
       freshOver: typeof b.freshOver === "number" ? b.freshOver : null,
     });
@@ -1438,7 +1431,7 @@ const router = new Router(mapError)
     if (b.label !== undefined) edit.label = b.label === null ? null : requireString(b, "label");
     if (b.enabled !== undefined) edit.enabled = requireBoolean(b, "enabled");
     if (b.repoId !== undefined) edit.repoId = requireString(b, "repoId");
-    if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : (requireOwnerOnHub(req, "a schedule's note command runs as the hub's user"), requireString(b, "noteCmd"));
+    if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : requireString(b, "noteCmd");
     if (b.sameSession !== undefined) edit.sameSession = requireBoolean(b, "sameSession");
     if (b.fallbacks !== undefined) edit.fallbacks = providers(b.fallbacks);
     if (b.freshOver !== undefined) {
@@ -1464,7 +1457,6 @@ const router = new Router(mapError)
     const who = speaker(b);
     if (!who) throw new HttpError(400, "a wait tells a session how it ended: run this from inside one, or name it with --for <session id>");
     const spec = (b.spec && typeof b.spec === "object" ? { ...b.spec } : {}) as Record<string, unknown>;
-    if (spec.kind === "until") requireOwnerOnHub(req, "a wait's until command runs as the hub's user");
     // A pull request as it was typed, a run with no repo named: the repo is the caller's.
     if (spec.kind === "pr" && b.pr !== undefined) Object.assign(spec, prNamed(b, who));
     const cwd = optionalString(b, "cwd");
@@ -1927,7 +1919,7 @@ const hubDeps: HubDeps = {
   peerOf: (req) => peerOfReq.get(req) ?? null,
   whois: (ip) => peerCheck?.whois(ip) ?? Promise.resolve(null),
 };
-hubRoutes(cloudRoutes(router, cloud, fleet), hubDeps).otherwise(({ req, url }) => {
+hubRoutes(router, hubDeps).otherwise(({ req, url }) => {
     if (req.method !== "GET" && req.method !== "HEAD") return fail(`no route for ${req.method} ${url.pathname}`, 404);
     const found = resolveStatic(webDist, url.pathname);
     if (found.kind === "notBuilt") return notBuiltPage();
@@ -2002,7 +1994,7 @@ function welcome(ws: Socket): void {
 
 /** How a request came in: the tailnet door's names for this machine, who it
  *  admitted, and the source address. Loopback has none of these. */
-type Door = { hosts?: readonly string[]; admission?: Admission; source?: string };
+type Door = { hosts?: readonly string[]; admission?: Admission; source?: string; person?: Person };
 
 /** A hub's page on a node's terminal: frames both ways, the node's close passed on. */
 function openRelay(ws: Socket): void {
@@ -2137,12 +2129,14 @@ export async function startServer(): Promise<void> {
     const url = new URL(req.url);
     const hosts = door.hosts;
     const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
-    const verdict = checkRequest(req, PORT, { upgrade, hosts });
+    // The public door checked its own request (src/server/public.ts).
+    const verdict = door.person ? ({ ok: true } as const) : checkRequest(req, PORT, { upgrade, hosts });
     if (!verdict.ok) return fail(verdict.reason, 403);
     // The loopback listener, or the tailnet one reached at this machine's own address.
-    if (!hosts || srv.requestIP(req)?.address === hosts[0]) fromThisMachine.add(req);
-    // Who asked: loopback is the machine's owner; the tailnet door says who else.
-    if (!hosts) setPerson(req, ownerPerson());
+    if (!door.person && (!hosts || srv.requestIP(req)?.address === hosts[0])) fromThisMachine.add(req);
+    // Who asked: loopback is the machine's owner; the tailnet and public doors say who else.
+    if (door.person) setPerson(req, door.person);
+    else if (!hosts) setPerson(req, ownerPerson());
     else if (door.admission?.kind === "person") setPerson(req, door.admission.person);
 
     if (url.pathname === "/ws") {
@@ -2160,8 +2154,6 @@ export async function startServer(): Promise<void> {
     if (url.pathname.startsWith("/api/node/")) return nodeRequest(req, url, srv, door.source ?? null, upgrade);
     if (url.pathname === "/ws/voice") {
       if (!upgrade) return fail("voice requires a WebSocket upgrade", 426);
-      const refused = roleRefusal(req, url.pathname);
-      if (refused) return fail(refused, 403);
       const convId = url.searchParams.get("c") ?? "";
       if (!/^[a-z0-9-]{8,64}$/.test(convId)) return fail("voice needs a conversation id", 400);
       return srv.upgrade(req, { data: { kind: "voice", convId } }) ? undefined : fail("websocket upgrade failed", 500);
@@ -2191,9 +2183,6 @@ export async function startServer(): Promise<void> {
       /* not an id: the router answers it */
     }
     if (target) return hubNodes.proxy(req, url, target, m![2] ?? "", personOf(req));
-    // On a hub, what is the owner's alone (src/server/roles.ts).
-    const refused = roleRefusal(req, url.pathname);
-    if (refused) return Promise.resolve(fail(refused, 403));
     return router.handle(req);
   };
 
@@ -2254,9 +2243,20 @@ export async function startServer(): Promise<void> {
   // take a while: pages connect and hear how far it is, and requests wait for
   // it rather than failing (`handle`).
   hold.stop(true);
-  Bun.serve<SocketData>({ port: PORT, hostname: HOST, idleTimeout: 60, websocket, fetch: (req, srv) => handle(req, srv) });
+  Bun.serve<SocketData>({
+    port: PORT,
+    hostname: HOST,
+    idleTimeout: 60,
+    websocket,
+    fetch: (req, srv) => {
+      // Loopback is the owner only when the owner's own user connected (src/server/peeruid.ts).
+      const other = otherUserRefusal(srv.requestIP(req)?.port, PORT);
+      return other ? fail(other, 403) : handle(req, srv);
+    },
+  });
   console.log(`agentbox listening on http://${HOST}:${PORT}`);
   void listenOnTailnet(websocket, handle);
+  listenInPublic(websocket, handle);
   const progress = setInterval(() => {
     for (const ws of waiting) send(ws, { type: "starting", ...startupProgress() });
   }, STARTING_PUSH_MS);
@@ -2279,8 +2279,6 @@ export async function startServer(): Promise<void> {
   waits.start();
   superagents.start();
   cards.start();
-  // Local first: with no cloud.env this reads nothing and sends nothing.
-  cloud.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's
   // sessions and in your own terminals alike, and Go's usage is asked through
   // it (accounts/usage.ts), so it is up from the start.
@@ -2351,6 +2349,30 @@ async function sayRateChanges(): Promise<void> {
   }
 }
 
+/** The public door (src/server/public.ts), when this machine has one: its
+ *  own loopback port, which only the proxy in front should reach. */
+function listenInPublic(
+  websocket: WebSocketHandler<SocketData>,
+  handle: (req: Request, srv: Server<SocketData>, door?: Door) => Response | undefined | Promise<Response>,
+): void {
+  const cfg = publicConfig();
+  if (!cfg) return;
+  const door = new PublicDoor(cfg);
+  Bun.serve<SocketData>({
+    port: cfg.port,
+    hostname: "127.0.0.1",
+    idleTimeout: 60,
+    websocket,
+    async fetch(req, srv) {
+      const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
+      const who = await door.gate(req, upgrade);
+      if (who instanceof Response) return who;
+      return handle(req, srv, { person: who });
+    },
+  });
+  console.log(`agentbox listening on http://127.0.0.1:${cfg.port} for ${cfg.url.origin} (sign-in at ${cfg.issuer.host})`);
+}
+
 async function listenOnTailnet(
   websocket: WebSocketHandler<SocketData>,
   handle: (req: Request, srv: Server<SocketData>, door?: Door) => Response | undefined | Promise<Response>,
@@ -2376,6 +2398,11 @@ async function listenOnTailnet(
         ...(tls ? { tls } : {}),
         async fetch(req, srv) {
           const from = sourceOf(req, srv.requestIP(req)?.address);
+          // This machine at its own tailnet address is loopback by another name.
+          if (from === self.ip) {
+            const other = otherUserRefusal(srv.requestIP(req)?.port, PORT);
+            if (other) return fail(other, 403);
+          }
           const peer = from ? await peers.whois(from) : null;
           // With no hub or link this is v2's rule: the owner's own untagged devices.
           const a = admit(peer, peers.isOwnDevice(peer), { members: readMembers(), nodes: readNodes(), link: readLink() });

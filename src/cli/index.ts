@@ -29,7 +29,6 @@ import * as schedules from "./schedules";
 import * as waits from "./waits";
 import * as cards from "./cards";
 import * as prs from "./prs";
-import { cloud, CLOUD_USAGE } from "./cloud";
 import { handover, superagent, SUPERAGENT_USAGE } from "./superagents";
 import { hub, HUB_USAGE } from "./hub";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
@@ -442,8 +441,6 @@ timeout, each saying which; a parked session is resumed to hear it):
   waits [--session ID | --mine] [--all] [--json]   what is waited on, and how the rest ended
   unwait <id>...        cancel one; its session is not told
 
-${CLOUD_USAGE}
-
 superagents (programs that run on agentbox: docs/superagents.md):
 ${SUPERAGENT_USAGE.replace(/^agentbox /gm, "  ")}
   handover <from> <to> [--close]       what <from> started, its cards, PRs and their waits go to <to>; messages to <from> reach <to>
@@ -653,9 +650,6 @@ export async function main(argv: string[]): Promise<number | null> {
       case "unschedule":
         await ensureServer();
         return await schedules.unschedule(api, argv.slice(1));
-      case "cloud":
-        await ensureServer();
-        return await cloud(api, argv.slice(1));
       case "superagent":
       case "superagents":
         await ensureServer();

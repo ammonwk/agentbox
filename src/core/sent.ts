@@ -19,14 +19,10 @@ export const agentSentMark = (from?: string | null): string => (from ? `[via age
 /** What a schedule that keeps to one session puts before each note it types
  *  into it (src/core/scheduler.ts): not you, and not another session. */
 export const scheduleSentMark = (scheduleId: string): string => `[via agentbox schedule ${scheduleId}]`;
-/** What a message from an agent on another installation carries
- *  (src/core/cloud/deliver.ts): who sent it, as the cloud vouches. The
- *  label never holds `]` or a line break. */
-export const cloudSentMark = (label: string): string => `[via agentbox cloud from ${label.replace(/[\]\r\n]/g, " ").slice(0, 200)}]`;
 
 // The removed Project session signed its messages `[Project session]`; old
 // transcripts still carry that form.
-const MARK = /^\s*\[(?:via agentbox send(?: from ([\w-]+))?|via agentbox (schedule) [\w-]+|via agentbox cloud from ([^\]\n]{1,200})|Project session)\]\s*/;
+const MARK = /^\s*\[(?:via agentbox send(?: from ([\w-]+))?|via agentbox (schedule) [\w-]+|Project session)\]\s*/;
 const PASTE_OPEN = /<pasted_content\s+id="[^"]*"\s*>/;
 const PASTE_CLOSE = /<\/pasted_content(?:\s+id="[^"]*")?\s*>/;
 const PASTE = new RegExp(`${PASTE_OPEN.source}([\\s\\S]*?)(?:${PASTE_CLOSE.source}|$)`, "g");
@@ -53,7 +49,7 @@ export interface Sent {
   from: string | null;
   /** How it came: `agentbox send`, a schedule's note, or Claude's own
    *  delivery between sessions. */
-  via: "agentbox send" | "agentbox cloud" | "a schedule" | "Claude" | null;
+  via: "agentbox send" | "a schedule" | "Claude" | null;
   /** The message without its wrapper and mark. */
   text: string;
 }
@@ -69,8 +65,8 @@ export function readSent(raw: string): Sent {
   if (FLEET_NOTE.test(text)) return { agent: true, from: "agentbox", via: null, text: text.trim() };
   const m = MARK.exec(text);
   if (m) {
-    const via = m[2] ? "a schedule" : m[3] ? "agentbox cloud" : "agentbox send";
-    return { agent: true, from: m[2] ? "agentbox" : (m[1] ?? m[3] ?? null), via, text: text.slice(m[0].length).trim() };
+    const via = m[2] ? "a schedule" : "agentbox send";
+    return { agent: true, from: m[2] ? "agentbox" : (m[1] ?? null), via, text: text.slice(m[0].length).trim() };
   }
   const d = DELIVERED.exec(text);
   if (d) {
