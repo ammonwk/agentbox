@@ -665,7 +665,8 @@ export function matchByCwd<C extends CwdCandidate>(
  * trust the contents of this directory?" → "Yes, continue"), the update
  * prompt ("Skip" — never "Update now", which runs npm under the session), and
  * resuming from another directory ("Use session directory" — where the
- * session was). Hook trust, model migration and login are left to you.
+ * session was). Model migration and login are left to you; hook trust never
+ * comes up where approvals are bypassed (`sessionFlags`).
  */
 export function codexAutoAnswer(raw: string): string[] | null {
   const s = plainScreen(raw);
@@ -727,6 +728,7 @@ const CARRIED: Record<string, Arity> = {
   "-a": "one",
   "--ask-for-approval": "one",
   "--dangerously-bypass-approvals-and-sandbox": "none",
+  "--dangerously-bypass-hook-trust": "none",
   "--full-auto": "none",
   "--add-dir": "one",
   "--enable": "one",
@@ -752,7 +754,11 @@ function sessionFlags(opts: { cwd: string; model?: string; effort?: string; auto
   if (opts.model && !(c && setsFlag(c, "-m", "--model"))) a.push("--model", opts.model);
   if (opts.effort && !configs.some((x) => /(^|=)model_reasoning_effort=/.test(x))) a.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (opts.readOnly) a.push(...READ_ONLY);
-  else if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox");
+  // Hook trust is kept by the path of the hooks.json, and each account's home
+  // links the same one at a path of its own, so every new account asks again
+  // for hooks already trusted. Where nothing is sandboxed a hook can do no
+  // more than the agent can.
+  else if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust");
   if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told(opts.cwd));
   return a;
 }

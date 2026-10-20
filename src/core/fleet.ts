@@ -127,7 +127,7 @@ import { openReader, pruneReaderStates, saveReaderState } from "./readercache";
 import { UNFUNDED_HOLD_MS, unfundedSince } from "./balancer";
 import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusals";
 import { statedUntil, statedWaitMs } from "./retrywait";
-import { retryClock } from "./attention";
+import { retryClock, retrying } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { readBtwPanel } from "./providers/claude-btw";
 import type { RewindGoal } from "./providers/claude-rewind";
@@ -452,6 +452,9 @@ export class Fleet extends EventEmitter {
   private nextWatchCheck = 0;
   /** What the watch found, by session, while it stands. */
   private trouble = new Map<string, string>();
+  /** Children stuck now (`watchChildren`), since when, and whether their parent was told. */
+  private stuck = new Map<string, { since: number; told: boolean }>();
+  private childrenSeen = false;
   readonly ready: Promise<void>;
   private markReady!: () => void;
 
@@ -712,6 +715,7 @@ export class Fleet extends EventEmitter {
     await this.refreshWork(now);
     lap("work");
     await this.watchStarts(now);
+    if (this.caughtUp) this.watchChildren(now);
     lap("starts");
     this.checkCrash(now);
     // Until then the snapshot recovery would start from stays the last one
@@ -2089,6 +2093,63 @@ export class Fleet extends EventEmitter {
       this.trouble.set(id, what);
       if (w.recovery !== null) this.noteTrouble(w.recovery, id, title, what);
     }
+  }
+
+  /**
+   * Tell a session when one it started is stuck: blocked for `STUCK_HOLD_MS`
+   * on anything but a question for you (a start-up dialog, a login, refused
+   * tool calls), or gone within `WATCH_MS` of its start with nothing having
+   * stopped it. One started with --detach is waited on by nothing, so without
+   * this its parent never hears. Once a spell; what was stuck when the
+   * server started is not news.
+   */
+  private watchChildren(now: number): void {
+    const stuck = new Set<string>();
+    for (const s of this.views.values()) {
+      const what = s.parent ? this.stuckOn(s, now) : null;
+      if (!what) continue;
+      stuck.add(s.id);
+      const spell = this.stuck.get(s.id) ?? { since: now, told: !this.childrenSeen };
+      this.stuck.set(s.id, spell);
+      if (spell.told || now - spell.since < what.hold) continue;
+      spell.told = true;
+      this.tellParent(s, what.text());
+    }
+    for (const id of this.stuck.keys()) if (!stuck.has(id)) this.stuck.delete(id);
+    this.childrenSeen = true;
+  }
+
+  private stuckOn(s: Session, now: number): { text: () => string; hold: number } | null {
+    if (s.status === "blocked") {
+      const why = this.blocked.get(s.id);
+      if (!why || s.question || why === "asking a question" || retrying(s)) return null;
+      return {
+        text: () => `has been stuck for a minute on "${why}". \`agentbox screen ${s.id}\` shows it; if it is yours to answer, answer it with \`agentbox keys ${s.id} <key>…\` (tmux key names: Enter, Escape, Down, 2), else say so in your STATUS`,
+        hold: STUCK_HOLD_MS,
+      };
+    }
+    // Its pane kept by tmux (remain-on-exit): the process ended, not tmux.
+    const w = this.watches.get(s.id);
+    const pane = w && s.host === "none" && !s.parkedAt ? this.panes.get(s.tmux ?? "") : undefined;
+    if (!w || !pane?.dead || (this.killedAt.get(pane.name) ?? 0) >= w.since) return null;
+    return {
+      text: () => {
+        const tail = (this.deps.runtime.capture(pane.name) ?? "").split("\n").filter((l) => l.trim()).slice(-8);
+        const code = pane.deadStatus === null ? "" : ` (exit ${pane.deadStatus})`;
+        return `exited${code} ${Math.round((now - w.since) / 1000)}s after it started, with nothing having stopped it${tail.length ? `. Its screen ended:\n${tail.map((l) => `    ${l.trimEnd()}`).join("\n")}\n` : ""}. Fix what it hit and start it again`;
+      },
+      hold: 0,
+    };
+  }
+
+  private tellParent(s: Session, what: string): void {
+    const p = this.views.get(s.parent!);
+    console.log(`agentbox: ${s.id} is stuck; telling ${s.parent}: ${oneLine(what, 120)}`);
+    // Only where it can be typed: not one stopped by hand, closed, or in a terminal not ours.
+    if (!p || p.status === "closed" || p.status === "stopped" || p.host === "subagent" || p.host === "external") return;
+    this.note(p.id, `[agentbox: ${s.id} ("${s.label ?? s.title}"), a session you started, ${what}.]`).catch((e) =>
+      console.error(`agentbox: telling ${p.id} that ${s.id} is stuck failed:`, e instanceof Error ? e.message : e),
+    );
   }
 
   /** Stop a devin session whose commands are all refused and resume it,
@@ -4055,6 +4116,9 @@ const REFUSED = /User skipped this tool call|Tool execution was rejected|The use
 const REFUSED_NOTE =
   '[agentbox: your tool calls were being refused ("User skipped this tool call"). That was a permission setting, not a person, and it is fixed now. Anything you concluded from those refusals — that you cannot run commands, check CI, push or edit — was wrong: redo what failed and carry on.]';
 
+/** How long a child stays blocked before its parent is told: a prompt you
+ *  answer at once is not news to it. */
+const STUCK_HOLD_MS = 60_000;
 /** A session started a moment ago, watched by `watchStarts`. */
 interface Watch {
   since: number;

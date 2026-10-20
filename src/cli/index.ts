@@ -396,6 +396,8 @@ sessions (ids first on every line; verbs taking ids read them from stdin with -)
   log <id> [-n turns] [--tools] [--thinking]    the conversation, oldest first
   grep <regex> [-i] [--all]                     search every conversation
   screen <id>...        what its terminal shows now
+  keys <id> <key>...    press keys in its terminal (tmux names: Enter, Escape, Down, 2),
+                        to answer a prompt its screen shows
   diff <id>... [--stat] its worktree's changes
   send <id> [--wake] <text…|->   type a message into it; from an agent, refused when it would wake a
                         cold or stopped session (--wake: waking it is the point) or is one too many
@@ -615,6 +617,7 @@ export async function main(argv: string[]): Promise<number | null> {
       case "log":
       case "grep":
       case "screen":
+      case "keys":
       case "diff":
       case "send":
       case "label":

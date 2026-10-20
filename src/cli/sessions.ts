@@ -305,6 +305,14 @@ export async function screen(api: Api, args: string[]): Promise<number> {
   return 0;
 }
 
+/** `agentbox keys <id> <key>...`: press keys in its terminal, to answer a prompt on its screen. */
+export async function keys(api: Api, args: string[]): Promise<number> {
+  const [id, ...keys] = args;
+  if (!id || keys.length === 0) throw new Error("usage: agentbox keys <id> <key>... (tmux key names: Enter, Escape, Up, Down, Tab, 2)");
+  await api("POST", `/api/sessions/${id}/keys`, { keys });
+  return 0;
+}
+
 export async function diff(api: Api, args: string[]): Promise<number> {
   const { flags, rest } = parseArgs(args, [], ["stat"]);
   const { ids } = await resolveIds(api, rest);
