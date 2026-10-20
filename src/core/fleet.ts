@@ -2134,7 +2134,7 @@ export class Fleet extends EventEmitter {
     if (!w || !pane?.dead || (this.killedAt.get(pane.name) ?? 0) >= w.since) return null;
     return {
       text: () => {
-        const tail = (this.deps.runtime.capture(pane.name) ?? "").split("\n").filter((l) => l.trim()).slice(-8);
+        const tail = (this.deps.runtime.capture(pane.name) ?? "").split("\n").filter((l) => l.trim() && !/^Pane is dead/.test(l)).slice(-8);
         const code = pane.deadStatus === null ? "" : ` (exit ${pane.deadStatus})`;
         return `exited${code} ${Math.round((now - w.since) / 1000)}s after it started, with nothing having stopped it${tail.length ? `. Its screen ended:\n${tail.map((l) => `    ${l.trimEnd()}`).join("\n")}\n` : ""}. Fix what it hit and start it again`;
       },
