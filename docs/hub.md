@@ -172,7 +172,14 @@ The plaibook deployment: `agents.plaibook.tech` is an A record for the
 Headscale box (54.84.189.218), where Caddy holds both names' certificates
 and forwards `agents.plaibook.tech` to `127.0.0.1:4491`, an SSH reverse
 tunnel that plaibook-box1 keeps open to it (box1 is behind NAT and accepts
-nothing). On box1, agentbox runs as the Unix user `agentbox`, not a person's.
+nothing). On box1, agentbox runs as the Unix user `agentbox`, not a person's,
+from a clone of github.com/ammonwk/agentbox; its service's drop-in
+(`~/.config/systemd/user/agentbox.service.d/team.conf`) sets the variables
+above and `AGENTBOX_TAILNET=0`, and `agentbox-tunnel.service` keeps the
+tunnel up. To update it to main:
+
+    ssh agentbox@plaibook-box1 'bash -lc "cd ~/Documents/agentbox && git pull --ff-only && bun install && bun run web:build && systemctl --user restart agentbox"'
+
 
 **What a node trusts.** Requests from the hub's tailnet IP that carry the
 link's token, on `/api/node/*` only. Nothing else the hub could send reaches
