@@ -130,8 +130,21 @@ export function fileResponse(root: string, filePath: string, req: Request): Resp
       return new Response(null, { status: 304, headers });
     }
   }
-  return new Response(Bun.file(filePath), { headers });
+  // Text gzipped once per build: the bundle is ~870 KB raw, ~250 KB gzipped,
+  // which matters to a phone, or at the public door over the box's uplink.
+  if (COMPRESSIBLE.test(filePath) && /\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
+    let hit = gzipped.get(filePath);
+    if (hit?.mtimeMs !== mtimeMs) {
+      hit = { mtimeMs, gz: Bun.gzipSync(readFileSync(filePath)) };
+      gzipped.set(filePath, hit);
+    }
+    return new Response(hit.gz, { headers: { ...headers, "content-encoding": "gzip", vary: "accept-encoding" } });
+  }
+  return new Response(Bun.file(filePath), { headers: { ...headers, vary: "accept-encoding" } });
 }
+
+const COMPRESSIBLE = /\.(?:js|css|html|svg|json|webmanifest)$/;
+const gzipped = new Map<string, { mtimeMs: number; gz: Uint8Array<ArrayBuffer> }>();
 
 /**
  * Which build `index.html` loads: its entry script's file name, e.g.
