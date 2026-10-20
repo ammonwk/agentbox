@@ -441,8 +441,9 @@ function configEnv(account: Pick<Account, "id">, cwd: string): Record<string, st
   return {
     OPENCODE_CONFIG_CONTENT: JSON.stringify(cfg),
     JSC_numberOfGCMarkers: process.env.JSC_numberOfGCMarkers || "2",
-    // Repo watchers cost 77k–130k watches/session, exhausting the user's 1,048,576; agents edit files themselves.
+    // Both repo watchers and fff's separate indexer exhaust inotify; file search falls back to ripgrep.
     OPENCODE_DISABLE_FILEWATCHER: "1",
+    OPENCODE_DISABLE_FFF: "1",
   };
 }
 
