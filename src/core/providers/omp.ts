@@ -42,6 +42,7 @@ import {
   type ToolOutcome,
 } from "./omp-transcript";
 import { ompRedirectVars } from "./omp-usage";
+import { ompContextLimit } from "./omp-models";
 import { GO_ACCOUNT_BEARER } from "../accounts/gocred";
 import { ensureBridge } from "../../bridge/service";
 import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
@@ -480,7 +481,7 @@ class OmpReader implements TranscriptReader {
       turnError: s.turnError,
       modelOutcome: s.modelOutcome,
       contextUsed: s.contextUsed,
-      contextLimit: null,
+      contextLimit: ompContextLimit(agentDir(), s.model),
       tokens,
       usage: null,
       rateLimitHits: hits,
@@ -763,6 +764,8 @@ export const ompAdapter: ProviderAdapter = {
   id: "omp",
   label: "omp",
   efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+
+  modelContextLimit: (model) => ompContextLimit(agentDir(), model),
 
   detect() {
     return cliVersion(["omp", "--version"]);

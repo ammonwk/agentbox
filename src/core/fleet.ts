@@ -2336,7 +2336,7 @@ export class Fleet extends EventEmitter {
       lastPromptAt: f?.lastPromptAt ?? rec.startedAt,
       lastMessage: f?.lastMessage ?? null,
       contextUsed: f?.contextUsed ?? null,
-      contextLimit: f?.contextLimit ?? null,
+      contextLimit: f?.contextLimit ?? adapter?.modelContextLimit?.(f?.model ?? null) ?? null,
       compactedAt: f?.compactedAt ?? undefined,
       tokens: f?.tokens ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0 },
       claim: rec.claim,
