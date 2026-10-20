@@ -471,6 +471,8 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
                         say what it prints before the prompt, nothing when it prints
                         nothing; --same-session says it to the session it started last,
                         and starts afresh once that holds over --fresh-over tokens
+           [--org|--personal]
+                        on the org's accounts or your own; absent, your default when it starts
   schedules [--json]    what is set to start, soonest first
   unschedule <id>...    delete one; it will not start (sessions it started stay)
   mcp                   run the fleet MCP server on stdio (for a conductor session)

@@ -132,6 +132,11 @@ readable.
   (incremental tail) and `procs.ts` (/proc helpers).
 - `src/core/accounts/` — credential homes, identity, usage fetchers, logins.
 - `src/core/fleet.ts` — joins everything into sessions; spawn/resume/adopt.
+- `src/core/org/`, `src/cli/org.ts` — orgs (`docs/org.md`): a team's pooled
+  claude and codex accounts, kept in step through a MongoDB store, the
+  members' org sessions and messages between them, and the org's skills. A
+  session's scope is its account's: an org account's home is under
+  `<agentbox home>/org/accounts/`, and `placement()` never crosses scopes.
 - `src/core/balancer.ts`, `claims.ts`, `calibration.ts` — placement.
 - `src/server/` — HTTP + WebSockets. `src/mcp/fleet.ts` — the conductor's MCP;
   it and the CLI share one HTTP client, `src/client.ts`.

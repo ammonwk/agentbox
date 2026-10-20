@@ -100,6 +100,9 @@ why). Arming the same wait twice is one wait.
 
     agentbox send <id> 'text'       # type a message into it (echo ... | agentbox send <id> -)
     agentbox send <id> --wake 'text'   # ...when it is stopped or cold and waking it is the point
+                                    # From an org session, <id> may be a member's org session on
+                                    # another machine (agentbox org ls): it waits for that
+                                    # machine to say it was delivered
     agentbox close <id>...          # stop it and take it off the board; transcript and worktree kept
     agentbox reopen <id>...         # back on the board (still stopped; resume to run it)
     agentbox stop <id>...           # end its process; it stays resumable
@@ -115,6 +118,10 @@ why). Arming the same wait twice is one wait.
     agentbox claude|codex|omp|opencode|devin|muse --detach [--account X] [--model M] 'prompt'   # start one, from the directory it should work in
                                     # --repo owner/name [--ref REF]: in that registered repo instead,
                                     # at REF in a detached worktree of its own
+                                    # --org / --personal: on the org's pooled accounts, where
+                                    # its members see it, or your own; absent, the starting
+                                    # session's, else your default (agentbox org default).
+                                    # agentbox schedule takes them too
     agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.
@@ -157,6 +164,16 @@ why). Arming the same wait twice is one wait.
     agentbox pr transfer <repo#n> --expect <holder> --to <successor>
                                     # the holder hands it over; refused if ownership moved meanwhile
     agentbox pr claims              # every pull request a live session has
+                                    # (in an org, a claim is also refused while a member's
+                                    # org session on another machine holds the PR)
+
+## Orgs (a team's pooled accounts and skills: docs/org.md)
+
+    agentbox org                    # the org, whether its store answers, its accounts
+    agentbox org ls [--json]        # the other members' live org sessions: id status person repo title
+    agentbox org join <invite>      # join it (a person's call, like moving accounts)
+    agentbox org default org|personal
+    agentbox org add-account <account> | take-account <account>
 
 ## Superagents (programs that run on agentbox: docs/superagents.md)
 
