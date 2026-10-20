@@ -767,7 +767,9 @@ export const ompAdapter: ProviderAdapter = {
 
   // Measured 2026-10-19 on OpenCode Go: a session stopped and resumed read
   // 43,136 of 43,325 input tokens from cache on its first call. An idle omp
-  // holds ~450 MB and ~1% of a core; a resume costs ~5 CPU-seconds.
+  // holds ~450 MB and ~1% of a core; a resume costs ~5 CPU-seconds. A resume
+  // after the briefing or rules changed misses (the system prompt is rebuilt),
+  // which they do a few times a week.
   parkIdleMs: 10 * 60_000,
 
   modelContextLimit: (model) => ompContextLimit(agentDir(), model),
