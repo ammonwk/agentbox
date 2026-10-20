@@ -6,7 +6,8 @@
  *
  * Waking: a message to a session that is stopped, parked, or whose prompt
  * cache has gone cold (`Session.cacheWarmUntil`, cache.ts) makes it read its
- * whole context again at full price to hear one line. That is refused unless
+ * whole context again at full price to hear one line (parked is fine where the
+ * cache outlives the process, `ProviderAdapter.parkIdleMs`). That is refused unless
  * the sender says waking it is the point (`wake`).
  *
  * Chatter: more than `CHATTER_MAX` messages from one session to another in
@@ -22,6 +23,7 @@
  */
 
 import type { Fleet } from "./fleet";
+import { adapterFor } from "./providers";
 import { agentSentMark } from "./sent";
 import type { Session } from "./types";
 
@@ -43,8 +45,10 @@ function span(ms: number): string {
  */
 export function wakeRefusal(s: Session, now: number): string | null {
   const asleep = s.host === "none";
+  // Parked, but its cache outlives the process: a resume reads it back warm.
+  const warmResume = asleep && s.status === "waiting" && !!adapterFor(s.provider).parkIdleMs;
   const cold = s.cold || now > s.cacheWarmUntil;
-  if (!asleep && (!cold || s.status === "running" || s.status === "blocked")) return null;
+  if ((!asleep || warmResume) && (!cold || s.status === "running" || s.status === "blocked")) return null;
   const state = asleep
     ? s.status === "closed"
       ? "is closed"

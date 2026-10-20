@@ -392,6 +392,11 @@ export interface ProviderAdapter {
    * and types the prompt through its normal serialized delivery path. */
   resumePromptInTerminal?: boolean;
 
+  /** Its prompt cache is the provider's and outlives the process: a resume
+   * reads it back like the next turn would, so an idle process keeps nothing
+   * warm and is parked after this long (park.ts), warm cache or not. */
+  parkIdleMs?: number;
+
   /**
    * Anything the CLI keeps outside its argv that must be right before
    * `resumeCommand` runs. Devin resumes in the permission mode it saved for

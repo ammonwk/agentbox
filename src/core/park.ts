@@ -36,6 +36,10 @@
  * landed; a cold resume for those costs less than a process each for the
  * other 95%. A sameSession schedule's current session is the exception: its
  * next note is coming, and keeping its cache warm is the point.
+ *
+ * A provider whose cache outlives its process (`ProviderAdapter.parkIdleMs`)
+ * is parked after that long instead, warm or not: nothing the process holds
+ * is worth keeping it up for once it has cost what a resume does.
  */
 
 import { readdirSync, statSync } from "node:fs";

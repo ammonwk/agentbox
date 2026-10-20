@@ -1493,13 +1493,15 @@ export class Fleet extends EventEmitter {
     const noted = new Set(listSchedules().flatMap((s) => (s.enabled && s.sameSession && s.lastSessionId ? [s.lastSessionId] : [])));
     // Done: parked within minutes, warm or not (park.ts `DONE_IDLE_MS`).
     const done = (v: Session) => this.liveStatus.get(v.id) === "waiting" && endedDone(v.lastMessage) && !noted.has(v.id);
-    const idleOf = (v: Session) => (done(v) ? Math.min(idleMs, DONE_IDLE_MS) : idleMs);
+    // A cache that outlives the process: parked after the provider's own time.
+    const survives = (v: Session) => this.adapter(v.provider).parkIdleMs;
+    const idleOf = (v: Session) => Math.min(idleMs, done(v) ? DONE_IDLE_MS : (survives(v) ?? idleMs));
     const candidates = [...this.views.values()].filter(
       (v) =>
         v.host === "tmux" &&
         v.tmux &&
         // Still warm, its next message costs less with the process up.
-        (now > v.cacheWarmUntil || done(v)) &&
+        (now > v.cacheWarmUntil || done(v) || survives(v)) &&
         (this.liveStatus.get(v.id) === "waiting"
           ? now - v.lastActivityAt >= idleOf(v)
           : this.liveStatus.get(v.id) === "running" && now - v.lastActivityAt >= Math.max(idleMs, STALE_TURN_MS)),
