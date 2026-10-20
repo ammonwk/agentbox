@@ -526,7 +526,9 @@ export function resyncShared(account: Pick<Account, "provider" | "home" | "isDef
   } else if (provider === "muse") {
     const cfgDir = join(home, "muse");
     mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
-    made.push(...linkShared(join(defaultHome(provider), "muse"), cfgDir, { names: ["settings.json", "skills", "AGENTS.md"], prefixes: [] }));
+    // An org home's skills are its own directory (org/skills.ts): the org's beside yours.
+    const names = isOrgHome(home) ? ["settings.json", "AGENTS.md"] : ["settings.json", "skills", "AGENTS.md"];
+    made.push(...linkShared(join(defaultHome(provider), "muse"), cfgDir, { names, prefixes: [] }));
   } else if (provider === "devin") {
     // devin logs in under XDG_DATA_HOME=<home> and XDG_CONFIG_HOME=<home>/config.
     // Its data dir must exist for the credentials to land; its config dir gets

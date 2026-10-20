@@ -153,8 +153,9 @@ Each member's machine keeps a clone of the skills repo in
 `<agentbox home>/org/skills` (`gh repo clone`, else `git clone`) and pulls it
 every 10 minutes. Claude and codex org homes get a `skills` directory of their
 own (not the link to the personal one that other homes have) holding a link to
-each org skill and each personal skill, a personal skill winning a name clash.
-omp and opencode read one user-level skills directory for every account
+each org skill and each personal skill, a personal skill winning a name clash;
+muse's is `muse/skills` in its config home, made the same way. omp and opencode
+read one user-level skills directory for every account
 (`~/.omp/agent/skills`, `~/.config/opencode/skills`), so the org's skills are
 linked there too — and so they reach personal sessions of those CLIs, which is
 the price of a CLI that has one directory. Publishing is a pull request or a

@@ -1,8 +1,8 @@
 /** Org skills (docs/org.md, Org skills): a GitHub repo of skill directories,
  *  cloned into `<agentbox home>/org/skills` and pulled every few minutes.
- *  Claude and codex org homes get a `skills` directory of their own, a link
- *  per skill: each personal one (the provider's default home's) and each of
- *  the org's, a personal skill winning a name clash. omp and opencode read
+ *  Claude, codex and muse org homes get a `skills` directory of their own, a
+ *  link per skill: each personal one (the provider's default home's) and each
+ *  of the org's, a personal skill winning a name clash. omp and opencode read
  *  one user-level skills directory for every account, so the org's links go
  *  there instead (and, being user-level, reach personal sessions too). */
 
@@ -29,6 +29,7 @@ export async function syncOrgSkills(): Promise<void> {
   if (!org.skills) {
     // No repo: the clone may still be on disk, but its skills are not the
     // org's any more, so every link we made for them goes.
+    for (const a of listAccounts()) if (isOrgHome(a.home)) linkSkills(a, new Map());
     linkOrgSkillsForEveryAccount(new Map());
     return;
   }
@@ -102,10 +103,17 @@ function skillsIn(dir: string): Map<string, string> {
 }
 
 /** An org home's `skills`: the personal ones, then the org's. */
-export function linkSkills(a: Pick<Account, "provider" | "home">): void {
-  if (a.provider !== "claude" && a.provider !== "codex") return;
-  const want = new Map([...skillsIn(orgSkillsDir()), ...skillsIn(join(defaultHome(a.provider), "skills"))]);
-  const dir = join(a.home, "skills");
+export function linkSkills(a: Pick<Account, "provider" | "home">, org: Map<string, string> = skillsIn(orgSkillsDir())): void {
+  // Where each CLI reads skills from inside its config home.
+  const spec =
+    a.provider === "claude" || a.provider === "codex"
+      ? { dir: join(a.home, "skills"), personal: join(defaultHome(a.provider), "skills") }
+      : a.provider === "muse"
+        ? { dir: join(a.home, "muse", "skills"), personal: join(defaultHome("muse"), "muse", "skills") }
+        : null;
+  if (!spec) return;
+  const want = new Map([...org, ...skillsIn(spec.personal)]);
+  const dir = spec.dir;
   // A home made before it was an org home's may hold the link to the personal directory.
   if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) rmSync(dir);
   mkdirSync(dir, { recursive: true });
