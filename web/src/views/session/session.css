@@ -3706,6 +3706,9 @@ a.wk-item:hover {
   color: var(--muted);
 }
 .sx-status[data-kind="needs"] > svg { color: var(--warning); }
+/* Narrower than its text: a wait chip's log line in it ellipsizes instead of
+ * widening the timeline. */
+.sx-status > .sx-md { min-width: 0; }
 
 /* `agentbox wait N` in prose, live (WaitRef.tsx): a quiet chip — what it
  * watches, its clock, and a running job's last line of output. */
