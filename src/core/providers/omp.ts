@@ -18,13 +18,13 @@
  * those processes are reported with no session until the file appears.
  */
 
-import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join, sep } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { userHome } from "../paths";
 import { cliVersion } from "./cli-version";
 import { mostNamed } from "../prrepo";
-import { carryFlags, setsFlag, type Arity } from "../launch";
+import { carryFlags, promptFiles, setsFlag, type Arity, type PromptFlag } from "../launch";
 import { ompAskStep, readOmpAsk } from "./omp-ask";
 import { underInput } from "./tui-screen";
 import type { Account, TimelineEvent, TimelinePage } from "../types";
@@ -664,6 +664,13 @@ const CARRIED: Record<string, Arity> = {
   "--approval-mode": "one",
 };
 
+/** omp's prompt flags. A one-line value is a file omp reads, so the words
+ *  go in one and the value names it: the same flag, a path for a value. */
+const PROMPTS: PromptFlag[] = [
+  { flag: "--append-system-prompt", file: "--append-system-prompt" },
+  { flag: "--system-prompt", file: "--system-prompt" },
+];
+
 /** `omp -p` and the machine-readable modes: something is reading the output. */
 function isHeadless(argv: string[]): boolean {
   for (let i = 0; i < argv.length; i++) {
@@ -892,6 +899,7 @@ export const ompAdapter: ProviderAdapter = {
 
   answerStep: ompAskStep,
   pasteEnd: " ",
-  carryOver: (argv) => carryFlags(argv, CARRIED),
+  carryOver: (argv, where) =>
+    carryFlags(promptFiles(argv, where, PROMPTS, (value) => !value.includes("\n") && existsSync(resolve(where.cwd, value))), CARRIED),
   headless: isHeadless,
 };

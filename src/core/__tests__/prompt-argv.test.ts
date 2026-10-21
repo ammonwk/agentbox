@@ -88,3 +88,34 @@ test("a session the fleet starts carries no prompt on its command line", async (
   expect(launches[0]!.stdinFile).toBeTruthy();
   expect(Bun.file(launches[0]!.stdinFile!).text()).resolves.toContain(PROMPT);
 });
+
+test("a launch carried over from another terminal keeps its prompt in a file", async () => {
+  // The same words an agent would be told, in the argv of a session some
+  // other terminal started: adopt carries that launch over.
+  const words = "you are a pirate and the rehearsal starts at dawn";
+  const where = { sessionId: "carried", cwd: dir };
+  const adapters = [claudeAdapter, codexAdapter, ompAdapter];
+  const cases: [string, string[]][] = [
+    ["claude", ["claude", "--append-system-prompt", words, "--model", "opus"]],
+    ["codex", ["codex", "-c", `developer_instructions=${JSON.stringify(words)}`, "--model", "gpt-5"]],
+    ["omp", ["omp", `--append-system-prompt=${words}`, "--model", "some-model"]],
+  ];
+  for (const [id, argv] of cases) {
+    const adapter = adapters.find((a) => a.id === id)!;
+    const carried = adapter.carryOver?.(argv, where) ?? [];
+    expect(carried.join(" "), id).not.toContain(words);
+    // The session keeps the prompt it was launched with: the words are in a
+    // file the launch names.
+    const path = /(\/[^\s"]*carried-[^\s"]*\.md)/.exec(carried.join(" "))?.[1];
+    expect(path, id).toBeTruthy();
+    expect(await Bun.file(path!).text(), id).toContain(words);
+  }
+});
+
+test("a prompt a provider reads from a file is carried as the path it is", () => {
+  // omp reads a one-line value as a file: a path stays a path.
+  const file = join(dir, "own-prompt.md");
+  writeFileSync(file, PROMPT);
+  const carried = ompAdapter.carryOver?.(["omp", `--append-system-prompt=${file}`], { sessionId: "carried", cwd: dir }) ?? [];
+  expect(carried).toContain(`--append-system-prompt=${file}`);
+});

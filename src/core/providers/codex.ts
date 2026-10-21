@@ -40,7 +40,8 @@ import { JsonlTranscriptReader } from "./jsonl-reader";
 import { cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf, type ProcMatch } from "./procs";
 import { pickOption, plainScreen, underInput } from "./tui-screen";
 import { moveInto } from "./move";
-import { carryFlags, setsFlag, type Arity } from "../launch";
+import { carryFlags, setsFlag, type Arity, type CarryWhere } from "../launch";
+import { carriedText } from "../textfile";
 import type {
   Command,
   LiveProcess,
@@ -715,6 +716,45 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
 const told = (briefingFile: string | undefined): string[] =>
   briefingFile ? ["-c", `developer_instructions=${JSON.stringify(`Read ${briefingFile} before anything else and follow every instruction in it: it is the agentbox briefing and the user's standing rules.`)}`] : [];
 
+/**
+ * Codex's prompt, in a config value: `-c developer_instructions=`. Codex has
+ * no flag for a prompt in a file, so the words go in one and the value names
+ * it: the session is told to read the file, as it is told to read the
+ * briefing. A session keeps the prompt it was launched with, but not on its
+ * command line.
+ */
+function codexPrompts(argv: string[], where: CarryWhere): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    // `-c key=value`, `--config key=value`, `-ckey=value`, `--config=key=value`.
+    const attached = a.startsWith("--config=") ? a.slice("--config=".length) : a.length > 2 && a.startsWith("-c") && !a.startsWith("--") ? a.slice(2) : undefined;
+    const next = a === "-c" || a === "--config" ? argv[i + 1] : undefined;
+    const value = attached ?? next;
+    if (value === undefined) {
+      out.push(a);
+      continue;
+    }
+    const eq = value.indexOf("=");
+    if (eq < 0 || value.slice(0, eq) !== "developer_instructions") {
+      out.push(a);
+      if (next !== undefined) out.push(value);
+      continue;
+    }
+    let words = value.slice(eq + 1);
+    if (words.length > 1 && words.startsWith('"') && words.endsWith('"')) words = words.slice(1, -1).replace(/\\(["\\])/g, "$1");
+    const path = words ? carriedText(where.sessionId, "developer-instructions", words) : undefined;
+    if (!path) {
+      // No file: the prompt is dropped rather than put on the command line.
+      if (next !== undefined) i++;
+      continue;
+    }
+    out.push("-c", `developer_instructions=${JSON.stringify(`Read ${path} before anything else and follow every instruction in it.`)}`);
+    if (next !== undefined) i++;
+  }
+  return out;
+}
+
 /** Flags adopt carries over (`carryFlags`): model, config, profile,
  *  sandbox and approvals, directories — never a subcommand or the prompt. */
 const CARRIED: Record<string, Arity> = {
@@ -853,7 +893,7 @@ export const codexAdapter: ProviderAdapter = {
   spawnCommand,
   resumeCommand,
   moveSession,
-  carryOver: (argv) => carryFlags(codexArgs(argv), CARRIED),
+  carryOver: (argv, where) => carryFlags(codexPrompts(codexArgs(argv), where), CARRIED),
   headless: isHeadless,
   autoAnswer: codexAutoAnswer,
   blockedOn: codexBlockedOn,

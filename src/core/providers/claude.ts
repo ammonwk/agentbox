@@ -36,7 +36,7 @@ import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf 
 import { pickOption, plainScreen, RULE, underInput } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
 import { claudeInputEmpty, claudeRewindOpen, claudeRewindStep, rewindStart } from "./claude-rewind";
-import { carryFlags, setsFlag, type Arity } from "../launch";
+import { carryFlags, promptFiles, setsFlag, type Arity, type CarryWhere, type PromptFlag } from "../launch";
 import type {
   Command,
   LiveProcess,
@@ -557,9 +557,7 @@ const CARRIED: Record<string, Arity> = {
   "--thinking-display": "one",
   "--autocompact": "one",
   "--betas": "many",
-  "--append-system-prompt": "one",
   "--append-system-prompt-file": "one",
-  "--system-prompt": "one",
   "--system-prompt-file": "one",
   "--disable-slash-commands": "none",
   "--exclude-dynamic-system-prompt-sections": "none",
@@ -573,7 +571,17 @@ const CARRIED: Record<string, Arity> = {
   "--verbose": "none",
 };
 
-export const claudeCarryOver = (argv: string[]): string[] => carryFlags(argv, CARRIED);
+/** Claude's prompt flags, and the flag that names the file the words are in:
+ *  `--append-system-prompt` holds the words, `--append-system-prompt-file`
+ *  names the file they are in. A session keeps the prompt it was launched
+ *  with, but not on its command line. */
+const PROMPTS: PromptFlag[] = [
+  { flag: "--append-system-prompt", file: "--append-system-prompt-file" },
+  { flag: "--system-prompt", file: "--system-prompt-file" },
+];
+
+export const claudeCarryOver = (argv: string[], where: CarryWhere): string[] =>
+  carryFlags(promptFiles(argv, where, PROMPTS), CARRIED);
 
 /**
  * Move a stopped session to another account's home: the transcript and its
