@@ -138,16 +138,19 @@ function sameOption(onScreen: string, label: string): boolean {
   return same(bare(norm(onScreen)), bare(norm(label)));
 }
 
-/** Does the Submit tab's line for a question say `a`? Typed text is quoted,
- *  and beside picked options reads `Other: “…”`: `Y, Other: “Z”`. */
+/** Does the Submit tab's line for a question say `a`? A single pick is the
+ *  whole line — a label may contain commas, and the recommended one is drawn
+ *  with a trailing " (Recommended)" that `sameOption` strips. Several picks
+ *  (multiSelect) are comma-separated. Typed text is quoted and reads
+ *  `Other: “…”`. */
 function says(line: string | undefined, a: AskAnswer): boolean {
   if (line === undefined) return false;
-  const got = line
-    .split(", ")
-    .map((x) => x.replace(/^Other: (?=[“"])/, "").replace(/^[“"]|[”"]$/g, "").trim())
-    .sort();
-  const want = [...a.labels, ...(a.other ? [a.other] : [])].map((x) => x.trim()).sort();
-  return got.length === want.length && got.every((x, i) => x === want[i]);
+  const val = (x: string) => x.replace(/^Other: (?=[“"])/, "").replace(/^[“"]|[”"]$/g, "").trim();
+  const want = [...a.labels, ...(a.other ? [a.other] : [])];
+  if (want.length === 1) return sameOption(val(line), want[0]!);
+  const got = line.split(", ").map(val).sort();
+  const wanted = want.map((x) => x.trim()).sort();
+  return got.length === wanted.length && got.every((x, i) => sameOption(x, wanted[i]!));
 }
 
 /** The next thing to do to get the dialog to `answers`. `visited` holds what
