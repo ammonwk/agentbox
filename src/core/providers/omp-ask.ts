@@ -11,10 +11,14 @@
  *   │   ◉ Other (type your own)                                  │
  *   │       Teal please           what was typed for Other       │
  *   ├────────────────────────────────────────────────────────────┤
- *   │ Enter select · n note · ↑/↓ move · Tab/←/→ · Esc cancel    │
+ *   │ ⏎ select · n note · ↑/↓ move · ⇥/←/→ question · ⎋ cancel    │
  *   ╰────────────────────────────────────────────────────────────╯
  *
- * A single question has neither the tab row nor `Tab/←/→` in the footer.
+ * omp draws the footer's keys as glyphs (⏎ ⇥ ⎋ ⌃); older builds spelled them
+ * out (Enter, Tab, Esc, ctrl+), and both forms are matched below.
+ *
+ * A single question has neither the tab row nor the ⇥/←/→ tab-switch key in
+ * the footer.
  *
  * The Submit tab reads "Review answers" and lists `1. color: “Teal please”`,
  * `2. sizes: Small, Large` above `❯ Submit`.
@@ -68,7 +72,7 @@ export function readOmpAsk(raw: string): OmpAskScreen | null {
   const lines = plainScreen(raw).split("\n").map((l) => l.replace(/\s+$/, ""));
 
   const custom = lastIndexWhere(lines, (l) => l.startsWith("Custom answer: "));
-  if (custom >= 0 && lines.slice(custom).some((l) => /enter or ctrl\+q submit/.test(l))) {
+  if (custom >= 0 && lines.slice(custom).some((l) => /(?:enter|⏎) or (?:ctrl\+|⌃)q submit/i.test(l))) {
     const field = lines.findIndex((l, i) => i > custom && /^>( |$)/.test(l));
     if (field < 0) return null;
     const question = norm(lines.slice(custom, field).join(" ").slice("Custom answer: ".length));
@@ -80,11 +84,11 @@ export function readOmpAsk(raw: string): OmpAskScreen | null {
   const end = lines.findIndex((l, i) => i > top && /^\s*╰/.test(l));
   const box = lines.slice(top + 1, end < 0 ? undefined : end);
   const rules = box.flatMap((l, i) => (/^\s*├─/.test(l) ? [i] : []));
-  if (rules.length < 2 || !/Esc cancel/.test(box[rules[1]! + 1] ?? "")) return null;
+  if (rules.length < 2 || !/(?:Esc|⎋) cancel/.test(box[rules[1]! + 1] ?? "")) return null;
   // The right edge is the border, and a scrollbar inside it while the list scrolls.
   const inner = (l: string) => l.replace(/^\s*│ ?/, "").replace(/(\s*[│┃█▐▌░▒▓])+\s*$/, "");
-  // A single question has no tab row (and no Tab in the footer): its first line is the question.
-  const tabs = /\bTab\b/.test(box[rules[1]! + 1] ?? "") ? 1 : 0;
+  // A single question has no tab row (and no tab-switch key in the footer): its first line is the question.
+  const tabs = /\bTab\b|⇥/.test(box[rules[1]! + 1] ?? "") ? 1 : 0;
   const text = norm(box.slice(tabs, rules[0]).map(inner).join(" "));
   const body = box.slice(rules[0]! + 1, rules[1]).map(inner);
 
