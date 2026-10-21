@@ -41,6 +41,7 @@ import { agentDir } from "./providers/omp";
 import { ompModelCatalog, ompModelsConfig } from "./providers/omp-models";
 import type { Account, ModelOption, ProviderId } from "./types";
 import { museModels } from "./providers/muse";
+import type { ModelFamily } from "../subagents/parent";
 
 /** Re-read a file only when its mtime moves; models.dev's cache is ~5 MB. */
 const fileCache = new Map<string, { mtimeMs: number; value: unknown }>();
@@ -277,6 +278,7 @@ async function opencodeModels(dev: ModelsDev): Promise<ModelOption[]> {
 interface DevinModelList {
   families?: {
     family_label?: string;
+    family_uid?: string;
     slug?: string;
     aliases?: string[];
     variants?: {
@@ -332,6 +334,56 @@ async function listDevinModels(account: Account): Promise<ModelOption[] | null> 
     }
   }
   return byRelease(out);
+}
+
+/** devin's families, as this machine's own login sees them: the family a
+ *  model belongs to, and the variants (effort tiers) it runs at.
+ *
+ *  The subagent MCP's devin backend runs `devin acp` with this login, so
+ *  this is the list that decides what it can run — the one a session's own
+ *  model is looked up in, to run that same model there. Cached like the
+ *  per-account list above, and the last good answer stands in for a failed
+ *  one. */
+let devinFamilyCatalog: { at: number; families: ModelFamily[] } | null = null;
+
+/** The last families devin was asked for, without asking again. */
+export function devinFamiliesNow(): ModelFamily[] | null {
+  return devinFamilyCatalog?.families ?? null;
+}
+
+export async function devinFamilies(): Promise<ModelFamily[] | null> {
+  if (devinFamilyCatalog && Date.now() - devinFamilyCatalog.at < DEVIN_TTL_MS) return devinFamilyCatalog.families;
+  // A stale list is better than none and better than a wait: it answers now
+  // and the fresh one lands behind it.
+  if (devinFamilyCatalog) {
+    void refreshDevinFamilies();
+    return devinFamilyCatalog.families;
+  }
+  return refreshDevinFamilies();
+}
+
+async function refreshDevinFamilies(): Promise<ModelFamily[] | null> {
+  const r = await exec(["devin", "models", "list", "--format", "json"], {
+    // A stray WINDSURF_API_KEY from the server's shell would answer for the
+    // wrong login; this is the machine's own devin login.
+    unset: ["WINDSURF_API_KEY"],
+    timeoutMs: 15_000,
+  });
+  if (r.code !== 0) return devinFamilyCatalog?.families ?? null;
+  let list: DevinModelList;
+  try {
+    list = JSON.parse(r.stdout) as DevinModelList;
+  } catch {
+    return devinFamilyCatalog?.families ?? null;
+  }
+  const families: ModelFamily[] = [];
+  for (const f of list.families ?? []) {
+    const uid = f.family_uid ?? f.slug;
+    if (!uid) continue;
+    families.push({ uid, variants: (f.variants ?? []).flatMap((v) => (v.model_uid ? [v.model_uid] : [])) });
+  }
+  devinFamilyCatalog = { at: Date.now(), families };
+  return families;
 }
 
 /** The models agentbox's bridge adds to devin (`src/bridge/`), for whichever

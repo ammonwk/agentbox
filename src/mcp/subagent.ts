@@ -29,6 +29,7 @@ import {
 } from "../subagents/pool";
 import { describePlace, renderPlace } from "../subagents/place";
 import { SUBAGENT_PROVIDERS, backendFor } from "../subagents/backend";
+import { decodeParent, parentProvider, PARENT_ENV } from "../subagents/parent";
 import { budget, healthWord, renderBudget, verdict, type Verdict } from "../subagents/health";
 import * as live from "../subagents/live";
 import {
@@ -492,11 +493,14 @@ export async function runSubagentMcp(): Promise<void> {
   const providers = SUBAGENT_PROVIDERS.map(
     (id) => `${id} (${backendFor(id).model() ?? "its own configured default model"})`,
   ).join(", ");
+  /** The backend that runs the caller's own model, when one can: the
+   *  session's CLI if it can run it, and otherwise the one that can. */
+  const defaultProvider = parentProvider(decodeParent(process.env[PARENT_ENV]));
   const providerArg = z
     .enum(SUBAGENT_PROVIDERS)
     .optional()
     .describe(
-      `The agent CLI to run: ${providers}. Defaults to omp. Each takes the same brief ` +
+      `The agent CLI to run: ${providers}. Defaults to ${defaultProvider}. Each takes the same brief ` +
         `and works the same way here; they differ in the model behind them.`,
     );
 
@@ -613,7 +617,7 @@ export async function runSubagentMcp(): Promise<void> {
         name,
         role,
         cwd,
-        provider,
+        provider: provider ?? defaultProvider,
         readOnly: read_only,
         allowOutsideCwd: allow_outside_cwd,
         maxTurnMs: max_turn_hours === undefined ? undefined : max_turn_hours * 3_600_000,
@@ -1020,7 +1024,7 @@ export async function runSubagentMcp(): Promise<void> {
           args: parseJsonArgs(args),
           concurrency,
           cwd,
-          provider,
+          provider: provider ?? defaultProvider,
           // `progress`/`total` and not just prose: a client handed both renders
           // a percentage of its own. Both grow during the run, because the
           // script decides how many agents there are as it goes.

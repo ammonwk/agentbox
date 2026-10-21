@@ -5,6 +5,7 @@
 
 import { bridgeUrl, bridgedModel } from "../bridge/models";
 import { ensureBridge } from "../bridge/service";
+import { decodeParent, PARENT_ENV } from "./parent";
 
 export const SUBAGENT_PROVIDERS = ["omp", "devin"] as const;
 export type SubagentProvider = (typeof SUBAGENT_PROVIDERS)[number];
@@ -17,6 +18,9 @@ export interface AcpBackend {
    * models pass the names they know ("sonnet"), which a CLI can accept at
    * launch and fail on only at the first prompt, as a provider error that
    * reads like the agent's own.
+   *
+   * Failing that, the model of the session that called: a subagent runs on
+   * what its caller runs on, when this CLI can run it.
    */
   model(): string | null;
   argv(model: string | null, promptFile: string, readOnly: boolean): string[];
@@ -32,7 +36,9 @@ export interface AcpBackend {
 const omp: AcpBackend = {
   id: "omp",
   model: () =>
-    process.env.AGENTBOX_SUBAGENT_OMP_MODEL || "opencode-go-responses/muse-spark-1.3-contributor",
+    process.env.AGENTBOX_SUBAGENT_OMP_MODEL ||
+    decodeParent(process.env[PARENT_ENV])?.omp ||
+    "opencode-go-responses/muse-spark-1.3-contributor",
   // omp treats an --append-system-prompt value containing a newline as the
   // prompt itself and otherwise reads it as a file, falling back silently to
   // the path as text when the read fails — hence the runner's existence check.
@@ -63,7 +69,7 @@ function devinBridgeEnv(): Record<string, string> {
 
 const devin: AcpBackend = {
   id: "devin",
-  model: () => process.env.AGENTBOX_SUBAGENT_DEVIN_MODEL || null,
+  model: () => process.env.AGENTBOX_SUBAGENT_DEVIN_MODEL || decodeParent(process.env[PARENT_ENV])?.devin || null,
   argv: (model) => ["devin", "acp", ...(model === null ? [] : ["--model", model])],
   // devin logs at INFO to stderr, which the pool reports as the agent's errors.
   env: () => ({ RUST_LOG: "error", ...devinBridgeEnv() }),

@@ -104,8 +104,10 @@ claude mcp add agentbox -- bun /path/to/agentbox/bin/agentbox mcp
 ```
 
 For omp and devin subagents any Claude session can delegate to (no server
-needed). `AGENTBOX_SUBAGENT_OMP_MODEL` and `AGENTBOX_SUBAGENT_DEVIN_MODEL` pick
-their models; devin's defaults to its own configured one:
+needed). A subagent runs on the model of the session that called it, when
+the CLI behind it can run that model; `AGENTBOX_SUBAGENT_OMP_MODEL` and
+`AGENTBOX_SUBAGENT_DEVIN_MODEL` pick their models instead, and devin's
+defaults to its own configured one:
 
 ```bash
 claude mcp add subagents -e AGENTBOX_SUBAGENT_OMP_MODEL=opencode-go/deepseek-flash -- bun /path/to/agentbox/bin/agentbox subagent-mcp

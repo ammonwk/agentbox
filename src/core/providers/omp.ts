@@ -690,6 +690,15 @@ function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoA
   const c = opts.carry;
   const a: string[] = [...(c ?? [])];
   if (opts.model && !(c && setsFlag(c, "--model"))) a.push("--model", opts.model);
+  // omp's bundled sub-agents are pinned to roles — scout and sonic to
+  // `@smol`, reviewer to `@slow` — so they would answer in whatever those
+  // roles name rather than in the session's own model. Pin the roles to it,
+  // and the sub-agents follow the session they belong to.
+  const model = opts.model ?? defaultModel(join(agentDir(), "config.yml"));
+  if (model) {
+    if (!(c && setsFlag(c, "--smol"))) a.push("--smol", model);
+    if (!(c && setsFlag(c, "--slow"))) a.push("--slow", model);
+  }
   if (opts.effort && !(c && setsFlag(c, "--thinking"))) a.push(`--thinking=${opts.effort}`);
   if (!c && opts.autoApprove) a.push("--auto-approve");
   if (!(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${briefing(opts.cwd)}`);

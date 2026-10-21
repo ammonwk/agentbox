@@ -129,6 +129,8 @@ import { REFUSAL_LOOKBACK_MS, refusedRoutes, type RouteOutcome } from "./refusal
 import { statedUntil, statedWaitMs } from "./retrywait";
 import { retryClock, retrying } from "./attention";
 import { isAgentSent, PROMPT_PREVIEW } from "./sent";
+import { parentModelFor, parentModelNow } from "./subagent-models";
+import { encodeParent, PARENT_ENV, type ParentModel } from "../subagents/parent";
 import { readBtwPanel } from "./providers/claude-btw";
 import type { RewindGoal } from "./providers/claude-rewind";
 import { devinQueuedCount } from "./providers/devin";
@@ -2960,8 +2962,13 @@ export class Fleet extends EventEmitter {
       why: placement.why,
     });
 
+    // The model this session's subagents will run on, told to it in its
+    // environment: a delegated agent answers in the same model as its caller.
+    // A session with no model of its own runs on the CLI's default, which
+    // is a model too.
+    const parentModel = await parentModelFor(req.provider, model ?? adapter.defaultModel?.() ?? null, effort);
     try {
-      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider) }, cmd.secret), unset: cmd.unset });
+      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider, parentModel) }, cmd.secret), unset: cmd.unset });
     } catch (e) {
       updateSessionRecord(id, { tmux: null });
       throw new FleetError(500, (e as Error).message);
@@ -3267,7 +3274,7 @@ export class Fleet extends EventEmitter {
     // A dead pane from the last run holds the name.
     this.killTmux(name);
     // The account's variables win over the launching shell's.
-    const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider) };
+    const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider, parentModelNow(rec.provider, opts.model ?? adapter.defaultModel?.() ?? null, opts.effort)) };
     this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, ...splitSecret(env, cmd.secret), unset: cmd.unset });
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
@@ -4273,8 +4280,12 @@ function resumeModel(rec: SessionRecord): string | null {
  * itself it names a session after its folder, so one started in another
  * session's worktree answered to that session's id, and replies sent with
  * `agentbox send` went there. Claude does not pass it on to its shells.
+ *
+ * The model the session runs on goes with it, so a subagent the session
+ * delegates to runs on the same model rather than on one the fleet picked
+ * for it (src/subagents/parent.ts).
  */
-function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
+function sessionEnv(id: string, provider: ProviderId, parent?: ParentModel | null): Record<string, string> {
   try {
     sessionCapability(id);
   } catch (e) {
@@ -4288,6 +4299,7 @@ function sessionEnv(id: string, provider: ProviderId): Record<string, string> {
     ...(process.env.AGENTBOX_PORT ? { AGENTBOX_PORT: process.env.AGENTBOX_PORT } : {}),
     ...(process.env.AGENTBOX_TMUX_SOCKET ? { AGENTBOX_TMUX_SOCKET: process.env.AGENTBOX_TMUX_SOCKET } : {}),
     ...(provider === "claude" ? { CLAUDE_CODE_SESSION_NAME: id } : {}),
+    ...(parent ? { [PARENT_ENV]: encodeParent(parent) } : {}),
   };
 }
 
