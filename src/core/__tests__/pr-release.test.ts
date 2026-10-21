@@ -50,7 +50,7 @@ test("release cancels armed and undelivered results only for that session and re
     updateWait(w.id, { ended: "cancelled", endedAt: now });
   }
   const sent: string[] = [];
-  const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async (_id, text) => { sent.push(text); } });
+  const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async (_id, text) => { sent.push(text); }, finishNote: async () => false });
   await waits.tick();
   expect(sent).toEqual([]);
   expect(() => waits.arm("old", spec(8066))).toThrow("You no longer hold");
@@ -79,7 +79,7 @@ test("feedback cursor survives restart without reviving a released owner's notif
   claim("old", 9003);
   const feedback = { ...spec(9003), all: false, feedback: true } as Extract<WaitSpec, { kind: "pr" }>;
   const w = insertWait({ sessionId: "old", spec: feedback, createdAt: now, deadline: now + 60_000 });
-  const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async () => {} });
+  const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async () => {}, finishNote: async () => false });
   // The durable transition is what this test is about, and `looked` writes it;
   // the GitHub read that would feed it is what `tick` is stubbed out of.
   const inner = waits as unknown as { tick: () => Promise<void>; looked: (w: Wait, look: Look, now: number) => void };
@@ -163,7 +163,7 @@ test("a pre-existing observer wait names the current owner instead of granting a
   const wait = pending("observer", 9004);
   updateWait(wait.id, { ended: "stuck", endedAt: now, outcome: "Arm it again for the new head." });
   const sent: string[] = [];
-  const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async (_id, text) => { sent.push(text); } });
+  const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async (_id, text) => { sent.push(text); }, finishNote: async () => false });
   await waits.tick();
   expect(sent).toHaveLength(1);
   expect(sent[0]).toContain("assigned to new, not you (observer)");

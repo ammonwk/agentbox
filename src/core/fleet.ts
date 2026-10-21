@@ -194,6 +194,8 @@ export interface Runtime {
   newSession(s: NewSession): number;
   listPanes(): PaneInfo[];
   sendText(name: string, text: string, opts?: { pieces?: number }): Promise<void>;
+  /** Enter on a message `sendText` left in the input box; false when the pane does not show it. */
+  submitDraft?(name: string, text: string): Promise<boolean>;
   sendKeys(name: string, keys: string[]): void;
   capture(name: string, opts?: { ansi?: boolean; scrollback?: number }): string | null;
   captureMany(names: string[]): Map<string, string | null>;
@@ -3390,6 +3392,15 @@ export class Fleet extends EventEmitter {
    *  the fleet's own nudges are, and a stopped one is resumed with it. */
   note(id: string, text: string): Promise<void> {
     return this.serial(id, () => this.sendNow(id, text, undefined, true));
+  }
+
+  /** Submit a note an earlier `note` left typed in the input box; false when its pane does not show it. */
+  finishNote(id: string, text: string): Promise<boolean> {
+    return this.serial(id, async () => {
+      const s = this.get(id);
+      if (s.host !== "tmux" || !s.tmux || !this.deps.runtime.submitDraft) return false;
+      return this.deps.runtime.submitDraft(s.tmux, text);
+    });
   }
 
   /** Wake a cold tmux session on the balancer's pick with `text` as its

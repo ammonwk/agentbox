@@ -314,12 +314,12 @@ export class Waits {
   private asking = new Set<number>();
   /** When each ended wait may next be typed, and how long the last pause was. */
   private tellAfter = new Map<number, { at: number; pause: number }>();
-  /** Waits whose note was typed and left in the input box, and when: not typed again until the conversation has moved. */
-  private draftLeft = new Map<number, number>();
+  /** Waits whose note was typed and left in the input box, when, and the note: not typed again until the conversation has moved. */
+  private draftLeft = new Map<number, { at: number; text: string }>();
   private telling = new Set<number>();
 
   constructor(
-    private readonly fleet: Pick<Fleet, "get" | "heir" | "note">,
+    private readonly fleet: Pick<Fleet, "get" | "heir" | "note" | "finishNote">,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -530,7 +530,8 @@ export class Waits {
    * after a pause that doubles (a minute, to half an hour). One that was
    * typed and left in the input box is not typed again until the
    * conversation has moved: a draft goes out with the next message submitted,
-   * and a second copy typed after it would go out twice.
+   * and a second copy typed after it would go out twice. Until then each try
+   * presses Enter on it, if its pane shows it by now.
    */
   private async tell(w: Wait): Promise<void> {
     const now = this.now();
@@ -558,26 +559,36 @@ export class Waits {
     }
     if (now < (this.tellAfter.get(w.id)?.at ?? 0)) return;
     const drafted = this.draftLeft.get(w.id);
-    if (drafted !== undefined && s.lastActivityAt <= drafted) return;
+    const left = drafted && s.lastActivityAt <= drafted.at ? drafted.text : null;
+    const holder = w.spec.kind === "pr" ? assignedPrHolder(w.spec) : null;
+    const notice = holder && holder !== s.id
+      ? `[agentbox: This PR is assigned to ${holder}, not you (${s.id}). This wait is observation only; it does not authorize edits, merges, pushes or use of the holder's worktree.]\n\n`
+      : "";
+    const text = left ?? notice + message(w, now);
     try {
-      const holder = w.spec.kind === "pr" ? assignedPrHolder(w.spec) : null;
-      const notice = holder && holder !== s.id
-        ? `[agentbox: This PR is assigned to ${holder}, not you (${s.id}). This wait is observation only; it does not authorize edits, merges, pushes or use of the holder's worktree.]\n\n`
-        : "";
-      await this.fleet.note(s.id, notice + message(w, now));
+      if (left === null) await this.fleet.note(s.id, text);
+      else if (!(await this.fleet.finishNote(s.id, text))) {
+        this.pause(w.id);
+        return;
+      }
       updateWait(w.id, { toldAt: this.now(), untold: null });
       this.tellAfter.delete(w.id);
       this.draftLeft.delete(w.id);
       console.log(`agentbox: wait ${w.id}: told ${s.id}`);
     } catch (e) {
       const said = (e as Error).message;
-      const pause = Math.min((this.tellAfter.get(w.id)?.pause ?? TELL_EVERY_MS / 2) * 2, 30 * 60_000);
-      this.tellAfter.set(w.id, { at: this.now() + pause, pause });
-      if (said.startsWith("not sent:")) this.draftLeft.set(w.id, this.now());
+      this.pause(w.id);
+      if (said.startsWith("not sent:")) this.draftLeft.set(w.id, { at: this.now(), text });
       const why = `could not type it into ${s.id}: ${said}`;
       console.error(`agentbox: wait ${w.id}: ${why}`);
       updateWait(w.id, { untold: why });
     }
+  }
+
+  /** The next try at telling a wait after a pause twice the last (a minute, to half an hour). */
+  private pause(id: number): void {
+    const pause = Math.min((this.tellAfter.get(id)?.pause ?? TELL_EVERY_MS / 2) * 2, 30 * 60_000);
+    this.tellAfter.set(id, { at: this.now() + pause, pause });
   }
 }
 

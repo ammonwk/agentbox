@@ -75,7 +75,7 @@ test("a released session can still arm and be told its --merged wait, naming the
   transferPr(prClaims(sessions, byBranch), sessions, "team/repo", 4, "holder", "holder", "next", 3);
   expect(getWait(wait.id)!.ended).toBeNull();
   const sent: string[] = [];
-  const waits = new Waits({ get: (id) => sessions.find((s) => s.id === id)!, heir: (id) => id, note: async (_id, text) => { sent.push(text); } });
+  const waits = new Waits({ get: (id) => sessions.find((s) => s.id === id)!, heir: (id) => id, note: async (_id, text) => { sent.push(text); }, finishNote: async () => false });
   const inner = waits as unknown as { tick: () => Promise<void>; tell: (w: Wait) => Promise<void> };
   inner.tick = async () => {}; // the ending is what this is about, not the GitHub read
   expect(waits.arm("holder", stacked)).toMatchObject({ already: true, wait: { id: wait.id } });

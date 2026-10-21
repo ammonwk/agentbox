@@ -295,6 +295,28 @@ export async function sendText(name: string, text: string, opts: { pieces?: numb
   if (!draft) {
     throw new Unsubmitted(`its pane showed nothing of the message for ${PASTE_WAIT_MS / 1000}s, so Enter was not pressed: a dialog may be up, or it is not reading its terminal`);
   }
+  await submit(name, draft);
+}
+
+/**
+ * Press Enter on a message an earlier `sendText` left in the input box
+ * because the pane showed it only after that stopped looking (a TUI starved
+ * of CPU). The bottom row that starts with the message's first words is the
+ * draft; false when no row does.
+ */
+export async function submitDraft(name: string, text: string): Promise<boolean> {
+  const said = text.replace(/\s+/g, "");
+  const rows = screenRows(name);
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const head = rowHead(rows[index]!);
+    if (head.words.length < Math.min(6, said.length) || !said.startsWith(head.words)) continue;
+    await submit(name, { index, ...head, below: rowsBelow(rows, index) });
+    return true;
+  }
+  return false;
+}
+
+async function submit(name: string, draft: DraftRow): Promise<void> {
   for (let press = 0; press < ENTER_TRIES; press++) {
     sendKeys(name, ["Enter"]);
     if (await leftRow(name, draft)) return;
