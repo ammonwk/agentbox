@@ -444,6 +444,13 @@ function migrate(d: Database) {
       d.exec(`PRAGMA user_version = ${v + 1}`);
     })();
   }
+  // A release is said once: the PR a session lost, and whether it has been
+  // told about it yet. The column is added here and not in the entries above,
+  // because a database ahead of this code — another branch's migrations ran
+  // before this one landed — skips them, and the code that reads the column
+  // has to work on that database too.
+  const columns = d.query("PRAGMA table_info(pr_releases)").all() as { name: string }[];
+  if (!columns.some((c) => c.name === "told_at")) d.exec("ALTER TABLE pr_releases ADD COLUMN told_at INTEGER");
 }
 
 // --------------------------------------------------------------- accounts

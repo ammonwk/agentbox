@@ -84,5 +84,6 @@ test("a released session can still arm and be told its --merged wait, naming the
   expect(sent).toHaveLength(1);
   expect(sent[0]).toContain("PR #4 merged.");
   expect(sent[0]).toContain("assigned to next, not you (holder)");
-  expect(sent[0]).not.toContain("You no longer hold");
+  // A --merged wait needs no ownership: the release line is not said here.
+  expect(sent[0]).not.toContain("do not edit");
 });

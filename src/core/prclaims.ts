@@ -39,9 +39,14 @@ export function releasedPrs(sessionId: string): PrRef[] {
   return getDb().query("SELECT repo, number FROM pr_releases WHERE session_id = ? ORDER BY repo, number").all(sessionId) as PrRef[];
 }
 
+/** Who holds the PR now, and since when. */
+export function prHolder(pr: PrRef): { sessionId: string; at: number } | null {
+  const row = getDb().query("SELECT session_id, at FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?").get(pr.repo, pr.number) as { session_id: string; at: number } | null;
+  return row ? { sessionId: row.session_id, at: row.at } : null;
+}
+
 export function assignedPrHolder(pr: PrRef): string | null {
-  const row = getDb().query("SELECT session_id FROM pr_claims WHERE lower(repo) = lower(?) AND number = ?").get(pr.repo, pr.number) as { session_id: string } | null;
-  return row?.session_id ?? null;
+  return prHolder(pr)?.sessionId ?? null;
 }
 
 export function prReleased(sessionId: string, pr: PrRef): boolean {
@@ -50,19 +55,39 @@ export function prReleased(sessionId: string, pr: PrRef): boolean {
   return !!getDb().query("SELECT 1 FROM pr_releases WHERE session_id = ? AND lower(repo) = lower(?) AND number = ?").get(sessionId, pr.repo, pr.number);
 }
 
-/** Read at delivery, not when a message is queued: ownership can move meanwhile. */
-export function prReleaseNotice(sessionId: string): string {
-  const refs = releasedPrs(sessionId);
+/** The line for the PRs a session lost: which PR, who holds it now and since
+ *  when, and that it is not to edit that branch or worktree. */
+function prLossLine(refs: PrRef[]): string {
   if (!refs.length) return "";
   const names = refs.map((p) => {
-    const holder = assignedPrHolder(p);
-    return `${p.repo}#${p.number}${holder ? ` (assigned to ${holder})` : " (released)"}`;
+    const holder = prHolder(p);
+    return holder
+      ? `${p.repo}#${p.number} is ${holder.sessionId}'s since ${new Date(holder.at).toLocaleTimeString()}`
+      : `${p.repo}#${p.number} is held by nobody now`;
   });
-  return `[agentbox: PR ownership changed. You no longer hold ${names.join(", ")}. `
-    + `Its checks, --require/--only and --feedback waits are cancelled; a --merged wait on it stays armed, `
-    + `since waiting for a merge needs no ownership. `
-    + `Earlier prompts, waits, messages and schedules do not restore ownership. `
-    + `Do not edit, merge, push or use the successor's worktree for these PRs. Only a successful explicit agentbox pr claim can give one back to you.]`;
+  const many = names.length > 1;
+  return `[agentbox: PR ${names.join(many ? " and " : "")}, not yours: do not edit ${many ? "those branches or worktrees" : "that branch or worktree"}, `
+    + `and leave ${many ? "them" : "it"} to whoever holds ${many ? "them" : "it"}; only your user can hand ${many ? "them" : "it"} back to you (\`agentbox pr claim\`).]`;
+}
+
+/**
+ * What a session lost and has not been told about: said once, the next time
+ * anything is delivered to it, and never again for that claim. Read at
+ * delivery, not when a message is queued: ownership can move meanwhile.
+ */
+export function prReleaseLine(sessionId: string): string {
+  return prLossLine(getDb().query("SELECT repo, number FROM pr_releases WHERE session_id = ? AND told_at IS NULL ORDER BY repo, number").all(sessionId) as PrRef[]);
+}
+
+/** Everything a session lost, told or not: what its heir inherits, and is
+ *  told about once. */
+export function prReleasedLine(sessionId: string): string {
+  return prLossLine(releasedPrs(sessionId));
+}
+
+/** It has been said: never again for that claim. */
+export function prReleaseTold(sessionId: string): void {
+  getDb().run("UPDATE pr_releases SET told_at = ? WHERE session_id = ? AND told_at IS NULL", [Date.now(), sessionId]);
 }
 
 const holds = (s: Session | undefined): s is Session =>
@@ -186,8 +211,15 @@ export function releasePr(sessionId: string, pr: PrRef | null): number {
 /** A schedule's replacement keeps its predecessor's obligations and exclusions. */
 export function movePrClaims(from: string, to: string): number {
   const db = getDb();
+  const now = Date.now();
   return db.transaction(() => {
-    const moved = db.run("UPDATE pr_claims SET session_id = ? WHERE session_id = ?", [to, from]).changes;
+    const held = db.query("SELECT repo, number FROM pr_claims WHERE session_id = ?").all(from) as PrRef[];
+    const moved = db.run("UPDATE pr_claims SET session_id = ?, at = ? WHERE session_id = ?", [to, now, from]).changes;
+    // The predecessor let the PRs go to its heir: it is told, when it next
+    // wakes, that they are not its to edit.
+    for (const ref of held) db.run("INSERT OR IGNORE INTO pr_releases (session_id, repo, number) VALUES (?,?,?)", [from, ref.repo, ref.number]);
+    // The heir inherits the exclusions: the PRs its predecessor lost, which
+    // are not its to work either.
     db.run(`INSERT OR IGNORE INTO pr_releases (session_id, repo, number)
       SELECT ?, r.repo, r.number FROM pr_releases r WHERE r.session_id = ?
       AND NOT EXISTS (SELECT 1 FROM pr_claims c WHERE c.session_id = ? AND lower(c.repo) = lower(r.repo) AND c.number = r.number)`, [to, from, to]);
