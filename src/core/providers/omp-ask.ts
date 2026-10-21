@@ -72,7 +72,9 @@ export function readOmpAsk(raw: string): OmpAskScreen | null {
   const lines = plainScreen(raw).split("\n").map((l) => l.replace(/\s+$/, ""));
 
   const custom = lastIndexWhere(lines, (l) => l.startsWith("Custom answer: "));
-  if (custom >= 0 && lines.slice(custom).some((l) => /(?:enter|⏎) or (?:ctrl\+|⌃)q submit/i.test(l))) {
+  // The editor's footer: the key that submits, then the one that cancels
+  // (omp draws these as glyphs, and once spelled "enter or ctrl+q submit").
+  if (custom >= 0 && lines.slice(custom).some((l) => /\bsubmit\b.*\bcancel\b/i.test(l))) {
     const field = lines.findIndex((l, i) => i > custom && /^>( |$)/.test(l));
     if (field < 0) return null;
     const question = norm(lines.slice(custom, field).join(" ").slice("Custom answer: ".length));
@@ -89,10 +91,14 @@ export function readOmpAsk(raw: string): OmpAskScreen | null {
   const inner = (l: string) => l.replace(/^\s*│ ?/, "").replace(/(\s*[│┃█▐▌░▒▓])+\s*$/, "");
   // A single question has no tab row (and no tab-switch key in the footer): its first line is the question.
   const tabs = /\bTab\b|⇥/.test(box[rules[1]! + 1] ?? "") ? 1 : 0;
-  const text = norm(box.slice(tabs, rules[0]).map(inner).join(" "));
+  const head = box.slice(tabs, rules[0]).map(inner);
+  const text = norm(head.join(" "));
   const body = box.slice(rules[0]! + 1, rules[1]).map(inner);
 
-  if (text === "Review answers") {
+  // The Submit tab's header reads "Review answers". Its footer has no
+  // tab-switch key, so `tabs` is 0 and the tab row stays in `head`: find the
+  // header line rather than expect `text` to be it alone.
+  if (head.some((l) => norm(l) === "Review answers")) {
     const answers = new Map<number, string>();
     for (const l of body) {
       const m = /^\s*(\d+)\.\s+[^:]*:\s*(.*)$/.exec(l);
