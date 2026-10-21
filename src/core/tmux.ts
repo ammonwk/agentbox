@@ -64,6 +64,10 @@ export interface NewSession {
   name: string;
   cwd: string;
   argv: string[];
+  /** A file to feed the command's standard input: a CLI that takes its first
+   *  prompt from stdin reads it there, so the words stay off the command
+   *  line. */
+  stdinFile?: string;
   env?: Record<string, string>;
   unset?: string[];
   /** Variables holding secrets. They are exported by the private launcher
@@ -73,6 +77,10 @@ export interface NewSession {
   cols?: number;
   rows?: number;
 }
+
+/** `sh` runs the command with the file as its standard input and execs it, so
+ *  the pane's process is the agent itself. */
+const STDIN_SCRIPT = 'f=$1; shift; exec "$@" <"$f"';
 
 /**
  * Variables that say which session a process belongs to. The tmux server
@@ -101,9 +109,10 @@ export function newSession(s: NewSession): number {
   // one the server inherited, and a stray CLAUDE_CONFIG_DIR from the shell
   // that started agentbox would put the session on the wrong account.
   const unset = [...new Set([...INHERITED_IDENTITY.filter((v) => !(v in (s.env ?? {}))), ...(s.unset ?? []), ...AWS_CREDENTIAL_ENV])];
+  const run = s.stdinFile ? ["sh", "-c", STDIN_SCRIPT, "sh", s.stdinFile, ...s.argv] : s.argv;
   const argv = process.platform === "linux" && Bun.which("systemd-run")
-    ? ["/usr/bin/python3", fileURLToPath(new URL("./session-owner.py", import.meta.url)), "launch", ...s.argv]
-    : s.argv;
+    ? ["/usr/bin/python3", fileURLToPath(new URL("./session-owner.py", import.meta.url)), "launch", ...run]
+    : run;
   const env: Record<string, string> = { ...(process.env.BASH_ENV ? { BASH_ENV: process.env.BASH_ENV } : {}), ...s.env, ...agentAwsEnv() };
   for (const key of AWS_CREDENTIAL_ENV) delete env[key];
   let cmd = ["env", ...unset.flatMap((v) => ["-u", v]), ...Object.entries(env).map(([k, v]) => `${k}=${v}`), ...argv];

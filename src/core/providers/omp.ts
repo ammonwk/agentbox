@@ -46,7 +46,6 @@ import { ompContextLimit } from "./omp-models";
 import { GO_ACCOUNT_BEARER } from "../accounts/gocred";
 import { ensureBridge } from "../../bridge/service";
 import { argvOf, cwdOf, environOf, filesWrittenBy, findProcesses, runsCli, startedAtOf } from "./procs";
-import { briefing } from "./briefing";
 import { getSessionRecord } from "../db";
 import type {
   Command,
@@ -630,12 +629,6 @@ function lowerBound<T = number>(a: T[], x: number, key: (v: T) => number = (v) =
 
 // ------------------------------------------------------------ adapter
 
-function withPrompt(argv: string[], prompt?: string): string[] {
-  // `--` so a prompt starting with `-` is not read as a flag. omp still
-  // treats a leading `@` as a file to attach, which is its documented syntax.
-  return prompt ? [...argv, "--", prompt] : argv;
-}
-
 /** Flags adopt carries over (`carryFlags`): model, permissions, prompt,
  *  tools and directories — never the session, the profile, a key or a mode
  *  that makes it a one-shot. */
@@ -686,7 +679,7 @@ function isHeadless(argv: string[]): boolean {
  * The flags a session starts with. A carried launch decides model and
  * permissions (ResumeOptions.carry); what it does not set is ours.
  */
-function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[] }): string[] {
+function commonFlags(opts: { cwd: string; briefingFile?: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[] }): string[] {
   const c = opts.carry;
   const a: string[] = [...(c ?? [])];
   if (opts.model && !(c && setsFlag(c, "--model"))) a.push("--model", opts.model);
@@ -701,7 +694,9 @@ function commonFlags(opts: { cwd: string; model?: string; effort?: string; autoA
   }
   if (opts.effort && !(c && setsFlag(c, "--thinking"))) a.push(`--thinking=${opts.effort}`);
   if (!c && opts.autoApprove) a.push("--auto-approve");
-  if (!(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${briefing(opts.cwd)}`);
+  // omp reads a one-line value as a file: the briefing goes in one, and the
+  // command line names it.
+  if (opts.briefingFile && !(c && setsFlag(c, "--append-system-prompt", "--system-prompt"))) a.push(`--append-system-prompt=${opts.briefingFile}`);
   // omp silently moves a session started in ~ to a temp dir unless told not to.
   if (canonical(opts.cwd) === canonical(homedir()) && !(c && setsFlag(c, "--allow-home"))) a.push("--allow-home");
   return a;
@@ -773,6 +768,9 @@ export const ompAdapter: ProviderAdapter = {
   id: "omp",
   label: "omp",
   efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+  // omp takes no prompt from a file: `@path` would put the file's reference
+  // in the conversation instead of the words. The fleet types it.
+  promptDelivery: "typed",
 
   // Measured 2026-10-19 on OpenCode Go: a session stopped and resumed read
   // 43,136 of 43,325 input tokens from cache on its first call. An idle omp
@@ -863,7 +861,7 @@ export const ompAdapter: ProviderAdapter = {
 
   spawnCommand(opts: SpawnOptions) {
     return {
-      argv: withPrompt(["omp", ...commonFlags(opts)], opts.prompt),
+      argv: ["omp", ...commonFlags(opts)],
       ...ompLaunch(opts.account),
       agentSessionId: null,
     };
@@ -874,7 +872,7 @@ export const ompAdapter: ProviderAdapter = {
     // different project, stops to ask whether to move the session.
     const path = findSessionFile(sessionsRoot(), opts.agentSessionId, opts.cwd);
     return {
-      argv: withPrompt(["omp", "-r", path ?? opts.agentSessionId, ...commonFlags(opts)], opts.prompt),
+      argv: ["omp", "-r", path ?? opts.agentSessionId, ...commonFlags(opts)],
       ...ompLaunch(opts.account),
     };
   },

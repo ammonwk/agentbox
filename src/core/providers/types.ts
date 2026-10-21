@@ -277,7 +277,12 @@ export interface TranscriptReader {
 export interface SpawnOptions {
   account: Account;
   cwd: string;
-  prompt?: string;
+  /** The file the first prompt is in. The CLI reads it, or the fleet types
+   *  it; the words are never an argument (see `ProviderAdapter.promptDelivery`). */
+  promptFile?: string;
+  /** The file the briefing is in: what the session is told about where it
+   *  runs, and the user's rules for it. */
+  briefingFile?: string;
   model?: string;
   /** One of the adapter's `efforts`; absent means the CLI's default. */
   effort?: string;
@@ -292,7 +297,10 @@ export interface ResumeOptions {
   agentSessionId: string;
   /** The cwd to run in — the caller has already proven it (see resumeCwd). */
   cwd: string;
-  prompt?: string;
+  /** The file the first prompt is in; see `SpawnOptions.promptFile`. */
+  promptFile?: string;
+  /** The file the briefing is in; see `SpawnOptions.briefingFile`. */
+  briefingFile?: string;
   model?: string;
   effort?: string;
   autoApprove: boolean;
@@ -316,6 +324,10 @@ export interface Command {
    *  values): they reach the process through a private launch script, never
    *  on a command line (`NewSession.secretEnv`). */
   secret?: string[];
+  /** The file to feed the process's standard input: a CLI that takes its
+   *  first prompt from stdin reads it there, so the words stay off the
+   *  command line. */
+  stdinFile?: string;
 }
 
 /** What `blockedOn` says of the dialog a CLI puts up at its account's usage
@@ -388,9 +400,16 @@ export interface ProviderAdapter {
 
   resumeCommand(opts: ResumeOptions): Command;
 
-  /** The resume CLI accepts no prompt argument. The fleet waits for the TUI
-   * and types the prompt through its normal serialized delivery path. */
-  resumePromptInTerminal?: boolean;
+  /**
+   * How the CLI takes the first prompt of a session: from the file the launch
+   *  names (`file`), or typed into the pane once the TUI is up (`typed`).
+   *
+   * Nothing else may carry the prompt. A command line holds it, and
+   * `pgrep -f` reads command lines: an agent whose prompt is an argument is
+   * found by any word in it, so a `pkill -f` on one of them kills it — and
+   * every other agent told the same words.
+   */
+  promptDelivery?: "file" | "typed";
 
   /** Its prompt cache is the provider's and outlives the process: a resume
    * reads it back like the next turn would, so an idle process keeps nothing

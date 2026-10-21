@@ -39,7 +39,6 @@ import { codexFormat, codexLineage, type CodexLineage } from "./codex-transcript
 import { JsonlTranscriptReader } from "./jsonl-reader";
 import { cwdOf, environOf, findProcesses, openFilesOf, runsCli, startedAtOf, type ProcMatch } from "./procs";
 import { pickOption, plainScreen, underInput } from "./tui-screen";
-import { briefing } from "./briefing";
 import { moveInto } from "./move";
 import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
@@ -709,11 +708,12 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
   return account.isDefault ? { env: {}, unset: ["CODEX_HOME"] } : { env: { CODEX_HOME: account.home } };
 }
 
-/** A JSON string is a TOML basic string, which is what `-c` parses. */
-const told = (cwd: string): string[] => ["-c", `developer_instructions=${JSON.stringify(briefing(cwd))}`];
-
-/** clap reads a leading `-` as a flag. */
-const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
+/** Codex has no flag for a system prompt in a file: `-c developer_instructions=`
+ *  is the only way in, and it is the command line. So the file is named
+ *  there instead, and the session reads it: the words stay off the command
+ *  line, which is what `pgrep -f` reads. */
+const told = (briefingFile: string | undefined): string[] =>
+  briefingFile ? ["-c", `developer_instructions=${JSON.stringify(`Read ${briefingFile} before anything else and follow every instruction in it: it is the agentbox briefing and the user's standing rules.`)}`] : [];
 
 /** Flags adopt carries over (`carryFlags`): model, config, profile,
  *  sandbox and approvals, directories — never a subcommand or the prompt. */
@@ -748,7 +748,7 @@ const isHeadless = (argv: string[]): boolean => ["exec", "e", "review"].includes
  * The flags a session starts with. A carried launch decides model and
  * permissions (ResumeOptions.carry); what it does not set is ours.
  */
-function sessionFlags(opts: { cwd: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
+function sessionFlags(opts: { cwd: string; briefingFile?: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
   const c = opts.carry;
   const a: string[] = [...(c ?? [])];
   const configs = (c ?? []).filter((x, i) => c![i - 1] === "-c" || c![i - 1] === "--config" || x.startsWith("--config="));
@@ -760,7 +760,7 @@ function sessionFlags(opts: { cwd: string; model?: string; effort?: string; auto
   // for hooks already trusted. Where nothing is sandboxed a hook can do no
   // more than the agent can.
   else if (!c && opts.autoApprove) a.push("--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust");
-  if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told(opts.cwd));
+  if (!configs.some((x) => /(^|=)developer_instructions=/.test(x))) a.push(...told(opts.briefingFile));
   // `inherit = "core"` drops the process's AWS defaults from tool shells.
   // Per-key overrides preserve the rest of the person's policy and set map;
   // append after carried config so an adopt/resume cannot restore old paths.
@@ -776,13 +776,11 @@ export const READ_ONLY = ["--sandbox", "read-only", "--ask-for-approval", "never
 
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
   const argv = ["codex", ...sessionFlags(opts)];
-  if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account), agentSessionId: null };
 }
 
 function resumeCommand(opts: ResumeOptions): Command {
   const argv = ["codex", "resume", ...sessionFlags(opts), opts.agentSessionId];
-  if (opts.prompt) argv.push(promptArg(opts.prompt));
   return { argv, ...accountCommand(opts.account) };
 }
 
@@ -819,6 +817,9 @@ export const codexAdapter: ProviderAdapter = {
   id: "codex",
   label: "Codex",
   efforts: ["minimal", "low", "medium", "high", "xhigh"],
+  // Codex takes no prompt from a file and no prompt from stdin: the fleet
+  // types it into the pane.
+  promptDelivery: "typed",
 
   detect: () => cliVersion(["codex", "--version"]),
 

@@ -36,7 +36,6 @@ import { argvOf, cwdOf, environOf, findProcesses, isAlive, runsCli, startedAtOf 
 import { pickOption, plainScreen, RULE, underInput } from "./tui-screen";
 import { askFromScreen, askStep } from "./claude-ask";
 import { claudeInputEmpty, claudeRewindOpen, claudeRewindStep, rewindStart } from "./claude-rewind";
-import { briefing } from "./briefing";
 import { carryFlags, setsFlag, type Arity } from "../launch";
 import type {
   Command,
@@ -463,7 +462,9 @@ function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Comm
  *  timeline has nothing to show. */
 const THINKING = ["--thinking-display", "summarized"];
 
-const told = (cwd: string): string[] => ["--append-system-prompt", briefing(cwd)];
+/** The briefing goes in as a file: `--append-system-prompt-file` reads it,
+ *  and the command line names the file, not the words in it. */
+const told = (briefingFile: string | undefined): string[] => (briefingFile ? ["--append-system-prompt-file", briefingFile] : []);
 
 /** A subagent's own subagents are told who started them, or they take "main"
  *  for their coordinator and write to the conversation the user is reading
@@ -488,18 +489,16 @@ const HOOKED = [
   }),
 ];
 
-/** A prompt that starts with `-` would be parsed as a flag. */
-const promptArg = (p: string) => (p.startsWith("-") ? ` ${p}` : p);
-
+/** Claude reads its first prompt from stdin, so the file is fed to it there:
+ *  the words stay off the command line. */
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
   const id = randomUUID();
   const argv = ["claude", "--session-id", id];
   if (opts.model) argv.push("--model", opts.model);
   if (opts.effort) argv.push("--effort", opts.effort);
   if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-  argv.push(...THINKING, ...told(opts.cwd), ...HOOKED);
-  if (opts.prompt) argv.push(promptArg(opts.prompt));
-  return { argv, ...accountCommand(opts.account), agentSessionId: id };
+  argv.push(...THINKING, ...told(opts.briefingFile), ...HOOKED);
+  return { argv, ...accountCommand(opts.account), agentSessionId: id, stdinFile: opts.promptFile };
 }
 
 function resumeCommand(opts: ResumeOptions): Command {
@@ -512,17 +511,16 @@ function resumeCommand(opts: ResumeOptions): Command {
     if (!setsFlag(opts.carry, "--thinking-display")) argv.push(...THINKING);
     // One it was launched with is its own, or ours from an earlier launch; a
     // second would replace it.
-    if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...told(opts.cwd));
+    if (!setsFlag(opts.carry, "--append-system-prompt", "--append-system-prompt-file")) argv.push(...told(opts.briefingFile));
     if (!setsFlag(opts.carry, "--settings")) argv.push(...HOOKED);
   } else {
     if (opts.model) argv.push("--model", opts.model);
     if (opts.effort) argv.push("--effort", opts.effort);
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
-    argv.push(...THINKING, ...told(opts.cwd), ...HOOKED);
+    argv.push(...THINKING, ...told(opts.briefingFile), ...HOOKED);
   }
   if (opts.forkAs) argv.push("--fork-session", "--session-id", opts.forkAs);
-  if (opts.prompt) argv.push(promptArg(opts.prompt));
-  return { argv, ...accountCommand(opts.account) };
+  return { argv, ...accountCommand(opts.account), stdinFile: opts.promptFile };
 }
 
 /**
@@ -646,6 +644,9 @@ export const claudeAdapter: ProviderAdapter = {
   id: "claude",
   label: "Claude Code",
   efforts: ["low", "medium", "high", "xhigh", "max"],
+  // Claude reads its first prompt from stdin, and the launch feeds it the
+  // file the prompt is in.
+  promptDelivery: "file",
 
   detect: () => cliVersion(["claude", "--version"]),
 

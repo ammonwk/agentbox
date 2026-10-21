@@ -217,20 +217,21 @@ describe("opencode launching", () => {
   });
 
   test("spawn makes the session with its model and variant, then opens it standalone", () => {
-    const cmd = adapter.spawnCommand({ account, cwd: "/w", prompt: "-x go", model: "opencode-go/deepseek-v4.1-flash", effort: "max", autoApprove: true });
+    const briefingFile = join(dir, "briefing.md");
+    const cmd = adapter.spawnCommand({ account, cwd: "/w", briefingFile, model: "opencode-go/deepseek-v4.1-flash", effort: "max", autoApprove: true });
     expect(cmd.argv.slice(0, 2)).toEqual(["sh", "-c"]);
     const [body, id, ...flags] = cmd.argv.slice(4);
     expect(id).toBe(cmd.agentSessionId!);
     expect(JSON.parse(body!)).toEqual({ id, location: { directory: "/w" }, model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "max" } });
-    expect(flags).toEqual(["--standalone", "--auto", "--prompt=-x go"]);
-    expect(JSON.parse(cmd.env.OPENCODE_CONFIG_CONTENT!).instructions).toEqual([join(dir, "opencode-briefing.md")]);
+    expect(flags).toEqual(["--standalone", "--auto"]);
+    expect(JSON.parse(cmd.env.OPENCODE_CONFIG_CONTENT!).instructions).toEqual([briefingFile]);
   });
 
   test("resume opens the session, switching its model first only when asked for another", () => {
     expect(adapter.resumeCommand({ account, agentSessionId: S, cwd: "/w", autoApprove: false }).argv).toEqual(["opencode", "-s", S, "--standalone"]);
     expect(adapter.resumeCommand({ account, agentSessionId: S, cwd: "/w", autoApprove: false, effort: "high" }).argv[0]).toBe("opencode");
-    const sw = adapter.resumeCommand({ account, agentSessionId: S, cwd: "/w", autoApprove: true, effort: "max", prompt: "go on" }).argv;
-    expect(sw.slice(3)).toEqual(["opencode", S, JSON.stringify({ model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "max" } }), "--standalone", "--auto", "--prompt=go on"]);
+    const sw = adapter.resumeCommand({ account, agentSessionId: S, cwd: "/w", autoApprove: true, effort: "max" }).argv;
+    expect(sw.slice(3)).toEqual(["opencode", S, JSON.stringify({ model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "max" } }), "--standalone", "--auto"]);
     expect(modelRef("opencode-go/mimo#low")).toEqual({ providerID: "opencode-go", id: "mimo", variant: "low" });
     expect(modelRef("bare")).toBeNull();
   });

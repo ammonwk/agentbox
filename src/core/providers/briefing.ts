@@ -2,8 +2,10 @@ import { repoRulesFor, rulesPath, standingRules } from "../rules";
 
 /**
  * What an agent agentbox launches is told about where it runs, appended to its
- * system prompt: claude and omp by `--append-system-prompt`, codex by
- * `developer_instructions`. Devin has no such flag and is not told.
+ * system prompt. It goes in a file the launch names: claude and omp read it
+ * (`--append-system-prompt-file`, `--append-system-prompt=<file>`), codex is
+ * told to read it (`-c developer_instructions`). Devin has no such flag and is
+ * not told.
  *
  * Only what an agent could not guess and would use unprompted belongs here.
  * Every word is in every session's context, and a change to it is a change to

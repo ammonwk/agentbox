@@ -132,6 +132,8 @@ import { isAgentSent, PROMPT_PREVIEW } from "./sent";
 import { parentModelFor, parentModelNow } from "./subagent-models";
 import { encodeParent, PARENT_ENV, type ParentModel } from "../subagents/parent";
 import { readBtwPanel } from "./providers/claude-btw";
+import { briefing } from "./providers/briefing";
+import { sessionText } from "./textfile";
 import type { RewindGoal } from "./providers/claude-rewind";
 import { devinQueuedCount } from "./providers/devin";
 import { accountProvider } from "./providers";
@@ -180,15 +182,6 @@ const BREATHE_MS = 25;
 /** Dialogs are only auto-answered this soon after we start a process: a key
  *  pressed into a session you are using is worse than a dialog left open. */
 const AUTO_ANSWER_MS = 120_000;
-/**
- * Linux caps a single argument at 128 KiB (MAX_ARG_STRLEN), whatever room the
- * whole command line has: a prompt past it in the agent's argv fails the exec
- * with "Argument list too long" and the pane dies before the agent starts.
- * Past this many bytes the agent starts bare and the prompt is pasted in
- * (`typeFirstPrompt`).
- */
-const MAX_ARGV_PROMPT = 100_000;
-const tooLongForArgv = (prompt: string | undefined): prompt is string => !!prompt && Buffer.byteLength(prompt) > MAX_ARGV_PROMPT;
 /** A dead pane is kept this long so its last screen can be read, then killed. */
 const DEAD_PANE_MS = 10 * 60_000;
 /** A new token sample at most this often per session (plus at turn end). */
@@ -2916,8 +2909,10 @@ export class Fleet extends EventEmitter {
     if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);
 
     const model = unretired(req.model || settings.models[req.provider] || undefined);
-    const typed = tooLongForArgv(req.prompt) ? req.prompt : undefined;
-    const launched = adapter.spawnCommand({ account, cwd, prompt: typed ? undefined : req.prompt || undefined, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
+    // The prompt and the briefing go in files the launch names: a command
+    // line holds them, and `pgrep -f` reads command lines.
+    const text = sessionText(id, briefing(cwd), adapter.promptDelivery === "file" ? req.prompt || undefined : undefined);
+    const launched = adapter.spawnCommand({ account, cwd, promptFile: text.prompt, briefingFile: text.briefing, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
     const cmd = req.readOnly ? launched : withGlobalMcp(req.provider, account, launched, [], cwd);
     const now = this.now();
     const name = tmuxName(id);
@@ -2968,14 +2963,16 @@ export class Fleet extends EventEmitter {
     // is a model too.
     const parentModel = await parentModelFor(req.provider, model ?? adapter.defaultModel?.() ?? null, effort);
     try {
-      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider, parentModel) }, cmd.secret), unset: cmd.unset });
+      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider, parentModel) }, cmd.secret), unset: cmd.unset });
     } catch (e) {
       updateSessionRecord(id, { tmux: null });
       throw new FleetError(500, (e as Error).message);
     }
     this.startedAt.set(id, now);
     this.watches.set(id, { since: now, flagged: false, repaired: false, recovery: null });
-    if (typed) this.typeFirstPrompt(id, name, typed);
+    // A CLI that takes no prompt from a file is given it by typing, once its
+    // TUI is up.
+    if (req.prompt && !text.prompt) this.typeFirstPrompt(id, name, req.prompt);
     await this.tick();
     return { session: this.get(id), placement };
   }
@@ -3245,10 +3242,14 @@ export class Fleet extends EventEmitter {
     if (notice) prompt = `${notice}\n\n${prompt ?? ""}`;
     const adapter = this.adapter(rec.provider);
     const launch = rec.launch ? cleanMcpLaunch(rec.provider, rec.launch, new Map([["CODEX_HOME", account.home]])) : undefined;
-    const typed = adapter.resumePromptInTerminal || tooLongForArgv(prompt) ? prompt : undefined;
+    // The prompt and the briefing go in files the launch names: a command
+    // line holds them, and `pgrep -f` reads command lines.
+    const text = sessionText(rec.id, briefing(cwd), adapter.promptDelivery === "file" ? prompt || undefined : undefined);
+    const typed = adapter.promptDelivery === "typed" ? prompt : undefined;
     const opts = {
       account, agentSessionId: rec.agentSessionId!, cwd,
-      prompt: typed ? undefined : prompt || undefined,
+      promptFile: text.prompt,
+      briefingFile: text.briefing,
       ...(rec.effort ? { effort: rec.effort } : {}),
       ...(resumeOn(rec) ? { model: resumeOn(rec)! } : {}),
       autoApprove: getSettings().autoApprove,
@@ -3275,7 +3276,7 @@ export class Fleet extends EventEmitter {
     this.killTmux(name);
     // The account's variables win over the launching shell's.
     const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider, parentModelNow(rec.provider, opts.model ?? adapter.defaultModel?.() ?? null, opts.effort)) };
-    this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, ...splitSecret(env, cmd.secret), unset: cmd.unset });
+    this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret(env, cmd.secret), unset: cmd.unset });
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
@@ -3286,9 +3287,9 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * Paste the prompt of a session started without one because it was too long
-   * for its argv (`tooLongForArgv`), once the TUI is up and past its start-up
-   * dialogs. Queued like a message, so one sent meanwhile lands after it.
+   * Paste the prompt of a session whose CLI takes no prompt from a file, once
+   * the TUI is up and past its start-up dialogs. Queued like a message, so one
+   * sent meanwhile lands after it.
    */
   private typeFirstPrompt(id: string, pane: string, prompt: string): void {
     void this.serial(id, async () => {

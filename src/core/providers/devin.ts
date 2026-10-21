@@ -605,8 +605,9 @@ function carried(carry: string[] | undefined, flag: string): string | null {
   return null;
 }
 
-/** devin takes the initial prompt after `--`. */
-const withPrompt = (argv: string[], prompt?: string) => (prompt ? [...argv, "--", prompt] : argv);
+/** devin takes the initial prompt from a file: `--prompt-file` reads it, and
+ *  the command line names the file, not the words in it. */
+const withPrompt = (argv: string[], promptFile?: string) => (promptFile ? [...argv, "--prompt-file", promptFile] : argv);
 
 export interface DevinAdapterOptions {
   /** The default XDG data dir; read on every call so tests can point it at a
@@ -657,6 +658,8 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     id: "devin",
     label: "Devin",
     efforts: [],
+    // devin reads its first prompt from `--prompt-file`.
+    promptDelivery: "file",
 
     detect: () => cliVersion(["devin", "--version"]),
 
@@ -721,7 +724,7 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
     spawnCommand(opts: SpawnOptions) {
       const account = accountCommand(opts.account);
       return {
-        argv: withPrompt(["devin", ...flags(opts)], opts.prompt),
+        argv: withPrompt(["devin", ...flags(opts)], opts.promptFile),
         ...account,
         env: { ...account.env, ...bridgeEnv(opts.model) },
         agentSessionId: null,
@@ -738,7 +741,7 @@ export function createDevinAdapter(options: DevinAdapterOptions = {}): ProviderA
       // the one that says whether the session needs the bridge.
       const model = opts.model ?? carried(opts.carry, "--model") ?? db.sessionById(paths().db, opts.agentSessionId)?.model;
       return {
-        argv: withPrompt(["devin", "-r", opts.agentSessionId, ...flags(opts)], opts.prompt),
+        argv: withPrompt(["devin", "-r", opts.agentSessionId, ...flags(opts)], opts.promptFile),
         ...account,
         env: { ...account.env, ...bridgeEnv(model) },
       };

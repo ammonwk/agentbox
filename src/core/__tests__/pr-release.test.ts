@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, getWait, insertWait, updateWait, insertSessionRecord, type SessionRecord, insertSchedule, insertAccount } from "../db";
@@ -153,7 +153,9 @@ test("resuming a parked former holder without a prompt still starts with its rel
   claim("new", 9003);
   await fleet.resume("parked");
   expect(launches).toHaveLength(1);
-  expect(launches[0]!.argv.join(" ")).toContain("You no longer hold o/r#9003 (assigned to new)");
+  // The notice is in the file the launch names, not on the command line.
+  expect(launches[0]!.argv.join(" ")).not.toContain("You no longer hold");
+  expect(readFileSync(launches[0]!.stdinFile!, "utf8")).toContain("You no longer hold o/r#9003 (assigned to new)");
 });
 
 test("a pre-existing observer wait names the current owner instead of granting authority", async () => {

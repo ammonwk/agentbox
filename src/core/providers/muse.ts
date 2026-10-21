@@ -162,10 +162,10 @@ export const museAdapter: ProviderAdapter = {
     return out;
   },
   spawnCommand(opts) {
-    return { argv: ["muse", ...flags(opts), ...(opts.prompt ? ["--", opts.prompt] : [])], ...accountCommand(opts.account), agentSessionId: null };
+    return { argv: ["muse", ...flags(opts)], ...accountCommand(opts.account), agentSessionId: null };
   },
   resumeCommand(opts) { return { argv: ["muse", "resume", opts.agentSessionId, ...flags(opts)], ...accountCommand(opts.account) }; },
-  resumePromptInTerminal: true,
+  promptDelivery: "typed",
   carryOver: (argv) => carryFlags(argv, CARRIED),
   headless: (argv) => argv[1] === "exec" || argv[1] === "serve",
   blockedOn(screen) {
