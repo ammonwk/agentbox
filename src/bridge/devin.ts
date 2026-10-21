@@ -28,6 +28,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { userHome } from "../core/paths";
+import { serverBase } from "../client";
 import { GO_ACCOUNT_BEARER, GO_CONSOLE_UPSTREAM, GO_CONSOLE_USAGE, GO_KEY_UPSTREAM, goHomeForAccount } from "../core/accounts/gocred";
 import { freshGoLogin } from "../core/accounts/godevice";
 import { ForeignReasoning, refusedForeignReasoning } from "./reasoning";
@@ -422,21 +423,74 @@ async function passThrough(req: Request, url: URL, body: Uint8Array | null): Pro
  * caller sent. `<account>` is an account id (its Console sign-in, refreshed
  * here when due or refused), or "caller": omp, whose endpoint is fixed in
  * its models.yml, names the account in its key (`agentbox-account:<id>`).
- * Any other key it sends is a real one, of an omp you ran in your own
- * terminal, and goes through untouched: agentbox holds no key of its own.
- * `/go/<account>/v1/usage` is Go's own usage
+ * One that names none — an omp you ran yourself, or one another agent did —
+ * is placed (`placeCaller`). `/go/<account>/v1/usage` is Go's own usage
  * report for that credential (accounts/usage.ts). The session's own headers
  * (`x-opencode-session`) ride along; the reply streams back. Reasoning the
  * session was given on another account is left out (./reasoning.ts).
  */
 const foreignReasoning = new ForeignReasoning();
 
+/** What Go answers a request its credential cannot make: not signed in or
+ *  expired, not allowed, out of its limit. */
+const REFUSED = new Set([401, 402, 403, 429]);
+
+/**
+ * Where an omp that names no account goes: one started by hand, by another
+ * agent, or by the subagents MCP, which sends whatever models.yml found —
+ * opencode's own API key, which is no account and expires on its own (on
+ * 2026-10-21 every such omp died on "This API key has expired"). It goes
+ * where the balancer would start a session of its model, the server's
+ * `/api/placement`, and stays there for its conversation
+ * (`x-opencode-session`, fixed for an omp's life), so its cache and its
+ * reasoning stay on one sign-in; a refusal there forgets the pick, and its
+ * retry is placed afresh. A request with no conversation (a model list, a
+ * usage poll) shares one pick for a minute. Null when the server cannot be
+ * asked or no account can take it: then the key the caller sent is all
+ * there is.
+ */
+const placedCallers = new Map<string, { account: string; at: number }>();
+
+async function placeCaller(conversation: string | null, model: string | null, log: (line: string) => void): Promise<string | null> {
+  const now = Date.now();
+  const hit = placedCallers.get(conversation ?? "");
+  if (hit && (conversation || now - hit.at < 60_000)) {
+    hit.at = now;
+    return hit.account;
+  }
+  for (const [k, v] of placedCallers) if (now - v.at > 86_400_000) placedCallers.delete(k);
+  const placement = await fetch(`${serverBase()}/api/placement`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-agentbox": "1" },
+    body: JSON.stringify({ provider: "omp", model: model && `opencode-go/${model}` }),
+    signal: AbortSignal.timeout(5_000),
+  })
+    .then((r) => r.json() as Promise<{ data?: { accountId?: string | null; mode?: string; why?: string } | null }>)
+    .then((r) => r.data ?? null)
+    .catch((e: Error) => (log(`go caller: no placement from the server (${e.message}), sent on its own key`), null));
+  if (!placement) return null;
+  log(`go caller ${conversation ?? "-"} ${model ?? "-"}: ${placement.accountId ? `placed on ${placement.accountId} (${placement.mode})` : "sent on its own key"}: ${placement.why ?? ""}`);
+  if (!placement.accountId) return null;
+  placedCallers.set(conversation ?? "", { account: placement.accountId, at: now });
+  return placement.accountId;
+}
+
+/** The model a request asks for, as Go names it. */
+function modelOf(body: ArrayBuffer | undefined): string | null {
+  if (!body?.byteLength) return null;
+  try {
+    const model = (JSON.parse(new TextDecoder().decode(body)) as { model?: unknown }).model;
+    return typeof model === "string" && model ? model : null;
+  } catch {
+    return null;
+  }
+}
+
 async function goProxy(req: Request, url: URL, log: (line: string) => void): Promise<Response> {
   const refuse = (message: string) => Response.json({ type: "error", error: { type: "AuthError", message: `agentbox bridge: ${message}` } }, { status: 401 });
   const m = /^\/go\/([^/]+)(\/anthropic)?\/v1(\/.*)$/.exec(url.pathname);
   if (!m) return refuse(`no such OpenCode Go route: ${url.pathname}`);
   const shape = m[2] ? "anthropic" : "openai";
-  const rest = m[3]! + url.search;
   const headers = new Headers(req.headers);
   for (const h of HOP) headers.delete(h);
   headers.set("accept-encoding", "identity");
@@ -449,21 +503,38 @@ async function goProxy(req: Request, url: URL, log: (line: string) => void): Pro
     }
   }
 
-  let selector = m[1]!;
-  if (selector === "caller") {
-    const sent = (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "") || (headers.get("x-api-key") ?? "");
-    if (!sent.startsWith(GO_ACCOUNT_BEARER)) return goSend(`${GO_KEY_UPSTREAM}${rest}`, req, headers, body, log, "caller");
-    selector = sent.slice(GO_ACCOUNT_BEARER.length);
-  }
+  if (m[1] !== "caller") return goOnAccount(m[1]!, shape, m[3]!, url.search, req, headers, body, log);
+  const sent = (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "") || (headers.get("x-api-key") ?? "");
+  if (sent.startsWith(GO_ACCOUNT_BEARER)) return goOnAccount(sent.slice(GO_ACCOUNT_BEARER.length), shape, m[3]!, url.search, req, headers, body, log);
+  const conversation = headers.get("x-opencode-session");
+  const placed = await placeCaller(conversation, modelOf(body), log);
+  if (!placed) return goSend(`${GO_KEY_UPSTREAM}${m[3]}${url.search}`, req, headers, body, log, "caller");
+  const res = await goOnAccount(placed, shape, m[3]!, url.search, req, headers, body, log);
+  if (REFUSED.has(res.status)) placedCallers.delete(conversation ?? "");
+  return res;
+}
+
+/** A request on one account's sign-in; `path` is what follows `/v1`. */
+async function goOnAccount(
+  selector: string,
+  shape: "openai" | "anthropic",
+  path: string,
+  query: string,
+  req: Request,
+  headers: Headers,
+  body: ArrayBuffer | undefined,
+  log: (line: string) => void,
+): Promise<Response> {
+  const refuse = (message: string) => Response.json({ type: "error", error: { type: "AuthError", message: `agentbox bridge: ${message}` } }, { status: 401 });
   const credential = (token: string) => {
     headers.set("authorization", `Bearer ${token}`);
     if (headers.has("x-api-key")) headers.set("x-api-key", token);
   };
 
-  const replays = shape === "openai" && req.method === "POST" && m[3] === "/responses";
+  const replays = shape === "openai" && req.method === "POST" && path === "/responses";
   const without = (fixed: { body: string; dropped: number } | null, why: string): boolean => {
     if (!fixed) return false;
-    log(`go ${selector} ${m[3]}: left out ${fixed.dropped} reasoning item(s) another account issued (${why})`);
+    log(`go ${selector} ${path}: left out ${fixed.dropped} reasoning item(s) another account issued (${why})`);
     body = new TextEncoder().encode(fixed.body).buffer as ArrayBuffer;
     return true;
   };
@@ -476,7 +547,7 @@ async function goProxy(req: Request, url: URL, log: (line: string) => void): Pro
     credential(login.access);
     if (login.orgID) headers.set("x-opencode-org-id", login.orgID);
     else headers.delete("x-opencode-org-id");
-    const target = shape === "openai" && m[3] === "/usage" ? `${GO_CONSOLE_USAGE}${url.search}` : `${GO_CONSOLE_UPSTREAM[shape]}${rest}`;
+    const target = shape === "openai" && path === "/usage" ? `${GO_CONSOLE_USAGE}${query}` : `${GO_CONSOLE_UPSTREAM[shape]}${path}${query}`;
     let res = await goSend(target, req, headers, body, log, selector);
     if (res.status === 400 && body && replays) {
       const said = await res.text();

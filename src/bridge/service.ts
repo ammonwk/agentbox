@@ -21,8 +21,9 @@ import { bridgePort } from "./models";
 export const BRIDGE_UNIT = "agentbox-devin-bridge";
 
 /** Settings of this process the bridge has to share: its port and thresholds
- *  are compiled into what sessions are told, and it reads the same homes. */
-const PASSED = /^(AGENTBOX_DEVIN_|AGENTBOX_LONGCAT_|AGENTBOX_HOME$|XDG_DATA_HOME$|HOME$)/;
+ *  are compiled into what sessions are told, it reads the same homes, and it
+ *  asks the server where an omp that names no account goes. */
+const PASSED = /^(AGENTBOX_DEVIN_|AGENTBOX_LONGCAT_|AGENTBOX_HOME$|AGENTBOX_PORT$|XDG_DATA_HOME$|HOME$)/;
 
 export const bridgeLog = (): string => join(logDir(), "devin-bridge.log");
 

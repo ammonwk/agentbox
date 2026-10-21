@@ -707,8 +707,8 @@ function commonFlags(opts: { cwd: string; briefingFile?: string; model?: string;
  *  the bridge and sends `OPENCODE_GO_API_KEY` as the key: here that "key"
  *  names the session's account, and the bridge puts the account's Console
  *  sign-in on the request (accounts/gocred.ts). No session is started
- *  without one, so none falls back to the API key models.yml reads for an
- *  omp in your own terminal. What must not leak in from the server's shell
+ *  without one; an omp in your own terminal, which has none, is placed by
+ *  the bridge. What must not leak in from the server's shell
  *  is anything that silently points omp at another data dir: an XDG_*_HOME
  *  with an `omp/` under it, a profile, or a session-dir override. */
 function ompAccountCommand(account: Pick<Account, "id">): Pick<Command, "env" | "unset"> {
@@ -809,8 +809,9 @@ export const ompAdapter: ProviderAdapter = {
   },
 
   async liveProcesses(accounts) {
-    // One started in your own terminal runs on whatever key its models.yml
-    // found, which is no account here; it is filed under the first.
+    // One started in your own terminal names no account: the bridge places
+    // its requests (bridge/devin.ts, `placeCaller`), on an account not known
+    // here, so it is filed under the first.
     const first = accounts.find((a) => a.provider === "omp");
     const matches = findProcesses(isOmpSessionArgv);
     const pids = new Set(matches.map((m) => m.pid));
