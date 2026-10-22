@@ -15,6 +15,7 @@ also reads them from stdin with `-`, so pipes and xargs work.
     agentbox ls -q ...              # ids only, for piping
     agentbox ls --json | jq ...     # every field
     agentbox show <id>              # the header: where, model, context, first/last prompt, last reply
+    agentbox show <id> --json       # its board record, e.g. lastActivityAt
     agentbox log <id> | tail -60    # the conversation as text, oldest first
     agentbox log <id> --tools       # with tool calls and their output
     agentbox grep <regex> [-i] [--all]   # text, thinking, tool calls and tool output: id time who line
