@@ -1007,25 +1007,110 @@ button.rail-state:hover {
   flex: none;
 }
 
-/* The tabs, and the session's actions at the right end of the same row. */
+/* The tabs, the session's name and model in the middle, and its actions at
+   the right end of the same row. Equal side tracks keep the middle pair
+   centered in the bar, not just in what the sides leave. */
 .sx-tabbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   margin-top: 4px;
 }
 .sx-tabs {
   display: flex;
+  grid-column: 1;
   gap: 2px;
   min-width: 0;
   margin-left: -12px;
 }
 .sx-tabbar-actions {
   display: flex;
+  grid-column: 3;
   align-items: center;
+  justify-self: end;
   gap: 6px;
-  margin-left: auto;
+  min-width: 0;
+}
+
+/* The session's name and what it runs on, between the tabs and the marks:
+   the name is the rename control, the model opens the picker. */
+.sx-identity {
+  display: flex;
+  grid-column: 2;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 10px;
+  overflow: hidden;
+}
+.sx-identity .sx-title {
+  flex: 0 1 auto;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.sx-identity .sx-title-btn {
+  padding: 3px 4px;
+  border-radius: 5px;
+}
+.sx-title-btn:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.sx-identity .sx-title-pen {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.sx-identity .sx-title-btn:hover .sx-title-pen,
+.sx-identity .sx-title-btn:focus-visible .sx-title-pen {
+  opacity: 1;
+}
+@media (hover: none) {
+  .sx-identity .sx-title-pen {
+    opacity: 1;
+  }
+}
+.sx-title-row .sx-identity {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  padding: 0;
+}
+.sx-title-row .sx-identity .sx-title {
+  font-size: 15px;
+}
+/* The model: quiet text that opens the picker, not a pill. */
+.sx-identity .ns-pill {
+  flex: 0 1 auto;
+  max-width: min(260px, 40vw);
+  min-width: 0;
+  height: 24px;
+  padding: 0 3px 0 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+}
+.sx-identity .ns-pill:hover,
+.sx-identity .ns-pill[aria-expanded="true"] {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
+.sx-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  letter-spacing: -0.005em;
+}
+.sx-model-effort {
   flex: none;
+  color: var(--faint);
+  font-size: 11px;
+}
+.sx-identity .ns-pill-chev {
+  display: none;
 }
 .sx-tab {
   border: 0;

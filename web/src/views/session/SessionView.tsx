@@ -14,6 +14,7 @@ import {
   runningSubagents,
   sectionsOf,
   shownStatus,
+  shownTitle,
   splitActive,
   titleOf,
   type SessionRow,
@@ -33,11 +34,12 @@ import { useIsNarrow } from "./useIsNarrow";
 import { isInstalledApp, useIsPhone } from "../../lib/phone";
 import { useSysbarSlot } from "../../sysbarslot";
 import { prBaseFor } from "../../lib/prlinks";
-import { repoOfSession, skillsFor } from "../../lib/newsession";
+import { filterModels, modelName, rankModels, repoOfSession, skillsFor, type ModelChoice } from "../../lib/newsession";
 import { sessionProject, useProjectData, useScope } from "../../lib/projects";
 import { selectScope } from "../../route";
 import { ago, fmtRetryAt } from "../../lib/format";
 import { outstandingOf, sortWindows } from "../../lib/usage";
+import { Dropdown, type MenuItem } from "../newsession/Dropdown";
 import { useDismiss, useFloating } from "../newsession/popover";
 import { buildSessionIndex, withResolved } from "../../lib/sessionrefs";
 import { useResolvedSessions } from "../../lib/sessionresolve";
@@ -646,12 +648,6 @@ export function Detail({
           <Icon.branch size={12} /> {session.branch}
         </span>
       ) : null}
-      {session.model ? (
-        <span className="fact mono" title={session.model}>
-          {session.model}
-          {session.effort ? <span className="muted"> · {session.effort}</span> : null}
-        </span>
-      ) : null}
       <span className="fact">
         <ContextBar used={session.contextUsed} limit={session.contextLimit} wide />
       </span>
@@ -715,7 +711,7 @@ export function Detail({
         {narrow ? (
           <div className="sx-title-row">
             <Button variant="ghost" size="sm" icon={Icon.chevronLeft} aria-label="Back to the list" title="Back to the list" data-nav-back onClick={() => go({ page: "sessions" })} />
-            <TitleEdit session={session} />
+            <SessionIdentity session={session} sessions={state.sessions} run={run} busy={busy} />
             {marks}
           </div>
         ) : null}
@@ -763,6 +759,7 @@ export function Detail({
               </button>
             ))}
           </div>
+          {narrow ? null : <SessionIdentity session={session} sessions={state.sessions} run={run} busy={busy} />}
           <div className="sx-tabbar-actions">
             {narrow ? null : marks}
             {session.host === "external" ? (
@@ -972,12 +969,145 @@ function TranscriptInstead({
   );
 }
 
+/** The session's name and the model it runs on, between the tabs and the
+ *  marks: click the name to rename it, the model to switch it. */
+function SessionIdentity({
+  session,
+  sessions,
+  run,
+  busy,
+}: {
+  session: SessionRow;
+  sessions: readonly SessionRow[];
+  run: (fn: () => Promise<unknown>) => Promise<boolean>;
+  busy: boolean;
+}) {
+  return (
+    <div className="sx-identity">
+      <TitleEdit session={session} run={run} busy={busy} />
+      <ModelMenu session={session} sessions={sessions} run={run} busy={busy} />
+    </div>
+  );
+}
+
+/** The row that passes a typed model through as is. */
+const TYPED_MODEL = "typed:";
+
+/** The model under the name, as a quiet menu: the account's catalog, its
+ *  recently used first, and anything typed. */
+function ModelMenu({
+  session,
+  sessions,
+  run,
+  busy,
+}: {
+  session: SessionRow;
+  sessions: readonly SessionRow[];
+  run: (fn: () => Promise<unknown>) => Promise<boolean>;
+  busy: boolean;
+}) {
+  const [catalog, setCatalog] = useState<ModelChoice[]>([]);
+  // The board changes every tick; recency only needs the sessions as they
+  // were when the catalog arrived, not a refetch each time.
+  const recent = useRef(sessions);
+  recent.current = sessions;
+  useEffect(() => {
+    let live = true;
+    setCatalog([]);
+    if (!session.accountId) return;
+    api.models(session.accountId, session.provider).then(
+      (opts) => live && setCatalog(rankModels(opts, recent.current, session.provider)),
+      () => live && setCatalog([]),
+    );
+    return () => {
+      live = false;
+    };
+  }, [session.accountId, session.provider]);
+
+  const nameOf = (id: string) => catalog.find((m) => m.id === id)?.label ?? modelName(id);
+  // The header has no room for the vendor or a note: "Claude Opus 5.5" reads
+  // "Opus 5.5", and "DeepSeek V4.1 Flash (OpenCode Go)" its model name. The
+  // menu itself keeps both.
+  const shortName = (name: string) => name.replace(/^Claude (?=\S)/, "").replace(/\s*\([^()]*\)\s*$/, "");
+  const shown = session.model ? shortName(nameOf(session.model)) : null;
+
+  function items(query: string): MenuItem[] {
+    const { rows, hidden } = filterModels(catalog, query);
+    const out: MenuItem[] = rows.map((m) => ({
+      key: m.id,
+      group: m.lastUsedAt != null ? "Recently used" : "Newest first",
+      children: (
+        <>
+          <span className="ns-item-main">{m.label}</span>
+          <span className="ns-item-sub">{m.lastUsedAt != null ? ago(m.lastUsedAt) : (m.releasedAt ?? m.note ?? "")}</span>
+        </>
+      ),
+    }));
+    if (query && !catalog.some((m) => m.id === query))
+      out.push({
+        key: `${TYPED_MODEL}${query}`,
+        children: (
+          <span className="ns-item-main">
+            Use <span className="mono">{query}</span>
+          </span>
+        ),
+      });
+    if (!query && out.length === 0)
+      out.push({ key: "none", disabled: true, children: <span className="faint">No models listed — type one.</span> });
+    if (hidden > 0) out.push({ key: "hidden", disabled: true, children: <span className="faint">{hidden} more — keep typing to filter.</span> });
+    return out;
+  }
+
+  return (
+    <Dropdown
+      label="Model"
+      title={
+        session.model
+          ? session.host === "tmux"
+            ? "Switch the model; the session restarts on it"
+            : session.host === "external"
+              ? "Adopt it first to switch its model"
+              : "Switch the model it resumes on"
+          : "Pick a model"
+      }
+      width={320}
+      search="Search models, or type one…"
+      selected={session.model ?? ""}
+      onPick={(k) => {
+        const id = k.startsWith(TYPED_MODEL) ? k.slice(TYPED_MODEL.length) : k;
+        if (busy || !id || id === session.model) return;
+        void run(() => api.setModel(session.id, id));
+      }}
+      trigger={
+        shown ? (
+          <>
+            <span className="sx-model-name">{shown}</span>
+            {session.effort ? <span className="sx-model-effort">{session.effort}</span> : null}
+          </>
+        ) : (
+          <span className="sx-model-name faint">Default model</span>
+        )
+      }
+      items={items}
+    />
+  );
+}
+
 /** The title, click to rename. Clearing it falls back to the derived title. */
-function TitleEdit({ session }: { session: SessionRow }) {
+function TitleEdit({
+  session,
+  run,
+  busy,
+}: {
+  session: SessionRow;
+  run: (fn: () => Promise<unknown>) => Promise<boolean>;
+  busy: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const { run, busy } = useAction();
-  const title = titleOf(session);
+  // The stored label is what an edit starts from; the derived title is shown
+  // without the emoji its last turn may have put in it.
+  const title = shownTitle(session);
 
   if (!editing) {
     return (

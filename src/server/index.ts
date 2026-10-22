@@ -1076,6 +1076,15 @@ const router = new Router(mapError)
     fleet.interrupt(params.id!);
     return json(null);
   })
+  .add("POST", "/api/sessions/:id/model", async ({ req, params }) => {
+    const b = await readBody(req);
+    const model = requireString(b, "model").trim();
+    if (!model) throw new HttpError(400, "the model is empty");
+    const s = await fleet.switchModel(params.id!, model);
+    scheduleHot();
+    scheduleCold();
+    return json(s);
+  })
   .add("POST", "/api/sessions/:id/resume", async ({ req, params }) => {
     const b = await readBody(req);
     const s = await fleet.resume(params.id!, typeof b.prompt === "string" ? b.prompt : undefined);

@@ -288,6 +288,9 @@ export const api = {
   btwDismiss: (id: string, row: number) => post<unknown>(`/api/sessions/${enc(id)}/btw/${row}/dismiss`),
   resume: (id: string, prompt?: string) =>
     post<Session>(`/api/sessions/${enc(id)}/resume`, prompt ? { prompt } : {}),
+  /** Put it on another model: a stopped session records it for its next resume,
+   *  a running one is restarted on it. */
+  setModel: (id: string, model: string) => post<Session>(`/api/sessions/${enc(id)}/model`, { model }),
   adopt: (id: string) => post<Session>(`/api/sessions/${enc(id)}/adopt`),
   /** Continue on another account (`auto` = the balancer's pick), sending `prompt`. */
   move: (id: string, opts: { accountId?: string; prompt?: string }) => post<Session>(`/api/sessions/${enc(id)}/move`, opts),

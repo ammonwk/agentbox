@@ -1576,10 +1576,13 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       return receipt;
     }
     const s = mustSession(id);
-    const x = body<{ label: string | null; text: string; keys: string[]; prompt: string; closed: boolean; question: string; answers: AskAnswer[] }>(b);
+    const x = body<{ label: string | null; text: string; keys: string[]; prompt: string; closed: boolean; question: string; answers: AskAnswer[]; model: string }>(b);
     switch (method === "PATCH" ? "patch" : action) {
       case "patch":
         if ("label" in x) s.label = x.label?.trim() ? x.label.trim() : null;
+        break;
+      case "model":
+        if (x.model?.trim()) s.model = x.model.trim();
         break;
       case "send": {
         const tl = timelineOf(id);

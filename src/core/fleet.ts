@@ -2453,7 +2453,7 @@ export class Fleet extends EventEmitter {
       prRepo: f?.prRepo ?? null,
       branch: f?.gitBranch ?? null,
       worktree: rec.worktree,
-      model: f?.model ?? null,
+      model: liveModel(rec),
       firstPrompt: f?.firstPrompt?.slice(0, PROMPT_PREVIEW) ?? null,
       lastPrompt: f?.lastPrompt?.slice(0, PROMPT_PREVIEW) ?? null,
       lastPromptAt: f?.lastPromptAt ?? rec.startedAt,
@@ -3003,6 +3003,7 @@ export class Fleet extends EventEmitter {
       createdAt: now,
       effort: effort ?? null,
       model: model ?? null,
+      modelAt: model ? now : null,
       parent: parent ?? null,
       parentByHand: !!req.parent,
     });
@@ -3309,6 +3310,53 @@ export class Fleet extends EventEmitter {
     await this.wake(rec, view, from, cwd, target, opts.prompt);
     await this.tick();
     return this.get(id);
+  }
+
+  /**
+   * Put the session on another model. A stopped one is recorded for its next
+   * resume; a running one is restarted on it, since the CLIs' own /model is a
+   * picker no remote here can drive. Mid-turn is refused: the turn in flight
+   * is the old model's, and stopping it would throw that work away.
+   */
+  switchModel(id: string, model: string): Promise<Session> {
+    return this.serial(id, async () => {
+      const rec = getSessionRecord(id);
+      if (!rec) throw new FleetError(404, `no session ${id}`);
+      const view = this.get(id);
+      if (view.host === "subagent") throw this.callersAgent(view);
+      if (view.host === "external") throw new FleetError(409, "running in another terminal — adopt it first");
+      if (view.status === "running") throw new FleetError(409, "it is mid-turn; interrupt it first");
+      // Restarting would throw away the prompt it is sitting on.
+      if (view.status === "blocked") throw new FleetError(409, "it is waiting on a prompt; answer it or interrupt it first");
+      // A retired model runs as its replacement, as it would at spawn.
+      model = unretired(model);
+      const at = this.now();
+      // The pane, not the last pass, says whether it still runs: a stop taken
+      // mid-pass leaves the view on "tmux" for a tick, and restarting from
+      // that would stop a process already gone and resume an id it never wrote.
+      if (!rec.tmux || !this.paneAlive(rec.tmux)) {
+        updateSessionRecord(id, { model, modelAt: at });
+        await this.tick();
+        return this.get(id);
+      }
+      // A CLI that picks its own session id (codex, omp, devin, muse) has none
+      // until its first transcript is written, so there is nothing to resume it on.
+      if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation");
+      const account = this.accountFor(rec, view);
+      if (!account) throw new FleetError(409, "this session's account is no longer set up");
+      const cwd = this.resumeDir(rec);
+      // An adopted launch's carried --model would otherwise win over the switch.
+      const launch = rec.launch ? { ...rec.launch, args: withoutModelFlag(rec.launch.args) } : null;
+      const next = { ...rec, model, modelAt: at, launch };
+      // Build the resume before stopping anything: a launch that cannot be
+      // built leaves the session running as it was.
+      const prepared = this.resumeLaunch(next, account, cwd);
+      await this.stopAndWait(rec, view);
+      updateSessionRecord(id, { model, modelAt: at, ...(launch ? { launch } : {}) });
+      this.startTmux(next, account, cwd, undefined, prepared);
+      await this.tick();
+      return this.get(id);
+    });
   }
 
   private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string, fork?: { as: string; id: string }): PreparedLaunch {
@@ -4346,6 +4394,20 @@ function unretired<T extends string | undefined>(model: T): T {
   return ((model && getSettings().retiredModels[model]) || model) as T;
 }
 
+/** A launch's model flags, dropped when a switch replaces the model. */
+const MODEL_FLAGS = ["--model", "-m"];
+function withoutModelFlag(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const eq = a.indexOf("=");
+    const flag = a.startsWith("--") && eq > 0 ? a.slice(0, eq) : a;
+    if (!MODEL_FLAGS.includes(flag)) out.push(a);
+    else if (eq < 0) i++; // its value is the next word
+  }
+  return out;
+}
+
 /** `resumeModel`, unless the session is on a retired model: its replacement.
  *  One started on the CLI's default has no model of its own, so the
  *  transcript says what it runs on. */
@@ -4354,19 +4416,30 @@ function resumeOn(rec: SessionRecord): string | null {
   return (on && getSettings().retiredModels[on]) || resumeModel(rec);
 }
 
-/**
- * The model to resume on. A resume without `--model` runs on the CLI's
- * default, so a session started on Haiku or on 1M-context Fable would come
- * back as something else. The model it was started with, unless the
- * transcript shows it has since been switched (`/model`) to another.
+/** The model the session is on: what its transcript last answered on, or the
+ *  one set since then (a spawn, or a switch here) that it has not used yet. */
+function liveModel(rec: SessionRecord): string | null {
+  const f = rec.facts as Partial<TranscriptFacts> | null;
+  return rec.model && (rec.modelAt ?? 0) > (f?.lastTurnAt ?? 0) ? rec.model : f?.model ?? rec.model ?? null;
+}
+
+/** The model to resume on. A resume without `--model` runs on the CLI's
+ *  default, so a session started on Haiku or on 1M-context Fable would come
+ *  back as something else. The model it was started with, unless the
+ *  transcript shows it has since been switched (`/model`) to another — or
+ *  the switch was ours, after the transcript's last answer.
  */
 function resumeModel(rec: SessionRecord): string | null {
   if (!rec.model) return null;
-  const latest = (rec.facts as Partial<TranscriptFacts> | null)?.model ?? null;
+  const f = rec.facts as Partial<TranscriptFacts> | null;
+  const latest = f?.model ?? null;
   const base = rec.model.replace(/\[[^\]]*\]$/, "");
   if (!latest || latest.startsWith(base) || base.startsWith(latest)) return rec.model;
   // An alias (`opus`) resolves to a full id; that is not a switch.
   if (!base.includes("-") && latest.includes(base)) return rec.model;
+  // A model set here since the transcript last answered has not run yet: it
+  // is what the session will run, not what it last did.
+  if ((rec.modelAt ?? 0) > (f?.lastTurnAt ?? 0)) return rec.model;
   return latest;
 }
 

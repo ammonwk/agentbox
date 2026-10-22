@@ -383,6 +383,15 @@ export function titleOf(s: Pick<Session, "label" | "title" | "firstPrompt">): st
   return s.label?.trim() || s.title?.trim() || s.firstPrompt?.split("\n")[0]?.slice(0, 80) || "Untitled session";
 }
 
+/** A title as the list and the session header draw it: emoji stripped, so a
+ *  name an agent decorated itself with reads as a name. The stored label is
+ *  left as it is; renaming starts from it. */
+const EMOJI = /[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D\u20E3\u{1F3FB}-\u{1F3FF}]/gu;
+export function shownTitle(s: Pick<Session, "label" | "title" | "firstPrompt">): string {
+  const clean = titleOf(s).replace(EMOJI, "").replace(/\s+/g, " ").trim();
+  return clean || "Untitled session";
+}
+
 /** "agentbox · feat/x", or the cwd's basename when there is no repo. */
 export function whereOf(s: Pick<Session, "repoRoot" | "cwd" | "branch">): { name: string; branch: string | null } {
   return { name: baseName(s.repoRoot ?? s.cwd), branch: s.branch };

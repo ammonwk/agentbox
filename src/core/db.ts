@@ -579,6 +579,9 @@ export interface SessionRecord {
   effort?: string | null;
   /** The model asked for at spawn (`--model`), e.g. `claude-fable-5-1[1m]`. */
   model?: string | null;
+  /** When `model` was last set by us (a spawn, or a switch here). A transcript
+   *  that answered on another model after this is what the TUI switched to. */
+  modelAt?: number | null;
   /** The session that started this one, once proven (see `Fleet.linkParents`). */
   parent?: string | null;
   /** You set or cleared `parent` yourself (`Fleet.patch`): the fleet leaves it be. */
@@ -612,7 +615,7 @@ type SessionRow = {
   cwd: string; worktree: string | null; label: string | null; claim: number;
   origin: string; tmux: string | null; transcript_path: string | null; started_at: number;
   last_activity_at: number; archived_at: number | null; facts: string | null; created_at: number;
-  launch: string | null; effort: string | null; model: string | null; parent: string | null;
+  launch: string | null; effort: string | null; model: string | null; model_at: number | null; parent: string | null;
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
   parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
   pin_order: number | null; bookmarked_at: number | null; quiet: number | null;
@@ -639,6 +642,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     launch: (parseJson(r.launch) as Launch | null) ?? null,
     effort: r.effort ?? null,
     model: r.model ?? null,
+    modelAt: r.model_at ?? null,
     parent: r.parent ?? null,
     parentByHand: !!r.parent_by_hand,
     parkedAt: r.parked_at ?? null,
@@ -672,6 +676,7 @@ const RECORD_COLUMNS = {
   launch: "launch",
   effort: "effort",
   model: "model",
+  modelAt: "model_at",
   parent: "parent",
   parentByHand: "parent_by_hand",
   parkedAt: "parked_at",
