@@ -767,10 +767,11 @@ export class Fleet extends EventEmitter {
    * meets stops it for good, though every other session cut off with it
    * still has its own move. A manual move (the limit banner) is always yours.
    *
-   * One that has had its move, or has nowhere to go, carries on where it is
-   * once its account's usage says the limit has lifted (`limitEnd`): a minute
-   * after, it is told to go on. Whatever lifted it: the 5-hour window's
-   * reset, a reset redeemed at the provider, a bigger plan. Only when that
+   * One that has had its move, has nowhere to go, or stopped at a limit that
+   * is its model's on every account (`modelWide`), carries on where it is
+   * once the limit has lifted (`limitEnd`): a minute after, it is told to go
+   * on. Whatever lifted it: the 5-hour window's reset, a reset redeemed at
+   * the provider, a bigger plan, the time its message named. Only when that
    * comes within `CARRY_ON_WITHIN_MS` of the hit: a weekly limit that runs
    * its days out is left to you. A session parked while it waited is resumed
    * by that message; one you wrote to in the last minute is answering you.
@@ -801,12 +802,26 @@ export class Fleet extends EventEmitter {
       if (v.status !== "waiting" || v.host !== "tmux" || this.busy.has(v.id)) continue;
       const rec = getSessionRecord(v.id);
       if (!rec?.accountId) continue;
-      const next = rec.hoppedAt ? null : this.hopTarget(rec, v);
+      const next = rec.hoppedAt || this.modelWide(v) ? null : this.hopTarget(rec, v);
       // Another is on its way over: this one is looked at again once it has landed.
       if (next && this.hopping) continue;
       this.stallsSeen.set(v.id, hit.at);
       if (next) this.hop(v, next, now);
     }
+  }
+
+  /** Is the limit this session stopped at its model's on every account, not
+   *  its account's? Another account's session on the same model stopped at
+   *  one within minutes of it. Moving it would only meet the limit again
+   *  (the free model's 429 on 2026-10-21), so it waits out `until` where it is. */
+  private modelWide(v: Session): boolean {
+    const model = v.model?.split(":")[0];
+    if (!model) return false;
+    const at = v.limitHit!.at;
+    for (const o of this.views.values()) {
+      if (o.limitHit && o.accountId !== v.accountId && o.model?.split(":")[0] === model && Math.abs(o.limitHit.at - at) <= MODEL_WIDE_WITHIN_MS) return true;
+    }
+    return false;
   }
 
   /** Where a session stopped at its account's limit can go: the balancer's
@@ -914,8 +929,8 @@ export class Fleet extends EventEmitter {
    *  after the reset of the window its account has spent, when that comes
    *  soon enough (`continueStalled`), or past an error (`nudgeErrored`). */
   private autoResumeOf(v: Session, now: number): Session["autoResume"] {
-    const reset = v.limitHit && v.status === "waiting" && v.host === "tmux" ? this.spentUntil(v.accountId, v.limitHit, now) : null;
-    if (reset !== null && reset - v.limitHit!.at <= CARRY_ON_WITHIN_MS) return { at: reset + 60_000, attempt: 1, of: 1, after: "reset" };
+    const reset = v.status === "waiting" && (v.host === "tmux" || (v.host === "none" && v.parkedAt)) ? v.limitHit?.until : null;
+    if (reset && reset - v.limitHit!.at <= CARRY_ON_WITHIN_MS) return { at: reset + 60_000, attempt: 1, of: 1, after: "reset" };
     const plan = this.nudgePlan(v, now);
     return plan && { at: plan.at, attempt: plan.attempt, of: plan.of, after: "error" };
   }
@@ -1037,8 +1052,10 @@ export class Fleet extends EventEmitter {
    * was spent as the hit struck and none is any more (it reset, or a reset
    * was redeemed at the provider, or the plan grew); else, where no window
    * ever accounted for the hit (a rate limit, an empty balance, an account
-   * whose usage cannot be read), the wait or the date the message itself
-   * names, null when it names none or that has passed. The message's time
+   * whose usage cannot be read), the wait or the time the message itself
+   * names, "lifted" once that has passed, null when it names none. On
+   * 2026-10-21 33 omp sessions stopped on a free model's 429 "retry-after-ms=
+   * 8060000" sat for good after it cleared at 18:00. The message's time
    * is never held against usage that has moved on: on 2026-10-11 a codex
    * account's weekly reset was redeemed nine minutes after two sessions
    * stopped on it, usage read 0%, and both were still refused every message
@@ -1050,8 +1067,8 @@ export class Fleet extends EventEmitter {
     const windows = this.limitWindows(accountId, hit);
     if (windows.length > 0 && !windows.some((w) => w.usedPct >= 100 && w.resetsAt === null) && this.spentAtHit(this.ownerOf(accountId!), windows, hit.at, now)) return "lifted";
     const wait = statedWaitMs(hit.detail);
-    const named = wait !== null ? hit.at + wait : statedUntil(hit.detail);
-    return named !== null && named > now ? named : null;
+    const named = wait !== null ? hit.at + wait : statedUntil(hit.detail, hit.at);
+    return named === null ? null : named > now ? named : "lifted";
   }
 
   /** Did the account's usage have one of these windows spent as the hit
@@ -4098,6 +4115,8 @@ export class Fleet extends EventEmitter {
  *  5-hour window's length, the longest a 5-hour limit lasts. One that lifts
  *  later is old work, and yours to pick up or leave. */
 const CARRY_ON_WITHIN_MS = 5 * 60 * 60_000;
+/** Limits on one model from two accounts this close together are the model's. */
+const MODEL_WIDE_WITHIN_MS = 15 * 60_000;
 const STALL_FRESH_MS = 15 * 60_000;
 /** A session stuck on an error screen is nudged once the error's reset window
  *  ("will reset in N seconds") has passed: this long after it last moved. */

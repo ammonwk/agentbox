@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { statedWaitMs } from "../retrywait";
+import { statedUntil, statedWaitMs } from "../retrywait";
 
 const MIN = 60_000;
 
@@ -29,9 +29,29 @@ describe("statedWaitMs", () => {
     expect(statedWaitMs("try again in 1 hour and 5 minutes")).toBe(65 * MIN);
   });
 
+  test("reads a provider's retry header echoed into its 429", () => {
+    // OpenCode Go's free model on 2026-10-21: hits hours apart, one reset at 18:00 MDT.
+    const detail = (ms: number) =>
+      `opencode-go/minimax-m3.1-flash-free: 429 Upstream request failed: Rate limit exceeded. Please try again later. retry-after-ms=${ms}`;
+    expect(statedWaitMs(detail(8060000))).toBe(8_060_000);
+    const reset = Date.parse("2026-10-22T00:00:00Z");
+    expect(Math.abs(1792614630178 + statedWaitMs(detail(12570000))! - reset)).toBeLessThan(1_000);
+    expect(Math.abs(1792626423168 + statedWaitMs(detail(777000))! - reset)).toBeLessThan(1_000);
+    expect(statedWaitMs("429 Too Many Requests (retry-after: 300)")).toBe(300_000);
+  });
+
   test("is null when no wait is named", () => {
     expect(statedWaitMs("Something went wrong. Send a message to retry")).toBeNull();
     expect(statedWaitMs("Connection lost, retrying...")).toBeNull();
     expect(statedWaitMs("retry after 500ms")).toBeNull();
+  });
+});
+
+describe("statedUntil", () => {
+  test("reads a date, or a bare time as the next one after the hit", () => {
+    expect(statedUntil("You've hit your usage limit. Try again at Oct 14th, 2026 12:10 AM.", 0)).toBe(new Date(2026, 9, 14, 0, 10).getTime());
+    const hit = new Date(2026, 9, 21, 15, 0).getTime();
+    expect(statedUntil("Rate limit exceeded; resets at 6:00 PM", hit)).toBe(new Date(2026, 9, 21, 18, 0).getTime());
+    expect(statedUntil("Rate limit exceeded; resets at 09:30", hit)).toBe(new Date(2026, 9, 22, 9, 30).getTime());
   });
 });
