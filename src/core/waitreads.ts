@@ -12,6 +12,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { github as request } from "./github";
 import type { WaitSpec } from "./types";
 import { isLaunchdJob, readLaunchdJob, stopLaunchdJob } from "./job-launchd";
 import { ensureCheckout } from "./worktrees";
@@ -58,27 +59,8 @@ export interface RunRead {
   head: string;
 }
 
-let token: string | null = null;
-
 async function github(path: string, init: { method?: string; body?: string; etag?: string | null } = {}): Promise<Response> {
-  if (!token) {
-    const p = Bun.spawn(["gh", "auth", "token", "--hostname", "github.com"], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GH_PROMPT_DISABLED: "1" } });
-    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-    if (code !== 0 || !out.trim()) throw new Error(`gh has no GitHub login to read with: ${err.trim().split("\n")[0] || `gh exited ${code}`}`);
-    token = out.trim();
-  }
-  const res = await fetch(`https://api.github.com${path}`, {
-    method: init.method ?? "GET",
-    body: init.body,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(init.etag ? { "If-None-Match": init.etag } : {}),
-    },
-    signal: AbortSignal.timeout(60_000),
-  });
-  if (res.status === 401) token = null;
+  const res = await request("waits", path, init);
   if ((res.status === 403 || res.status === 429) && res.headers.get("x-ratelimit-remaining") === "0") throw new Held(resetOf(res));
   return res;
 }
@@ -197,19 +179,34 @@ export async function readPrs(prs: (Pick<PrSpec, "repo" | "number"> & { feedback
   return out;
 }
 
+/** Each feedback page as last read: asked again conditionally, so a page
+ *  that has not changed (a 304) does not spend the REST limit. */
+const feedbackPages = new Map<string, { etag: string | null; marks: string[]; next: boolean }>();
+
 /** Review text stays on GitHub. Persist only a digest so edits and new replies
  * wake the owner once, including comments inside previously resolved threads. */
-export async function readPrFeedback(repo: string, number: number, request: (path: string) => Promise<Response> = github): Promise<{ fingerprint: string; count: number }> {
+export async function readPrFeedback(repo: string, number: number): Promise<{ fingerprint: string; count: number }> {
   const surfaces = [`pulls/${number}/reviews`, `pulls/${number}/comments`, `issues/${number}/comments`];
   const rows = await Promise.all(surfaces.map(async surface => {
     const marks: string[] = [];
     for (let page = 1; page <= 10; page++) {
-      const res = await request(`/repos/${repo}/${surface}?per_page=100&page=${page}`);
-      if (!res.ok) throw new Error(`GitHub answered ${res.status} reading PR feedback`);
-      const data = await res.json() as { id: number; state?: string; submitted_at?: string; updated_at?: string; body?: string }[];
-      if (!Array.isArray(data) || data.some(r => !Number.isSafeInteger(r?.id))) throw new Error("GitHub returned invalid PR feedback");
-      for (const r of data) if (r.state !== "PENDING") marks.push(createHash("sha256").update(JSON.stringify([surface, r.id, r.state, r.submitted_at, r.updated_at, r.body])).digest("hex"));
-      if (!res.headers.get("link")?.includes('rel="next"')) return marks;
+      const path = `/repos/${repo}/${surface}?per_page=100&page=${page}`;
+      const had = feedbackPages.get(path);
+      const res = await github(path, { etag: had?.etag });
+      let read = res.status === 304 ? had : undefined;
+      if (!read) {
+        if (!res.ok) throw new Error(`GitHub answered ${res.status} reading PR feedback`);
+        const data = await res.json() as { id: number; state?: string; submitted_at?: string; updated_at?: string; body?: string }[];
+        if (!Array.isArray(data) || data.some(r => !Number.isSafeInteger(r?.id))) throw new Error("GitHub returned invalid PR feedback");
+        read = {
+          etag: res.headers.get("etag"),
+          marks: data.filter(r => r.state !== "PENDING").map(r => createHash("sha256").update(JSON.stringify([surface, r.id, r.state, r.submitted_at, r.updated_at, r.body])).digest("hex")),
+          next: res.headers.get("link")?.includes('rel="next"') ?? false,
+        };
+        feedbackPages.set(path, read);
+      }
+      marks.push(...read.marks);
+      if (!read.next) return marks;
     }
     throw new Error("PR feedback exceeds 1000 records on one surface; read it manually before rearming");
   }));

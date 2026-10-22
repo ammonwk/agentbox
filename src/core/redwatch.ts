@@ -13,6 +13,7 @@
  */
 
 import { basename } from "node:path";
+import { github } from "./github";
 import type { ScheduleRule } from "./schedule";
 
 type RedRule = Extract<ScheduleRule, { kind: "red" }>;
@@ -73,7 +74,6 @@ export function redNote(rule: RedRule, streak: RedStreak | null, lastSessionId: 
 
 /** What was read last for a workflow and branch, and GitHub's tag for it. */
 const read = new Map<string, { etag: string | null; runs: WorkflowRun[] }>();
-let token: string | null = null;
 
 interface RawRun {
   id: number; status: string | null; conclusion: string | null; created_at: string; updated_at: string;
@@ -98,18 +98,8 @@ export async function readRuns(rule: RedRule): Promise<WorkflowRun[]> {
   }
   const path = `/repos/${rule.repo}/actions/workflows/${encodeURIComponent(rule.file)}/runs?branch=${encodeURIComponent(rule.branch)}&per_page=${RUNS_READ}`;
   const had = read.get(path);
-  token ??= (await gh(["auth", "token", "--hostname", "github.com"])).trim();
-  const res = await fetch(`https://api.github.com${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(had?.etag ? { "If-None-Match": had.etag } : {}),
-    },
-    signal: AbortSignal.timeout(60_000),
-  });
+  const res = await github("redwatch", path, { etag: had?.etag });
   if (res.status === 304 && had) return had.runs;
-  if (res.status === 401) token = null;
   if (!res.ok) throw new Error(`GitHub answered ${res.status} ${res.statusText}`.trim());
   const body = (await res.json()) as { workflow_runs: RawRun[] };
   const runs = body.workflow_runs.map((r) => ({

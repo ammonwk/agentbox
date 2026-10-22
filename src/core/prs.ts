@@ -35,10 +35,10 @@ import {
   type PrSync,
   type StoredPr,
 } from "./db";
-import { ghErrorMessage, repoCheckoutPath, repoFullNameOf, runAsync } from "./git";
+import { repoCheckoutPath, repoFullNameOf } from "./git";
+import { github, NoGhLogin } from "./github";
 import type { PrInfo, Session } from "./types";
 
-const API = "https://api.github.com";
 /** A page of the one-time loads. */
 const BIG_PAGE = 100;
 /** A page of the minute's catch-up: a PR is ~28 KB of JSON, and a minute
@@ -342,45 +342,21 @@ function toStored(repo: string, p: RawPr): StoredPr {
 let pausedUntil = 0;
 /** Requests left in the hour, as of the last answer. */
 let remaining = Infinity;
-let token: string | null = null;
 
 /** GitHub did not answer, or answered that it is down: nothing about the repo. */
 class Unreachable extends Error {}
 
-/** `gh`'s token, so the sync counts against the same login the agents use
- *  and needs no setup of its own. */
-async function ghToken(): Promise<string> {
-  if (token) return token;
-  const r = await runAsync(["gh", "auth", "token", "--hostname", "github.com"]);
-  const t = r.stdout.trim();
-  if (r.code !== 0 || !t) {
-    const message = ghErrorMessage(r);
-    throw new Error(message.startsWith("`gh`") ? message : "`gh` is not authenticated — run `gh auth login`");
-  }
-  return (token = t);
-}
-
 /** What GitHub answers, or null when it has not changed since `etag`. */
 async function get<T>(path: string, etag?: string | null): Promise<{ body: T; etag: string | null } | null> {
-  const auth = `Bearer ${await ghToken()}`;
   const unreachable = (e: unknown): never => {
     throw new Unreachable((e as Error).message);
   };
-  const res = await fetch(API + path, {
-    headers: {
-      Authorization: auth,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(etag ? { "If-None-Match": etag } : {}),
-    },
-    signal: AbortSignal.timeout(60_000),
-  }).catch(unreachable);
+  const res = await github("prs", path, { etag }).catch((e) => (e instanceof NoGhLogin ? Promise.reject(e) : unreachable(e)));
   const left = res.headers.get("x-ratelimit-remaining");
   if (left !== null) remaining = Number(left);
   if (res.status === 304) return null;
   if (res.ok) return { body: (await res.json().catch(unreachable)) as T, etag: res.headers.get("etag") };
   if (res.status === 401) {
-    token = null;
     throw new Error("`gh` is not authenticated — run `gh auth login`");
   }
   const retry = res.headers.get("retry-after");
