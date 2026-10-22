@@ -517,8 +517,36 @@ export function updateAccount(
   getDb().run(`UPDATE accounts SET ${cols.join(", ")} WHERE id = ?`, [...vals, id]);
 }
 
-export function deleteAccount(id: string): void {
+/**
+ * Delete an account, returning the sessions it was pinned to. The foreign key
+ * nulls them, so the list is what an undo needs to put the claims back.
+ */
+export function deleteAccount(id: string): string[] {
+  const pinned = (getDb().query("SELECT id FROM sessions WHERE account_id = ? ORDER BY id").values() as [string][]).map(([s]) => s);
   getDb().run("DELETE FROM accounts WHERE id = ?", [id]);
+  return pinned;
+}
+
+/** Bring a just-deleted account and its pins back, as one step. */
+export function restoreAccount(account: Account, sessionIds: readonly string[]): void {
+  getDb().transaction(() => {
+    insertAccount(account);
+    if (sessionIds.length > 0) {
+      getDb().run(`UPDATE sessions SET account_id = ? WHERE id IN (${sessionIds.map(() => "?").join(",")})`, [account.id, ...sessionIds]);
+    }
+  })();
+}
+
+/** Whether a provider's default home was removed by hand. `ensureDefaultAccounts`
+ *  must leave it alone while it is, or the trash would refill at every start. */
+export function defaultDismissed(provider: AccountProvider): boolean {
+  return getDb().query("SELECT 1 FROM dismissed_defaults WHERE provider = ?").get(provider) !== null;
+}
+
+/** Record (or lift) that dismissal; importing the default home lifts it too. */
+export function dismissDefault(provider: AccountProvider, dismissed: boolean): void {
+  if (dismissed) getDb().run("INSERT OR REPLACE INTO dismissed_defaults (provider, at) VALUES (?, ?)", [provider, Date.now()]);
+  else getDb().run("DELETE FROM dismissed_defaults WHERE provider = ?", [provider]);
 }
 
 // --------------------------------------------------------------- sessions

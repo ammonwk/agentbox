@@ -1505,6 +1505,12 @@ const router = new Router(mapError)
     scheduleCold();
     return json(null);
   })
+  .add("POST", "/api/accounts/:id/undo", ({ params }) => {
+    const a = accounts.undoRemove(params.id!);
+    if (!a) throw new HttpError(410, "that account's undo window has passed");
+    scheduleCold();
+    return json(a);
+  })
   .add("POST", "/api/accounts/:id/login", async ({ params }) => {
     const flow = accounts.login(params.id!);
     scheduleCold();

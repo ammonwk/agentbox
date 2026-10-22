@@ -333,6 +333,8 @@ export const api = {
   patchAccount: (id: string, patch: { label?: string; enabled?: boolean }) =>
     request<Account>("PATCH", `/api/accounts/${enc(id)}`, patch),
   forgetAccount: (id: string) => request<unknown>("DELETE", `/api/accounts/${enc(id)}`),
+  /** Undo a forget: the server holds the account for five seconds. */
+  undoForgetAccount: (id: string) => post<Account>(`/api/accounts/${enc(id)}/undo`),
   login: (id: string) => post<LoginFlow>(`/api/accounts/${enc(id)}/login`),
   /** Share one of your accounts' logins with the org, or stop: it stays yours either way. */
   shareWithOrg: (id: string, shared: boolean) => request<null>("PUT", `/api/org/shared/${enc(id)}`, { shared }),

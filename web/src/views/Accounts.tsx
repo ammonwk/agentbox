@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AccountView, AppState, LoginFlow, ProviderId, ResetConsumeResult } from "../../../src/core/types";
 import { api, useNow } from "../api";
 import { accountProvider, ORG_PROVIDERS } from "../../../src/core/providers/account";
@@ -18,6 +18,9 @@ function fmtPoint(n: number): string {
   return s === "0" && n > 0 ? "<0.1" : s;
 }
 
+/** How long a removal can be taken back; the server holds its snapshot as long. */
+const UNDO_MS = 5_000;
+
 /**
  * Every login agentbox can place sessions on, grouped by provider: how much of
  * each rate-limit window is used, what the running sessions still claim, and
@@ -35,7 +38,56 @@ function AccountList({ state }: { state: AppState }) {
   /** Logins this tab started, until the cold state carries them. */
   const [started, setStarted] = useState<LoginFlow[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  /** Accounts removed in this tab: hidden at once, and the last one undoable. */
+  const [removing, setRemoving] = useState<Set<string>>(new Set());
+  const [removed, setRemoved] = useState<AccountView | null>(null);
+  const forget = useAction();
+  const undo = useAction();
   const home = useMemo(() => guessHome(state.accounts.map((a) => a.home)), [state.accounts]);
+
+  useEffect(() => {
+    if (!removed) return;
+    const t = setTimeout(() => setRemoved(null), UNDO_MS);
+    return () => clearTimeout(t);
+  }, [removed]);
+
+  // Once the server's state no longer lists an account, there is nothing left
+  // to hide. Until then it stays hidden, so the card does not flash back while
+  // the delete is on its way.
+  useEffect(() => {
+    setRemoving((prev) => {
+      if (prev.size === 0) return prev;
+      const listed = new Set(state.accounts.map((a) => a.id));
+      const next = new Set([...prev].filter((id) => listed.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [state.accounts]);
+
+  const remove = (a: AccountView) => {
+    setRemoving((prev) => new Set(prev).add(a.id));
+    void forget.run(() => api.forgetAccount(a.id)).then((ok) => {
+      if (ok) setRemoved(a);
+      else
+        setRemoving((prev) => {
+          const next = new Set(prev);
+          next.delete(a.id);
+          return next;
+        });
+    });
+  };
+
+  const undoRemove = () => {
+    const a = removed;
+    if (!a) return;
+    setRemoved(null);
+    void undo.run(() => api.undoForgetAccount(a.id)).then(() =>
+      setRemoving((prev) => {
+        const next = new Set(prev);
+        next.delete(a.id);
+        return next;
+      }),
+    );
+  };
 
   const logins = useMemo(() => {
     const byId = new Map<string, LoginFlow>();
@@ -55,8 +107,23 @@ function AccountList({ state }: { state: AppState }) {
 
   return (
     <div className="acs">
+      {forget.error || undo.error ? (
+        <p className="error-line" role="alert">
+          {forget.error ?? undo.error}{" "}
+          <button
+            className="linkish"
+            onClick={() => {
+              forget.clear();
+              undo.clear();
+            }}
+          >
+            dismiss
+          </button>
+        </p>
+      ) : null}
+
       {providers.map((p) => {
-        const accounts = state.accounts.filter((a) => a.provider === p);
+        const accounts = state.accounts.filter((a) => a.provider === p && !removing.has(a.id));
         // A login whose account is not listed: one just created (not in the
         // state yet), or a failure worth reading. A finished one whose
         // account was forgotten says nothing true any more.
@@ -115,6 +182,7 @@ function AccountList({ state }: { state: AppState }) {
                     onLogin={(l) => setStarted((s) => [...s.filter((x) => x.accountId !== l.accountId), l])}
                     onDismissLogin={dismiss}
                     onAddOwn={() => setAdding({ provider: p, expect: a.email ?? undefined })}
+                    onRemove={() => remove(a)}
                   />
                 ))}
               </div>
@@ -141,6 +209,19 @@ function AccountList({ state }: { state: AppState }) {
         />
       ) : null}
       {importing ? <ImportHome provider={importing} onClose={() => setImporting(null)} /> : null}
+
+      {removed ? (
+        <div className="ac-undo" role="status">
+          <span>
+            Removed <strong>{removed.label}</strong>
+            <span className="faint"> · its login stays on disk</span>
+          </span>
+          <Button size="sm" icon={Icon.undo} loading={undo.busy} onClick={undoRemove}>
+            Undo
+          </Button>
+          <i className="ac-undo-clock" aria-hidden="true" />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -155,6 +236,7 @@ function AccountCard({
   onLogin,
   onDismissLogin,
   onAddOwn,
+  onRemove,
 }: {
   account: AccountView;
   state: AppState;
@@ -163,12 +245,12 @@ function AccountCard({
   onLogin: (l: LoginFlow) => void;
   onDismissLogin: (id: string) => void;
   onAddOwn: () => void;
+  onRemove: () => void;
 }) {
   const { run, busy, error, clear } = useAction();
   const refresh = useAction();
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(a.label);
-  const [forget, setForget] = useState(false);
   const [forgetHome, setForgetHome] = useState<AccountView["alsoAt"][number] | null>(null);
   const org = state.org?.name ?? null;
   // The pool's mirror of another member's login.
@@ -381,9 +463,16 @@ function AccountCard({
                 return (
                   <tr key={cl.sessionId} data-lapsed={cl.lapsed || undefined} data-top={top.has(cl.sessionId) || undefined}>
                     <td>
-                      <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "timeline" })} className="ac-claim-title">
-                        {cl.title}
-                      </a>
+                      {cl.machine ? (
+                        <span className="ac-claim-title" title={`On ${cl.machine}: an org session on another machine, which this board cannot open`}>
+                          {cl.title}
+                          <span className="faint"> · {cl.machine}</span>
+                        </span>
+                      ) : (
+                        <a href={hrefOf({ page: "session", id: cl.sessionId, tab: "timeline" })} className="ac-claim-title">
+                          {cl.title}
+                        </a>
+                      )}
                       {cl.lapsed ? <span className="ac-lapsed" title="Idle long enough that its claim no longer counts">lapsed</span> : null}
                     </td>
                     <td
@@ -472,18 +561,23 @@ function AccountCard({
         >
           Log in again
         </Button>
-        {/* The CLI's own home cannot be forgotten: it is re-registered at the
-            next start, and sessions started from the CLI live in it. */}
         {sharable ? (
           <span className="ac-share" title={`${org}'s members can run their org sessions on this login too. It stays yours; flip it off any time.`}>
             <Toggle checked={a.shared} label={`Shared with ${org}`} disabled={busy} onChange={(v) => void run(() => api.shareWithOrg(a.id, v))} />
           </span>
         ) : null}
-        {/* A mirror goes when its sharer stops sharing it: forgotten, it would be back at the next sync. */}
-        {a.isDefault || pooled ? null : (
-          <Button size="sm" variant="ghost" icon={Icon.trash} className="ac-forget" disabled={busy} onClick={() => setForget(true)}>
-            Forget
-          </Button>
+        {/* A mirror goes when its sharer stops sharing it: removed, it would be back at the next sync. */}
+        {pooled ? null : (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={Icon.trash}
+            className="ac-trash"
+            aria-label={`Remove ${a.label}`}
+            title="Remove this account from agentbox. Its home stays on disk, and you can undo for 5 seconds."
+            disabled={busy}
+            onClick={onRemove}
+          />
         )}
       </footer>
 
@@ -503,28 +597,6 @@ function AccountCard({
             const id = forgetHome.id;
             setForgetHome(null);
             void run(() => api.forgetAccount(id));
-          }}
-        />
-      ) : null}
-
-      {forget ? (
-        <Confirm
-          title={`Forget “${a.label}”?`}
-          danger
-          confirmLabel="Forget"
-          body={
-            <>
-              <p>
-                agentbox stops listing and placing sessions on this account. The credential home stays on disk untouched —{" "}
-                <span className="mono">{a.home}</span> — and can be imported again.
-              </p>
-              {a.claims.length > 0 ? <p>{a.claims.length} session(s) pinned here keep running where they are.</p> : null}
-            </>
-          }
-          onCancel={() => setForget(false)}
-          onConfirm={() => {
-            setForget(false);
-            void run(() => api.forgetAccount(a.id));
           }}
         />
       ) : null}
@@ -842,11 +914,17 @@ function AddAccount({
 function ImportHome({ provider, onClose }: { provider: ProviderId; onClose: () => void }) {
   const [home, setHome] = useState("");
   const { run, busy, error } = useAction();
-  const example = provider === "muse" ? "~/.config" : provider === "codex" ? "~/.codex-work" : provider === "devin" ? "~/.local/share/devin-work" : "~/.claude-work";
+  const example = provider === "muse" ? "~/.config" : provider === "codex" ? "~/.codex-work" : provider === "devin" ? "~/.local/share/devin-work" : provider === "omp" ? "~/.local/share/agentbox/accounts/<id>" : "~/.claude-work";
+  const hint =
+    provider === "muse"
+      ? "The XDG config root containing muse/auth.json. Dedicated homes use the file credential backend and keep sessions under <home>/data/muse. Credentials are read in place."
+      : provider === "omp"
+        ? "An agentbox account home holding opencode-console.json — a copy or a backup of one. agentbox reads it in place and never copies its sign-in."
+        : "Use a credential home that is already logged in — a CLAUDE_CONFIG_DIR or CODEX_HOME you set up by hand. agentbox reads it in place and never moves or copies the credentials.";
   return (
     <Modal
       title={`Import a ${PROVIDER_LABEL[provider]} home`}
-      hint={provider === "muse" ? "The XDG config root containing muse/auth.json. Dedicated homes use the file credential backend and keep sessions under <home>/data/muse. Credentials are read in place." : "Use a credential home that is already logged in — a CLAUDE_CONFIG_DIR or CODEX_HOME you set up by hand. agentbox reads it in place and never moves or copies the credentials."}
+      hint={hint}
       onClose={onClose}
     >
       <form

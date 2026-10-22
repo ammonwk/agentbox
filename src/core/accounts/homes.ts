@@ -29,7 +29,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { getAccount, insertAccount, listAccounts } from "../db";
+import { defaultDismissed, dismissDefault, getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
 import { adapterFor } from "../providers";
 import { GO_LOGIN_FILE, readGoLogin } from "./gocred";
@@ -206,7 +206,8 @@ export function owners<A extends Pick<Account, "id" | "provider" | "email" | "is
 export async function ensureDefaultAccounts(
   detect: (p: ProviderId) => Promise<CliInfo> = detectCli,
 ): Promise<Account[]> {
-  const hasDefault = (p: AccountProvider) => listAccounts(p).some((a) => a.isDefault || samePath(a.home, defaultHome(p)));
+  const hasDefault = (p: AccountProvider) =>
+    defaultDismissed(p) || listAccounts(p).some((a) => a.isDefault || samePath(a.home, defaultHome(p)));
   // Only a provider without one is asked whether its CLI is installed: that
   // runs it (`omp --version` is a second), on every server start.
   const missing = PROVIDERS.filter((p) => p !== "omp" && !hasDefault(p));
@@ -595,5 +596,6 @@ export async function importHome(
     createdAt: Date.now(),
   };
   insertAccount(account);
+  if (isDefault) dismissDefault(provider, false);
   return { account: getAccount(account.id) ?? account, email };
 }

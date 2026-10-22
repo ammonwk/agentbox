@@ -7,7 +7,7 @@
  */
 
 import { EventEmitter } from "node:events";
-import { deleteAccount, getAccount, insertAccount, listAccounts, updateAccount } from "../db";
+import { deleteAccount, dismissDefault, getAccount, insertAccount, listAccounts, restoreAccount, updateAccount } from "../db";
 import type { Account, AccountAuth, AccountProvider, AccountUsage, LoginFlow, ProviderId, UsageWindow } from "../types";
 import type { ExecFn } from "./exec";
 import {
@@ -46,12 +46,16 @@ export interface AccountsServiceOptions {
 
 const UNKNOWN_AUTH: AccountAuth = { state: "unknown", expiresAt: null, detail: null };
 const IDENTITY_SWEEP_MS = 30 * 60_000;
+/** How long a removed account can be brought back; the trash toast's window. */
+const UNDO_MS = 5_000;
 
 export class AccountsService extends EventEmitter {
   readonly usage: UsageService;
   readonly logins: LoginManager;
   private identities: IdentityCache;
   private sweep: ReturnType<typeof setInterval> | null = null;
+  /** Accounts removed a moment ago, with their pins, while undo is open. */
+  private undoable = new Map<string, { account: Account; sessions: string[]; at: number }>();
 
   constructor(private opts: AccountsServiceOptions = {}) {
     super();
@@ -169,18 +173,41 @@ export class AccountsService extends EventEmitter {
   /**
    * Forget an account. The home directory is never deleted: it holds a login
    * you may want back, and transcripts the sessions list may still point at.
+   * The row is held for a moment so a mistaken click can be taken back — and a
+   * default (CLI) home is marked as dismissed so a restart does not register it
+   * again.
    */
   remove(id: string): void {
     const a = getAccount(id);
     if (!a) return;
-    if (a.isDefault) {
-      throw new AccountError(409, `"${a.label}" is the ${a.provider} default account and would be re-registered at the next start — disable it instead`);
-    }
+    if (a.isDefault) dismissDefault(a.provider, true);
     this.logins.cancelForAccount(id);
-    deleteAccount(id);
+    const sessions = deleteAccount(id);
+    const at = Date.now();
+    this.undoable.set(id, { account: a, sessions, at });
+    for (const [old, rec] of this.undoable) if (rec.at < at - UNDO_MS) this.undoable.delete(old);
     this.usage.forget(id);
     this.identities.forget(id);
     this.emit("change");
+  }
+
+  /** Put back an account removed a moment ago, with the sessions pinned to
+   *  it. Null once the undo window has passed, or if it was never removed. */
+  undoRemove(id: string): Account | null {
+    const rec = this.undoable.get(id);
+    if (!rec) return null;
+    this.undoable.delete(id);
+    if (Date.now() - rec.at > UNDO_MS) return null;
+    try {
+      restoreAccount(rec.account, rec.sessions);
+    } catch {
+      throw new AccountError(409, `an account already uses ${rec.account.home}`);
+    }
+    if (rec.account.isDefault) dismissDefault(rec.account.provider, false);
+    void this.reidentify(id).catch(() => undefined);
+    void this.usage.refresh(id).catch(() => undefined);
+    this.emit("change");
+    return getAccount(id);
   }
 
   login(accountId: string): LoginFlow {

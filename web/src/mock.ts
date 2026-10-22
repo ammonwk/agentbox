@@ -247,6 +247,9 @@ const accounts: MockAccount[] = [
   },
 ];
 
+/** What a DELETE took from `accounts`, by index, for the trash toast's undo. */
+const removedAccounts = new Map<string, { account: MockAccount; index: number }>();
+
 let logins: LoginFlow[] = [
   {
     id: "lg-1",
@@ -1703,12 +1706,21 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
       pushCold();
       return acc;
     }
+    if (action === "undo" && method === "POST") {
+      const back = removedAccounts.get(id);
+      if (!back) throw new Error(`mock: no account ${id} was just removed`);
+      removedAccounts.delete(id);
+      accounts.splice(Math.min(back.index, accounts.length), 0, back.account);
+      pushCold();
+      return back.account;
+    }
     const a = mustAccount(id);
     if (method === "PATCH") {
       const x = body<{ label: string; enabled: boolean }>(b);
       if (typeof x.label === "string" && x.label.trim()) a.label = x.label.trim();
       if (typeof x.enabled === "boolean") a.enabled = x.enabled;
     } else if (method === "DELETE") {
+      removedAccounts.set(id, { account: a, index: accounts.indexOf(a) });
       accounts.splice(accounts.indexOf(a), 1);
       logins = logins.filter((l) => l.accountId !== id);
     } else if (action === "usage") {
