@@ -223,6 +223,19 @@ function General({ settings, save, saveStateOf }: SectionProps) {
     <section className="card" data-nav-item data-nav-id="settings:general" tabIndex={0} aria-label="General">
       <h3>General</h3>
 
+      <Field label="Theme" hint="Light, Dark, or what your system uses.">
+        {(id) => (
+          <div className="seg" role="group" aria-label="Theme" id={id}>
+            {([["light", "Light"], ["system", "System"], ["dark", "Dark"]] as const).map(([value, label]) => (
+              <button key={value} type="button" aria-pressed={settings.theme === value} disabled={saveStateOf("theme")?.phase === "saving"} onClick={() => save("theme", { theme: value })}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </Field>
+      <SaveMark state={saveStateOf("theme")} />
+
       <Field label="Theme" hint="Also on the switch at the bottom of the sidebar.">
         {(id) => (
           <div className="seg" role="group" aria-label="Theme" id={id}>

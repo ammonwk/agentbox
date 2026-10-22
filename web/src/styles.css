@@ -534,39 +534,6 @@ code {
   animation: pulse 1.6s infinite;
 }
 
-.theme-control {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--sunken);
-  border-radius: var(--radius-sm);
-  flex: none;
-}
-/* Collapsed, only the current theme shows; the choice appears with the room. */
-.sidebar:not(:hover):not(:has(:focus-visible)):not(:has(.nav-bell[aria-expanded="true"])) .theme-opt:not(.on) {
-  display: none;
-}
-.theme-opt {
-  flex: 1 0 28px;
-  min-height: var(--tap);
-  display: grid;
-  place-items: center;
-  border: none;
-  background: none;
-  border-radius: 5px;
-  color: var(--muted);
-  cursor: pointer;
-}
-.theme-opt:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-.theme-opt.on {
-  background: var(--panel);
-  color: var(--text);
-  box-shadow: var(--shadow-sm);
-}
-
 .main {
   flex: 1;
   display: flex;
@@ -2522,7 +2489,6 @@ kbd {
   .sidebar .spacer,
   .sidebar .nav-keys,
   .sidebar .conn,
-  .sidebar .theme-control,
   .nav-fullscreen,
   .nav-new kbd {
     display: none;

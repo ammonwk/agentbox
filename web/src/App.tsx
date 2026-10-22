@@ -102,7 +102,7 @@ export function App() {
   useKeyboardNavigation();
   const { state } = useAppState();
   const [route, navigate] = useRoute();
-  const theme = useTheme(state?.settings.theme);
+  useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -259,9 +259,8 @@ export function App() {
             <kbd className="nav-label">?</kbd>
           </button>
           <UpdateReady />
-          <InboxBell state={state} themeError={theme.error} />
+          <InboxBell state={state} />
           <ConnectionChip />
-          <ThemeControl value={theme.pref} onChange={theme.set} />
         </aside>
       </div>
 
@@ -568,21 +567,10 @@ function Bootstrapping() {
 
 const THEME_CACHE_KEY = "agentbox.theme";
 
-const THEMES: { id: AgentSettings["theme"]; label: string; icon: IconComponent }[] = [
-  { id: "light", label: "Light", icon: Icon.sun },
-  { id: "system", label: "System", icon: Icon.monitor },
-  { id: "dark", label: "Dark", icon: Icon.moon },
-];
-
-/** Three states, honestly: `system` is a real preference. */
+/** The theme Settings saved, applied: `system` follows the system's. Cached
+ *  so a load paints in it before the state arrives. */
 function useTheme(serverPref: AgentSettings["theme"] | undefined) {
-  const [pending, setPending] = useState<AgentSettings["theme"] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const pref = pending ?? serverPref ?? readCachedTheme();
-
-  useEffect(() => {
-    if (pending && serverPref === pending) setPending(null);
-  }, [pending, serverPref]);
+  const pref = serverPref ?? readCachedTheme();
 
   useEffect(() => {
     const apply = () => {
@@ -601,19 +589,6 @@ function useTheme(serverPref: AgentSettings["theme"] | undefined) {
     return () => mq.removeEventListener("change", apply);
   }, [pref]);
 
-  return {
-    pref,
-    error,
-    set: (next: AgentSettings["theme"]) => {
-      setPending(next);
-      setError(null);
-      api.saveSettings({ theme: next }).catch((e: Error) => {
-        // Revert AND say why: a theme that silently snaps back reads as a glitch.
-        setPending(null);
-        setError(e.message);
-      });
-    },
-  };
 }
 
 function readCachedTheme(): AgentSettings["theme"] {
@@ -628,26 +603,6 @@ function readCachedTheme(): AgentSettings["theme"] {
 function resolveTheme(pref: AgentSettings["theme"]): "light" | "dark" {
   if (pref !== "system") return pref;
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-function ThemeControl({ value, onChange }: { value: AgentSettings["theme"]; onChange: (t: AgentSettings["theme"]) => void }) {
-  return (
-    <div className="theme-control" role="group" aria-label="Colour theme">
-      {THEMES.map(({ id, label, icon: IconCmp }) => (
-        <button
-          key={id}
-          type="button"
-          className={`theme-opt ${value === id ? "on" : ""}`}
-          aria-pressed={value === id}
-          title={`${label} theme`}
-          onClick={() => onChange(id)}
-        >
-          <IconCmp size={14} />
-          <span className="sr-only">{label} theme</span>
-        </button>
-      ))}
-    </div>
-  );
 }
 
 function BrandMark() {

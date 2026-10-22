@@ -1,7 +1,7 @@
 /**
  * The bell at the foot of the icon rail, and the inbox it opens: what ran as
  * banners across the top of every page — the first-run checklist, sessions
- * to adopt, the server's warnings, a theme that did not save, a server that
+ * to adopt, the server's warnings, a server that
  * is starting or restarting. Pointing at the bell opens the inbox; a click
  * keeps it open; Escape or a click outside closes it. The rail stays open
  * while the inbox is, so the inbox sits against its edge.
@@ -24,11 +24,11 @@ import { useOnboardingInbox } from "./views/Onboarding";
 const OPEN_MS = 120;
 const CLOSE_MS = 220;
 
-export function InboxBell({ state, themeError }: { state: AppState | null; themeError: string | null }) {
+export function InboxBell({ state }: { state: AppState | null }) {
   const setup = useOnboardingInbox(state?.onboarding ?? null, state?.sessions ?? []);
   const server = useServerNotice();
   const warnings = state?.warnings ?? [];
-  const alerts = warnings.length + (themeError ? 1 : 0);
+  const alerts = warnings.length;
   const count = setup.count + alerts + (server ? 1 : 0);
 
   const [open, setOpen] = useState(false);
@@ -114,7 +114,6 @@ export function InboxBell({ state, themeError }: { state: AppState | null; theme
             ) : (
               <div className="inbox-list">
                 {server}
-                {themeError ? <Row icon={Icon.alert} tone="warn">Theme not saved: {themeError}</Row> : null}
                 {warnings.map((w) => (
                   <Row key={w} icon={Icon.alert} tone="warn">
                     {w}
