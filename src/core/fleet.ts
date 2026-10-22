@@ -61,7 +61,7 @@ import {
 import { branchOnDisk, createWorktree, detachedWorktree, repoRootOf, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
 import { ensureCheckout } from "./worktrees";
-import { describe as describeWait } from "./waits";
+import { describe as describeWait, TELL_FOR_MS } from "./waits";
 import { prReleaseNotice, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
@@ -77,7 +77,6 @@ import {
 } from "./providers/types";
 import { argvOf, childrenOf, environOf, isAlive, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
 import { sessionCapability } from "./session-authority";
-import { dropAgentAws } from "./agent-aws";
 import { describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
 import {
   classifyShell,
@@ -337,7 +336,7 @@ export class Fleet extends EventEmitter {
   private openIds = new Set<string>();
   /** What each session has going, as of this pass (`workHeld`). */
   private holding = new Map<string, string[]>();
-  /** Each session's waits still going, as of this pass (`Session.waits`). */
+  /** Each session's waits not yet told, as of this pass (`Session.waits`). */
   private waitsOf = new Map<string, Session["waits"]>();
   /** `${provider}:${agentSessionId}` → session id. */
   private byAgentId = new Map<string, string>();
@@ -2210,7 +2209,9 @@ export class Fleet extends EventEmitter {
     this.openIds = new Set(records.filter((r) => !r.archivedAt).map((r) => r.id));
     this.holding = this.workHeld();
     this.waitsOf = new Map();
-    for (const w of listOpenWaits(0)) if (!w.ended) this.waitsOf.set(w.sessionId, [...(this.waitsOf.get(w.sessionId) ?? []), { kind: w.spec.kind, what: describeWait(w.spec) }]);
+    // Until it is told, not just until it ends: a parked session's tell is
+    // a resume, and in between nothing may take it for finished and close it.
+    for (const w of listOpenWaits(now - TELL_FOR_MS)) this.waitsOf.set(w.sessionId, [...(this.waitsOf.get(w.sessionId) ?? []), { kind: w.spec.kind, what: describeWait(w.spec) }]);
     const seen = new Set<string>();
     let dirty = false;
     for (const rec of records) {
@@ -2949,7 +2950,7 @@ export class Fleet extends EventEmitter {
     // The prompt and the briefing go in files the launch names: a command
     // line holds them, and `pgrep -f` reads command lines.
     const text = sessionText(id, briefing(cwd), adapter.promptDelivery === "file" ? req.prompt || undefined : undefined);
-    const launched = adapter.spawnCommand({ session: id, account, cwd, promptFile: text.prompt, briefingFile: text.briefing, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
+    const launched = adapter.spawnCommand({ account, cwd, promptFile: text.prompt, briefingFile: text.briefing, model, effort, autoApprove: settings.autoApprove, readOnly: req.readOnly });
     const cmd = req.readOnly ? launched : withGlobalMcp(req.provider, account, launched, [], cwd);
     const now = this.now();
     const name = tmuxName(id);
@@ -3000,7 +3001,7 @@ export class Fleet extends EventEmitter {
     // is a model too.
     const parentModel = await parentModelFor(req.provider, model ?? adapter.defaultModel?.() ?? null, effort);
     try {
-      this.deps.runtime.newSession({ name, session: id, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider, parentModel) }, cmd.secret), unset: cmd.unset });
+      this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret({ ...cmd.env, ...sessionEnv(id, req.provider, parentModel) }, cmd.secret), unset: cmd.unset });
     } catch (e) {
       updateSessionRecord(id, { tmux: null });
       throw new FleetError(500, (e as Error).message);
@@ -3282,8 +3283,7 @@ export class Fleet extends EventEmitter {
     return this.get(id);
   }
 
-  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string, fork?: { as: string; id: string }) {
-    const forkAs = fork?.as;
+  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string, forkAs?: string) {
     // A fork is a new session: what the old one was told is not its news.
     const notice = forkAs ? null : prReleaseNotice(rec.id);
     if (notice) prompt = `${notice}\n\n${prompt ?? ""}`;
@@ -3294,7 +3294,7 @@ export class Fleet extends EventEmitter {
     const text = sessionText(rec.id, briefing(cwd), adapter.promptDelivery === "file" ? prompt || undefined : undefined);
     const typed = adapter.promptDelivery === "typed" ? prompt : undefined;
     const opts = {
-      session: fork?.id ?? rec.id, account, agentSessionId: rec.agentSessionId!, cwd,
+      account, agentSessionId: rec.agentSessionId!, cwd,
       promptFile: text.prompt,
       briefingFile: text.briefing,
       ...(rec.effort ? { effort: rec.effort } : {}),
@@ -3323,7 +3323,7 @@ export class Fleet extends EventEmitter {
     this.killTmux(name);
     // The account's variables win over the launching shell's.
     const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider, parentModelNow(rec.provider, opts.model ?? adapter.defaultModel?.() ?? null, opts.effort)) };
-    this.deps.runtime.newSession({ name, session: rec.id, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret(env, cmd.secret), unset: cmd.unset });
+    this.deps.runtime.newSession({ name, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret(env, cmd.secret), unset: cmd.unset });
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
@@ -3687,8 +3687,8 @@ export class Fleet extends EventEmitter {
     const cwd = this.resumeDir(rec);
 
     const forkAs = randomUUID();
+    const prepared = this.resumeLaunch(rec, account, cwd, undefined, forkAs);
     const newId = newSessionId();
-    const prepared = this.resumeLaunch(rec, account, cwd, undefined, { as: forkAs, id: newId });
     const now = this.now();
     const placement = this.placement(rec.provider, view.model, account.id, rec.effort ?? null, true, this.scopeOf(account.id));
     const claim = this.claimOf(rec.provider, view.model, rec.effort ?? null, false);
@@ -4016,11 +4016,7 @@ export class Fleet extends EventEmitter {
     // A parked one is stopped already; closing makes that yours, so it
     // reopens stopped rather than waiting on you.
     const at = this.now();
-    for (const sid of family) {
-      updateSessionRecord(sid, { archivedAt: at, parkedAt: null, parkedMates: null, parkedWhy: null });
-      // An MFA grant ends with the session (`agent-aws.ts`).
-      dropAgentAws(sid);
-    }
+    for (const sid of family) updateSessionRecord(sid, { archivedAt: at, parkedAt: null, parkedMates: null, parkedWhy: null });
     await this.tick();
     const dropped = held.get(id) ?? [];
     return { closed: family, kept, dropped, said: closedWords(family.slice(1), kept, dropped) };

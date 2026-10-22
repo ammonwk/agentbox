@@ -649,8 +649,8 @@ export interface Session {
    *  turn is over and it is waiting on teammates, background agents or
    *  shells, not thinking. */
   background: boolean;
-  /** The waits it has armed (`agentbox wait`) and still going: what each is
-   *  on, and that in a line (`PR #8883: every check on 0ab9de7654`). */
+  /** The waits it has armed (`agentbox wait`) and not yet been told the end
+   *  of: what each is on, and that in a line (`PR #8883: every check on 0ab9de7654`). */
   waits: { kind: WaitSpec["kind"]; what: string }[];
 }
 
