@@ -171,7 +171,8 @@ function AccountCard({
   const [forget, setForget] = useState(false);
   const [forgetHome, setForgetHome] = useState<AccountView["alsoAt"][number] | null>(null);
   const org = state.org?.name ?? null;
-  const pooled = a.scope === "org";
+  // The pool's mirror of another member's login.
+  const pooled = !a.scopes.includes("personal");
   const sharer = pooled ? state.org?.accounts.find((x) => x.id === a.id)?.addedBy : undefined;
   const sharable = !!org && !pooled && ORG_PROVIDERS.includes(a.provider) && (a.shared || a.auth.state === "ok");
   const now = useNow(30_000);
@@ -478,7 +479,7 @@ function AccountCard({
             <Toggle checked={a.shared} label={`Shared with ${org}`} disabled={busy} onChange={(v) => void run(() => api.shareWithOrg(a.id, v))} />
           </span>
         ) : null}
-        {/* An org account goes when its sharer stops sharing it: forgotten, it would be back at the next sync. */}
+        {/* A mirror goes when its sharer stops sharing it: forgotten, it would be back at the next sync. */}
         {a.isDefault || pooled ? null : (
           <Button size="sm" variant="ghost" icon={Icon.trash} className="ac-forget" disabled={busy} onClick={() => setForget(true)}>
             Forget

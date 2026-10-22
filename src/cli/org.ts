@@ -16,8 +16,9 @@ agentbox org init <name> --store <mongodb uri> [--skills owner/repo]
 agentbox org join <invite>                   join the org an invite is for
 agentbox org default org|personal            where a session starts when it does not say (--org, --personal) and has no parent
 agentbox org invite                          the invite for the next member: it is the org's store and key, send it privately
-agentbox org share <account>                 share an account's login with the org; it stays yours
-agentbox org unshare <account>               stop sharing it: the org's members lose it, you keep it`;
+agentbox org share <account>                 put an account's login in the org's pool; it stays yours
+agentbox org unshare <account>               take it out of the pool: the org's members lose it, you keep it
+agentbox org reclaim <account>               take its login out of the org's store altogether (to leave the org)`;
 
 async function reach(org: OrgConfig): Promise<void> {
   try {
@@ -81,7 +82,8 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       return 0;
     }
     case "share":
-    case "unshare": {
+    case "unshare":
+    case "reclaim": {
       await ensureServer();
       const want = words[0];
       if (!want) throw new Error(`org ${verb} <account>`);
@@ -89,8 +91,10 @@ export async function orgCommand(api: Api, ensureServer: () => Promise<void>, ar
       const match = state.accounts.filter((a) => a.id === want || a.label === want || a.email === want);
       if (match.length !== 1) throw new Error(match.length ? `${want} is ${match.length} accounts here: name it by id` : `no account ${want}`);
       const a = match[0]!;
-      await api("PUT", `/api/org/shared/${encodeURIComponent(a.id)}`, { shared: verb === "share" });
-      console.log(verb === "share" ? `${a.label} is shared with ${readOrg()?.name ?? "the org"}.` : `${a.label} is no longer shared; it is still yours.`);
+      if (verb === "reclaim") await api("DELETE", `/api/org/shared/${encodeURIComponent(a.id)}`);
+      else await api("PUT", `/api/org/shared/${encodeURIComponent(a.id)}`, { shared: verb === "share" });
+      const org = readOrg()?.name ?? "the org";
+      console.log(verb === "share" ? `${a.label} is in ${org}'s pool.` : verb === "unshare" ? `${a.label} is no longer shared; it is still yours.` : `${a.label}'s login is yours alone again, out of ${org}'s store.`);
       return 0;
     }
     case "ls":

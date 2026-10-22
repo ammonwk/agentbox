@@ -105,8 +105,8 @@ export function writeGoLogin(home: string, login: GoLogin): void {
   cache.delete(path);
 }
 
-/** Every account home holding a Console sign-in, found on disk: personal
- *  homes and the org's (a pooled account's home is under org/accounts). */
+/** Every account home holding a Console sign-in, found on disk: yours, and
+ *  the pool's mirrors of other members' logins (under org/accounts). */
 export function goLoginHomes(): string[] {
   return [accountsRoot(), orgAccountsRoot()].flatMap((root) => {
     try {
@@ -125,11 +125,11 @@ export function hasGoCredential(account: Pick<Account, "home">): boolean {
 }
 
 /** The home behind the account id the bridge is asked for, or null when that
- *  is no id. An account lives in one place: `accounts/<id>`, or the org's
- *  `org/accounts/<id>` when its login is the pool's. */
+ *  is no id: `accounts/<id>`, else the pool's mirror `org/accounts/<id>` of
+ *  someone else's login. A login you shared keeps your home and its id. */
 export function goHomeForAccount(id: string): string | null {
   if (!/^[\w-]+$/.test(id)) return null;
   const personal = accountHomeFor(id);
   const pooled = join(orgAccountsRoot(), id);
-  return existsSync(pooled) ? pooled : personal;
+  return existsSync(pooled) && !existsSync(personal) ? pooled : personal;
 }

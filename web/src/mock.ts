@@ -113,7 +113,7 @@ function usage(accountId: string, windows: UsageWindow[], extra: Partial<Account
   return { accountId, at: T0 - 2 * M, windows, stale: null, source: "endpoint", notes: [], ...extra };
 }
 
-type MockAccount = Omit<AccountView, "claims" | "placement" | "alsoAt" | "scope" | "shared">;
+type MockAccount = Omit<AccountView, "claims" | "placement" | "alsoAt" | "scopes" | "shared">;
 
 const accounts: MockAccount[] = [
   {
@@ -344,6 +344,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
   return {
     agentSessionId: crypto.randomUUID(),
     accountId: null,
+    scope: "personal",
     label: null,
     repoRoot: null,
     prRepo: null,
@@ -763,7 +764,7 @@ function placementFor(provider: ProviderId, manual?: string): Placement {
 
 function accountViews(): AccountView[] {
   const now = Date.now();
-  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, now), alsoAt: [], scope: "personal" as const, shared: false }));
+  return accounts.map((a) => ({ ...a, claims: claimsFor(a.id), placement: candidateFor(a, now), alsoAt: [], scopes: ["personal" as const], shared: false }));
 }
 
 // ------------------------------------------------------------- state

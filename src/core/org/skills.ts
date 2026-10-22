@@ -1,18 +1,16 @@
 /** Org skills (docs/org.md, Org skills): a GitHub repo of skill directories,
- *  cloned into `<agentbox home>/org/skills` and pulled every few minutes.
- *  Claude, codex and muse org homes get a `skills` directory of their own, a
- *  link per skill: each personal one (the provider's default home's) and each
- *  of the org's, a personal skill winning a name clash. omp and opencode read
- *  one user-level skills directory for every account, so the org's links go
- *  there instead (and, being user-level, reach personal sessions too). */
+ *  cloned into `<agentbox home>/org/skills`, pulled every few minutes, and
+ *  linked into each CLI's user-level skills directory: the one every account
+ *  home of claude, codex and muse links to (accounts/homes.ts), and the one
+ *  omp and opencode read for every account. So an org skill reaches every
+ *  session on a member's machine, personal ones too, and a personal skill of
+ *  the same name wins. */
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { defaultHome } from "../accounts/homes";
-import { listAccounts } from "../db";
 import { userHome } from "../paths";
-import type { Account } from "../types";
-import { isOrgHome, orgDir, readOrg } from "./config";
+import { orgDir, readOrg } from "./config";
 
 export const orgSkillsDir = (): string => join(orgDir(), "skills");
 
@@ -29,8 +27,7 @@ export async function syncOrgSkills(): Promise<void> {
   if (!org.skills) {
     // No repo: the clone may still be on disk, but its skills are not the
     // org's any more, so every link we made for them goes.
-    for (const a of listAccounts()) if (isOrgHome(a.home)) linkSkills(a, new Map());
-    linkOrgSkillsForEveryAccount(new Map());
+    linkOrgSkills(new Map());
     return;
   }
   const dir = orgSkillsDir();
@@ -41,25 +38,19 @@ export async function syncOrgSkills(): Promise<void> {
   } else {
     await run(["git", "pull", "--quiet", "--ff-only"], dir);
   }
-  for (const a of listAccounts()) if (isOrgHome(a.home)) linkSkills(a);
-  linkOrgSkillsForEveryAccount();
+  linkOrgSkills();
 }
 
-/** omp and opencode read user-level skills from here, for every account. */
-const sharedSkillRoots = (): string[] => [
+/** Where each CLI reads its user-level skills, for every account. */
+const skillRoots = (): string[] => [
+  join(defaultHome("claude"), "skills"),
+  join(defaultHome("codex"), "skills"),
+  join(defaultHome("muse"), "muse", "skills"),
   join(userHome(), ".config", "opencode", "skills"),
   join(userHome(), ".omp", "agent", "skills"),
 ];
 
-/** Personal roots that shadow the shared ones: a personal skill of a name
- *  wins, whichever root holds it. */
-const personalSkillRoots = (): string[] => [
-  join(userHome(), ".claude", "skills"),
-  join(userHome(), ".agents", "skills"),
-  join(userHome(), ".codex", "skills"),
-];
-
-/** A link in a shared root that we made into the org's skills. */
+/** A link in a skills root that we made into the org's skills. */
 function isOrgLink(path: string): boolean {
   try {
     return lstatSync(path).isSymbolicLink() && readlinkSync(path).startsWith(orgSkillsDir() + "/");
@@ -68,15 +59,16 @@ function isOrgLink(path: string): boolean {
   }
 }
 
-/** The org's skills, linked where omp and opencode read every account's:
- *  only our own links are touched, a personal name wins, and a name the org
- *  no longer has loses its link. */
-function linkOrgSkillsForEveryAccount(skills: Map<string, string> = skillsIn(orgSkillsDir())): void {
+/** The org's skills, linked into the skills root of each CLI installed here:
+ *  only our own links are touched, a personal name in any root wins, and a
+ *  name the org no longer has loses its link. */
+function linkOrgSkills(skills: Map<string, string> = skillsIn(orgSkillsDir())): void {
+  const roots = skillRoots().filter((dir) => existsSync(dirname(dir)));
   const personal = new Set<string>();
-  for (const root of [...personalSkillRoots(), ...sharedSkillRoots()]) {
+  for (const root of [...roots, join(userHome(), ".agents", "skills")]) {
     for (const [name, path] of skillsIn(root)) if (!isOrgLink(path)) personal.add(name);
   }
-  for (const dir of sharedSkillRoots()) {
+  for (const dir of roots) {
     mkdirSync(dir, { recursive: true });
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
@@ -100,26 +92,4 @@ function skillsIn(dir: string): Map<string, string> {
   }
   for (const n of names) if (!n.startsWith(".") && existsSync(join(dir, n, "SKILL.md"))) out.set(n, join(dir, n));
   return out;
-}
-
-/** An org home's `skills`: the personal ones, then the org's. */
-export function linkSkills(a: Pick<Account, "provider" | "home">, org: Map<string, string> = skillsIn(orgSkillsDir())): void {
-  // Where each CLI reads skills from inside its config home.
-  const spec =
-    a.provider === "claude" || a.provider === "codex"
-      ? { dir: join(a.home, "skills"), personal: join(defaultHome(a.provider), "skills") }
-      : a.provider === "muse"
-        ? { dir: join(a.home, "muse", "skills"), personal: join(defaultHome("muse"), "muse", "skills") }
-        : null;
-  if (!spec) return;
-  const want = new Map([...org, ...skillsIn(spec.personal)]);
-  const dir = spec.dir;
-  // A home made before it was an org home's may hold the link to the personal directory.
-  if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) rmSync(dir);
-  mkdirSync(dir, { recursive: true });
-  for (const n of readdirSync(dir)) {
-    const p = join(dir, n);
-    if (lstatSync(p).isSymbolicLink() && readlinkSync(p) !== want.get(n)) rmSync(p);
-  }
-  for (const [n, target] of want) if (!existsSync(join(dir, n))) symlinkSync(target, join(dir, n));
 }

@@ -87,7 +87,7 @@ import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import { Superagents } from "../core/superagents";
 import { Org } from "../core/org";
-import { OrgAccountError, shareWithOrg, unshareFromOrg } from "../core/org/accounts";
+import { OrgAccountError, shareWithOrg, unshareFromOrg, reclaimFromOrg } from "../core/org/accounts";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -203,7 +203,7 @@ export const org = new Org({
   deliver: (to, from, text, wake) => sendAsAgent(fleet, to, text, { from: from || null, wake }, Date.now()),
   changed: () => scheduleCold(),
 });
-fleet.setRemoteClaims(() => org.remoteClaims());
+fleet.setOrg(org);
 export const cards = new Cards(fleet, () => scheduleCold(), (batch) => {
   if (pushSubscriptions().length === 0) return;
   const [first] = batch;
@@ -371,16 +371,19 @@ function buildAccountViews(): AccountView[] {
   const homes = accounts.list();
   const owner = owners(homes);
   const { claims, placements } = fleet.accountsBoard(homes.map((a) => a.provider));
-  return homes.filter((a) => owner.get(a.id) === a.id).map((a) => ({
-    ...a,
-    scope: fleet.scopeOf(a.id),
-    shared: org.shares(a),
-    // Lapsed claims weigh nothing; listing every session of the last few
-    // days under its account would bury the handful that do.
-    claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
-    placement: placements.get(`${a.provider}/${fleet.scopeOf(a.id)}`)?.candidates.find((c) => c.accountId === a.id) ?? null,
-    alsoAt: homes.filter((h) => h.id !== a.id && owner.get(h.id) === a.id).map((h) => ({ id: h.id, home: h.home, isDefault: h.isDefault })),
-  }));
+  return homes.filter((a) => owner.get(a.id) === a.id).map((a) => {
+    const scopes = fleet.scopesOf(a.id);
+    return {
+      ...a,
+      scopes,
+      shared: scopes.length === 2,
+      // Lapsed claims weigh nothing; listing every session of the last few
+      // days under its account would bury the handful that do.
+      claims: (claims.get(a.id) ?? []).filter((c) => !c.lapsed),
+      placement: placements.get(`${a.provider}/${scopes[0] ?? "personal"}`)?.candidates.find((c) => c.accountId === a.id) ?? null,
+      alsoAt: homes.filter((h) => h.id !== a.id && owner.get(h.id) === a.id).map((h) => ({ id: h.id, home: h.home, isDefault: h.isDefault })),
+    };
+  });
 }
 
 /** Who has which pull request, now (src/core/prclaims.ts). */
@@ -1192,6 +1195,16 @@ const router = new Router(mapError)
     try {
       if (b.shared) await shareWithOrg(params.id!);
       else await unshareFromOrg(params.id!);
+    } catch (e) {
+      throw e instanceof OrgAccountError ? new HttpError(e.status, e.message) : e;
+    }
+    await org.syncAccounts();
+    scheduleCold();
+    return json(null);
+  })
+  .add("DELETE", "/api/org/shared/:id", async ({ params }) => {
+    try {
+      await reclaimFromOrg(params.id!);
     } catch (e) {
       throw e instanceof OrgAccountError ? new HttpError(e.status, e.message) : e;
     }

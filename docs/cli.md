@@ -173,7 +173,8 @@ why). Arming the same wait twice is one wait.
     agentbox org ls [--json]        # the other members' live org sessions: id status person repo title
     agentbox org join <invite>      # join it (a person's call, like sharing accounts)
     agentbox org default org|personal
-    agentbox org share <account> | unshare <account>
+    agentbox org share <account> | unshare <account>   # in or out of the org's pool
+    agentbox org reclaim <account>  # its login out of the org's store, to leave the org
 
 ## Superagents (programs that run on agentbox: docs/superagents.md)
 

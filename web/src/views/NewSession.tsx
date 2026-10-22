@@ -152,10 +152,10 @@ export function NewSession({
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
 
-  // In an org, the org's accounts or your own; out of one, your own.
+  // In an org, the org's pool or your own accounts; out of one, your own.
   const [scope, setScope] = useState<Scope>(state.org ? state.settings.scope : "personal");
   const accounts = useMemo(
-    () => state.accounts.filter((a) => a.provider === accountProvider(provider) && a.scope === scope),
+    () => state.accounts.filter((a) => a.provider === accountProvider(provider) && a.scopes.includes(scope)),
     [state.accounts, provider, scope],
   );
   // A remembered pin to an account that is gone is not a pin.

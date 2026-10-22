@@ -1,22 +1,25 @@
 /** Org accounts (docs/org.md, Org accounts): a login that lives in the store
  *  instead of on one machine.
  *
- *  Every member's machine keeps an ordinary home for each org account, under
- *  `<agentbox home>/org/accounts/<id>`, holding the store's current access
- *  token and a placeholder refresh token, so the CLI runs on it like any
- *  account and can never rotate the org's login away. The store refreshes it
- *  instead, before the CLI would want to, under a lease; a CLI near its
- *  token's expiry re-reads the file (claude) or re-reads it on a 401 before
- *  refreshing (codex), and so picks up the new one.
+ *  Sharing a login puts it in the store for good, and `shared` says whether
+ *  the org's pool has it now: flipping that is all sharing and unsharing do.
+ *  Every home of a login the store keeps is a mirror, holding the store's
+ *  current access token and a placeholder refresh token, so the CLI runs on
+ *  it like any account and can never rotate the login away: the sharer's own
+ *  homes always, and on every other member's machine, while it is shared, an
+ *  ordinary home under `<agentbox home>/org/accounts/<id>`. The store
+ *  refreshes it instead, before the CLI would want to, under a lease; a CLI
+ *  near its token's expiry re-reads the file (claude) or re-reads it on a 401
+ *  before refreshing (codex), and so picks up the new one.
  *
  *  Two holders of a refresh token log each other out at the next refresh,
- *  so while a login is shared the store holds its only one: every home of it
- *  on every member's machine, the sharer's own among them, is a mirror. */
+ *  which is why the store keeps the only one until the sharer takes it back
+ *  (`reclaimFromOrg`). */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { deleteAccount, getAccount, insertAccount, listAccounts } from "../db";
-import { claudeJsonPath, credentialsPath, newAccountId, resyncShared } from "../accounts/homes";
+import { claudeJsonPath, credentialsPath, resyncShared } from "../accounts/homes";
 import { POOLED, readGoLogin, writeGoLogin, type GoLogin } from "../accounts/gocred";
 import { decodeJwtPayload } from "../accounts/identity";
 import { exchangeGoRefresh, REFRESH_AHEAD_MS } from "../accounts/godevice";
@@ -24,7 +27,6 @@ import type { Account, AccountProvider } from "../types";
 import { ORG_PROVIDERS } from "../providers/account";
 import { isOrgHome, machineName, orgAccountsRoot, personName, readOrg } from "./config";
 import { seal, unseal } from "./seal";
-import { linkSkills } from "./skills";
 import { storeAccounts, type StoreAccount } from "./store";
 
 export const isOrgAccount = (a: Pick<Account, "home">): boolean => isOrgHome(a.home);
@@ -258,35 +260,41 @@ export function loginKey(a: Pick<Account, "provider" | "email" | "home">): strin
 export const storeKey = (d: Pick<StoreAccount, "provider" | "email" | "externalId">): string | null =>
   d.provider === "omp" ? (d.externalId ? `omp:${d.externalId}` : null) : d.email ? `${d.provider}:${d.email}` : null;
 
-/** Every home here that holds a shared login: the org's own, and each of
- *  yours logged in as it. */
+/** Every home here of a login the store keeps: each of yours logged in as
+ *  it (the sharer's own account has its id), or the pool's mirror of it. */
 function homesOf(doc: StoreAccount): Account[] {
   const key = storeKey(doc);
   return listAccounts(doc.provider).filter((a) => a.id === doc._id || (!isOrgAccount(a) && key !== null && loginKey(a) === key));
 }
 
-/** One pass over the org's accounts: this machine's homes of each made to
+/** One pass over the store's logins: this machine's homes of each made to
  *  match the store, a newer login found in one of them taken to the store,
- *  and a login that is due refreshed. Returns whether anything here changed. */
+ *  and a login that is due refreshed. A machine holding no login of its own
+ *  of a shared one gets the pool's mirror of it, and loses it once it is
+ *  unshared. Returns whether anything here changed. */
 export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
   const org = readOrg();
   const col = await storeAccounts();
   if (!org || !col) return false;
   let changed = false;
   const docs = await col.find().toArray();
-  const ids = new Set(docs.map((d) => d._id));
+  const mirrors = new Set<string>();
   for (const doc of docs) {
-    if (!getAccount(doc._id)) {
-      const local: Account = { id: doc._id, provider: doc.provider, label: doc.label, email: doc.email, plan: doc.plan, home: join(orgAccountsRoot(), doc._id), isDefault: false, enabled: true, createdAt: doc.addedAt.getTime() };
-      mkdirSync(local.home, { recursive: true, mode: 0o700 });
-      chmodSync(local.home, 0o700);
-      resyncShared(local);
-      linkSkills(local);
-      insertAccount(local);
-      changed = true;
+    if (doc.shared && !homesOf(doc).some((a) => !isOrgAccount(a))) {
+      mirrors.add(doc._id);
+      if (!getAccount(doc._id)) {
+        const local: Account = { id: doc._id, provider: doc.provider, label: doc.label, email: doc.email, plan: doc.plan, home: join(orgAccountsRoot(), doc._id), isDefault: false, enabled: true, createdAt: doc.addedAt.getTime() };
+        mkdirSync(local.home, { recursive: true, mode: 0o700 });
+        chmodSync(local.home, 0o700);
+        resyncShared(local);
+        insertAccount(local);
+        changed = true;
+      }
     }
+    const homes = homesOf(doc).filter((a) => !isOrgAccount(a) || mirrors.has(a.id));
+    // Not yours and not in the pool: nothing of it here.
+    if (!homes.length) continue;
     await recoverPending(doc);
-    const homes = homesOf(doc);
     // A login made in one of them (logging in again, or the sharer's CLI
     // refreshing its own before it saw the store's) goes to the store when it
     // is newer than the store's; an older one is only a stale copy.
@@ -319,10 +327,10 @@ export async function syncOrgAccounts(now = Date.now()): Promise<boolean> {
     for (const h of homes) writeHome(h, login);
     if (refreshDue(doc.provider, login, doc.refreshedAt, now)) changed = (await refreshOne(doc, login, org.key, now)) || changed;
   }
-  // No longer shared: the org's home of it here goes. Yours were given the
-  // login back by the machine that stopped sharing it.
+  // The pool's mirror of a login no longer in it, or one this machine now
+  // holds a login of its own of, goes.
   for (const a of listAccounts()) {
-    if (!isOrgAccount(a) || ids.has(a.id)) continue;
+    if (!isOrgAccount(a) || mirrors.has(a.id)) continue;
     deleteAccount(a.id);
     rmSync(credentialsPath(a.provider, a.home)!, { force: true });
     changed = true;
@@ -375,24 +383,32 @@ async function refreshOne(doc: StoreAccount, login: Login, key: string, now: num
 
 // ----------------------------------------------------------------- sharing
 
-/** The org's account of a login you hold here, if it is shared. */
-async function sharedAs(a: Account): Promise<StoreAccount | null> {
+/** The store's document of a login you hold here, shared or not. */
+async function keptAs(a: Account): Promise<StoreAccount | null> {
   const key = loginKey(a);
   const col = await storeAccounts();
   if (!key || !col) return null;
   return (await col.find({ provider: a.provider }).toArray()).find((d) => storeKey(d) === key) ?? null;
 }
 
-/** Share an account's login with the org. It stays yours: from now on the
- *  store refreshes it, and your homes of it get each new login as everyone
- *  else's do. */
-export async function shareWithOrg(accountId: string): Promise<StoreAccount> {
+/** Put an account's login in the org's pool. It stays yours: the store
+ *  keeps it from the first share on and refreshes it, and your homes of it
+ *  get each new login as everyone else's do. */
+export async function shareWithOrg(accountId: string): Promise<void> {
   const org = readOrg();
   if (!org) throw new OrgAccountError(409, "this machine is in no org: agentbox org join <invite>");
   const a = getAccount(accountId);
   if (!a) throw new OrgAccountError(404, `no account ${accountId}`);
-  if (isOrgAccount(a)) throw new OrgAccountError(409, `${a.label} is ${org.name}'s own home of a shared login`);
+  if (isOrgAccount(a)) throw new OrgAccountError(409, `${a.label} is ${org.name}'s mirror of someone else's login`);
   if (!ORG_PROVIDERS.includes(a.provider)) throw new OrgAccountError(400, `${a.provider} accounts stay on their machine (docs/org.md)`);
+  const col = await storeAccounts();
+  if (!col) throw new OrgAccountError(409, "the org's store cannot be reached");
+  const kept = await keptAs(a);
+  if (kept) {
+    await col.updateOne({ _id: kept._id }, { $set: { shared: true } });
+    console.log(`agentbox: org: ${a.label} shared with ${org.name} again`);
+    return;
+  }
   if (a.provider === "claude" && process.platform === "darwin") throw new OrgAccountError(400, "on macOS claude keeps its login in the Keychain, which agentbox cannot share yet");
   const login = loginIn(a);
   if (!login) {
@@ -403,12 +419,8 @@ export async function shareWithOrg(accountId: string): Promise<StoreAccount> {
         : `${a.label} is not logged in here`,
     );
   }
-  const col = await storeAccounts();
-  if (!col) throw new OrgAccountError(409, "the org's store cannot be reached");
-  const existing = await sharedAs(a);
-  if (existing) return existing;
-  const doc: StoreAccount = {
-    _id: newAccountId(),
+  await col.insertOne({
+    _id: a.id,
     provider: a.provider,
     label: a.label,
     email: a.email?.toLowerCase() ?? null,
@@ -419,35 +431,47 @@ export async function shareWithOrg(accountId: string): Promise<StoreAccount> {
     refreshedAt: null,
     lease: null,
     problem: null,
+    shared: true,
     addedBy: personName(),
     addedAt: new Date(),
-  };
-  await col.insertOne(doc);
+  });
   console.log(`agentbox: org: ${a.label} shared with ${org.name}`);
-  return doc;
 }
 
-/** Stop sharing an account's login: your homes of it get the whole login
- *  back, refresh token and all, and the org's homes of it go at each
- *  machine's next sync. A session there already on it keeps its access
+/** Take an account's login out of the org's pool. The store still keeps
+ *  and refreshes it for your machines; the other members' mirrors of it go
+ *  at their next sync, and a session there already on it keeps its access
  *  token until it runs out. */
 export async function unshareFromOrg(accountId: string): Promise<void> {
+  const a = getAccount(accountId);
+  if (!a) throw new OrgAccountError(404, `no account ${accountId}`);
+  const kept = await keptAs(a);
+  if (kept) await (await storeAccounts())!.updateOne({ _id: kept._id }, { $set: { shared: false } });
+  console.log(`agentbox: org: ${a.label} no longer shared`);
+}
+
+/** Take a login out of the store altogether: your homes of it get the whole
+ *  login back, refresh token and all, and the pool's mirrors of it go at
+ *  each machine's next sync. For leaving the org, or a store you cannot
+ *  rely on. */
+export async function reclaimFromOrg(accountId: string): Promise<void> {
   const org = readOrg();
   const col = await storeAccounts();
   if (!org || !col) throw new OrgAccountError(409, "this machine is in no org, or its store cannot be reached");
   const a = getAccount(accountId);
   if (!a) throw new OrgAccountError(404, `no account ${accountId}`);
-  const doc = await sharedAs(a);
-  if (!doc) return;
+  if (isOrgAccount(a)) throw new OrgAccountError(409, `${a.label} is ${org.name}'s mirror of someone else's login`);
+  const kept = await keptAs(a);
+  if (!kept) return;
   // Only the version read: a refresh landing in between would be lost with it.
-  if (!(await col.deleteOne({ _id: doc._id, version: doc.version })).deletedCount) {
+  if (!(await col.deleteOne({ _id: kept._id, version: kept.version })).deletedCount) {
     throw new OrgAccountError(409, `${a.label}'s login was just refreshed: try again`);
   }
-  if (doc.login) {
-    const login = unseal<Login>(org.key, doc.login);
-    for (const h of homesOf(doc)) if (!isOrgAccount(h)) writeLogin(h, login);
+  if (kept.login) {
+    const login = unseal<Login>(org.key, kept.login);
+    for (const h of homesOf(kept)) if (!isOrgAccount(h)) writeLogin(h, login);
   }
-  console.log(`agentbox: org: ${a.label} no longer shared with ${org.name}`);
+  console.log(`agentbox: org: ${a.label} taken back from ${org.name}'s store`);
 }
 
 /** A whole login, refresh token and all, into one of your homes. */

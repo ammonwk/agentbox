@@ -31,7 +31,6 @@ import {
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { getAccount, insertAccount, listAccounts } from "../db";
 import { accountHomeFor, userHome } from "../paths";
-import { isOrgHome } from "../org/config";
 import { adapterFor } from "../providers";
 import { GO_LOGIN_FILE, readGoLogin } from "./gocred";
 import type { Account, AccountProvider, ProviderId } from "../types";
@@ -174,9 +173,7 @@ export function twinOf<A extends Pick<Account, "id" | "provider" | "email" | "is
     const [p, q] = [rank(x), rank(y)];
     return p[0] - q[0] || p[1] - q[1] || p[2].localeCompare(q[2]);
   };
-  // An org's home and yours are never one account, even of a shared login: they place in different scopes (docs/org.md).
-  const org = (x: A) => isOrgHome(x.home);
-  const primary = all.filter((o) => sameLogin(a, o) && org(o) === org(a)).sort(before)[0];
+  const primary = all.filter((o) => sameLogin(a, o)).sort(before)[0];
   return primary && primary.id !== a.id ? primary : null;
 }
 
@@ -516,9 +513,7 @@ export function resyncShared(account: Pick<Account, "provider" | "home" | "isDef
   const { provider, home } = account;
   const made: string[] = [];
   if (provider === "claude" || provider === "codex") {
-    // An org home's skills are its own directory (org/skills.ts): the org's beside yours.
-    const spec = isOrgHome(home) ? { ...SHARED[provider], names: SHARED[provider].names.filter((n) => n !== "skills") } : SHARED[provider];
-    made.push(...linkShared(defaultHome(provider), home, spec));
+    made.push(...linkShared(defaultHome(provider), home, SHARED[provider]));
     if (provider === "claude") {
       made.push(...linkMemory(defaultHome(provider), home));
       if (syncClaudeJson(home)) made.push(".claude.json");
@@ -526,9 +521,7 @@ export function resyncShared(account: Pick<Account, "provider" | "home" | "isDef
   } else if (provider === "muse") {
     const cfgDir = join(home, "muse");
     mkdirSync(cfgDir, { recursive: true, mode: 0o700 });
-    // An org home's skills are its own directory (org/skills.ts): the org's beside yours.
-    const names = isOrgHome(home) ? ["settings.json", "AGENTS.md"] : ["settings.json", "skills", "AGENTS.md"];
-    made.push(...linkShared(join(defaultHome(provider), "muse"), cfgDir, { names, prefixes: [] }));
+    made.push(...linkShared(join(defaultHome(provider), "muse"), cfgDir, { names: ["settings.json", "skills", "AGENTS.md"], prefixes: [] }));
   } else if (provider === "devin") {
     // devin logs in under XDG_DATA_HOME=<home> and XDG_CONFIG_HOME=<home>/config.
     // Its data dir must exist for the credentials to land; its config dir gets

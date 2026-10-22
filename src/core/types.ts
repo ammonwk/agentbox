@@ -148,9 +148,10 @@ export interface AccountView extends Account {
   placement: Candidate | null;
   /** Other homes logged in as this login. */
   alsoAt: { id: string; home: string; isDefault: boolean }[];
-  /** Yours, or the org's (docs/org.md). */
-  scope: Scope;
-  /** One of yours whose login is shared with the org too. */
+  /** Which sessions may run on it (docs/org.md): yours, the org's, or
+   *  both for a login of yours in the org's pool. */
+  scopes: Scope[];
+  /** One of yours whose login is in the org's pool. */
   shared: boolean;
 }
 
@@ -503,6 +504,8 @@ export interface Session {
    *  same login (see `AccountView.alsoAt`); the account is what matters for
    *  limits, claims and where it can move. */
   accountId: string | null;
+  /** Whose accounts it runs on, and who can see it (docs/org.md). */
+  scope: Scope;
   status: SessionStatus;
   host: SessionHost;
 
@@ -866,8 +869,8 @@ export interface AgentSettings {
 }
 
 /** Whose accounts a session runs on, which is also who can see it: yours,
- *  or the org's (docs/org.md). A session's is its account's, so a move
- *  never crosses it. */
+ *  or the org's pool (docs/org.md). A session keeps the one it started in,
+ *  so a move never crosses it. */
 export type Scope = "personal" | "org";
 // ------------------------------------------------------------------ diff
 

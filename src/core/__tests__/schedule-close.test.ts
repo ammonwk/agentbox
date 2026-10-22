@@ -53,6 +53,7 @@ function record(id: string): Parameters<typeof insertSessionRecord>[0] {
     provider: "claude",
     agentSessionId: null,
     accountId: null,
+    scope: "personal",
     cwd: "/tmp",
     worktree: null,
     label: null,

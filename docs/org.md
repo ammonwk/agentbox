@@ -17,8 +17,8 @@ in. Two collections:
 
 | collection | a row | written by |
 |---|---|---|
-| `accounts` | an org account: provider, label, email, plan, its login sealed with the org key, `version`, a refresh `lease`, `problem` | any member's machine |
-| `sessions` | a live org session: id, person, machine, provider, title, repo, branch, status, account, the PRs it holds, `seenAt`, and its mailbox (`inbox`) | the machine running it (the inbox: senders) |
+| `accounts` | a login the store keeps, under its sharer's account id: provider, label, email, plan, the login sealed with the org key, `shared`, `version`, a refresh `lease`, `problem` | any member's machine |
+| `sessions` | a live session on the pool: id, person, machine, provider, status, account, what it claims, `seenAt`; an org session's also has its title, repo, branch, the PRs it holds and its mailbox (`inbox`), a personal one is `private` | the machine running it (the inbox: senders) |
 
 Org skills are not in the store: they are a GitHub repo
 (`plaibook-dev/agentbox-skills`), which already has history, review and
@@ -35,21 +35,23 @@ that is what pooling is. **Removing someone** is changing the database user's
 password, sending the rest a new invite, and logging every org account in
 again (they could have copied the refresh tokens; nothing else revokes them).
 
-**Scope is the account's.** An org account's home is under
-`<agentbox home>/org/accounts/<id>`; every other home is personal. A session
-is an org session when its account is an org account, so there is no column
-and nothing to carry along: a resume, a hop or a recovery stays in its scope
-because `placement()` only offers accounts of the scope it is asked for, and
-every caller (start, hop, wake, fork, schedules) asks for the session's own.
-A start says `scope` (`--org` / `--personal`, the dialog's Personal /
-Plaibook); without it, its parent's; without a parent, `settings.scope`
-(`agentbox org default org|personal`). A schedule keeps the scope it was made
-with, or takes the default when it starts. Scope decides:
+**Scope is the session's** (`sessions.scope`), set when it starts and kept:
+a resume, a hop, a wake, a fork or a recovery stays in it because
+`placement()` only offers accounts of the scope it is asked for, and every
+caller asks for the session's own. A start says `scope` (`--org` /
+`--personal`, the dialog's Personal / Plaibook); without it, its parent's;
+without a parent, `settings.scope` (`agentbox org default org|personal`). A
+schedule keeps the scope it was made with, or takes the default when it
+starts. A session started outside agentbox is personal, unless its home is
+the pool's mirror of someone else's login. Scope decides:
 
-- **which accounts it may run on**: personal on this machine's own accounts,
-  org on the org's, never both.
-- **who sees it**: an org session has a `sessions` row and a mailbox; a
-  personal one is invisible outside this machine.
+- **which accounts it may run on** (`Fleet.scopesOf`): a personal session on
+  your own accounts, an org session on the logins in the pool. A login of
+  yours that you shared is one account in both.
+- **who sees it**: an org session has a `sessions` row with its title and a
+  mailbox. A personal one is invisible outside this machine, except that one
+  on a pooled login publishes an untitled `private` row, so the other
+  members count what it claims.
 
 ## Org accounts
 
@@ -61,40 +63,51 @@ stays personal, since every sharer refreshing it would log the others out.
 A login is shared or not, and you flip it either way at any time
 (Accounts › the card's "Shared with Plaibook" toggle, `agentbox org share
 <account>` / `unshare <account>`). Nothing has to be idle and nothing is
-logged out: the account stays yours, and the org gets it too.
+logged out: the account stays yours, and while it is shared the org has it
+too. A login is one account everywhere: the store's document of it has its
+sharer's account id, which is its account id on every member's machine, so
+its card, its claims and the balancer's view of it are one in both scopes.
 
 Two holders of a refresh token log each other out at the next refresh, so
-while a login is shared the store holds its only one. **Every home of it** on
-every member's machine is a mirror: the org's home of it under
-`org/accounts/<id>` on each machine, and the sharer's own homes (the account
-and any copy logged in as the same login, the CLI's own home usually). A
-login's name across machines is its email for claude, codex, devin and muse,
-and one OpenCode account in one workspace for omp — an email can hold several
-workspaces, each its own sign-in.
+the store holds the only one of a login from the first time it is shared,
+and **every home of it** on every member's machine is a mirror: the sharer's
+own homes (the account and any copy logged in as the same login, the CLI's
+own home usually), and on each other member's machine, while it is shared,
+the pool's home of it under `org/accounts/<id>`. A machine that holds a
+login of its own of a shared one gets no mirror of it. A login's name across
+machines is its email for claude, codex, devin and muse, and one OpenCode
+account in one workspace for omp — an email can hold several workspaces,
+each its own sign-in.
 
-- **Sharing** seals the login into `accounts`. At the next sync (at once,
+- **Sharing** seals the login into `accounts` with `shared: true`, or sets
+  `shared` again on one the store already keeps. At the next sync (at once,
   here) the sharer's homes get the placeholder refresh token like everyone
   else's. A session already running on it goes on: its CLI re-reads the file
   near its token's expiry and finds the store's.
+- **Unsharing** sets `shared: false`, and that is all: the store keeps the
+  login and the sharer's machines go on mirroring and refreshing it, so it
+  does not matter which of them is online. The other members' mirrors go at
+  their next sync; a session there already on it keeps its access token until
+  it runs out. A login out of the pool is still readable by any member with
+  the org key: unsharing is a rule, not a revocation.
+- **Reclaiming** (`agentbox org reclaim <account>`, for leaving the org)
+  deletes the store's document (only at the version read, so a refresh
+  landing in between is not lost) and writes the whole login, refresh token
+  and all, back into the sharer's homes of it here.
 - **A newer login in any mirror** (logging in again, or a CLI that refreshed
   before it saw the store's) goes to the store when its access token outlives
   the store's; an older one is a stale copy and is overwritten. A refresh the
   provider refuses sets `problem` and clears the login, and every mirror is
   logged out until someone logs in again.
-- **Unsharing** deletes the store's document (only at the version read, so a
-  refresh landing in between is not lost) and writes the whole login, refresh
-  token and all, into the sharer's homes of it here. The org's homes go at
-  each machine's next sync; a session there already on it keeps its access
-  token until it runs out. Unsharing is done from a machine with a personal
-  home of the login: the org's own card has no switch.
 
 Linux only for claude: on macOS it keeps its login in the Keychain, and a
 muse default home may keep its login there too.
 
-**Credential files.** Each member's machine keeps an ordinary local home for
-each org account (`syncOrgAccounts`, every 60 s) and writes the store's current
-login into it: claude `.credentials.json` with `refreshToken: "pooled"` and
-`.claude.json`'s `oauthAccount`, codex `auth.json` with `refresh_token:
+**Credential files.** Each member's machine keeps every home it has of a
+login the store keeps in step with it (`syncOrgAccounts`, every 60 s): its
+own, and an ordinary local home for each pooled login it holds none of. It
+writes the store's current login into each: claude `.credentials.json` with
+`refreshToken: "pooled"` and `.claude.json`'s `oauthAccount`, codex `auth.json` with `refresh_token:
 "pooled"`, omp `opencode-console.json` with `refresh: "pooled"`, and devin's
 `devin/credentials.toml` and muse's `muse/auth.json` whole (their key does not
 rotate, so a mirror needs no placeholder). The CLI runs on it as on any
@@ -120,10 +133,12 @@ mirrors' files when the login changes. A machine that dies between the
 provider's answer and the store's write recovers from its pending file.
 
 **Usage** is read by each machine for itself, with its home's access token, as
-for any account. **Claims are shared**: each machine publishes what its org
-sessions still claim in their rows, and every member's balancer counts them,
-so two members do not both place onto one pooled account as if it were free.
-An org session at its limit moves to another org account as any session does
+for any account. **Claims are shared**: each machine publishes what every
+session of its on a pooled login still claims, personal ones (untitled)
+among them, and every member's balancer counts them, so two members do not
+both place onto one pooled account as if it were free. The rows carry the
+account id, which is the same on every machine. An org session at its limit
+moves to another pooled account as any session does
 (`Fleet.continueStalled`); codex has a `moveSession` (the rollout moves to the
 same day's path in the other home).
 
@@ -151,20 +166,20 @@ holds the PR.
 
 Each member's machine keeps a clone of the skills repo in
 `<agentbox home>/org/skills` (`gh repo clone`, else `git clone`) and pulls it
-every 10 minutes. Claude and codex org homes get a `skills` directory of their
-own (not the link to the personal one that other homes have) holding a link to
-each org skill and each personal skill, a personal skill winning a name clash;
-muse's is `muse/skills` in its config home, made the same way. omp and opencode
-read one user-level skills directory for every account
-(`~/.omp/agent/skills`, `~/.config/opencode/skills`), so the org's skills are
-linked there too — and so they reach personal sessions of those CLIs, which is
-the price of a CLI that has one directory. Publishing is a pull request or a
-push to the repo.
+every 10 minutes. It links each org skill into each installed CLI's
+user-level skills directory: `~/.claude/skills`, `~/.codex/skills` and muse's
+`muse/skills`, which every account home of those CLIs links to, and
+`~/.omp/agent/skills` and `~/.config/opencode/skills`, which omp and opencode
+read for every account. So an org skill reaches every session on a member's
+machine, personal ones too, and a personal skill of the same name (in any of
+those, or `~/.agents/skills`) wins. Publishing is a pull request or a push to
+the repo.
 
 ## When things fail
 
-- **The store unreachable.** Running org sessions keep their access tokens
-  (hours) and go on; a refresh waits; `send` to another machine and the org
-  status say why. Personal sessions do not notice.
+- **The store unreachable.** Running sessions on a login the store keeps,
+  yours among them, keep their access tokens (hours) and go on; a refresh
+  waits; `send` to another machine and the org status say why. Sessions on a
+  login the store does not keep do not notice.
 - **A member's machine off.** Its org sessions stop with it; their rows show
   away after 3 minutes, and messages to them are refused.

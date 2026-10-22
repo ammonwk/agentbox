@@ -210,8 +210,8 @@ async function usage(): Promise<number> {
     const claims = claimed ? `  +${claimed}% weekly claimed by ${n} session${n === 1 ? "" : "s"}` : "";
     const have = a.usage.resets?.availableCount ?? 0;
     const resets = have > 0 ? `  ${have} usage reset${have === 1 ? "" : "s"} available` : "";
-    // A shared login is listed twice, its own home and the org's.
-    const label = a.scope === "org" ? `${a.label.slice(0, 22)} (org)` : a.label.slice(0, 28);
+    // The pool's mirror of someone else's login, or one of yours in it.
+    const label = a.scopes.includes("org") ? `${a.label.slice(0, 22)} (${a.shared ? "shared" : "org"})` : a.label.slice(0, 28);
     console.log(`${a.provider.padEnd(6)} ${label.padEnd(28)} ${windows || "no reading"}${claims}${resets}${a.usage.stale ? `  [${a.usage.stale}]` : ""}`);
   }
   return 0;

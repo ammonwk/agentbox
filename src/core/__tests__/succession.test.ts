@@ -32,7 +32,7 @@ function record(id: string, successor: string | null = null): SessionRecord {
   return {
     id, provider: "claude", agentSessionId: null, accountId: null, cwd: "/tmp", worktree: null, label: null, claim: 1,
     origin: "agentbox", tmux: null, transcriptPath: null, startedAt: NOW, lastActivityAt: NOW, archivedAt: null,
-    facts: null, createdAt: NOW, successor,
+    facts: null, createdAt: NOW, successor, scope: "personal",
   };
 }
 

@@ -40,7 +40,7 @@ const HOUR = 3_600_000;
 function parked(id: string, parent: string | null): SessionRecord {
   return {
     id, provider: "claude", agentSessionId: null, accountId: null, cwd: "/tmp", worktree: null, label: null, claim: 1,
-    origin: "agentbox", tmux: `ab-${id}`, transcriptPath: null, startedAt: NOW - 3 * HOUR, lastActivityAt: NOW - 2 * HOUR,
+    origin: "agentbox", scope: "personal", tmux: `ab-${id}`, transcriptPath: null, startedAt: NOW - 3 * HOUR, lastActivityAt: NOW - 2 * HOUR,
     archivedAt: null, facts: null, createdAt: NOW - 3 * HOUR, parent, parkedAt: NOW - HOUR,
   } as SessionRecord;
 }

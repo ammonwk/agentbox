@@ -16,6 +16,7 @@ import type {
   Repo,
   RepoSetup,
   Schedule,
+  Scope,
   TokenTotals,
   UsageWindow,
   Wait,
@@ -434,6 +435,20 @@ export const MIGRATIONS: readonly string[] = [
   `,
   // 32 — a plan is priced from its accounts' spending, read by time.
   `CREATE INDEX IF NOT EXISTS token_samples_at ON token_samples (at);`,
+  // 33 — when the model was last set here: a switch newer than the
+  // transcript's last answer says what the session will run, not what it did.
+  `ALTER TABLE sessions ADD COLUMN model_at INTEGER;`,
+  // 34 — a provider's default (CLI) home removed with the trash: a start must
+  // not re-register what was deliberately taken away.
+  `
+  CREATE TABLE dismissed_defaults (
+    provider TEXT PRIMARY KEY,
+    at       INTEGER NOT NULL
+  );
+  `,
+  // 35 — whose accounts a session runs on is the session's, not its home's:
+  // a login in the org's pool is one account, for your sessions and the org's.
+  `ALTER TABLE sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'personal';`,
 ];
 
 function migrate(d: Database) {
@@ -560,6 +575,8 @@ export interface SessionRecord {
   bookmarkedAt?: number | null;
   /** Started with `notify: false`: its stops are not pushed. */
   quiet?: boolean;
+  /** Whose accounts it runs on (docs/org.md): the org's pool, or yours. */
+  scope: Scope;
 }
 
 type SessionRow = {
@@ -571,6 +588,7 @@ type SessionRow = {
   parked_at: number | null; parked_mates: string | null; parked_why: string | null;
   parent_by_hand: number | null; successor: string | null; hopped_at: number | null;
   pin_order: number | null; bookmarked_at: number | null; quiet: number | null;
+  scope: Scope;
 };
 
 function parseJson(raw: string | null): unknown {
@@ -603,6 +621,7 @@ function rowToRecord(r: SessionRow): SessionRecord {
     pinOrder: r.pin_order ?? null,
     bookmarkedAt: r.bookmarked_at ?? null,
     quiet: !!r.quiet,
+    scope: r.scope,
   };
 }
 
@@ -635,6 +654,7 @@ const RECORD_COLUMNS = {
   pinOrder: "pin_order",
   bookmarkedAt: "bookmarked_at",
   quiet: "quiet",
+  scope: "scope",
 } as const satisfies Record<Exclude<keyof SessionRecord, "id">, string>;
 
 type RecordKey = keyof typeof RECORD_COLUMNS;

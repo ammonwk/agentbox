@@ -118,7 +118,7 @@ test("a message queued before the release carries the line when it lands, and th
   };
   const fleet = new Fleet({ adapters: [claudeAdapter], runtime, usage: { usageOf: () => null } });
   insertSessionRecord({ id: "messenger", provider: "claude", agentSessionId: null, accountId: null, cwd: dir, worktree: null,
-    label: null, claim: 1, origin: "agentbox", tmux: pane.name, transcriptPath: null, startedAt: now, lastActivityAt: now,
+    label: null, claim: 1, origin: "agentbox", scope: "personal", tmux: pane.name, transcriptPath: null, startedAt: now, lastActivityAt: now,
     archivedAt: null, facts: null, createdAt: now } as SessionRecord);
   await fleet.tick();
   const first = fleet.note("messenger", "first");
@@ -148,7 +148,7 @@ test("resuming a parked former holder without a prompt still starts with its rel
   const runtime: Runtime = { listPanes: () => [], newSession: s => { launches.push(s); return 0; }, killSession: () => {}, sendText: async () => {}, sendKeys: () => {}, capture: () => null, captureMany: () => new Map() };
   insertAccount({ id: "fixture-account", provider: "claude", label: "fixture", email: null, plan: null, home: join(dir, "account"), isDefault: false, enabled: true, createdAt: now });
   insertSessionRecord({ id: "parked", provider: "claude", agentSessionId: "00000000-0000-4000-8000-000000000150", accountId: "fixture-account", cwd: dir, worktree: null,
-    label: null, claim: 1, origin: "agentbox", tmux: null, transcriptPath: null, startedAt: now, lastActivityAt: now,
+    label: null, claim: 1, origin: "agentbox", scope: "personal", tmux: null, transcriptPath: null, startedAt: now, lastActivityAt: now,
     archivedAt: null, parkedAt: now, facts: { resumeCwd: dir }, createdAt: now } as SessionRecord);
   const fleet = new Fleet({ adapters: [claudeAdapter], runtime, usage: { usageOf: () => null } });
   await fleet.tick();
@@ -194,7 +194,7 @@ function fleetFor(id: string, pane: PaneInfo): { fleet: Fleet; delivered: string
   };
   const fleet = new Fleet({ adapters: [claudeAdapter], runtime, usage: { usageOf: () => null } });
   insertSessionRecord({ id, provider: "claude", agentSessionId: null, accountId: null, cwd: dir, worktree: null,
-    label: null, claim: 1, origin: "agentbox", tmux: pane.name, transcriptPath: null, startedAt: now, lastActivityAt: now,
+    label: null, claim: 1, origin: "agentbox", scope: "personal", tmux: pane.name, transcriptPath: null, startedAt: now, lastActivityAt: now,
     archivedAt: null, facts: null, createdAt: now } as SessionRecord);
   return { fleet, delivered };
 }

@@ -6,7 +6,8 @@ import { MongoClient, type Collection, type Db } from "mongodb";
 import type { AccountProvider, ClaimView, ProviderId } from "../types";
 import { readOrg } from "./config";
 
-/** An org account. Its id is its account id on every member's machine. */
+/** A login the store keeps (docs/org.md, Org accounts). Its id is the
+ *  sharer's account id, and its account id on every member's machine. */
 export interface StoreAccount {
   _id: string;
   provider: AccountProvider;
@@ -26,6 +27,9 @@ export interface StoreAccount {
   lease: { by: string; until: Date } | null;
   /** Why it needs logging in again, once a refresh was refused. */
   problem: string | null;
+  /** In the org's pool now. Off, the store still keeps the login, for the
+   *  sharer's machines alone, until they take it back (`reclaimFromOrg`). */
+  shared: boolean;
   addedBy: string;
   addedAt: Date;
 }
@@ -43,7 +47,8 @@ export interface OrgMessage {
   why: string | null;
 }
 
-/** A live org session, as its machine publishes it. */
+/** A live session on a pooled login, as its machine publishes it: an org
+ *  session, or (`private`) a personal one, which only says what it claims. */
 export interface OrgSessionRow {
   _id: string;
   machine: string;
@@ -58,6 +63,8 @@ export interface OrgSessionRow {
   prs: string[];
   /** What it still claims on its account, as its machine works it out. */
   claim?: ClaimView | null;
+  /** A personal session: no title, repo or PRs, never shown or written to. */
+  private: boolean;
   seenAt: Date;
   inbox: OrgMessage[];
 }

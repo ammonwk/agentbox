@@ -221,6 +221,15 @@ export interface UsageSource {
   ingestRollout?(accountId: string, reading: { at: number; windows: UsageWindow[] }): void;
 }
 
+/** What the fleet needs of the org's pool (src/core/org/index.ts). */
+export interface FleetOrg {
+  /** What sessions on other machines claim on pooled logins, by account:
+   *  the store's, so two members do not count one account as free twice. */
+  remoteClaims(): ReadonlyMap<string, ClaimView[]>;
+  /** Whether an account's login is in the pool. */
+  pooled(accountId: string): boolean;
+}
+
 export interface FleetDeps {
   adapters: ProviderAdapter[];
   runtime: Runtime;
@@ -230,9 +239,8 @@ export interface FleetDeps {
    *  session that asked for it rather than a session of its own. */
   poolAgents?: () => ReadonlyMap<string, PoolAgent>;
   now?: () => number;
-  /** What org sessions on other machines claim on a pooled account: the
-   *  store's, so two members do not count one account as free twice. */
-  remoteClaims?: () => ReadonlyMap<string, ClaimView[]>;
+  /** The org's pool, once there is one (docs/org.md). */
+  org?: FleetOrg;
 }
 
 /** What a close took with it, and what it left open, to follow "closed <id>". */
@@ -478,10 +486,9 @@ export class Fleet extends EventEmitter {
     this.ready = new Promise((r) => (this.markReady = r));
   }
 
-  /** Set once the org exists (server/index.ts): what org sessions on other
-   *  machines claim on a pooled account, from the store. */
-  setRemoteClaims(f: () => ReadonlyMap<string, ClaimView[]>): void {
-    this.deps.remoteClaims = f;
+  /** Set once the org exists (server/index.ts). */
+  setOrg(org: FleetOrg): void {
+    this.deps.org = org;
   }
 
 
@@ -844,7 +851,7 @@ export class Fleet extends EventEmitter {
   private hopTarget(rec: SessionRecord, v: Session): Candidate | null {
     if (!this.movable.has(rec.provider) || !rec.agentSessionId) return null;
     const own = this.ownerOf(rec.accountId ?? "");
-    return elsewhere(this.placement(rec.provider, v.model, null, rec.effort ?? null, false, this.scopeOf(rec.accountId)), own);
+    return elsewhere(this.placement(rec.provider, v.model, null, rec.effort ?? null, false, rec.scope), own);
   }
 
   private hop(v: Session, to: Candidate, now: number): void {
@@ -1352,6 +1359,8 @@ export class Fleet extends EventEmitter {
       // It was not placed: what it claims is what any stretch of work does.
       claim: this.claimOf(t.ref.provider, f.model, null, false),
       origin: "external",
+      // Started outside agentbox: yours, unless its home is the pool's mirror.
+      scope: this.scopesOf(t.ref.accountId)[0] ?? "personal",
       tmux: null,
       transcriptPath: t.ref.path,
       startedAt: started,
@@ -2472,6 +2481,7 @@ export class Fleet extends EventEmitter {
       // The queue lives in the process: one that has ended took it with it.
       queued: live === "running" || live === "blocked" ? (f?.queued ?? []) : [],
       origin: rec.origin,
+      scope: rec.scope,
       parent: rec.parent ?? null,
       parentByHand: !!rec.parentByHand,
       successor: rec.successor ?? null,
@@ -2729,7 +2739,7 @@ export class Fleet extends EventEmitter {
     this.refreshRates();
     const consumed = new Map(inputs.map((i) => [i.sessionId, this.consumedOf(i.sessionId, i.accountId, i.since, now)]));
     const claims = claimsByAccount(inputs, consumed, now);
-    for (const [accountId, list] of this.deps.remoteClaims?.() ?? []) {
+    for (const [accountId, list] of this.deps.org?.remoteClaims() ?? []) {
       const here = claims.get(accountId);
       if (here) here.push(...list);
       else claims.set(accountId, [...list]);
@@ -2869,18 +2879,21 @@ export class Fleet extends EventEmitter {
   /** Set only inside `accountsBoard`, which places every provider in one go. */
   private claimsNow: Map<string, ClaimView[]> | null = null;
 
-  /** Whose accounts a session on this account runs on. */
-  scopeOf(accountId: string | null): Scope {
-    const a = accountId ? getAccount(accountId) : null;
-    return a && isOrgAccount(a) ? "org" : "personal";
+  /** Whose sessions may run on an account: yours on your own, the org's on
+   *  a login in its pool, both on one of yours you shared. */
+  scopesOf(accountId: string): Scope[] {
+    const a = getAccount(accountId);
+    if (!a) return [];
+    const out: Scope[] = isOrgAccount(a) ? [] : ["personal"];
+    if (this.deps.org?.pooled(accountId)) out.push("org");
+    return out;
   }
 
   placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true, scope: Scope = getSettings().scope): Placement {
     const adapter = this.adapter(provider);
     const asked = model || getSettings().models[provider] || null;
-    const states = this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null).filter((a) => this.scopeOf(a.account.id) === scope);
-    // A login shared with the org has a home in each scope, under one label
-    // and email: naming either means its home in the scope this one runs in.
+    const states = this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null).filter((a) => this.scopesOf(a.account.id).includes(scope));
+    // Naming another home of a login means the login's account.
     const named = accountId && accountId !== "auto" ? getAccount(accountId) : null;
     const home = named && states.find((a) => a.account.id === named.id || sameLogin(getAccount(a.account.id)!, named));
     return place({
@@ -2894,7 +2907,7 @@ export class Fleet extends EventEmitter {
       accountId: home ? home.account.id : accountId && accountId !== "auto" ? accountId : null,
       // One started without a model runs on the CLI's own default: that is
       // the route whose refusals count against it.
-      // Never across scopes: an org session on your accounts, or yours on the org's.
+      // Only the scope's: an org session on the pool, yours on your own.
       accounts: states,
       settings: getSettings().balancer,
       now: this.now(),
@@ -2914,7 +2927,7 @@ export class Fleet extends EventEmitter {
     // A session started from another runs where that one does: a subagent of
     // an org session draws on the org, not on you.
     const parentId = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
-    const scope = req.scope ?? (parentId ? this.scopeOf(getSessionRecord(parentId)?.accountId ?? null) : settings.scope);
+    const scope = req.scope ?? (parentId ? getSessionRecord(parentId)?.scope : undefined) ?? settings.scope;
     if (scope === "org" && !readOrg()) throw new FleetError(409, "this machine is in no org: agentbox org join <invite>");
     const placement = this.placement(req.provider, req.model, req.accountId, effort, true, scope);
     if (!placement.accountId) throw new FleetError(409, placement.why, placement);
@@ -2980,6 +2993,7 @@ export class Fleet extends EventEmitter {
       label: null,
       claim: placement.claim,
       origin: "agentbox",
+      scope,
       tmux: name,
       transcriptPath: null,
       startedAt: now,
@@ -3140,7 +3154,7 @@ export class Fleet extends EventEmitter {
    */
   private wakeTarget(rec: SessionRecord, view: Session, accountId?: string | null): { account: Account; placement: Placement } | null {
     if (!this.adapter(rec.provider).moveSession) return null;
-    const placement = this.placement(rec.provider, view.model, accountId, rec.effort ?? null, false, this.scopeOf(rec.accountId));
+    const placement = this.placement(rec.provider, view.model, accountId, rec.effort ?? null, false, rec.scope);
     // Another home on the same login is the same account: moving there would
     // cost a cold start and change nothing about the limits.
     if (!placement.accountId || placement.mode === "none" || placement.accountId === this.ownerOf(rec.accountId ?? "")) return null;
@@ -3720,7 +3734,7 @@ export class Fleet extends EventEmitter {
     const newId = newSessionId();
     const prepared = this.resumeLaunch(rec, account, cwd, undefined, { as: forkAs, id: newId });
     const now = this.now();
-    const placement = this.placement(rec.provider, view.model, account.id, rec.effort ?? null, true, this.scopeOf(account.id));
+    const placement = this.placement(rec.provider, view.model, account.id, rec.effort ?? null, true, rec.scope);
     const claim = this.claimOf(rec.provider, view.model, rec.effort ?? null, false);
     insertSessionRecord({
       id: newId,
@@ -3732,6 +3746,7 @@ export class Fleet extends EventEmitter {
       label: null,
       claim,
       origin: "agentbox",
+      scope: rec.scope,
       tmux: tmuxName(newId),
       transcriptPath: null,
       startedAt: now,

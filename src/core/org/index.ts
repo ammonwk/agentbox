@@ -1,15 +1,14 @@
 /** The org, as this machine takes part in it (docs/org.md): its accounts kept
- *  in step with the store, its org sessions published as rows, messages to
- *  them delivered, and the org's skills pulled. Everything here calls out to
- *  the store; with it unreachable, org sessions already running go on and
- *  personal ones never notice. */
+ *  in step with the store, its sessions on pooled logins published as rows,
+ *  messages to its org sessions delivered, and the org's skills pulled.
+ *  Everything here calls out to the store; with it unreachable, sessions
+ *  already running go on. */
 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { getAccount } from "../db";
-import type { Account, ClaimView, OrgSessionView, OrgStatus, Session } from "../types";
+import type { ClaimView, OrgSessionView, OrgStatus, Session } from "../types";
 import { machineName, personName, readOrg } from "./config";
-import { isOrgAccount, loginKey, storeKey, syncOrgAccounts } from "./accounts";
+import { syncOrgAccounts } from "./accounts";
 import { orgSkillsDir, syncOrgSkills } from "./skills";
 import { storeAccounts, storeSessions, type OrgMessage, type OrgSessionRow, type StoreAccount } from "./store";
 
@@ -41,7 +40,7 @@ export class Org {
   private error: string | null = null;
   private others: OrgSessionView[] = [];
   private accounts: StoreAccount[] = [];
-  /** What org sessions on other machines still claim, by account. */
+  /** What sessions on other machines still claim on pooled logins, by account. */
   private remote = new Map<string, ClaimView[]>();
 
   constructor(private deps: OrgDeps) {}
@@ -86,13 +85,16 @@ export class Org {
     if (changed) this.deps.changed();
   }
 
-  /** This machine's live org sessions. */
+  /** This machine's live sessions the other members need to know of: its
+   *  org sessions, and its personal ones on a pooled login, which spend
+   *  from the same pool. */
   private mine(): Session[] {
-    return this.deps.sessions().filter((s) => s.status !== "closed" && !!s.accountId && isOrgAccount(getAccount(s.accountId) ?? { home: "" }));
+    return this.deps.sessions().filter((s) => s.status !== "closed" && (s.scope === "org" || (!!s.accountId && this.pooled(s.accountId))));
   }
 
-  /** Publish this machine's org sessions, forget the ones that ended, and
-   *  read everyone else's. */
+  /** Publish this machine's sessions on the pool, forget the ones that
+   *  ended, and read everyone else's. A personal one says only what it
+   *  claims. */
   private async publish(): Promise<void> {
     const col = await storeSessions();
     if (!col) {
@@ -107,34 +109,39 @@ export class Org {
     const claims = this.deps.claims();
     if (mine.length) {
       await col.bulkWrite(
-        mine.map((s) => ({
-          updateOne: {
-            filter: { _id: s.id },
-            update: {
-              $set: {
-                machine: me,
-                person,
-                provider: s.provider,
-                title: s.title,
-                repo: s.prRepo,
-                branch: s.branch,
-                status: s.status,
-                accountId: s.accountId,
-                prs: this.deps.prsOf(s.id),
-                claim: claims.get(s.accountId!)?.find((c) => c.sessionId === s.id) ?? null,
-                seenAt: now,
+        mine.map((s) => {
+          const open = s.scope === "org";
+          const claim = (s.accountId && claims.get(s.accountId)?.find((c) => c.sessionId === s.id)) || null;
+          return {
+            updateOne: {
+              filter: { _id: s.id },
+              update: {
+                $set: {
+                  machine: me,
+                  person,
+                  provider: s.provider,
+                  title: open ? s.title : "",
+                  repo: open ? s.prRepo : null,
+                  branch: open ? s.branch : null,
+                  status: s.status,
+                  accountId: s.accountId,
+                  prs: open ? this.deps.prsOf(s.id) : [],
+                  claim: claim && !open ? { ...claim, title: "" } : claim,
+                  private: !open,
+                  seenAt: now,
+                },
+                $setOnInsert: { inbox: [] },
               },
-              $setOnInsert: { inbox: [] },
+              upsert: true,
             },
-            upsert: true,
-          },
-        })),
+          };
+        }),
       );
     }
     await col.deleteMany({ machine: me, _id: { $nin: mine.map((s) => s.id) } });
     const rows = await col.find({ machine: { $ne: me } }, { projection: { inbox: 0 } }).toArray();
     const labels = new Map(this.accounts.map((a) => [a._id, a.label]));
-    const next = rows.map((r) => viewOf(r, labels, now.getTime())).sort((a, b) => b.seenAt - a.seenAt);
+    const next = rows.filter((r) => !r.private).map((r) => viewOf(r, labels, now.getTime())).sort((a, b) => b.seenAt - a.seenAt);
     // Claims move every pass, so they are read here rather than compared:
     // a row unseen past AWAY_MS is a machine that is off, and holds nothing.
     const remote = new Map<string, ClaimView[]>();
@@ -152,8 +159,9 @@ export class Org {
     }
   }
 
-  /** What org sessions on other machines still claim, by account. The
-   *  balancer counts these too: a pooled account is one pool for everyone. */
+  /** What sessions on other machines still claim on pooled logins, by
+   *  account, personal ones among them. The balancer counts these too: a
+   *  pooled account is one pool for everyone. */
   remoteClaims(): ReadonlyMap<string, ClaimView[]> {
     return this.remote;
   }
@@ -184,9 +192,9 @@ export class Org {
     this.reached();
   }
 
-  /** Whether a session runs in the org (its account is the org's). */
+  /** Whether a session here runs in the org. */
   isOrgSession(id: string): boolean {
-    return this.mine().some((s) => s.id === id);
+    return this.deps.sessions().some((s) => s.id === id && s.scope === "org");
   }
 
   /** The other machine's org session an id (or a unique prefix of one) names. */
@@ -195,7 +203,7 @@ export class Org {
       throw new Error(`no session ${id} here, and the org's store cannot be reached to look there: ${e.message}`);
     });
     if (!col) return null;
-    const rows = await col.find({ _id: { $regex: `^${id.replace(/[^\w-]/g, "")}` }, machine: { $ne: machineName() } }, { projection: { inbox: 0 } }).limit(2).toArray();
+    const rows = await col.find({ _id: { $regex: `^${id.replace(/[^\w-]/g, "")}` }, machine: { $ne: machineName() }, private: { $ne: true } }, { projection: { inbox: 0 } }).limit(2).toArray();
     return rows.length === 1 ? (rows[0] as OrgSessionRow) : null;
   }
 
@@ -225,10 +233,10 @@ export class Org {
     return this.others.find((s) => !s.away && s.prs.some((p) => p.toLowerCase() === key)) ?? null;
   }
 
-  /** Whether one of your accounts is shared with the org, as of the last sync. */
-  shares(a: Pick<Account, "provider" | "email" | "home">): boolean {
-    const key = !isOrgAccount(a) && readOrg() ? loginKey(a) : null;
-    return !!key && this.accounts.some((d) => storeKey(d) === key);
+  /** Whether an account's login is in the org's pool, as of the last sync:
+   *  one of yours you shared, or the mirror of someone else's. */
+  pooled(accountId: string): boolean {
+    return !!readOrg() && this.accounts.some((d) => d._id === accountId && d.shared);
   }
 
   status(): OrgStatus | null {
@@ -241,7 +249,7 @@ export class Org {
       skills: org.skills,
       reachedAt: this.reachedAt,
       error: this.error,
-      accounts: this.accounts.map((a) => ({ id: a._id, provider: a.provider, label: a.label, problem: a.problem, refreshedAt: a.refreshedAt?.getTime() ?? null, addedBy: a.addedBy })),
+      accounts: this.accounts.filter((a) => a.shared).map((a) => ({ id: a._id, provider: a.provider, label: a.label, problem: a.problem, refreshedAt: a.refreshedAt?.getTime() ?? null, addedBy: a.addedBy })),
       sessions: this.others,
     };
   }
