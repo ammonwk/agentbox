@@ -366,7 +366,23 @@ export function Rail({
               }
             }}
           />
-          <kbd aria-hidden="true">/</kbd>
+          {filter.query ? (
+            <button
+              type="button"
+              className="rail-search-clear"
+              aria-label="Clear search"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.preventDefault();
+                setFilter({ ...filter, query: "" });
+                e.currentTarget.parentElement?.querySelector("input")?.focus();
+              }}
+            >
+              <Icon.x size={12} />
+            </button>
+          ) : (
+            <kbd aria-hidden="true">/</kbd>
+          )}
         </label>
         <BookmarksMenu sessions={visibleSessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
