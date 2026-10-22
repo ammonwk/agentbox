@@ -44,3 +44,25 @@ export function sessionText(sessionId: string, briefing: string, prompt?: string
   if (prompt !== undefined) files.prompt = textFile(join(dir, "prompt.md"), prompt);
   return files;
 }
+
+/**
+ * The words a session was launched with, in a file under the agentbox home.
+ *
+ * A launch that carries its prompt on the command line is found by `pgrep -f`
+ * on any word in it, and a `pkill -f` on one of them kills it — and every
+ * other agent that was told the same words. The words go to a file and the
+ * launch names the file, as the briefing and the first prompt do.
+ *
+ * Undefined when the file could not be written: the caller drops the prompt
+ * rather than put the words on the command line.
+ */
+export function carriedText(sessionId: string, name: string, text: string): string | undefined {
+  try {
+    const path = join(agentboxHome(), "sessions", sessionId, `carried-${name}.md`);
+    mkdirSync(dirname(path), { recursive: true });
+    if (!existsSync(path) || readFileSync(path, "utf8") !== text) writeFileSync(path, text);
+    return path;
+  } catch {
+    return undefined;
+  }
+}

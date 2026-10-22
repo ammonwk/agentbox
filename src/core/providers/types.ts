@@ -14,6 +14,7 @@
 
 import type { AskStep } from "./claude-ask";
 import type { RewindGoal, RewindState, RewindStep } from "./claude-rewind";
+import type { CarryWhere } from "../launch";
 import type {
   Account,
   AskAnswer,
@@ -471,8 +472,10 @@ export interface ProviderAdapter {
 
   /** The flags in a live process's argv worth keeping when adopt resumes it —
    *  permissions, directories, MCP config, model — and never the session id,
-   *  the prompt, or anything that makes it a one-shot. */
-  carryOver?(argv: string[]): string[];
+   *  the prompt, or anything that makes it a one-shot. A prompt that is kept
+   *  is kept in a file the launch names, never as words on the command line:
+   *  `where` says which session the launch belongs to and where it runs. */
+  carryOver?(argv: string[], where: CarryWhere): string[];
 
   /** A scripted one-shot (`claude -p`): something is waiting on its output,
    *  so it is never adopted. */

@@ -75,7 +75,7 @@ import {
   type TranscriptReader,
   type TranscriptRef,
 } from "./providers/types";
-import { argvOf, childrenOf, environOf, isAlive, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
+import { argvOf, childrenOf, cwdOf, environOf, isAlive, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
 import { sessionCapability } from "./session-authority";
 import { dropAgentAws } from "./agent-aws";
 import { describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
@@ -1899,7 +1899,7 @@ export class Fleet extends EventEmitter {
     if (argv && adapter?.headless?.(argv)) launch = undefined;
     else if (argv && adapter) {
       const env = environOf(pid);
-      launch = cleanMcpLaunch(v.provider, { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} }, env ?? undefined);
+      launch = cleanMcpLaunch(v.provider, { args: adapter.carryOver?.(argv, { sessionId: v.id, cwd: cwdOf(pid) ?? v.cwd }) ?? [], env: env ? carryEnv(env, process.env) : {} }, env ?? undefined);
     }
     this.launches.set(pid, launch);
     return launch;
@@ -3396,7 +3396,7 @@ export class Fleet extends EventEmitter {
     const argv = argvOf(pid) ?? [];
     if (adapter.headless?.(argv)) throw new FleetError(409, "a scripted one-shot run: something is waiting on its output, so it is left alone");
     const env = environOf(pid);
-    const launch = cleanMcpLaunch(rec.provider, { args: adapter.carryOver?.(argv) ?? [], env: env ? carryEnv(env, process.env) : {} }, env ?? undefined);
+    const launch = cleanMcpLaunch(rec.provider, { args: adapter.carryOver?.(argv, { sessionId: rec.id, cwd }) ?? [], env: env ? carryEnv(env, process.env) : {} }, env ?? undefined);
     const prepared = this.resumeLaunch({ ...rec, launch }, account, cwd);
     try {
       process.kill(pid, "SIGTERM");
