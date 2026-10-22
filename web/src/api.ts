@@ -59,7 +59,7 @@ import type {
 } from "../../src/core/types";
 import { mergeTimeline } from "./lib/timeline";
 import { byAttention } from "../../src/core/attention";
-import { noteServerBuild } from "./lib/update";
+import { noteServerBehind, noteServerBuild } from "./lib/update";
 
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadDetail, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
@@ -236,6 +236,8 @@ export const api = {
   state: () => get<AppState>("/api/state?open=1"),
   /** Opening prompts you wrote, newest first, for the new-session box's ↑. */
   prompts: () => get<PromptHistoryEntry[]>("/api/prompts"),
+  /** Restart the server onto the checkout's newer commits (the Update button). */
+  restartServer: () => post<{ restarting: boolean; to: string }>("/api/server/restart"),
   health: (refresh = false) => get<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
   voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
   /** Whether web links can open behind the window in front, for this browser. */
@@ -565,6 +567,7 @@ class Wire {
       }
       if (msg.type === "error") this.setStatus({ lastError: msg.message });
       else if (msg.type === "build") noteServerBuild(msg.entry);
+      else if (msg.type === "behind") noteServerBehind(msg.behind);
       else if (msg.type === "restarting") this.restartUntil = Date.now() + RESTART_WINDOW_MS;
       else if (msg.type === "starting") this.setStatus({ starting: { read: msg.read, of: msg.of } });
       else if (msg.type === "hot" && this.status.starting) this.setStatus({ starting: null });

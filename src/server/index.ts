@@ -22,7 +22,10 @@ import { ZodError } from "zod";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
-import { DEFAULT_PORT, webDist } from "../core/paths";
+import { DEFAULT_PORT, packageRoot, webDist } from "../core/paths";
+import { behindHead, type Behind } from "../core/behind";
+import { restartService } from "../core/restart";
+import { sourceCheckout } from "../core/snapshot";
 import { Fleet, FleetError } from "../core/fleet";
 import { repoRootOf } from "../core/git";
 import { sessionProject } from "../core/projects";
@@ -797,6 +800,15 @@ const router = new Router(mapError)
   .add("GET", "/api/state", ({ url }) => stateResponse(url.searchParams.get("open") === "1"))
   .add("GET", "/api/prompts", () => json(fleet.openingPrompts(PROMPT_HISTORY)))
   .add("GET", "/api/voice", () => json(voice.status()))
+  // The Update button, when the checkout has newer commits: the service
+  // restarts itself onto them. Started after the answer has gone out.
+  .add("POST", "/api/server/restart", () => {
+    if (!serverBehind) throw new HttpError(409, "the server already runs the checkout's newest commit");
+    setTimeout(() => {
+      if (!restartService()) console.error("agentbox: restart asked, but no agentbox service is installed");
+    }, 250);
+    return json({ restarting: true, to: serverBehind.head });
+  })
   .add("GET", "/api/health", async ({ url }) => {
     // Re-check is someone who just installed or logged into something.
     const refresh = url.searchParams.get("refresh") === "1";
@@ -1829,6 +1841,22 @@ function checkBuild(): void {
   broadcast({ type: "build", entry });
 }
 
+/** Commits on the checkout's branch that this server does not run: the
+ *  board's Update button offers a restart onto them. */
+let serverBehind: Behind | null = null;
+const BEHIND_POLL_MS = 15_000;
+function checkBehind(): void {
+  let next: Behind | null = null;
+  try {
+    next = behindHead(sourceCheckout(packageRoot), RUNNING_REVISION?.commit);
+  } catch {
+    // An unreadable checkout says nothing new.
+  }
+  if (JSON.stringify(next) === JSON.stringify(serverBehind)) return;
+  serverBehind = next;
+  broadcast({ type: "behind", behind: next });
+}
+
 // ------------------------------------------------------------------ boot
 
 /** The first pass is done and everything below `Bun.serve` in `startServer`
@@ -1855,6 +1883,7 @@ function welcome(ws: Socket): void {
   send(ws, { type: "cold", state: coldState() });
   send(ws, { type: "metrics", state: metricsSnapshot() });
   send(ws, { type: "build", entry: uiBuild });
+  send(ws, { type: "behind", behind: serverBehind });
   setMetricsWatchers(clients.size);
   // A watch sent while it waited.
   if (ws.data.kind === "app" && ws.data.watching) {
@@ -2042,6 +2071,8 @@ export async function startServer(): Promise<void> {
   setInterval(() => void refreshPrs(), SLOW_REFRESH_MS).unref?.();
   checkBuild();
   setInterval(checkBuild, BUILD_POLL_MS).unref?.();
+  checkBehind();
+  setInterval(checkBehind, BEHIND_POLL_MS).unref?.();
   watchPwaDesktop();
   startNightlyReclaim(() => fleet.sessions());
   // Soon after a start as well as hourly: the server is restarted more often than that.
