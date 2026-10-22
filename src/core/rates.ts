@@ -162,13 +162,16 @@ function asOf(rs: Reading[], t: number): Reading | null {
 
 /** Readings per account and window, oldest first, from the one source with
  *  the most of them: codex's endpoint and rollouts can disagree, and
- *  interleaved they would rise and fall by the difference. */
-function readingsSince(since: number): Map<string, Map<string, Reading[]>> {
+ *  interleaved they would rise and fall by the difference. A twin home's
+ *  readings are its owner's: one login, one pool, and a home added later
+ *  would otherwise start the account's history over. */
+function readingsSince(since: number, owner: (id: string) => string): Map<string, Map<string, Reading[]>> {
   const bySeries = new Map<string, { accountId: string; windowId: string; source: string; rows: Reading[] }>();
   for (const r of usageSamplesSince(since)) {
-    const k = `${r.accountId}\0${r.windowId}\0${r.source}`;
+    const accountId = owner(r.accountId);
+    const k = `${accountId}\0${r.windowId}\0${r.source}`;
     let s = bySeries.get(k);
-    if (!s) bySeries.set(k, (s = { accountId: r.accountId, windowId: r.windowId, source: r.source, rows: [] }));
+    if (!s) bySeries.set(k, (s = { accountId, windowId: r.windowId, source: r.source, rows: [] }));
     s.rows.push({ at: r.at, usedPct: r.usedPct, resetsAt: r.resetsAt });
   }
   const out = new Map<string, Map<string, Reading[]>>();
@@ -356,14 +359,12 @@ function fitUnits(units: Unit[], meta: Pick<PlanMeta, "base" | "weekly" | "windo
       if (r) perWeekly[x.id] = { value: r.value / w.value, samples: r.samples, r2: r.r2, se: r.se / w.value };
     }
   }
-  const baseRate = coarse ? 1 : perWeekly[meta.base.id]?.value;
+  const baseRate = baseRateOf({ perWeekly }, meta);
   if (!baseRate) return { perWeekly, price: null };
   const pts = usable.filter((u) => u.cost > 0).map((u) => ({ x: u.cost, y: u.dBase / baseRate }));
   // The stretches with no outside use in them: those whose points did not
-  // come much dearer than the median stretch's. Where the finest window is
-  // the week itself (codex), a stretch is a day read in whole percent of a
-  // week, too coarse to tell outside use from rounding: every one counts.
-  const median = coarse ? Infinity : weightedMedian(pts.map((p) => ({ r: p.y / p.x, w: p.x })));
+  // come much dearer than the median stretch's.
+  const median = weightedMedian(pts.map((p) => ({ r: p.y / p.x, w: p.x })));
   const clean = pts.filter((p) => p.y / p.x <= median * OUTSIDE_OVER);
   const sx = clean.reduce((n, p) => n + p.x, 0);
   if (clean.length < MIN_PRICE_UNITS || sx < MIN_PRICE_COST) return { perWeekly, price: null };
@@ -371,6 +372,11 @@ function fitUnits(units: Unit[], meta: Pick<PlanMeta, "base" | "weekly" | "windo
   const se = Math.sqrt(clean.reduce((n, p) => n + (p.y - value * p.x) ** 2, 0)) / sx;
   return { perWeekly, price: { value, samples: clean.length, r2: null, se } };
 }
+
+/** Points of the finest window per weekly point: 1 where it is the week
+ *  itself (codex), else as measured. */
+const baseRateOf = (fit: Pick<Fit, "perWeekly">, meta: Pick<PlanMeta, "base" | "weekly">): number | undefined =>
+  meta.base.id === meta.weekly.id ? 1 : fit.perWeekly[meta.base.id]?.value;
 
 /** Two estimates differ, beyond three standard errors of their difference. */
 const differ = (a: Measure, b: Measure): boolean => Math.abs(a.value - b.value) > 3 * Math.hypot(a.se, b.se);
@@ -408,7 +414,7 @@ export class Rates {
   private async fit(accounts: RateAccount[], owner: (id: string) => string, now: number): Promise<void> {
     const since = now - (HISTORY_DAYS * DAY + HISTORY_FIT_SPAN);
     await this.spend.load(since, now, owner);
-    const readings = readingsSince(since);
+    const readings = readingsSince(since, owner);
     const metas = new Map<string, PlanMeta>();
     const planOfAccount = new Map<string, string>();
     for (const a of accounts) {
@@ -461,13 +467,12 @@ export class Rates {
   /** What an account's weekly rose by over the units ending since `since`,
    *  split into what agentbox's sessions spent at the price and what it did
    *  not see. A unit within noise of the price is all agentbox's. Null where
-   *  there is no price, or the finest window is the week (codex), too coarse
-   *  to tell. */
+   *  there is no price. */
   split(accountId: string, since: number, until = this.now()): { ours: number; outside: number; units: number } | null {
     const p = this.plans.get(this.planOfAccount.get(accountId) ?? "");
     const price = p?.fit.price?.value;
-    const baseRate = p?.fit.perWeekly[p.base.id]?.value;
-    if (!p || !price || !baseRate || p.base.id === p.weekly.id) return null;
+    const baseRate = p && baseRateOf(p.fit, p);
+    if (!p || !price || !baseRate) return null;
     let ours = 0;
     let outside = 0;
     let units = 0;
@@ -572,7 +577,7 @@ export class Rates {
         const moved = p.accounts
           .map((acct) => recentUnits.filter((u) => u.accountId === acct.id && !u.capped && u.cost > 0))
           .filter((us) => us.length >= 3)
-          .map((us) => us.reduce((n, u) => n + u.dBase, 0) / (p.fit.perWeekly[p.base.id]?.value ?? 1) / us.reduce((n, u) => n + u.cost, 0));
+          .map((us) => us.reduce((n, u) => n + u.dBase, 0) / (baseRateOf(p.fit, p) ?? 1) / us.reduce((n, u) => n + u.cost, 0));
         const agree = moved.filter((x) => x > a.value === smaller && Math.abs(x / a.value - 1) >= MIN_CHANGE / 2).length;
         if (smaller && (moved.length < 2 || agree * 2 <= moved.length)) continue;
         say(

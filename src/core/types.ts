@@ -292,7 +292,7 @@ export interface RatesReport {
     priceUnits: number;
     /** Each account over the last seven days, in weekly points: what agentbox's
      *  sessions spent at the price, and the rise it did not see. Null where
-     *  there is no price, or the finest window is the week (too coarse to tell). */
+     *  there is no price. */
     accounts: { id: string; label: string; split: { ours: number; outside: number; units: number } | null }[];
     /** One per day, fitted over the week up to it. */
     history: { at: number; price: number | null; perWeekly: Record<string, number> }[];
