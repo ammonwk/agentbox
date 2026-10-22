@@ -774,18 +774,15 @@ function rememberTimeline(sessionId: string, t: CachedTimeline): void {
   while (recentTimelines.size > RECENT_TIMELINES) recentTimelines.delete(recentTimelines.keys().next().value!);
 }
 
-function overlaps(held: readonly TimelineEvent[], incoming: readonly TimelineEvent[]): boolean {
-  const ids = new Set(held.map((e) => e.id));
-  return incoming.some((e) => ids.has(e.id));
-}
-
-/** The page holds everything held from its start on: the conversation did
- *  not go back to an earlier message meanwhile (an edit), leaving what was
- *  held after it on another branch. */
-function agrees(held: readonly TimelineEvent[], page: readonly TimelineEvent[]): boolean {
+/** The fresh page carries on from what is held: it starts inside it, and
+ *  holds everything held from there on, so the conversation did not go back
+ *  to an earlier message meanwhile (an edit), leaving what was held after it
+ *  on another branch. */
+function continues(held: readonly TimelineEvent[], page: readonly TimelineEvent[]): boolean {
+  const from = held.findIndex((e) => e.id === page[0]!.id);
+  if (from < 0) return false;
   const ids = new Set(page.map((e) => e.id));
-  const from = page[0]!.at;
-  return held.every((e) => e.at <= from || ids.has(e.id));
+  return held.slice(from).every((e) => ids.has(e.id));
 }
 
 /**
@@ -839,7 +836,7 @@ export function useTimeline(sessionId: string): TimelineState & { loadOlder: (li
         // alone is right. Merging keeps unchanged events as they were, so
         // rows already on screen are not rebuilt; older pages the cache held
         // stay, and so does the cursor behind them.
-        const keep = fromCache && held.length > 0 && msg.events.length > 0 && overlaps(held, msg.events) && held[0]!.at <= msg.events[0]!.at && agrees(held, msg.events);
+        const keep = fromCache && held.length > 0 && msg.events.length > 0 && continues(held, msg.events);
         fromCache = false;
         if (keep) {
           eventsRef.current = mergeTimeline(held, msg.events);

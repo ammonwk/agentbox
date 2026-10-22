@@ -6,12 +6,17 @@ import { sendOf, type SendCall } from "./sendtool";
 /**
  * Merge incoming events into what is held, keyed by `id`.
  *
+ * Order is the transcript's: the order the agent saw things in, which the
+ * server sends events in. It is never re-sorted by `at`, which is only the
+ * time to show: a CLI may write a record after one stamped later (Claude
+ * stamps a message typed mid-turn with when it was typed, but writes it after
+ * the step it waited behind), and sorting by time would put it where the
+ * agent never saw it.
+ *
  * - An id already held is **replaced in place**: a tool event is re-sent with
  *   the same id when its result lands, and it must not move or duplicate.
- * - New ids are added, and the whole list is ordered by `at`. Ties keep the
- *   order they arrived in (older page first, then held, then new), because two
- *   events stamped in the same millisecond — a tool call and its text — have
- *   no other order to go by.
+ * - New ids go after what is held (a live increment) or before it (an older
+ *   page), in the order they came.
  *
  * Returns the same array when nothing changed, so a caller can skip a render.
  */
@@ -42,13 +47,7 @@ export function mergeTimeline(
     }
   }
   if (fresh.length === 0) return changed ? next : held;
-
-  const combined = where === "prepend" ? [...fresh, ...next] : [...next, ...fresh];
-  // Stable sort by time: Array.prototype.sort is stable in every engine we ship to.
-  return combined
-    .map((e, i) => ({ e, i }))
-    .sort((a, b) => a.e.at - b.e.at || a.i - b.i)
-    .map((x) => x.e);
+  return where === "prepend" ? [...fresh, ...next] : [...next, ...fresh];
 }
 
 function sameEvent(a: TimelineEvent | undefined, b: TimelineEvent): boolean {
