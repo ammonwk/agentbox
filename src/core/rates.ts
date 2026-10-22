@@ -362,6 +362,7 @@ function fitUnits(units: Unit[], meta: Pick<PlanMeta, "base" | "weekly" | "windo
   const baseRate = baseRateOf({ perWeekly }, meta);
   if (!baseRate) return { perWeekly, price: null };
   const pts = usable.filter((u) => u.cost > 0).map((u) => ({ x: u.cost, y: u.dBase / baseRate }));
+  if (pts.length < MIN_PRICE_UNITS) return { perWeekly, price: null };
   // The stretches with no outside use in them: those whose points did not
   // come much dearer than the median stretch's.
   const median = weightedMedian(pts.map((p) => ({ r: p.y / p.x, w: p.x })));
