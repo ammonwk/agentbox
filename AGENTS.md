@@ -61,6 +61,21 @@ is one line of at most 72 characters saying what changed; why, and what it
 fixes, go in the body after a blank line, so `git log --oneline` stays
 readable.
 
+With `agentbox serve-from-commit on`, the server runs that checkout's HEAD
+commit instead (`src/core/snapshot.ts`): `serve` moves a worktree of its own,
+`$AGENTBOX_HOME/live`, to HEAD, builds its UI when `web/` changed, and then
+becomes the server there. A restart puts only committed work live, so another
+session's unfinished edit cannot break it. Commit first, then restart;
+`/api/health` names the commit it runs (`revision`).
+
+To put a finished branch into a checkout that others are editing, use
+`agentbox integrate <branch> [--restart]` (`src/core/integrate.ts`), not
+cherry-pick or stash. It replays the branch onto HEAD in a scratch worktree,
+runs the typecheck and the tests on that exact commit, merges each changed
+file around the uncommitted edits in memory, and changes nothing on a
+conflict. It writes the files, then moves the branch, and leaves the others'
+edits unstaged.
+
 ## Rules that are easy to break
 
 - **No agent carries its prompt or its briefing on a command line.**

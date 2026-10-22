@@ -88,6 +88,7 @@ import { VERSION } from "../version";
 import { Agents, MAX_AVATAR, readAvatar, writeAvatar } from "../core/agents";
 import { Org } from "../core/org";
 import { OrgAccountError, shareWithOrg, unshareFromOrg, reclaimFromOrg } from "../core/org/accounts";
+import { RUNNING_REVISION } from "../revision";
 import { rowsVersion, type ChangeRow } from "../core/changes";
 import type {
   AccountView,
@@ -803,7 +804,7 @@ const router = new Router(mapError)
       await detectProviders();
       scheduleCold();
     }
-    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh) };
+    const health: Health = { version: VERSION, tmux: tmux.tmuxVersion(), providers: slow.providers, deps: dependencies(refresh), revision: RUNNING_REVISION };
     if (!booted) health.starting = startupProgress();
     return json(health);
   })
