@@ -653,6 +653,11 @@ const Row = memo(function Row({
         <RowTitle s={s} />
         {said ? <span className={`rail-snippet${s.attention.kind === "blocked" ? " blocked" : ""}`}>{said}</span> : null}
       </span>
+      {/* Before the count, not after: it shows only under the pointer, and there
+          it takes its width from the name rather than moving the count. */}
+      <span className="rail-when">
+        <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
+      </span>
       {s.kids ? (
         <button
           type="button"
@@ -672,9 +677,6 @@ const Row = memo(function Row({
         </button>
       ) : null}
       {s.provider !== usual && !shape ? <ProviderBadge provider={s.provider} short /> : null}
-      <span className="rail-when">
-        <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
-      </span>
       <RowLoad id={s.id} folded={s.kids > 0 && !s.open} />
       {s.host === "subagent" || s.status === "closed" ? (
         <RowState s={s} />
