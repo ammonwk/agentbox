@@ -1,7 +1,7 @@
 {
   "name": "steward",
   "title": "Steward",
-  "description": "Looks after your open pull requests: starts an owner for one that needs work and has none, and brings you only what needs judgement.",
+  "description": "Takes your pull requests to ready: gives each one handed to it, or that needs work and has nobody, one owner, and brings you only what needs judgement.",
   "run": ["bun", "main.ts"],
   "main": {
     "start": { "provider": "claude", "cwd": "~" },
@@ -11,6 +11,7 @@
     "repos": [],
     "author": "@me",
     "every": 60,
+    "discover": true,
     "owners": { "provider": "claude", "running": 4, "perPass": 2, "prompt": "OWNER.md" }
   }
 }
