@@ -62,15 +62,17 @@ import { branchOnDisk, createWorktree, detachedWorktree, repoRootOf, worktreeFor
 import { setUpWorktree } from "./setup";
 import { ensureCheckout } from "./worktrees";
 import { describe as describeWait, TELL_FOR_MS } from "./waits";
-import { prReleaseNotice, unfinishedClaims } from "./prclaims";
+import { prReleaseLine, prReleaseTold, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
 import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
 import {
   LIMIT_DIALOG,
   transcriptFile,
+  type Command,
   type LiveProcess,
   type ModelOutcome,
   type ProviderAdapter,
+  type ResumeOptions,
   type TranscriptFacts,
   type TranscriptReader,
   type TranscriptRef,
@@ -274,6 +276,17 @@ interface Tracked {
   /** The reader took up where the last server left off (`readercache.ts`)
    *  and has not been refreshed since. */
   restored: boolean;
+}
+
+/** A launch, ready to run: the command, the prompt it takes (typed, when the
+ *  CLI reads none from a file) and the line about the PRs the session lost,
+ *  which goes with the prompt. */
+interface PreparedLaunch {
+  opts: ResumeOptions;
+  cmd: Command;
+  typed: string | undefined;
+  inherited: Record<string, string> | undefined;
+  line: string;
 }
 
 export interface SpawnRequest {
@@ -3284,17 +3297,21 @@ export class Fleet extends EventEmitter {
     return this.get(id);
   }
 
-  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string, fork?: { as: string; id: string }) {
+  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string, fork?: { as: string; id: string }): PreparedLaunch {
     const forkAs = fork?.as;
-    // A fork is a new session: what the old one was told is not its news.
-    const notice = forkAs ? null : prReleaseNotice(rec.id);
-    if (notice) prompt = `${notice}\n\n${prompt ?? ""}`;
     const adapter = this.adapter(rec.provider);
+    // What the session must read before it reads its prompt: the PRs it lost,
+    // once each. A fork is a new session: what the old one was told is not
+    // its news. A CLI that reads the prompt from a file is told it there; one
+    // the fleet types is told it when it is typed, with the prompt.
+    const line = forkAs ? "" : prReleaseLine(rec.id);
+    const fromFile = adapter.promptDelivery === "file";
     const launch = rec.launch ? cleanMcpLaunch(rec.provider, rec.launch, new Map([["CODEX_HOME", account.home]])) : undefined;
     // The prompt and the briefing go in files the launch names: a command
     // line holds them, and `pgrep -f` reads command lines.
-    const text = sessionText(rec.id, briefing(cwd), adapter.promptDelivery === "file" ? prompt || undefined : undefined);
-    const typed = adapter.promptDelivery === "typed" ? prompt : undefined;
+    const withLine = line ? `${line}\n\n${prompt ?? ""}` : prompt;
+    const text = sessionText(rec.id, briefing(cwd), fromFile ? withLine || undefined : undefined);
+    const typed = fromFile ? undefined : prompt ?? (line ? "" : undefined);
     const opts = {
       session: fork?.id ?? rec.id, account, agentSessionId: rec.agentSessionId!, cwd,
       promptFile: text.prompt,
@@ -3308,12 +3325,12 @@ export class Fleet extends EventEmitter {
     const resumed = adapter.resumeCommand(opts);
     const readOnly = !!adapter.readOnly && !!launch && adapter.readOnly.every((a) => launch.args.includes(a));
     const cmd = readOnly ? resumed : withGlobalMcp(rec.provider, account, resumed, opts.carry, cwd, launch?.env);
-    return { opts, cmd, typed, inherited: launch?.env };
+    return { opts, cmd, typed, inherited: launch?.env, line: fromFile ? line : "" };
   }
 
-  private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string, prepared?: ReturnType<Fleet["resumeLaunch"]>): void {
+  private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string, prepared?: PreparedLaunch): void {
     const adapter = this.adapter(rec.provider);
-    const { opts, cmd, typed, inherited } = prepared ?? this.resumeLaunch(rec, account, cwd, prompt);
+    const { opts, cmd, typed, inherited, line } = prepared ?? this.resumeLaunch(rec, account, cwd, prompt);
     try {
       adapter.prepareResume?.(opts);
     } catch (e) {
@@ -3326,13 +3343,17 @@ export class Fleet extends EventEmitter {
     // The account's variables win over the launching shell's.
     const env = { ...inherited, ...cmd.env, ...sessionEnv(rec.id, rec.provider, parentModelNow(rec.provider, opts.model ?? adapter.defaultModel?.() ?? null, opts.effort)) };
     this.deps.runtime.newSession({ name, session: rec.id, cwd, argv: cmd.argv, stdinFile: cmd.stdinFile, ...splitSecret(env, cmd.secret), unset: cmd.unset });
+    // The prompt is in the file the launch names, and the session reads it:
+    // what it was told about the PRs it lost has been said. A CLI the fleet
+    // types is told when it is typed, and says it then.
+    if (line) prReleaseTold(rec.id);
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
     this.trouble.delete(rec.id);
     const prev = this.watches.get(rec.id);
     this.watches.set(rec.id, { since: this.now(), flagged: false, repaired: prev?.repaired ?? false, recovery: prev?.recovery ?? null });
-    if (typed) this.typeFirstPrompt(rec.id, name, typed);
+    if (typed !== undefined) this.typeFirstPrompt(rec.id, name, typed);
   }
 
   /**
@@ -3473,15 +3494,22 @@ export class Fleet extends EventEmitter {
   /** Type a message into a session's pane, the way its TUI takes one as typed.
    *  One its TUI did not take is a refusal the sender must hear, never a send. */
   private async typeInto(id: string, provider: ProviderId, pane: string, text: string): Promise<void> {
+    const adapter = this.adapter(provider);
+    // What the session must read before it reads this: the PRs it lost, once
+    // each. It is said here and not again: the next thing delivered to it
+    // does not carry it.
+    const line = prReleaseLine(id);
+    const body = line ? (text ? `${line}\n\n${text}` : line) : text;
     try {
-      const adapter = this.adapter(provider);
-      const notice = prReleaseNotice(id);
-      if (notice) text = `${notice}\n\n${text}`;
-      await this.deps.runtime.sendText(pane, text + (adapter.pasteEnd ?? ""), { pieces: adapter.pasteInPieces });
+      await this.deps.runtime.sendText(pane, body + (adapter.pasteEnd ?? ""), { pieces: adapter.pasteInPieces });
     } catch (e) {
       if (!(e instanceof Unsubmitted)) throw e;
+      // The text is a draft in the input box: it goes out with the next
+      // message submitted, so it was said after all.
+      prReleaseTold(id);
       throw new FleetError(409, `not sent: ${e.message}. Do not send it again before reading \`agentbox screen ${id}\`: a draft left in its input box goes out with the next message that is submitted.`);
     }
+    if (line) prReleaseTold(id);
   }
 
   private async sendNow(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {

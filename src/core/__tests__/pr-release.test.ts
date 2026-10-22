@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, getWait, insertWait, updateWait, insertSessionRecord, type SessionRecord, insertSchedule, insertAccount } from "../db";
-import { claimPr, releasePr, prClaims, prReleased, movePrClaims } from "../prclaims";
+import { claimPr, releasePr, prClaims, prReleased, prReleaseLine, movePrClaims } from "../prclaims";
 import { Waits, lookPr, type Look } from "../waits";
 import { Fleet, type Runtime } from "../fleet";
 import { claudeAdapter } from "../providers/claude";
@@ -53,7 +53,7 @@ test("release cancels armed and undelivered results only for that session and re
   const waits = new Waits({ get: id => sessions.find(s => s.id === id)!, heir: id => id, note: async (_id, text) => { sent.push(text); }, finishNote: async () => false });
   await waits.tick();
   expect(sent).toEqual([]);
-  expect(() => waits.arm("old", spec(8066))).toThrow("You no longer hold");
+  expect(() => waits.arm("old", spec(8066))).toThrow("not yours");
   expect(prClaims(sessions, [{ repo: "o/r", number: 8066, sessionId: "old", at: now }])[0]!.sessionId).toBe("new");
   releasePr("new", { repo: "o/r", number: 8066 });
   expect(prClaims(sessions, [{ repo: "o/r", number: 8066, sessionId: "old", at: now }])).toEqual([]);
@@ -98,14 +98,14 @@ test("feedback cursor survives restart without reviving a released owner's notif
   claim("new", 9003);
   closeDb();
   for (const id of [w.id, again.id]) expect(getWait(id)?.ended).toBe("cancelled");
-  expect(() => waits.arm("old", feedback)).toThrow("You no longer hold");
+  expect(() => waits.arm("old", feedback)).toThrow("not yours");
   const next = waits.arm("new", feedback).wait;
   expect(next.memo.feedback).toBeUndefined();
   expect(lookPr(feedback, next.memo, read, now, now)).toHaveProperty("end");
   releasePr("new", { repo: "o/r", number: 9003 });
 });
 
-test("warm messages and schedule ticks carry release state even when queued before release", async () => {
+test("a message queued before the release carries the line when it lands, and the line is said once", async () => {
   const delivered: string[] = [];
   let entered!: () => void;
   const entering = new Promise<void>(resolve => { entered = resolve; });
@@ -129,13 +129,17 @@ test("warm messages and schedule ticks carry release state even when queued befo
   claim("new", 9002);
   unblock();
   await Promise.all([first, second]);
-  expect(delivered.at(-1)).toContain("You no longer hold o/r#9002 (assigned to new)");
+  expect(delivered[0]).toBe("first");
+  expect(delivered.at(-1)).toContain("o/r#9002 is new's since");
+  expect(delivered.at(-1)).toContain("not yours");
+  expect(delivered.at(-1)).toContain("finish PR 9002");
   const schedule: Schedule = { id: "release-tick", rule: { kind: "every", minutes: 10, from: now }, spec: { provider: "claude", cwd: dir, worktree: false, prompt: "continue PR 9002" } as Schedule["spec"], label: null, enabled: true, nextAt: now + 600_000, createdAt: now, lastRunAt: null, lastSessionId: "messenger", lastError: null, noteCmd: null, sameSession: true, freshOver: null, retiring: null };
   insertSchedule(schedule);
   const scheduler = new Scheduler(fleet, () => {}, () => now);
   expect(await scheduler.runNow(schedule.id)).toBe("messenger");
-  expect(delivered.at(-1)).toContain("You no longer hold o/r#9002 (assigned to new)");
   expect(delivered.at(-1)).toContain("continue PR 9002");
+  // The line was said with the message above: it is not said again.
+  expect(delivered.at(-1)).not.toContain("o/r#9002");
 });
 
 
@@ -153,9 +157,10 @@ test("resuming a parked former holder without a prompt still starts with its rel
   claim("new", 9003);
   await fleet.resume("parked");
   expect(launches).toHaveLength(1);
-  // The notice is in the file the launch names, not on the command line.
-  expect(launches[0]!.argv.join(" ")).not.toContain("You no longer hold");
-  expect(readFileSync(launches[0]!.stdinFile!, "utf8")).toContain("You no longer hold o/r#9003 (assigned to new)");
+  // The line is in the file the launch names, not on the command line.
+  expect(launches[0]!.argv.join(" ")).not.toContain("o/r#9003");
+  expect(readFileSync(launches[0]!.stdinFile!, "utf8")).toContain("o/r#9003 is new's since");
+  expect(readFileSync(launches[0]!.stdinFile!, "utf8")).toContain("not yours");
 });
 
 test("a pre-existing observer wait names the current owner instead of granting authority", async () => {
@@ -178,4 +183,98 @@ test("repeated schedule retirement cannot revoke a PR its successor explicitly r
   claimPr([], [], "o/r", 9005, "successor", now);
   movePrClaims("predecessor", "successor");
   expect(prReleased("successor", { repo: "o/r", number: 9005 })).toBe(false);
+});
+
+/** A fleet with one live session, and everything typed into it. */
+function fleetFor(id: string, pane: PaneInfo): { fleet: Fleet; delivered: string[] } {
+  const delivered: string[] = [];
+  const runtime: Runtime = {
+    listPanes: () => [pane], newSession: () => 0, killSession: () => {}, sendKeys: () => {}, capture: () => "", captureMany: () => new Map(),
+    sendText: async (_pane, text) => { delivered.push(text); },
+  };
+  const fleet = new Fleet({ adapters: [claudeAdapter], runtime, usage: { usageOf: () => null } });
+  insertSessionRecord({ id, provider: "claude", agentSessionId: null, accountId: null, cwd: dir, worktree: null,
+    label: null, claim: 1, origin: "agentbox", tmux: pane.name, transcriptPath: null, startedAt: now, lastActivityAt: now,
+    archivedAt: null, facts: null, createdAt: now } as SessionRecord);
+  return { fleet, delivered };
+}
+
+test("the session that lost a PR is told once, when it next wakes, and never again", async () => {
+  const { fleet, delivered } = fleetFor("loser", { name: "ab-loser", pid: 99999991, dead: false, activity: now / 1000 } as PaneInfo);
+  await fleet.tick();
+  claimPr([], [], "o/r", 9100, "loser", now);
+  releasePr("loser", { repo: "o/r", number: 9100 });
+  claim("new", 9100);
+  // Nothing is said at the release: the session is told when it next wakes.
+  expect(delivered).toEqual([]);
+  await fleet.note("loser", "are you still on 9100?");
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0]).toContain("o/r#9100 is new's since");
+  expect(delivered[0]).toContain("not yours");
+  expect(delivered[0]).toContain("do not edit that branch or worktree");
+  expect(delivered[0]).toContain("only your user can hand it back to you");
+  expect(delivered[0]).toContain("are you still on 9100?");
+  // The next thing delivered to it does not carry the line again.
+  await fleet.note("loser", "and now?");
+  expect(delivered).toHaveLength(2);
+  expect(delivered[1]).toBe("and now?");
+});
+
+test("a session that is never woken is told nothing", async () => {
+  const { fleet, delivered } = fleetFor("quiet", { name: "ab-quiet", pid: 99999992, dead: false, activity: now / 1000 } as PaneInfo);
+  await fleet.tick();
+  claimPr([], [], "o/r", 9101, "quiet", now);
+  releasePr("quiet", { repo: "o/r", number: 9101 });
+  claim("new", 9101);
+  expect(delivered).toEqual([]);
+  // The line waits for the next thing delivered to it.
+  expect(prReleaseLine("quiet")).toContain("o/r#9101");
+});
+
+test("a session that took its PR back is told nothing", async () => {
+  const { fleet, delivered } = fleetFor("taker", { name: "ab-taker", pid: 99999993, dead: false, activity: now / 1000 } as PaneInfo);
+  await fleet.tick();
+  claimPr([], [], "o/r", 9102, "taker", now);
+  releasePr("taker", { repo: "o/r", number: 9102 });
+  claim("new", 9102);
+  // The holder lets go, and the user says the session may have it back.
+  releasePr("new", { repo: "o/r", number: 9102 });
+  claimPr(prClaims(sessions, []), sessions, "o/r", 9102, "taker", now);
+  expect(prReleased("taker", { repo: "o/r", number: 9102 })).toBe(false);
+  await fleet.note("taker", "back on it");
+  expect(delivered).toEqual(["back on it"]);
+});
+
+test("a schedule's heir is told what its predecessor lost, and the predecessor is told it lost the PR", async () => {
+  // The predecessor held one PR and had lost another to a session that holds it now.
+  claimPr([], [], "o/r", 9103, "old", now);
+  releasePr("old", { repo: "o/r", number: 9104 });
+  claim("new", 9104);
+  const live = new Map<string, Session>([["old", { id: "old", provider: "claude", host: "tmux", status: "waiting", cold: false, cacheWarmUntil: 0, contextUsed: 30_000, limitHit: null } as Session]]);
+  const prompts: string[] = [];
+  const fleet = {
+    get: (id: string) => live.get(id)!,
+    spawn: async (req: { prompt?: string }) => {
+      prompts.push(req.prompt ?? "");
+      live.set("heir", { id: "heir", provider: "claude", host: "tmux", status: "running", cold: false, cacheWarmUntil: 0, contextUsed: 0, limitHit: null } as Session);
+      return { session: live.get("heir")! };
+    },
+    patch: async () => {},
+    startedBy: () => [],
+    handOver: async () => {},
+    close: async () => {},
+    note: async () => {},
+  } as unknown as Fleet;
+  insertSchedule({ id: "heir-tick", rule: { kind: "every", minutes: 10, from: now }, spec: { provider: "claude", cwd: dir, worktree: false, prompt: "take 9103 to green" } as Schedule["spec"],
+    label: null, enabled: true, nextAt: now + 600_000, createdAt: now, lastRunAt: null, lastSessionId: "old", lastError: null, noteCmd: null, sameSession: true, freshOver: 20_000, retiring: null });
+  const scheduler = new Scheduler(fleet, () => {}, () => now);
+  expect(await scheduler.runNow("heir-tick")).toBe("heir");
+  // The heir's first prompt names the PR its predecessor lost, and who holds it.
+  expect(prompts[0]).toContain("o/r#9104 is new's since");
+  expect(prompts[0]).toContain("take 9103 to green");
+  // The PR its predecessor held is its own now, and the predecessor is told
+  // that it lost it.
+  const heirs = [...sessions, { id: "heir", host: "tmux", status: "running" } as Session];
+  expect(prClaims(heirs, []).find(c => c.number === 9103)?.sessionId).toBe("heir");
+  expect(prReleaseLine("old")).toContain("o/r#9103 is heir's since");
 });

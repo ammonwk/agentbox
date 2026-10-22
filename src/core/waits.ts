@@ -31,7 +31,7 @@
  */
 
 import { getWait, insertWait, listOpenWaits, listWaits, updateWait } from "./db";
-import { assignedPrHolder, prReleased, prReleaseNotice } from "./prclaims";
+import { assignedPrHolder, prReleased, prReleasedLine } from "./prclaims";
 import { FleetError, type Fleet } from "./fleet";
 import { Held, logTail, prKey, readJob, readPrs, readRun, readUntil, type JobRead, type PrRead, type RunRead } from "./waitreads";
 import type { Session, Wait, WaitEnd, WaitSpec, WaitView } from "./types";
@@ -343,7 +343,9 @@ export class Waits {
     }
     // Ownership is the right to act on the PR, which the checks forms and
     // --feedback are; a --merged wait only waits, so a release does not end it.
-    if (spec.kind === "pr" && !spec.merged && prReleased(sessionId, spec)) throw new FleetError(409, prReleaseNotice(sessionId));
+    if (spec.kind === "pr" && !spec.merged && prReleased(sessionId, spec)) {
+      throw new FleetError(409, `${prReleasedLine(sessionId)} Its checks, --require/--only and --feedback waits on it are cancelled; a --merged wait on it stays armed, since waiting for a merge needs no ownership.`);
+    }
     const ms = timeoutMs ?? DEFAULT_TIMEOUT_MS[spec.kind];
     if (!Number.isFinite(ms) || ms < MIN_TIMEOUT_MS || ms > MAX_TIMEOUT_MS) throw new FleetError(400, `a wait's timeout is between ${span(MIN_TIMEOUT_MS)} and ${span(MAX_TIMEOUT_MS)}`);
     const going = listOpenWaits(0).filter((w) => w.sessionId === sessionId && !w.ended);
@@ -541,7 +543,7 @@ export class Waits {
     // Not for a --merged wait: a released session's merge wait is still waiting
     // for a merge, which needs no ownership, and ends as it always would.
     if (w.spec.kind === "pr" && !w.spec.merged && prReleased(s?.id ?? w.sessionId, w.spec)) {
-      updateWait(w.id, { ended: "cancelled", endedAt: now, outcome: prReleaseNotice(s?.id ?? w.sessionId), untold: null });
+      updateWait(w.id, { ended: "cancelled", endedAt: now, outcome: prReleasedLine(s?.id ?? w.sessionId), untold: null });
       return;
     }
     const hold = !s
