@@ -1,22 +1,33 @@
-/** The Agents page: each agent with its main conversation, its own page
- *  (blocks its program answers with), its sessions, and what it is
+/** The Agents page: the rail of agents, each with its picture and what it is
+ *  doing, and under the open one its conversations; beside it the open one's
+ *  Chat, its Feed (the page its program answers with) and its Settings
  *  (docs/agents.md). Opening any of it starts nothing; only sending does. */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { Sparkle } from "@phosphor-icons/react/dist/csr/Sparkle";
+import { Wrench } from "@phosphor-icons/react/dist/csr/Wrench";
+import { Cloud } from "@phosphor-icons/react/dist/csr/Cloud";
+import { Heartbeat } from "@phosphor-icons/react/dist/csr/Heartbeat";
+import { Brain } from "@phosphor-icons/react/dist/csr/Brain";
 import { api, type AgentActionReply } from "../api";
-import type { AppState, AgentAction, AgentBlock, AgentField, AgentInfo, AgentView } from "../../../src/core/types";
-import { Button, Empty, ErrorBoundary, Icon, RelativeTime } from "../components";
+import type { AppState, AgentAction, AgentBlock, AgentField, AgentIcon, AgentInfo, AgentView, Session } from "../../../src/core/types";
+import { Button, Empty, ErrorBoundary, Icon, RelativeTime, Spinner, Toggle } from "../components";
 import { copyText } from "../bits";
-import { go, hrefOf, SESSION_TABS, type SessionTab } from "../route";
+import { go, hrefOf, SESSION_TABS, type AgentTab, type SessionTab } from "../route";
 import { titleOf } from "../lib/board";
+import { useScope } from "../lib/projects";
+import { halfOf, placeIn, readOrder, saveOrder, stepIn } from "../lib/manualorder";
 import { Detail } from "./session/SessionView";
 import { Markdown } from "./session/Markdown";
 import { loadDraft, newRevision, saveDraft } from "./session/drafts";
 import { useIsNarrow } from "./session/useIsNarrow";
+import { ScheduleItem } from "./Settings";
 import "./agents.css";
 
 const REMEMBER = "agentbox.agent";
 const LIST_MS = 4_000;
+/** Your order of the agents, by project (lib/manualorder.ts). */
+const ORDER = "agentbox.agentOrder";
 
 function useAgents(): { list: AgentInfo[] | null; error: string | null; reload: () => void } {
   const [list, setList] = useState<AgentInfo[] | null>(null);
@@ -39,27 +50,39 @@ function useAgents(): { list: AgentInfo[] | null; error: string | null; reload: 
   return { list, error, reload: useCallback(() => setN((x) => x + 1), []) };
 }
 
-export function Agents({ state, name, tab }: { state: AppState; name: string | null; tab: string | null }) {
+/** A disabled agent, or one whose manifest cannot be read: listed last, never opened first. */
+const resting = (a: AgentInfo) => !a.enabled || !!a.error;
+
+export function Agents({ state, name, tab, sub }: { state: AppState; name: string | null; tab: AgentTab | null; sub: string | null }) {
   const { list, error, reload } = useAgents();
   const narrow = useIsNarrow();
-  const [q, setQ] = useState("");
+  const { project } = useScope();
+  const scope = project ?? "";
+  const [order, setOrder] = useState(() => ({ scope, ids: readOrder(ORDER, scope) }));
+  const ids = order.scope === scope ? order.ids : readOrder(ORDER, scope);
+  // Those the project shows (its manifest's `projects`), awake ones first, each part in your order.
+  const agents = useMemo(() => {
+    const rank = new Map(ids.map((id, i) => [id, i]));
+    return (list ?? [])
+      .filter((a) => !project || !a.projects || a.projects.includes(project))
+      .sort((a, b) => Number(resting(a)) - Number(resting(b)) || (rank.get(a.name) ?? 1e9) - (rank.get(b.name) ?? 1e9));
+  }, [list, project, ids]);
+  const reorder = (next: string[]) => {
+    saveOrder(ORDER, scope, next);
+    setOrder({ scope, ids: next });
+  };
   const selected = list?.find((a) => a.name === name) ?? null;
 
   // A computer opens straight onto the one last looked at; a phone shows the list first.
   useEffect(() => {
-    if (name || narrow || !list?.length) return;
+    if (name || narrow || !agents.length) return;
     const last = localStorage.getItem(REMEMBER);
-    const pick = list.find((a) => a.name === last) ?? list[0]!;
+    const pick = agents.find((a) => a.name === last) ?? agents.find((a) => !resting(a)) ?? agents[0]!;
     go({ page: "agents", name: pick.name, tab: null }, true);
-  }, [name, narrow, list]);
+  }, [name, narrow, agents]);
   useEffect(() => {
     if (selected) localStorage.setItem(REMEMBER, selected.name);
   }, [selected?.name]);
-
-  const shown = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return (list ?? []).filter((a) => !needle || [a.name, a.title, a.description].some((x) => x.toLowerCase().includes(needle)));
-  }, [list, q]);
 
   const showList = !narrow || !name;
   const showPane = !narrow || !!name;
@@ -67,31 +90,21 @@ export function Agents({ state, name, tab }: { state: AppState; name: string | n
     <div className="ag" data-detail={name ? "on" : "off"}>
       {showList ? (
         <aside className="ag-list" aria-label="Agents" data-nav-region="list">
-          <div className="ag-search">
-            <Icon.search size={14} />
-            <input data-search placeholder="Find an agent" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Find an agent" />
-          </div>
           {error && !list ? <p className="ag-note bad">Could not load the agents: {error}</p> : null}
-          <ul>
-            {shown.map((a) => (
-              <li key={a.name}>
-                <a className={`ag-row${a.name === name ? " on" : ""}`} href={hrefOf({ page: "agents", name: a.name, tab: null })}>
-                  <span className={`ag-dot ${dotOf(a, state)}`} aria-hidden />
-                  <span className="ag-row-text">
-                    <span className="ag-row-title">{a.title}</span>
-                    <span className="ag-row-sub">{a.error ? "Its manifest cannot be read" : a.description || a.name}</span>
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
-          {list && !list.length ? (
+          <Rail agents={agents} state={state} name={name} sub={tab ? null : sub} order={ids} reorder={reorder} />
+          {list && !agents.length ? (
             <div className="ag-note">
-              <p>No agents yet.</p>
-              <p>
-                Add one from its directory with <code>agentbox agent add &lt;dir&gt;</code>. The examples are in the agentbox checkout under{" "}
-                <code>agents/</code>; Jupiter writes new ones.
-              </p>
+              {list.length ? (
+                <p>No agent shows in this project. An agent shows in the projects its manifest names (`projects`), or in every one when it names none.</p>
+              ) : (
+                <>
+                  <p>No agents yet.</p>
+                  <p>
+                    Add one from its directory with <code>agentbox agent add &lt;dir&gt;</code>. The examples are in the agentbox checkout under{" "}
+                    <code>agents/</code>; Jupiter writes new ones.
+                  </p>
+                </>
+              )}
             </div>
           ) : null}
         </aside>
@@ -102,7 +115,7 @@ export function Agents({ state, name, tab }: { state: AppState; name: string | n
             <Empty title="Loading…" />
           ) : selected ? (
             <ErrorBoundary resetKey={selected.name} label="This agent">
-              <Pane key={selected.name} info={selected} state={state} tab={tab} reload={reload} back={narrow} />
+              <Pane key={selected.name} info={selected} state={state} tab={tab} sub={sub} reload={reload} back={narrow} />
             </ErrorBoundary>
           ) : name ? (
             <Empty title="No such agent" action={<a className="btn" href={hrefOf({ page: "agents", name: null, tab: null })}>All agents</a>}>
@@ -119,36 +132,198 @@ export function Agents({ state, name, tab }: { state: AppState; name: string | n
   );
 }
 
-function dotOf(a: AgentInfo, state: AppState): string {
-  if (a.error) return "bad";
-  if (!a.enabled) return "idle";
-  if (a.process?.state === "backoff") return "warn";
-  const main = a.main ? state.sessions.find((s) => s.id === a.main) : null;
-  if (main?.status === "running") return "busy";
-  if (main?.status === "blocked") return "warn";
-  return a.process?.state === "running" || main ? "ok" : "idle";
+// ------------------------------------------------------------------- rail
+
+type Tone = "ok" | "busy" | "warn" | "bad" | "idle";
+
+/** What an agent is doing, from its program and its main conversation. */
+function statusOf(a: AgentInfo, main: Session | null): { label: string; tone: Tone } {
+  if (a.error) return { label: "Manifest error", tone: "bad" };
+  if (!a.enabled) return { label: "Disabled", tone: "idle" };
+  const p = a.process;
+  if (p?.state === "backoff") return { label: `Restarting${p.restarts ? ` (${p.restarts})` : ""}`, tone: "warn" };
+  if (main?.question) return { label: "Asking you", tone: "warn" };
+  if (main?.status === "blocked") return { label: "Needs you", tone: "warn" };
+  if (main?.status === "running") return { label: "Working", tone: "busy" };
+  if (p?.state === "stopped") return { label: "Stopped", tone: "warn" };
+  if (main) return { label: "Available", tone: "ok" };
+  if (a.canStart) return { label: "Ready to begin", tone: "idle" };
+  return p ? { label: p.state === "running" ? "Running" : "Starting", tone: p.state === "running" ? "ok" : "idle" } : { label: "No conversation", tone: "idle" };
+}
+
+const toneOf = (s: Session | undefined): Tone =>
+  !s ? "idle" : s.question || s.status === "blocked" ? "warn" : s.status === "running" ? "busy" : s.status === "closed" || s.status === "stopped" ? "idle" : "ok";
+
+function StateMark({ tone, label }: { tone: Tone; label: string }) {
+  return (
+    <span className="ag-state" role="img" aria-label={label} title={label}>
+      {tone === "busy" ? <Spinner size={12} /> : tone === "warn" ? <Icon.alert size={13} /> : <span className={`ag-dot ${tone}`} />}
+    </span>
+  );
+}
+
+/** One of an agent's conversations: its main, a session it started under one of its mains, or an earlier main. */
+type Thread = { id: string; session: Session | undefined; kind: "main" | "work" | "earlier" };
+
+function threadsOf(info: AgentInfo, state: AppState): Thread[] {
+  const byId = new Map(state.sessions.map((s) => [s.id, s]));
+  const kids = new Map<string, Session[]>();
+  for (const s of state.sessions) if (s.parent) kids.set(s.parent, [...(kids.get(s.parent) ?? []), s]);
+  const mains = [info.main, ...info.previous].filter((x): x is string => !!x);
+  const seen = new Set(mains);
+  const work: Session[] = [];
+  const walk = (id: string) => {
+    for (const k of kids.get(id) ?? []) if (!seen.has(k.id)) (seen.add(k.id), work.push(k), walk(k.id));
+  };
+  mains.forEach(walk);
+  work.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  return [
+    ...(info.main ? [{ id: info.main, session: byId.get(info.main), kind: "main" as const }] : []),
+    ...work.map((s) => ({ id: s.id, session: s, kind: "work" as const })),
+    ...info.previous.map((id) => ({ id, session: byId.get(id), kind: "earlier" as const })),
+  ];
+}
+
+const active = (t: Thread) => t.kind === "main" || (t.kind === "work" && t.session?.status !== "closed" && t.session?.status !== "stopped");
+
+/** The agents in your order (drag one, or Alt+↑/↓), and the open one's conversations under it. */
+function Rail({ agents, state, name, sub, order, reorder }: { agents: AgentInfo[]; state: AppState; name: string | null; sub: string | null; order: string[]; reorder: (ids: string[]) => void }) {
+  const [drag, setDrag] = useState<string | null>(null);
+  const [over, setOver] = useState<{ name: string; at: "before" | "after" } | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => setShowAll(false), [name]);
+  const list = useRef<HTMLUListElement>(null);
+  // An agent moves among those beside it: the awake ones, or the resting ones.
+  const siblingsOf = (n: string) => {
+    const a = agents.find((x) => x.name === n);
+    return agents.filter((x) => a && resting(x) === resting(a)).map((x) => x.name);
+  };
+  const step = (n: string, by: -1 | 1) => {
+    const next = stepIn(order, siblingsOf(n), n, by);
+    if (!next) return false;
+    reorder(next);
+    requestAnimationFrame(() => list.current?.querySelector<HTMLElement>(`[data-agent="${CSS.escape(n)}"]`)?.focus());
+    return true;
+  };
+  const dropOn = (target: string, e: DragEvent) => (drag && drag !== target && siblingsOf(drag).includes(target) ? halfOf(e) : null);
+  return (
+    <ul className="ag-rail" ref={list}>
+      {agents.map((a) => {
+        const main = a.main ? state.sessions.find((s) => s.id === a.main) ?? null : null;
+        const st = statusOf(a, main);
+        const open = a.name === name;
+        const threads = open ? threadsOf(a, state) : [];
+        const shown = threads.filter((t) => showAll || active(t));
+        const hidden = threads.length - shown.length;
+        return (
+          <li key={a.name}>
+            <a
+              className={`ag-row${open ? " on" : ""}`}
+              href={hrefOf({ page: "agents", name: a.name, tab: null })}
+              aria-current={open && !sub ? "page" : undefined}
+              data-agent={a.name}
+              data-drop={over?.name === a.name ? over.at : undefined}
+              draggable
+              title={a.description || a.name}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/x-agentbox-order", a.name);
+                setDrag(a.name);
+              }}
+              onDragEnd={() => (setDrag(null), setOver(null))}
+              onDragOver={(e) => {
+                const at = dropOn(a.name, e);
+                if (!at) return setOver(null);
+                e.preventDefault();
+                setOver({ name: a.name, at });
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const at = dropOn(a.name, e);
+                if (drag && at) reorder(placeIn(order, siblingsOf(drag), drag, a.name, at));
+                setDrag(null);
+                setOver(null);
+              }}
+              onKeyDown={(e) => {
+                if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+                if (step(a.name, e.key === "ArrowUp" ? -1 : 1)) e.preventDefault();
+              }}
+            >
+              <AgentAvatar info={a} size={24} />
+              <span className="ag-row-title">{a.title}</span>
+              <StateMark tone={st.tone} label={st.label} />
+            </a>
+            {open && threads.length > 1 ? (
+              <ul className="ag-threads" aria-label={`${a.title}'s conversations`}>
+                {shown.map((t) => (
+                  <li key={t.id}>
+                    <a
+                      className={`ag-thread${sub === t.id || (!sub && t.kind === "main") ? " on" : ""}`}
+                      href={hrefOf({ page: "agents", name: a.name, tab: null, sub: t.kind === "main" ? null : t.id })}
+                      aria-current={sub === t.id ? "page" : undefined}
+                    >
+                      <span className="ag-row-title">{t.kind === "main" ? "Main conversation" : t.session ? titleOf(t.session) : t.id}</span>
+                      {t.kind === "earlier" ? <span className="ag-tag">earlier</span> : null}
+                      {t.session ? <span className="ag-when"><RelativeTime ts={t.session.lastActivityAt} short /></span> : null}
+                      <StateMark tone={toneOf(t.session)} label={t.session?.status ?? "closed"} />
+                    </a>
+                  </li>
+                ))}
+                {hidden > 0 || showAll ? (
+                  <li>
+                    <button type="button" className="ag-more" onClick={() => setShowAll((v) => !v)}>
+                      {showAll ? "Only the active ones" : `${hidden} closed and earlier`}
+                    </button>
+                  </li>
+                ) : null}
+              </ul>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const ICONS: Record<AgentIcon, typeof Brain> = { brain: Brain, sparkle: Sparkle, fix: Wrench, release: Cloud, health: Heartbeat };
+
+/** Its picture, else the icon its manifest names, else one from what it says it does. */
+function AgentAvatar({ info, size }: { info: AgentInfo; size: number }) {
+  const src = info.avatar ? `/api/agents/${encodeURIComponent(info.name)}/avatar?v=${info.avatar.at}` : null;
+  const [failed, setFailed] = useState<string | null>(null);
+  if (src && failed !== src) return <img className="ag-avatar" style={{ width: size, height: size }} src={src} alt="" onError={() => setFailed(src)} />;
+  const d = info.description;
+  const Glyph = info.icon ? ICONS[info.icon] : /deploy|release/i.test(d) ? Cloud : /health|monitor|performance/i.test(d) ? Heartbeat : /fix|triage|bug|repair/i.test(d) ? Wrench : Brain;
+  return (
+    <span className="ag-avatar icon" style={{ width: size, height: size }} aria-hidden>
+      <Glyph size={Math.round(size * 0.58)} weight="duotone" />
+    </span>
+  );
 }
 
 // ------------------------------------------------------------------- pane
 
-function Pane({ info, state, tab, reload, back }: { info: AgentInfo; state: AppState; tab: string | null; reload: () => void; back: boolean }) {
+function Pane({ info, state, tab, sub, reload, back }: { info: AgentInfo; state: AppState; tab: AgentTab | null; sub: string | null; reload: () => void; back: boolean }) {
   const wide = useWide();
   // The page's first tab, also what says which tabs it has.
   const page = usePage(info, null);
-  const tabs = page.view?.tabs ?? (info.hasPage ? [{ id: "page", title: "Page" }] : []);
-  const current = tab ?? "chat";
-  // On a wide screen the page sits beside the chat, so its first tab is not a tab of its own.
-  const beside = wide && info.hasPage && current === "chat";
+  const tabs = page.view?.tabs ?? [];
+  const main = info.main ? state.sessions.find((s) => s.id === info.main) ?? null : null;
+  const status = statusOf(info, main);
+  const badge = tabs.reduce((n, t) => n + (typeof t.badge === "number" ? t.badge : 0), 0);
+  const feed = tab === "feed" && info.hasPage;
+  // On a wide screen the page sits beside its main conversation.
+  const beside = wide && info.hasPage && !tab && !sub;
   const [composeKey, setComposeKey] = useState(0);
+  /** A page's "give guidance": its text goes into the main's box, after what is there. */
   const compose = async (text: string) => {
-    const main = info.main;
-    const key = main ?? `agent:${info.name}`;
+    const key = info.main ?? `agent:${info.name}`;
     const cur = loadDraft(key);
     await saveDraft(key, cur?.text ? `${cur.text}\n\n${text}` : text, cur?.images ?? [], newRevision());
     setComposeKey((k) => k + 1);
-    if (current !== "chat" && !beside) go({ page: "agents", name: info.name, tab: null });
+    if (!beside) go({ page: "agents", name: info.name, tab: null });
   };
-  const to = (t: string | null) => go({ page: "agents", name: info.name, tab: t }, true);
+  const to = (t: AgentTab | null, s: string | null = null) => go({ page: "agents", name: info.name, tab: t, sub: s }, true);
 
   return (
     <div className="ag-agent">
@@ -158,43 +333,47 @@ function Pane({ info, state, tab, reload, back }: { info: AgentInfo; state: AppS
             <Icon.chevronLeft size={16} />
           </a>
         ) : null}
+        <AgentAvatar info={info} size={34} />
         <div className="ag-head-text">
           <h2>{info.title}</h2>
           {info.description ? <p className="ag-desc">{info.description}</p> : null}
         </div>
-        <ProcessPill info={info} />
+        <span className={`ag-pill ${status.tone}`}>{status.label}</span>
       </header>
       <nav className="ag-tabs" role="tablist" aria-label={`${info.title} views`}>
-        <TabButton on={current === "chat"} onClick={() => to(null)}>
+        <TabButton on={!tab} onClick={() => to(null)}>
           Chat
         </TabButton>
-        {tabs.map((t, i) =>
-          beside && i === 0 ? null : (
-            <TabButton key={t.id} on={current === t.id} onClick={() => to(t.id)}>
-              {t.title}
-              {t.badge != null && t.badge !== 0 && t.badge !== "" ? <span className="ag-badge">{t.badge}</span> : null}
-            </TabButton>
-          ),
-        )}
-        <TabButton on={current === "sessions"} onClick={() => to("sessions")}>
-          Sessions
-        </TabButton>
-        <TabButton on={current === "about"} onClick={() => to("about")}>
-          About
+        {info.hasPage ? (
+          <TabButton on={feed} onClick={() => to("feed")}>
+            Feed
+            {badge ? <span className="ag-badge">{badge}</span> : null}
+          </TabButton>
+        ) : null}
+        <TabButton on={tab === "settings"} onClick={() => to("settings")}>
+          Settings
         </TabButton>
       </nav>
+      {feed && tabs.length > 1 ? (
+        <div className="ag-subtabs" role="tablist" aria-label="Its feed">
+          {tabs.map((t, i) => (
+            <button key={t.id} type="button" role="tab" aria-selected={(sub ?? tabs[0]!.id) === t.id} onClick={() => to("feed", i ? t.id : null)}>
+              {t.title}
+              {t.badge != null && t.badge !== 0 && t.badge !== "" ? <span className="ag-badge">{t.badge}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className={`ag-body${beside ? " split" : ""}`}>
-        {current === "chat" ? (
+        {tab === "settings" ? (
+          <AgentSettings info={info} state={state} main={main} reload={reload} />
+        ) : feed ? (
+          sub && sub !== tabs[0]?.id ? <TabPage key={sub} info={info} tab={sub} onCompose={compose} /> : <PagePanel info={info} page={page} tab={null} onCompose={compose} />
+        ) : (
           <>
-            <Chat key={composeKey} info={info} state={state} reload={reload} />
+            <Chat key={`${sub}:${composeKey}`} info={info} state={state} sub={sub} reload={reload} />
             {beside ? <PagePanel info={info} page={page} tab={null} onCompose={compose} side /> : null}
           </>
-        ) : current === "sessions" ? (
-          <SessionsList info={info} state={state} />
-        ) : current === "about" ? (
-          <About info={info} reload={reload} />
-        ) : (
-          <TabPage info={info} tab={current === "page" ? null : current} onCompose={compose} />
         )}
       </div>
     </div>
@@ -221,52 +400,24 @@ function useWide(): boolean {
   return wide;
 }
 
-function ProcessPill({ info }: { info: AgentInfo }) {
-  if (info.error) return <span className="ag-pill bad">Manifest error</span>;
-  if (!info.enabled) return <span className="ag-pill idle">Disabled</span>;
-  const p = info.process;
-  if (!p) return null;
-  const label = p.state === "running" ? "Running" : p.state === "backoff" ? `Restarting${p.restarts ? ` (${p.restarts})` : ""}` : p.state === "starting" ? "Starting" : "Stopped";
-  return <span className={`ag-pill ${p.state === "running" ? "ok" : p.state === "backoff" ? "warn" : "idle"}`}>{label}</span>;
-}
-
 // ------------------------------------------------------------------- chat
 
-function Chat({ info, state, reload }: { info: AgentInfo; state: AppState; reload: () => void }) {
+/** Its main conversation, or the one of its conversations picked in the rail, as a session's Timeline. */
+function Chat({ info, state, sub, reload }: { info: AgentInfo; state: AppState; sub: string | null; reload: () => void }) {
   const [sessTab, setSessTab] = useState<SessionTab>(SESSION_TABS[0]!);
-  const main = info.main ? state.sessions.find((s) => s.id === info.main) ?? null : null;
-  const earlier = info.previous.length ? (
-    <div className="ag-earlier">
-      Earlier conversations:{" "}
-      {info.previous.slice(0, 6).map((id, i) => (
-        <span key={id}>
-          {i ? ", " : null}
-          <a href={hrefOf({ page: "session", id, tab: "timeline" })}>{sessionName(state, id)}</a>
-        </span>
-      ))}
-      {info.previous.length > 6 ? <span className="muted"> and {info.previous.length - 6} more on the Sessions tab</span> : null}
-    </div>
-  ) : null;
-  if (main)
+  const id = sub ?? info.main;
+  const session = id ? state.sessions.find((s) => s.id === id) ?? null : null;
+  if (session)
     return (
       <div className="ag-chat">
-        {earlier}
-        <Detail
-          key={main.id}
-          session={main}
-          state={state}
-          tab={sessTab}
-          onTab={setSessTab}
-          onClose={(s) => void api.close(s.id, true)}
-        />
+        <Detail key={session.id} session={session} state={state} tab={sessTab} onTab={setSessTab} onClose={(s) => void api.close(s.id, true)} />
       </div>
     );
-  if (info.main)
+  if (id)
     return (
       <div className="ag-chat">
-        {earlier}
-        <Empty title="Its conversation is not on the board" action={<a className="btn" href={hrefOf({ page: "session", id: info.main, tab: "timeline" })}>Open {info.main}</a>}>
-          <p>The main conversation is closed or older than the board&apos;s window.</p>
+        <Empty title="It is not on the board" action={<a className="btn" href={hrefOf({ page: "session", id, tab: "timeline" })}>Open {id}</a>}>
+          <p>The conversation is closed or older than the board&apos;s window.</p>
         </Empty>
       </div>
     );
@@ -277,7 +428,7 @@ function Chat({ info, state, reload }: { info: AgentInfo; state: AppState; reloa
         <p>
           {info.process
             ? "Its program starts its main conversation when it has something to talk about."
-            : "Its manifest says neither how to start a main conversation nor which schedule's session it is."}
+            : "Its manifest does not say how to start a main conversation (main.start)."}
         </p>
       </Empty>
     </div>
@@ -326,6 +477,7 @@ function StartChat({ info, onStarted }: { info: AgentInfo; onStarted: () => void
           value={text}
           rows={3}
           placeholder={`Message ${info.title}`}
+          disabled={!info.enabled}
           onChange={(e) => save(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -334,18 +486,14 @@ function StartChat({ info, onStarted }: { info: AgentInfo; onStarted: () => void
             }
           }}
         />
-        <Button variant="primary" icon={Icon.send} loading={busy} disabled={!text.trim()} type="submit">
+        <Button variant="primary" icon={Icon.send} loading={busy} disabled={!text.trim() || !info.enabled} type="submit">
           Send
         </Button>
       </div>
+      {!info.enabled ? <p className="ag-note">{info.title} is disabled. Turn it on in Settings to send.</p> : null}
       {error ? <p className="ag-note bad" role="alert">That did not send: {error}</p> : null}
     </form>
   );
-}
-
-function sessionName(state: AppState, id: string): string {
-  const s = state.sessions.find((x) => x.id === id);
-  return s ? titleOf(s) : id;
 }
 
 // ------------------------------------------------------------------- page
@@ -410,7 +558,7 @@ function PagePanel({ info, page, tab, onCompose, side }: { info: AgentInfo; page
     <div className={`ag-page${side ? " side" : ""}`}>
       {!running ? (
         <Empty title="Its program is not running">
-          <p>The About tab shows its state and the end of its output.</p>
+          <p>Its Settings tab shows its state and the end of its output.</p>
         </Empty>
       ) : error && !view ? (
         <p className="ag-note bad">Its page did not load: {error}</p>
@@ -739,58 +887,17 @@ function FieldView({ field: f, value, onChange }: { field: AgentField; value: un
   );
 }
 
-// --------------------------------------------------------------- sessions
 
-/** Its main conversations, and what each started, at any depth: newest activity first. */
-function SessionsList({ info, state }: { info: AgentInfo; state: AppState }) {
-  const rows = useMemo(() => {
-    const roots = new Set([info.main, ...info.previous].filter((x): x is string => !!x));
-    const kids = new Map<string, string[]>();
-    for (const s of state.sessions) if (s.parent) kids.set(s.parent, [...(kids.get(s.parent) ?? []), s.id]);
-    const all = new Set<string>();
-    const walk = (id: string) => {
-      if (all.has(id)) return;
-      all.add(id);
-      for (const k of kids.get(id) ?? []) walk(k);
-    };
-    roots.forEach(walk);
-    return state.sessions.filter((s) => all.has(s.id)).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-  }, [info.main, info.previous, state.sessions]);
-  if (!rows.length)
-    return (
-      <Empty title="No sessions yet">
-        <p>Its main conversation and every session it starts under it are listed here.</p>
-      </Empty>
-    );
-  return (
-    <ul className="ag-sessions">
-      {rows.map((s) => (
-        <li key={s.id}>
-          <a href={hrefOf({ page: "session", id: s.id, tab: "timeline" })}>
-            <span className={`ag-dot ${s.status === "running" ? "busy" : s.status === "blocked" ? "warn" : s.status === "closed" || s.status === "stopped" ? "idle" : "ok"}`} aria-hidden />
-            <span className="ag-row-text">
-              <span className="ag-row-title">
-                {titleOf(s)}
-                {s.id === info.main ? <span className="ag-tag">main</span> : info.previous.includes(s.id) ? <span className="ag-tag">earlier main</span> : null}
-              </span>
-              <span className="ag-row-sub">
-                {s.provider} · {s.status} · <RelativeTime ts={s.lastActivityAt} />
-              </span>
-            </span>
-          </a>
-        </li>
-      ))}
-    </ul>
-  );
-}
+// --------------------------------------------------------------- settings
 
-// ------------------------------------------------------------------ about
-
-function About({ info, reload }: { info: AgentInfo; reload: () => void }) {
+/** What it is, whether it runs, and what speaks to it. What it does is its directory's to say. */
+function AgentSettings({ info, state, main, reload }: { info: AgentInfo; state: AppState; main: Session | null; reload: () => void }) {
   const [log, setLog] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const p = info.process;
   useEffect(() => {
+    if (!p) return;
     let live = true;
     const load = () => api.agentLog(info.name).then((l) => live && setLog(l.text), () => undefined);
     void load();
@@ -799,7 +906,7 @@ function About({ info, reload }: { info: AgentInfo; reload: () => void }) {
       live = false;
       clearInterval(t);
     };
-  }, [info.name]);
+  }, [info.name, !!p]);
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
@@ -812,27 +919,58 @@ function About({ info, reload }: { info: AgentInfo; reload: () => void }) {
       setBusy(false);
     }
   };
-  const p = info.process;
+  const schedules = state.schedules.filter((s) => s.agent === info.name);
+  const projects = info.projects?.map((id) => state.repos.find((r) => r.id === id)?.displayName ?? id);
   return (
     <div className="ag-about">
+      {info.error ? <p className="ag-note bad">{info.error}</p> : null}
+      <div className="ag-picture">
+        <AgentAvatar info={info} size={64} />
+        <div className="ag-actions">
+          <label className={`btn btn-sm${busy ? " disabled" : ""}`}>
+            {info.avatar ? "Replace picture" : "Upload a picture"}
+            <input
+              type="file"
+              hidden
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              disabled={busy}
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0];
+                e.currentTarget.value = "";
+                if (!file) return;
+                if (file.size > 2 * 1024 * 1024) return setError("A picture is at most 2 MB");
+                void run(() => api.agentAvatar(info.name, file));
+              }}
+            />
+          </label>
+          {info.avatar ? (
+            <Button size="sm" disabled={busy} onClick={() => void run(() => api.agentAvatar(info.name, null))}>
+              Remove
+            </Button>
+          ) : null}
+        </div>
+      </div>
       {info.description ? (
         <div className="ag-md">
           <Markdown text={info.description} />
         </div>
       ) : null}
-      {info.error ? <p className="ag-note bad">{info.error}</p> : null}
+      <Toggle checked={info.enabled} label={info.enabled ? "Enabled" : "Disabled: its program is stopped and its main takes no messages"} disabled={busy} onChange={(on) => void run(() => api.agentPatch(info.name, { enabled: on }))} />
       <dl className="ag-fields">
-        <div>
-          <dt>Name</dt>
-          <dd className="mono">{info.name}</dd>
-        </div>
         <div>
           <dt>Directory</dt>
           <dd className="mono">{info.dir}</dd>
         </div>
         <div>
+          <dt>Shows in</dt>
+          <dd>{projects ? projects.join(", ") || "No project" : "Every project"}</dd>
+        </div>
+        <div>
           <dt>Main conversation</dt>
-          <dd>{info.main ? <a href={hrefOf({ page: "session", id: info.main, tab: "timeline" })}>{info.main}</a> : info.canStart ? "Started by your first message" : "None yet"}</dd>
+          <dd>
+            {info.main ? <a href={hrefOf({ page: "session", id: info.main, tab: "timeline" })}>{info.main}</a> : info.canStart ? "Started by your first message" : "None yet"}
+            {main ? ` · ${[main.provider, main.model].filter(Boolean).join(" ")}` : null}
+          </dd>
         </div>
         <div>
           <dt>Program</dt>
@@ -849,17 +987,26 @@ function About({ info, reload }: { info: AgentInfo; reload: () => void }) {
           </dd>
         </div>
       </dl>
-      <div className="ag-actions">
-        {p ? (
+      {p ? (
+        <div className="ag-actions">
           <Button size="sm" icon={Icon.refresh} loading={busy} onClick={() => void run(() => api.agentRestart(info.name))}>
             Restart its program
           </Button>
-        ) : null}
-        <Button size="sm" variant={info.enabled ? "default" : "primary"} disabled={busy} onClick={() => void run(() => api.agentPatch(info.name, { enabled: !info.enabled }))}>
-          {info.enabled ? "Disable" : "Enable"}
-        </Button>
-      </div>
+        </div>
+      ) : null}
       {error ? <p className="ag-note bad">{error}</p> : null}
+      <h4 className="ag-h">What speaks to it</h4>
+      {schedules.length ? (
+        <ul className="sched-list">
+          {schedules.map((sc) => (
+            <ScheduleItem key={sc.id} sc={sc} state={state} />
+          ))}
+        </ul>
+      ) : (
+        <p className="ag-note">
+          No schedule. <code>agentbox schedule "every weekday at 9am" --to {info.name} &lt;what to say&gt;</code> gives it one.
+        </p>
+      )}
       <p className="ag-note">
         Change it by changing its directory (ask your coding agent, or Jupiter), then <code>agentbox agent add {info.dir}</code> to read the manifest
         again. <code>agentbox agent rm {info.name}</code> forgets it and leaves the directory.

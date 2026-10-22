@@ -82,7 +82,7 @@ function Schedules({ state }: { state: AppState }) {
   );
 }
 
-function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
+export function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
   const { run, busy, error, clear } = useAction();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);

@@ -24,6 +24,7 @@ import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
 import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { ProjectTabs } from "./ProjectTabs";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -265,20 +266,15 @@ export function App() {
       </div>
 
       <div className="main">
-        {/* On a phone the sidebar is a tab bar without the logo, so the
-            project is named — and switched — in a bar above the page. */}
-        <div className="project-bar">
-          <button type="button" aria-label={`Switch project: ${projectName}`} aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
-            <BrandMark />
-            <span>{projectName}</span>
-            <Icon.chevronDown size={12} />
-          </button>
-          {GLOBAL_PAGES.has(route.page) ? (
-            <span className="hint">
-              {route.page === "context" ? "What agents are told" : "Global settings and tools"}
-            </span>
-          ) : null}
-        </div>
+        {/* The projects you keep open (ProjectTabs.tsx); + opens any other. */}
+        {state ? (
+          <ProjectTabs
+            state={state}
+            selected={scope.project}
+            onOpen={() => setSwitcherOpen(true)}
+            hint={GLOBAL_PAGES.has(route.page) ? (route.page === "context" ? "What agents are told" : "Global settings and tools") : undefined}
+          />
+        ) : null}
         {/* The sessions pages carry their own header — the board's filter bar,
             the session's title — so a page title above them is a second one. */}
         {flush ? null : (
@@ -338,7 +334,7 @@ export function App() {
               />
             ) : route.page === "agents" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
-                <Agents state={state} name={route.name} tab={route.tab} />
+                <Agents state={state} name={route.name} tab={route.tab} sub={route.sub ?? null} />
               </Suspense>
             ) : route.page === "accounts" ? (
               <Suspense fallback={<Empty title="Loading…" />}>

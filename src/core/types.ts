@@ -1725,10 +1725,19 @@ export type ClientMessage =
   | { type: "ping" };
 
 /** An agent as the Agents page shows it (`GET /api/agents`, src/core/agents.ts). */
+/** The pictures an agent's manifest can name (`icon`), for when no picture was uploaded. */
+export const AGENT_ICONS = ["brain", "sparkle", "fix", "release", "health"] as const;
+export type AgentIcon = (typeof AGENT_ICONS)[number];
+
 export interface AgentInfo {
   name: string;
   title: string;
   description: string;
+  icon: AgentIcon | null;
+  /** A picture uploaded on its Settings tab (`/api/agents/:name/avatar`), and when. */
+  avatar: { at: number } | null;
+  /** The registered repos it shows under, from its manifest's `projects`; null: every project. */
+  projects: string[] | null;
   /** Where its `agent.json` and code are. */
   dir: string;
   enabled: boolean;

@@ -10,18 +10,18 @@
  * one agent needs is that agent's to write.
  */
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Subprocess } from "bun";
 import { moveCards } from "./cards";
-import { getDb } from "./db";
+import { getDb, listRepos } from "./db";
 import { FleetError, type Fleet, type SpawnRequest } from "./fleet";
 import { agentboxBin, agentboxHome, packageRoot, userHome } from "./paths";
 import { movePrClaims, prReleasedLine, prReleaseTold } from "./prclaims";
 import { submitWithReceipt } from "./send-receipts";
 import { scheduleSentMark } from "./sent";
-import type { AgentInfo, ProviderId, Session } from "./types";
+import { AGENT_ICONS, type AgentInfo, type ProviderId, type Repo, type Session } from "./types";
 
 const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
@@ -48,6 +48,9 @@ export const Manifest = z
     name: z.string().regex(NAME, "a name is lowercase letters, digits and dashes, starting with a letter"),
     title: z.string().trim().min(1).max(80).optional(),
     description: z.string().max(2000).default(""),
+    icon: z.enum(AGENT_ICONS).optional(),
+    /** The projects it shows under, for navigation only: repo ids, owner/repo or checkout paths. None: every project. */
+    projects: z.array(z.string().min(1)).max(50).optional(),
     /** The program, run in the directory and kept running: argv, not a shell line. */
     run: z.array(z.string().min(1)).min(1).optional(),
     /** Where a program agentbox does not run answers (`/agentbox/view`, `/agentbox/action`). */
@@ -119,6 +122,47 @@ export function readManifest(dir: string): Manifest {
   if (!m.success) throw new FleetError(400, `${file}: ${m.error.issues.map((i) => `${i.path.join(".") || "(top)"}: ${i.message}`).join("; ")}`);
   if (m.data.run && m.data.url) throw new FleetError(400, `${file}: give run or url, not both`);
   return m.data;
+}
+
+/** The registered repos a manifest's `projects` name (ids, owner/repo or
+ *  checkout paths), else its main's `repoId`; null: every project. */
+export function projectsOf(m: Manifest, repos: readonly Repo[]): string[] | null {
+  const want = m.projects ?? (typeof m.main?.start?.repoId === "string" ? [m.main.start.repoId] : null);
+  if (!want) return null;
+  const key = (x: string) => x.replace(/\/+$/, "").toLowerCase();
+  return repos.filter((r) => want.some((w) => r.id === w || [r.fullName, r.ref, r.checkoutRoot].some((x) => x && key(x) === key(w)))).map((r) => r.id);
+}
+
+/** Its picture, uploaded on its Settings tab: one file in its home, any of the image types a browser shows. */
+const AVATAR_TYPES: Record<string, (b: Uint8Array) => boolean> = {
+  "image/png": (b) => b[0] === 0x89 && b[1] === 0x50,
+  "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8,
+  "image/gif": (b) => b[0] === 0x47 && b[1] === 0x49,
+  "image/webp": (b) => b[8] === 0x57 && b[9] === 0x45,
+};
+export const MAX_AVATAR = 2 * 1024 * 1024;
+const avatarFile = (name: string) => join(agentHome(name), "avatar");
+function avatarAt(name: string): { at: number } | null {
+  try {
+    return { at: Math.floor(statSync(avatarFile(name)).mtimeMs) };
+  } catch {
+    return null;
+  }
+}
+export function readAvatar(name: string): { bytes: Uint8Array<ArrayBuffer>; type: string } | null {
+  if (!avatarAt(name)) return null;
+  const bytes = new Uint8Array(readFileSync(avatarFile(name)));
+  const type = Object.keys(AVATAR_TYPES).find((t) => AVATAR_TYPES[t]!(bytes));
+  return type ? { bytes, type } : null;
+}
+/** Sets its picture, or removes it with null. */
+export function writeAvatar(name: string, bytes: Uint8Array | null): void {
+  if (!rowOf(name)) throw new FleetError(404, `no agent is called ${name}`);
+  if (!bytes) return rmSync(avatarFile(name), { force: true });
+  if (bytes.length > MAX_AVATAR) throw new FleetError(413, "a picture is at most 2 MB");
+  if (!Object.values(AVATAR_TYPES).some((is) => is(bytes))) throw new FleetError(400, "a picture is a PNG, JPEG, GIF or WebP");
+  mkdirSync(agentHome(name), { recursive: true, mode: 0o700 });
+  writeFileSync(avatarFile(name), bytes);
 }
 
 /** The secret agentbox sends its program, so a page on another site cannot drive it. Same-user readable, like a session capability. */
@@ -486,6 +530,9 @@ export class Agents {
       name: r.name,
       title: m?.title ?? r.name,
       description: m?.description ?? "",
+      icon: m?.icon ?? null,
+      avatar: avatarAt(r.name),
+      projects: m ? projectsOf(m, listRepos()) : null,
       dir: r.dir,
       enabled: r.enabled === 1,
       error,

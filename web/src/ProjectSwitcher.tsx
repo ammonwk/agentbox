@@ -1,4 +1,4 @@
-/** The switcher behind the sidebar's logo: one registered repository, or All
+/** The switcher behind the sidebar's logo and the project tabs' +: one registered repository, or All
  *  projects. Picking one is navigation (route.ts `selectScope`): nothing
  *  running is touched. */
 
@@ -17,7 +17,7 @@ export function ProjectSwitcher({ repos, selected, onClose }: { repos: Repo[]; s
   // Two repos may share a name (a fork, a second clone): then the path tells them apart.
   const ambiguous = (r: Repo) => !!r.fullName && repos.some((o) => o.id !== r.id && (o.fullName === r.fullName || o.displayName === r.displayName));
   return (
-    <Modal title="Switch project" hint="One repository per project. Switching keeps all running work active." onClose={onClose}>
+    <Modal title="Open a project" hint="One repository per project. It opens as a tab above the page; switching keeps all running work active." onClose={onClose}>
       <input
         className="input"
         autoFocus

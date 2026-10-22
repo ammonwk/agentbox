@@ -7,8 +7,9 @@ export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "loa
 
 export type Route =
   | { page: "sessions" }
-  /** An agent: its chat, a tab of its page, its sessions or about it. */
-  | { page: "agents"; name: string | null; tab: string | null }
+  /** An agent: its Chat (null; `sub` a conversation other than its main),
+   *  its Feed (`sub` a tab of its page) or its Settings. */
+  | { page: "agents"; name: string | null; tab: AgentTab | null; sub?: string | null }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
   /** One account's usage insights. */
@@ -21,6 +22,8 @@ export type Route =
   | { page: "review" }
   | { page: "voice" }
   | { page: "settings" };
+
+export type AgentTab = "feed" | "settings";
 
 /** The rail entry a route lights up. */
 export type NavId = "agents" | "sessions" | "review" | "voice" | "accounts" | "context" | "mcps" | "settings";
@@ -49,7 +52,13 @@ export function parseHash(hash: string): Route {
     if (a === "insights" && b) return { page: "accounts", sub: "insights", account: b };
     return { page: "accounts", sub: a === "calibration" ? "calibration" : "accounts" };
   }
-  if (head === "agents") return { page: "agents", name: a ?? null, tab: a && b ? b : null };
+  if (head === "agents") {
+    const c = parts[3] ?? null;
+    if (!a || !b || b === "chat" || b === "sessions") return { page: "agents", name: a ?? null, tab: null, sub: b === "chat" ? c : null };
+    if (b === "settings" || b === "about") return { page: "agents", name: a, tab: "settings" };
+    // Before Feed, a page's tab was a tab of its own: `#/agents/<name>/<page tab>`.
+    return { page: "agents", name: a, tab: "feed", sub: b === "feed" ? c : b };
+  }
   // `#/skills` is the page before it became Context; old links keep working.
   if (head === "context" || head === "skills") return { page: "context" };
   if (head === "mcps") return { page: "mcps" };
@@ -64,7 +73,8 @@ function routePath(route: Route): string {
     case "session":
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
     case "agents":
-      return `#/agents${route.name ? `/${encodeURIComponent(route.name)}${route.tab ? `/${encodeURIComponent(route.tab)}` : ""}` : ""}`;
+      if (!route.name) return "#/agents";
+      return `#/agents/${[route.name, route.tab ?? (route.sub ? "chat" : null), route.sub].filter(Boolean).map((x) => encodeURIComponent(x!)).join("/")}`;
     case "accounts":
       if (route.sub === "insights") return `#/accounts/insights/${encodeURIComponent(route.account)}`;
       return route.sub === "calibration" ? "#/accounts/calibration" : "#/accounts";

@@ -2656,9 +2656,8 @@ kbd {
 }
 
 /* ---------------------------------------------------------------- projects
-   The logo (desktop) and the bar above the page (a narrow screen, whose tab
-   bar has no logo) name the selected project and open the same switcher
-   (ProjectSwitcher.tsx). */
+   The tabs above the page (ProjectTabs.tsx), and the switcher their + and the
+   logo open (ProjectSwitcher.tsx). */
 .project-brand {
   border: 0;
   background: none;
@@ -2671,34 +2670,85 @@ kbd {
   text-overflow: ellipsis;
 }
 .project-bar {
-  display: none;
-  align-items: center;
-  gap: 16px;
-  min-height: 36px;
-  padding: 3px 18px;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-height: 34px;
+  padding: 0 10px;
   border-bottom: 1px solid var(--border);
   flex: none;
+  overflow-x: auto;
 }
-.project-bar > button {
+.project-tabs {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: 0;
-  padding: 4px 0;
-  color: var(--muted);
-  cursor: pointer;
+  align-items: stretch;
+  gap: 2px;
   min-width: 0;
 }
-.project-bar > button > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.project-tab {
+  display: flex;
+  align-items: center;
+  border-bottom: 2px solid transparent;
 }
-.project-bar img {
-  display: none;
-  width: 20px;
-  height: 20px;
+.project-tab[data-active] {
+  border-bottom-color: var(--accent);
+}
+.project-tab > button[role="tab"] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.project-tab[data-active] > button[role="tab"],
+.project-tab > button[role="tab"]:hover {
+  color: var(--text);
+}
+.project-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.project-tab-close,
+.project-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+}
+.project-tab-close {
+  opacity: 0;
+}
+.project-tab:hover .project-tab-close,
+.project-tab[data-active] .project-tab-close,
+.project-tab-close:focus-visible {
+  opacity: 1;
+}
+.project-tab-close:hover,
+.project-tab-add:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.project-tab-add {
+  align-self: center;
+}
+.project-bar > .hint {
+  align-self: center;
+  margin-left: auto;
+  font-size: 11.5px;
+  white-space: nowrap;
 }
 .project-options {
   display: flex;
@@ -2739,15 +2789,7 @@ kbd {
   flex: none;
 }
 @media (max-width: 900px) {
-  .project-bar {
-    display: flex;
-    padding: 4px 12px;
-  }
-  .project-bar img {
-    display: block;
-  }
-  .project-bar > .hint {
-    margin-left: auto;
-    font-size: 11px;
+  .project-tab-close {
+    opacity: 1;
   }
 }

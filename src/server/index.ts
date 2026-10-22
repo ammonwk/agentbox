@@ -85,7 +85,7 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
-import { Agents } from "../core/agents";
+import { Agents, MAX_AVATAR, readAvatar, writeAvatar } from "../core/agents";
 import { Org } from "../core/org";
 import { OrgAccountError, shareWithOrg, unshareFromOrg, reclaimFromOrg } from "../core/org/accounts";
 import { rowsVersion, type ChangeRow } from "../core/changes";
@@ -1247,6 +1247,21 @@ const router = new Router(mapError)
   .add("DELETE", "/api/agents/:name", ({ params }) => {
     agents.remove(params.name!);
     return json(null);
+  })
+  .add("GET", "/api/agents/:name/avatar", ({ params }) => {
+    const a = readAvatar(params.name!);
+    if (!a) throw new HttpError(404, "it has no picture");
+    // The page asks with ?v=<when it was set>, so a new one is a new address.
+    return new Response(a.bytes, { headers: { "content-type": a.type, "cache-control": "private, max-age=31536000", "x-content-type-options": "nosniff" } });
+  })
+  .add("PUT", "/api/agents/:name/avatar", async ({ req, params }) => {
+    if (Number(req.headers.get("content-length") ?? 0) > MAX_AVATAR) throw new HttpError(413, "a picture is at most 2 MB");
+    writeAvatar(params.name!, new Uint8Array(await req.arrayBuffer()));
+    return json(agents.get(params.name!));
+  })
+  .add("DELETE", "/api/agents/:name/avatar", ({ params }) => {
+    writeAvatar(params.name!, null);
+    return json(agents.get(params.name!));
   })
   .add("POST", "/api/agents/:name/restart", async ({ params }) => json(await agents.restart(params.name!)))
   .add("GET", "/api/agents/:name/log", ({ params, url }) => {

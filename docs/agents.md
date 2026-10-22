@@ -53,6 +53,9 @@ forgets it and leaves the directory and its state alone.
   "name": "vulcan",                 // lowercase, digits, dashes; unique on this machine
   "title": "Vulcan",                // shown on the Agents page
   "description": "Issues to reviewed pull requests",
+  "icon": "fix",                    // optional: brain, sparkle, fix, release or health, until a picture is uploaded
+  "projects": ["owner/repo"],       // optional: the projects it shows in (repo ids, owner/repo or checkout
+                                    // paths); without it, main.start's repoId, else every project
   "run": ["bun", "main.ts"],        // optional: its program, argv, run in the directory and kept running
   "url": "http://127.0.0.1:9000",   // optional instead of run: a program agentbox does not run
   "main": {                         // optional: its main conversation
@@ -102,8 +105,19 @@ must not be cut in half runs as a session, or in a unit of its own
 | `AGENTBOX_AGENT_TOKEN` | the secret every request from agentbox carries |
 | `PORT` | where to answer agentbox, on 127.0.0.1 |
 
+**Its place on the Agents page.** The rail lists the agents the selected
+project shows, each with its picture (uploaded on its Settings tab, kept as
+`<its home>/avatar`) and what it is doing, in the order you drag them to
+(or Alt+↑/↓); disabled ones last. Under the open one are its conversations:
+its main, the sessions started under it that are still open, and on request
+the closed ones and the earlier mains. Its tabs are Chat (the conversation
+picked in the rail), Feed (its page, below) and Settings: what it is, whether
+it is enabled, its program and that program's output, and the schedules
+that speak to it.
+
 **Its main conversation.** The Agents page shows it as the agent's chat:
-an ordinary session, with the Sessions page's timeline and composer. It is
+an ordinary session, with the Sessions page's timeline and composer, so a
+question it asks (AskUserQuestion) is answered there as on the Sessions page. It is
 the session the program named (`PATCH /api/agents/:name {main}` or `agentbox
 agent main`), or one agentbox starts from `main.start` on the first message,
 with `instructions` before it. Opening the page never starts anything; only
@@ -132,7 +146,8 @@ When a program hands its main to a fresh session itself (`agentbox
 handover`), the page follows.
 
 **Its page.** A program answers `GET /agentbox/view[?tab=…]` with blocks that
-agentbox draws, on a phone too:
+agentbox draws as its Feed, on a phone too; on a wide screen the first tab
+also sits beside its main conversation:
 
 ```jsonc
 {

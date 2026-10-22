@@ -221,6 +221,13 @@ export const api = {
   agentPatch: (name: string, patch: { enabled?: boolean; main?: string | null }) =>
     request<AgentInfo>("PATCH", `/api/agents/${enc(name)}`, patch),
   agentRestart: (name: string) => post<AgentInfo>(`/api/agents/${enc(name)}/restart`),
+  /** Sets its picture, or removes it with null. Raw bytes, as `upload`. */
+  agentAvatar: async (name: string, file: Blob | null): Promise<AgentInfo> => {
+    const res = await fetch(`/api/agents/${enc(name)}/avatar`, { method: file ? "PUT" : "DELETE", headers: { "x-agentbox": "1", ...(file ? { "content-type": file.type } : {}) }, body: file });
+    const env = (await res.json().catch(() => ({ ok: false, error: `${res.status} ${res.statusText}` }))) as { ok?: boolean; data?: AgentInfo; error?: string };
+    if (!env.ok || !env.data) throw new Error(env.error || `that did not save: ${res.status}`);
+    return env.data;
+  },
   agentLog: (name: string) => get<{ text: string }>(`/api/agents/${enc(name)}/log`),
 
   /** One `agentbox wait`, and the end of its job's log while that runs. */
