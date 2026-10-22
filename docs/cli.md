@@ -123,6 +123,9 @@ why). Arming the same wait twice is one wait.
                                     # its members see it, or your own; absent, the starting
                                     # session's, else your default (agentbox org default).
                                     # agentbox schedule takes them too
+                                    # --worktree: in a new worktree of the repo you are in (or
+                                    # --repo's), for a worker, never the shared checkout;
+                                    # --branch B: in the worktree of branch B
     agentbox schedule '<when>' [--cwd DIR] [--provider codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.

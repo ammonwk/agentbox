@@ -119,12 +119,21 @@ async function attach(id: string, argv: string[]): Promise<number> {
 
 // ----------------------------------------------------------------- commands
 
-/** `agentbox claude [--account X] [--model M] [--claim PR] [--parent ID] [--org|--personal] [--repo R] [--ref REF] [--detach] [prompt…]`
+/** The registered repo whose checkout holds `dir` (a linked worktree counts
+ *  as its main checkout), for a session started in a worktree of its own. */
+function repoOfDir(repos: { id: string; checkoutRoot?: string }[], dir: string): string | null {
+  const p = Bun.spawnSync(["git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { stdout: "pipe", stderr: "ignore" });
+  if (p.exitCode !== 0) return null;
+  const root = p.stdout.toString().trim().replace(/\/\.git\/?$/, "");
+  return repos.find((r) => r.checkoutRoot === root)?.id ?? null;
+}
+
+/** `agentbox claude [--account X] [--model M] [--claim PR] [--parent ID] [--org|--personal] [--repo R] [--ref REF | --worktree | --branch B] [--detach] [prompt…]`
  *
  *  A mistyped option is refused, not taken for a switch: `--acount work`
  *  would otherwise start on the balancer's pick with "work" in the prompt. */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
-  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "claim", "parent", "repo", "ref"], ["detach", "org", "personal", "help", "h"]);
+  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "claim", "parent", "repo", "ref", "branch"], ["detach", "org", "personal", "worktree", "help", "h"]);
   const str = (k: string): string | undefined => (typeof flags.get(k) === "string" ? (flags.get(k) as string) : undefined);
   // Asking how is not asking to start one.
   if (flags.has("help") || flags.has("h")) {
@@ -148,12 +157,25 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
     accountId = match.id;
   }
 
+  // --worktree: a new worktree of the registered repo this runs in (or
+  // --repo's), never the shared checkout, as New session in the app does;
+  // --branch B: the worktree of existing branch B, as the app's branch pick.
+  let place: { repoId?: string; worktree: true; branch?: string } | null = null;
+  if (flags.has("worktree") || str("branch")) {
+    const repoId = str("repo") ? undefined : repoOfDir((await api<AppState>("GET", "/api/state")).repos, process.cwd());
+    if (repoId === null) {
+      console.error("agentbox: --worktree needs a registered repo here: run it inside one, name one with --repo, or add it in Settings");
+      return 2;
+    }
+    place = { ...(repoId ? { repoId } : {}), worktree: true, ...(str("branch") ? { branch: str("branch") } : {}) };
+  }
+
   let out: { session: Session; placement: Placement };
   try {
     out = await api("POST", "/api/sessions", {
       provider,
-      // A named repo is where it runs, not this directory.
-      cwd: str("repo") ? undefined : process.cwd(),
+      // A named repo, or a worktree of one, is where it runs, not this directory.
+      ...(place ?? { cwd: str("repo") ? undefined : process.cwd() }),
       prompt: rest.join(" ") || undefined,
       model: str("model"),
       accountId,
@@ -380,14 +402,16 @@ async function recover(args: string[]): Promise<number> {
 const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
   claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--parent ID] [--detach]
-         [--org|--personal] [--repo OWNER/NAME [--ref REF]] [prompt…]
+         [--org|--personal] [--repo OWNER/NAME [--ref REF]] [--worktree | --branch B] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d);
                         --parent puts it under that session (default: the one this runs in);
                         --org runs it on the org's accounts, where its members see it, --personal
                         on yours (default: its parent's, else \`agentbox org default\`);
                         --repo runs in that registered repo instead of here, --ref at that
-                        branch, tag or commit in a worktree of its own (detached)
+                        branch, tag or commit in a worktree of its own (detached);
+                        --worktree in a new worktree of the repo (here, or --repo's), never
+                        the shared checkout; --branch B in the worktree of branch B
   usage                 each account's limits and what running sessions claim
   attach <id>           attach this terminal to a session in agentbox
 
