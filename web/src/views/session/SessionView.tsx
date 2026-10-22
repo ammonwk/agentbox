@@ -47,7 +47,7 @@ import { PrBase } from "./prbase";
 import { SessionLinks } from "./sessionlinks";
 import { TermRail } from "./MessageRail";
 import { jumpInTimeline } from "./jump";
-import { FamilyContext, FamilyStrip, useFamilyOf } from "./family";
+import { FamilyContext, FamilyStrip, ParentLine, useFamilyOf } from "./family";
 import "./session.css";
 
 const Terminal = lazy(() => import("./Terminal"));
@@ -153,20 +153,23 @@ export function SessionView({
   // unless pinned: a pin holds its place closed or not. With the split off,
   // the list is every row in the sort's order, whatever it last did.
   const split = state.settings.splitActive;
-  const { sections, counts } = useMemo(() => {
+  const { sections, counts, listed } = useMemo(() => {
     const rows = filterSessions(
       visible.sessions.filter((s) => s.pinOrder !== null || (s.status !== "closed" && !closing.has(s.id))),
       filter,
     );
     const tabs = splitActive(rows, now);
     const roots = (r: SessionRow[]) => r.length - parentsOf(r).size;
+    const shown = split ? tabs[view] : rows;
     return {
       sections: sectionsOf(
-        split ? tabs[view] : rows,
+        shown,
         { open: (x, auto) => shownBy(kids, x, auto), quiet: (x, auto) => shownBy(quiet, x, auto), keep, now },
         sort,
       ),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
+      // What a folded row adds up: the rows before folding hid them.
+      listed: shown,
     };
   }, [visible.sessions, keep, filter, sort, view, split, now, kids, quiet, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
@@ -326,7 +329,7 @@ export function SessionView({
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
-      {showRail ? <Rail sections={sections} counts={counts} state={state} visibleSessions={visible.sessions} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
+      {showRail ? <Rail sections={sections} listed={listed} counts={counts} state={state} visibleSessions={visible.sessions} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
       {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
       ) : sched ? (
@@ -808,7 +811,7 @@ export function Detail({
       </header>
 
       <FamilyContext.Provider value={family}>
-      {narrow ? <FamilyStrip /> : null}
+      {narrow ? <FamilyStrip /> : <ParentLine />}
       <PrBase.Provider value={prBase}>
       <SessionLinks.Provider value={linkCtx}>
       <div className="sv-body" role="tabpanel" aria-label={TAB_LABEL[tab]}>

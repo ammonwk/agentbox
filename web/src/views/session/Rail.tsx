@@ -4,7 +4,7 @@
  *  Sessions page's list; on a narrow screen with nothing open it is the page. */
 
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from "react";
-import type { AppState, ProviderId, Schedule } from "../../../../src/core/types";
+import type { AppState, LoadSample, ProviderId, Schedule } from "../../../../src/core/types";
 import { copyText, PROVIDER_LABEL, ProviderBadge, ShapeMark, StatusDot, WaitGlyph } from "../../bits";
 import { Icon, RelativeTime, Spinner } from "../../components";
 import {
@@ -17,6 +17,7 @@ import {
   sortTime,
   sentTip,
   shownStatus,
+  shownTitle,
   titleOf,
   usualProvider,
   waitingOn,
@@ -184,6 +185,7 @@ export type ListState = ReturnType<typeof useListState>;
 
 export function Rail({
   sections,
+  listed,
   counts,
   state,
   visibleSessions,
@@ -196,6 +198,8 @@ export function Rail({
 }: {
   /** The sections of the tab `list.view` names, or of every row unsplit. */
   sections: Section<Nested<SessionRow>>[];
+  /** That tab's rows before folding: a folded row sums the load it hides. */
+  listed: readonly SessionRow[];
   /** Top-level rows in each tab, after the search. */
   counts: Record<RailView, number>;
   state: AppState;
@@ -343,6 +347,7 @@ export function Rail({
 
   return (
     <RepoMarks.Provider value={marks}>
+    <RailRows.Provider value={listed}>
     <nav className="rail" data-nav-region="list" tabIndex={-1} aria-label="Sessions" onKeyDown={onArrow}>
       <div className="rail-top">
         <label className="rail-search">
@@ -477,6 +482,7 @@ export function Rail({
         />
       ) : null}
     </nav>
+    </RailRows.Provider>
     </RepoMarks.Provider>
   );
 }
@@ -495,6 +501,10 @@ function enters(sec: Section<Nested<SessionRow>>, i: number): boolean {
 
 /** Whether rows name their repo or show its shape, and each repo's shape. */
 const RepoMarks = createContext<{ shape: boolean; shapes: ReadonlyMap<string, Shape> }>({ shape: false, shapes: new Map() });
+
+/** The rows of the tab on screen. A folded row adds up the load of what the
+ *  fold hides, and those rows are the ones it must not add up twice. */
+const RailRows = createContext<readonly SessionRow[]>([]);
 
 /** What a row calls back. The same object for the life of the list. */
 interface RowApi {
@@ -665,9 +675,15 @@ const Row = memo(function Row({
       <span className="rail-when">
         <RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />
       </span>
-      <RowLoad id={s.id} />
-      {s.host === "subagent" || s.status === "closed" ? null : <CloseX s={s} onClose={api.close} />}
-      <RowState s={s} />
+      <RowLoad id={s.id} folded={s.kids > 0 && !s.open} />
+      {s.host === "subagent" || s.status === "closed" ? (
+        <RowState s={s} />
+      ) : (
+        <span className="rail-end">
+          <CloseX s={s} onClose={api.close} />
+          <RowState s={s} />
+        </span>
+      )}
     </a>
   );
 });
@@ -680,8 +696,8 @@ const Row = memo(function Row({
  * and a clock while one is on anything else (`waitingOn`), a gray alert when
  * it is otherwise your turn, and an amber one while it waits for your
  * approval or your answer, or a red one when its turn failed. Nothing once
- * it is stopped. A click copies its id. Under the pointer it moves left into
- * the load's place, and the ✕ takes its own.
+ * it is stopped. A click copies its id. Under the pointer the ✕ takes its
+ * place, in the same slot: nothing in the row moves.
  */
 function RowState({ s }: { s: Nested<SessionRow> }) {
   const [copied, setCopied] = useState(false);
@@ -738,9 +754,9 @@ function stateOf(s: Nested<SessionRow>): { kind: string; label: string; icon: Re
 }
 
 /**
- * The ✕ that takes the time's place under the pointer: Close, straight from
- * the list. One mid-turn asks first — a second click within a few seconds —
- * since closing stops it and cuts the turn short.
+ * The ✕ that takes the state icon's place under the pointer: Close, straight
+ * from the list. One mid-turn asks first — a second click within a few
+ * seconds — since closing stops it and cuts the turn short.
  */
 function CloseX({ s, onClose }: { s: SessionRow; onClose: (s: SessionRow) => void }) {
   const [armed, setArmed] = useState(false);
@@ -773,24 +789,82 @@ function CloseX({ s, onClose }: { s: SessionRow; onClose: (s: SessionRow) => voi
  * What its processes hold now: CPU over memory. A subscription of its own, so
  * a metrics frame (every 2s) re-renders these figures and not the list. A
  * session with no process has none.
+ *
+ * A folded row shows the subtree's figures instead: its own load and that of
+ * every row the fold hides, so nothing vanishes with them. A subagent runs
+ * under the process tree of the session whose MCP started it, so its figures
+ * are already inside that ancestor's and are added only where no ancestor
+ * above it has a reading.
  */
-function RowLoad({ id }: { id: string }) {
-  const load = useMetrics().metrics?.load[id];
-  if (!load) return <span className="rail-load" />;
+function RowLoad({ id, folded }: { id: string; folded: boolean }) {
+  const metrics = useMetrics().metrics;
+  const rows = useContext(RailRows);
+  const own = metrics?.load[id];
+  const rolled = folded && rows.length ? foldedLoad(id, own, rows, metrics?.load ?? {}) : null;
+  const load = rolled?.load ?? own;
+  // A session with no process has no figures to show, and no column to hold
+  // their place: the name takes the width.
+  if (!load) return null;
   const cpu = load.cpuPct < 1 ? "0%" : `${Math.round(load.cpuPct)}%`;
   const gb = load.memBytes / 2 ** 30;
   const mem = gb >= 1 ? `${gb.toFixed(1)}G` : `${Math.round(load.memBytes / 2 ** 20)}M`;
+  const hidden = rolled?.hidden ?? 0;
+  const kind = load.memKind === "rss" ? " (RSS, overstated until the next measure)" : "";
+  const summed = hidden ? ` · ${own ? "its own and" : "combined from"} ${hidden} hidden session${hidden === 1 ? "" : "s"}` : "";
   return (
     <span
       className="rail-load"
-      data-idle={load.cpuPct < 1 || undefined}
       data-hot={load.cpuPct >= 80 || undefined}
-      title={`CPU ${cpu} (100% is one core) · memory ${fmtBytes(load.memBytes)}${load.memKind === "rss" ? " (RSS, overstated until the next measure)" : ""} · ${load.procs} process${load.procs === 1 ? "" : "es"}`}
+      data-rollup={hidden ? true : undefined}
+      title={`CPU ${cpu} (100% is one core) · memory ${fmtBytes(load.memBytes)}${kind} · ${load.procs} process${load.procs === 1 ? "" : "es"}${summed}`}
     >
       <span>{cpu}</span>
       <span>{mem}</span>
     </span>
   );
+}
+
+/**
+ * A folded row's figures: its own and those of the hidden rows that are
+ * separate processes. `hidden` counts the rows that added to it.
+ */
+function foldedLoad(
+  id: string,
+  own: LoadSample | undefined,
+  rows: readonly SessionRow[],
+  all: Record<string, LoadSample>,
+): { load: LoadSample; hidden: number } | null {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  let cpuPct = own?.cpuPct ?? 0;
+  let memBytes = own?.memBytes ?? 0;
+  let procs = own?.procs ?? 0;
+  let rss = own?.memKind === "rss";
+  let hidden = 0;
+  for (const d of descendantsOf({ id }, rows)) {
+    // A pinned session is a root of its own section whatever its parent's
+    // fold, and takes its own subtree with it: those rows show there, so
+    // adding them here would count them twice.
+    let pinnedAbove = d.pinOrder !== null;
+    let covered = false;
+    for (let p: string | null | undefined = d.parent; p; p = byId.get(p)?.parent) {
+      if (p !== id && byId.get(p)?.pinOrder != null) pinnedAbove = true;
+      if (all[p]) covered = true;
+      if (p === id) break;
+    }
+    if (pinnedAbove) continue;
+    // A subagent's process is under its caller's: the caller's figures have
+    // it already.
+    if (d.host === "subagent" && covered) continue;
+    const l = all[d.id];
+    if (!l) continue;
+    cpuPct += l.cpuPct;
+    memBytes += l.memBytes;
+    procs += l.procs;
+    rss ||= l.memKind === "rss";
+    hidden++;
+  }
+  if (!hidden) return null;
+  return { load: { cpuPct, memBytes, memKind: rss ? "rss" : "pss", procs }, hidden };
 }
 
 /** A close the server refused: the row is back, and this says why. */
@@ -826,12 +900,12 @@ function RowTitle({ s }: { s: SessionRow }) {
       ) : project ? (
         <span className="rail-proj">{project}</span>
       ) : null}
-      {titleOf(s)}
+      {shownTitle(s)}
     </span>
   );
 }
 
-const namedTitle = (s: SessionRow) => [projectOf(s), titleOf(s)].filter(Boolean).join(" · ");
+const namedTitle = (s: SessionRow) => [projectOf(s), shownTitle(s)].filter(Boolean).join(" · ");
 
 /** What it last said, what it is asking, or that its answer is waiting. */
 function snippetOf(s: SessionRow): string {
@@ -936,8 +1010,8 @@ function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: reado
     );
   }
   return (
-    <div ref={wrap} className="rail-menu rail-rowmenu" role="menu" aria-label={titleOf(s)} style={{ position: "fixed", ...at }}>
-      <div className="rail-menu-label">{titleOf(s)}</div>
+    <div ref={wrap} className="rail-menu rail-rowmenu" role="menu" aria-label={shownTitle(s)} style={{ position: "fixed", ...at }}>
+      <div className="rail-menu-label">{shownTitle(s)}</div>
       <button type="button" role="menuitem" onClick={() => setDraft(s.label ?? titleOf(s))}>
         <span className="rail-menu-check">
           <Icon.edit size={12} />
@@ -1007,15 +1081,15 @@ function BookmarksMenu({ sessions, current, shapes }: { sessions: readonly Sessi
           ) : (
             marks.map((s) => (
               <div key={s.id} className="rail-bm-row" data-status={s.status} aria-current={s.id === current ? "page" : undefined}>
-                <a role="menuitem" href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })} title={titleOf(s)} onClick={() => setOpen(false)}>
+                <a role="menuitem" href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })} title={shownTitle(s)} onClick={() => setOpen(false)}>
                   <StatusDot status={shownStatus(s)} shape={shapes.get(repoKey(s))} repo={baseName(repoKey(s))} />
-                  <span className="rail-title">{titleOf(s)}</span>
+                  <span className="rail-title">{shownTitle(s)}</span>
                   <span className="rail-when">
                     {s.status === "closed" ? "closed " : null}
                     <RelativeTime ts={s.status === "closed" && s.closedAt ? s.closedAt : s.lastActivityAt} short />
                   </span>
                 </a>
-                <button type="button" className="rail-x" aria-label={`Remove the bookmark from ${titleOf(s)}`} title="Remove the bookmark" onClick={() => toggleBookmark(s)}>
+                <button type="button" className="rail-x" aria-label={`Remove the bookmark from ${shownTitle(s)}`} title="Remove the bookmark" onClick={() => toggleBookmark(s)}>
                   <Icon.x size={12} />
                 </button>
               </div>

@@ -707,10 +707,25 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-/* CPU over memory, for the session's whole process tree. The column keeps
-   its width when empty, so the times stay in line. Quiet by default: an idle
-   process shows nothing and a busy one its CPU; the pointer, or the open
-   row, shows both figures. A hot CPU always shows, in amber. */
+/* The time costs a row nothing until the pointer is on it, so the name gets
+   the width instead. Keyboard focus and a touch screen, which has no hover,
+   show it too. */
+@media (hover: hover) {
+  .rail-when {
+    display: none;
+  }
+  .rail-row:hover .rail-when,
+  .rail-row:focus-within .rail-when,
+  .rail-bm-row:hover .rail-when,
+  .rail-bm-row:focus-within .rail-when {
+    display: inline;
+  }
+}
+/* CPU over memory, for the session's whole process tree: CPU is what is hot
+   now, memory what the session costs, and neither explains the other. Both
+   show whenever a process runs, a 0% one included — memory is the figure you
+   scan the list for, and an idle session can still be the one holding the
+   gigabytes. A hot CPU is amber. */
 .rail-load {
   flex: none;
   display: flex;
@@ -724,75 +739,76 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.rail-load > :last-child {
-  display: none;
-}
-.rail-load[data-idle] > :first-child {
-  visibility: hidden;
-}
-.rail-row:hover .rail-load > *,
-.rail-row[aria-current="page"] .rail-load > * {
-  display: block;
-  visibility: visible;
-}
 .rail-row:hover .rail-load,
+.rail-row:focus-within .rail-load,
 .rail-row[aria-current="page"] .rail-load {
   color: var(--muted);
 }
 .rail-load[data-hot] > :first-child {
   color: var(--warning);
 }
-/* Close from the list: under the pointer the ✕ takes the state icon's place
-   at the row's end, and the icon takes the load's. Not on touch screens,
-   which have no hover to reveal it. */
+/* A folded row's figures are its whole subtree's, with the children's own
+   columns hidden under it. */
+.rail-load[data-rollup] {
+  color: var(--muted);
+}
+/* Close from the list: the ✕ and the state icon share one slot at the row's
+   end, and under the pointer the ✕ takes the icon's place, so nothing else
+   in the row moves. Not on touch screens, which have no hover to reveal it. */
+.rail-end {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: -3px;
+}
+.rail-end .rail-state {
+  margin-right: 0;
+}
 .rail-x {
   display: none;
-  flex: none;
   align-items: center;
   justify-content: center;
-  min-width: 22px;
-  height: 22px;
-  margin: -2px -4px -2px 0;
-  padding: 0 3px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 6px;
   background: none;
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
+}
+.rail-end .rail-x {
+  position: absolute;
+  inset: 0;
+  padding: 0;
 }
 .rail-x:hover {
   color: var(--text);
   background: var(--active);
 }
-.rail-x[data-armed] {
-  display: inline-flex;
+/* Armed, it says so over the load's column and nothing moves: the state
+   icon's slot stays where it was. */
+.rail-end .rail-x[data-armed] {
+  display: flex;
+  left: auto;
+  width: auto;
+  padding: 0 6px;
   color: var(--danger);
-}
-/* The state widens into what the load and its own end margin took, less the
-   ✕'s width: the time stays put. */
-.rail-row:has(.rail-x[data-armed]) .rail-load {
-  display: none;
-}
-.rail-row:has(.rail-x[data-armed]) .rail-x {
-  order: 1;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--border);
 }
 .rail-row:has(.rail-x[data-armed]) .rail-state {
-  width: 25px;
-  margin-right: 0;
+  visibility: hidden;
 }
 @media (hover: hover) {
-  .rail-row:hover:has(.rail-x) .rail-load {
-    display: none;
-  }
   .rail-row:hover .rail-x {
-    display: inline-flex;
-    order: 1;
+    display: flex;
   }
   .rail-row:hover:has(.rail-x) .rail-state {
-    width: 25px;
-    margin-right: 0;
+    visibility: hidden;
   }
 }
 .rail-row .prov {
@@ -2073,6 +2089,20 @@ a.tl-sender:hover .tl-sender-name {
 .fam-up + .fam-count {
   padding-left: 6px;
   border-left: 1px solid var(--border);
+}
+/* The wide-screen line: one chip, the label before it. */
+.fam-parent {
+  gap: 8px;
+}
+.fam-label {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* Room for the name the rail gives its own rows; the strip on a phone keeps
+   its narrower chips. */
+.fam-parent .fam-chip {
+  max-width: 460px;
 }
 
 .tl-jump {

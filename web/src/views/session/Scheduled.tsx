@@ -48,7 +48,6 @@ export function ScheduledRow({ sc, current, onCancel }: { sc: Schedule; current:
       <span className="rail-when" title={sc.nextAt ? describeRule({ kind: "once", at: sc.nextAt }) : sc.enabled ? describeRule(sc.rule) : "Not scheduled: give it a new time"}>
         {!sc.enabled ? "off" : sc.rule.kind === "merge" && sc.nextAt === null ? "on merge" : <Until at={sc.nextAt} />}
       </span>
-      <span className="rail-load" />
       <button
         type="button"
         className="rail-x"
