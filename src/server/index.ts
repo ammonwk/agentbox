@@ -63,6 +63,7 @@ import { completeDir, resolveDirs } from "../core/dirs";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
+import { grantAws } from "../core/agent-aws";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { otherUserRefusal } from "./peeruid";
 import { VoiceHub } from "../voice/hub";
@@ -890,6 +891,22 @@ const router = new Router(mapError)
     } catch (e) {
       if (e instanceof PrHeld) throw new HttpError(409, e.message);
       throw e;
+    }
+  })
+  // The person's MFA code, given to one session, becomes its `mfa` profile
+  // (src/core/agent-aws.ts). The session is its capability, never a name.
+  .add("POST", "/api/aws-grant", async ({ req }) => {
+    const b = await readBody(req);
+    const id = authenticatedSession(req);
+    if (!id) throw new HttpError(403, "run agentbox aws-grant inside the agentbox session the code was given to");
+    if (!fleet.sessions().some((s) => s.id === id && s.closedAt === null)) throw new HttpError(404, `no open session ${id}`);
+    const code = requireString(b, "code");
+    try {
+      const g = await grantAws(id, code);
+      console.log(`agentbox: aws grant: session ${id}, profile ${g.profile}, until ${g.expiration}`);
+      return json(g);
+    } catch (e) {
+      throw new HttpError(400, `not granted: ${(e as Error).message}`);
     }
   })
   .add("POST", "/api/prs/transfer", async ({ req }) => {

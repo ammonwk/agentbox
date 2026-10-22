@@ -62,6 +62,8 @@ const GLOBALS: string[][] = [
 
 export interface NewSession {
   name: string;
+  /** The agentbox session it runs, whose own AWS files it is given. */
+  session: string;
   cwd: string;
   argv: string[];
   /** A file to feed the command's standard input: a CLI that takes its first
@@ -113,7 +115,7 @@ export function newSession(s: NewSession): number {
   const argv = process.platform === "linux" && Bun.which("systemd-run")
     ? ["/usr/bin/python3", fileURLToPath(new URL("./session-owner.py", import.meta.url)), "launch", ...run]
     : run;
-  const env: Record<string, string> = { ...(process.env.BASH_ENV ? { BASH_ENV: process.env.BASH_ENV } : {}), ...s.env, ...agentAwsEnv() };
+  const env: Record<string, string> = { ...(process.env.BASH_ENV ? { BASH_ENV: process.env.BASH_ENV } : {}), ...s.env, ...agentAwsEnv(s.session) };
   for (const key of AWS_CREDENTIAL_ENV) delete env[key];
   let cmd = ["env", ...unset.flatMap((v) => ["-u", v]), ...Object.entries(env).map(([k, v]) => `${k}=${v}`), ...argv];
   const launcher = cmd.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0) > MAX_INLINE ? writeLauncher(s.name, cmd) : null;

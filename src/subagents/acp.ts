@@ -420,7 +420,7 @@ export class AcpRunner {
     // Each CLI keeps the conversation in its own default store, where a
     // resume looks for it and where the fleet finds it (and leaves it off the
     // board, by the session id in the agent's record).
-    const env = { ...process.env, ...this.backend.env(this.id), ...agentAwsEnv() };
+    const env = { ...process.env, ...this.backend.env(this.id), ...agentAwsEnv(null) };
     for (const key of AWS_CREDENTIAL_ENV) delete env[key];
     const proc = Bun.spawn(this.backend.argv(opts.model, opts.promptFile, opts.readOnly), {
       cwd: opts.worktree,

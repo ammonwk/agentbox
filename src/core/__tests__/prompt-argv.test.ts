@@ -59,7 +59,7 @@ test("no provider puts the words of a prompt or a briefing on the command line",
   writeFileSync(briefingFile, BRIEFING);
   const adapters = [claudeAdapter, codexAdapter, ompAdapter, createOpencodeAdapter(), createDevinAdapter(), museAdapter];
   for (const adapter of adapters) {
-    const opts = { account, cwd: dir, promptFile, briefingFile, autoApprove: true };
+    const opts = { session: "fixture", account, cwd: dir, promptFile, briefingFile, autoApprove: true };
     const argv = [...adapter.spawnCommand(opts).argv, ...adapter.resumeCommand({ ...opts, agentSessionId: "fixture-session" }).argv].join(" ");
     expect(argv, adapter.id).not.toContain(PROMPT);
     expect(argv, adapter.id).not.toContain(BRIEFING);

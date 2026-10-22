@@ -748,7 +748,7 @@ const isHeadless = (argv: string[]): boolean => ["exec", "e", "review"].includes
  * The flags a session starts with. A carried launch decides model and
  * permissions (ResumeOptions.carry); what it does not set is ours.
  */
-function sessionFlags(opts: { cwd: string; briefingFile?: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
+function sessionFlags(opts: { session: string; cwd: string; briefingFile?: string; model?: string; effort?: string; autoApprove: boolean; carry?: string[]; readOnly?: boolean }): string[] {
   const c = opts.carry;
   const a: string[] = [...(c ?? [])];
   const configs = (c ?? []).filter((x, i) => c![i - 1] === "-c" || c![i - 1] === "--config" || x.startsWith("--config="));
@@ -764,7 +764,7 @@ function sessionFlags(opts: { cwd: string; briefingFile?: string; model?: string
   // `inherit = "core"` drops the process's AWS defaults from tool shells.
   // Per-key overrides preserve the rest of the person's policy and set map;
   // append after carried config so an adopt/resume cannot restore old paths.
-  for (const [key, value] of Object.entries(agentAwsSettings())) {
+  for (const [key, value] of Object.entries(agentAwsSettings(opts.session))) {
     a.push("-c", `shell_environment_policy.set.${key}=${JSON.stringify(value)}`);
   }
   return a;

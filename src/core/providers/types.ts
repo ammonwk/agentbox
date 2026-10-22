@@ -276,6 +276,9 @@ export interface TranscriptReader {
 
 export interface SpawnOptions {
   account: Account;
+  /** The agentbox session it launches: its AWS files are its own
+   *  (`agent-aws.ts`), and a CLI that filters its tools' environment names them. */
+  session: string;
   cwd: string;
   /** The file the first prompt is in. The CLI reads it, or the fleet types
    *  it; the words are never an argument (see `ProviderAdapter.promptDelivery`). */
@@ -294,6 +297,8 @@ export interface SpawnOptions {
 
 export interface ResumeOptions {
   account: Account;
+  /** See `SpawnOptions.session`. */
+  session: string;
   agentSessionId: string;
   /** The cwd to run in — the caller has already proven it (see resumeCwd). */
   cwd: string;

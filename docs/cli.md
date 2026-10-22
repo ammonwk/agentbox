@@ -185,6 +185,13 @@ why). Arming the same wait twice is one wait.
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
 
+## AWS
+
+Your AWS default is `agent-readonly`. For a write or admin operation, ask
+your user for a fresh 6-digit MFA code, saying what it is for, then:
+
+    agentbox aws-grant <code>       # this session alone gets --profile mfa, for a few hours
+
 ## Conventions
 
 - One session has a pull request. You have yours by being on its branch, or
