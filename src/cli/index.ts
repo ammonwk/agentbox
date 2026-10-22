@@ -29,7 +29,7 @@ import * as schedules from "./schedules";
 import * as waits from "./waits";
 import * as cards from "./cards";
 import * as prs from "./prs";
-import { handover, superagent, SUPERAGENT_USAGE } from "./superagents";
+import { handover, agent, AGENT_USAGE } from "./agents";
 import { orgCommand, ORG_USAGE } from "./org";
 import { awsGrant } from "./aws";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
@@ -442,8 +442,8 @@ timeout, each saying which; a parked session is resumed to hear it):
 org (a team's shared accounts and skills, its members' sessions on their own machines: docs/org.md):
 ${ORG_USAGE.replace(/^agentbox /gm, "  ")}
 
-superagents (programs that run on agentbox: docs/superagents.md):
-${SUPERAGENT_USAGE.replace(/^agentbox /gm, "  ")}
+agents (programs that run on agentbox: docs/agents.md):
+${AGENT_USAGE.replace(/^agentbox /gm, "  ")}
   handover <from> <to> [--close]       what <from> started, its cards, PRs and their waits go to <to>; messages to <from> reach <to>
 
 AWS (an agent's default is agent-readonly: docs/agent-aws.md):
@@ -496,7 +496,7 @@ scheduled sessions (one-time ones show in the app as sessions; recurring ones in
   version               print the version`;
 
 /** Other names for commands USAGE lists, which it does not mention itself. */
-const ALIASES: Record<string, string> = { list: "ls", cards: "card", prs: "pr", superagents: "superagent", archive: "close", unarchive: "reopen" };
+const ALIASES: Record<string, string> = { list: "ls", cards: "card", prs: "pr", agents: "agent", archive: "close", unarchive: "reopen" };
 
 /** USAGE's entries for one command: each line that starts with it (`resume|adopt`
  *  counts for both) and the lines indented under it. All of USAGE when it has none. */
@@ -655,10 +655,10 @@ export async function main(argv: string[]): Promise<number | null> {
       case "unschedule":
         await ensureServer();
         return await schedules.unschedule(api, argv.slice(1));
-      case "superagent":
-      case "superagents":
+      case "agent":
+      case "agents":
         await ensureServer();
-        return await superagent(api, argv.slice(1));
+        return await agent(api, argv.slice(1));
       case "aws-grant":
         await ensureServer();
         return await awsGrant(api, argv.slice(1));

@@ -1726,12 +1726,12 @@ export type ClientMessage =
   | { type: "watch"; sessionId: string | null; cursor?: string }
   | { type: "ping" };
 
-/** A superagent as the Agents page shows it (`GET /api/superagents`, src/core/superagents.ts). */
-export interface SuperagentInfo {
+/** An agent as the Agents page shows it (`GET /api/agents`, src/core/agents.ts). */
+export interface AgentInfo {
   name: string;
   title: string;
   description: string;
-  /** Where its `superagent.json` and code are. */
+  /** Where its `agent.json` and code are. */
   dir: string;
   enabled: boolean;
   /** Why its manifest cannot be read, when it cannot. */
@@ -1755,17 +1755,17 @@ export interface SuperagentInfo {
   createdAt: number;
 }
 
-/** What a superagent's page is made of: its program answers `GET /agentbox/view` with this (docs/superagents.md). */
-export interface SuperagentView {
+/** What an agent's page is made of: its program answers `GET /agentbox/view` with this (docs/agents.md). */
+export interface AgentView {
   title?: string;
   /** Its tabs, beside Chat; the page asks for one with `?tab=`. */
   tabs?: { id: string; title: string; badge?: number | string }[];
-  blocks: SuperagentBlock[];
+  blocks: AgentBlock[];
   /** Ask again after this many seconds (at least 2). */
   refresh?: number;
 }
 
-export interface SuperagentAction {
+export interface AgentAction {
   id: string;
   label: string;
   style?: "primary" | "danger";
@@ -1775,31 +1775,31 @@ export interface SuperagentAction {
   values?: Record<string, unknown>;
 }
 
-export type SuperagentField =
+export type AgentField =
   | { name: string; label: string; kind: "text" | "textarea"; value?: string; placeholder?: string; rows?: number }
   | { name: string; label: string; kind: "select"; value?: string; options: { value: string; label: string }[] }
   | { name: string; label: string; kind: "checkbox"; value?: boolean };
 
-export type SuperagentStatus = "ok" | "warn" | "bad" | "busy" | "idle";
+export type AgentStatus = "ok" | "warn" | "bad" | "busy" | "idle";
 
 /** One entry of a `split` block's list, and what its pane shows when chosen. */
-export interface SuperagentPane {
+export interface AgentPane {
   id: string;
   title: string;
   subtitle?: string;
   /** Shown at the row's right: a count, a size. */
   badge?: string | number;
-  status?: SuperagentStatus;
-  blocks: SuperagentBlock[];
+  status?: AgentStatus;
+  blocks: AgentBlock[];
 }
 
-export type SuperagentBlock =
+export type AgentBlock =
   | { type: "heading"; text: string }
   | { type: "markdown"; text: string }
   | { type: "fields"; items: { label: string; value: string }[] }
   | { type: "divider" }
-  | { type: "actions"; actions: SuperagentAction[] }
-  | { type: "form"; id: string; fields: SuperagentField[]; actions: SuperagentAction[] }
+  | { type: "actions"; actions: AgentAction[] }
+  | { type: "form"; id: string; fields: AgentField[]; actions: AgentAction[] }
   /** Text shown exactly as given, in a fixed-width font: whitespace, blank
    *  lines and markup characters kept. It scrolls past `maxHeight` pixels
    *  (default 480), and has a copy button and a wrap toggle (`wrap`, default on). */
@@ -1807,23 +1807,23 @@ export type SuperagentBlock =
   /** A list beside the pane of the entry chosen in it, as on the Skills page;
    *  one at a time on a phone. The choice is the browser's, kept across
    *  refreshes by `id`; `selected` is the first one shown. */
-  | { type: "split"; id: string; title?: string; items: SuperagentPane[]; selected?: string }
+  | { type: "split"; id: string; title?: string; items: AgentPane[]; selected?: string }
   /** Alternative views of one thing, chosen with a segmented control in the
    *  browser and kept across refreshes by `id`. */
-  | { type: "switch"; id: string; options: { id: string; label: string; blocks: SuperagentBlock[] }[]; selected?: string }
+  | { type: "switch"; id: string; options: { id: string; label: string; blocks: AgentBlock[] }[]; selected?: string }
   | {
       type: "item";
       id?: string;
       title: string;
       subtitle?: string;
-      status?: SuperagentStatus;
+      status?: AgentStatus;
       /** Markdown. */
       body?: string;
       /** Session ids, linked to their pages. */
       sessions?: string[];
       links?: { label: string; url: string }[];
-      actions?: SuperagentAction[];
-      children?: SuperagentBlock[];
+      actions?: AgentAction[];
+      children?: AgentBlock[];
       /** Folds under its header, which opens and closes it: `true` starts it
        *  folded, `false` open. Kept across refreshes by `id`. */
       collapsed?: boolean;

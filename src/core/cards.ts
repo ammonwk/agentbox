@@ -67,7 +67,7 @@ export interface NewCard {
   about?: string | null;
   /** When it happened, for one added after the fact; never later than now. */
   at?: number | null;
-  /** False: a decision that does not push to your devices (a superagent's Feed already shows it). */
+  /** False: a decision that does not push to your devices (an agent's Feed already shows it). */
   notify?: boolean;
 }
 

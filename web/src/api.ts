@@ -40,8 +40,8 @@ import type {
   ReclaimResult,
   Repo,
   ContextDoc,
-  SuperagentInfo,
-  SuperagentView,
+  AgentInfo,
+  AgentView,
   Schedule,
   ServerMessage,
   Session,
@@ -117,10 +117,10 @@ const get = <T,>(path: string) => request<T>("GET", path);
 const post = <T,>(path: string, body?: unknown) => request<T>("POST", path, body);
 const enc = encodeURIComponent;
 
-/** What a superagent's program answers an action with (docs/superagents.md). */
-export interface SuperagentActionReply {
+/** What an agent's program answers an action with (docs/agents.md). */
+export interface AgentActionReply {
   message?: string;
-  view?: SuperagentView;
+  view?: AgentView;
   open?: string;
   compose?: string;
 }
@@ -209,18 +209,18 @@ export function healthRows(h: Health): { name: string; state: DepState; detail: 
 }
 
 export const api = {
-  // ---- superagents (docs/superagents.md)
-  superagents: () => get<SuperagentInfo[]>("/api/superagents"),
-  superagentView: (name: string, tab: string | null) =>
-    get<SuperagentView | null>(`/api/superagents/${enc(name)}/view${tab ? `?tab=${enc(tab)}` : ""}`),
-  superagentAction: (name: string, body: { action: string; values: Record<string, unknown>; tab: string | null }) =>
-    post<SuperagentActionReply>(`/api/superagents/${enc(name)}/action`, body),
-  superagentChat: (name: string, text: string, sendId: string) =>
-    post<{ session: string; started: boolean }>(`/api/superagents/${enc(name)}/chat`, { text, sendId }),
-  superagentPatch: (name: string, patch: { enabled?: boolean; main?: string | null }) =>
-    request<SuperagentInfo>("PATCH", `/api/superagents/${enc(name)}`, patch),
-  superagentRestart: (name: string) => post<SuperagentInfo>(`/api/superagents/${enc(name)}/restart`),
-  superagentLog: (name: string) => get<{ text: string }>(`/api/superagents/${enc(name)}/log`),
+  // ---- agents (docs/agents.md)
+  agents: () => get<AgentInfo[]>("/api/agents"),
+  agentView: (name: string, tab: string | null) =>
+    get<AgentView | null>(`/api/agents/${enc(name)}/view${tab ? `?tab=${enc(tab)}` : ""}`),
+  agentAction: (name: string, body: { action: string; values: Record<string, unknown>; tab: string | null }) =>
+    post<AgentActionReply>(`/api/agents/${enc(name)}/action`, body),
+  agentChat: (name: string, text: string, sendId: string) =>
+    post<{ session: string; started: boolean }>(`/api/agents/${enc(name)}/chat`, { text, sendId }),
+  agentPatch: (name: string, patch: { enabled?: boolean; main?: string | null }) =>
+    request<AgentInfo>("PATCH", `/api/agents/${enc(name)}`, patch),
+  agentRestart: (name: string) => post<AgentInfo>(`/api/agents/${enc(name)}/restart`),
+  agentLog: (name: string) => get<{ text: string }>(`/api/agents/${enc(name)}/log`),
 
   /** One `agentbox wait`, and the end of its job's log while that runs. */
   wait: (id: number) => get<WaitView>(`/api/waits/${id}`),

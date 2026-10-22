@@ -85,7 +85,7 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
-import { Superagents } from "../core/superagents";
+import { Agents } from "../core/agents";
 import { Org } from "../core/org";
 import { OrgAccountError, shareWithOrg, unshareFromOrg, reclaimFromOrg } from "../core/org/accounts";
 import { rowsVersion, type ChangeRow } from "../core/changes";
@@ -174,8 +174,8 @@ setMetricsSource(() => fleet.sessions());
 export const scheduler = new Scheduler(fleet, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
-/** Programs that run on agentbox's API, shown on the Agents page (src/core/superagents.ts). */
-export const superagents = new Superagents(fleet, `http://127.0.0.1:${PORT}`);
+/** Programs that run on agentbox's API, shown on the Agents page (src/core/agents.ts). */
+export const agents = new Agents(fleet, `http://127.0.0.1:${PORT}`);
 /** The registered repo a start names: its id, its GitHub `owner/name`, or its ref. */
 function repoNamed(name: string): Repo | null {
   const lower = name.trim().toLowerCase();
@@ -1195,7 +1195,7 @@ const router = new Router(mapError)
     return json({ to, children: moved, cards: cardsMoved, claims: claimsMoved, closed: b.close === true });
   })
 
-  // ----- superagents (src/core/superagents.ts, docs/superagents.md)
+  // ----- agents (src/core/agents.ts, docs/agents.md)
   // ---- the org (docs/org.md)
   .add("GET", "/api/org", () => json(org.status()))
   .add("PUT", "/api/org/shared/:id", async ({ req, params }) => {
@@ -1221,39 +1221,39 @@ const router = new Router(mapError)
     scheduleCold();
     return json(null);
   })
-  .add("GET", "/api/superagents", () => json(superagents.list()))
-  .add("POST", "/api/superagents", async ({ req }) => json(await superagents.register(requireString(await readBody(req), "dir")), 201))
-  .add("GET", "/api/superagents/:name", ({ params }) => json(superagents.get(params.name!)))
-  .add("PATCH", "/api/superagents/:name", async ({ req, params }) => {
+  .add("GET", "/api/agents", () => json(agents.list()))
+  .add("POST", "/api/agents", async ({ req }) => json(await agents.register(requireString(await readBody(req), "dir")), 201))
+  .add("GET", "/api/agents/:name", ({ params }) => json(agents.get(params.name!)))
+  .add("PATCH", "/api/agents/:name", async ({ req, params }) => {
     const b = await readBody(req);
     const main = b.main === null ? null : typeof b.main === "string" ? b.main : undefined;
     const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
-    return json(await superagents.patch(params.name!, { main, enabled }));
+    return json(await agents.patch(params.name!, { main, enabled }));
   })
-  .add("DELETE", "/api/superagents/:name", ({ params }) => {
-    superagents.remove(params.name!);
+  .add("DELETE", "/api/agents/:name", ({ params }) => {
+    agents.remove(params.name!);
     return json(null);
   })
-  .add("POST", "/api/superagents/:name/restart", async ({ params }) => json(await superagents.restart(params.name!)))
-  .add("GET", "/api/superagents/:name/log", ({ params, url }) => {
+  .add("POST", "/api/agents/:name/restart", async ({ params }) => json(await agents.restart(params.name!)))
+  .add("GET", "/api/agents/:name/log", ({ params, url }) => {
     const bytes = Number(url.searchParams.get("bytes")) || undefined;
-    return json({ text: superagents.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
+    return json({ text: agents.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
   })
-  .add("GET", "/api/superagents/:name/view", async ({ params, url }) => json(await superagents.view(params.name!, url.searchParams.get("tab"))))
-  .add("POST", "/api/superagents/:name/action", async ({ req, params }) => {
+  .add("GET", "/api/agents/:name/view", async ({ params, url }) => json(await agents.view(params.name!, url.searchParams.get("tab"))))
+  .add("POST", "/api/agents/:name/action", async ({ req, params }) => {
     const b = await readBody(req);
     requireString(b, "action");
     // Who asked: a session proves itself with its capability; a page in a browser sends an Origin.
     const caller = { session: authenticatedSession(req), via: req.headers.get("origin") ? ("app" as const) : ("api" as const) };
-    return json(await superagents.action(params.name!, b, caller));
+    return json(await agents.action(params.name!, b, caller));
   })
-  .add("POST", "/api/superagents/:name/chat", async ({ req, params }) => {
+  .add("POST", "/api/agents/:name/chat", async ({ req, params }) => {
     const b = await readBody(req);
     const text = requireString(b, "text");
     if (!text.trim()) throw new HttpError(400, "the message is empty");
     const sendId = requireString(b, "sendId");
     if (!/^[\w-]{1,64}$/.test(sendId)) throw new HttpError(400, "invalid send ID");
-    const out = await superagents.chat(params.name!, text, sendId);
+    const out = await agents.chat(params.name!, text, sendId);
     scheduleHot();
     return json(out);
   })
@@ -1869,7 +1869,7 @@ export async function startServer(): Promise<void> {
     }
     scheduler.stop();
     waits.stop();
-    superagents.stopAll();
+    agents.stopAll();
     org.stop();
     fleet.stop();
     accounts.stop();
@@ -2000,7 +2000,7 @@ export async function startServer(): Promise<void> {
   phase("first pass");
   scheduler.start();
   waits.start();
-  superagents.start();
+  agents.start();
   cards.start();
   org.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's

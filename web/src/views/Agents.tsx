@@ -1,10 +1,10 @@
-/** The Agents page: each superagent with its main conversation, its own page
+/** The Agents page: each agent with its main conversation, its own page
  *  (blocks its program answers with), its sessions, and what it is
- *  (docs/superagents.md). Opening any of it starts nothing; only sending does. */
+ *  (docs/agents.md). Opening any of it starts nothing; only sending does. */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, type SuperagentActionReply } from "../api";
-import type { AppState, SuperagentAction, SuperagentBlock, SuperagentField, SuperagentInfo, SuperagentView } from "../../../src/core/types";
+import { api, type AgentActionReply } from "../api";
+import type { AppState, AgentAction, AgentBlock, AgentField, AgentInfo, AgentView } from "../../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, RelativeTime } from "../components";
 import { copyText } from "../bits";
 import { go, hrefOf, SESSION_TABS, type SessionTab } from "../route";
@@ -18,14 +18,14 @@ import "./agents.css";
 const REMEMBER = "agentbox.agent";
 const LIST_MS = 4_000;
 
-function useSuperagents(): { list: SuperagentInfo[] | null; error: string | null; reload: () => void } {
-  const [list, setList] = useState<SuperagentInfo[] | null>(null);
+function useAgents(): { list: AgentInfo[] | null; error: string | null; reload: () => void } {
+  const [list, setList] = useState<AgentInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [n, setN] = useState(0);
   useEffect(() => {
     let live = true;
     const load = () =>
-      api.superagents().then(
+      api.agents().then(
         (l) => live && (setList(l), setError(null)),
         (e: Error) => live && setError(e.message),
       );
@@ -40,7 +40,7 @@ function useSuperagents(): { list: SuperagentInfo[] | null; error: string | null
 }
 
 export function Agents({ state, name, tab }: { state: AppState; name: string | null; tab: string | null }) {
-  const { list, error, reload } = useSuperagents();
+  const { list, error, reload } = useAgents();
   const narrow = useIsNarrow();
   const [q, setQ] = useState("");
   const selected = list?.find((a) => a.name === name) ?? null;
@@ -87,10 +87,10 @@ export function Agents({ state, name, tab }: { state: AppState; name: string | n
           </ul>
           {list && !list.length ? (
             <div className="ag-note">
-              <p>No superagents yet.</p>
+              <p>No agents yet.</p>
               <p>
-                Add one from its directory with <code>agentbox superagent add &lt;dir&gt;</code>. The examples are in the agentbox checkout under{" "}
-                <code>superagents/</code>; Jupiter writes new ones.
+                Add one from its directory with <code>agentbox agent add &lt;dir&gt;</code>. The examples are in the agentbox checkout under{" "}
+                <code>agents/</code>; Jupiter writes new ones.
               </p>
             </div>
           ) : null}
@@ -119,7 +119,7 @@ export function Agents({ state, name, tab }: { state: AppState; name: string | n
   );
 }
 
-function dotOf(a: SuperagentInfo, state: AppState): string {
+function dotOf(a: AgentInfo, state: AppState): string {
   if (a.error) return "bad";
   if (!a.enabled) return "idle";
   if (a.process?.state === "backoff") return "warn";
@@ -131,7 +131,7 @@ function dotOf(a: SuperagentInfo, state: AppState): string {
 
 // ------------------------------------------------------------------- pane
 
-function Pane({ info, state, tab, reload, back }: { info: SuperagentInfo; state: AppState; tab: string | null; reload: () => void; back: boolean }) {
+function Pane({ info, state, tab, reload, back }: { info: AgentInfo; state: AppState; tab: string | null; reload: () => void; back: boolean }) {
   const wide = useWide();
   // The page's first tab, also what says which tabs it has.
   const page = usePage(info, null);
@@ -142,7 +142,7 @@ function Pane({ info, state, tab, reload, back }: { info: SuperagentInfo; state:
   const [composeKey, setComposeKey] = useState(0);
   const compose = async (text: string) => {
     const main = info.main;
-    const key = main ?? `superagent:${info.name}`;
+    const key = main ?? `agent:${info.name}`;
     const cur = loadDraft(key);
     await saveDraft(key, cur?.text ? `${cur.text}\n\n${text}` : text, cur?.images ?? [], newRevision());
     setComposeKey((k) => k + 1);
@@ -221,7 +221,7 @@ function useWide(): boolean {
   return wide;
 }
 
-function ProcessPill({ info }: { info: SuperagentInfo }) {
+function ProcessPill({ info }: { info: AgentInfo }) {
   if (info.error) return <span className="ag-pill bad">Manifest error</span>;
   if (!info.enabled) return <span className="ag-pill idle">Disabled</span>;
   const p = info.process;
@@ -232,7 +232,7 @@ function ProcessPill({ info }: { info: SuperagentInfo }) {
 
 // ------------------------------------------------------------------- chat
 
-function Chat({ info, state, reload }: { info: SuperagentInfo; state: AppState; reload: () => void }) {
+function Chat({ info, state, reload }: { info: AgentInfo; state: AppState; reload: () => void }) {
   const [sessTab, setSessTab] = useState<SessionTab>(SESSION_TABS[0]!);
   const main = info.main ? state.sessions.find((s) => s.id === info.main) ?? null : null;
   const earlier = info.previous.length ? (
@@ -285,9 +285,9 @@ function Chat({ info, state, reload }: { info: SuperagentInfo; state: AppState; 
 }
 
 /** The first message: agentbox starts the main conversation from the manifest. One send id per attempt, kept across a reload, so a retry never starts two. */
-function StartChat({ info, onStarted }: { info: SuperagentInfo; onStarted: () => void }) {
-  const key = `superagent:${info.name}`;
-  const pendingKey = `agentbox.superagentStart.${info.name}`;
+function StartChat({ info, onStarted }: { info: AgentInfo; onStarted: () => void }) {
+  const key = `agent:${info.name}`;
+  const pendingKey = `agentbox.agentStart.${info.name}`;
   const [text, setText] = useState(() => loadDraft(key)?.text ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -305,7 +305,7 @@ function StartChat({ info, onStarted }: { info: SuperagentInfo; onStarted: () =>
     const sendId = localStorage.getItem(pendingKey) ?? newRevision();
     localStorage.setItem(pendingKey, sendId);
     try {
-      await api.superagentChat(info.name, text, sendId);
+      await api.agentChat(info.name, text, sendId);
       localStorage.removeItem(pendingKey);
       void saveDraft(key, "", [], newRevision());
       onStarted();
@@ -350,8 +350,8 @@ function sessionName(state: AppState, id: string): string {
 
 // ------------------------------------------------------------------- page
 
-function usePage(info: SuperagentInfo, tab: string | null) {
-  const [view, setView] = useState<SuperagentView | null>(null);
+function usePage(info: AgentInfo, tab: string | null) {
+  const [view, setView] = useState<AgentView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [n, setN] = useState(0);
   const running = info.hasPage && (!info.process || info.process.state === "running");
@@ -360,7 +360,7 @@ function usePage(info: SuperagentInfo, tab: string | null) {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const load = () =>
-      api.superagentView(info.name, tab).then(
+      api.agentView(info.name, tab).then(
         (v) => {
           if (!live) return;
           setView(v);
@@ -384,19 +384,19 @@ function usePage(info: SuperagentInfo, tab: string | null) {
 
 type Page = ReturnType<typeof usePage>;
 
-function TabPage({ info, tab, onCompose }: { info: SuperagentInfo; tab: string | null; onCompose: (text: string) => void }) {
+function TabPage({ info, tab, onCompose }: { info: AgentInfo; tab: string | null; onCompose: (text: string) => void }) {
   const page = usePage(info, tab);
   return <PagePanel info={info} page={page} tab={tab} onCompose={onCompose} />;
 }
 
-function PagePanel({ info, page, tab, onCompose, side }: { info: SuperagentInfo; page: Page; tab: string | null; onCompose: (text: string) => void; side?: boolean }) {
+function PagePanel({ info, page, tab, onCompose, side }: { info: AgentInfo; page: Page; tab: string | null; onCompose: (text: string) => void; side?: boolean }) {
   const { view, setView, error, running, reload } = page;
   const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null);
-  const act = async (a: SuperagentAction, values: Record<string, unknown>) => {
+  const act = async (a: AgentAction, values: Record<string, unknown>) => {
     if (a.confirm && !confirm(a.confirm)) return;
     setMessage(null);
     try {
-      const reply: SuperagentActionReply = (await api.superagentAction(info.name, { action: a.id, values: { ...a.values, ...values }, tab })) ?? {};
+      const reply: AgentActionReply = (await api.agentAction(info.name, { action: a.id, values: { ...a.values, ...values }, tab })) ?? {};
       if (reply.view) setView(reply.view);
       else reload();
       if (reply.message) setMessage({ text: reply.message, bad: false });
@@ -432,9 +432,9 @@ function PagePanel({ info, page, tab, onCompose, side }: { info: SuperagentInfo;
   );
 }
 
-type Act = (a: SuperagentAction, values: Record<string, unknown>) => Promise<void>;
+type Act = (a: AgentAction, values: Record<string, unknown>) => Promise<void>;
 
-function Blocks({ blocks, act }: { blocks: SuperagentBlock[]; act: Act }) {
+function Blocks({ blocks, act }: { blocks: AgentBlock[]; act: Act }) {
   return (
     <>
       {(blocks ?? []).map((b, i) => (
@@ -444,7 +444,7 @@ function Blocks({ blocks, act }: { blocks: SuperagentBlock[]; act: Act }) {
   );
 }
 
-function BlockView({ block: b, act }: { block: SuperagentBlock; act: Act }) {
+function BlockView({ block: b, act }: { block: AgentBlock; act: Act }) {
   switch (b.type) {
     case "heading":
       return <h4 className="ag-h">{b.text}</h4>;
@@ -502,7 +502,7 @@ function useKept<T extends string | boolean>(id: string | undefined, initial: T)
   ];
 }
 
-function TextBlock({ block: b }: { block: Extract<SuperagentBlock, { type: "text" }> }) {
+function TextBlock({ block: b }: { block: Extract<AgentBlock, { type: "text" }> }) {
   const [wrap, setWrap] = useState(b.wrap ?? true);
   const [copied, setCopied] = useState(false);
   const lines = b.text ? b.text.split("\n").length : 0;
@@ -532,7 +532,7 @@ function TextBlock({ block: b }: { block: Extract<SuperagentBlock, { type: "text
   );
 }
 
-function SplitBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type: "split" }>; act: Act }) {
+function SplitBlock({ block: b, act }: { block: Extract<AgentBlock, { type: "split" }>; act: Act }) {
   const narrow = useIsNarrow();
   const [chosen, choose] = useKept<string>(b.id, b.selected ?? b.items[0]?.id ?? "");
   // On a phone the list comes first; choosing opens the pane, and back returns to the list.
@@ -585,7 +585,7 @@ function SplitBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type:
   );
 }
 
-function SwitchBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type: "switch" }>; act: Act }) {
+function SwitchBlock({ block: b, act }: { block: Extract<AgentBlock, { type: "switch" }>; act: Act }) {
   const [chosen, choose] = useKept<string>(b.id, b.selected ?? b.options[0]?.id ?? "");
   const opt = b.options.find((o) => o.id === chosen) ?? b.options[0];
   if (!opt) return null;
@@ -603,7 +603,7 @@ function SwitchBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type
   );
 }
 
-function ItemBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type: "item" }>; act: Act }) {
+function ItemBlock({ block: b, act }: { block: Extract<AgentBlock, { type: "item" }>; act: Act }) {
   const folds = b.collapsed !== undefined;
   const [folded, setFolded] = useKept<boolean>(folds ? b.id : undefined, b.collapsed ?? false);
   const head = (
@@ -660,7 +660,7 @@ function ItemBlock({ block: b, act }: { block: Extract<SuperagentBlock, { type: 
   );
 }
 
-function Actions({ actions, act, values }: { actions: SuperagentAction[]; act: Act; values: () => Record<string, unknown> }) {
+function Actions({ actions, act, values }: { actions: AgentAction[]; act: Act; values: () => Record<string, unknown> }) {
   const [busy, setBusy] = useState<string | null>(null);
   return (
     <div className="ag-actions">
@@ -688,7 +688,7 @@ function Actions({ actions, act, values }: { actions: SuperagentAction[]; act: A
   );
 }
 
-function FormBlock({ form, act }: { form: Extract<SuperagentBlock, { type: "form" }>; act: Act }) {
+function FormBlock({ form, act }: { form: Extract<AgentBlock, { type: "form" }>; act: Act }) {
   const initial = () => Object.fromEntries(form.fields.map((f) => [f.name, f.value ?? (f.kind === "checkbox" ? false : "")]));
   const [values, setValues] = useState<Record<string, unknown>>(initial);
   // A page that changed what the form holds (after an action) shows it; what you are typing is kept otherwise.
@@ -711,7 +711,7 @@ function FormBlock({ form, act }: { form: Extract<SuperagentBlock, { type: "form
   );
 }
 
-function FieldView({ field: f, value, onChange }: { field: SuperagentField; value: unknown; onChange: (v: unknown) => void }) {
+function FieldView({ field: f, value, onChange }: { field: AgentField; value: unknown; onChange: (v: unknown) => void }) {
   const id = `ag-f-${f.name}`;
   if (f.kind === "checkbox")
     return (
@@ -742,7 +742,7 @@ function FieldView({ field: f, value, onChange }: { field: SuperagentField; valu
 // --------------------------------------------------------------- sessions
 
 /** Its main conversations, and what each started, at any depth: newest activity first. */
-function SessionsList({ info, state }: { info: SuperagentInfo; state: AppState }) {
+function SessionsList({ info, state }: { info: AgentInfo; state: AppState }) {
   const rows = useMemo(() => {
     const roots = new Set([info.main, ...info.previous].filter((x): x is string => !!x));
     const kids = new Map<string, string[]>();
@@ -786,13 +786,13 @@ function SessionsList({ info, state }: { info: SuperagentInfo; state: AppState }
 
 // ------------------------------------------------------------------ about
 
-function About({ info, reload }: { info: SuperagentInfo; reload: () => void }) {
+function About({ info, reload }: { info: AgentInfo; reload: () => void }) {
   const [log, setLog] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
-    const load = () => api.superagentLog(info.name).then((l) => live && setLog(l.text), () => undefined);
+    const load = () => api.agentLog(info.name).then((l) => live && setLog(l.text), () => undefined);
     void load();
     const t = setInterval(load, 5_000);
     return () => {
@@ -851,18 +851,18 @@ function About({ info, reload }: { info: SuperagentInfo; reload: () => void }) {
       </dl>
       <div className="ag-actions">
         {p ? (
-          <Button size="sm" icon={Icon.refresh} loading={busy} onClick={() => void run(() => api.superagentRestart(info.name))}>
+          <Button size="sm" icon={Icon.refresh} loading={busy} onClick={() => void run(() => api.agentRestart(info.name))}>
             Restart its program
           </Button>
         ) : null}
-        <Button size="sm" variant={info.enabled ? "default" : "primary"} disabled={busy} onClick={() => void run(() => api.superagentPatch(info.name, { enabled: !info.enabled }))}>
+        <Button size="sm" variant={info.enabled ? "default" : "primary"} disabled={busy} onClick={() => void run(() => api.agentPatch(info.name, { enabled: !info.enabled }))}>
           {info.enabled ? "Disable" : "Enable"}
         </Button>
       </div>
       {error ? <p className="ag-note bad">{error}</p> : null}
       <p className="ag-note">
-        Change it by changing its directory (ask your coding agent, or Jupiter), then <code>agentbox superagent add {info.dir}</code> to read the manifest
-        again. <code>agentbox superagent rm {info.name}</code> forgets it and leaves the directory.
+        Change it by changing its directory (ask your coding agent, or Jupiter), then <code>agentbox agent add {info.dir}</code> to read the manifest
+        again. <code>agentbox agent rm {info.name}</code> forgets it and leaves the directory.
       </p>
       {p ? (
         <>

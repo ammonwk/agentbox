@@ -173,16 +173,15 @@ why). Arming the same wait twice is one wait.
     agentbox org ls [--json]        # the other members' live org sessions: id status person repo title
     agentbox org join <invite>      # join it (a person's call, like sharing accounts)
     agentbox org default org|personal
-    agentbox org share <account> | unshare <account>   # in or out of the org's pool
-    agentbox org reclaim <account>  # its login out of the org's store, to leave the org
+    agentbox org share <account> | unshare <account>
 
-## Superagents (programs that run on agentbox: docs/superagents.md)
+## Agents (programs that run on agentbox: docs/agents.md)
 
-    agentbox superagent ls          # each one: its program, its main conversation, its directory
-    agentbox superagent call <name> <action> --json <file>   # what a superagent's prompt tells you
+    agentbox agent ls          # each one: its program, its main conversation, its directory
+    agentbox agent call <name> <action> --json <file>   # what an agent's prompt tells you
                                     # to run: its answer is JSON; it knows which session called
-    agentbox superagent view <name> [--tab t]   # its page, as JSON
-    agentbox superagent add <dir>   # register one (a person's call: do it only when asked)
+    agentbox agent view <name> [--tab t]   # its page, as JSON
+    agentbox agent add <dir>   # register one (a person's call: do it only when asked)
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
 

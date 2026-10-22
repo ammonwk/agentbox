@@ -449,6 +449,14 @@ export const MIGRATIONS: readonly string[] = [
   // 35 — whose accounts a session runs on is the session's, not its home's:
   // a login in the org's pool is one account, for your sessions and the org's.
   `ALTER TABLE sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'personal';`,
+  // 36 — superagents are agents (src/core/agents.ts), and what the hub left
+  // behind goes: a card's person and who decided it, an agent's node.
+  `
+  ALTER TABLE superagents RENAME TO agents;
+  ALTER TABLE agents DROP COLUMN node;
+  ALTER TABLE cards DROP COLUMN person;
+  ALTER TABLE cards DROP COLUMN decided_by;
+  `,
 ];
 
 function migrate(d: Database) {

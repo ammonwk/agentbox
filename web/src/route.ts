@@ -7,7 +7,7 @@ export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "loa
 
 export type Route =
   | { page: "sessions" }
-  /** A superagent: its chat, a tab of its page, its sessions or about it. */
+  /** An agent: its chat, a tab of its page, its sessions or about it. */
   | { page: "agents"; name: string | null; tab: string | null }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
