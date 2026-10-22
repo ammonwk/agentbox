@@ -376,7 +376,7 @@ export const api = {
   deleteRepo: (id: string) => request<unknown>("DELETE", `/api/repos/${enc(id)}`),
   /** Where the repo's new sessions start, and what its new worktrees are given. */
   patchRepo: (id: string, patch: RepoPatch) => request<Repo[]>(`PATCH`, `/api/repos/${enc(id)}`, patch),
-  /** Write and enable the systemd user service for this checkout, lingering on. */
+  /** Install the background service: launchd at login, or systemd with lingering. */
   installService: () => post<{ installed: string; lingering: boolean }>("/api/onboarding/service"),
   /** Slow by construction — many git and gh calls. Only ever on a button. */
   scanWorktrees: (scope: "all" | "agentbox") => post<WorktreeScan>("/api/worktrees/scan", { scope }),

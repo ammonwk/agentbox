@@ -1,7 +1,7 @@
 # agentbox
 
 One place for every coding-agent session on this machine — **Claude Code,
-Codex, Devin and omp** — across every subscription you're logged into.
+Codex, Devin, omp, opencode and Muse Code** — across every subscription you're logged into.
 
 ![A Claude session's timeline, with its subagents and the rest of the fleet in the list beside it](docs/screenshots/timeline.png)
 
@@ -52,20 +52,22 @@ Codex, Devin and omp** — across every subscription you're logged into.
 
 Requires **bun**, **tmux**, **git**, and whichever of `claude`, `codex`,
 `devin`, `omp` you use. `gh` is optional (PR links).
-Runs on Linux and macOS. On macOS there is no systemd service: start the
-server yourself, and the machine panel has no pressure, temperature or
-throttle readings.
+Runs on Linux and macOS. Install the background service once so opening the
+app or its URL needs no terminal: launchd starts the backend at login on
+macOS, and systemd starts it at boot on Linux. On macOS the machine panel has
+no pressure, temperature or throttle readings.
 
 ```bash
 bun install
 bun run web:build
-bun bin/agentbox serve          # http://127.0.0.1:4479
+bun bin/agentbox service install # backend starts automatically
+# Open http://127.0.0.1:4479, or the installed agentbox app.
 ```
 
 `agentbox onboard` derives who agentbox works for from the machine — your git
 and `gh` config, the passwd entry, the timezone — writes it to
 `~/.local/share/agentbox/user.env`, and says what is still missing. The board
-shows the same as a first-run card, with a button for the systemd service.
+shows the same as a first-run card, with a button for the background service.
 Nothing personal lives in the checkout: identity and keys are files in the
 agentbox home, and personal skills live in `~/.claude/skills` or
 `~/.agents/skills`.
@@ -77,6 +79,7 @@ agentbox claude                  # new session here, on the account with the mos
 agentbox claude "migrate the billing module"
 agentbox codex --account work    # force an account
 agentbox omp --detach --model M  # start without attaching this terminal
+agentbox muse "explain this repo" # Muse Code, using its existing login
 agentbox ls                      # recent sessions (--all, --json)
 agentbox usage                   # every account's limits and outstanding claims
 agentbox attach <id>             # this terminal onto a session (detach: Ctrl-b d)
