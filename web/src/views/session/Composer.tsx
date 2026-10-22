@@ -432,7 +432,7 @@ const CONTINUE = "Usage limits have reset, continue";
 
 /** Providers whose adapter can move a transcript between account homes
  *  (`moveSession`); the others can only continue where they are. */
-const MOVABLE = new Set(["claude", "devin", "omp", "opencode"]);
+const MOVABLE: Record<string, true> = { claude: true, codex: true, devin: true, omp: true, opencode: true };
 
 /**
  * The session stopped at its account's limit. The fleet moves it to another
@@ -471,7 +471,7 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
   }, [session.id, hit.at]);
 
   const mine = accounts.filter((a) => a.provider === accountProvider(session.provider));
-  const canMove = MOVABLE.has(session.provider) && mine.length > 1;
+  const canMove = MOVABLE[session.provider] === true && mine.length > 1;
   const here = accounts.find((a) => a.id === session.accountId) ?? null;
   const auto = placement?.accountId && placement.mode !== "none" ? accounts.find((a) => a.id === placement.accountId) ?? null : null;
   const target = choice !== "auto" ? mine.find((a) => a.id === choice) ?? null : canMove ? auto : null;

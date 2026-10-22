@@ -546,6 +546,10 @@ export async function usageInsights(input: InsightsInput): Promise<UsageInsights
     limitHits: rateLimitHitsSince(from).filter((h) => h.accountId && input.accountIds.includes(h.accountId)).map((h) => h.at),
   };
   if (input.account.provider !== "claude" && input.account.provider !== "codex") {
+    // Only these two CLIs keep a per-call transcript file agentbox can tail.
+    // omp and opencode keep their calls in the CLI's own SQLite store, with
+    // no account on them; devin and muse write nothing per call. Their spend
+    // is the token totals Fleet sampled as each session moved.
     const r = fromSamples(input, from, hours);
     return { ...base, ...r, source: "samples", scan: { files: 0, bytes: 0, ms: Math.round(performance.now() - started) } };
   }

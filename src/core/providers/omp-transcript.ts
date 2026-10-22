@@ -408,8 +408,10 @@ function arrayOf(v: unknown): any[] {
  * Background work a tool result starts or ends. `bash` with `async` and
  * `task` answer "Backgrounded as job <id>" with `details.async.state:
  * "running"`, and the job's end arrives later as an `async-result` message;
- * `hub cancel` ends jobs in its own result. A bash job is killed at its
- * timeout.
+ * `hub cancel` ends jobs in its own result. A `hub jobs` / `hub wait`
+ * snapshot that lists a job settled is its delivery — the tool says no
+ * `async-result` follows — so it ends the wake too. A bash job is killed at
+ * its timeout.
  */
 function noteJobs(s: OmpState, callId: string, details: any, at: number): void {
   const command = s.asyncCalls.get(callId);
@@ -421,6 +423,14 @@ function noteJobs(s: OmpState, callId: string, details: any, at: number): void {
     s.wakes.set(job.jobId, { label, setAt: at, until: timeout === null ? null : at + timeout });
   }
   if (details?.op === "cancel") for (const j of arrayOf(details.jobs)) if (typeof j?.id === "string") s.wakes.delete(j.id);
+  // `hub jobs` and `hub wait` report what a still-running job has become. A
+  // settled one is delivered by this snapshot, so its async-result never
+  // comes; without this its wake held the session for the whole 24 hours.
+  if (details?.op === "jobs" || details?.op === "wait") {
+    for (const j of arrayOf(details.jobs)) {
+      if (typeof j?.id === "string" && typeof j.status === "string" && j.status !== "running") s.wakes.delete(j.id);
+    }
+  }
   noteDaemons(s, details, at);
 }
 

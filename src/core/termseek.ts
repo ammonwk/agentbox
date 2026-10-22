@@ -15,7 +15,7 @@
  *  that should be on screen and is not ends the search: the rail then shows
  *  it in the timeline instead. */
 
-import type { Turn } from "./types";
+import type { ProviderId, Turn } from "./types";
 import { dropPasteTags, readSent } from "./sent";
 
 /** A row with the TUI's prompt marker. */
@@ -125,6 +125,12 @@ export function whereOnScreen(screen: string, turns: readonly Turn[]): { turnId:
   const k = first.row < lines.length / 3 ? first.turn : Math.max(0, first.turn - 1);
   return { turnId: turns[k]?.id ?? null, bottom: false };
 }
+
+/** Whether the rail can find a message in this provider's TUI. Claude and
+ *  codex page a scrollback and mark the prompt row termseek's `place` anchors
+ *  on; omp and opencode page, but their history has no prompt marker, so a
+ *  seek there would match nothing and the rail opens the timeline instead. */
+export const canSeek = (provider: ProviderId): boolean => provider === "claude" || provider === "codex";
 
 export interface SeekIO {
   capture(): string;

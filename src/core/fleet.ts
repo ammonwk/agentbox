@@ -238,9 +238,9 @@ export interface FleetDeps {
    *  CLI's store like any other; this is what makes each a child of the
    *  session that asked for it rather than a session of its own. */
   poolAgents?: () => ReadonlyMap<string, PoolAgent>;
-  now?: () => number;
   /** The org's pool, once there is one (docs/org.md). */
   org?: FleetOrg;
+  now?: () => number;
 }
 
 /** What a close took with it, and what it left open, to follow "closed <id>". */
@@ -483,14 +483,15 @@ export class Fleet extends EventEmitter {
     this.adapters = new Map(deps.adapters.map((a) => [a.id, a]));
     this.now = deps.now ?? Date.now;
     this.nextParkCheck = this.now() + PARK_STARTUP_MS;
-    this.ready = new Promise((r) => (this.markReady = r));
+    const ready = Promise.withResolvers<void>();
+    this.ready = ready.promise;
+    this.markReady = ready.resolve;
   }
 
   /** Set once the org exists (server/index.ts). */
   setOrg(org: FleetOrg): void {
     this.deps.org = org;
   }
-
 
   start(): void {
     if (this.timer) return;

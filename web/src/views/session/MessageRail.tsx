@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MutableRefObject, type PointerEvent } from "react";
 import type { Session, Turn, TurnList } from "../../../../src/core/types";
+import { canSeek } from "../../../../src/core/termseek";
 import { ago, api } from "../../api";
 import { Icon } from "../../components";
 
@@ -300,7 +301,7 @@ export function TermRail({
 }) {
   const list = useTurns(session.id, session.lastActivityAt);
   const turns = list?.turns ?? [];
-  const seekable = session.provider === "claude" || session.provider === "codex";
+  const seekable = canSeek(session.provider);
   const [current, setCurrent] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   /** The newest request; an older one landing late is ignored. */

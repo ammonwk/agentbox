@@ -76,7 +76,7 @@ import { parseClientMessage } from "./protocol";
 import { TurnIndex } from "../core/turns";
 import { rewindGoalOf } from "../core/providers/claude-rewind";
 import { loadTurnState, saveTurnState } from "../core/readercache";
-import { seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
+import { canSeek, seekBottom, seekTurn, whereOnScreen, type SeekIO } from "../core/termseek";
 import { builtEntry, fileResponse, notBuiltPage, resolveStatic } from "./static";
 import { adapters } from "../core/providers";
 import { sendAsAgent } from "../core/sendguard";
@@ -198,8 +198,8 @@ function cardId(raw: string): number {
 /** This machine's part in its org (docs/org.md); idle outside one. */
 export const org = new Org({
   sessions: () => fleet.sessions(),
-  claims: () => fleet.claims(),
   prsOf: (id) => prClaimsNow().filter((c) => c.sessionId === id).map((c) => `${c.repo}#${c.number}`),
+  claims: () => fleet.claims(),
   deliver: (to, from, text, wake) => sendAsAgent(fleet, to, text, { from: from || null, wake }, Date.now()),
   changed: () => scheduleCold(),
 });
@@ -226,7 +226,7 @@ const seeks = new Map<string, number>();
 /** The terminal of a session whose TUI pages with PageUp/PageDown (src/core/termseek.ts). */
 function seekable(id: string): { io: SeekIO; claude: boolean } {
   const s = fleet.get(id);
-  if (s.provider !== "claude" && s.provider !== "codex") {
+  if (!canSeek(s.provider)) {
     throw new HttpError(409, `The ${s.provider} terminal cannot be scrolled from here.`);
   }
   fleet.tmuxOf(id);
