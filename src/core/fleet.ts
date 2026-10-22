@@ -77,7 +77,7 @@ import {
 } from "./providers/types";
 import { argvOf, childrenOf, environOf, isAlive, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
 import { sessionCapability } from "./session-authority";
-import { clockHz, describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
+import { describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
 import {
   classifyShell,
   minutes,
@@ -1585,12 +1585,6 @@ export class Fleet extends EventEmitter {
             holds.set(v.id, "idle; parked at the next check if it still is");
             continue;
           }
-          const cores = (check.cpuTicks - prev.cpuTicks) / clockHz() / Math.max(1, (check.at - prev.at) / 1000);
-          if (cores > BUSY_CORES_PER_AGENT * check.agents) {
-            clean.delete(v.id);
-            holds.set(v.id, `it is using ${Math.round(cores * 100)}% of a core`);
-            continue;
-          }
           // Checked last and fresh: you may have sent it something, stopped
           // it or resumed it while the checks above ran.
           const touched = this.touched.get(v.id) ?? 0;
@@ -1750,13 +1744,11 @@ export class Fleet extends EventEmitter {
 
     // What runs under each agent.
     const shells: number[] = [];
-    let cpuTicks = 0;
     for (const a of agents) {
       // The subagent MCP names its owner by the `--session-id` its client was
       // started with, which a `/clear` does not change.
       const owners = [`pid:${a.pid}`, ...(a.sessionId ? [a.sessionId] : []), ...family.map((m) => m.t.facts!.agentSessionId)];
       if (live.some((e) => owners.includes(e.owner))) return "MCP subagents are running";
-      cpuTicks += subtreeCpuTicks(subtree(table, a.pid));
       const found = shellWork(table, a.pid, v.provider, monitors, quiet, true, this.stillness, now);
       shells.push(...found.shells);
       if (found.hold) return found.hold;
@@ -1764,8 +1756,6 @@ export class Fleet extends EventEmitter {
     return {
       at: now,
       activity: v.lastActivityAt,
-      cpuTicks,
-      agents: Math.max(1, agents.length),
       agentPids: agents.map((a) => a.pid),
       shells,
       sizes: new Map(family.map((m) => [m.t.ref.path, sizeOf(m.t.ref.path)])),
@@ -4136,8 +4126,6 @@ export class Fleet extends EventEmitter {
 
 // ---------------------------------------------------------------- helpers
 
-/** An idle Claude uses 1–2.5% of a core; more than this per agent over a
- *  minute is work nothing else caught. */
 /** A turn error older than this is not retried on its own: it stalled before
  *  we were watching. */
 /** A session whose limit lifts within this of the hit is told to carry on: a
@@ -4163,8 +4151,6 @@ const NUDGE_SPELL_MS = 60 * 60_000;
 /** The waits before an error that names its own (`retryAfterMs`) is retried,
  *  by try, each capped at that; past the end of this, that wait. */
 const PACED_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000];
-
-const BUSY_CORES_PER_AGENT = 0.1;
 
 /** How often live sessions are checked for work a crash would kill. */
 const WORK_CHECK_MS = 30_000;
@@ -4221,8 +4207,6 @@ function oneLine(text: string, max: number): string {
 interface ParkCheck {
   at: number;
   activity: number;
-  cpuTicks: number;
-  agents: number;
   agentPids: number[];
   /** Tool shells under the agents. */
   shells: number[];
