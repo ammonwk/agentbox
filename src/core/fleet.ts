@@ -22,7 +22,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { owners } from "./accounts/homes";
+import { owners, sameLogin } from "./accounts/homes";
 import { elsewhere, place, type AccountState } from "./balancer";
 import { claimFor, listedClaim } from "./claim";
 import { claimsByAccount, type ClaimInput } from "./claims";
@@ -2862,7 +2862,11 @@ export class Fleet extends EventEmitter {
   placement(provider: ProviderId, model?: string | null, accountId?: string | null, effort?: string | null, first = true, scope: Scope = getSettings().scope): Placement {
     const adapter = this.adapter(provider);
     const asked = model || getSettings().models[provider] || null;
-    const states = this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null);
+    const states = this.accountStates(provider, asked ?? adapter.defaultModel?.() ?? null).filter((a) => this.scopeOf(a.account.id) === scope);
+    // A login shared with the org has a home in each scope, under one label
+    // and email: naming either means its home in the scope this one runs in.
+    const named = accountId && accountId !== "auto" ? getAccount(accountId) : null;
+    const home = named && states.find((a) => a.account.id === named.id || sameLogin(getAccount(a.account.id)!, named));
     return place({
       provider,
       model: asked,
@@ -2871,11 +2875,11 @@ export class Fleet extends EventEmitter {
       // A model the devin bridge serves draws on its own provider, not on
       // the devin account the session is signed in as.
       unmetered: provider === "devin" && bridgedModel(asked) !== null,
-      accountId: accountId && accountId !== "auto" ? accountId : null,
+      accountId: home ? home.account.id : accountId && accountId !== "auto" ? accountId : null,
       // One started without a model runs on the CLI's own default: that is
       // the route whose refusals count against it.
       // Never across scopes: an org session on your accounts, or yours on the org's.
-      accounts: states.filter((a) => this.scopeOf(a.account.id) === scope),
+      accounts: states,
       settings: getSettings().balancer,
       now: this.now(),
     });
