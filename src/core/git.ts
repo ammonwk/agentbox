@@ -147,7 +147,7 @@ function ensureRepoClone(repo: Repo): { path: string; fullName: string | null } 
 
 // ------------------------------------------------------------- branches
 
-function refExists(repoPath: string, ref: string): boolean {
+export function refExists(repoPath: string, ref: string): boolean {
   return run(["git", "show-ref", "--verify", "--quiet", ref], repoPath).code === 0;
 }
 
@@ -360,7 +360,7 @@ export function removeDetachedWorktree(worktreePath: string): boolean {
  * Drop a worktree directory, keeping its branch.
  *
  * The branch is deliberately left alone. It is the only durable record of what
- * a session did, and `createWorktree` rebuilds a checkout from it on demand —
+ * a session did, and a resume cuts the checkout again from it (`ensureCheckout`) —
  * so removing the directory costs nothing but disk, while `git branch -D`
  * alongside it would turn "reclaimed" into "unresumable".
  */

@@ -60,6 +60,7 @@ import {
 } from "./db";
 import { branchOnDisk, createWorktree, detachedWorktree, repoRootOf, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
+import { ensureCheckout } from "./worktrees";
 import { describe as describeWait } from "./waits";
 import { prReleaseNotice, unfinishedClaims } from "./prclaims";
 import { attachArgv, tmuxName, Unsubmitted, type NewSession, type PaneInfo } from "./tmux";
@@ -1486,10 +1487,28 @@ export class Fleet extends EventEmitter {
         this.deadSince.delete(pane.name);
         continue;
       }
+      if (!this.deadSince.has(pane.name)) this.parkExited(pane, now);
       const since = this.deadSince.get(pane.name) ?? now;
       this.deadSince.set(pane.name, since);
       if (now - since > DEAD_PANE_MS && pane.clients === 0) this.killTmux(pane.name);
     }
+  }
+
+  /**
+   * A pane of ours left dead is a session whose process ended with nothing
+   * here stopping it: a stop, a park and a resume all kill the whole tmux
+   * session, so none of them leaves a dead pane. Whatever ended it (the CLI
+   * exiting, a crash, a signal from outside), nobody asked for it, so it is
+   * parked rather than left looking stopped by hand: its waits are told, a
+   * message resumes it, and its worktree is not reclaimed under it.
+   */
+  private parkExited(pane: PaneInfo, now: number): void {
+    const rec = getSessionRecord(pane.name.slice(tmuxName("").length));
+    if (!rec || rec.tmux !== pane.name || rec.archivedAt || rec.parkedAt) return;
+    const code = pane.deadStatus === null ? "" : ` (exit ${pane.deadStatus})`;
+    const at = new Date(now).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    updateSessionRecord(rec.id, { parkedAt: now, parkedMates: null, parkedWhy: `this session's process exited at ${at}${code} with nothing in agentbox stopping it; it was parked, and this message resumed it.` });
+    console.log(`agentbox: ${rec.id}'s process exited${code} with nothing stopping it; parked it`);
   }
 
   // -------------------------------------------------------------- parking
@@ -2144,7 +2163,7 @@ export class Fleet extends EventEmitter {
     }
     // Its pane kept by tmux (remain-on-exit): the process ended, not tmux.
     const w = this.watches.get(s.id);
-    const pane = w && s.host === "none" && !s.parkedAt ? this.panes.get(s.tmux ?? "") : undefined;
+    const pane = w && s.host === "none" ? this.panes.get(s.tmux ?? "") : undefined;
     if (!w || !pane?.dead || (this.killedAt.get(pane.name) ?? 0) >= w.since) return null;
     return {
       text: () => {
@@ -2925,7 +2944,11 @@ export class Fleet extends EventEmitter {
       if (worktree && !(req.ref && req.readOnly)) setUpWorktree(repo, worktree, id);
     }
     if (!cwd) throw new FleetError(400, "say where the session should run: a repo or a directory");
-    if (!existsSync(cwd)) throw new FleetError(400, `no such directory: ${cwd}`);
+    try {
+      ensureCheckout(cwd);
+    } catch (e) {
+      throw new FleetError(400, (e as Error).message);
+    }
 
     const model = unretired(req.model || settings.models[req.provider] || undefined);
     // The prompt and the briefing go in files the launch names: a command
@@ -3011,6 +3034,17 @@ export class Fleet extends EventEmitter {
     return f?.cwd || rec.cwd;
   }
 
+  /** `resumeCwd`, cut again from its branch if the reclaim took it. */
+  private resumeDir(rec: SessionRecord): string {
+    const cwd = this.resumeCwd(rec);
+    try {
+      ensureCheckout(cwd);
+    } catch (e) {
+      throw new FleetError(409, `cannot resume: ${(e as Error).message}`);
+    }
+    return cwd;
+  }
+
   /**
    * Run `fn` once any action already under way on the session is done. Two
    * messages to a parked session must not each resume it: the second start
@@ -3061,8 +3095,7 @@ export class Fleet extends EventEmitter {
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to resume");
     const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is no longer set up; add it back to resume on the same account");
-    const cwd = this.resumeCwd(rec);
-    if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
+    const cwd = this.resumeDir(rec);
     attempt?.();
     if (view.cold) {
       await this.wake(rec, view, account, cwd, this.wakeTarget(rec, view), prompt);
@@ -3248,8 +3281,7 @@ export class Fleet extends EventEmitter {
       if (opts.prompt) await this.typeInto(rec.id, rec.provider, view.tmux, opts.prompt);
       return view;
     }
-    const cwd = this.resumeCwd(rec);
-    if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
+    const cwd = this.resumeDir(rec);
     await this.wake(rec, view, from, cwd, target, opts.prompt);
     await this.tick();
     return this.get(id);
@@ -3356,8 +3388,7 @@ export class Fleet extends EventEmitter {
     if (!rec.agentSessionId) throw new FleetError(409, "cannot tell which conversation that process is");
     const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is not set up in agentbox");
-    const cwd = this.resumeCwd(rec);
-    if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
+    const cwd = this.resumeDir(rec);
     if (!rec.transcriptPath || !existsSync(transcriptFile(rec.transcriptPath))) throw new FleetError(409, "its transcript is missing, so a resume would start empty");
 
     const pid = view.pid;
@@ -3431,11 +3462,10 @@ export class Fleet extends EventEmitter {
     if (!rec || !target || !from || !rec.agentSessionId) return false;
     let cwd: string;
     try {
-      cwd = this.resumeCwd(rec);
+      cwd = this.resumeDir(rec);
     } catch {
       return false; // cannot prove a resume: type into it where it is
     }
-    if (!existsSync(cwd)) return false;
     attempt?.();
     await this.wake(rec, s, from, cwd, target, text);
     await this.tick();
@@ -3658,8 +3688,7 @@ export class Fleet extends EventEmitter {
     if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to fork");
     const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is no longer set up");
-    const cwd = this.resumeCwd(rec);
-    if (!existsSync(cwd)) throw new FleetError(409, `the session's directory is gone: ${cwd}`);
+    const cwd = this.resumeDir(rec);
 
     const forkAs = randomUUID();
     const prepared = this.resumeLaunch(rec, account, cwd, undefined, forkAs);

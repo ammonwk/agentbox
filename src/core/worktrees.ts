@@ -1,21 +1,24 @@
 import { existsSync, readdirSync, statSync, type Dirent } from "node:fs";
-import { join } from "node:path";
-import { listRepos } from "./db";
+import { join, relative } from "node:path";
+import { getSessionRecord, listRepos } from "./db";
 import {
   type Dirt,
   branchAt,
   commitsHeldOnlyHere,
+  createWorktree,
   diskBytesOf,
   dirtOf,
   headMovedAt,
   listWorktreesOf,
   mapPool,
+  refExists,
   removeWorktreeAt,
   repoCheckoutPath,
   SCAN_CONCURRENCY,
 } from "./git";
 import { branchStatesOf, type PrState } from "./prs";
 import { worktreeRoot } from "./paths";
+import { setUpWorktree } from "./setup";
 import type { ReclaimResult, Session, WorktreeInfo, WorktreeScan, WorktreeVerdict } from "./types";
 
 /**
@@ -33,6 +36,45 @@ import type { ReclaimResult, Session, WorktreeInfo, WorktreeScan, WorktreeVerdic
  * it can read, and hand-made worktrees occupy exactly the same disk. They are
  * labelled `foreign` so the UI can scope them out, never silently swept.
  */
+
+/**
+ * Make sure `dir` is there, cutting again the worktree it lies in when it was
+ * removed: the reclaim takes a stopped session's clean checkout on the
+ * premise that its branch keeps the commits, and this is the other half of
+ * that premise. A directory under the worktree root is named for the session
+ * that cut it (`createWorktree`), so that session's branch, in whichever
+ * registered repo has it, is what it is cut from again, set up as a new
+ * worktree is. Throws, saying why, when there is nothing to cut it from: a
+ * directory agentbox did not cut, or a detached checkout with no branch.
+ */
+export function ensureCheckout(dir: string): void {
+  if (existsSync(dir)) return;
+  const gone = `the directory is gone: ${dir}`;
+  const name = isOurs(dir) ? relative(worktreeRoot(), dir).split("/")[0] : "";
+  if (!name) throw new Error(gone);
+  const branch = (getSessionRecord(name)?.facts as { gitBranch?: string | null } | null)?.gitBranch;
+  if (!branch || branch === "HEAD") throw new Error(`${gone}, and it was on no branch it could be cut again from`);
+  const repos = listRepos().filter((r) => existsSync(repoCheckoutPath(r)) && refExists(repoCheckoutPath(r), `refs/heads/${branch}`));
+  if (repos.length !== 1) {
+    throw new Error(`${gone}, and ${repos.length ? `${repos.length} registered repos have` : "no registered repo has"} its branch ${branch} to cut it again from`);
+  }
+  try {
+    const { path } = createWorktree(repos[0]!, name, branch, branch);
+    setUpWorktree(repos[0]!, path, name);
+  } catch (e) {
+    throw new Error(`${gone}, and cutting it again from ${branch} failed: ${(e as Error).message}`);
+  }
+  if (!existsSync(dir)) throw new Error(`${gone}: cut again from ${branch}, which does not have it`);
+  console.log(`agentbox: cut ${join(worktreeRoot(), name)} again from ${branch}`);
+}
+
+/** Whether a session still needs its checkout where it is. A parked one is
+ *  only waiting for its next message, which resumes it there, and one with a
+ *  wait armed is waiting on the world (an `until` command runs in its
+ *  directory): either is as much in use as a running one. */
+export function holdsCheckout(s: Session): boolean {
+  return s.host !== "none" || s.parkedAt !== null || s.waits.length > 0;
+}
 
 /** Where a scan is allowed to look. */
 export type WorktreeScope = "agentbox" | "all";
@@ -127,8 +169,8 @@ export function verdictFor(input: WorktreeFacts): WorktreeVerdict {
 
   // A directory under the worktree root that no registered repo claims. Its
   // repo was deregistered or moved, so no session can resume into it —
-  // `restoreWorktree` refuses outright without a registered repo — and there is
-  // no base branch left to compare against either. What it can still hold is
+  // `ensureCheckout` finds no registered repo to cut it again from — and there
+  // is no base branch left to compare against either. What it can still hold is
   // commits no branch or remote has, which removing it would leave unreachable.
   if (input.orphan) {
     if (input.heldOnly < 0) {
@@ -171,8 +213,8 @@ export function verdictFor(input: WorktreeFacts): WorktreeVerdict {
   }
 
   // A branch's commits live in the common repo, so removing the checkout
-  // leaves them and the branch intact; a resume only needs the checkout cut
-  // again. Clean is enough.
+  // leaves them and the branch intact, and a resume cuts the checkout again
+  // from it (`ensureCheckout`). Clean is enough.
   return { safe: true, reason: "clean", detail: "clean; its branch keeps the commits" };
 }
 
@@ -254,9 +296,7 @@ export async function scanWorktrees(
   }
   const liveOf = (path: string) => {
     const s = byPath.get(path);
-    // A parked session is only waiting for its next message, which resumes
-    // it here: its worktree is as much in use as a running one's.
-    return s ? s.host !== "none" || s.parkedAt !== null : false;
+    return s ? holdsCheckout(s) : false;
   };
 
   // ---- phase one: what is out there, and what does GitHub say about it

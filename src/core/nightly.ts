@@ -4,7 +4,7 @@ import { getKv, getSettings, setKv } from "./db";
 import { diskBytesOf, headMovedAt, removeWorktreeIdly } from "./git";
 import { cwdOf } from "./providers/procs";
 import type { NightlyReclaim, Session } from "./types";
-import { repoCheckoutPathFor, scanWorktrees, untouchedSince } from "./worktrees";
+import { holdsCheckout, repoCheckoutPathFor, scanWorktrees, untouchedSince } from "./worktrees";
 
 /**
  * The safe reclaim, every night at 3am, for the human who turned it on
@@ -70,7 +70,7 @@ export async function reclaimNightly(sessions: () => Session[]): Promise<Nightly
 
     const moved = await headMovedAt(item.path);
     const inUse =
-      sessions().some((s) => (s.cwd === item.path || s.worktree === item.path) && (s.host !== "none" || s.parkedAt !== null)) ||
+      sessions().some((s) => (s.cwd === item.path || s.worktree === item.path) && holdsCheckout(s)) ||
       processCwds().some((cwd) => inside(item.path, cwd)) ||
       // An orphan may not be a git checkout at all: nothing to read is not "recent".
       (moved !== null && Date.now() - moved < QUIET_MS) ||

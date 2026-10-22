@@ -51,6 +51,7 @@ import { describeRule, FRESH_OVER, isRecurring, nextRun, onEvent, parseWhen, typ
 import { listScheduledSessions, markScheduled } from "./schedule-sessions";
 import { scheduleSentMark } from "./sent";
 import type { ProviderId, Schedule, ScheduleSpec, Session } from "./types";
+import { ensureCheckout } from "./worktrees";
 
 const TICK_MS = 15_000;
 /** How often a PR waited on is looked at: the copy it reads syncs once a
@@ -601,7 +602,8 @@ function dirOf(spec: ScheduleSpec): string | null {
  */
 async function runNote(s: Schedule): Promise<string> {
   const cwd = dirOf(s.spec);
-  if (!cwd || !existsSync(cwd)) throw new Error(`its directory is gone: ${cwd}`);
+  if (!cwd) throw new Error("it has no directory to run in");
+  ensureCheckout(cwd);
   const p = Bun.spawn(["nice", "-n", "19", "timeout", "--kill-after=5", String(NOTE_TIMEOUT_S), "sh", "-c", s.noteCmd!], {
     cwd,
     stdin: "ignore",

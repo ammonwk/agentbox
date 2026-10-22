@@ -539,7 +539,8 @@ export interface SessionRecord {
   /** Teammates whose panes were stopped with it. */
   parkedMates?: string[] | null;
   /** Why it is parked, when that is not idleness: its process was lost in a
-   *  crash while it waited on you (src/core/recovery.ts). */
+   *  crash while it waited on you (src/core/recovery.ts), or ended with
+   *  nothing here stopping it (`Fleet.parkExited`). */
   parkedWhy?: string | null;
   /** The session that took over from it (`Fleet.handOver`); null for none. */
   successor?: string | null;
