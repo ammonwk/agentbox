@@ -1,8 +1,9 @@
 # Agents
 
-An agent is a program that runs on agentbox, not in it. Agentbox gives it
-a name on the Agents page, a main conversation, a page of its own, and keeps
-its program running. Everything it decides — when to start a session, what to
+An agent is a program that runs on agentbox, not in it: not one of the
+coding-agent CLI sessions agentbox runs, but something that starts, talks to
+and watches them. Agentbox gives it a name on the Agents page, a main
+conversation, a page of its own, and keeps its program running. Everything it decides — when to start a session, what to
 tell it, which rules to hold it to, what to remember — is its own code,
 written against the same HTTP API and CLI any session uses (`docs/v2.md`,
 HTTP API). Nothing in agentbox knows any agent by name.
@@ -35,10 +36,10 @@ it, or ask Jupiter for a new one.
 
 ```
 my-agent/
-  agent.json     the manifest (below)
-  MAIN.md             optional: what its main conversation is told first
-  main.ts             optional: its program
-  …                   anything else it wants
+  agent.json    the manifest (below)
+  MAIN.md       optional: what each fresh main conversation is told first
+  main.ts       optional: its program
+  …             anything else it wants
 ```
 
 Add it with `agentbox agent add <dir>` (or `POST /api/agents
@@ -55,19 +56,29 @@ forgets it and leaves the directory and its state alone.
   "run": ["bun", "main.ts"],        // optional: its program, argv, run in the directory and kept running
   "url": "http://127.0.0.1:9000",   // optional instead of run: a program agentbox does not run
   "main": {                         // optional: its main conversation
-    "start": { "provider": "claude", "model": "…", "cwd": "." },  // a POST /api/sessions body; cwd is from the directory, ~ is home
-    "instructions": "MAIN.md",       // said before the first message; {{dir}}, {{home}}, {{agentbox}} (the checkout) and {{bin}} are filled in
-    "schedule": "7w4wvcfm"           // instead of start: the session this schedule spoke to last
+    "start": { "provider": "claude", "model": "…", "cwd": ".", "fallbacks": ["codex"] },
+                                    // a POST /api/sessions body; cwd is from the directory, ~ is home;
+                                    // fallbacks: other providers, in order, when its own has no room
+    "instructions": "MAIN.md",       // what each fresh main is told first; {{dir}}, {{home}},
+                                    // {{agentbox}} (the checkout) and {{bin}} are filled in
+    "freshOver": 150000             // tokens of context past which the next message starts a fresh main
   }
   // Any other field is the agent's own: agentbox ignores it.
 }
 ```
 
 Each part is optional. A manifest with only `main.start` and `instructions`
-is a conversation agent with standing instructions and no code. One with
-`main.schedule` adopts a same-session schedule (docs/v2.md, Schedules that
-speak to one session) as its main conversation, which is how an existing
-steward becomes an agent without changing how it runs.
+is a conversation agent with standing instructions and no code. Something it
+should hear on a timer is a schedule that speaks to it (`agentbox schedule
+'every 10 minutes' --to <name> --note-cmd <command>`; docs/v2.md, Schedules
+that speak to an agent): its note command runs in the agent's directory, and
+what it prints is said to the main.
+
+**Memory** is files. An agent keeps what it should remember where its main
+can read and write it: its home (`{{home}}` in MAIN.md), or the CLI's own
+memory for the main's directory, which agentbox shares across every account
+of that CLI. Say in MAIN.md where it is and what goes there. Agentbox reads
+none of it, except the handoff below.
 
 ## What agentbox does for it
 
@@ -93,13 +104,32 @@ must not be cut in half runs as a session, or in a unit of its own
 
 **Its main conversation.** The Agents page shows it as the agent's chat:
 an ordinary session, with the Sessions page's timeline and composer. It is
-the first that applies of: the schedule's session (`main.schedule`), the
-session the program named (`PATCH /api/agents/:name {main}` or
-`agentbox agent main`), or, on the first message with neither, a session
-agentbox starts from `main.start` with `instructions` before the message.
-Opening the page never starts anything; only sending does. When a program
-hands its main to a fresh session (`agentbox handover`, below), the page
-follows; the ones before are listed under it, read-only.
+the session the program named (`PATCH /api/agents/:name {main}` or `agentbox
+agent main`), or one agentbox starts from `main.start` on the first message,
+with `instructions` before it. Opening the page never starts anything; only
+sending does. Every message for the main, yours and a schedule's, goes
+through agentbox (`Agents.say`), which keeps it a conversation that can run
+for months:
+
+- **A fresh main** takes over when the main is closed, stopped at a usage
+  limit, holds more context than `main.freshOver` (150k tokens unless it
+  says), or runs on a fallback while its own provider has room again. The
+  message starts it, after its instructions, the name of the main it follows,
+  and that main's handoff. The old main's sessions, cards, pull requests and
+  messages go to it (`agentbox handover`), and the old one is closed once it
+  is not mid-turn. The ones before are listed under it, read-only.
+- **The handoff.** A main that is idle, holds more than half its context
+  size, and whose prompt cache goes cold in a few minutes is asked once to
+  write what a successor needs to `<its home>/handoff.md`: a short turn while
+  the cache is warm, where asking a cold one would cost a re-read of
+  everything it holds.
+- **Compaction.** A main the CLI compacted is told its instructions again
+  with the next message, once.
+- **Kept warm.** A main is not parked as soon as its turn ends `STATUS:
+  done`, as other sessions are, since its next message is coming.
+
+When a program hands its main to a fresh session itself (`agentbox
+handover`), the page follows.
 
 **Its page.** A program answers `GET /agentbox/view[?tab=…]` with blocks that
 agentbox draws, on a phone too:

@@ -14,11 +14,14 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Subprocess } from "bun";
-import { getDb, getSchedule } from "./db";
+import { moveCards } from "./cards";
+import { getDb } from "./db";
 import { FleetError, type Fleet, type SpawnRequest } from "./fleet";
 import { agentboxBin, agentboxHome, packageRoot, userHome } from "./paths";
+import { movePrClaims, prReleasedLine, prReleaseTold } from "./prclaims";
 import { submitWithReceipt } from "./send-receipts";
-import type { ProviderId, AgentInfo } from "./types";
+import { scheduleSentMark } from "./sent";
+import type { AgentInfo, ProviderId, Session } from "./types";
 
 const PROVIDERS: readonly ProviderId[] = ["claude", "codex", "devin", "omp", "opencode", "muse"];
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
@@ -27,6 +30,14 @@ const VIEW_MS = 8_000;
 const ACTION_MS = 60_000;
 const MAX_REPLY = 2 * 1024 * 1024;
 const MAX_LOG = 4 * 1024 * 1024;
+/** Tokens of context past which the next message starts a fresh main, unless
+ *  the manifest names its own (`main.freshOver`): large enough to hold hours
+ *  of conversation, small enough that waking it cold is not a monolith. */
+export const FRESH_OVER = 150_000;
+/** A main this close to going cold is asked for its handoff (`askHandoff`). */
+const HANDOFF_LEAD_MS = 5 * 60_000;
+const HANDOFF_CHECK_MS = 60_000;
+const HANDOFF_ASK = "[agentbox: you have been idle and your prompt cache goes cold in a few minutes,";
 /** A program that lived this long before it exited starts again at once. */
 const STEADY_MS = 60_000;
 const MAX_BACKOFF_MS = 60_000;
@@ -43,12 +54,13 @@ export const Manifest = z
     url: z.string().url().optional(),
     main: z
       .object({
-        /** A `POST /api/sessions` body: what agentbox starts on the first message when there is no main yet. */
+        /** A `POST /api/sessions` body: what agentbox starts a main from. Its
+         *  `fallbacks` are other providers, tried in order when its own has no room. */
         start: z.record(z.string(), z.unknown()).optional(),
-        /** A file in the directory, said before that first message. */
+        /** A file in the directory: each fresh main is told it first. */
         instructions: z.string().min(1).optional(),
-        /** The main conversation is the session this schedule spoke to last. */
-        schedule: z.string().min(1).optional(),
+        /** Tokens of context past which the next message starts a fresh main. */
+        freshOver: z.number().int().min(20_000).optional(),
       })
       .strict()
       .optional(),
@@ -56,7 +68,19 @@ export const Manifest = z
   .passthrough();
 export type Manifest = z.infer<typeof Manifest>;
 
-type Row = { name: string; dir: string; enabled: number; main: string | null; previous: string; main_send: string | null; created_at: number };
+type Row = {
+  name: string;
+  dir: string;
+  enabled: number;
+  main: string | null;
+  previous: string;
+  main_send: string | null;
+  /** The main it replaced while that one was mid-turn: closed once its turn is over. */
+  retiring: string | null;
+  /** When the main was last told its instructions. */
+  briefed_at: number | null;
+  created_at: number;
+};
 
 type Proc = {
   child: Subprocess | null;
@@ -94,7 +118,6 @@ export function readManifest(dir: string): Manifest {
   const m = Manifest.safeParse(raw);
   if (!m.success) throw new FleetError(400, `${file}: ${m.error.issues.map((i) => `${i.path.join(".") || "(top)"}: ${i.message}`).join("; ")}`);
   if (m.data.run && m.data.url) throw new FleetError(400, `${file}: give run or url, not both`);
-  if (m.data.main?.schedule && m.data.main.start) throw new FleetError(400, `${file}: main is a schedule's session or one agentbox starts, not both`);
   return m.data;
 }
 
@@ -132,6 +155,7 @@ async function readCapped(res: Response): Promise<unknown> {
 export class Agents {
   private procs = new Map<string, Proc>();
   private starting = new Set<string>();
+  private handoffsAskedAt = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -253,38 +277,164 @@ export class Agents {
     return out;
   }
 
-  /**
-   * Say something to its main conversation. With none yet, start it from the
-   * manifest's `main.start`, its instructions before the message. A retry
-   * with the same `sendId` never starts a second one.
-   */
+  /** A person says something to its main conversation (the Agents page, `agentbox agent chat`).
+   *  A retry with the same `sendId` never starts a second main. */
   async chat(name: string, text: string, sendId: string): Promise<{ session: string; started: boolean }> {
     const r = this.row(name);
-    const main = this.mainOf(r);
-    if (main) {
-      await submitWithReceipt(main, sendId, "send", text, (attempt) => this.fleet.send(main, text, attempt));
-      return { session: main, started: false };
-    }
-    if (r.main_send === sendId && r.main) return { session: r.main, started: true };
+    if (r.enabled !== 1) throw new FleetError(409, `${name} is disabled: enable it to talk to it`);
+    if (r.main_send === sendId && r.main) return { session: this.fleet.heir(r.main), started: true };
+    const out = await this.say(r, text, { sendId });
+    if ("quiet" in out) throw new FleetError(409, out.quiet);
+    return out;
+  }
+
+  /** A schedule's note for its main conversation (src/core/scheduler.ts). Skipped
+   *  while the main is mid-turn or showing a prompt: its next time says what is still true. */
+  async note(name: string, text: string, scheduleId: string): Promise<{ session: string; started: boolean } | { quiet: string }> {
+    const r = this.row(name);
+    if (r.enabled !== 1) return { quiet: `${name} is disabled` };
+    return this.say(r, text, { schedule: scheduleId });
+  }
+
+  /** Where a schedule that speaks to it runs its note command: the agent's directory. */
+  dir(name: string): string {
+    return this.row(name).dir;
+  }
+
+  /** Its main is mid-turn or showing a prompt. */
+  busy(name: string): boolean {
+    const main = this.mainOf(this.row(name));
+    return !!main && atWork(this.session(main));
+  }
+
+  /**
+   * Say `text` to its main conversation: the one it has, or a fresh one when
+   * it has none, or when the one it has is closed, stopped at a usage limit,
+   * holds more context than `main.freshOver`, or runs on a fallback while its
+   * own provider has room again. A fresh main is told its instructions, the
+   * handoff the last one wrote (`askHandoff`), and who it takes over from; the
+   * last one's sessions, cards, PRs and messages go to it, and it is closed
+   * once it is not at work. A main compacted since it was last told its
+   * instructions is told them again, once.
+   */
+  private async say(r: Row, text: string, from: { sendId: string } | { schedule: string }): Promise<{ session: string; started: boolean } | { quiet: string }> {
     const m = readManifest(r.dir);
-    if (!m.main?.start) throw new FleetError(409, `${name} has no main conversation yet, and its manifest does not say how to start one`);
-    if (this.starting.has(name)) throw new FleetError(409, `${name}'s main conversation is being started this moment`);
-    this.starting.add(name);
+    const main = this.mainOf(r);
+    const last = main ? this.session(main) : null;
+    const start = m.main?.start;
+    const busy = atWork(last);
+    if (busy && "schedule" in from) return { quiet: "its main conversation is mid-turn or showing a prompt, so this time was skipped; its next time says what is still true" };
+    const over = !last ? "none yet" : busy || !start ? null : (pastIt(last, m.main?.freshOver ?? FRESH_OVER) ?? this.backHome(start, last));
+    const instructions = m.main?.instructions ? this.fill(readFileSync(join(r.dir, m.main.instructions), "utf8").trim(), r) : "";
+    if (last && !over) {
+      const compacted = !!instructions && (last.compactedAt ?? 0) > (r.briefed_at ?? 0);
+      const said = compacted ? `${text}\n\n[agentbox: you were compacted since you were told your instructions, so here they are again]\n\n${instructions}` : text;
+      if ("sendId" in from) await submitWithReceipt(last.id, from.sendId, "send", said, (attempt) => this.fleet.send(last.id, said, attempt));
+      else await this.fleet.note(last.id, `${scheduleSentMark(from.schedule)} ${said}`);
+      if (compacted) getDb().run("UPDATE agents SET briefed_at = ? WHERE name = ?", [Date.now(), r.name]);
+      return { session: last.id, started: false };
+    }
+    if (!start) throw new FleetError(409, `${r.name} has no main conversation, and its manifest does not say how to start one`);
+    if (this.starting.has(r.name)) return { quiet: `${r.name}'s main conversation is being started this moment` };
+    this.starting.add(r.name);
     try {
-      const spec = m.main.start;
-      const provider = spec.provider;
-      if (typeof provider !== "string" || !PROVIDERS.includes(provider as ProviderId)) throw new FleetError(400, `${name}: main.start.provider must be one of ${PROVIDERS.join(", ")}`);
-      const instructions = m.main.instructions ? this.fill(readFileSync(join(r.dir, m.main.instructions), "utf8").trim(), r) : "";
-      const cwd = typeof spec.cwd === "string" ? resolve(r.dir, spec.cwd.replace(/^~(?=\/|$)/, userHome())) : r.dir;
+      const provider = start.provider;
+      if (typeof provider !== "string" || !PROVIDERS.includes(provider as ProviderId)) throw new FleetError(400, `${r.name}: main.start.provider must be one of ${PROVIDERS.join(", ")}`);
+      const cwd = typeof start.cwd === "string" ? resolve(r.dir, start.cwd.replace(/^~(?=\/|$)/, userHome())) : r.dir;
       mkdirSync(cwd, { recursive: true });
-      const prompt = instructions ? `${instructions}\n\n---\n\n${text}` : text;
-      const { session } = await this.fleet.spawn({ ...(spec as Partial<SpawnRequest>), provider: provider as ProviderId, cwd, prompt, parent: undefined, callerPid: undefined, id: undefined });
-      getDb().run("UPDATE agents SET main_send = ? WHERE name = ?", [sendId, name]);
-      this.setMain(this.row(name), session.id);
+      const closing = !!last && last.status !== "closed";
+      const theirs = closing ? this.fleet.startedBy(last!.id) : [];
+      const handoff = last ? this.handoffOf(r, last) : "";
+      const follows = last
+        ? `[agentbox: you take over from ${last.id}, ${r.name}'s main conversation until now (${over}).${handoff ? ` It left you this handoff:\n\n${handoff}\n\n` : " "}What it did is in \`agentbox log ${last.id} | tail -60\`; it will not be spoken to again.${theirs.length ? ` The sessions it started are still at their work and are now listed under you: ${theirs.join(" ")}.` : ""}]`
+        : "";
+      const ownership = last ? prReleasedLine(last.id) : "";
+      const said = "schedule" in from ? `${scheduleSentMark(from.schedule)} ${text}` : text;
+      const prompt = [instructions, [ownership, follows, said].filter(Boolean).join("\n\n")].filter(Boolean).join("\n\n---\n\n");
+      const { fallbacks, ...spec } = start as Partial<SpawnRequest> & { fallbacks?: unknown };
+      const others = Array.isArray(fallbacks) ? fallbacks.filter((p): p is ProviderId => PROVIDERS.includes(p as ProviderId) && p !== provider) : [];
+      const asked = { ...spec, provider: provider as ProviderId, cwd, prompt, parent: undefined, callerPid: undefined, id: undefined };
+      const session = await this.fleet.spawnFirstWithRoom([asked, ...others.map((p) => ({ ...asked, provider: p, model: undefined, effort: undefined, accountId: null }))]);
+      getDb().run("UPDATE agents SET briefed_at = ?, main_send = ? WHERE name = ?", [Date.now(), "sendId" in from ? from.sendId : null, r.name]);
+      this.setMain(this.row(r.name), session.id);
+      if (closing) await this.retire(r.name, last!.id, session.id);
+      // It was told in its first prompt what its predecessor had lost, once.
+      if (ownership) prReleaseTold(session.id);
       this.changed();
       return { session: session.id, started: true };
     } finally {
-      this.starting.delete(name);
+      this.starting.delete(r.name);
+    }
+  }
+
+  /**
+   * `from` is replaced by `to`: handed over at once, mid-turn or not, so what
+   * it started, its cards, the PRs it has and any agent's message to it go to
+   * `to` from now on. It is closed alone once it is not at work; until then it
+   * is the agent's `retiring`, tried again each tick.
+   */
+  private async retire(name: string, from: string, to: string): Promise<void> {
+    try {
+      await this.fleet.handOver(from, to);
+      moveCards(from, to);
+      movePrClaims(from, to);
+      const s = this.session(from);
+      if (s && s.status !== "closed" && atWork(s)) {
+        getDb().run("UPDATE agents SET retiring = ? WHERE name = ?", [from, name]);
+        return;
+      }
+      if (s && s.status !== "closed") await this.fleet.close(from, true, true);
+      getDb().run("UPDATE agents SET retiring = NULL WHERE name = ?", [name]);
+    } catch (e) {
+      console.error(`agentbox: agent ${name}: retiring ${from}:`, e);
+    }
+  }
+
+  /** Why a main started on a fallback gives way: its own provider has room again. */
+  private backHome(start: Record<string, unknown>, last: Session): string | null {
+    const provider = start.provider as ProviderId;
+    if (last.provider === provider) return null;
+    const str = (v: unknown) => (typeof v === "string" ? v : null);
+    if (!this.fleet.placement(provider, str(start.model), str(start.accountId), str(start.effort), true).accountId) return null;
+    return `it ran on ${last.provider} while ${provider} had no account with room, and ${provider} has room again`;
+  }
+
+  /**
+   * A main that is idle, large, and about to go cold is asked, once, to write
+   * a handoff for the main that may take over from it: written now, while its
+   * cache is warm, it costs a short turn; asked of a cold one, it costs a
+   * re-read of everything it holds. The next fresh main is told it.
+   */
+  private async askHandoff(r: Row, m: Manifest | null, now: number): Promise<void> {
+    if (!m?.main?.start) return;
+    const main = r.main && this.session(this.fleet.heir(r.main));
+    if (!main || main.status !== "waiting" || main.host !== "tmux") return;
+    if (main.cacheWarmUntil < now || main.cacheWarmUntil - now > HANDOFF_LEAD_MS) return;
+    if ((main.contextUsed ?? 0) < (m.main.freshOver ?? FRESH_OVER) / 2) return;
+    if (main.lastPrompt?.startsWith(HANDOFF_ASK)) return;
+    const file = join(agentHome(r.name), "handoff.md");
+    await this.fleet.note(
+      main.id,
+      `${HANDOFF_ASK} and your conversation is large, so the next message may start a fresh main conversation in your place. Write what it needs to carry on to ${file}, replacing what is there, in at most 500 words: what you are in the middle of, what you decided and why, what you are waiting on, and who asked for what. Then end your turn without a reply.]`,
+    ).catch((e) => console.error(`agentbox: agent ${r.name}: asking ${main.id} for a handoff:`, e));
+  }
+
+  /** The handoff `last` wrote, when it wrote one. */
+  private handoffOf(r: Row, last: Session): string {
+    const file = join(agentHome(r.name), "handoff.md");
+    try {
+      if (statSync(file).mtimeMs < last.startedAt) return "";
+      return readFileSync(file, "utf8").trim().slice(0, 8_000);
+    } catch {
+      return "";
+    }
+  }
+
+  private session(id: string): Session | null {
+    try {
+      return this.fleet.get(id);
+    } catch {
+      return null;
     }
   }
 
@@ -311,17 +461,11 @@ export class Agents {
   }
 
   /**
-   * Its main conversation now. Following each handover (`Fleet.heir`), so a
+   * Its main conversation now, following each handover (`Fleet.heir`), so a
    * program that hands its main to a fresh session need not say so twice;
    * the one handed over from goes into `previous`.
    */
-  private mainOf(r: Row, m?: Manifest | null): string | null {
-    const manifest = m === undefined ? this.manifestOrError(r).m : m;
-    const sched = manifest?.main?.schedule;
-    if (sched) {
-      const s = getSchedule(sched);
-      return s?.lastSessionId ? this.fleet.heir(s.lastSessionId) : null;
-    }
+  private mainOf(r: Row): string | null {
     if (!r.main) return null;
     const heir = this.fleet.heir(r.main);
     if (heir !== r.main) this.setMain(r, heir);
@@ -334,25 +478,9 @@ export class Agents {
     getDb().run("UPDATE agents SET main = ?, previous = ? WHERE name = ?", [main, JSON.stringify(next.slice(0, 200)), r.name]);
   }
 
-  /** The sessions that were its main before this one, newest first. */
-  private previousOf(r: Row, m: Manifest | null, main: string | null): string[] {
-    if (!m?.main?.schedule) return JSON.parse(r.previous) as string[];
-    // A schedule's sessions hand over one to the next: walk back from the current one.
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (let at = main; at && out.length < 200; ) {
-      const before = getDb().query("SELECT id FROM sessions WHERE successor = ? ORDER BY created_at DESC LIMIT 1").get(at) as { id: string } | null;
-      if (!before || seen.has(before.id)) break;
-      seen.add(before.id);
-      out.push(before.id);
-      at = before.id;
-    }
-    return out;
-  }
-
   private info(r: Row): AgentInfo {
     const { m, error } = this.manifestOrError(r);
-    const main = this.mainOf(r, m);
+    const main = this.mainOf(r);
     const p = this.procs.get(r.name);
     return {
       name: r.name,
@@ -362,7 +490,7 @@ export class Agents {
       enabled: r.enabled === 1,
       error,
       main,
-      previous: this.previousOf(r, m, main),
+      previous: JSON.parse(r.previous) as string[],
       canStart: !main && !!m?.main?.start,
       hasPage: !!(m?.url || m?.run),
       process: m?.run
@@ -402,9 +530,13 @@ export class Agents {
   /** Start what should run and is not, each after its backoff. */
   private async tick(): Promise<void> {
     const now = Date.now();
+    const asking = now - this.handoffsAskedAt >= HANDOFF_CHECK_MS;
+    if (asking) this.handoffsAskedAt = now;
     for (const r of rows()) {
+      if (r.retiring && r.main && !atWork(this.session(r.retiring))) await this.retire(r.name, r.retiring, this.fleet.heir(r.main));
       if (r.enabled !== 1) continue;
       const { m } = this.manifestOrError(r);
+      if (asking) await this.askHandoff(r, m, now);
       if (!m?.run) continue;
       const p = this.procs.get(r.name);
       if (p?.child || (p && p.backoffUntil > now)) continue;
@@ -519,4 +651,17 @@ export class Agents {
       // A full disk loses log lines, not the program.
     }
   }
+}
+
+/** Mid-turn, or showing a prompt it needs answered. */
+function atWork(s: Session | null): boolean {
+  return !!s && (s.status === "running" || s.status === "blocked");
+}
+
+/** Why the next message leaves this main for a fresh one, or null when it still goes to it. */
+function pastIt(s: Session, freshOver: number): string | null {
+  if (s.status === "closed") return "it was closed";
+  if (s.limitHit) return "it stopped at a usage limit";
+  if ((s.contextUsed ?? 0) > freshOver) return `it held ${Math.round(s.contextUsed! / 1000)}k tokens of context, over the ${Math.round(freshOver / 1000)}k a main is kept to`;
+  return null;
 }

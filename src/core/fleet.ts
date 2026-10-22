@@ -38,7 +38,7 @@ import {
   getRepoById,
   getSessionRecord,
   getSettings,
-  listSchedules,
+  agentMains,
   insertAssignment,
   insertBtw,
   insertRateLimitHit,
@@ -1562,8 +1562,8 @@ export class Fleet extends EventEmitter {
     if (now < this.nextParkCheck) return;
     this.nextParkCheck = now + PARK_CHECK_MS;
     const idleMs = idleMin * 60_000;
-    // A sameSession schedule's next note goes to its current session.
-    const noted = new Set(listSchedules().flatMap((s) => (s.enabled && s.sameSession && s.lastSessionId ? [s.lastSessionId] : [])));
+    // An agent's main conversation: its next message is coming.
+    const noted = new Set(agentMains().map((id) => this.heir(id)));
     // Done: parked within minutes, warm or not (park.ts `DONE_IDLE_MS`).
     const done = (v: Session) => this.liveStatus.get(v.id) === "waiting" && endedDone(v.lastMessage) && !noted.has(v.id);
     // A cache that outlives the process: parked after the provider's own time.
@@ -2916,6 +2916,26 @@ export class Fleet extends EventEmitter {
   }
 
   // --------------------------------------------------------------- actions
+
+  /** Start the first of these that has an account with room: a provider and
+   *  its fallbacks. Anything but no room is thrown as it is; no room anywhere
+   *  is thrown saying each one's why. */
+  async spawnFirstWithRoom(tries: SpawnRequest[]): Promise<Session> {
+    const whys: string[] = [];
+    let last: FleetError | null = null;
+    for (const req of tries) {
+      try {
+        const { session } = await this.spawn(req);
+        if (whys.length) console.log(`agentbox: ${whys.join("; ")}: started on ${req.provider} instead`);
+        return session;
+      } catch (e) {
+        if (!(e instanceof FleetError && e.placement)) throw e;
+        whys.push(tries.length > 1 ? `${req.provider}: ${e.message}` : e.message);
+        last = e;
+      }
+    }
+    throw new FleetError(409, whys.join("; "), last!.placement);
+  }
 
   async spawn(req: SpawnRequest): Promise<{ session: Session; placement: Placement }> {
     const adapter = this.adapter(req.provider);

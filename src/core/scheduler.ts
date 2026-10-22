@@ -19,38 +19,31 @@
  * workflow's runs are read every two minutes, and a session starts for each
  * red streak (redwatch.ts), told which runs failed.
  *
- * A timed recurring one may have a note command and may keep to one session
- * (`Schedule.noteCmd`, `sameSession`; `come` below). The command runs each
- * time it comes due and what it prints goes before the prompt; when it prints
- * nothing, nothing happens. Keeping to one session, the note is typed into the
- * session the schedule started last, so its prompt cache stays warm between
- * notes, until that one is gone or has grown past `freshOver`: then a new one
- * takes over and the old one is closed, so it never becomes one huge cold
- * context. One compacted since the last note is kept, and the next note
- * carries the prompt again, so it has what it read at its start. An agent's message to the old one goes to the new one
- * (`Fleet.heir`). A session mid-turn is never typed into or closed: that time
- * is skipped, and the command says what is still true the next time; one that
- * was replaced and then got busy before it could be closed is closed once its
- * turn is over (`retire`).
+ * A timed recurring one may have a note command (`Schedule.noteCmd`): it
+ * runs each time the schedule comes due, and what it prints goes before the
+ * prompt; when it prints nothing, nothing happens. And it may speak to an
+ * agent (`Schedule.agent`) instead of starting a session: the note, or the
+ * prompt, is said to the agent's main conversation, which the agent keeps
+ * (src/core/agents.ts `say`). A main mid-turn is never typed into: that time
+ * is skipped, and the command says what is still true the next time.
  *
- * A session a schedule starts and no longer speaks to closes itself an hour
- * after its last message: it was started to do one thing, and the board is not
- * where it lives afterwards. A session kept by a `sameSession` schedule is
- * never closed this way, since its next note is going to it.
+ * A session that finished — one a schedule started and no longer speaks to,
+ * or one another session started — closes itself an hour after its last
+ * message, unless it still holds something (`closeFinished`). It was started
+ * to do one thing, and the board is not where it lives afterwards.
  */
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { moveCards } from "./cards";
-import { movePrClaims, prReleasedLine, prReleaseTold } from "./prclaims";
-import { deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
-import { FleetError, newSessionId, type Fleet, type SpawnRequest } from "./fleet";
+import { agentMains, deleteSchedule, getPr, getRepoById, getSchedule, getSessionRecord, insertSchedule, listSchedules, updateSchedule } from "./db";
+import { FleetError, newSessionId, type Fleet } from "./fleet";
 import { isGitRepo, repoCheckoutPath, repoFullNameOf } from "./git";
 import { defaultBranch, findWorkflow, readRuns, redNote, redStreak } from "./redwatch";
-import { describeRule, FRESH_OVER, isRecurring, nextRun, onEvent, parseWhen, type ScheduleRule } from "./schedule";
+import { unfinishedClaims } from "./prclaims";
+import { describeRule, isRecurring, nextRun, onEvent, parseWhen, type ScheduleRule } from "./schedule";
 import { listScheduledSessions, markScheduled } from "./schedule-sessions";
-import { scheduleSentMark } from "./sent";
-import type { ProviderId, Schedule, ScheduleSpec, Session } from "./types";
+import { turnStatus } from "./turnstatus";
+import type { ProviderId, Schedule, ScheduleSpec } from "./types";
 import { ensureCheckout } from "./worktrees";
 
 const TICK_MS = 15_000;
@@ -61,19 +54,23 @@ const MERGE_CHECK_MS = 60_000;
 const RED_CHECK_MS = 2 * 60_000;
 /** No account had room: try again this much later. */
 const RETRY_MS = 10 * 60_000;
-/** Below this a session is over the size at its first prompt, and every note
- *  would start another. */
-const FRESH_OVER_MIN = 20_000;
 /** How long a note command may take. */
 const NOTE_TIMEOUT_S = 120;
 /** How much of what it prints is said: it is typed into a session. */
 const NOTE_MAX = 16_000;
-/** A scheduled session's last message is this old before it closes itself. */
+/** A finished session's last message is this old before it closes itself. */
 const CLOSE_FINISHED_MS = 60 * 60_000;
 
-/** What a note command or a one-session schedule did when it came due: the
- *  session spoken to or started, or why there is none this time. */
+/** What a note command or a schedule that speaks to an agent did when it came
+ *  due: the session spoken to or started, or why there is none this time. */
 type Came = { sessionId: string } | { quiet: string };
+
+/** The agents a schedule may speak to (src/core/agents.ts). */
+export interface AgentsPort {
+  note(name: string, text: string, scheduleId: string): Promise<{ session: string } | { quiet: string }>;
+  dir(name: string): string;
+  busy(name: string): boolean;
+}
 
 export interface ScheduleEdit {
   /** Plain words, as for a new one. */
@@ -85,8 +82,6 @@ export interface ScheduleEdit {
   repoId?: string;
   /** Null or "" takes it away. */
   noteCmd?: string | null;
-  sameSession?: boolean;
-  freshOver?: number | null;
   /** [] takes them away. */
   fallbacks?: ProviderId[];
 }
@@ -94,8 +89,8 @@ export interface ScheduleEdit {
 /** What a new schedule may say beyond when and what. */
 export interface ScheduleExtras {
   noteCmd?: string | null;
-  sameSession?: boolean;
-  freshOver?: number | null;
+  /** Speak to this agent's main conversation instead of starting a session. */
+  agent?: string | null;
 }
 
 export class Scheduler {
@@ -112,6 +107,7 @@ export class Scheduler {
 
   constructor(
     private readonly fleet: Fleet,
+    private readonly agents: () => AgentsPort,
     /** Something changed that the app state shows. */
     private readonly changed: () => void,
     private readonly now: () => number = Date.now,
@@ -129,10 +125,12 @@ export class Scheduler {
   }
 
   async create(input: { when: string; spec: ScheduleSpec; label?: string | null } & ScheduleExtras): Promise<Schedule> {
-    checkSpec(input.spec);
+    const extras = { noteCmd: input.noteCmd?.trim() || null, agent: input.agent?.trim() || null };
+    // One that speaks to an agent starts nothing: it runs where the agent's directory is.
+    if (extras.agent) this.agents().dir(extras.agent);
+    else checkSpec(input.spec);
     const now = this.now();
     const rule = await settle(parse(input.when, now), input.spec);
-    const extras = { noteCmd: input.noteCmd?.trim() || null, sameSession: input.sameSession === true, freshOver: input.freshOver ?? null };
     checkExtras(rule, input.spec, extras);
     const s: Schedule = {
       id: freshId(),
@@ -145,7 +143,6 @@ export class Scheduler {
       lastRunAt: null,
       lastSessionId: null,
       lastError: null,
-      retiring: null,
       ...extras,
     };
     insertSchedule(s);
@@ -173,8 +170,6 @@ export class Scheduler {
     if (edit.when !== undefined) patch.rule = await settle(parse(edit.when, now), spec);
     if (edit.label !== undefined) patch.label = edit.label?.trim() || null;
     if (edit.noteCmd !== undefined) patch.noteCmd = edit.noteCmd?.trim() || null;
-    if (edit.sameSession !== undefined) patch.sameSession = edit.sameSession;
-    if (edit.freshOver !== undefined) patch.freshOver = edit.freshOver;
     const enabled = edit.enabled ?? s.enabled;
     const rule = patch.rule ?? s.rule;
     checkExtras(rule, spec, { ...s, ...patch });
@@ -203,7 +198,7 @@ export class Scheduler {
   /** Start it now. A one-time one is then done; a recurring one keeps its times. */
   async runNow(id: string): Promise<string> {
     const s = this.get(id);
-    if (s.noteCmd || s.sameSession) {
+    if (s.noteCmd || s.agent) {
       if (this.coming.has(id)) throw new FleetError(409, "it is at it right now: its note command is running");
       const came = await this.come(s, this.now(), true);
       if ("quiet" in came) throw new FleetError(409, came.quiet);
@@ -228,10 +223,9 @@ export class Scheduler {
     try {
       const now = this.now();
       for (const s of listSchedules()) {
-        if (s.retiring && s.lastSessionId && !this.atWork(s.retiring)) await this.retire(s.id, s.retiring, s.lastSessionId);
         if (!s.enabled || s.nextAt === null || s.nextAt > now) continue;
         // Not waited for: its command may take a while, and the rest are due too.
-        if (s.noteCmd || s.sameSession) void this.come(s, now, false).catch((e) => console.error(`agentbox: schedule ${s.id}:`, e));
+        if (s.noteCmd || s.agent) void this.come(s, now, false).catch((e) => console.error(`agentbox: schedule ${s.id}:`, e));
         else await this.fire(s, now, false);
       }
       if (now - this.mergesCheckedAt >= MERGE_CHECK_MS) {
@@ -321,35 +315,37 @@ export class Scheduler {
   }
 
   /**
-   * Close sessions a schedule started once their last message is an hour old.
-   * A session that is mid-turn, has a prompt to answer, is waiting on a limit
-   * or an automatic resume, or still holds a wait or background work is left
-   * alone: it has not finished. A session a `sameSession` schedule will speak
-   * to next is not closed at all.
+   * Close finished sessions once their last message is an hour old: the ones
+   * a schedule started and no longer speaks to, and the ones another session
+   * started. One is not finished while it is mid-turn, has a prompt to answer,
+   * is waiting on a limit or an automatic resume, holds a wait, background
+   * work or a pull request, ended its turn on something it needs from you, or
+   * has a session of its own still open; nor when you pinned or bookmarked it.
+   * An agent's main conversation is never closed this way.
    */
   private async closeFinished(now: number): Promise<void> {
-    const kept = new Set(listSchedules().flatMap((s) => (s.enabled && s.sameSession && s.lastSessionId ? [s.lastSessionId] : [])));
+    const mains = new Set(agentMains().map((id) => this.fleet.heir(id)));
+    const sessions = this.fleet.sessions();
+    const open = new Set(sessions.filter((s) => s.closedAt === null && s.status !== "closed").map((s) => s.id));
+    const parents = new Set(sessions.filter((s) => open.has(s.id) && s.parent).map((s) => s.parent!));
+    const scheduled = new Set(listScheduledSessions().map((r) => r.sessionId));
+    const claims = unfinishedClaims();
     let closed = false;
-    for (const { sessionId } of listScheduledSessions()) {
-      if (kept.has(sessionId)) continue;
-      let s: Session;
-      try {
-        s = this.fleet.get(sessionId);
-      } catch {
-        continue;
-      }
-      if (s.closedAt !== null) continue;
+    for (const s of sessions) {
+      if (!open.has(s.id) || mains.has(s.id) || parents.has(s.id)) continue;
+      if (!scheduled.has(s.id) && !s.parent) continue;
       // You pinned or bookmarked it: it is not clutter to you.
       if (s.pinOrder !== null || s.bookmarkedAt !== null) continue;
       if (now - s.lastActivityAt < CLOSE_FINISHED_MS) continue;
       if (s.status !== "waiting" && s.status !== "stopped") continue;
       if (s.question || s.limitHit || s.turnError || s.autoResume || s.waits.length > 0 || s.parkHold || s.background) continue;
+      if (claims.has(s.id) || turnStatus(s.lastMessage)?.kind === "needs") continue;
       try {
-        await this.fleet.close(sessionId, true, true);
+        await this.fleet.close(s.id, true, true);
         closed = true;
-        console.log(`agentbox: closed scheduled session ${sessionId} (${s.title}) after ${Math.round((now - s.lastActivityAt) / 60_000)}m idle`);
+        console.log(`agentbox: closed finished session ${s.id} (${s.title}) after ${Math.round((now - s.lastActivityAt) / 60_000)}m idle`);
       } catch (e) {
-        console.error(`agentbox: closing scheduled session ${sessionId} failed:`, e);
+        console.error(`agentbox: closing finished session ${s.id} failed:`, e);
       }
     }
     if (closed) this.changed();
@@ -390,13 +386,13 @@ export class Scheduler {
   }
 
   private async say(due: Schedule, now: number, early: boolean): Promise<Came> {
-    const busy = { quiet: "the session it keeps to is mid-turn or showing a prompt, so this time was skipped; its next time says what is still true" };
+    const busy = { quiet: "the main conversation it speaks to is mid-turn or showing a prompt, so this time was skipped; its next time says what is still true" };
     // Before the command is run: nothing it prints could be said.
-    if (due.sameSession && due.lastSessionId && this.atWork(due.lastSessionId)) return busy;
+    if (due.agent && this.agents().busy(due.agent)) return busy;
     let note: string | undefined;
     if (due.noteCmd) {
       try {
-        note = await runNote(due);
+        note = await runNote(due, due.agent ? this.agents().dir(due.agent) : dirOf(due.spec));
       } catch (e) {
         const message = `its note command failed: ${(e as Error).message}`;
         console.error(`agentbox: schedule ${due.id}: ${message}`);
@@ -412,100 +408,41 @@ export class Scheduler {
     // As it is now: the command took a while, and it may have been deleted or paused under it.
     const s = getSchedule(due.id);
     if (!s || (!s.enabled && !early)) return { quiet: "it was deleted or paused meanwhile" };
-    const last = s.sameSession && s.lastSessionId ? this.session(s.lastSessionId) : null;
-    if (last && (last.status === "running" || last.status === "blocked")) return busy;
-    const over = last ? (pastIt(last, s.freshOver ?? FRESH_OVER) ?? this.backHome(s, last)) : null;
-    if (last && !over) {
-      // Compacted since it was last spoken to, it goes on from a summary
-      // without what it read at its start: its prompt goes again, once.
-      const compacted = (last.compactedAt ?? 0) > (s.lastRunAt ?? 0);
-      const text = compacted && note && s.spec.prompt
-        ? `${note}\n\n[agentbox: you were compacted since this schedule last spoke to you, so here is what it started you with again]\n\n${s.spec.prompt}`
-        : note ?? s.spec.prompt;
-      if (!text) return { quiet: "it has neither a note nor a prompt to say" };
-      try {
-        await this.fleet.note(last.id, `${scheduleSentMark(s.id)} ${text}`);
-      } catch (e) {
-        const message = `could not say it to ${last.id}: ${(e as Error).message}`;
-        console.error(`agentbox: schedule ${s.id}: ${message}`);
-        updateSchedule(s.id, { lastError: message });
-        return { quiet: message };
-      }
-      updateSchedule(s.id, { lastRunAt: now, lastError: null });
-      console.log(`agentbox: schedule ${s.id} spoke to its session ${last.id}`);
-      return { sessionId: last.id };
+    if (!s.agent) {
+      const sid = await this.fire(s, now, early, note);
+      return sid ? { sessionId: sid } : { quiet: this.get(s.id).lastError ?? "it did not start" };
     }
-    // A new one, told who it follows. Once it is up, the sessions the old one
-    // started are put under it and the old one is closed alone: closing a
-    // session takes what it started with it, and those may be hours into work.
-    const closing = !!last && last.status !== "closed";
-    const theirs = closing ? this.fleet.startedBy(last.id) : [];
-    const follows = s.sameSession && s.lastSessionId
-      ? `[agentbox: you take over from ${s.lastSessionId}, the session this schedule spoke to until now (${over ?? "it is gone"}). What it did is in \`agentbox log ${s.lastSessionId} | tail -60\`; it will not be spoken to again.${theirs.length ? ` The sessions it started are still at their work and are now listed under you: ${theirs.join(" ")}.` : ""}]`
-      : undefined;
-    const ownership = s.sameSession && s.lastSessionId ? prReleasedLine(s.lastSessionId) : "";
-    const sid = await this.fire(s, now, early, note, [ownership, follows].filter(Boolean).join("\n\n") || undefined);
-    if (!sid) return { quiet: this.get(s.id).lastError ?? "it did not start" };
-    if (closing) await this.retire(s.id, last.id, sid);
-    // The heir was told in its first prompt what its predecessor had lost:
-    // it inherits those PRs, and is told about them once and once only.
-    if (ownership) prReleaseTold(sid);
-    return { sessionId: sid };
-  }
-
-  /**
-   * `from` is replaced by `to`: handed over at once, mid-turn or not, so
-   * what it started, what it asked the user, the pull requests it said it has
-   * and any agent's message to it go to `to` from now on. It is closed alone
-   * once it is not at work; until then it is the schedule's `retiring`, and
-   * each tick tries again, handing over whatever its last turn added.
-   */
-  private async retire(scheduleId: string, from: string, to: string): Promise<void> {
+    const text = [note, s.spec.prompt].filter(Boolean).join("\n\n");
+    if (!text) return { quiet: "it has neither a note nor a prompt to say" };
+    let came: { session: string } | { quiet: string };
     try {
-      await this.fleet.handOver(from, to);
-      moveCards(from, to);
-      movePrClaims(from, to);
-      const s = this.session(from);
-      if (s && s.status !== "closed" && this.atWork(from)) {
-        updateSchedule(scheduleId, { retiring: from });
-        return;
-      }
-      if (s && s.status !== "closed") await this.fleet.close(from, true, true);
-      updateSchedule(scheduleId, { retiring: null });
+      came = await this.agents().note(s.agent, text, s.id);
     } catch (e) {
-      console.error(`agentbox: schedule ${scheduleId}: retiring ${from}:`, e);
+      came = { quiet: `could not say it to ${s.agent}: ${(e as Error).message}` };
     }
-  }
-
-  /** Why a session started on a fallback gives way: its schedule's own
-   *  provider has room again. */
-  private backHome(s: Schedule, last: Session): string | null {
-    const { provider, model, accountId, effort, scope } = s.spec;
-    if (last.provider === provider || !this.fleet.placement(provider, model, accountId, effort, true, scope).accountId) return null;
-    return `it ran on ${last.provider} while ${provider} had no account with room, and ${provider} has room again`;
-  }
-
-  private session(id: string): Session | null {
-    try {
-      return this.fleet.get(id);
-    } catch {
-      return null;
+    if ("quiet" in came) {
+      console.error(`agentbox: schedule ${s.id}: ${came.quiet}`);
+      updateSchedule(s.id, { lastError: came.quiet });
+      return came;
     }
+    updateSchedule(s.id, { lastRunAt: now, lastSessionId: came.session, lastError: null });
+    console.log(`agentbox: schedule ${s.id} spoke to ${s.agent} in ${came.session}`);
+    return { sessionId: came.session };
   }
 
   /** The session it started, or null when it could not (said on the schedule).
-   *  `note` goes before what it was asked, `after` behind it. */
-  private async fire(s: Schedule, now: number, early: boolean, note?: string, after?: string): Promise<string | null> {
+   *  `note` goes before what it was asked. */
+  private async fire(s: Schedule, now: number, early: boolean, note?: string): Promise<string | null> {
     const once = !isRecurring(s.rule);
     const { accountId, fallbacks, ...spec } = s.spec;
     const asked = {
       ...spec,
       // What set it off, before what it was asked.
-      ...(note || after ? { prompt: [note, spec.prompt, after].filter(Boolean).join("\n\n") } : {}),
+      ...(note ? { prompt: [note, spec.prompt].filter(Boolean).join("\n\n") } : {}),
       ...(once ? { id: s.id } : {}),
     };
     try {
-      const session = await this.startFirstWithRoom([
+      const session = await this.fleet.spawnFirstWithRoom([
         { ...asked, accountId: accountId && accountId !== "auto" ? accountId : null },
         ...(fallbacks ?? []).map((provider) => ({ ...asked, provider, model: undefined, effort: undefined, accountId: null })),
       ]);
@@ -560,34 +497,6 @@ export class Scheduler {
       return null;
     }
   }
-
-  /** The first of these that has an account with room. Anything but no room
-   *  is thrown as it is; no room anywhere is thrown saying each one's why. */
-  private async startFirstWithRoom(tries: SpawnRequest[]): Promise<Session> {
-    const whys: string[] = [];
-    let last: FleetError | null = null;
-    for (const req of tries) {
-      try {
-        const { session } = await this.fleet.spawn(req);
-        if (whys.length) console.log(`agentbox: ${whys.join("; ")}: started on ${req.provider} instead`);
-        return session;
-      } catch (e) {
-        if (!(e instanceof FleetError && e.placement)) throw e;
-        whys.push(tries.length > 1 ? `${req.provider}: ${e.message}` : e.message);
-        last = e;
-      }
-    }
-    throw new FleetError(409, whys.join("; "), last!.placement);
-  }
-}
-
-/** Why a schedule that keeps to one session leaves this one for a new one, or
- *  null when it still speaks to it. */
-function pastIt(s: Session, freshOver: number): string | null {
-  if (s.status === "closed") return "it was closed";
-  if (s.limitHit) return "it stopped at a usage limit";
-  if ((s.contextUsed ?? 0) > freshOver) return `it held ${Math.round(s.contextUsed! / 1000)}k tokens of context, over the ${Math.round(freshOver / 1000)}k this schedule keeps one session to`;
-  return null;
 }
 
 /** Where a schedule's sessions run, and so its note command. */
@@ -598,13 +507,13 @@ function dirOf(spec: ScheduleSpec): string | null {
 
 /**
  * What the schedule's note command prints, trimmed: "" when it has nothing to
- * say. Run by `sh -c` in the schedule's directory at the lowest priority, and
- * killed with everything it started after `NOTE_TIMEOUT_S`. It is told which
- * schedule it speaks for and the session that one spoke to last
- * (`AGENTBOX_SCHEDULE`, `AGENTBOX_SCHEDULE_SESSION`). Throws when it fails.
+ * say. Run by `sh -c` in `cwd` (the schedule's directory, or its agent's) at
+ * the lowest priority, and killed with everything it started after
+ * `NOTE_TIMEOUT_S`. It is told which schedule it speaks for and the session
+ * that one spoke to last (`AGENTBOX_SCHEDULE`, `AGENTBOX_SCHEDULE_SESSION`).
+ * Throws when it fails.
  */
-async function runNote(s: Schedule): Promise<string> {
-  const cwd = dirOf(s.spec);
+async function runNote(s: Schedule, cwd: string | null): Promise<string> {
   if (!cwd) throw new Error("it has no directory to run in");
   ensureCheckout(cwd);
   const p = Bun.spawn(["nice", "-n", "19", "timeout", "--kill-after=5", String(NOTE_TIMEOUT_S), "sh", "-c", s.noteCmd!], {
@@ -621,16 +530,12 @@ async function runNote(s: Schedule): Promise<string> {
   return note.length > NOTE_MAX ? `${note.slice(0, NOTE_MAX)}\n[agentbox: the note was cut here, at ${NOTE_MAX} characters.]` : note;
 }
 
-/** A note command and keeping to one session are for a schedule that repeats
- *  at a time: an event has its own note, and a one-time one has no next time. */
-function checkExtras(rule: ScheduleRule, spec: ScheduleSpec, x: { noteCmd?: string | null; sameSession?: boolean; freshOver?: number | null }): void {
-  if (!x.noteCmd && !x.sameSession && (x.freshOver === null || x.freshOver === undefined)) return;
+/** A note command and speaking to an agent are for a schedule that repeats at
+ *  a time: an event has its own note, and a one-time one has no next time. */
+function checkExtras(rule: ScheduleRule, spec: ScheduleSpec, x: { noteCmd?: string | null; agent?: string | null }): void {
+  if (!x.noteCmd && !x.agent) return;
   if (rule.kind !== "every" && rule.kind !== "weekly") {
-    throw new FleetError(400, "a note command and keeping to one session are for a schedule that repeats at a time: “every 10 minutes”, “every weekday at 9am”");
-  }
-  if (x.freshOver !== null && x.freshOver !== undefined) {
-    if (!x.sameSession) throw new FleetError(400, "a context size to start afresh over means something only with the same session");
-    if (!Number.isInteger(x.freshOver) || x.freshOver < FRESH_OVER_MIN) throw new FleetError(400, `the context size to start afresh over must be at least ${FRESH_OVER_MIN / 1000}k tokens`);
+    throw new FleetError(400, "a note command and speaking to an agent are for a schedule that repeats at a time: “every 10 minutes”, “every weekday at 9am”");
   }
   if (!x.noteCmd && !spec.prompt) throw new FleetError(400, "with no note command it needs a prompt: that is what it says each time");
 }

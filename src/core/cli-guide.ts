@@ -122,28 +122,24 @@ why). Arming the same wait twice is one wait.
                                     # its members see it, or your own; absent, the starting
                                     # session's, else your default (agentbox org default).
                                     # agentbox schedule takes them too
-    agentbox schedule '<when>' [--cwd DIR] [--agent codex] [--name N] 'prompt'
+    agentbox schedule '<when>' [--cwd DIR] [--provider codex] [--name N] 'prompt'
                                     # start one later: 'in 4 hours', 'tomorrow at 9am',
                                     # 'friday 5pm', 'every weekday at 8:30', 'every 2 hours'.
                                     # Prints the id and when it was understood to start.
                                     # --fallback omp,codex: started on those, in order,
-                                    # when --agent has no account with room
-    agentbox schedule 'every 10 minutes' --note-cmd './whats-open.sh' --same-session [--fresh-over 150k] 'prompt'
+                                    # when --provider has no account with room
+    agentbox schedule 'every 10 minutes' --note-cmd './whats-open.sh' [--to AGENT] 'prompt'
                                     # a recurring one that speaks only when there is
-                                    # something to say, and to one session. Each time
-                                    # it comes due the command runs in --cwd (2 minutes
-                                    # at most); what it prints goes before the prompt,
-                                    # and when it prints nothing, nothing happens.
-                                    # --same-session types the note into the session it
-                                    # started last instead of starting another, skips
-                                    # the time while that one is mid-turn, and starts a
-                                    # fresh one (closing the old) once it is gone or
-                                    # holds over --fresh-over tokens of context. One
-                                    # compacted since the last note is kept, and that
-                                    # note carries the prompt again. Either flag works
-                                    # without the other
-    agentbox schedules              # what is set to start: id  in  when · agent · title,
-                                    # and for those: its session, its command, its last note
+                                    # something to say. Each time it comes due the
+                                    # command runs in --cwd (2 minutes at most); what it
+                                    # prints goes before the prompt, and when it prints
+                                    # nothing, nothing happens. --to says it to that
+                                    # agent's main conversation instead of starting a
+                                    # session, and skips the time while the main is
+                                    # mid-turn; the command then runs in the agent's
+                                    # directory. Either flag works without the other
+    agentbox schedules              # what is set to start: id  in  when · provider or agent · title,
+                                    # and its command and its last note
     agentbox unschedule <id>...     # it will not start
     agentbox card add --kind decision --title T --short S [--long-file F] [--recommend R] [--pr URL]
                       [--default D --default-at 'in 24 hours'] [--key K] [--for <session>]

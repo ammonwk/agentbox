@@ -457,6 +457,21 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE cards DROP COLUMN person;
   ALTER TABLE cards DROP COLUMN decided_by;
   `,
+  // 37 — a schedule speaks to an agent's main conversation, which agentbox
+  // keeps (src/core/agents.ts), instead of keeping a session of its own. One
+  // that kept to its own session is paused, since it would now start a new
+  // session each time: point it at an agent.
+  `
+  ALTER TABLE schedules ADD COLUMN agent TEXT;
+  UPDATE schedules SET enabled = 0, next_at = NULL,
+    last_error = 'it kept to one session of its own, which a schedule no longer does: make that conversation an agent and point this at it (docs/agents.md)'
+    WHERE same_session = 1;
+  ALTER TABLE schedules DROP COLUMN same_session;
+  ALTER TABLE schedules DROP COLUMN fresh_over;
+  ALTER TABLE schedules DROP COLUMN retiring;
+  ALTER TABLE agents ADD COLUMN retiring TEXT;
+  ALTER TABLE agents ADD COLUMN briefed_at INTEGER;
+  `,
 ];
 
 function migrate(d: Database) {
@@ -906,7 +921,7 @@ export function updateWait(id: number, patch: Partial<Pick<Wait, keyof typeof WA
 type ScheduleRow = {
   id: string; rule: string; spec: string; label: string | null; enabled: number; next_at: number | null;
   created_at: number; last_run_at: number | null; last_session_id: string | null; last_error: string | null;
-  note_cmd: string | null; same_session: number; fresh_over: number | null; retiring: string | null;
+  note_cmd: string | null; agent: string | null;
 };
 
 function rowToSchedule(r: ScheduleRow): Schedule {
@@ -922,9 +937,7 @@ function rowToSchedule(r: ScheduleRow): Schedule {
     lastSessionId: r.last_session_id,
     lastError: r.last_error,
     noteCmd: r.note_cmd,
-    sameSession: r.same_session === 1,
-    freshOver: r.fresh_over,
-    retiring: r.retiring ?? null,
+    agent: r.agent,
   };
 }
 
@@ -939,9 +952,7 @@ const SCHEDULE_COLUMNS = {
   lastSessionId: "last_session_id",
   lastError: "last_error",
   noteCmd: "note_cmd",
-  sameSession: "same_session",
-  freshOver: "fresh_over",
-  retiring: "retiring",
+  agent: "agent",
 } as const satisfies Record<Exclude<keyof Schedule, "id">, string>;
 
 type ScheduleKey = keyof typeof SCHEDULE_COLUMNS;
@@ -951,6 +962,12 @@ function scheduleToSql(key: ScheduleKey, value: unknown): string | number | null
   if (key === "rule" || key === "spec") return JSON.stringify(value);
   if (typeof value === "boolean") return value ? 1 : 0;
   return value as string | number;
+}
+
+/** The main conversations of the enabled agents (src/core/agents.ts), as last recorded:
+ *  follow each with `Fleet.heir` for the one it is now. */
+export function agentMains(): string[] {
+  return (getDb().query("SELECT main FROM agents WHERE enabled = 1 AND main IS NOT NULL").all() as { main: string }[]).map((r) => r.main);
 }
 
 /** The soonest first; those with nothing coming last. */

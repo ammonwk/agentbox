@@ -2,13 +2,12 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDb, getWait, insertWait, updateWait, insertSessionRecord, type SessionRecord, insertSchedule, insertAccount } from "../db";
+import { closeDb, getWait, insertWait, updateWait, insertSessionRecord, type SessionRecord, insertAccount } from "../db";
 import { claimPr, releasePr, prClaims, prReleased, prReleaseLine, movePrClaims } from "../prclaims";
 import { Waits, lookPr, type Look } from "../waits";
 import { Fleet, type Runtime } from "../fleet";
 import { claudeAdapter } from "../providers/claude";
-import { Scheduler } from "../scheduler";
-import type { Session, Wait, WaitSpec, Schedule } from "../types";
+import type { Session, Wait, WaitSpec } from "../types";
 import type { NewSession, PaneInfo } from "../tmux";
 
 const dir = mkdtempSync(join(tmpdir(), "agentbox-release-"));
@@ -133,13 +132,6 @@ test("a message queued before the release carries the line when it lands, and th
   expect(delivered.at(-1)).toContain("o/r#9002 is new's since");
   expect(delivered.at(-1)).toContain("not yours");
   expect(delivered.at(-1)).toContain("finish PR 9002");
-  const schedule: Schedule = { id: "release-tick", rule: { kind: "every", minutes: 10, from: now }, spec: { provider: "claude", cwd: dir, worktree: false, prompt: "continue PR 9002" } as Schedule["spec"], label: null, enabled: true, nextAt: now + 600_000, createdAt: now, lastRunAt: null, lastSessionId: "messenger", lastError: null, noteCmd: null, sameSession: true, freshOver: null, retiring: null };
-  insertSchedule(schedule);
-  const scheduler = new Scheduler(fleet, () => {}, () => now);
-  expect(await scheduler.runNow(schedule.id)).toBe("messenger");
-  expect(delivered.at(-1)).toContain("continue PR 9002");
-  // The line was said with the message above: it is not said again.
-  expect(delivered.at(-1)).not.toContain("o/r#9002");
 });
 
 
@@ -243,38 +235,4 @@ test("a session that took its PR back is told nothing", async () => {
   expect(prReleased("taker", { repo: "o/r", number: 9102 })).toBe(false);
   await fleet.note("taker", "back on it");
   expect(delivered).toEqual(["back on it"]);
-});
-
-test("a schedule's heir is told what its predecessor lost, and the predecessor is told it lost the PR", async () => {
-  // The predecessor held one PR and had lost another to a session that holds it now.
-  claimPr([], [], "o/r", 9103, "old", now);
-  releasePr("old", { repo: "o/r", number: 9104 });
-  claim("new", 9104);
-  const live = new Map<string, Session>([["old", { id: "old", provider: "claude", host: "tmux", status: "waiting", cold: false, cacheWarmUntil: 0, contextUsed: 30_000, limitHit: null } as Session]]);
-  const prompts: string[] = [];
-  const fleet = {
-    get: (id: string) => live.get(id)!,
-    spawn: async (req: { prompt?: string }) => {
-      prompts.push(req.prompt ?? "");
-      live.set("heir", { id: "heir", provider: "claude", host: "tmux", status: "running", cold: false, cacheWarmUntil: 0, contextUsed: 0, limitHit: null } as Session);
-      return { session: live.get("heir")! };
-    },
-    patch: async () => {},
-    startedBy: () => [],
-    handOver: async () => {},
-    close: async () => {},
-    note: async () => {},
-  } as unknown as Fleet;
-  insertSchedule({ id: "heir-tick", rule: { kind: "every", minutes: 10, from: now }, spec: { provider: "claude", cwd: dir, worktree: false, prompt: "take 9103 to green" } as Schedule["spec"],
-    label: null, enabled: true, nextAt: now + 600_000, createdAt: now, lastRunAt: null, lastSessionId: "old", lastError: null, noteCmd: null, sameSession: true, freshOver: 20_000, retiring: null });
-  const scheduler = new Scheduler(fleet, () => {}, () => now);
-  expect(await scheduler.runNow("heir-tick")).toBe("heir");
-  // The heir's first prompt names the PR its predecessor lost, and who holds it.
-  expect(prompts[0]).toContain("o/r#9104 is new's since");
-  expect(prompts[0]).toContain("take 9103 to green");
-  // The PR its predecessor held is its own now, and the predecessor is told
-  // that it lost it.
-  const heirs = [...sessions, { id: "heir", host: "tmux", status: "running" } as Session];
-  expect(prClaims(heirs, []).find(c => c.number === 9103)?.sessionId).toBe("heir");
-  expect(prReleaseLine("old")).toContain("o/r#9103 is heir's since");
 });

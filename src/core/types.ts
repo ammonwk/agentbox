@@ -1606,12 +1606,13 @@ export interface ScheduleSpec {
 /**
  * A session to start later (src/core/scheduler.ts). A one-time one is shown as
  * a session and starts under its own id, so a link to it keeps working; a
- * recurring one starts a new session each time, unless it keeps to one
- * (`sameSession`).
+ * recurring one starts a new session each time, unless it speaks to an agent
+ * (`agent`).
  */
 export interface Schedule {
   id: string;
   rule: ScheduleRule;
+  /** What it starts; for one that speaks to an agent, only its `prompt`. */
   spec: ScheduleSpec;
   label: string | null;
   /** Off: a recurring one paused, or a one-time one whose start failed. */
@@ -1619,34 +1620,27 @@ export interface Schedule {
   /** The next start; null when there is none coming. */
   nextAt: number | null;
   createdAt: number;
-  /** When it last started a session or, with `sameSession`, said something
-   *  to its own. A time its note command had nothing to say is not one. */
+  /** When it last started a session or said something to its agent. A time
+   *  its note command had nothing to say is not one. */
   lastRunAt: number | null;
-  /** The session the last start made. */
+  /** The session the last start made, or the agent's main it last spoke to. */
   lastSessionId: string | null;
   lastError: string | null;
   /**
-   * A shell command run in the schedule's directory each time it comes due
-   * (timed recurring ones only). What it prints is the note: said before the
-   * prompt, as a red rule's note is. When it prints nothing, nothing happens
-   * that time; when it fails, that is `lastError` and nothing starts.
+   * A shell command run each time it comes due (timed recurring ones only), in
+   * the schedule's directory or its agent's. What it prints is the note: said
+   * before the prompt, as a red rule's note is. When it prints nothing,
+   * nothing happens that time; when it fails, that is `lastError` and nothing
+   * starts.
    */
   noteCmd: string | null;
   /**
-   * Each time it comes due it speaks to the session it started last instead
-   * of starting another: the note (or, with no note command, the prompt) is
-   * typed into it. A new one is started, and the old one closed, when that
-   * session is gone, closed, stopped at a limit, or holds more context than
-   * `freshOver`. While it is mid-turn or showing a prompt, that time is skipped.
-   * The first note after it was compacted carries the prompt too.
+   * The agent it speaks to: each time it comes due, the note (or, with no note
+   * command, the prompt) is said to that agent's main conversation instead of
+   * starting a session (src/core/agents.ts `say`). While the main is mid-turn
+   * or showing a prompt, that time is skipped.
    */
-  sameSession: boolean;
-  /** Tokens of context past which a `sameSession` schedule starts afresh;
-   *  null for the default (`FRESH_OVER`, src/core/schedule.ts). */
-  freshOver: number | null;
-  /** The session it replaced while that one was mid-turn: handed over at
-   *  once, and closed once its turn is over. */
-  retiring: string | null;
+  agent: string | null;
 }
 
 // ----------------------------------------------------------------- health

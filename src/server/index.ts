@@ -171,7 +171,7 @@ export const fleet = new Fleet({
 });
 setMetricsSource(() => fleet.sessions());
 /** Sessions to start later; on the board and in Settings, so cold state. */
-export const scheduler = new Scheduler(fleet, () => scheduleCold());
+export const scheduler = new Scheduler(fleet, () => agents, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/agents.ts). */
@@ -1262,11 +1262,13 @@ const router = new Router(mapError)
   .add("POST", "/api/schedules", async ({ req }) => {
     const b = await readBody(req);
     const spec = (b.spec && typeof b.spec === "object" ? b.spec : {}) as Record<string, unknown>;
+    const agent = optionalString(b, "agent");
     const s = await scheduler.create({
       when: requireString(b, "when"),
       label: optionalString(b, "label") ?? null,
       spec: {
-        provider: provider(spec.provider),
+        // One that speaks to an agent starts nothing: its agent's main says where and on what.
+        provider: agent && spec.provider === undefined ? "claude" : provider(spec.provider),
         cwd: optionalString(spec, "cwd"),
         repoId: optionalString(spec, "repoId"),
         worktree: spec.worktree === true,
@@ -1280,8 +1282,7 @@ const router = new Router(mapError)
         scope: scopeOf(spec),
       },
       noteCmd: noteCmdOf(b),
-      sameSession: b.sameSession === true,
-      freshOver: typeof b.freshOver === "number" ? b.freshOver : null,
+      agent,
     });
     return json(s, 201);
   })
@@ -1297,12 +1298,7 @@ const router = new Router(mapError)
     if (b.enabled !== undefined) edit.enabled = requireBoolean(b, "enabled");
     if (b.repoId !== undefined) edit.repoId = requireString(b, "repoId");
     if (b.noteCmd !== undefined) edit.noteCmd = b.noteCmd === null ? null : requireString(b, "noteCmd");
-    if (b.sameSession !== undefined) edit.sameSession = requireBoolean(b, "sameSession");
     if (b.fallbacks !== undefined) edit.fallbacks = providers(b.fallbacks);
-    if (b.freshOver !== undefined) {
-      if (b.freshOver !== null && typeof b.freshOver !== "number") throw new HttpError(400, "freshOver must be a number of tokens");
-      edit.freshOver = b.freshOver as number | null;
-    }
     return json(await scheduler.update(params.id!, edit));
   })
   .add("DELETE", "/api/schedules/:id", ({ params }) => {

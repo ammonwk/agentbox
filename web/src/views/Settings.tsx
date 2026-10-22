@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AgentSettings, AppState, BalancerSettings, NightlyReclaim, ReclaimResult, Repo, Schedule, WorktreeScan } from "../../../src/core/types";
-import { describeAt, describeRule, FRESH_OVER, isRecurring } from "../../../src/core/schedule";
+import { describeAt, describeRule, isRecurring } from "../../../src/core/schedule";
 import { api, fmtBytes, healthRows, type Health, type RepoPatch, type SettingsPatch } from "../api";
 import { PROVIDER_LABEL, PROVIDERS, ProviderBadge } from "../bits";
 import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle } from "../components";
@@ -118,7 +118,7 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
           disabled={busy}
           onChange={(on) => void run(() => api.patchSchedule(sc.id, { enabled: on }))}
         />
-        <ProviderBadge provider={sc.spec.provider} short />
+        {sc.agent ? null : <ProviderBadge provider={sc.spec.provider} short />}
         <span className="sched-name" title={sc.spec.prompt}>
           {scheduleTitle(sc)}
         </span>
@@ -139,7 +139,7 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
         {sc.lastRunAt ? (
           <>
             {" "}
-            · {sc.sameSession ? "last spoke" : "last ran"} <RelativeTime ts={sc.lastRunAt} />
+            · {sc.agent ? "last spoke" : "last ran"} <RelativeTime ts={sc.lastRunAt} />
             {sc.lastSessionId && !sc.lastError ? (
               <>
                 {" "}
@@ -149,11 +149,11 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
           </>
         ) : null}
       </p>
-      {sc.sameSession || sc.noteCmd ? (
+      {sc.agent || sc.noteCmd ? (
         <p className="sched-meta">
-          {sc.sameSession ? (
+          {sc.agent ? (
             <>
-              Keeps to one session, and starts a new one once it holds over {Math.round((sc.freshOver ?? FRESH_OVER) / 1000)}k tokens
+              Speaks to <a href={hrefOf({ page: "agents", name: sc.agent, tab: null })}>{sc.agent}</a>'s main conversation
             </>
           ) : (
             "Starts a session each time"
@@ -168,7 +168,7 @@ function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
       ) : null}
       {sc.lastError ? (
         <p className="error" role="alert">
-          {(sc.rule.kind === "red" && sc.lastError.startsWith("could not read")) || sc.noteCmd || sc.sameSession ? "" : "Last time it did not start: "}{sc.lastError}
+          {(sc.rule.kind === "red" && sc.lastError.startsWith("could not read")) || sc.noteCmd || sc.agent ? "" : "Last time it did not start: "}{sc.lastError}
         </p>
       ) : null}
       {editing ? (
