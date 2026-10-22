@@ -402,6 +402,10 @@ export function Timeline({ session }: { session: Session }) {
       question?.id === r.event.ask.id ? null : <AskRow key={r.event.id} ev={r.event} />
     ) : r.type === "sent" ? (
       <SentRow key={r.event.id} ev={r.event} send={r.send} />
+    ) : r.type === "end" ? (
+      <div key={r.id} className="tl-turn-end">
+        <time dateTime={new Date(r.at).toISOString()}>{fmtHourMin(r.at)}</time>
+      </div>
     ) : (
       <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
     );

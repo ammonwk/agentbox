@@ -1820,6 +1820,16 @@ a.tl-sender:hover .tl-sender-name {
 .tl-assistant {
   padding: 2px 2px;
 }
+/* When the agent handed the mic back, set as your message's time is. */
+.tl-turn-end {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: -4px;
+  padding: 0 2px;
+  color: var(--faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 /* How long a step took. */
 .tl-dur {
   flex: none;

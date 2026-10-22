@@ -69,7 +69,10 @@ export type TimelineRow =
   | { type: "btw"; btw: Btw }
   /** The work between two things the agent said, folded to one line. `live`
    *  while the agent still works on it; `from` and `to` bound the work. */
-  | { type: "trace"; id: string; rows: Exclude<TimelineRow, { type: "trace" }>[]; live: boolean; from: number; to: number };
+  | { type: "trace"; id: string; rows: Exclude<TimelineRow, { type: "trace" }>[]; live: boolean; from: number; to: number }
+  /** When the agent's turn ended: it stopped working and the next thing said
+   *  is yours. Placed after the turn's last row, and only once it is over. */
+  | { type: "end"; id: string; at: number };
 
 type IdleEvent = Extract<TimelineEvent, { kind: "meta" }> & { mate: NonNullable<Extract<TimelineEvent, { kind: "meta" }>["mate"]> };
 
@@ -100,7 +103,7 @@ export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
 }
 
 const rowAt = (r: TimelineRow): number =>
-  r.type === "trace" ? r.from : r.type === "sent" ? r.event.at : r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
+  r.type === "trace" ? r.from : r.type === "end" ? r.at : r.type === "sent" ? r.event.at : r.type === "tools" || r.type === "idle" ? r.events[0]!.at : r.type === "btw" ? r.btw.askedAt : r.event.at;
 
 type Flat = Exclude<TimelineRow, { type: "trace" }>;
 
@@ -110,7 +113,7 @@ const rowEnd = (r: Flat): number =>
 
 /** The id each event in a row is found by in the page (`data-ev`). */
 export function rowEventIds(r: Flat): string[] {
-  return r.type === "tools" || r.type === "idle" ? r.events.map((e) => e.id) : r.type === "btw" ? [] : [r.event.id];
+  return r.type === "tools" || r.type === "idle" ? r.events.map((e) => e.id) : r.type === "btw" || r.type === "end" ? [] : [r.event.id];
 }
 
 /** What stays in view: a message to the agent, its question to you, and your side questions. */
@@ -125,6 +128,11 @@ const wakes = (r: Flat): boolean => r.type === "event" && r.event.kind === "meta
  * row. A turn runs from one message to the agent to the next. While `live`,
  * the agent still works on the last turn: the work after the last thing it
  * said is an open-ended trace, even before any has landed.
+ *
+ * A turn that is over gets an `end` row: the time it handed the mic back. It
+ * comes after the turn's last row, so it reads when the agent stopped, not
+ * when it started writing. A side question is no turn boundary — it is an
+ * aside inside one.
  */
 export function traceTurns(rows: TimelineRow[], live: boolean): TimelineRow[] {
   const out: TimelineRow[] = [];
@@ -143,9 +151,20 @@ export function traceTurns(rows: TimelineRow[], live: boolean): TimelineRow[] {
     }
     work = [];
   };
+  // The time the agent stopped: after the last thing it did, once the turn is
+  // over. A row that only begins a turn (your message, a side question) is no
+  // end of one, and an end is never followed by a second.
+  const endTurn = () => {
+    const last = out[out.length - 1];
+    if (!last || last.type === "end" || last.type === "btw" || last.type === "ask") return;
+    if (last.type === "event" && last.event.kind === "user") return;
+    out.push({ type: "end", id: `end-${out.length}`, at: last.type === "trace" ? last.to : rowEnd(last) });
+  };
   for (const r of rows as Flat[]) {
     if (inView(r)) {
       fold(false);
+      // A question to you ends the turn: it waits for your answer next.
+      if (r.type !== "btw") endTurn();
       out.push(r);
       anchor = { id: rowEventIds(r)[0] ?? `btw-${rowAt(r)}`, at: rowAt(r) };
     } else if (r.type === "event" && r.event.kind === "assistant") {
@@ -154,6 +173,7 @@ export function traceTurns(rows: TimelineRow[], live: boolean): TimelineRow[] {
       anchor = { id: r.event.id, at: rowAt(r) };
     } else if (wakes(r)) {
       fold(false);
+      endTurn();
       anchor = { id: rowEventIds(r)[0]!, at: rowAt(r) };
       work.push(r);
     } else {
@@ -161,6 +181,7 @@ export function traceTurns(rows: TimelineRow[], live: boolean): TimelineRow[] {
     }
   }
   fold(live);
+  if (!live) endTurn();
   return out;
 }
 
