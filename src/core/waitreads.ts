@@ -112,6 +112,30 @@ function check(c: RawContext): Check {
   return { name: c.context ?? "?", key: `${c.id}:${c.createdAt ?? ""}:${c.state ?? ""}`, done, ok: c.state === "SUCCESS", how: (c.state ?? "pending").toLowerCase() };
 }
 
+const CONTEXTS = `pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{id name status conclusion completedAt} ... on StatusContext{id context state createdAt}}`;
+
+interface Contexts {
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  nodes: RawContext[];
+}
+
+/** The checks on commit `oid` after the first page's `after`. */
+async function restOfChecks(repo: string, oid: string, after: string | null): Promise<RawContext[]> {
+  const [owner, name] = repo.split("/");
+  const rest: RawContext[] = [];
+  for (;;) {
+    const query = `{ repository(owner:${JSON.stringify(owner)},name:${JSON.stringify(name)}){ object(oid:${JSON.stringify(oid)}){ ... on Commit{ statusCheckRollup{contexts(first:100,after:${JSON.stringify(after)}){${CONTEXTS}}} } } } }`;
+    const res = await github("/graphql", { method: "POST", body: JSON.stringify({ query }) });
+    const body = (await res.json().catch(() => null)) as { data?: { repository?: { object?: { statusCheckRollup?: { contexts: Contexts } | null } | null } | null }; errors?: { type?: string; message?: string }[] } | null;
+    if (body?.errors?.some((e) => e.type === "RATE_LIMITED")) throw new Held(resetOf(res));
+    const contexts = body?.data?.repository?.object?.statusCheckRollup?.contexts;
+    if (!res.ok || !contexts) throw new Error(`GitHub answered ${res.status} reading ${repo}@${oid.slice(0, 10)}'s checks past the first ${100 + rest.length}${body?.errors?.[0]?.message ? `: ${body.errors[0].message}` : ""}`);
+    rest.push(...contexts.nodes);
+    if (!contexts.pageInfo.hasNextPage) return rest;
+    after = contexts.pageInfo.endCursor;
+  }
+}
+
 export const prKey = (s: Pick<PrSpec, "repo" | "number">): string => `${s.repo}#${s.number}`;
 
 /**
@@ -120,7 +144,7 @@ export const prKey = (s: Pick<PrSpec, "repo" | "number">): string => `${s.repo}#
  */
 export async function readPrs(prs: (Pick<PrSpec, "repo" | "number"> & { feedback?: boolean })[]): Promise<Map<string, PrRead | Error>> {
   const repos = [...new Set(prs.map((p) => p.repo))];
-  const fields = `state headRefOid baseRefName mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount nodes{__typename ... on CheckRun{id name status conclusion completedAt} ... on StatusContext{id context state createdAt}}}}}}}`;
+  const fields = `state headRefOid baseRefName mergeable commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){${CONTEXTS}}}}}}`;
   const query = `{ ${repos
     .map((repo, i) => {
       const [owner, name] = repo.split("/");
@@ -133,10 +157,11 @@ export async function readPrs(prs: (Pick<PrSpec, "repo" | "number"> & { feedback
   if (body?.errors?.some((e) => e.type === "RATE_LIMITED")) throw new Held(resetOf(res));
   if (!res.ok || !body?.data) throw new Error(`GitHub answered ${res.status}${body?.errors?.[0]?.message ? `: ${body.errors[0].message}` : ""}`);
   const out = new Map<string, PrRead | Error>();
+  const overflow: { read: PrRead; repo: string; oid: string; after: string | null }[] = [];
   repos.forEach((repo, i) => {
     for (const p of prs.filter((x) => x.repo === repo)) {
       const node = body.data![`r${i}`]?.[`p${p.number}`] as
-        | { state: PrRead["state"]; headRefOid: string; baseRefName: string; mergeable: PrRead["mergeable"]; commits: { nodes: { commit: { oid: string; statusCheckRollup: { contexts: { totalCount: number; nodes: RawContext[] } } | null } }[] } }
+        | { state: PrRead["state"]; headRefOid: string; baseRefName: string; mergeable: PrRead["mergeable"]; commits: { nodes: { commit: { oid: string; statusCheckRollup: { contexts: Contexts } | null } }[] } }
         | null
         | undefined;
       if (!node) {
@@ -151,13 +176,17 @@ export async function readPrs(prs: (Pick<PrSpec, "repo" | "number"> & { feedback
         continue;
       }
       const contexts = commit?.statusCheckRollup?.contexts;
-      const checksError = contexts && contexts.totalCount > contexts.nodes.length
-        ? new Error(`${prKey(p)} has ${contexts.totalCount} checks on its head, more than one look reads (${contexts.nodes.length})`) : undefined;
-      // Incomplete checks cannot establish readiness, but must not hide a
-      // separately complete review-feedback read while a large CI matrix runs.
-      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: node.baseRefName, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check), ...(checksError ? { checksError } : {}) });
+      out.set(prKey(p), { state: node.state, head: node.headRefOid, base: node.baseRefName, mergeable: node.mergeable, checks: (contexts?.nodes ?? []).map(check) });
+      if (commit && contexts?.pageInfo.hasNextPage) overflow.push({ read: out.get(prKey(p)) as PrRead, repo, oid: commit.oid, after: contexts.pageInfo.endCursor });
     }
   });
+  // A head with more than a page of checks (a release PR's matrix) is read
+  // on, page by page. Incomplete checks cannot establish readiness, but must
+  // not hide a separately complete review-feedback read.
+  await Promise.all(overflow.map(async o => {
+    try { o.read.checks.push(...(await restOfChecks(o.repo, o.oid, o.after)).map(check)); }
+    catch (e) { o.read.checksError = e instanceof Error ? e : new Error(String(e)); }
+  }));
   const feedback = [...new Map(prs.filter(p => p.feedback).map(p => [prKey(p), p])).values()];
   await Promise.all(feedback.map(async p => {
     const read = out.get(prKey(p));
