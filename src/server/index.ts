@@ -50,7 +50,7 @@ import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { parseSpec, Waits } from "../core/waits";
 import { CARD_KINDS, Cards, moveCards } from "../core/cards";
-import type { CardKind, CardState, McpServerInput, McpState } from "../core/types";
+import type { CardKind, CardState, McpServerInput, McpState, OrgReadEvent } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
 import { claimPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
@@ -201,6 +201,10 @@ export const org = new Org({
   prsOf: (id) => prClaimsNow().filter((c) => c.sessionId === id).map((c) => `${c.repo}#${c.number}`),
   claims: () => fleet.claims(),
   deliver: (to, from, text, wake) => sendAsAgent(fleet, to, text, { from: from || null, wake }, Date.now()),
+  conversation: async (id, limit) =>
+    (await fleet.timeline(id, null, limit)).events.flatMap((e): OrgReadEvent[] =>
+      e.kind === "user" || e.kind === "assistant" ? [{ kind: e.kind, text: e.text, at: e.at }] : e.kind === "tool" ? [{ kind: "tool", name: e.name, summary: e.summary, at: e.at }] : [],
+    ),
   changed: () => scheduleCold(),
 });
 fleet.setOrg(org);
@@ -1198,6 +1202,16 @@ const router = new Router(mapError)
   // ----- agents (src/core/agents.ts, docs/agents.md)
   // ---- the org (docs/org.md)
   .add("GET", "/api/org", () => json(org.status()))
+  // An org session on another member's machine: its conversation, as that machine answers.
+  .add("GET", "/api/org/sessions/:id/conversation", async ({ params }) => {
+    const row = await org.find(params.id!);
+    if (!row) throw new HttpError(404, `no org session ${params.id} on another member's machine`);
+    try {
+      return json({ session: row._id, person: row.person, machine: row.machine, title: row.title, events: await org.read(row) });
+    } catch (e) {
+      throw new HttpError(409, (e as Error).message);
+    }
+  })
   .add("PUT", "/api/org/shared/:id", async ({ req, params }) => {
     const b = await readBody(req);
     if (typeof b.shared !== "boolean") throw new HttpError(400, "shared must be true or false");

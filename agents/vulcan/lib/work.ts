@@ -144,7 +144,20 @@ async function launchWriter(ctx: Ctx, w: Work, now = Date.now()): Promise<void> 
     w.launch = { at: now };
     w.state = "starting";
     ctx.store.saveWork(w);
-    const s = await agentbox.start({ provider: w.provider, notify: false, repoId: repo.id, branch: w.branch, parent: w.main, prompt: writerPrompt(w, ctx.config.cli, ctx.revision(w.promptRevision)) });
+    // The writer holds its issues in agentbox's claims, where every session (and, in an org,
+    // every member's) sees who has them: the first from its start, which is refused while
+    // another session has it, the rest once it runs.
+    const [first, ...rest] = w.input.issues.map((i) => canonicalSource(i.source)).filter((i) => i.repo && i.number);
+    const s = await agentbox.start({
+      provider: w.provider,
+      notify: false,
+      repoId: repo.id,
+      branch: w.branch,
+      parent: w.main,
+      prompt: writerPrompt(w, ctx.config.cli, ctx.revision(w.promptRevision)),
+      ...(first ? { claim: `${first.repo}#${first.number}` } : {}),
+    });
+    for (const i of rest) await agentbox.claimPr(`${i.repo}#${i.number}`, s.id).catch((e) => console.error(`vulcan: ${w.id}: claiming ${i.repo}#${i.number}: ${(e as Error).message}`));
     w.session = s.id;
     w.cwd = s.cwd;
     w.state = "working";

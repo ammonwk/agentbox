@@ -1,6 +1,10 @@
 /**
- * Who has a pull request: the one answer, so that no two sessions work the
- * same PR and nothing has to guess from prompts and titles.
+ * Who has a pull request or an issue: the one answer, so that no two sessions
+ * work the same PR or issue and nothing has to guess from prompts and titles.
+ * GitHub numbers a repo's issues and pull requests in one sequence, so
+ * `owner/repo#12` is one or the other, never both, and a claim of an issue is
+ * a claim like any other: an agent that takes an issue claims it, and a
+ * session in the org that asks for it is refused while another has it.
  *
  * A session holds a PR in one of two ways. It is on the PR's branch (what
  * `openPrs` has always matched: the session that opened it, or checked it
@@ -20,15 +24,15 @@
 import { getDb } from "./db";
 import type { PrClaim, Session } from "./types";
 
-/** `owner/repo#12`, a PR's URL, or a bare number in `repo`. */
+/** `owner/repo#12`, a PR's or an issue's URL, or a bare number in `repo`. */
 export function parsePrRef(text: string, repo: string | null): { repo: string; number: number } {
   const t = text.trim();
-  const url = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(t);
+  const url = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/(\d+)/.exec(t);
   if (url) return { repo: url[1]!, number: Number(url[2]) };
   const full = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(t);
   if (full) return { repo: full[1]!, number: Number(full[2]) };
   const bare = /^#?(\d+)$/.exec(t);
-  if (!bare) throw new Error(`"${text}" is not a pull request: give its number, owner/repo#number, or its URL`);
+  if (!bare) throw new Error(`"${text}" is not a pull request or an issue: give its number, owner/repo#number, or its URL`);
   if (!repo) throw new Error(`which repo is #${bare[1]} in? Give owner/repo#${bare[1]} or the PR's URL (nothing here says: no GitHub repo around this directory or session)`);
   return { repo, number: Number(bare[1]) };
 }

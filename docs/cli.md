@@ -162,6 +162,8 @@ why). Arming the same wait twice is one wait.
     agentbox pr claims              # every pull request a live session has
                                     # (in an org, a claim is also refused while a member's
                                     # org session on another machine holds the PR)
+                                    # An issue is claimed the same way (its number or URL):
+                                    # take one before working it, and nobody else will
 
 ## Orgs (a team's pooled accounts and skills: docs/org.md)
 

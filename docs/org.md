@@ -148,7 +148,18 @@ Every 15 s each machine upserts a row for each of its live org sessions,
 deletes its rows for the ones that ended, and reads everyone else's. A row
 unseen for 3 minutes shows away; the TTL index removes it after a day. The
 Sessions rail has a Plaibook section with the other members' live org
-sessions (read-only; a click copies the id); `agentbox org ls` prints them.
+sessions; `agentbox org ls` prints them.
+
+**Anyone in the org can read an org session**, its conversation included:
+that is how a member's agent tells whether work is already being done before
+it starts the same. A click on its row in the rail, or `agentbox log <id>`
+for an id that is not this machine's, leaves a request in the store's `reads`
+collection; the machine running the session answers it at its next look at
+its mailbox (every 5 s) with the conversation's last 400 events from the
+provider's transcript (what was said, and each tool by its one-line summary),
+and the reader waits up to 30 s for it. Nothing calls in, and no copy is
+kept: an answer is gone ten minutes later (a TTL index). A personal session
+is not the org's to read, and a request for one is refused.
 
 `agentbox send <id> 'text'` from an org session to an org session on another
 machine pushes the message into the target row's `inbox`. The target machine

@@ -1,9 +1,9 @@
 /** The org's store (docs/org.md, The model): one MongoDB database every
- *  member's machine calls out to. Two collections: the org's accounts, and
- *  its live sessions with their mailboxes. */
+ *  member's machine calls out to. The org's accounts, its live sessions with
+ *  their mailboxes, and requests to read an org session's conversation. */
 
 import { MongoClient, type Collection, type Db } from "mongodb";
-import type { AccountProvider, ClaimView, ProviderId } from "../types";
+import type { AccountProvider, ClaimView, OrgReadEvent, ProviderId } from "../types";
 import { readOrg } from "./config";
 
 /** A login the store keeps (docs/org.md, Org accounts). Its id is the
@@ -69,6 +69,24 @@ export interface OrgSessionRow {
   inbox: OrgMessage[];
 }
 
+/**
+ * A member's request to read an org session's conversation on another
+ * machine, and that machine's answer. Nothing calls in to a machine, so the
+ * reader leaves the request here and the machine running the session answers
+ * it at its next look (`Org.takeInbox`). An answer is gone ten minutes later:
+ * the provider's transcript on its machine is the record.
+ */
+export interface OrgRead {
+  _id: string;
+  session: string;
+  machine: string;
+  by: { person: string; machine: string };
+  at: Date;
+  state: "new" | "answered" | "refused";
+  events: OrgReadEvent[] | null;
+  why: string | null;
+}
+
 let client: { uri: string; c: MongoClient; db: Db } | null = null;
 
 /** The store's database, connected on first use; null outside an org. */
@@ -86,6 +104,7 @@ export async function storeDb(): Promise<Db | null> {
   client = { uri: org.store, c, db };
   // A machine that dies takes its rows with it, a day later.
   await db.collection<OrgSessionRow>("sessions").createIndex({ seenAt: 1 }, { expireAfterSeconds: 86_400 }).catch(() => undefined);
+  await db.collection<OrgRead>("reads").createIndex({ at: 1 }, { expireAfterSeconds: 600 }).catch(() => undefined);
   return db;
 }
 
@@ -101,4 +120,8 @@ export async function storeAccounts(): Promise<Collection<StoreAccount> | null> 
 
 export async function storeSessions(): Promise<Collection<OrgSessionRow> | null> {
   return (await storeDb())?.collection<OrgSessionRow>("sessions") ?? null;
+}
+
+export async function storeReads(): Promise<Collection<OrgRead> | null> {
+  return (await storeDb())?.collection<OrgRead>("reads") ?? null;
 }

@@ -6,11 +6,11 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import type { ClaimView, OrgSessionView, OrgStatus, Session } from "../types";
+import type { ClaimView, OrgReadEvent, OrgSessionView, OrgStatus, Session } from "../types";
 import { machineName, personName, readOrg } from "./config";
 import { syncOrgAccounts } from "./accounts";
 import { orgSkillsDir, syncOrgSkills } from "./skills";
-import { storeAccounts, storeSessions, type OrgMessage, type OrgSessionRow, type StoreAccount } from "./store";
+import { storeAccounts, storeReads, storeSessions, type OrgMessage, type OrgSessionRow, type StoreAccount } from "./store";
 
 /** A row unseen this long shows its session away. */
 export const AWAY_MS = 3 * 60_000;
@@ -18,8 +18,12 @@ const ACCOUNTS_MS = 60_000;
 const ROWS_MS = 15_000;
 const INBOX_MS = 5_000;
 const SKILLS_MS = 10 * 60_000;
-/** How long `send` waits for the other machine to say what came of a message. */
+/** How long `send` waits for the other machine to say what came of a message,
+ *  and `read` for its answer. */
 const SEND_WAIT_MS = 30_000;
+/** How much of a conversation a read answers with: its last events. */
+const READ_EVENTS = 400;
+const READ_TEXT_MAX = 8_000;
 
 export interface OrgDeps {
   /** This machine's sessions. */
@@ -30,6 +34,8 @@ export interface OrgDeps {
   claims: () => ReadonlyMap<string, ClaimView[]>;
   /** Deliver a message from another machine, as an agent's: what came of it. */
   deliver: (to: string, from: string, text: string, wake: boolean) => Promise<{ to: string } | { refused: string }>;
+  /** The last `limit` events of a session's conversation here, from its transcript. */
+  conversation: (sessionId: string, limit: number) => Promise<OrgReadEvent[]>;
   /** Something the board shows changed. */
   changed: () => void;
 }
@@ -189,7 +195,47 @@ export class Org {
       // Answered messages a minute old are done with.
       await col.updateOne({ _id: row._id }, { $pull: { inbox: { state: { $in: ["delivered", "refused"] }, at: { $lt: new Date(Date.now() - 60_000) } } } });
     }
+    await this.answerReads();
     this.reached();
+  }
+
+  /** Members' requests to read this machine's org sessions: each answered
+   *  with the conversation's last events, from its transcript. A personal
+   *  session is not the org's to read. */
+  private async answerReads(): Promise<void> {
+    const reads = await storeReads();
+    if (!reads) return;
+    for (const r of await reads.find({ machine: machineName(), state: "new" }).toArray()) {
+      let answer: { state: "answered" | "refused"; events: OrgReadEvent[] | null; why: string | null };
+      if (!this.isOrgSession(r.session)) answer = { state: "refused", events: null, why: `${r.session} is not an org session on ${machineName()}` };
+      else {
+        try {
+          const events = (await this.deps.conversation(r.session, READ_EVENTS)).map((e) => ("text" in e && e.text.length > READ_TEXT_MAX ? { ...e, text: `${e.text.slice(0, READ_TEXT_MAX)} […]` } : e));
+          answer = { state: "answered", events, why: null };
+        } catch (e) {
+          answer = { state: "refused", events: null, why: (e as Error).message };
+        }
+      }
+      await reads.updateOne({ _id: r._id, state: "new" }, { $set: answer });
+    }
+  }
+
+  /** The conversation of an org session on another machine, as that machine
+   *  answers: asked through the store, and waited for. */
+  async read(row: OrgSessionRow): Promise<OrgReadEvent[]> {
+    const reads = await storeReads();
+    if (!reads) throw new Error("the org's store cannot be reached");
+    if (Date.now() - row.seenAt.getTime() > AWAY_MS) throw new Error(`${row._id} is away: ${row.machine} was last heard from ${Math.round((Date.now() - row.seenAt.getTime()) / 60_000)}m ago`);
+    const id = randomUUID();
+    await reads.insertOne({ _id: id, session: row._id, machine: row.machine, by: { person: personName(), machine: machineName() }, at: new Date(), state: "new", events: null, why: null });
+    const until = Date.now() + SEND_WAIT_MS;
+    while (Date.now() < until) {
+      await Bun.sleep(1_000);
+      const got = await reads.findOne({ _id: id });
+      if (got?.state === "answered") return got.events ?? [];
+      if (got?.state === "refused") throw new Error(got.why ?? "refused");
+    }
+    throw new Error(`${row.machine} did not answer within ${SEND_WAIT_MS / 1000}s`);
   }
 
   /** Whether a session here runs in the org. */

@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   Btw,
+  OrgReadEvent,
   Account,
   AccountUsage,
   AgentSettings,
@@ -326,6 +327,9 @@ export const api = {
   load: (id: string) => get<LoadDetail>(`/api/sessions/${enc(id)}/load`),
   work: (id: string) => get<SessionWork>(`/api/sessions/${enc(id)}/work`),
   /** One of its in-process agents' transcript: the newest page, or what came after `since`. */
+  /** Another member's org session: its conversation, as its machine answers (docs/org.md). */
+  orgConversation: (id: string) =>
+    get<{ session: string; person: string; machine: string; title: string; events: OrgReadEvent[] }>(`/api/org/sessions/${enc(id)}/conversation`),
   agentTimeline: (id: string, agentId: string, since: string | null) =>
     get<AgentTimeline>(`/api/sessions/${enc(id)}/agents/${enc(agentId)}/timeline${since ? `?since=${encodeURIComponent(since)}` : ""}`),
 

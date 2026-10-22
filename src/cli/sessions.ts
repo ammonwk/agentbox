@@ -6,7 +6,7 @@ import { ApiError, type Api } from "../client";
 import { CHANGE_KINDS, ChangeWatcher, changeLine, rowsVersion, type ChangeKind, type ChangeRow } from "../core/changes";
 import { accountProvider } from "../core/providers/account";
 import { agentAncestor, stillRunning } from "../core/providers/procs";
-import type { AppState, Closed, GrepHit, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
+import type { AppState, Closed, GrepHit, OrgReadEvent, Session, SessionDiff, TimelineEvent, TimelinePage, Wait } from "../core/types";
 import { describe } from "../core/waits";
 
 type Row = AppState["sessions"][number];
@@ -257,7 +257,21 @@ async function allEvents(api: Api, id: string, turns = Infinity): Promise<Timeli
 /** `agentbox log <id> [-n turns] [--tools] [--thinking]` — oldest first. */
 export async function log(api: Api, args: string[]): Promise<number> {
   const { flags, rest } = parseArgs(args, ["n"], ["tools", "thinking"]);
-  const { ids } = await resolveIds(api, rest);
+  let ids: string[];
+  try {
+    ({ ids } = await resolveIds(api, rest));
+  } catch (e) {
+    // Not one of this machine's: another member's org session, read through the org.
+    if (rest.length !== 1) throw e;
+    const there = await api<{ person: string; events: OrgReadEvent[] }>("GET", `/api/org/sessions/${encodeURIComponent(rest[0]!)}/conversation`).catch((o: Error) => {
+      throw new Error(`${(e as Error).message}${/no org session/.test(o.message) ? "" : `; in the org: ${o.message}`}`);
+    });
+    for (const ev of there.events) {
+      if (ev.kind === "tool") console.log(`  ▸ ${ev.name}: ${ev.summary}`);
+      else console.log(`\n── ${ev.kind === "user" ? there.person : "agent"} · ${clock(ev.at)}\n${ev.text}`);
+    }
+    return 0;
+  }
   if (ids.length !== 1) throw new Error("log takes one session id");
   const turns = str(flags.get("n"));
   if (turns && !/^[1-9]\d*$/.test(turns)) throw new Error(`-n: expected a number of turns, got "${turns}"`);

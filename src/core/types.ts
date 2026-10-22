@@ -1451,6 +1451,10 @@ export interface ColdState {
 }
 
 /** Another member's org session, as the board shows it (docs/org.md). */
+/** One line of an org session's conversation as a member reads it: what was
+ *  said, and the tools it ran by their one-line summary (src/core/org/store.ts). */
+export type OrgReadEvent = { at: number } & ({ kind: "user" | "assistant"; text: string } | { kind: "tool"; name: string; summary: string });
+
 export interface OrgSessionView {
   id: string;
   person: string;
