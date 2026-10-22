@@ -169,13 +169,15 @@ export async function readPrs(prs: (Pick<PrSpec, "repo" | "number"> & { feedback
     try { o.read.checks.push(...(await restOfChecks(o.repo, o.oid, o.after)).map(check)); }
     catch (e) { o.read.checksError = e instanceof Error ? e : new Error(String(e)); }
   }));
+  // One PR at a time: a hundred requests at once is what GitHub's secondary
+  // limit answers 403, and a page refused is a page asked again next poll.
   const feedback = [...new Map(prs.filter(p => p.feedback).map(p => [prKey(p), p])).values()];
-  await Promise.all(feedback.map(async p => {
+  for (const p of feedback) {
     const read = out.get(prKey(p));
-    if (!read || read instanceof Error) return;
+    if (!read || read instanceof Error) continue;
     try { read.feedback = await readPrFeedback(p.repo, p.number); }
     catch (e) { read.feedback = e instanceof Error ? e : new Error(String(e)); }
-  }));
+  }
   return out;
 }
 
