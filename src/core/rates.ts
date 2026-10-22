@@ -43,8 +43,9 @@ const HISTORY_FIT_SPAN = 7 * DAY;
 /** …for this many days. */
 const HISTORY_DAYS = 60;
 /** A lifetime longer than this (a week, where there is no 5-hour window) is
- *  cut into days: a whole percent of a week is several dollars of work. */
-const CHUNK_MS = DAY;
+ *  cut into pieces: enough of them in a week for each day's history, and a
+ *  busy one rises well clear of whole-percent rounding. */
+const CHUNK_MS = 6 * HOUR;
 /** Providers jitter a window's reset by seconds between readings. */
 const SAME_RESET_MS = 10 * MIN;
 /** A window's newest reading stands for its value only this long: readings
