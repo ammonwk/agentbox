@@ -27,6 +27,7 @@
  */
 
 import { sessionAccounts, sessionMoves, spendBetween, usageSamplesSince } from "./db";
+import { isFree } from "./pricing";
 import type { RatesReport, UsageWindow } from "./types";
 
 const MIN = 60_000;
@@ -227,7 +228,10 @@ class Spend {
         // A session's first sample holds what it spent before it: counted
         // only for one that started inside what is read.
         const inc = prev !== undefined ? cost - prev : (sessions.get(sessionId)?.startedAt ?? 0) >= since ? cost : 0;
-        const acct = inc > 0 ? accountAt(sessionId, at) : null;
+        // A session on a free model spent nothing of its plan's; one recorded
+        // before pricing.ts knew that still carries its API price.
+        const free = sessions.get(sessionId)?.models.some(isFree);
+        const acct = inc > 0 && !free ? accountAt(sessionId, at) : null;
         if (!acct) continue;
         let series = this.byAccount.get(acct);
         if (!series) this.byAccount.set(acct, (series = { at: [], cum: [] }));
@@ -369,8 +373,11 @@ function fitUnits(units: Unit[], meta: Pick<PlanMeta, "base" | "weekly" | "windo
   const median = weightedMedian(pts.map((p) => ({ r: p.y / p.x, w: p.x })));
   const clean = pts.filter((p) => p.y / p.x <= median * OUTSIDE_OVER);
   const sx = clean.reduce((n, p) => n + p.x, 0);
-  if (clean.length < MIN_PRICE_UNITS || sx < MIN_PRICE_COST) return { perWeekly, price: null };
-  const value = clean.reduce((n, p) => n + p.y, 0) / sx;
+  const sy = clean.reduce((n, p) => n + p.y, 0);
+  // Spending that hardly moved a window says nothing of what a point costs:
+  // a price fitted from a percent or two would make a week worth millions.
+  if (clean.length < MIN_PRICE_UNITS || sx < MIN_PRICE_COST || sy * baseRate < MIN_RISE) return { perWeekly, price: null };
+  const value = sy / sx;
   const se = Math.sqrt(clean.reduce((n, p) => n + (p.y - value * p.x) ** 2, 0)) / sx;
   return { perWeekly, price: { value, samples: clean.length, r2: null, se } };
 }
