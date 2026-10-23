@@ -15,21 +15,20 @@
  *
  * Which session a process is — codex keeps no rollout open and writes no
  * per-pid file, so this is proven in order of strength:
- *   1. argv: `codex resume <uuid>`;
+ *   1. argv: `codex resume <uuid>`, or our unique launch originator in
+ *      record 0 and the process environment;
  *   2. an open `<home>/thread-writer-locks/<uuid>.lock` (the writer lock
  *      codex 0.156 takes for the thread it records) or open rollout;
  *   3. `<home>/logs_2.sqlite`, whose rows carry `process_uuid = "pid:<pid>:…"`
  *      and the `thread_id` they were logged for (the TUI logs its thread id
  *      within a second or two of creating it);
- *   4. a rollout in the process's cwd, of the same kind (TUI vs exec), that
- *      started after the process and that no other unexplained process in
- *      that cwd could have written. Two codex started in one directory with
- *      nothing else to go on stay unknown rather than guessed.
+ * A cwd and a nearby timestamp never identify a conversation.
  */
 
 import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
 import { deserialize, serialize } from "bun:jsc";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { agentboxHome, userHome } from "../paths";
 import { agentAwsSettings } from "../agent-aws";
@@ -444,10 +443,15 @@ function loggedThreads(log: CodexLog | null, pid: number, startedAt: number): st
     .map(([id]) => id);
 }
 
-interface Candidate extends CwdCandidate {
+interface Candidate {
   pid: number;
   pids: number[];
   account: Account | null;
+  home: string;
+  cwd: string;
+  startedAt: number;
+  kind: "tui" | "exec";
+  id: string | null;
 }
 
 /** A rollout of this kind: the TUI writes source "cli" (the VS Code
@@ -491,6 +495,7 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
   const now = Date.now();
   const cands: Candidate[] = [];
   const unheld: { cand: Candidate; key: string }[] = [];
+  const marked: { cand: Candidate; key: string; marker: string }[] = [];
   for (const [rootPid, members] of groups) {
     const root = byPid.get(rootPid)!;
     const inv = parseCodexArgs(codexArgs(root.argv));
@@ -514,16 +519,40 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
     const key = `${rootPid}:${startedAt}`;
     const cached = proven.get(key);
     if (!id && cached && now - cached.at < PROVEN_TTL) id = cached.id;
-    if (!id) {
+    const marker = env?.get("CODEX_INTERNAL_ORIGINATOR_OVERRIDE");
+    if (!id && !marker?.startsWith("agentbox-")) {
       const held = [...new Set(pids.flatMap((p) => openThreads(p, home)))];
       id = pickThread(held, home);
       if (id) proven.set(key, { id, at: now });
     }
     const cand: Candidate = { pid: rootPid, pids, account, home, cwd, startedAt, kind, id };
     cands.push(cand);
-    if (!id) unheld.push({ cand, key });
+    if (!id) {
+      if (marker?.startsWith("agentbox-")) marked.push({ cand, key, marker });
+      else unheld.push({ cand, key });
+    }
   }
-  // Then the log database, read once per home for all of them.
+  // Record 0 carries our unique launch originator before the first prompt.
+  // Scan once per home, not once per process; identified processes use the
+  // same short-lived proof cache as writer locks and the log database.
+  const launches = new Map<string, Map<string, string[]>>();
+  for (const { cand: c, key, marker } of marked) {
+    let byMarker = launches.get(c.home);
+    if (!byMarker) {
+      launches.set(c.home, (byMarker = new Map()));
+      const since = Math.min(...marked.filter((m) => m.cand.home === c.home).map((m) => m.cand.startedAt));
+      for (const r of indexFor(c.home).scan(since)) {
+        const l = lineageOf(r.path);
+        if (!l?.originator || !kindMatches(l, "tui")) continue;
+        const ids = byMarker.get(l.originator) ?? [];
+        ids.push(r.id);
+        byMarker.set(l.originator, ids);
+      }
+    }
+    c.id = pickThread(byMarker.get(marker) ?? [], c.home);
+    if (c.id) proven.set(key, { id: c.id, at: now });
+  }
+  // Then the log database, read once per home for all unmarked processes.
   if (unheld.length) {
     const from = Math.floor(Math.min(...unheld.map((u) => u.cand.startedAt)) / 1000) - 5;
     const logs = new Map<string, CodexLog | null>();
@@ -535,7 +564,6 @@ async function liveProcesses(accounts: Account[]): Promise<LiveProcess[]> {
   }
   if (proven.size > 500) for (const [k, v] of proven) if (now - v.at > PROVEN_TTL) proven.delete(k);
 
-  matchByCwd(cands);
   return cands
     .filter((c) => c.kind === "tui" || c.id)
     .map((c) => ({ pid: c.pid, accountId: c.account?.id ?? null, agentSessionId: c.id, cwd: c.cwd, startedAt: c.startedAt }));
@@ -562,100 +590,6 @@ export function pickThread(
   if (!own.length) return null;
   const written = own.filter((id) => paths.get(id));
   return (written.length ? written : own).sort().reverse()[0]!;
-}
-
-export interface CwdCandidate {
-  home: string;
-  cwd: string;
-  kind: "tui" | "exec";
-  startedAt: number;
-  id: string | null;
-}
-
-export interface RolloutInfo {
-  id: string;
-  /** Epoch ms the thread was created. */
-  start: number;
-  lineage: CodexLineage;
-}
-
-/** Threads the log database attributes to some process. */
-function loggedOwners(home: string, ids: string[]): Set<string> {
-  const out = new Set<string>();
-  const path = join(home, "logs_2.sqlite");
-  if (!ids.length || !existsSync(path)) return out;
-  let db: Database | null = null;
-  try {
-    db = new Database(path, { readonly: true });
-    const q = db.query("SELECT 1 FROM logs WHERE thread_id = ?1 LIMIT 1");
-    for (const id of ids) if (q.get(id)) out.add(id);
-  } catch {
-    /* only one witness */
-  } finally {
-    db?.close();
-  }
-  return out;
-}
-
-/** Rollouts started since `sinceMs` that no log row ties to a process: a
- *  thread with a logged owner belongs to that owner, and had the owner been
- *  one of the unexplained processes it would already have been matched. */
-function unownedRollouts(home: string, sinceMs: number): RolloutInfo[] {
-  const found = indexFor(home)
-    .scan(sinceMs)
-    .map((r) => ({ r, l: lineageOf(r.path) }))
-    .filter((x): x is { r: Rollout; l: CodexLineage } => !!x.l);
-  const owned = loggedOwners(home, found.map((x) => x.r.id));
-  return found
-    .filter((x) => !owned.has(x.r.id))
-    .map((x) => ({ id: x.r.id, start: x.l.startedAt ?? rolloutStartFromName(basename(x.r.path)) ?? 0, lineage: x.l }));
-}
-
-/**
- * The weakest proof, used only where it is unambiguous: a rollout of the
- * right kind in the process's cwd, created after the process started, that
- * exactly one unexplained process could have written. Rollouts are taken in
- * creation order, so once one has two possible writers every later one does
- * too, and the rest stay unknown.
- */
-export function matchByCwd<C extends CwdCandidate>(
-  cands: C[],
-  rolloutsFor: (home: string, sinceMs: number) => RolloutInfo[] = unownedRollouts,
-): void {
-  const open = cands.filter((c) => !c.id && c.cwd);
-  if (!open.length) return;
-  const claimed = new Set(cands.filter((c) => c.id).map((c) => c.id!));
-  const byKey = new Map<string, C[]>();
-  for (const c of open) {
-    const k = JSON.stringify([c.home, c.cwd, c.kind]);
-    const g = byKey.get(k);
-    if (g) g.push(c);
-    else byKey.set(k, [c]);
-  }
-  const earliest = new Map<string, number>();
-  for (const c of open) earliest.set(c.home, Math.min(earliest.get(c.home) ?? Infinity, c.startedAt));
-  const cache = new Map<string, RolloutInfo[]>();
-  for (const group of byKey.values()) {
-    const { home, cwd, kind } = group[0]!;
-    let all = cache.get(home);
-    if (!all) cache.set(home, (all = rolloutsFor(home, earliest.get(home)! - 60_000)));
-    const rollouts = all
-      .filter((r) => r.lineage.cwd === cwd && kindMatches(r.lineage, kind) && !claimed.has(r.id))
-      .sort((a, b) => a.start - b.start);
-    const pending = new Set(group);
-    for (const ro of rollouts) {
-      // Its possible writers: unexplained processes that had started by then,
-      // with slack for /proc start ticks against a wall-clock timestamp.
-      const owners = [...pending].filter((c) => c.startedAt - 5_000 <= ro.start);
-      if (owners.length === 1) {
-        owners[0]!.id = ro.id;
-        claimed.add(ro.id);
-        pending.delete(owners[0]!);
-      } else if (owners.length > 1) {
-        break;
-      }
-    }
-  }
 }
 
 // ------------------------------------------------------------- screens
@@ -706,7 +640,7 @@ export function codexBlockedOn(raw: string): string | null {
 
 function accountCommand(account: Pick<Account, "home" | "isDefault">): Pick<Command, "env" | "unset"> {
   // The server's own CODEX_HOME must not leak into the default account.
-  return account.isDefault ? { env: {}, unset: ["CODEX_HOME"] } : { env: { CODEX_HOME: account.home } };
+  return { env: account.isDefault ? {} : { CODEX_HOME: account.home }, unset: ["CODEX_INTERNAL_ORIGINATOR_OVERRIDE", ...(account.isDefault ? ["CODEX_HOME"] : [])] };
 }
 
 /** Codex has no flag for a system prompt in a file: `-c developer_instructions=`
@@ -807,6 +741,9 @@ function sessionFlags(opts: { session: string; cwd: string; briefingFile?: strin
   for (const [key, value] of Object.entries(agentAwsSettings(opts.session))) {
     a.push("-c", `shell_environment_policy.set.${key}=${JSON.stringify(value)}`);
   }
+  // The launch originator identifies the TUI, never a nested Codex started
+  // by a tool shell. Codex exec's ordinary originator is restored there.
+  a.push("-c", 'shell_environment_policy.set.CODEX_INTERNAL_ORIGINATOR_OVERRIDE="codex_exec"');
   return a;
 }
 
@@ -816,7 +753,8 @@ export const READ_ONLY = ["--sandbox", "read-only", "--ask-for-approval", "never
 
 function spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null } {
   const argv = ["codex", ...sessionFlags(opts)];
-  return { argv, ...accountCommand(opts.account), agentSessionId: null };
+  const command = accountCommand(opts.account);
+  return { argv, ...command, env: { ...command.env, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: `agentbox-${opts.session}-${randomUUID()}` }, agentSessionId: null };
 }
 
 function resumeCommand(opts: ResumeOptions): Command {

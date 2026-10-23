@@ -1206,8 +1206,9 @@ export class Fleet extends EventEmitter {
   /**
    * A provider that cannot be told its session id up front (codex, devin,
    * omp) writes a transcript some seconds after we start it. The session we
-   * spawned is waiting with a null id; the first new transcript on the same
-   * account, in the same directory, started after we did, is it.
+   * spawned is waiting with a null id. A recorded launch marker or the
+   * process in its pane identifies it. Only older adapters without a marker
+   * may use the directory/time fallback; Codex must never use that guess.
    */
   private matchPendingSpawns(now: number): void {
     const defaults = new Set(listAccounts().filter((a) => a.isDefault).map((a) => a.id));
@@ -1218,21 +1219,26 @@ export class Fleet extends EventEmitter {
       (r) => r.agentSessionId === null && r.origin === "agentbox" && !r.archivedAt && !r.successor,
     );
     for (const rec of pending) {
-      // Strongest evidence first: the process in our pane says which session it is.
+      // A provider-recorded launch marker works even before the pane is visible.
+      // Otherwise the process in our pane must name the conversation.
       const pane = rec.tmux ? this.panes.get(rec.tmux) : undefined;
       const proc = pane && !pane.dead ? this.processUnder(pane.pid, rec.provider) : undefined;
-      let agentId = proc?.agentSessionId ?? null;
+      const marked = rec.provider === "codex" ? [...this.tracked.values()].find((t) =>
+        t.facts?.spawnSessionId === rec.id && !t.facts.isSubagent &&
+        t.ref.provider === rec.provider && t.ref.accountId === rec.accountId,
+      ) : undefined;
+      let agentId = marked?.facts?.agentSessionId ?? proc?.agentSessionId ?? null;
       // A pane is only evidence of our own spawn if the process there is the
       // one we started: on our account, in our directory, and not older than
       // the row. Another process's transcript can otherwise be read as ours.
-      if (agentId && (!proc!.accountId || !samePath(proc!.cwd, rec.cwd) || proc!.accountId !== rec.accountId || proc!.startedAt < rec.createdAt - 10_000)) continue;
+      if (!marked && agentId && (!proc!.accountId || !samePath(proc!.cwd, rec.cwd) || proc!.accountId !== rec.accountId || proc!.startedAt < rec.createdAt - 10_000)) continue;
       // One we just spawned never began before us, so a process naming an older
       // conversation is misread: wait for it to name its own rather than guess
       // among siblings started beside it.
       if (agentId && this.transcriptStartedBefore(rec.provider, agentId, rec.createdAt - 10_000)) continue;
 
       if (!agentId) {
-        if (now - rec.createdAt >= MATCH_WINDOW_MS) continue;
+        if (rec.provider === "codex" || now - rec.createdAt >= MATCH_WINDOW_MS) continue;
         let best: Tracked | null = null;
         for (const t of this.tracked.values()) {
           const f = t.facts;
@@ -1259,7 +1265,7 @@ export class Fleet extends EventEmitter {
       // holds the claim, the pin and the tmux session, is the real one: the
       // discovered row becomes its closed alias.
       if (discovered) {
-        if (!proc?.agentSessionId || !samePath(discovered.cwd, rec.cwd) || !attachDiscoveredSpawn(rec.id, discovered.id, now)) continue;
+        if ((!marked && !proc?.agentSessionId) || !samePath(discovered.cwd, rec.cwd) || !attachDiscoveredSpawn(rec.id, discovered.id, now)) continue;
       } else updateSessionRecord(rec.id, { agentSessionId: agentId });
       this.byAgentId.set(`${rec.provider}:${agentId}`, rec.id);
     }
@@ -4553,6 +4559,7 @@ function outcomeOn(o: ModelOutcome | null | undefined, stored: ModelOutcome | nu
 function compactFacts(f: TranscriptFacts, transcriptSize: number, accountId: string | null, stored?: unknown): StoredFacts {
   return {
     transcriptSize,
+    spawnSessionId: f.spawnSessionId,
     cwd: f.cwd,
     resumeCwd: f.resumeCwd,
     title: f.title,

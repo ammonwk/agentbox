@@ -413,6 +413,7 @@ export class CodexFold {
     const windows = [...this.windows.values()].flat();
     return {
       agentSessionId: this.ref.agentSessionId,
+      spawnSessionId: /^agentbox-([a-z0-9]{8})-[0-9a-f-]{36}$/.exec(l?.originator ?? "")?.[1] ?? null,
       cwd: this.cwd,
       // `codex resume` finds a session by id from anywhere, but started from
       // another directory it stops to ask which one to use; the session's

@@ -120,6 +120,9 @@ export function nextOutcome(prev: ModelOutcome | null, model: string, at: number
 /** Everything an adapter can say about one transcript. */
 export interface TranscriptFacts {
   agentSessionId: string;
+  /** A managed launch id recorded by the provider itself. Used to bind a new
+   *  conversation before its process/pane is discoverable. */
+  spawnSessionId?: string | null;
   /** The latest cwd the session worked in. */
   cwd: string | null;
   /**
@@ -400,7 +403,7 @@ export interface ProviderAdapter {
   /**
    * argv for a new interactive session. `agentSessionId` is set when the CLI
    * can be told its session id up front (claude `--session-id`); otherwise the
-   * fleet discovers it from the first new transcript in `cwd`.
+   * fleet discovers it from the launch marker or the process in its pane.
    */
   spawnCommand(opts: SpawnOptions): Command & { agentSessionId: string | null };
 
