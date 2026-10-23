@@ -42,8 +42,11 @@ const RED = new Set(["failure", "timed_out", "startup_failure"]);
 const RUNS_READ = 30;
 
 /**
- * The red streak the workflow is in, or null when it is green or the streak
- * already had a session: one started at `startedAt`, after its last green run.
+ * The red streak the workflow is in, or null when it is green or every red run
+ * in it finished before the session started at `startedAt`. A red run that
+ * finished after it needs a session once that one stops (the scheduler waits
+ * while it is at work): 10-23 staging's candidate went red again a day after
+ * its session ended, with no green run between, and nobody was started.
  */
 export function redStreak(runs: WorkflowRun[], startedAt: number | null): RedStreak | null {
   const settled = runs
@@ -53,7 +56,7 @@ export function redStreak(runs: WorkflowRun[], startedAt: number | null): RedStr
   const failed = i === -1 ? settled : settled.slice(0, i);
   if (!failed.length) return null;
   const lastGreen = i === -1 ? null : settled[i]!;
-  if (startedAt !== null && (!lastGreen || Date.parse(lastGreen.updatedAt) <= startedAt)) return null;
+  if (startedAt !== null && Date.parse(failed[0]!.updatedAt) <= startedAt) return null;
   return { failed, lastGreen };
 }
 

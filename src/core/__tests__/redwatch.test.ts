@@ -76,10 +76,12 @@ describe("redStreak", () => {
     expect(s).toEqual({ failed: [b, a], lastGreen: green });
   });
 
-  test("a streak has had its session once one started after its last green run", () => {
+  test("a streak has had its session until a red run finishes after that session started", () => {
     const runs = [run(0, "success"), run(10, "failure"), run(40, "failure")];
-    // Started for this streak, at minute 35: more red runs do not start another.
-    expect(redStreak(runs, T0 + 35 * 60_000)).toBeNull();
+    // Started at minute 65, after both red runs finished.
+    expect(redStreak(runs, T0 + 65 * 60_000)).toBeNull();
+    // Started at minute 35: the run that finished at 60 needs one once it stops.
+    expect(redStreak(runs, T0 + 35 * 60_000)).not.toBeNull();
     // Started before the green run: that was the last streak.
     expect(redStreak(runs, T0 + 5 * 60_000)).not.toBeNull();
   });
@@ -87,7 +89,7 @@ describe("redStreak", () => {
   test("a streak longer than what was read keeps its session", () => {
     const runs = [run(10, "failure"), run(40, "failure")];
     expect(redStreak(runs, null)?.lastGreen).toBeNull();
-    expect(redStreak(runs, T0)).toBeNull();
+    expect(redStreak(runs, T0 + 65 * 60_000)).toBeNull();
   });
 });
 
