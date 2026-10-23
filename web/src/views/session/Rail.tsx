@@ -426,13 +426,15 @@ export function Rail({
           </div>
         ) : null}
         {rows.length === 0 && ((split && view === "inactive") || scheduled.length === 0) ? (
+          filter.query ? (
+            <SaidList query={filter.query} none={`Nothing ${split ? `${view} ` : ""}matches.`} current={current} onMenu={onMenu} />
+          ) : (
           <p className="rail-none">
-            {filter.query
-              ? `Nothing ${split ? `${view} ` : ""}matches.`
-              : state.sessions.length
+            {state.sessions.length
                 ? split ? `Nothing ${view}.` : "Nothing open."
                 : "No sessions yet."}
           </p>
+          )
         ) : null}
         {sections.map((sec) => (
           <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
@@ -1250,6 +1252,70 @@ function ClosedList({
           <div ref={end} className="rail-closed-end" aria-hidden="true" />
         </>
       ) : null}
+    </div>
+  );
+}
+
+type SaidHits = Awaited<ReturnType<typeof api.said>>;
+
+/** A search no title matches looks in what was said: you and the agents,
+ *  not tool output. From the server's index of every transcript. */
+function SaidList({ query, none, current, onMenu }: { query: string; none: string; current: string | null; onMenu: (s: SessionRow, x: number, y: number) => void }) {
+  const { project } = useScope();
+  const q = query.trim();
+  const [hits, setHits] = useState<SaidHits | null>(null);
+  useEffect(() => {
+    setHits(null);
+    if (q.length < 3) return;
+    let live = true;
+    const t = setTimeout(() => {
+      api.said(q, project).then(
+        (h) => {
+          if (!live) return;
+          for (const x of h) closedSessions.set(x.session.id, x.session);
+          setHits(h);
+        },
+        () => live && setHits([]),
+      );
+    }, 200);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [q, project]);
+  if (!hits?.length) return <p className="rail-none">{hits === null && q.length >= 3 ? "Looking in what was said…" : none}</p>;
+  return (
+    <div className="rail-sec" data-kind="said">
+      <div className="rail-label">
+        Said in <span>{hits.length}</span>
+      </div>
+      {hits.map(({ session: s, snippet, at, kind }) => (
+        <a
+          key={s.id}
+          className="rail-row rail-said"
+          data-nav-item
+          data-nav-id={`session:${s.id}`}
+          href={hrefOf({ page: "session", id: s.id, tab: openingTab(s) })}
+          aria-current={s.id === current ? "page" : undefined}
+          data-status={s.status}
+          title={namedTitle(s)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            onMenu(s, e.clientX, e.clientY);
+          }}
+        >
+          <span className="rail-text">
+            <RowTitle s={s} />
+            <span className="rail-said-line">
+              {kind === "user" ? "You: " : ""}
+              {snippet}
+            </span>
+          </span>
+          <span className="rail-when">
+            <RelativeTime ts={at} short title={`Said ${new Date(at).toLocaleString()}`} />
+          </span>
+        </a>
+      ))}
     </div>
   );
 }

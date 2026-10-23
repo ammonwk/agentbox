@@ -35,6 +35,7 @@ import { calibrate } from "../core/calibration";
 import { usageInsights } from "../core/insights";
 import { diffOf } from "../core/diff";
 import { grepInWorker } from "../core/grep";
+import { searchSaid, startSearchIndex } from "../core/search";
 import { metricsEvents, metricsSnapshot, procDetail, setMetricsSource, setMetricsWatchers } from "../core/metrics";
 import { reclaimWorktrees, scanWorktrees } from "../core/worktrees";
 import { McpError, addServer, importServer, readRegistry, removeServer, setEnabled, updateServer } from "../core/mcp";
@@ -46,14 +47,14 @@ import { demoteSkill, listSkills, promoteSkill, readSkillBody, skillRoots, write
 import { containedIn, looksLikeSkillFile, skillMdPath, skillRootDirs } from "./guard";
 import { contextDocs, readContextDoc, writeContextDoc } from "./context";
 import { briefingText } from "../core/providers/briefing";
-import { addRepo, deleteRepo, getDb, getKv, resolveSessionRefs, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
+import { addRepo, deleteRepo, getDb, getKv, listSessionRecords, resolveSessionRefs, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
 import { parseSpec, Waits } from "../core/waits";
 import { CARD_KINDS, Cards, moveCards } from "../core/cards";
-import type { CardKind, CardState, McpServerInput, McpState, OrgReadEvent } from "../core/types";
+import type { CardKind, CardState, McpServerInput, McpState, OrgReadEvent, Session } from "../core/types";
 import { environOf, startedAtOf } from "../core/providers/procs";
 import { branchHolders, openPrs, prWarnings, repoSlugOf, syncPrs } from "../core/prs";
 import { claimPr, holderOf, movePrClaims, parsePrRef, prClaims, PrHeld, releasePr, transferPr } from "../core/prclaims";
@@ -1441,6 +1442,22 @@ const router = new Router(mapError)
     const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit, project ? (s) => sessionProject(repos, s) === project : undefined);
     return json({ sessions: page.sessions.map((s) => ({ ...s, attention: attentionOf(s, null) })), total: page.total });
   })
+  // Sessions where the words were said, for the rail's search when no title matches.
+  .add("GET", "/api/sessions/said", ({ url }) => {
+    const project = url.searchParams.get("project");
+    const repos = project ? reposWithRoots() : [];
+    const views = new Map<string, Session>();
+    const hits = searchSaid(url.searchParams.get("q") ?? "", 30, (id) => {
+      try {
+        const s = fleet.get(id);
+        views.set(id, s);
+        return !project || sessionProject(repos, s) === project;
+      } catch {
+        return false; // deleted since
+      }
+    });
+    return json(hits.map((h) => ({ ...h, session: { ...views.get(h.sessionId)!, attention: attentionOf(views.get(h.sessionId)!, null) } })));
+  })
   // Words in agent output that may name a session off the board (an old
   // one's id or provider id): which of them do, and as which session.
   .add("POST", "/api/sessions/resolve", async ({ req }) => {
@@ -2075,6 +2092,13 @@ export async function startServer(): Promise<void> {
   setInterval(checkBehind, BEHIND_POLL_MS).unref?.();
   watchPwaDesktop();
   startNightlyReclaim(() => fleet.sessions());
+  startSearchIndex(() =>
+    listSessionRecords(0).flatMap((r) =>
+      r.transcriptPath && r.agentSessionId && r.accountId
+        ? [{ id: r.id, ref: { provider: r.provider, accountId: r.accountId, agentSessionId: r.agentSessionId, path: r.transcriptPath, mtimeMs: 0, size: 0 } }]
+        : [],
+    ),
+  );
   // Soon after a start as well as hourly: the server is restarted more often than that.
   setTimeout(() => void sayRateChanges(), 2 * 60_000).unref?.();
   setInterval(() => void sayRateChanges(), RATE_CHANGES_MS).unref?.();

@@ -313,6 +313,12 @@ export const api = {
    *  history; only a project's, when one is selected. */
   closed: (q: string, offset: number, limit = 30, project: string | null = null) =>
     get<{ sessions: AppState["sessions"]; total: number }>(`/api/sessions/closed?${new URLSearchParams({ q, offset: String(offset), limit: String(limit), ...(project ? { project } : {}) })}`),
+  /** Sessions where `q` was said, by you or the agent, the most recent mention
+   *  first, from all of history; only a project's, when one is selected. */
+  said: (q: string, project: string | null = null) =>
+    get<{ sessionId: string; at: number; kind: "user" | "assistant"; snippet: string; session: AppState["sessions"][number] }[]>(
+      `/api/sessions/said?${new URLSearchParams({ q, ...(project ? { project } : {}) })}`,
+    ),
   /** One session by id, wherever in history it is. */
   session: (id: string) => get<AppState["sessions"][number]>(`/api/sessions/${enc(id)}`),
   /** Which of these words name a session, as provider id or agentbox id → agentbox id. */

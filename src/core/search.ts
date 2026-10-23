@@ -1,0 +1,104 @@
+/** What was said in every session, searchable: the rail's search when no
+ *  session's title matches.
+ *
+ *  Transcripts are tens of gigabytes, almost all of it tool calls, their
+ *  output and thinking; what you and the agents said is about 1% of it. A
+ *  scan at query time takes a ripgrep pass over all of it (15 s and more), so
+ *  the said text alone is kept in an FTS5 table (`cache/search.db`) and a
+ *  query is a lookup. Trigrams, so a fragment matches mid-word as the title
+ *  filter does.
+ *
+ *  A worker keeps it current (`search-worker.ts`): the first pass reads every
+ *  transcript once, through the providers' own readers, and after it only
+ *  sessions whose transcript grew, from where it left off. It is a cache:
+ *  deleting the file rebuilds it. */
+
+import { Database } from "bun:sqlite";
+import { statSync } from "node:fs";
+import { join } from "node:path";
+import { agentboxHome } from "./paths";
+import type { TranscriptRef } from "./providers/types";
+
+export const searchDbPath = (): string => join(agentboxHome(), "cache", "search.db");
+
+/** Bumped when what is kept changes: the worker drops the old index and reads everything again. */
+export const SEARCH_VERSION = 1;
+
+export interface IndexJob {
+  sessions: { id: string; ref: TranscriptRef }[];
+}
+
+/** How often the worker looks for transcripts that grew. */
+const CATCH_UP_MS = 60_000;
+
+/** Keep the index current from now on: a pass a minute, never two at once.
+ *  `sessions` lists every session with a transcript, newest first. */
+export function startSearchIndex(sessions: () => IndexJob["sessions"]): void {
+  const worker = new Worker(new URL("./search-worker.ts", import.meta.url));
+  let busy = false;
+  worker.onmessage = () => {
+    busy = false;
+  };
+  worker.onerror = (e) => {
+    busy = false;
+    console.error("agentbox: indexing what was said failed:", e.message);
+  };
+  const pass = () => {
+    if (busy) return;
+    busy = true;
+    worker.postMessage({ sessions: sessions() } satisfies IndexJob);
+  };
+  setTimeout(pass, 30_000).unref?.();
+  setInterval(pass, CATCH_UP_MS).unref?.();
+}
+
+export interface SaidHit {
+  sessionId: string;
+  at: number;
+  kind: "user" | "assistant";
+  /** The matching line, cut down around the match. */
+  snippet: string;
+}
+
+let reader: Database | null = null;
+
+/** The sessions where `q` was said, the most recent mention first, one hit
+ *  each. Empty under three characters, which a trigram cannot match. */
+export function searchSaid(q: string, limit: number, include: (sessionId: string) => boolean): SaidHit[] {
+  const needle = q.trim();
+  if (needle.length < 3) return [];
+  if (!reader) {
+    try {
+      statSync(searchDbPath());
+      reader = new Database(searchDbPath(), { readonly: true });
+    } catch {
+      return []; // not built yet
+    }
+  }
+  const rows = reader
+    .query(
+      `SELECT said.session, said.at, said.kind, said.text FROM said_fts JOIN said ON said.id = said_fts.rowid
+       WHERE said_fts MATCH ? ORDER BY said_fts.rowid DESC LIMIT 2000`,
+    )
+    .all(`"${needle.replaceAll('"', '""')}"`) as { session: string; at: number; kind: "user" | "assistant"; text: string }[];
+  // The newest rows, not the newest mentions: sorting every match by time
+  // took seconds for a common word, on the server's thread. A rarer phrase
+  // has fewer matches than the limit, and those come out in time order.
+  rows.sort((a, b) => b.at - a.at);
+  const out: SaidHit[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (seen.has(r.session) || !include(r.session)) continue;
+    seen.add(r.session);
+    out.push({ sessionId: r.session, at: r.at, kind: r.kind, snippet: snippetOf(r.text, needle) });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function snippetOf(text: string, needle: string): string {
+  const at = text.toLowerCase().indexOf(needle.toLowerCase());
+  const from = Math.max(0, at - 60);
+  const s = text.slice(from, from + 200).replace(/\s+/g, " ").trim();
+  return (from > 0 ? "…" : "") + s;
+}

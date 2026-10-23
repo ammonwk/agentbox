@@ -408,6 +408,19 @@
   color: var(--muted);
   font-weight: 450;
 }
+/* A search's hit in what was said: the line it was said in, under the title. */
+.rail-said {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.rail-said-line {
+  font-size: 11.5px;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .rail-closed-end {
   height: 1px;
 }
