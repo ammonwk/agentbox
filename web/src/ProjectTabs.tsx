@@ -1,7 +1,6 @@
 /** The projects you keep open, as tabs above the page, with a dot on one that
  *  has something waiting on you. Picking one is navigation (route.ts
- *  `selectScope`), as the switcher's pick is: nothing running is touched.
- *  Ctrl+Tab and Ctrl+Shift+Tab move between them. */
+ *  `selectScope`), as the switcher's pick is: nothing running is touched. */
 
 import { useEffect, useState } from "react";
 import type { AppState } from "../../src/core/types";
@@ -68,17 +67,6 @@ function attentionOf(state: AppState, project: string | null): string {
 
 export function ProjectTabs({ state, selected, onOpen, hint }: { state: AppState; selected: string | null; onOpen: () => void; hint?: string }) {
   const { tabs, close } = useProjectTabs(state, selected);
-  const all = [null, ...tabs.map((r) => r.id)];
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey || e.metaKey || e.key !== "Tab") return;
-      e.preventDefault();
-      const at = all.indexOf(selected);
-      selectScope("project", all[(at + (e.shiftKey ? -1 : 1) + all.length) % all.length] ?? null);
-    };
-    addEventListener("keydown", onKey, true);
-    return () => removeEventListener("keydown", onKey, true);
-  }, [all.join(), selected]);
   return (
     <nav className="project-bar" aria-label="Projects">
       <div className="project-tabs" role="tablist" aria-label="Open projects">
