@@ -153,12 +153,12 @@ function repoOfDir(repos: { id: string; checkoutRoot?: string }[], dir: string):
   return repos.find((r) => r.checkoutRoot === root)?.id ?? null;
 }
 
-/** `agentbox claude [--account X] [--model M] [--claim PR] [--parent ID] [--org|--personal] [--repo R] [--ref REF | --worktree | --branch B] [--detach] [prompt…]`
+/** `agentbox claude [--account X] [--model M] [--effort E] [--claim PR] [--parent ID] [--org|--personal] [--repo R] [--ref REF | --worktree | --branch B] [--detach] [prompt…]`
  *
  *  A mistyped option is refused, not taken for a switch: `--acount work`
  *  would otherwise start on the balancer's pick with "work" in the prompt. */
 async function startSession(provider: ProviderId, args: string[]): Promise<number> {
-  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "claim", "parent", "repo", "ref", "branch"], ["detach", "org", "personal", "worktree", "help", "h"]);
+  const { flags, rest } = verbs.parseArgs(args, ["account", "model", "effort", "claim", "parent", "repo", "ref", "branch"], ["detach", "org", "personal", "worktree", "help", "h"]);
   const str = (k: string): string | undefined => (typeof flags.get(k) === "string" ? (flags.get(k) as string) : undefined);
   // Asking how is not asking to start one.
   if (flags.has("help") || flags.has("h")) {
@@ -203,6 +203,7 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       ...(place ?? { cwd: str("repo") ? undefined : process.cwd() }),
       prompt: rest.join(" ") || undefined,
       model: str("model"),
+      effort: str("effort"),
       accountId,
       // In the org or on your own accounts; absent, its parent's, else your default.
       scope: flags.has("org") ? "org" : flags.has("personal") ? "personal" : undefined,
@@ -428,10 +429,11 @@ const USAGE = `usage: agentbox <command>
   serve                 run the server on port ${DEFAULT_PORT} (default command)
   start                 start the backend in the background, if needed
   service install       keep the backend available at login (macOS) or boot (Linux)
-  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--parent ID] [--detach]
+  claude|codex|devin|omp|opencode|muse [--account NAME] [--model M] [--effort E] [--parent ID] [--detach]
          [--org|--personal] [--repo OWNER/NAME [--ref REF]] [--worktree | --branch B] [prompt…]
                         start a session here, on the account with the most room,
                         and attach this terminal to it (detach: Ctrl-b d);
+                        --effort how hard it thinks, one of the provider's levels (codex xhigh);
                         --parent puts it under that session (default: the one this runs in);
                         --org runs it on the org's accounts, where its members see it, --personal
                         on yours (default: its parent's, else \`agentbox org default\`);
