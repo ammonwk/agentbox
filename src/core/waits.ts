@@ -59,14 +59,8 @@ export const TELL_FOR_MS = 24 * 3_600_000;
 const MAX_PER_SESSION = 20;
 export const MIN_TIMEOUT_MS = 60_000;
 export const MAX_TIMEOUT_MS = 7 * 24 * 3_600_000;
-export const DEFAULT_TIMEOUT_MS: Record<WaitSpec["kind"], number> = {
-  pr: 3 * 3_600_000,
-  run: 2 * 3_600_000,
-  job: 12 * 3_600_000,
-  session: 4 * 3_600_000,
-  until: 2 * 3_600_000,
-  time: 3_600_000,
-};
+/** The backstop for a wait armed without --timeout: short, so a stuck one is looked into. */
+export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 
 type Ending = { how: Exclude<WaitEnd, "cancelled" | "timeout">; text: string };
 /** One look: how it ends the wait, or what it saw and hands the next look. */
@@ -346,7 +340,7 @@ export class Waits {
     if (spec.kind === "pr" && !spec.merged && prReleased(sessionId, spec)) {
       throw new FleetError(409, `${prReleasedLine(sessionId)} Its checks, --require/--only and --feedback waits on it are cancelled; a --merged wait on it stays armed, since waiting for a merge needs no ownership.`);
     }
-    const ms = timeoutMs ?? DEFAULT_TIMEOUT_MS[spec.kind];
+    const ms = timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isFinite(ms) || ms < MIN_TIMEOUT_MS || ms > MAX_TIMEOUT_MS) throw new FleetError(400, `a wait's timeout is between ${span(MIN_TIMEOUT_MS)} and ${span(MAX_TIMEOUT_MS)}`);
     const going = listOpenWaits(0).filter((w) => w.sessionId === sessionId && !w.ended);
     // One wait per thing waited on; asked again with a timeout, it takes the new deadline. Every timer is its own.

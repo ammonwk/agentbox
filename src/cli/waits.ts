@@ -37,7 +37,8 @@ const USAGE = `wait takes what to wait for:
                         not yet, anything else is a look that failed. One argument is a
                         shell line, several an argv. For a PR, use wait pr
   agentbox wait time <45m>           nothing but the time
-all take --timeout <3h> and --for <session id>.`;
+all take --timeout <1h> (about twice what you expect it to take; 30m when left out)
+and --for <session id>.`;
 
 /** `agentbox wait <what> … [--timeout 3h] [--for ID]`: arm one and return at once. */
 export async function wait(api: Api, args: string[]): Promise<number> {

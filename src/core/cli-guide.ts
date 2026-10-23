@@ -79,10 +79,11 @@ also reads them from stdin with \`-\`, so pipes and xargs work.
                                     # those that ended in the last day, and how
     agentbox unwait <id>...         # cancel one; a job it started keeps running
 
-Each takes \`--timeout <3h>\` (it has one regardless: 3h for a pull request, 2h a
-run or a command, 12h a job, 4h a session; a week at most) and \`--for <session>\`
-(default: the session it is run in). It prints the wait's id and returns at
-once. The server does the waiting, not your process: end your turn, or carry
+Each takes \`--timeout <1h>\`: set it to about twice how long you expect the
+wait to take (30m when left out; a week at most), so one that is stuck wakes you
+to look into it instead of leaving you waiting.
+\`--for <session>\` names the session it is for (default: the one it is run
+in). It prints the wait's id and returns at once. The server does the waiting, not your process: end your turn, or carry
 on with other work, and the wait is typed into the session as agentbox's own
 note the moment it ends, which is one of exactly four ways, each named:
 
