@@ -856,7 +856,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
       <ToggleRow
         label="Delete safe worktrees every night at 3am"
         hint={
-          "The same ones Delete safe removes — including anything untouched for 14 days, uncommitted work and all — except any that changed in the last day or that a process is running in. One at a time, at idle priority, waiting while the machine is busy." +
+          "The same ones Delete safe removes — including anything untouched for 7 days, uncommitted work and all — except any that changed in the last day or that a process is running in. One at a time, at idle priority, waiting while the machine is busy." +
           (nightly
             ? ` Last run ${new Date(nightly.startedAt).toLocaleDateString()}: removed ${nightly.removed}, freeing ${fmtBytes(nightly.bytesFreed)}` +
               (nightly.failed.length ? `; ${nightly.failed.length} could not be removed` : "") +
@@ -910,7 +910,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
           from GitHub yet (see the warnings if <code>gh</code> is the reason), so no
           branch could be checked for a merged or closed pull request. Branch
           worktrees are kept; only detached checkouts whose commits are elsewhere,
-          or anything untouched for 14 days, count as safe below.
+          or anything untouched for 7 days, count as safe below.
         </p>
       )}
 
@@ -931,7 +931,7 @@ function Disk({ settings, save, saveStateOf }: SectionProps) {
                 title={
                   safe.length === 0
                     ? "Nothing is safe to delete — every worktree below has changes, an open PR, or could not be checked."
-                    : "Removes worktrees nobody is coming back to: merged or closed PRs; clean branches GitHub holds no PR for; detached checkouts whose commits are all on a branch or remote; the same with only untracked files once 3 days idle; and anything untouched for 14 days, whatever is in it. Nothing is saved first."
+                    : "Removes worktrees nobody is coming back to: merged or closed PRs; clean branches GitHub holds no PR for; detached checkouts whose commits are all on a branch or remote; the same with only untracked files once 3 days idle; and anything untouched for 7 days, whatever is in it. Nothing is saved first."
                 }
                 onClick={() => void reclaim("safe", safe.map((w) => w.path), false)}
               >

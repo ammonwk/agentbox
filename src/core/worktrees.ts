@@ -135,7 +135,7 @@ export interface WorktreeFacts {
  * what nobody came back for, and the session's transcript still has most of it.
  * Anything unreadable, unanswerable or in use lands on the cautious side.
  */
-export const STALE_DAYS = 14;
+export const STALE_DAYS = 7;
 export const MINOR_DIRT_DAYS = 3;
 
 /** Whether what is uncommitted here still holds the worktree back. */
@@ -200,7 +200,7 @@ export function verdictFor(input: WorktreeFacts): WorktreeVerdict {
   // is on no branch, and `git worktree remove` keeps branches, not this. Ask
   // what no branch or remote already holds, rather than what the base branch
   // lacks — a review checkout sits on the PR's own commits and would otherwise
-  // look like unpushed work for a fortnight.
+  // look like unpushed work until it went stale.
   if (input.detached) {
     if (input.heldOnly < 0) {
       return { safe: false, reason: "unknown", detail: "could not tell whether its commits are held elsewhere" };
