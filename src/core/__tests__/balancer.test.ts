@@ -158,3 +158,18 @@ test("a session's one move goes to an account whose weekly has room for it", () 
   const tight = acct("C", { short: 9, weekly: 98, weeklyResetsIn: 4 * D });
   expect(elsewhere(place({ provider: "claude", accounts: [own, last, tight], settings, now: NOW, claim: 2.4 }), "A")!.accountId).toBe("C");
 });
+
+test("an expired login is a wall: no session is placed or moved onto it, overflow included", () => {
+  // 2026-10-22: ammon@plaibook.tech's login ended at 20:19 with 11% of its
+  // week used; it stayed the account with the most room, and seven sessions
+  // started on it died on their first call.
+  const dead = { ...acct("A", { short: 0, weekly: 11 }), auth: "expired" as const };
+  const busy = acct("B", { short: 40, weekly: 80 });
+  const p = run([dead, busy]);
+  expect(p.accountId).toBe("B");
+  expect(p.candidates.find((c) => c.accountId === "A")).toMatchObject({ eligible: false, wall: true, reason: "its login has expired: log in again" });
+  expect(elsewhere(p, "B")).toBeNull();
+  // Every other account spoken for: overflow still passes it by.
+  const spoken = acct("B", { short: 40, weekly: 99, claims: [{ outstanding: 3, since: NOW }] });
+  expect(run([dead, spoken])).toMatchObject({ accountId: "B", mode: "overflow" });
+});

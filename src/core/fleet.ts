@@ -147,6 +147,7 @@ import { readOrg } from "./org/config";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
   Account,
+  AccountAuth,
   AccountUsage,
   AskAnswer,
   AskQuestion,
@@ -216,7 +217,7 @@ export interface Runtime {
 export interface UsageSource {
   usageOf(accountId: string): AccountUsage | null;
   /** The account's login state, if known. */
-  authOf?(accountId: string): "ok" | "expired" | "missing" | "unknown" | null;
+  authOf?(accountId: string): AccountAuth["state"] | null;
   /** Codex reports its limits inside the rollout; hand fresher readings over. */
   ingestRollout?(accountId: string, reading: { at: number; windows: UsageWindow[] }): void;
 }
@@ -2831,7 +2832,7 @@ export class Fleet extends EventEmitter {
             : [],
           claims: (claims.get(a.id) ?? []).map((c) => ({ outstanding: c.outstanding, since: c.since })),
           perWeekly: this.rates.perWeeklyOf(a.id, windows),
-          loggedOut: this.deps.usage.authOf?.(a.id) === "missing",
+          auth: this.deps.usage.authOf?.(a.id),
           unfunded: unfundedSince(hits.filter((h) => h.accountId === a.id), this.now(), usage ?? undefined),
           refused: refused.get(a.id) ?? null,
         };

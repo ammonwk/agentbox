@@ -141,12 +141,10 @@ function refreshDue(provider: AccountProvider, login: Login, refreshedAt: Date |
   return exp - now < 24 * 3_600_000 || !refreshedAt || now - refreshedAt.getTime() > 5 * 86_400_000;
 }
 
-/** The file a member's home holds for a login: everything but the refresh token. */
+/** The file a member's home holds for a login: everything but the refresh
+ *  token. Its expiry stays: it is when the login ends, refreshed or not. */
 function homeFile(provider: AccountProvider, login: Login): Record<string, unknown> {
-  if (provider === "claude") {
-    const { refreshTokenExpiresAt: _r, ...o } = (login as ClaudeLogin).claudeAiOauth;
-    return { claudeAiOauth: { ...o, refreshToken: POOLED } };
-  }
+  if (provider === "claude") return { claudeAiOauth: { ...(login as ClaudeLogin).claudeAiOauth, refreshToken: POOLED } };
   if (provider === "omp") return { ...(login as GoLogin), refresh: POOLED };
   if (provider === "devin" || provider === "muse") return login as StaticLogin;
   const l = login as CodexLogin;

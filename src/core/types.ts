@@ -126,7 +126,8 @@ export interface AccountUsage {
 /** Credential health as far as we can tell without refreshing anything. */
 export interface AccountAuth {
   state: "ok" | "expired" | "missing" | "unknown";
-  /** Access-token expiry, epoch ms, when the provider publishes one. */
+  /** When the login ends and must be made again (the refresh token's
+   *  expiry, epoch ms), when the provider publishes one: claude does. */
   expiresAt: number | null;
   detail: string | null;
 }

@@ -98,21 +98,26 @@ export function claudePlan(subscriptionType: string | null, rateLimitTier: strin
 /**
  * Auth from token timestamps. An expired ACCESS token is not a broken login:
  * the CLI refreshes it the next time it runs on this account, so that is "ok"
- * with a detail. Only an expired or absent REFRESH token needs you.
+ * with a detail. The login itself ends when its REFRESH token does, and no
+ * refresh moves that: claude's ends about four weeks after `/login`, however
+ * often it is refreshed meanwhile. So `expiresAt` is that end, when you must
+ * log in again, and it is said for its last three days.
  */
 export function tokenAuth(
   t: { expiresAt: number | null; hasRefreshToken: boolean; refreshTokenExpiresAt?: number | null },
   now: number,
 ): AccountAuth {
-  if (t.refreshTokenExpiresAt != null && t.refreshTokenExpiresAt <= now) {
-    return { state: "expired", expiresAt: t.expiresAt, detail: "login expired — log in again" };
+  const ends = t.refreshTokenExpiresAt ?? null;
+  if (ends != null && ends <= now) {
+    return { state: "expired", expiresAt: ends, detail: "login expired — log in again" };
   }
-  if (t.expiresAt != null && t.expiresAt <= now) {
-    return t.hasRefreshToken
-      ? { state: "ok", expiresAt: t.expiresAt, detail: EXPIRED_REFRESHABLE }
-      : { state: "expired", expiresAt: t.expiresAt, detail: "access token expired and there is no refresh token — log in again" };
+  if (t.expiresAt != null && t.expiresAt <= now && !t.hasRefreshToken) {
+    return { state: "expired", expiresAt: ends, detail: "access token expired and there is no refresh token — log in again" };
   }
-  return { state: "ok", expiresAt: t.expiresAt, detail: null };
+  if (ends != null && ends - now < 3 * 86_400_000) {
+    return { state: "ok", expiresAt: ends, detail: `this login ends in ${Math.ceil((ends - now) / 3_600_000)}h — log in again before then` };
+  }
+  return { state: "ok", expiresAt: ends, detail: t.expiresAt != null && t.expiresAt <= now ? EXPIRED_REFRESHABLE : null };
 }
 
 export function identifyClaude(account: AccountRef, now = Date.now()): Identity {

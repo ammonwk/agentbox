@@ -119,7 +119,9 @@ edits unstaged.
   than guesses.
 - **Never copy or refresh credentials.** Claude and Codex rotate refresh
   tokens; two homes holding one token log each other out. Every account gets
-  its own login. Usage reads with an expired token report `stale`.
+  its own login. Usage reads with an expired token report `stale`. A
+  claude login ends at its `refreshTokenExpiresAt`, about four weeks after
+  `/login`, whatever refreshes it; only logging in again moves it.
 - **The balancer is pure.** `src/core/balancer.ts` takes numbers and returns
   a choice with every candidate's inputs attached; it touches no I/O. Keep it
   that way — the assignments table stores its inputs so placements can be

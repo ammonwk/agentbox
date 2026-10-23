@@ -724,10 +724,10 @@ function AuthBadge({ account: a, now }: { account: AccountView; now: number }) {
   const label =
     s === "ok"
       ? a.auth.expiresAt && a.auth.expiresAt > now
-        ? `signed in · token ${fmtCountdown(a.auth.expiresAt - now)}`
+        ? `signed in · login ends in ${fmtCountdown(a.auth.expiresAt - now)}`
         : "signed in"
       : s === "expired"
-        ? "token expired"
+        ? "login expired"
         : s === "missing"
           ? "not logged in"
           : "auth unknown";

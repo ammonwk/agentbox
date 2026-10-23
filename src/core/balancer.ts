@@ -48,6 +48,7 @@ import { coldPerWeekly } from "./rates";
 import type { Refusal } from "./refusals";
 import type {
   Account,
+  AccountAuth,
   BalancerSettings,
   Candidate,
   Placement,
@@ -63,8 +64,10 @@ export interface AccountState {
   /** Each active session pinned here: its outstanding weekly points, and
    *  since when it has been spending here (started, or woken onto it). */
   claims: { outstanding: number; since: number }[];
-  /** No login in its home (a new account mid-login, or the CLI logged out). */
-  loggedOut?: boolean;
+  /** Its login as identity.ts reads it: "missing" (none in its home) and
+   *  "expired" (its refresh token is past its end, or the CLI cleared it) run
+   *  nothing; every session started there dies on its first call. */
+  auth?: AccountAuth["state"] | null;
   /** Its provider lately refused a session for want of funds (`unfundedSince`). */
   unfunded?: { at: number; detail: string } | null;
   /** The provider is refusing the model being started to this account
@@ -327,10 +330,10 @@ function evaluate(
     c.eligible = false;
     c.wall = true;
     c.reason = "turned off for new sessions";
-  } else if (state.loggedOut) {
+  } else if (state.auth === "missing" || state.auth === "expired") {
     c.eligible = false;
     c.wall = true;
-    c.reason = "not logged in";
+    c.reason = state.auth === "missing" ? "not logged in" : "its login has expired: log in again";
   } else if (state.refused) {
     // Whoever meters it: a route that answers nothing runs nothing.
     const r = state.refused;
