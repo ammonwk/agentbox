@@ -1260,10 +1260,11 @@ export function spendBetween(fromMs: number, toMs: number): [string, number, num
     .values(fromMs, toMs) as [string, number, number][];
 }
 
-/** Every session's account (its home's owner) and start, by id. */
-export function sessionAccounts(): Map<string, { accountId: string | null; startedAt: number }> {
-  const rows = getDb().query("SELECT id, account_id, started_at FROM sessions").values() as [string, string | null, number][];
-  return new Map(rows.map(([id, accountId, startedAt]) => [id, { accountId, startedAt }]));
+/** Every session's account (its home's owner), start, and the models it
+ *  was started on and last ran, by id. */
+export function sessionAccounts(): Map<string, { accountId: string | null; startedAt: number; models: (string | null)[] }> {
+  const rows = getDb().query("SELECT id, account_id, started_at, model, json_extract(facts, '$.model') FROM sessions").values() as [string, string | null, number, string | null, string | null][];
+  return new Map(rows.map(([id, accountId, startedAt, model, ran]) => [id, { accountId, startedAt, models: [model, ran] }]));
 }
 
 /** Every move of a session onto an account (its placements, wakes and
