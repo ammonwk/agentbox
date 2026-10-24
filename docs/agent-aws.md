@@ -39,14 +39,18 @@ outside the repo:
     AWS_MFA_SOURCE_PROFILE=<the profile holding the long-term key>
     AWS_MFA_SERIAL=arn:aws:iam::<account>:mfa/<device>
 
-A grant lasts 4 hours (`GRANT_HOURS`): long enough for the task it was asked
-for (a release, an incident), short enough that the approval does not
-outlive it by a day. `aws-mfa` mints 36 hours because its one `mfa` profile
-was shared by every agent, and a shorter mint over it cost a second code; a
-grant is one session's, so the next task asks again. It survives the
-session's resume until it expires, and is deleted when the session is
-closed. The server log records each grant's session, profile and expiry,
-never a credential.
+A grant lasts until its session is closed, which deletes it, and at most
+36 hours (`GRANT_HOURS`), the longest STS gives an IAM user. It survives the
+session's resume. The first version minted 4 hours, so an approval could not
+outlive the task it was asked for by a day; but a release that runs past 4
+hours has to stop and ask for a second code, which is why `aws-mfa` had
+minted 36 hours into the one `mfa` profile in `~/.aws/credentials`. That
+profile was readable by every session on the box, so one code gave admin
+AWS to all of them for a day and a half. A grant keeps the 36 hours and
+drops the sharing: one session holds it, and closing the session ends it.
+Inside an agentbox session `aws-mfa <code>` runs `agentbox aws-grant <code>`
+and never writes `~/.aws/credentials`. The server log records each grant's
+session, profile and expiry, never a credential.
 
 A session started before its files were its own reads the old shared
 `agent-aws/` files until it is resumed; `agentbox aws-grant` prints the

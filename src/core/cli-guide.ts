@@ -199,7 +199,7 @@ why). Arming the same wait twice is one wait.
 Your AWS default is \`agent-readonly\`. For a write or admin operation, ask
 your user for a fresh 6-digit MFA code, saying what it is for, then:
 
-    agentbox aws-grant <code>       # this session alone gets --profile mfa, for a few hours
+    agentbox aws-grant <code>       # this session alone gets --profile mfa, until it closes
 
 ## Conventions
 

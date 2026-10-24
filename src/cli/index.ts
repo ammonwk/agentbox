@@ -505,7 +505,7 @@ ${AGENT_USAGE.replace(/^agentbox /gm, "  ")}
 
 AWS (an agent's default is agent-readonly: docs/agent-aws.md):
   aws-grant <code>      admin AWS for this session alone: the 6-digit MFA code your user
-                        gave you becomes its --profile mfa for a few hours
+                        gave you becomes its --profile mfa until it closes (36h at most)
 
 pull requests and issues (who has one: no two sessions work the same one; an issue is named as a PR is):
   pr claim <n|owner/repo#n|url> [--for ID]   this session has it, and it says "you hold"; refused, naming the other session, if another live one does
