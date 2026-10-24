@@ -59,19 +59,30 @@ export interface Sent {
  *  together. A note put before your own message
  *  (`[agentbox: …]\n\nwhat you wrote`, waking a parked session) is yours. */
 const FLEET_NOTE = /^\s*(?:\[agentbox: (?:(?!\]\n)[\s\S])*\]\s*)+$/;
+/** Notes agentbox put before a message say nothing of who wrote it: an
+ *  agent's mark comes after them. Each ends at a `]` before a newline, the
+ *  next bracket or the end: agentbox may join them with no newline. */
+const NOTES_BEFORE = /^\s*(?:\[agentbox: [\s\S]*?\](?=\n|\s*\[|\s*$)\s*)+/;
+
+/** The text without the agentbox notes put before it. */
+export const withoutNotes = (text: string): string => text.replace(NOTES_BEFORE, "");
 
 export function readSent(raw: string): Sent {
   const text = unwrapPaste(raw);
   if (FLEET_NOTE.test(text)) return { agent: true, from: "agentbox", via: null, text: text.trim() };
-  const m = MARK.exec(text);
+  const signed = withoutNotes(text);
+  // The notes stay in what is shown; only the mark comes out.
+  const notes = text.slice(0, text.length - signed.length).trim();
+  const shown = (rest: string): string => [notes, rest.trim()].filter(Boolean).join("\n\n");
+  const m = MARK.exec(signed);
   if (m) {
     const via = m[2] ? "a schedule" : "agentbox send";
-    return { agent: true, from: m[2] ? "agentbox" : (m[1] ?? null), via, text: text.slice(m[0].length).trim() };
+    return { agent: true, from: m[2] ? "agentbox" : (m[1] ?? null), via, text: shown(signed.slice(m[0].length)) };
   }
-  const d = DELIVERED.exec(text);
+  const d = DELIVERED.exec(signed);
   if (d) {
     const from = d[1] === "cross-session-message" ? (attr(d[2]!, "from-name") ?? null) : attr(d[2]!, "from");
-    return { agent: true, from, via: "Claude", text: d[3]!.trim() };
+    return { agent: true, from, via: "Claude", text: shown(d[3]!) };
   }
   return { agent: false, from: null, via: null, text };
 }

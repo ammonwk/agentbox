@@ -472,6 +472,16 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE agents ADD COLUMN retiring TEXT;
   ALTER TABLE agents ADD COLUMN briefed_at INTEGER;
   `,
+  // 38 — what you did that no transcript or card records: a session you
+  // started, a question you answered on the board, a login (src/core/yourtime.ts).
+  `
+  CREATE TABLE IF NOT EXISTS you_acts (
+    at         INTEGER NOT NULL,
+    kind       TEXT NOT NULL,
+    session_id TEXT
+  );
+  CREATE INDEX IF NOT EXISTS you_acts_at ON you_acts (at);
+  `,
 ];
 
 function migrate(d: Database) {

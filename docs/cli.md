@@ -188,6 +188,12 @@ why). Arming the same wait twice is one wait.
     agentbox handover <from> <to> [--close]     # what <from> started, its cards, PRs and their
                                     # waits go to <to>; messages to <from> reach <to>
 
+## Your user's time
+
+    agentbox your-time [--days N] [--json]   # per local day: the messages, cards, MFA codes and
+                                    # logins your user gave the fleet, and the minutes they took
+                                    # (GET /api/you/time?days=14; the rule is in src/core/yourtime.ts)
+
 ## AWS
 
 Your AWS default is `agent-readonly`. For a write or admin operation, ask

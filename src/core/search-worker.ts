@@ -29,6 +29,8 @@ function open(): Database {
     CREATE TABLE IF NOT EXISTS said (id INTEGER PRIMARY KEY, session TEXT NOT NULL, event TEXT NOT NULL, at INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL, UNIQUE (session, event));
     CREATE VIRTUAL TABLE IF NOT EXISTS said_fts USING fts5(text, content = 'said', content_rowid = 'id', tokenize = 'trigram');
     CREATE TRIGGER IF NOT EXISTS said_ai AFTER INSERT ON said BEGIN INSERT INTO said_fts (rowid, text) VALUES (new.id, new.text); END;
+    CREATE INDEX IF NOT EXISTS said_user_at ON said (at) WHERE kind = 'user';
+    CREATE INDEX IF NOT EXISTS said_user_session ON said (session, at) WHERE kind = 'user';
     CREATE TRIGGER IF NOT EXISTS said_ad AFTER DELETE ON said BEGIN INSERT INTO said_fts (said_fts, rowid, text) VALUES ('delete', old.id, old.text); END;
   `);
   return db;

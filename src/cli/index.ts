@@ -33,6 +33,7 @@ import * as prs from "./prs";
 import { handover, agent, AGENT_USAGE } from "./agents";
 import { orgCommand, ORG_USAGE } from "./org";
 import { awsGrant } from "./aws";
+import { yourTime } from "./yourtime";
 import type { AppState, Placement, ProviderId, Session } from "../core/types";
 import { accountProvider } from "../core/providers/account";
 import type { RecoveryReport } from "../core/recovery";
@@ -215,6 +216,8 @@ async function startSession(provider: ProviderId, args: string[]): Promise<numbe
       // `--parent` names it outright, for a program no session runs.
       callerPid: process.pid,
       parent: str("parent"),
+      // Typed at a terminal: you started it, and its first message is yours.
+      tty: process.stdin.isTTY === true,
     });
   } catch (e) {
     const err = e as ApiError;
@@ -512,6 +515,10 @@ pull requests and issues (who has one: no two sessions work the same one; an iss
   pr claims [--json]                 every PR a live session has
   claude|codex|… --claim <n|…> …     start a session that has the PR from its first moment, or does not start
 
+your time (src/core/yourtime.ts):
+  your-time [--days N] [--json]   per day: the messages, cards, MFA codes and logins you gave
+                        the fleet, and the minutes they took you
+
 cards (what a session hands the user to decide or to know; the app's Review page shows them):
   card add --kind decision|merged|note --title T --short S [--long L | --long-file F] [--pr URL]
            [--recommend R] [--default D --default-at <when>] [--key K] [--for <session>]
@@ -786,6 +793,9 @@ export async function main(argv: string[]): Promise<number | null> {
       case "aws-grant":
         await ensureServer();
         return await awsGrant(api, argv.slice(1));
+      case "your-time":
+        await ensureServer();
+        return await yourTime(api, argv.slice(1));
       case "handover":
         await ensureServer();
         return await handover(api, argv.slice(1));

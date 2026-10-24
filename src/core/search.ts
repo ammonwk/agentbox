@@ -62,19 +62,25 @@ export interface SaidHit {
 
 let reader: Database | null = null;
 
-/** The sessions where `q` was said, the most recent mention first, one hit
- *  each. Empty under three characters, which a trigram cannot match. */
-export function searchSaid(q: string, limit: number, include: (sessionId: string) => boolean): SaidHit[] {
-  const needle = q.trim();
-  if (needle.length < 3) return [];
+/** The index, read-only; null until the worker has built it. */
+function index(): Database | null {
   if (!reader) {
     try {
       statSync(searchDbPath());
       reader = new Database(searchDbPath(), { readonly: true });
     } catch {
-      return []; // not built yet
+      return null;
     }
   }
+  return reader;
+}
+
+/** The sessions where `q` was said, the most recent mention first, one hit
+ *  each. Empty under three characters, which a trigram cannot match. */
+export function searchSaid(q: string, limit: number, include: (sessionId: string) => boolean): SaidHit[] {
+  const needle = q.trim();
+  const reader = needle.length < 3 ? null : index();
+  if (!reader) return [];
   const rows = reader
     .query(
       `SELECT said.session, said.at, said.kind, said.text FROM said_fts JOIN said ON said.id = said_fts.rowid
@@ -94,6 +100,25 @@ export function searchSaid(q: string, limit: number, include: (sessionId: string
     if (out.length >= limit) break;
   }
   return out;
+}
+
+/** Every message a person or program sent a session since `since`, oldest
+ *  first; `first` when it is the first its session was ever sent. */
+export function userSaidSince(since: number): { session: string; at: number; text: string; first: boolean }[] {
+  const reader = index();
+  if (!reader) return [];
+  const rows = reader.query("SELECT session, at, text FROM said WHERE kind = 'user' AND at >= ? ORDER BY at").all(since) as { session: string; at: number; text: string }[];
+  const firsts = new Map(
+    (
+      reader
+        .query(
+          `SELECT session, min(at) AS at FROM said WHERE kind = 'user'
+             AND session IN (SELECT DISTINCT session FROM said WHERE kind = 'user' AND at >= ?) GROUP BY session`,
+        )
+        .all(since) as { session: string; at: number }[]
+    ).map((r) => [r.session, r.at]),
+  );
+  return rows.map((r) => ({ ...r, first: firsts.get(r.session) === r.at }));
 }
 
 function snippetOf(text: string, needle: string): string {

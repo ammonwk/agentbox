@@ -67,6 +67,7 @@ import { completeDir, resolveDirs } from "../core/dirs";
 import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
+import { recordYourAct, yourTime } from "../core/yourtime";
 import { grantAws } from "../core/agent-aws";
 import { PeerCheck, tailnetCert, tailnetSelf } from "./tailnet";
 import { otherUserRefusal } from "./peeruid";
@@ -417,6 +418,13 @@ function prNamed(b: Record<string, unknown>, sessionId: string | null): { repo: 
 function speaker(b: Record<string, unknown>): string | null {
   const callerPid = typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : null;
   return (typeof b.session === "string" && /^[\w-]{1,64}$/.test(b.session) ? b.session : null) ?? (callerPid ? fleet.callerOf(callerPid) : null);
+}
+
+/** You made this request yourself: on the board (a browser sends its
+ *  Origin) or with the CLI at a terminal of your own, not from a session's
+ *  process, a hook or a script, none of which has a terminal. */
+function byYou(req: Request, b: Record<string, unknown>): boolean {
+  return !authenticatedSession(req) && (req.headers.has("origin") || b.tty === true);
 }
 
 /** PRs a session is being started on, until it exists to hold them. */
@@ -866,6 +874,7 @@ const router = new Router(mapError)
         parent: optionalString(b, "parent"),
       });
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
+      if (byYou(req, b)) recordYourAct("launch", out.session.id);
       scheduleHot();
       scheduleCold();
       return json(out, 201);
@@ -998,6 +1007,8 @@ const router = new Router(mapError)
       }
       const sent = await sendAsAgent(fleet, params.id!, text, { from: fromSession, wake: b.wake === true }, Date.now());
       if ("refused" in sent) throw new HttpError(409, sent.refused);
+      // Signed as an agent's, but typed at your own terminal.
+      if (!fromSession && byYou(req, b)) recordYourAct("message", sent.to);
       return json(sent);
     }
     if (b.sendId !== undefined) {
@@ -1077,6 +1088,7 @@ const router = new Router(mapError)
     const b = await readBody(req);
     const question = requireString(b, "question");
     await fleet.answer(params.id!, question, parseAnswers(b.answers));
+    if (byYou(req, b)) recordYourAct("message", params.id!);
     scheduleHot();
     return json(null);
   })
@@ -1405,6 +1417,12 @@ const router = new Router(mapError)
       }),
       201,
     );
+  })
+  // How much of your time the fleet took, per day (src/core/yourtime.ts).
+  .add("GET", "/api/you/time", ({ url }) => {
+    const days = Number(url.searchParams.get("days") ?? 14);
+    if (!Number.isInteger(days) || days < 1 || days > 60) throw new HttpError(400, "days is a whole number from 1 to 60");
+    return json(yourTime(days, readUserIdentity().timezone));
   })
   .add("GET", "/api/cards/:id", ({ params }) => json(cards.get(cardId(params.id!))))
   .add("POST", "/api/cards/:id/answer", async ({ req, params }) => {

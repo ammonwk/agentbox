@@ -26,6 +26,7 @@ import {
 import { identify, IdentityCache, type Identity } from "./identity";
 import { LoginManager, type LoginCommand } from "./login";
 import { UsageService, type UsageDeps, type ResetConsumeResult } from "./usage";
+import { recordYourAct } from "../yourtime";
 
 export { AccountError } from "./homes";
 
@@ -309,6 +310,7 @@ export class AccountsService extends EventEmitter {
    * count twice.
    */
   private async afterLogin(account: Account): Promise<string | null> {
+    recordYourAct("login", null);
     const id = await this.reidentify(account.id, true);
     void this.usage.refresh(account.id).catch(() => undefined);
     if (!id?.email) return null;
