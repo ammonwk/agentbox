@@ -9,7 +9,9 @@
  * since the last green one, and it has had its session once one started after
  * that green run: the session owns the streak until it is green, so ten red
  * pushes in a row are one session, not ten. A new streak while that session
- * is still at work is its too: the next starts once it stops, if still red.
+ * is not finished (scheduler.ts `finished`: mid-turn, or holding a wait, a
+ * question, background work or a PR) is its too: the next starts once it is
+ * finished, if still red.
  */
 
 import { basename } from "node:path";
@@ -44,8 +46,8 @@ const RUNS_READ = 30;
 /**
  * The red streak the workflow is in, or null when it is green or every red run
  * in it finished before the session started at `startedAt`. A red run that
- * finished after it needs a session once that one stops (the scheduler waits
- * while it is at work): 10-23 staging's candidate went red again a day after
+ * finished after it needs a session once that one is finished (the scheduler
+ * waits until then): 10-23 staging's candidate went red again a day after
  * its session ended, with no green run between, and nobody was started.
  */
 export function redStreak(runs: WorkflowRun[], startedAt: number | null): RedStreak | null {

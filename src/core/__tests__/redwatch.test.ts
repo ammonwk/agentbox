@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { redNote, redStreak, type WorkflowRun } from "../redwatch";
 import { describeRule, isRecurring, nextRun, parseWhen } from "../schedule";
+import { finished } from "../scheduler";
+import type { Session } from "../types";
 
 const T0 = Date.parse("2026-10-08T12:00:00Z");
 const min = (n: number) => new Date(T0 + n * 60_000).toISOString();
@@ -108,5 +110,33 @@ describe("redNote", () => {
 
   test("started by hand while green says so", () => {
     expect(redNote(rule, null, null)).toContain("not in a red streak right now");
+  });
+});
+
+describe("a red streak's last session owns it until it is finished", () => {
+  const session = (over: Partial<Session> = {}) =>
+    ({
+      id: "s1", status: "waiting", closedAt: null, question: null, limitHit: null, turnError: null,
+      autoResume: null, waits: [], parkHold: null, background: false, lastMessage: "Fixed.\n\nSTATUS: done", ...over,
+    }) as Session;
+  const none = new Map<string, string[]>();
+  // Started at minute 35; the run that finished at minute 60 is red again.
+  const runs = [run(0, "success"), run(10, "failure"), run(40, "failure")];
+  const startsAnother = (owner: Session, claims = none) => redStreak(runs, T0 + 35 * 60_000) !== null && finished(owner, claims);
+
+  test("one that ended its turn holding a wait still owns it", () => {
+    // 10-24: four sessions for one staging failure, each waiting on CD green.
+    const waiting = session({ waits: [{ kind: "run", what: "staging CD green" }], lastMessage: "STATUS: waiting on staging CD green" });
+    expect(startsAnother(waiting)).toBe(false);
+    expect(startsAnother(session({ status: "running" }))).toBe(false);
+    expect(startsAnother(session({ parkHold: "a background command" }))).toBe(false);
+    expect(startsAnother(session(), new Map([["s1", ["o/r#1"]]]))).toBe(false);
+    expect(startsAnother(session({ lastMessage: "STATUS: needs Ammon — merge?" }))).toBe(false);
+  });
+
+  test("once it is finished and the workflow is still red, another starts", () => {
+    expect(startsAnother(session())).toBe(true);
+    expect(startsAnother(session({ status: "stopped" }))).toBe(true);
+    expect(startsAnother(session({ status: "closed", closedAt: T0, waits: [{ kind: "run", what: "stale" }] }))).toBe(true);
   });
 });

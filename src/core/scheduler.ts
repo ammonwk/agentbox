@@ -43,7 +43,7 @@ import { unfinishedClaims } from "./prclaims";
 import { describeRule, isRecurring, nextRun, onEvent, parseWhen, type ScheduleRule } from "./schedule";
 import { listScheduledSessions, markScheduled } from "./schedule-sessions";
 import { turnStatus } from "./turnstatus";
-import type { ProviderId, Schedule, ScheduleSpec } from "./types";
+import type { ProviderId, Schedule, ScheduleSpec, Session } from "./types";
 import { ensureCheckout } from "./worktrees";
 
 const TICK_MS = 15_000;
@@ -60,6 +60,23 @@ const NOTE_TIMEOUT_S = 120;
 const NOTE_MAX = 16_000;
 /** A finished session's last message is this old before it closes itself. */
 const CLOSE_FINISHED_MS = 60 * 60_000;
+
+/**
+ * A session has put down what it was doing: closed, or out of its turn with
+ * nothing held — no prompt to answer, no limit or automatic resume waited on,
+ * no wait, background work or pull request (`claims`: `unfinishedClaims`),
+ * and its turn did not end on something it needs from you. A finished one a
+ * schedule started closes itself (`closeFinished`), and a red schedule's last
+ * session owns the streak until it is finished: 10-24 one that ended its turn
+ * on a wait for staging's CD counted as idle, and three more were started for
+ * the same failure.
+ */
+export function finished(s: Session, claims: ReadonlyMap<string, unknown>): boolean {
+  if (s.closedAt !== null || s.status === "closed") return true;
+  if (s.status !== "waiting" && s.status !== "stopped") return false;
+  if (s.question || s.limitHit || s.turnError || s.autoResume || s.waits.length > 0 || s.parkHold || s.background) return false;
+  return !claims.has(s.id) && turnStatus(s.lastMessage)?.kind !== "needs";
+}
 
 /** What a note command or a schedule that speaks to an agent did when it came
  *  due: the session spoken to or started, or why there is none this time. */
@@ -286,6 +303,7 @@ export class Scheduler {
 
   /** Each workflow waited on, read once: a session for a new red streak. */
   private async checkReds(now: number): Promise<void> {
+    const claims = unfinishedClaims();
     for (const s of listSchedules()) {
       const rule = s.rule;
       if (!s.enabled || rule.kind !== "red" || !rule.repo || !rule.branch) continue;
@@ -302,10 +320,10 @@ export class Scheduler {
         continue;
       }
       const streak = redStreak(runs, s.lastRunAt);
-      // The last one still at it owns this streak too: green came and went
-      // under it, and it watches the deploy itself. Another starts once it
-      // stops, if it is still red.
-      if (streak && s.lastSessionId && this.atWork(s.lastSessionId)) continue;
+      // The last one owns this streak too until it is finished: green came
+      // and went under it, or it holds a wait on the deploy it fixed. Another
+      // starts once it is finished, if it is still red.
+      if (streak && s.lastSessionId && this.unfinished(s.lastSessionId, claims)) continue;
       if (streak) await this.fire(s, now, false, redNote(rule, streak, s.lastSessionId));
       else if (s.lastError) {
         updateSchedule(s.id, { lastError: null });
@@ -317,11 +335,9 @@ export class Scheduler {
   /**
    * Close finished sessions once their last message is an hour old: the ones
    * a schedule started and no longer speaks to, and the ones another session
-   * started. One is not finished while it is mid-turn, has a prompt to answer,
-   * is waiting on a limit or an automatic resume, holds a wait, background
-   * work or a pull request, ended its turn on something it needs from you, or
-   * has a session of its own still open; nor when you pinned or bookmarked it.
-   * An agent's main conversation is never closed this way.
+   * started (`finished`), unless one has a session of its own still open or
+   * you pinned or bookmarked it. An agent's main conversation is never closed
+   * this way.
    */
   private async closeFinished(now: number): Promise<void> {
     const mains = new Set(agentMains().map((id) => this.fleet.heir(id)));
@@ -337,9 +353,7 @@ export class Scheduler {
       // You pinned or bookmarked it: it is not clutter to you.
       if (s.pinOrder !== null || s.bookmarkedAt !== null) continue;
       if (now - s.lastActivityAt < CLOSE_FINISHED_MS) continue;
-      if (s.status !== "waiting" && s.status !== "stopped") continue;
-      if (s.question || s.limitHit || s.turnError || s.autoResume || s.waits.length > 0 || s.parkHold || s.background) continue;
-      if (claims.has(s.id) || turnStatus(s.lastMessage)?.kind === "needs") continue;
+      if (!finished(s, claims)) continue;
       try {
         await this.fleet.close(s.id, true, true);
         closed = true;
@@ -351,11 +365,10 @@ export class Scheduler {
     if (closed) this.changed();
   }
 
-  /** Mid-turn, or showing a prompt it needs answered. */
-  private atWork(sessionId: string): boolean {
+  /** The session, or the one that took over from it, is not `finished`. */
+  private unfinished(sessionId: string, claims: ReadonlyMap<string, unknown>): boolean {
     try {
-      const { status } = this.fleet.get(sessionId);
-      return status === "running" || status === "blocked";
+      return !finished(this.fleet.get(this.fleet.heir(sessionId)), claims);
     } catch {
       return false;
     }
