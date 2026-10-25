@@ -640,13 +640,16 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
  * Something said to the agent. What you typed is yours, in a bubble on the
  * right; what another agent sent — through `agentbox send`, Claude's own
  * delivery between sessions, or agentbox's own notes — is quieter: who sent
- * it (linked), its first two lines, and "… Read more" for the rest.
+ * it (linked), its first two lines, and "… Read more" for the rest. Its
+ * agentbox notes lose their `[agentbox: …]` brackets: the header says whose.
  * Pastes are shown as pastes: Claude records one wrapped in `<pasted_content>`.
  */
+const NOTE = /\[agentbox: ([\s\S]*?)\](?=\s*(?:\[agentbox: |\n|$))/g;
+
 function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean }) {
   const sent = useMemo(() => readSent(ev.text), [ev.text]);
   const edits = useContext(EditsCtx);
-  const parts = useMemo(() => splitPastes(sent.text), [sent.text]);
+  const parts = useMemo(() => splitPastes(sent.agent ? sent.text.replace(NOTE, "$1") : sent.text), [sent]);
   const body = parts.map((p, i) =>
     p.kind === "paste" ? (
       <Clamp key={i} className="tl-paste" lines={8} label="Pasted">

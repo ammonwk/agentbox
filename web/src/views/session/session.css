@@ -1321,19 +1321,24 @@ button.rail-state:hover {
   background: var(--panel);
   padding: 8px 12px 10px;
 }
-/* Another agent's message: not you, so not your accent. */
+/* Another agent's message: not you, so not your accent. A note set off by
+ * a thin rule, upright and quieter than the agent's own prose. */
 .tl-user.tl-sent {
   border: 0;
+  border-left: 2px solid var(--border);
   border-radius: 0;
   background: none;
-  padding: 4px 2px;
+  padding: 1px 0 1px 12px;
   color: var(--muted);
-  font-style: italic;
 }
 .tl-sent .sx-md,
 .tl-sent .sx-md a,
 .tl-sent .tl-sender {
   color: inherit;
+}
+.tl-sent .sx-md {
+  font-size: 13px;
+  line-height: 1.55;
 }
 .tl-sent .tl-who {
   text-transform: none;
@@ -1343,11 +1348,11 @@ button.rail-state:hover {
 /* An incoming one shows its first two lines; "… Read more" ends the second. */
 .tl-peek {
   position: relative;
-  font-size: 13.5px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.55;
 }
 .tl-peek-body {
-  max-height: 3.2em;
+  max-height: 3.1em;
   overflow: hidden;
 }
 .tl-peek-more {
@@ -1355,51 +1360,25 @@ button.rail-state:hover {
   right: 0;
   bottom: 0;
   border: 0;
-  padding: 0 0 0 3em;
-  background: linear-gradient(to right, transparent, var(--tl-bg, var(--bg)) 2.5em);
-  color: inherit;
+  padding: 0 0 0 4em;
+  background: linear-gradient(to right, transparent, var(--bg) 3em);
+  color: var(--faint);
   font: inherit;
   cursor: pointer;
 }
+.tl-peek .tl-clamp-more,
 .tl-peek-more .linkish {
-  font-style: normal;
-}
-.tl-sender {
-  color: inherit;
-}
-.tl-sent .tl-who {
-  text-transform: none;
-  letter-spacing: 0;
+  color: var(--accent);
   font-weight: 500;
+  text-decoration: none;
 }
-/* An incoming one is folded to "agentbox" until it is opened. */
-.tl-sent-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  margin: 0;
-  padding: 2px 4px;
-  margin-left: -4px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.tl-sent-toggle:hover .tl-sent-label {
+.tl-peek .tl-clamp-more:hover,
+.tl-peek-more:hover .linkish {
   text-decoration: underline;
-  text-underline-offset: 2px;
 }
-.tl-sent-toggle:focus-visible {
+.tl-peek-more:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-.tl-sent-full {
-  margin-top: 4px;
 }
 .tl-sender {
   display: inline-flex;
