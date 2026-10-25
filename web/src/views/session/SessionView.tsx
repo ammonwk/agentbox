@@ -31,7 +31,7 @@ import { WorkStrip } from "./WorkStrip";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
-import { isInstalledApp, useIsPhone } from "../../lib/phone";
+import { isInstalledApp, openingTab, useIsPhone } from "../../lib/phone";
 import { useSysbarSlot } from "../../sysbarslot";
 import { prBaseFor } from "../../lib/prlinks";
 import { filterModels, modelName, rankModels, repoOfSession, skillsFor, type ModelChoice } from "../../lib/newsession";
@@ -173,6 +173,19 @@ export function SessionView({
     };
   }, [visible.sessions, keep, filter, sort, view, split, now, kids, quiet, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
+
+  // Coming back to the list on a computer reopens the session you were last
+  // on in this project, while it is still on the board. A phone shows one
+  // pane at a time, so there the list is what you came back for.
+  const projectKey = scope.project ?? "";
+  useEffect(() => {
+    if (session) rememberLast(projectKey, session.id);
+  }, [projectKey, session?.id]);
+  useEffect(() => {
+    if (id || narrow) return;
+    const last = visible.sessions.find((s) => s.id === lastSessions()[projectKey]);
+    if (last && last.status !== "closed" && !closing.has(last.id)) go({ page: "session", id: last.id, tab: openingTab(last) }, true);
+  }, [id, narrow, projectKey]);
   const scheduled = useMemo(() => {
     const q = filter.query.trim().toLowerCase();
     return visible.schedules
@@ -433,6 +446,25 @@ function RunningFamily({ session, sessions }: { session: SessionRow; sessions: A
 }
 
 // ------------------------------------------------------------ rail width
+
+const LAST_KEY = "agentbox.lastSession";
+
+/** The session last open in each project ("" is All projects). */
+function lastSessions(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_KEY) ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberLast(project: string, id: string): void {
+  try {
+    localStorage.setItem(LAST_KEY, JSON.stringify({ ...lastSessions(), [project]: id }));
+  } catch {
+    /* private mode: nothing remembered */
+  }
+}
 
 const RAIL_W_KEY = "agentbox.railWidth";
 const RAIL_W = 264;
