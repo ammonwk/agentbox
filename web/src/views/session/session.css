@@ -1340,6 +1340,38 @@ button.rail-state:hover {
   letter-spacing: 0;
   font-weight: 500;
 }
+/* An incoming one shows its first two lines; "… Read more" ends the second. */
+.tl-peek {
+  position: relative;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.tl-peek-body {
+  max-height: 3.2em;
+  overflow: hidden;
+}
+.tl-peek-more {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  border: 0;
+  padding: 0 0 0 3em;
+  background: linear-gradient(to right, transparent, var(--tl-bg, var(--bg)) 2.5em);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.tl-peek-more .linkish {
+  font-style: normal;
+}
+.tl-sender {
+  color: inherit;
+}
+.tl-sent .tl-who {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
 /* An incoming one is folded to "agentbox" until it is opened. */
 .tl-sent-toggle {
   display: inline-flex;
@@ -3506,7 +3538,6 @@ a.wk-item:hover {
    * orange down the edge pulled the eye from the conversation. */
   --mr-prompt: color-mix(in srgb, var(--accent) 60%, var(--faint));
   --mr-answer: var(--info);
-  --mr-agent: var(--faint);
   --mr-command: var(--muted);
   --mr-line: var(--border);
   --mr-bg: var(--panel);
@@ -3528,7 +3559,6 @@ a.wk-item:hover {
 .mr-dark {
   --mr-prompt: #ca7a46;
   --mr-answer: #7dd3fc;
-  --mr-agent: #85858e;
   --mr-command: #a8a8b0;
   --mr-line: #26262b;
   --mr-bg: #0e0e11;
@@ -3598,11 +3628,6 @@ a.wk-item:hover {
 .mr-dot[data-kind="answer"] {
   --dot: var(--mr-answer);
 }
-.mr-dot[data-kind="agent"] {
-  --dot: var(--mr-agent);
-  background: var(--mr-bg);
-  box-shadow: inset 0 0 0 1.5px var(--dot);
-}
 .mr-dot[data-kind="command"] {
   --dot: var(--mr-command);
   width: 5px;
@@ -3657,9 +3682,6 @@ a.wk-item:hover {
 }
 .mr-card[data-kind="answer"] {
   --dot: var(--mr-answer);
-}
-.mr-card[data-kind="agent"] {
-  --dot: var(--mr-agent);
 }
 .mr-card[data-kind="command"] {
   --dot: var(--mr-command);

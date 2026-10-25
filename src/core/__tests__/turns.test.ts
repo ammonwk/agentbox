@@ -37,8 +37,8 @@ describe("turnOf", () => {
     expect(turnOf(user("a", "/model opus"), 0)?.kind).toBe("command");
     expect(turnOf(user("a", "! ls -la"), 0)?.kind).toBe("command");
     expect(turnOf(user("a", "/home/me/file.ts is broken"), 0)?.kind).toBe("prompt");
-    expect(turnOf(user("a", "[via agentbox send] status?"), 0)).toMatchObject({ kind: "agent", text: "status?" });
-    expect(turnOf(user("a", "[From the Project session. Dev is away.] go"), 0)?.kind).toBe("agent");
+    expect(turnOf(user("a", "[via agentbox send] status?"), 0)).toBeNull();
+    expect(turnOf(user("a", "[From the Project session. Dev is away.] go"), 0)).toBeNull();
     expect(turnOf(said("a"), 0)).toBeNull();
     expect(turnOf(ask("q"), 0)).toBeNull();
     expect(turnOf(ask("q", 'User has answered your questions: "Which one?"="The left one".'), 0)).toMatchObject({

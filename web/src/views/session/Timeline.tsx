@@ -1,4 +1,4 @@
-import { createContext, memo, startTransition, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
@@ -639,16 +639,14 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
 /**
  * Something said to the agent. What you typed is yours, in a bubble on the
  * right; what another agent sent — through `agentbox send`, Claude's own
- * delivery between sessions, or agentbox's own notes — is one quiet line,
- * "agentbox", that opens on a click to who sent it (linked) and all of it.
+ * delivery between sessions, or agentbox's own notes — is quieter: who sent
+ * it (linked), its first two lines, and "… Read more" for the rest.
  * Pastes are shown as pastes: Claude records one wrapped in `<pasted_content>`.
  */
 function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>; queued?: boolean }) {
   const sent = useMemo(() => readSent(ev.text), [ev.text]);
   const edits = useContext(EditsCtx);
   const parts = useMemo(() => splitPastes(sent.text), [sent.text]);
-  const [open, setOpen] = useState(false);
-  const bodyId = useId();
   const body = parts.map((p, i) =>
     p.kind === "paste" ? (
       <Clamp key={i} className="tl-paste" lines={8} label="Pasted">
@@ -687,35 +685,29 @@ function UserRow({ ev, queued }: { ev: Extract<TimelineEvent, { kind: "user" }>;
     </span>
   ) : null;
   return (
-    <div className={`tl-user tl-sent tl-sent-fold${open ? " is-open" : ""}${queued ? " tl-queued" : ""}`} data-ev={ev.id}>
-      <button type="button" className="tl-sent-toggle" aria-expanded={open} aria-controls={bodyId} title={open ? "Hide the message" : "Show who sent it and the whole message"} onClick={() => setOpen(!open)}>
-        <Icon.send size={12} /> <span className="tl-sent-label">agentbox</span>
-        {open ? null : queuedNote}
-      </button>
-      {queued ? null : <VersionNav ev={ev} />}
-      {open ? (
-        <div id={bodyId} className="tl-sent-full">
-          <div className="tl-who">
-            <Party name={sent.from} />
-            {sent.via ? <span className="tl-via">via {sent.via}</span> : null}
-            {queuedNote}
-            <time className="tl-time">{fmtHourMin(ev.at)}</time>
-          </div>
-          {/* Opened on purpose: all of it, pastes too, with no second "Show all". */}
-          {parts.map((p, i) =>
-            p.kind === "paste" ? (
-              <div key={i} className="tl-clamp tl-paste">
-                <div className="tl-clamp-label">Pasted</div>
-                <div className="tl-clamp-body">
-                  <Markdown text={p.text} />
-                </div>
+    <div className={`tl-user tl-sent${queued ? " tl-queued" : ""}`} data-ev={ev.id}>
+      <div className="tl-who">
+        <Icon.send size={12} /> <Party name={sent.from} />
+        {sent.via ? <span className="tl-via">via {sent.via}</span> : null}
+        {queuedNote}
+        {queued ? null : <VersionNav ev={ev} />}
+        <time className="tl-time">{fmtHourMin(ev.at)}</time>
+      </div>
+      <Peek>
+        {/* Pastes open with the rest: no second "Show all". */}
+        {parts.map((p, i) =>
+          p.kind === "paste" ? (
+            <div key={i} className="tl-clamp tl-paste">
+              <div className="tl-clamp-label">Pasted</div>
+              <div className="tl-clamp-body">
+                <Markdown text={p.text} />
               </div>
-            ) : (
-              <Markdown key={i} text={p.text} />
-            ),
-          )}
-        </div>
-      ) : null}
+            </div>
+          ) : (
+            <Markdown key={i} text={p.text} />
+          ),
+        )}
+      </Peek>
     </div>
   );
 }
@@ -917,16 +909,7 @@ function Clamp({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const [over, setOver] = useState(false);
-  // Measured when its size settles, not on every render: a read after each
-  // render made the browser lay the whole timeline out again, once per clamp.
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || open) return;
-    const ro = new ResizeObserver(() => setOver(el.scrollHeight > el.clientHeight + 4));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [open]);
+  const over = useOver(ref, open);
   return (
     <div className={`tl-clamp${className ? ` ${className}` : ""}`}>
       {label ? <div className="tl-clamp-label">{label}</div> : null}
@@ -942,6 +925,45 @@ function Clamp({
           ) : null}
           {foot}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Whether a cut box holds more than it shows. Measured when its size
+ *  settles, not on every render: a read after each render made the browser
+ *  lay the whole timeline out again, once per clamp. */
+function useOver(ref: React.RefObject<HTMLDivElement | null>, open: boolean): boolean {
+  const [over, setOver] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    const ro = new ResizeObserver(() => setOver(el.scrollHeight > el.clientHeight + 4));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref, open]);
+  return over;
+}
+
+/** Another agent's message, cut to its first two lines with "… Read more"
+ *  at the end of the second. */
+function Peek({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const over = useOver(ref, open);
+  return (
+    <div className="tl-peek">
+      <div ref={ref} className={open ? undefined : "tl-peek-body"}>
+        {children}
+      </div>
+      {open ? (
+        <button type="button" className="linkish tl-clamp-more" onClick={() => setOpen(false)}>
+          Show less
+        </button>
+      ) : over ? (
+        <button type="button" className="tl-peek-more" onClick={() => setOpen(true)}>
+          … <span className="linkish">Read more</span>
+        </button>
       ) : null}
     </div>
   );

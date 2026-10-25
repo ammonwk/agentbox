@@ -18,7 +18,6 @@ import { Icon } from "../../components";
 const KIND_LABEL: Record<Turn["kind"], string> = {
   prompt: "You",
   answer: "Your answer",
-  agent: "From another session",
   command: "Command",
 };
 

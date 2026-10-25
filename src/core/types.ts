@@ -788,10 +788,9 @@ export interface Turn {
   at: number;
   /**
    * `prompt` you typed (or sent from here); `answer` to the agent's question;
-   * `agent`, typed in by another session; `command`, a slash command or a
-   * `!` shell line.
+   * `command`, a slash command or a `!` shell line.
    */
-  kind: "prompt" | "answer" | "agent" | "command";
+  kind: "prompt" | "answer" | "command";
   /** The message, capped. An answer is the question, a newline, and the answer. */
   text: string;
   /** How many events come before it, to place it along the conversation. */

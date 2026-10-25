@@ -1,4 +1,5 @@
-/** Everything you said to a session, for the message rail.
+/** Everything you said to a session, for the message rail: what another
+ *  session or agentbox sent it is not yours, so it is not here.
  *
  *  A long conversation is thousands of events, and the timeline only ever
  *  holds a page of them. The rail needs every message you sent, from the
@@ -28,7 +29,7 @@ export function turnOf(ev: TimelineEvent, seq: number): Turn | null {
   if (ev.kind === "user") {
     const sent = readSent(ev.text.trim());
     const raw = dropPasteTags(sent.text).trim();
-    if (sent.agent || FROM_PROJECT.test(raw)) return { id: ev.id, at: ev.at, kind: "agent", text: cap(raw), seq };
+    if (sent.agent || FROM_PROJECT.test(raw)) return null;
     const text = raw || (ev.images ? `(${ev.images} image${ev.images === 1 ? "" : "s"})` : "");
     if (!text) return null;
     const command = /^\/[a-z][\w:-]*(\s|$)/.test(text) || text.startsWith("! ");
