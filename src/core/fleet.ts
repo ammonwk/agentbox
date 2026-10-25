@@ -444,6 +444,8 @@ export class Fleet extends EventEmitter {
    *  did anything to it. */
   private busy = new Map<string, Promise<void>>();
   private touched = new Map<string, number>();
+  /** When each session was last given something to answer (`Session.saidAt`). */
+  private saidAt = new Map<string, number>();
   /** Side questions asked in the terminal whose answer is being waited for, by session. */
   private btwWatching = new Map<string, Promise<void>>();
   private btwHistory = new BtwHistory();
@@ -2240,8 +2242,8 @@ export class Fleet extends EventEmitter {
     this.openIds = new Set(records.filter((r) => !r.archivedAt).map((r) => r.id));
     this.holding = this.workHeld();
     this.waitsOf = new Map();
-    // Until it is told, not just until it ends: a parked session's tell is
-    // a resume, and in between nothing may take it for finished and close it.
+    // Until it is told, not just until it ends; after that, the turn it was
+    // told by is owed (`Session.saidAt`).
     for (const w of listOpenWaits(now - TELL_FOR_MS)) this.waitsOf.set(w.sessionId, [...(this.waitsOf.get(w.sessionId) ?? []), { kind: w.spec.kind, what: describeWait(w.spec) }]);
     const seen = new Set<string>();
     let dirty = false;
@@ -2503,6 +2505,7 @@ export class Fleet extends EventEmitter {
       // When the conversation last moved. Starting or resuming a process is not
       // activity: a session resumed and left alone is as idle as before.
       lastActivityAt,
+      saidAt: this.saidAt.get(rec.id) ?? null,
       closedAt: rec.archivedAt,
       pinOrder: rec.pinOrder ?? null,
       bookmarkedAt: rec.bookmarkedAt ?? null,
@@ -3439,6 +3442,7 @@ export class Fleet extends EventEmitter {
     if (line) prReleaseTold(rec.id);
     updateSessionRecord(rec.id, { tmux: name, archivedAt: null, parkedAt: null, parkedMates: null, parkedWhy: null });
     this.startedAt.set(rec.id, this.now());
+    if (opts.promptFile) this.saidAt.set(rec.id, this.now());
     this.answered.delete(rec.id);
     this.trouble.delete(rec.id);
     const prev = this.watches.get(rec.id);
@@ -3556,7 +3560,10 @@ export class Fleet extends EventEmitter {
     return this.serial(id, async () => {
       const s = this.get(id);
       if (s.host !== "tmux" || !s.tmux || !this.deps.runtime.submitDraft) return false;
-      return this.deps.runtime.submitDraft(s.tmux, text);
+      const at = this.now();
+      if (!(await this.deps.runtime.submitDraft(s.tmux, text))) return false;
+      this.saidAt.set(id, at);
+      return true;
     });
   }
 
@@ -3590,8 +3597,11 @@ export class Fleet extends EventEmitter {
     // does not carry it.
     const line = prReleaseLine(id);
     const body = line ? (text ? `${line}\n\n${text}` : line) : text;
+    // Taken before it goes in: whatever the conversation writes on reading it is later.
+    const at = this.now();
     try {
       await this.deps.runtime.sendText(pane, body + (adapter.pasteEnd ?? ""), { pieces: adapter.pasteInPieces });
+      this.saidAt.set(id, at);
     } catch (e) {
       if (!(e instanceof Unsubmitted)) throw e;
       // The text is a draft in the input box: it goes out with the next

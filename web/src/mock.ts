@@ -378,6 +378,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     transcriptPath: null,
     startedAt: T0 - 2 * H,
     lastActivityAt: T0 - 5 * M,
+    saidAt: null,
     closedAt: null,
     pinOrder: null,
     bookmarkedAt: null,

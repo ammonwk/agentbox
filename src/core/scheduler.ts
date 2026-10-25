@@ -65,16 +65,19 @@ const CLOSE_FINISHED_MS = 60 * 60_000;
  * A session has put down what it was doing: closed, or out of its turn with
  * nothing held — no prompt to answer, no limit or automatic resume waited on,
  * no wait, background work or pull request (`claims`: `unfinishedClaims`),
- * and its turn did not end on something it needs from you. A finished one a
- * schedule started closes itself (`closeFinished`), and a red schedule's last
- * session owns the streak until it is finished: 10-24 one that ended its turn
- * on a wait for staging's CD counted as idle, and three more were started for
- * the same failure.
+ * nothing said to it that it has not answered yet (`saidAt`), and its turn
+ * did not end on something it needs from you. A finished one a schedule
+ * started closes itself (`closeFinished`), and a red schedule's last session
+ * owns the streak until it is finished: 10-24 one that ended its turn on a
+ * wait for staging's CD counted as idle, and three more were started for the
+ * same failure; 10-25 the nightly release, resumed to be told its run had
+ * concluded, was closed before it got to that turn.
  */
 export function finished(s: Session, claims: ReadonlyMap<string, unknown>): boolean {
   if (s.closedAt !== null || s.status === "closed") return true;
   if (s.status !== "waiting" && s.status !== "stopped") return false;
   if (s.question || s.limitHit || s.turnError || s.autoResume || s.waits.length > 0 || s.parkHold || s.background) return false;
+  if (s.saidAt !== null && s.saidAt > s.lastActivityAt) return false;
   return !claims.has(s.id) && turnStatus(s.lastMessage)?.kind !== "needs";
 }
 

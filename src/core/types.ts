@@ -629,6 +629,10 @@ export interface Session {
 
   startedAt: number;
   lastActivityAt: number;
+  /** When this server last gave it something to answer: typed into it, or
+   *  resumed it with a prompt. Later than `lastActivityAt`, the turn that
+   *  answers it is still to come. */
+  saidAt: number | null;
   /** When you closed it; null while it is on the list. */
   closedAt: number | null;
   /** Pinned to the top of the session list, at this place among the pinned
