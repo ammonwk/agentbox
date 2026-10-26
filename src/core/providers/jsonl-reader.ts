@@ -116,6 +116,9 @@ export class JsonlTranscriptReader implements TranscriptReader {
   private idle: number | null = null;
   /** The newest message is shown as taken back. */
   private takenBack = false;
+  /** Read something since the last `refresh`, whoever pulled it: a page read
+   *  for the timeline must not swallow the change the fleet reports. */
+  private dirty = false;
 
   constructor(
     readonly ref: TranscriptRef,
@@ -183,7 +186,10 @@ export class JsonlTranscriptReader implements TranscriptReader {
       changed = true;
     }
     // A reply, or the next message, settles whether the last one was taken back.
-    if (changed) this.settle();
+    if (changed) {
+      this.settle();
+      this.dirty = true;
+    }
     if (reset || this.ino === -1) {
       try {
         this.ino = statSync(this.ref.path).ino;
@@ -230,7 +236,9 @@ export class JsonlTranscriptReader implements TranscriptReader {
   }
 
   async refresh(): Promise<{ changed: boolean; facts: TranscriptFacts }> {
-    let changed = this.pull();
+    this.pull();
+    let changed = this.dirty;
+    this.dirty = false;
     if (this.format.refreshExtra) {
       try {
         if (this.format.refreshExtra()) changed = true;
