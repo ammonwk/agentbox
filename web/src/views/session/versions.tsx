@@ -39,6 +39,35 @@ export interface MessageEdits {
 
 export const EditsCtx = createContext<MessageEdits | null>(null);
 
+/** An edit left open, kept per session in this browser so leaving the session
+ *  (or reloading) brings it back as it was. Ended by Cancel, a send, or a flip. */
+interface OpenEdit {
+  ev: string;
+  text: string;
+  at: number;
+}
+const OPEN_EDITS = "agentbox.openEdits";
+function openEdits(): Record<string, OpenEdit> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(OPEN_EDITS) ?? "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, OpenEdit>) : {};
+  } catch {
+    return {};
+  }
+}
+export const openEdit = (sessionId: string): OpenEdit | null => openEdits()[sessionId] ?? null;
+export function keepEdit(sessionId: string, edit: { ev: string; text: string } | null): void {
+  const all = openEdits();
+  if (edit) all[sessionId] = { ...edit, at: Date.now() };
+  else delete all[sessionId];
+  const kept = Object.entries(all).sort(([, a], [, b]) => b.at - a.at).slice(0, 30);
+  try {
+    localStorage.setItem(OPEN_EDITS, JSON.stringify(Object.fromEntries(kept)));
+  } catch {
+    /* private mode: the edit lasts while the session is open */
+  }
+}
+
 /** The conversation through one version of a message (`via`), paged from the
  *  server; nothing follows it live, since it is not where the session is. */
 export function useVersionTimeline(sessionId: string, via: string | null): TimelineState & { loadOlder: (limit?: number) => void } {
@@ -130,7 +159,10 @@ export function EditBox({ ev, text }: { ev: UserEvent; text: string }) {
   const edits = useContext(EditsCtx)!;
   const { session } = edits;
   const can = editsOf(session.provider);
-  const [draft, setDraft] = useState(text);
+  const [draft, setDraft] = useState(() => {
+    const kept = openEdit(session.id);
+    return kept?.ev === ev.id ? kept.text : text;
+  });
   const [busy, setBusy] = useState<EditMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
@@ -142,9 +174,11 @@ export function EditBox({ ev, text }: { ev: UserEvent; text: string }) {
   useEffect(() => {
     const el = area.current;
     if (!el) return;
-    el.focus();
+    // It is in view when opened; on coming back, the timeline puts you where you were.
+    el.focus({ preventScroll: true });
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
+  useEffect(() => keepEdit(session.id, { ev: ev.id, text: draft }), [session.id, ev.id, draft]);
   // Grow with what is typed, up to most of the view.
   useEffect(() => {
     const el = area.current;

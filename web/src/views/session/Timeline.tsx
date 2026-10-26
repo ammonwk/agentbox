@@ -19,7 +19,7 @@ import { hrefOf } from "../../route";
 import { dropPasteTags, readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
-import { EditBox, EditButton, EditsCtx, editsOf, VersionBar, VersionNav, useVersionTimeline, type MessageEdits } from "./versions";
+import { EditBox, EditButton, EditsCtx, editsOf, keepEdit, openEdit, VersionBar, VersionNav, useVersionTimeline, type MessageEdits } from "./versions";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -79,6 +79,8 @@ export function Timeline({ session }: { session: Session }) {
   // Whether a trace is open is the setting's, until you open or fold it.
   const { state } = useAppState();
   const hideSteps = state?.settings.hideSteps ?? "always";
+  // Whether this page has had the session open before, read before the effects below remember it.
+  const [returning] = useState(() => places.has(session.id));
   const [flipped, setFlipped] = useState<ReadonlySet<string>>(() => places.get(session.id)?.flipped ?? new Set());
   useEffect(() => remember(session.id, { flipped }), [session.id, flipped]);
   const isOpen = (r: Extract<TimelineRow, { type: "trace" }>) =>
@@ -224,14 +226,18 @@ export function Timeline({ session }: { session: Session }) {
   useEffect(findCurrent, [findCurrent, events]);
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
-  // One handed over from the terminal's rail.
+  // One handed over from the terminal's rail; else, with no place of yours to
+  // go back to (a reload), the message you left an edit open on.
   useEffect(() => {
     const j = takeJump(session.id);
     if (j) {
       setJump(j.turnId);
       setNote(j.note ?? null);
+    } else if (!returning) {
+      const open = openEdit(session.id);
+      if (open) setJump(open.ev);
     }
-  }, [session.id]);
+  }, [session.id, returning]);
   useEffect(() => {
     if (!note) return;
     const t = setTimeout(() => setNote(null), 6000);
@@ -272,7 +278,14 @@ export function Timeline({ session }: { session: Session }) {
   const local = useMemo(() => ({ names: agentNames, jump: (id: string) => setJump(id) }), [agentNames]);
 
   // ---- editing a message, and its versions
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditingNow] = useState<string | null>(() => openEdit(session.id)?.ev ?? null);
+  const setEditing = useCallback(
+    (id: string | null) => {
+      if (!id) keepEdit(session.id, null);
+      setEditingNow(id);
+    },
+    [session.id],
+  );
   // The version just flipped to, to go to once its page is in.
   const [focus, setFocus] = useState<string | null>(null);
   // Each message with versions: the one the conversation as it stands has.
@@ -290,7 +303,7 @@ export function Timeline({ session }: { session: Session }) {
       setFocus(target);
       setVia(standing.get(v.of[0]!) === target ? null : { session: session.id, via: target });
     },
-    [standing, session.id],
+    [standing, session.id, setEditing],
   );
   const versionOf = (e: TimelineEvent, via: string) => e.kind === "user" && e.versions?.of[e.versions.index] === via;
   useEffect(() => {
@@ -314,7 +327,7 @@ export function Timeline({ session }: { session: Session }) {
       setEditing,
       flip,
     }),
-    [session, viewing, editing, flip],
+    [session, viewing, editing, setEditing, flip],
   );
 
   const toLatest = () => {
