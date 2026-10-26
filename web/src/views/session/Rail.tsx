@@ -694,7 +694,7 @@ const Row = memo(function Row({
 
 /**
  * What it is doing, as one icon at the row's right end: a spinner while it
- * works, a pulse while it waits on work it left running, a check once its
+ * works or waits on work it left running, a check once its
  * turn ended `STATUS: done` (with a small dial while a session it started
  * works), a pull request while a wait it armed is on a PR or an Actions run
  * and a clock while one is on anything else (`waitingOn`), a gray alert when
@@ -739,9 +739,7 @@ function stateOf(s: Nested<SessionRow>): { kind: string; label: string; icon: Re
     return { kind: "approval", label: s.question ? "Asking you a question" : "Waiting for your approval", icon: <Icon.alert size={13} /> };
   }
   if (s.status === "running") {
-    return s.background
-      ? { kind: "background", label: "Its turn is over; it waits on work it left running", icon: <span className="rail-pulse" /> }
-      : { kind: "working", label: "Working", icon: <Spinner size={12} /> };
+    return { kind: "working", label: s.background ? "Working: its turn is over, but work it left running is not" : "Working", icon: <Spinner size={12} /> };
   }
   if (s.status !== "waiting") return null;
   if (s.turnError) return { kind: "error", label: `Its turn failed: ${s.turnError.detail}`, icon: <Icon.alert size={13} /> };

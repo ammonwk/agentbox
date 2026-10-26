@@ -854,8 +854,7 @@ button.rail-state {
 button.rail-state:hover {
   background: var(--active);
 }
-.rail-state[data-state="working"],
-.rail-state[data-state="background"] {
+.rail-state[data-state="working"] {
   color: var(--accent);
 }
 .rail-state[data-state="waiting"],
@@ -882,18 +881,6 @@ button.rail-state:hover {
   border-width: 1.5px;
   color: var(--accent);
   opacity: 1;
-}
-.rail-pulse {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: wk-pulse 1.6s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .rail-pulse {
-    animation: none;
-  }
 }
 
 /* ------------------------------------------------------------------ header */
