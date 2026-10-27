@@ -9,45 +9,39 @@ export interface ViewerEntry {
 }
 
 /** What the viewer shows, as a stack: a link in a viewed file opens over it.
- *  Each file is a history entry, so a phone's back gesture steps back through
- *  them and then closes it, rather than leaving the session. */
-let stack: ViewerEntry[] = [];
-const listeners = new Set<() => void>();
-const emit = () => listeners.forEach((fn) => fn());
+ *  The stack lives in the history entry, one entry per file, so a phone's
+ *  back gesture steps back through them and then closes it, forward opens
+ *  them again, and a reload leaves the viewer as it was. */
+type Entry = { fileViewer?: ViewerEntry[] } | null;
+const stackOf = (): ViewerEntry[] => {
+  const s = (history.state as Entry)?.fileViewer;
+  return Array.isArray(s) ? s : [];
+};
 
-type Entry = { fileViewer?: number } | null;
-const depthOf = (): number => (history.state as Entry)?.fileViewer ?? 0;
+let stack = stackOf();
+const listeners = new Set<() => void>();
+const sync = () => {
+  const next = stackOf();
+  if (next.length === stack.length && next.every((e, i) => e.path === stack[i]!.path && e.session === stack[i]!.session)) return;
+  stack = next;
+  listeners.forEach((fn) => fn());
+};
 
 export function openInViewer(e: ViewerEntry): void {
-  stack = [...stack, e];
-  history.pushState({ ...(history.state as object | null), fileViewer: stack.length }, "", location.href);
-  emit();
+  history.pushState({ ...(history.state as object | null), fileViewer: [...stack, e] }, "", location.href);
+  sync();
 }
 
 export function viewerBack(): void {
-  if (depthOf() > 0) history.back();
-  else closeViewer();
+  history.back();
 }
 
 export function closeViewer(): void {
-  const depth = depthOf();
-  if (depth > 0) history.go(-depth);
-  stack = [];
-  emit();
+  history.go(-stack.length);
 }
 
-addEventListener("popstate", () => {
-  const depth = depthOf();
-  if (depth === stack.length) return;
-  stack = stack.slice(0, Math.min(depth, stack.length));
-  emit();
-});
-// Following a link out of the viewer (a session) leaves it.
-addEventListener("hashchange", () => {
-  if (stack.length === 0) return;
-  stack = [];
-  emit();
-});
+addEventListener("popstate", sync);
+addEventListener("hashchange", sync);
 
 export function useViewerStack(): ViewerEntry[] {
   return useSyncExternalStore(
