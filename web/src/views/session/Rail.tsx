@@ -743,16 +743,15 @@ function stateOf(s: Nested<SessionRow>): { kind: string; label: string; icon: Re
   }
   if (s.status !== "waiting") return null;
   if (s.turnError) return { kind: "error", label: `Its turn failed: ${s.turnError.detail}`, icon: <Icon.alert size={13} /> };
-  const parked = s.parkedAt ? " (parked: a message resumes it)" : "";
   if (endedDone(s.lastMessage)) {
     // Done itself, with what it started still going: a small dial in the check's corner.
     return s.working
-      ? { kind: "done", label: `Done; a session it started is still working${parked}`, icon: <span className="rail-done-busy"><Icon.check size={13} /><Spinner size={7} /></span> }
-      : { kind: "done", label: `Done${parked}`, icon: <Icon.check size={13} /> };
+      ? { kind: "done", label: `Done; a session it started is still working`, icon: <span className="rail-done-busy"><Icon.check size={13} /><Spinner size={7} /></span> }
+      : { kind: "done", label: "Done", icon: <Icon.check size={13} /> };
   }
   const on = waitingOn(s);
-  if (on === "you") return { kind: "waiting", label: `Your turn${parked}`, icon: <WaitGlyph on={on} size={13} /> };
-  return { kind: "armed", label: `Waiting on ${s.waits.map((w) => w.what).join("; ")}${parked}`, icon: <WaitGlyph on={on} size={13} /> };
+  if (on === "you") return { kind: "waiting", label: "Your turn", icon: <WaitGlyph on={on} size={13} /> };
+  return { kind: "armed", label: `Waiting on ${s.waits.map((w) => w.what).join("; ")}`, icon: <WaitGlyph on={on} size={13} /> };
 }
 
 /**

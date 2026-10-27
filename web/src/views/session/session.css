@@ -3374,9 +3374,6 @@ a.wk-item:hover {
     -webkit-touch-callout: none;
     transition: transform 0.12s, background-color 0.12s;
   }
-  .cmp-go-label {
-    display: none;
-  }
   .cmp-row .cmp-go svg {
     width: 18px;
     height: 18px;

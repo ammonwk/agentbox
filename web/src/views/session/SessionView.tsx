@@ -802,11 +802,6 @@ export function Detail({
                 Adopt
               </Button>
             ) : null}
-            {session.host === "none" ? (
-              <Button size="sm" variant="primary" icon={Icon.play} loading={busy} onClick={() => void run(() => api.resume(session.id))}>
-                Resume
-              </Button>
-            ) : null}
             {session.host === "tmux" || session.host === "external" ? (
               <Button size="sm" icon={Icon.stop} disabled={busy} onClick={() => setConfirmStop(true)}>
                 Stop
@@ -818,7 +813,7 @@ export function Detail({
                 variant="ghost"
                 icon={Icon.undo}
                 disabled={busy}
-                title="Put it back on the list. It stays stopped until you resume it or send it something."
+                title="Put it back on the list. A message picks it up where it left off."
                 onClick={() => {
                   forget(session.id);
                   void run(() => api.close(session.id, false));
@@ -916,7 +911,7 @@ export function Detail({
           body={
             <p>
               Ends the {PROVIDER_LABEL[session.provider]} process
-              {session.host === "external" ? " running in your other terminal" : " and its tmux session"}. The conversation is kept and Resume
+              {session.host === "external" ? " running in your other terminal" : " and its tmux session"}. The conversation is kept and a message
               continues it — on the same account while its cache is warm, on whichever has room once it has been idle an hour.
               {subagents.length > 0 ? (
                 <>
@@ -940,8 +935,8 @@ export function Detail({
 
 /**
  * The Terminal tab when there is no terminal to attach to: the conversation
- * itself, under one line saying why it is not live and how to make it so.
- * Reading a stopped session should not cost a resume.
+ * itself, under one line saying how to make it live. Reading a session
+ * whose process is parked should not cost a resume.
  */
 function TranscriptInstead({
   session,
@@ -981,19 +976,15 @@ function TranscriptInstead({
             agentbox proves the conversation resumes, stops that process, and continues it in its own tmux.
           </span>
         ) : (
-          <span>
-            {session.status === "closed" ? "Closed" : "Stopped"} — this is its transcript. Resume, or type a prompt below, to get the live
-            terminal back
-            {session.cold ? " on whichever account has room (its cache is cold)" : " on the same account"}.
-          </span>
+          <span>{session.status === "closed" ? "Closed — this is its transcript." : "The terminal opens with your next message, or now:"}</span>
         )}
         {external ? (
           <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={onAdopt}>
             Adopt
           </Button>
         ) : (
-          <Button size="sm" variant="primary" icon={Icon.play} loading={busy} onClick={onResume}>
-            Resume
+          <Button size="sm" variant="primary" icon={Icon.terminal} loading={busy} onClick={onResume}>
+            Open terminal
           </Button>
         )}
       </div>
@@ -1102,7 +1093,7 @@ function ModelMenu({
             ? "Switch the model; the session restarts on it"
             : session.host === "external"
               ? "Adopt it first to switch its model"
-              : "Switch the model it resumes on"
+              : "Switch the model; its next message runs on it"
           : "Pick a model"
       }
       width={320}

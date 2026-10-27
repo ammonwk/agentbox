@@ -16,18 +16,17 @@ import { useAction } from "./useAction";
 import { useVoiceNote, voiceNotes } from "./voicenote";
 import { accountProvider } from "../../../../src/core/providers/account";
 
-/** What the composer can do for a session, and the sentence that says so. */
+/** What the composer can do for a session. One with no process (parked or
+ *  stopped) is written to like a live one: the message resumes it. */
 export type ComposerMode =
   | { kind: "send" }
-  | { kind: "resume" }
   | { kind: "adopt" }
   | { kind: "subagent" };
 
 export function composerMode(s: Pick<Session, "host" | "status">): ComposerMode {
-  if (s.host === "tmux") return { kind: "send" };
   if (s.host === "external") return { kind: "adopt" };
   if (s.host === "subagent") return { kind: "subagent" };
-  return { kind: "resume" };
+  return { kind: "send" };
 }
 
 /** Keys worth a button when the agent is showing a prompt. tmux key names. */
@@ -43,7 +42,7 @@ const PROMPT_KEYS: { keys: string[]; label: string; title: string }[] = [
 /**
  * Type into the session. For a session in agentbox's tmux, Enter pastes the
  * text into the TUI (bracketed, so newlines stay one prompt) and presses
- * Enter. For a stopped one, the text becomes the prompt it resumes with. A
+ * Enter. For one with no process, the text is the prompt it resumes with. A
  * session in someone else's terminal cannot be typed into until adopted, so
  * the box is replaced by the Adopt explanation. `/` completes the skills the
  * session can run, as in the new-session prompt.
@@ -70,15 +69,17 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   /** The last failure was the recording's, not a send's. */
   const [spoke, setSpoke] = useState(false);
   const mode = composerMode(session);
+  /** In agentbox's tmux now; otherwise a message resumes it. */
+  const live = session.host === "tmux";
   const ref = textareaRef;
   const provider = PROVIDER_LABEL[session.provider];
   const images = useAttachments({ text, setText, textareaRef: ref, initial: draft?.images });
   const skill = useSkillComplete({ value: text, onChange: setText, skills, textareaRef: ref });
   const recall = useRecall(session.id, text, setText);
   /** Claude's side question: asked through the pane, answered in the Timeline, not sent as a message. */
-  const btw = mode.kind === "send" && session.provider === "claude" ? BTW.exec(text) : null;
+  const btw = live && session.provider === "claude" ? BTW.exec(text) : null;
   /** Esc on the keyboard stops the turn: a session at its prompt has nothing to stop. */
-  const interruptible = mode.kind === "send" && session.status === "running";
+  const interruptible = live && session.status === "running";
   // Esc from anywhere on the page that is not a field, the terminal (which
   // sends its own) or a dialog.
   useEffect(() => {
@@ -149,11 +150,11 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       const missing = [...tokensIn(text)].filter((n) => !paths.has(n));
       if (missing.length) throw new Error(`image #${missing.join(", #")} did not upload — retry it or remove it`);
       const body = expandImages(text, paths).trim();
-      const side = mode.kind === "send" && session.provider === "claude" ? BTW.exec(body) : null;
+      const side = live && session.provider === "claude" ? BTW.exec(body) : null;
       const bodyHash = submissionHash(body);
       const pending: PendingSend = {
         id: newRevision(), sessionId: session.id, draft: sent,
-        kind: side ? "btw" : mode.kind === "resume" ? "resume" : "send",
+        kind: side ? "btw" : live ? "send" : "resume",
         body: side ? side[1]! : body, bodyHash, at: Date.now(), state: "pending", error: null,
       };
       // Taking the draft notifies any composer holding this revision. A
@@ -190,12 +191,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
   const talks = voiceNotes();
   const recording = voice.phase !== "idle";
 
-  const placeholder =
-    mode.kind === "send"
-      ? session.status === "running"
-        ? `Message ${provider} — it arrives when the current step yields`
-        : `Message ${provider}`
-      : "Stopped. Type a prompt to resume with it, or just press Resume.";
+  const placeholder = session.status === "running" ? `Message ${provider} — it arrives when the current step yields` : `Message ${provider}`;
   const lastOn = accounts.find((a) => a.id === session.accountId)?.label ?? null;
 
   return (
@@ -215,7 +211,7 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       }} />
       {error ? (
         <div className="cmp-error" role="alert">
-          <Icon.alert size={13} /> {spoke ? "Not heard" : mode.kind === "resume" ? "Could not resume" : btw ? "Not asked" : "Not sent"}: {error}
+          <Icon.alert size={13} /> {spoke ? "Not heard" : btw ? "Not asked" : "Not sent"}: {error}
           <button className="linkish" onClick={clear}>
             dismiss
           </button>
@@ -275,10 +271,10 @@ export function Composer({ session, accounts, skills, textareaRef }: {
 
       {session.limitHit ? <LimitBanner session={session} accounts={accounts} /> : null}
 
-      {mode.kind === "send" || mode.kind === "resume" ? (
+      {mode.kind === "send" ? (
       <div className="cmp-row">
         <label className="sr-only" htmlFor={`cmp-${session.id}`}>
-          {mode.kind === "resume" ? "Prompt to resume with" : "Message to the agent"}
+          Message to the agent
         </label>
         {/* One box: the paperclip, the text, then the keys and Send. Pasted
             images go under the text, inside the box. */}
@@ -314,79 +310,55 @@ export function Composer({ session, accounts, skills, textareaRef }: {
         {skill.list}
         {voice.bar}
         <div className="cmp-tools">
-          {mode.kind === "send" ? (
-            <>
-              {/* Esc and Interrupt only while there is a turn or a prompt to stop. */}
-              {session.status === "running" || session.status === "blocked" ? (
-                <button
-                  type="button"
-                  className="cmp-tool cmp-esc"
-                  title="Press Escape in the session — cancels the current prompt or menu"
-                  aria-label="Press Escape in the session"
-                  disabled={busy}
-                  onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
-                >
-                  esc
-                </button>
-              ) : null}
-              {session.status === "running" ? (
-                <button
-                  type="button"
-                  className="cmp-tool cmp-stop"
-                  title="Interrupt the current turn (Esc)"
-                  aria-label="Interrupt the current turn"
-                  disabled={busy}
-                  onClick={() => void run(() => api.interrupt(session.id))}
-                >
-                  <Icon.stop size={14} />
-                </button>
-              ) : null}
-              <span className="cmp-go-wrap">
-                {voice.above}
-                <Button
-                  className="cmp-go"
-                  variant="ghost"
-                  icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.send}
-                  loading={busy}
-                  disabled={talks ? images.uploading : !text.trim() || images.uploading}
-                  title="Send (Enter)"
-                  aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
-                  data-ready={text.trim() ? true : undefined}
-                  data-rec={recording ? voice.phase : undefined}
-                  onMouseDown={keepKeyboard}
-                  {...(talks ? voice.button : {})}
-                  onClick={() => {
-                    if (voice.click()) return;
-                    if (talks && !text.trim()) voice.hint();
-                    else void submit();
-                  }}
-                />
-              </span>
-            </>
-          ) : (
-            <span className="cmp-go-wrap">
-              {voice.above}
-              <Button
-                className="cmp-go"
-                variant="ghost"
-                icon={voice.phase === "locked" ? Icon.check : voice.phase === "held" ? Icon.mic : text.trim() ? Icon.send : Icon.play}
-                loading={busy}
-                aria-label={voice.phase === "locked" ? "Finish the recording" : text.trim() ? "Resume with prompt" : "Resume"}
-                data-ready
-                data-rec={recording ? voice.phase : undefined}
-                onMouseDown={keepKeyboard}
-                {...(talks ? voice.button : {})}
-                onClick={() => {
-                  if (!voice.click()) void submit();
-                }}
-              >
-                <span className="cmp-go-label">{text.trim() ? "Resume with prompt" : "Resume"}</span>
-              </Button>
-            </span>
-          )}
+          {/* Esc and Interrupt only while there is a turn or a prompt to stop. */}
+          {session.status === "running" || session.status === "blocked" ? (
+            <button
+              type="button"
+              className="cmp-tool cmp-esc"
+              title="Press Escape in the session — cancels the current prompt or menu"
+              aria-label="Press Escape in the session"
+              disabled={busy}
+              onClick={() => void run(() => api.keys(session.id, ["Escape"]))}
+            >
+              esc
+            </button>
+          ) : null}
+          {session.status === "running" ? (
+            <button
+              type="button"
+              className="cmp-tool cmp-stop"
+              title="Interrupt the current turn (Esc)"
+              aria-label="Interrupt the current turn"
+              disabled={busy}
+              onClick={() => void run(() => api.interrupt(session.id))}
+            >
+              <Icon.stop size={14} />
+            </button>
+          ) : null}
+          <span className="cmp-go-wrap">
+            {voice.above}
+            <Button
+              className="cmp-go"
+              variant="ghost"
+              icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.send}
+              loading={busy}
+              disabled={talks ? images.uploading : !text.trim() || images.uploading}
+              title="Send (Enter)"
+              aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
+              data-ready={text.trim() ? true : undefined}
+              data-rec={recording ? voice.phase : undefined}
+              onMouseDown={keepKeyboard}
+              {...(talks ? voice.button : {})}
+              onClick={() => {
+                if (voice.click()) return;
+                if (talks && !text.trim()) voice.hint();
+                else void submit();
+              }}
+            />
+          </span>
         </div>
         </AttachFrame>
-        {mode.kind === "send" ? (
+        {live ? (
           // A phone has no Esc or arrow keys: these send them to the session.
           <div className="cmp-aux cmp-navigation">
             {(["Escape", "Up", "Down", "Enter"] as const).map((key) => (
@@ -410,13 +382,11 @@ export function Composer({ session, accounts, skills, textareaRef }: {
           textarea's tooltip rather than a permanent line under it. */}
       {btw ? (
         <div className="cmp-hint">A side question: Claude answers from what it already knows, without tools and without stopping its work. The answer shows in the Timeline.</div>
-      ) : session.cold && mode.kind !== "adopt" ? (
+      ) : session.cold && mode.kind === "send" ? (
         <div className="cmp-hint">
-          Idle since {ago(session.lastActivityAt)}, so its cache is cold: {mode.kind === "send" ? "a message" : "resuming"} wakes it on whichever account has
-          room{lastOn ? ` (last on ${lastOn})` : ""}{mode.kind === "send" ? ", restarting it there if that is another one" : ""}.
+          Idle since {ago(session.lastActivityAt)}, so its cache is cold: a message wakes it on whichever account has
+          room{lastOn ? ` (last on ${lastOn})` : ""}.
         </div>
-      ) : mode.kind === "resume" ? (
-        <div className="cmp-hint">Resumes on the same account{lastOn ? `, ${lastOn}` : ""}, in agentbox&apos;s tmux — its cache is still warm.</div>
       ) : null}
     </div>
   );
