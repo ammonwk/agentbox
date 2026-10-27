@@ -347,7 +347,8 @@ export type PromptProject =
   | { key: string; kind: "repo"; repo: Repo }
   | { key: string; kind: "path"; path: string };
 
-/** Whole project names only: mentioning agentbox-cloud must not choose agentbox. */
+/** Whole project names only, and none that sits inside another project's
+ *  name: with plaibook-platform known, "plaibook" chooses nothing. */
 export function promptProjects(text: string, repos: readonly Repo[], folders: readonly string[]): PromptProject[] {
   const targets: { project: PromptProject; names: string[] }[] = repos.map((repo) => ({
     project: { key: `repo:${repo.id}`, kind: "repo", repo },
@@ -357,9 +358,13 @@ export function promptProjects(text: string, repos: readonly Repo[], folders: re
     if (repos.some((r) => r.ref === path)) continue;
     targets.push({ project: { key: `path:${path}`, kind: "path", path }, names: [path, path.replace(/\/+$/, "").split("/").pop() ?? ""] });
   }
+  const bare = (names: string[]) => names.filter((n) => n && !n.includes("/")).map((n) => n.toLowerCase());
   const matches: { project: PromptProject; start: number; end: number; priority: number }[] = [];
   for (const { project, names } of targets) {
+    const others = targets.filter((t) => t.project.key !== project.key).flatMap((t) => bare(t.names));
     for (const name of new Set(names.filter(Boolean))) {
+      const lower = name.toLowerCase();
+      if (!name.includes("/") && others.some((o) => o !== lower && o.includes(lower))) continue;
       const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const pattern = new RegExp(`(?<![\\p{L}\\p{N}_-])${escaped}(?![\\p{L}\\p{N}_-])`, "giu");
       const priority = project.kind === "repo"
