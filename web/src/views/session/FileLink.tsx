@@ -4,19 +4,38 @@ import { Icon } from "../../components";
 import { localFileLink } from "../../../../src/core/filelinks";
 import { SessionLinks } from "./sessionlinks";
 import { useAction } from "./useAction";
+import { FileBase, inBase, openInViewer, useOnThisMachine } from "./viewerstore";
 
-/** Opening is a desktop action, not navigation out of the attached session. */
-export function FileLink({ path, children }: { path: string; children?: React.ReactNode }) {
+const HTML = /\.html?$/i;
+
+/** A file opens in the app's viewer, wherever the board is read. A page opens
+ *  in the desktop browser when the board is read on this machine, since it
+ *  may need its scripts and neighbors; Ctrl- or middle-click hands any file
+ *  to the desktop there (a page behind the window in front). */
+export function FileLink({ path: ref, children }: { path: string; children?: React.ReactNode }) {
   const { self } = useContext(SessionLinks);
+  const path = inBase(useContext(FileBase), ref);
+  const here = useOnThisMachine();
   const { busy, error, run } = useAction();
-  const browser = localFileLink(path, true)?.browser;
-  if (!self) return <>{children ?? path}</>;
-  const open = (background: boolean) => { if (!busy) void run(() => api.openFile(self, path, background)); };
+  if (!self) return <>{children ?? ref}</>;
+  const page = HTML.test(localFileLink(path, true)?.path ?? "");
+  const desktop = (background: boolean) => {
+    if (!busy) void run(() => api.openFile(self, path, background));
+  };
+  const open = (modified: boolean) => {
+    if (here && (page || modified)) desktop(modified && page);
+    else openInViewer({ session: self, path });
+  };
+  const title = here
+    ? page
+      ? "open in desktop browser (Ctrl-click: in the background)"
+      : "view (Ctrl-click: show in file explorer)"
+    : "view";
   return <>
     <a
       href="#"
-      className={browser ? "sx-desktoplink" : "sx-filelink"}
-      title={`${path} · ${browser ? "open in desktop browser (Ctrl-click: in the background)" : "show in file explorer"}`}
+      className={page ? "sx-desktoplink" : "sx-filelink"}
+      title={`${ref} · ${title}`}
       aria-disabled={busy}
       onClick={(e) => {
         e.preventDefault();
@@ -30,7 +49,7 @@ export function FileLink({ path, children }: { path: string; children?: React.Re
         open(true);
       }}
     >
-      {!browser && <Icon.folder size={12} />}{children ?? path}
+      {!page && <Icon.file size={12} />}{children ?? ref}
     </a>
     {error && <span className="sx-filelink-error" role="alert"> {error}</span>}
   </>;

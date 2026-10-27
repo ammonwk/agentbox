@@ -64,6 +64,7 @@ import { noteServerBehind, noteServerBuild } from "./lib/update";
 export type { SessionRow } from "./lib/board";
 export type { DepState, DepStatus, Health, LoadDetail, LoadSample, ProcDetail, ProcRole, SystemState } from "../../src/core/types";
 import type { AgentTimeline, SessionWork } from "../../src/core/work";
+import type { FileView } from "../../src/core/files";
 export type { AgentTimeline, SessionWork, WorkAgent, WorkShell } from "../../src/core/work";
 export * from "./lib/format";
 
@@ -185,6 +186,11 @@ export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComp
 
 /** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
  *  is the session's directory's. */
+/** A file's bytes by its absolute path (`FileView.path`), so a page's relative
+ *  links reach the files beside it. */
+export const rawFileUrl = (path: string, download = false): string =>
+  `/api/files${path.split("/").map(encodeURIComponent).join("/")}${download ? "?download" : ""}`;
+
 export const shownImageUrl = (sessionId: string, path: string): string =>
   `/api/sessions/${encodeURIComponent(sessionId)}/image?path=${encodeURIComponent(path)}`;
 
@@ -241,7 +247,8 @@ export const api = {
   health: (refresh = false) => get<Health>(`/api/health${refresh ? "?refresh=1" : ""}`),
   voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
   /** Whether web links can open behind the window in front, for this browser. */
-  desktop: () => get<{ backgroundTabs: boolean }>("/api/desktop"),
+  desktop: () => get<{ here: boolean; backgroundTabs: boolean }>("/api/desktop"),
+  viewFile: (id: string, path: string) => get<FileView>(`/api/sessions/${enc(id)}/file?path=${encodeURIComponent(path)}`),
   openUrl: (url: string) => post<null>("/api/open-url", { url }),
 
   // notifications (lib/push.ts)

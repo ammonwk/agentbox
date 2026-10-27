@@ -18,6 +18,7 @@ import { shownImageUrl } from "../../api";
 import { ImagePath, imagePathRefs, isImagePath } from "./imagepaths";
 import { localFileLink } from "../../../../src/core/filelinks";
 import { FileLink } from "./FileLink";
+import { FileBase, inBase } from "./viewerstore";
 import { WaitRef } from "./WaitRef";
 import { turnStatus, type TurnStatus } from "../../../../src/core/turnstatus";
 
@@ -228,12 +229,13 @@ type ImgProps = { src?: unknown; alt?: string };
  *  renders on every hot frame, so the image would be remade and blink. */
 function ShownImage({ src: raw, alt = "" }: ImgProps) {
   const { self: session } = useContext(SessionLinks);
+  const base = useContext(FileBase);
   const [broken, setBroken] = useState(false);
   const [open, setOpen] = useState(false);
   const src = typeof raw === "string" ? raw : "";
   const web = /^https?:\/\//i.test(src);
   const path = web ? src : safeDecode(src);
-  const url = web ? src : session && path ? shownImageUrl(session, path) : null;
+  const url = web ? src : session && path ? shownImageUrl(session, inBase(base, path)) : null;
   const label = labelOf(alt, path);
   if (!url || broken) return <ImageChip label={label} title={broken ? `Could not load ${path}` : path} />;
   return (

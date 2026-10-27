@@ -14,6 +14,7 @@ import { useKeyboardNavigation } from "./lib/keyboard";
 import { SystemBar } from "./SystemBar";
 import { SysbarSlot } from "./sysbarslot";
 import { SessionView } from "./views/session/SessionView";
+import { FileViewerHost } from "./views/session/FileViewer";
 import { isRecurring } from "../../src/core/schedule";
 import { NewSession } from "./views/NewSession";
 import { Settings } from "./views/Settings";
@@ -361,6 +362,9 @@ export function App() {
         </ErrorBoundary>
       </div>
 
+      <ErrorBoundary label="The file viewer">
+        <FileViewerHost />
+      </ErrorBoundary>
       {keysOpen ? <Shortcuts onClose={() => setKeysOpen(false)} /> : null}
       {switcherOpen && state ? <ProjectSwitcher repos={state.repos} selected={scope.project} onClose={() => setSwitcherOpen(false)} /> : null}
       {newOpen && state ? (

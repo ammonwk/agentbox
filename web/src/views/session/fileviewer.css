@@ -1,0 +1,485 @@
+/* The file viewer (FileViewer.tsx): a panel over the page on a wide screen,
+   the whole screen on a phone. Under the image lightbox (1000), which a
+   viewed document's images open. */
+
+.fv-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgb(0 0 0 / 0.45);
+  animation: fv-fade 0.14s ease-out;
+}
+@keyframes fv-fade {
+  from { opacity: 0; }
+}
+@keyframes fv-rise {
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
+}
+.fv {
+  display: flex;
+  flex-direction: column;
+  width: min(1120px, 100%);
+  height: min(100%, 1400px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  outline: none;
+  animation: fv-rise 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* head ------------------------------------------------------------------- */
+
+.fv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex: none;
+}
+.fv-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+.fv-title {
+  flex: 1;
+  min-width: 0;
+}
+.fv-title h2 {
+  font-size: 14.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fv-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--faint);
+  line-height: 1.4;
+}
+/* The folder is cut at its start, so the end — the part that differs — shows. */
+.fv-dir {
+  min-width: 0;
+  flex: 0 1 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  direction: rtl;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.fv-dir:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.fv-meta {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.fv-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.fv-seg {
+  margin-right: 6px;
+  align-self: center;
+}
+.fv-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: none;
+}
+.fv-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.fv-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.fv-btn[aria-pressed="true"] {
+  background: var(--active);
+  color: var(--accent);
+}
+.fv-btn[data-error] {
+  color: var(--danger);
+}
+.fv-close {
+  margin-left: 4px;
+}
+
+/* body ------------------------------------------------------------------- */
+
+.fv-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--panel);
+}
+.fv-scroll {
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.fv-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 24px;
+  color: var(--faint);
+  text-align: center;
+}
+.fv-empty-title {
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.fv-empty-detail {
+  max-width: 460px;
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.fv-empty .btn {
+  margin-top: 8px;
+  text-decoration: none;
+}
+.fv-pad {
+  padding: 16px 20px;
+}
+.fv-cut {
+  margin: 0 auto;
+  padding: 14px 20px 22px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+.fv-cut a {
+  color: var(--accent);
+}
+
+/* A document reads like one: a measure, a size, room around it. */
+.fv-doc {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 30px 36px 56px;
+}
+.fv-doc .sx-md {
+  font-size: 15px;
+  line-height: 1.7;
+}
+.fv-doc .sx-md p,
+.fv-doc .sx-md ul,
+.fv-doc .sx-md ol,
+.fv-doc .sx-md pre,
+.fv-doc .sx-md blockquote,
+.fv-doc .sx-md table {
+  margin-bottom: 14px;
+}
+.fv-doc .sx-md h1 { font-size: 26px; margin: 4px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); letter-spacing: -0.01em; }
+.fv-doc .sx-md h2 { font-size: 20px; margin: 30px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.fv-doc .sx-md h3 { font-size: 16.5px; margin: 24px 0 10px; }
+.fv-doc .sx-md h4, .fv-doc .sx-md h5, .fv-doc .sx-md h6 { font-size: 15px; margin: 20px 0 8px; }
+.fv-doc .sx-md pre { font-size: 13px; padding: 12px 14px; }
+.fv-doc .sx-md table { font-size: 13.5px; }
+.fv-doc .sx-md .sx-img-btn img { max-height: 560px; }
+
+/* Code and text: a gutter that stays put while the lines scroll sideways. */
+.fv-code-scroll {
+  background: var(--panel);
+}
+.fv-code {
+  min-width: 100%;
+  width: max-content;
+  padding: 10px 0 14px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 20px;
+  tab-size: 4;
+}
+.fv-code.fv-wrap {
+  width: auto;
+}
+.fv-lazy {
+  content-visibility: auto;
+}
+.fv-line {
+  display: flex;
+}
+.fv-ln {
+  position: sticky;
+  left: 0;
+  flex: none;
+  box-sizing: content-box;
+  width: var(--ln-w);
+  padding: 0 14px 0 16px;
+  text-align: right;
+  color: var(--faint);
+  opacity: 0.7;
+  background: var(--panel);
+  user-select: none;
+  -webkit-user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.fv-lc {
+  padding-right: 20px;
+  white-space: pre;
+}
+.fv-wrap .fv-lc {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fv-line[data-hl] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.fv-line[data-hl] .fv-ln {
+  color: var(--accent);
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
+.fv-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+/* An image on a checkerboard, so a transparent one shows where it ends. */
+.fv-image {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background-color: var(--sunken);
+  background-image: conic-gradient(var(--hover) 25%, transparent 0 50%, var(--hover) 0 75%, transparent 0);
+  background-size: 20px 20px;
+}
+.fv-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: var(--shadow-md);
+}
+
+.fv-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+}
+.fv-list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 18px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.fv-list button:hover {
+  background: var(--hover);
+}
+.fv-list button > svg {
+  flex: none;
+  color: var(--faint);
+}
+.fv-list-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fv-list-size {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* PDF pages, drawn here on a phone: paper on a grey desk, a floating bar. */
+.fv-pdf {
+  position: relative;
+  height: 100%;
+}
+.fv-pages {
+  padding: 14px 12px 76px;
+  background: var(--sunken);
+}
+.fv-page {
+  margin: 0 auto 14px;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12), 0 4px 14px rgb(0 0 0 / 0.08);
+}
+.fv-page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.fv-pdfbar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+}
+.fv-pdfpage {
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.fv-pdfzoom {
+  min-width: 52px;
+  height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.fv-pdfzoom:hover {
+  background: var(--hover);
+}
+
+/* phone ------------------------------------------------------------------ */
+
+@media (max-width: 900px) {
+  .fv-backdrop {
+    padding: 0;
+    background: var(--panel);
+  }
+  .fv {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    animation: fv-slide 0.2s cubic-bezier(0.2, 0, 0, 1);
+  }
+  @keyframes fv-slide {
+    from { opacity: 0.6; transform: translateY(24px); }
+  }
+  .fv-head {
+    gap: 6px;
+    padding: calc(6px + env(safe-area-inset-top)) 6px 6px 12px;
+  }
+  .fv-head:has(> .fv-btn:first-child) {
+    padding-left: 4px;
+  }
+  .fv-icon,
+  .fv-wide-only {
+    display: none;
+  }
+  .fv-btn {
+    width: 38px;
+    height: 38px;
+  }
+  .fv-close {
+    margin-left: 0;
+  }
+  .fv-seg {
+    margin-right: 2px;
+  }
+  .fv-seg button {
+    min-height: 26px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+  .fv-sub {
+    gap: 6px;
+  }
+  .fv-doc {
+    padding: 20px 18px calc(40px + env(safe-area-inset-bottom));
+  }
+  .fv-doc .sx-md h1 { font-size: 22px; }
+  .fv-doc .sx-md h2 { font-size: 18px; }
+  .fv-code {
+    font-size: 12px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+  .fv-ln {
+    padding: 0 10px 0 8px;
+  }
+  .fv-list button {
+    min-height: 46px;
+    padding: 8px 16px;
+    font-size: 14.5px;
+  }
+  .fv-pages {
+    padding: 8px 6px 76px;
+  }
+  .fv-page {
+    margin-bottom: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fv-backdrop,
+  .fv {
+    animation: none;
+  }
+}

@@ -1,5 +1,13 @@
 import type { ReactElement } from "react";
 import type { Icon as PhosphorIcon, IconWeight } from "@phosphor-icons/react";
+import { File } from "@phosphor-icons/react/dist/csr/File";
+import { FileText } from "@phosphor-icons/react/dist/csr/FileText";
+import { FilePdf } from "@phosphor-icons/react/dist/csr/FilePdf";
+import { FileCode } from "@phosphor-icons/react/dist/csr/FileCode";
+import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
+import { MagnifyingGlassPlus } from "@phosphor-icons/react/dist/csr/MagnifyingGlassPlus";
+import { MagnifyingGlassMinus } from "@phosphor-icons/react/dist/csr/MagnifyingGlassMinus";
+import { TextAlignLeft } from "@phosphor-icons/react/dist/csr/TextAlignLeft";
 import { GearSix } from "@phosphor-icons/react/dist/csr/GearSix";
 import { Keyboard } from "@phosphor-icons/react/dist/csr/Keyboard";
 import { Stack } from "@phosphor-icons/react/dist/csr/Stack";
@@ -134,4 +142,12 @@ export const Icon = {
   plugsOn: icon(PlugsConnected),
   pin: icon(PushPin),
   bookmark: icon(BookmarkSimple),
+  file: icon(File),
+  fileText: icon(FileText),
+  filePdf: icon(FilePdf),
+  fileCode: icon(FileCode),
+  download: icon(DownloadSimple),
+  zoomIn: icon(MagnifyingGlassPlus),
+  zoomOut: icon(MagnifyingGlassMinus),
+  wrap: icon(TextAlignLeft),
 };

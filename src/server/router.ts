@@ -65,13 +65,18 @@ function split(path: string): string[] {
   return path.split("/").filter((s) => s.length > 0);
 }
 
+/** `:name` takes one segment; a last `*name` takes the rest, joined by `/`. */
 function matchSegments(route: string[], actual: string[]): Params | null {
-  if (route.length !== actual.length) return null;
+  const rest = route.at(-1)?.startsWith("*");
+  if (rest ? actual.length < route.length : route.length !== actual.length) return null;
   const params: Params = {};
   for (let i = 0; i < route.length; i++) {
     const r = route[i]!;
     const a = actual[i]!;
-    if (r.startsWith(":")) {
+    if (r.startsWith("*")) {
+      params[r.slice(1)] = actual.slice(i).map(decodeURIComponent).join("/");
+      break;
+    } else if (r.startsWith(":")) {
       params[r.slice(1)] = decodeURIComponent(a);
     } else if (r !== a) {
       return null;

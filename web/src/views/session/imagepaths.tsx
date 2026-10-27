@@ -2,6 +2,7 @@ import { Fragment, useContext, useState } from "react";
 import { Lightbox } from "../../attachments";
 import { shownImageUrl } from "../../api";
 import { SessionLinks } from "./sessionlinks";
+import { FileBase, inBase } from "./viewerstore";
 
 /** A path to an image in text: absolute, `~/…`, `./…` or relative, ending in
  *  an extension the server will show. Not the tail of a URL (`https://…/a.png`
@@ -26,10 +27,11 @@ export const isImagePath = (s: string): boolean => {
 
 /** An image's path, which opens the image full size. It sits inside rows that
  *  are buttons themselves, so the click is its own. */
-export function ImagePath({ path, children }: { path: string; children?: React.ReactNode }) {
+export function ImagePath({ path: ref, children }: { path: string; children?: React.ReactNode }) {
   const { self } = useContext(SessionLinks);
+  const path = inBase(useContext(FileBase), ref);
   const [open, setOpen] = useState(false);
-  if (!self) return <>{children ?? path}</>;
+  if (!self) return <>{children ?? ref}</>;
   const url = shownImageUrl(self, path);
   return (
     <>
@@ -43,7 +45,7 @@ export function ImagePath({ path, children }: { path: string; children?: React.R
           setOpen(true);
         }}
       >
-        {children ?? path}
+        {children ?? ref}
       </a>
       {open ? <Lightbox src={url} label={path.split("/").pop() || path} onClose={() => setOpen(false)} /> : null}
     </>

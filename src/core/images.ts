@@ -9,9 +9,8 @@
  * carry one.
  */
 
-import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
-import { userHome } from "./paths";
+import { closeSync, openSync, readSync } from "node:fs";
+import { resolveLocal } from "./files";
 
 export const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 
@@ -35,30 +34,17 @@ export interface ShownImage {
 /** The image `ref` names, read as the agent wrote it: absolute, `~/…`,
  *  `file://…`, or relative to the session's `cwd`. Throws with the reason. */
 export function shownImage(ref: string, cwd: string | null): ShownImage {
-  let p = ref.trim();
-  if (p.startsWith("file://")) p = p.slice("file://".length);
-  if (p === "~" || p.startsWith("~/")) p = userHome() + p.slice(1);
-  if (!isAbsolute(p)) {
-    if (!cwd) throw new Error("a relative path needs the session's directory");
-    p = resolve(cwd, p);
-  }
-  let real: string;
-  try {
-    real = realpathSync(p);
-  } catch {
-    throw new Error(`no such file: ${p}`);
-  }
-  const st = statSync(real);
-  if (!st.isFile()) throw new Error(`not a file: ${p}`);
-  if (st.size > MAX_IMAGE_BYTES) throw new Error(`over ${MAX_IMAGE_BYTES / 1024 / 1024} MB: ${p}`);
+  const { path, stat } = resolveLocal(ref, cwd);
+  if (!stat.isFile()) throw new Error(`not a file: ${path}`);
+  if (stat.size > MAX_IMAGE_BYTES) throw new Error(`over ${MAX_IMAGE_BYTES / 1024 / 1024} MB: ${path}`);
   const head = new Uint8Array(12);
-  const fd = openSync(real, "r");
+  const fd = openSync(path, "r");
   try {
     readSync(fd, head, 0, head.length, 0);
   } finally {
     closeSync(fd);
   }
   const mime = MAGIC.find((m) => m.test(head))?.mime;
-  if (!mime) throw new Error(`not a png, jpeg, gif or webp image: ${p}`);
-  return { path: real, mime, size: st.size, mtimeMs: st.mtimeMs };
+  if (!mime) throw new Error(`not a png, jpeg, gif or webp image: ${path}`);
+  return { path, mime, size: stat.size, mtimeMs: stat.mtimeMs };
 }

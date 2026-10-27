@@ -64,7 +64,8 @@ import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
 import { completeDir, resolveDirs } from "../core/dirs";
-import { DesktopError, backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
+import { backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
+import { FileError, rawFile, rawHeaders, viewFile } from "../core/files";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
 import { recordYourAct, yourTime } from "../core/yourtime";
@@ -760,7 +761,7 @@ function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
   // A schema refusal is the request's shape, not the server's fault.
   if (e instanceof ZodError) return new HttpError(400, e.message);
-  if (e instanceof DesktopError) return new HttpError(e.status, e.message);
+  if (e instanceof FileError) return new HttpError(e.status, e.message);
   if (e instanceof FleetError || e instanceof AccountError || e instanceof McpError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }
@@ -1165,14 +1166,25 @@ const router = new Router(mapError)
     if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
     return new Response(Bun.file(img.path), { headers });
   })
+  // The viewer: a clicked path, read in the app wherever it was clicked.
+  .add("GET", "/api/sessions/:id/file", ({ params, url }) => json(viewFile(url.searchParams.get("path") ?? "", fleet.get(params.id!).cwd || null)))
+  // Its bytes, by absolute path, so a page's relative links reach the files beside it.
+  .add("GET", "/api/files/*path", ({ req, params, url }) => {
+    const f = rawFile(`/${params.path}`);
+    const etag = `"${f.size.toString(36)}-${Math.floor(f.mtimeMs).toString(36)}"`;
+    const headers = { ...rawHeaders(f.mime, f.path.split("/").pop()!, url.searchParams.has("download")), etag };
+    if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
+    return new Response(Bun.file(f.path), { headers });
+  })
   // A browser on this machine; anywhere else the link opens where it was clicked.
-  .add("GET", "/api/desktop", ({ req }) => json({ backgroundTabs: fromThisMachine.has(req) && backgroundTabs() }))
+  .add("GET", "/api/desktop", ({ req }) => json({ here: fromThisMachine.has(req), backgroundTabs: fromThisMachine.has(req) && backgroundTabs() }))
   .add("POST", "/api/open-url", async ({ req }) => {
     if (!fromThisMachine.has(req)) throw new HttpError(403, "only a browser on this machine opens links on its desktop");
     await openUrlBehind(requireString(await readBody(req), "url"));
     return json(null);
   })
   .add("POST", "/api/sessions/:id/open-file", async ({ req, params }) => {
+    if (!fromThisMachine.has(req)) throw new HttpError(403, "only a browser on this machine opens files on its desktop");
     const s = fleet.get(params.id!);
     const body = await readBody(req);
     return json(await openLocalFile(requireString(body, "path"), s.cwd || null, body.background === true));
