@@ -153,6 +153,7 @@ function StatusLine({ status: { kind, text } }: { status: TurnStatus }) {
  *  live wait's open popover — would be remade on every hot frame. */
 function MdLink({ node: _node, children, href, ...rest }: ComponentPropsWithoutRef<"a"> & { node?: unknown }) {
   const board = useBoardSessions();
+  const base = useContext(FileBase);
   const local = useLocalAgents();
   if (href?.startsWith("wait:")) return <WaitRef id={Number(href.slice(5))}>{children}</WaitRef>;
   if (href?.startsWith("imgpath:")) return <ImagePath path={href.slice("imgpath:".length)}>{children}</ImagePath>;
@@ -199,7 +200,8 @@ function MdLink({ node: _node, children, href, ...rest }: ComponentPropsWithoutR
     }
     return <a {...rest} href={href}>{children}</a>;
   }
-  const file = href && !/^\/(?:api|assets|ws)(?:\/|$)/.test(href) && localFileLink(href);
+  // In a viewed file every relative link is a file beside it, folders too.
+  const file = href && !/^\/(?:api|assets|ws)(?:\/|$)/.test(href) && localFileLink(href, base !== null);
   if (file) {
     if (isImagePath(file.path)) return <ImagePath path={file.path}>{children}</ImagePath>;
     return <FileLink path={href!}>{children}</FileLink>;
@@ -211,11 +213,14 @@ const BLOCK = { img: ShownImage, a: MdLink };
 const INLINE = { p: Inline, img: ShownImageChip, a: MdLink };
 
 /** react-markdown blanks any URL whose scheme it does not know, which would
- *  blank the links the passes here make (`fileref:`, `imgpath:`, `wait:`) and an image
- *  named by `file://`, one way an agent shows you one. */
+ *  blank the links the passes here make (`fileref:`, `imgpath:`, `wait:`), an image
+ *  named by `file://`, one way an agent shows you one, and a link to a file's
+ *  line. A local link is drawn by FileLink, never as the href itself. */
 function keepOurUrls(url: string, key: string): string {
   if (/^(?:fileref|imgpath|wait):/.test(url)) return url;
-  return url.startsWith("file://") && (key === "src" || localFileLink(url)) ? url : defaultUrlTransform(url);
+  // `notes.md:12` reads as a URL scheme to it, and would be blanked too.
+  if (url.startsWith("file://") && key === "src") return url;
+  return key === "href" && localFileLink(url) ? url : defaultUrlTransform(url);
 }
 
 type ImgProps = { src?: unknown; alt?: string };

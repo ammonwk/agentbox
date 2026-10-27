@@ -308,6 +308,7 @@ const EMPTY_INDEX = { ids: new Set<string>(), provider: new Map() };
 const CHUNK = 400;
 function TextView({ text, wrap, lines, footer }: { text: string; wrap: boolean; lines: [number, number] | null; footer: React.ReactNode }) {
   const all = useMemo(() => {
+    if (text === "") return [];
     const ls = text.split("\n");
     if (ls.length > 1 && ls.at(-1) === "") ls.pop();
     return ls;
