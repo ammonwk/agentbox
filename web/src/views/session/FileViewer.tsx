@@ -145,7 +145,7 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
               ) : null}
               {file ? (
                 <span className="fv-meta">
-                  {file.kind === "directory" ? `${file.entries?.length ?? 0} items` : fmtBytes(file.size)}
+                  {file.kind === "directory" ? `${file.entries?.length ?? 0} item${file.entries?.length === 1 ? "" : "s"}` : fmtBytes(file.size)}
                   {lineCount ? ` · ${lineCount.toLocaleString()} lines` : null} · <RelativeTime ts={file.mtimeMs} short />
                 </span>
               ) : null}
@@ -336,7 +336,7 @@ function TextView({ text, wrap, lines, footer }: { text: string; wrap: boolean; 
     const slice = all.slice(at, at + CHUNK);
     const near = lines !== null && lines[0] > at && lines[0] <= at + CHUNK + 1;
     chunks.push(
-      <div key={at} className={near ? "fv-chunk" : "fv-chunk fv-lazy"} style={{ containIntrinsicSize: `auto ${slice.length * 20}px` }}>
+      <div key={at} className={near ? "fv-chunk" : "fv-chunk fv-lazy"} style={{ containIntrinsicHeight: `auto ${slice.length * 20}px` }}>
         {slice.map((l, i) => {
           const n = at + i + 1;
           const hl = lines !== null && n >= lines[0] && n <= lines[1];

@@ -28,8 +28,13 @@
   border-radius: 14px;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  outline: none;
   animation: fv-rise 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Focused so keys reach it, not as something to act on. */
+.fv:focus,
+.fv:focus-visible {
+  outline: none;
 }
 
 /* head ------------------------------------------------------------------- */
@@ -450,8 +455,9 @@
     padding: 0 8px;
     font-size: 12px;
   }
-  .fv-sub {
-    gap: 6px;
+  /* No room for both: the folder, which is a way out, over size and age. */
+  .fv-dir + .fv-meta {
+    display: none;
   }
   .fv-doc {
     padding: 20px 18px calc(40px + env(safe-area-inset-bottom));

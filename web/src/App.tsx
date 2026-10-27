@@ -142,7 +142,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
-      if (document.querySelector(".modal-backdrop")) return;
+      if (document.querySelector(".modal-backdrop, .fv-backdrop")) return;
       if (e.key === "n") {
         e.preventDefault();
         setNewOpen(true);
@@ -164,7 +164,7 @@ export function App() {
       if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || e.key.toLowerCase() !== "t" || !isInstalledApp()) return;
       e.preventDefault();
       e.stopPropagation();
-      if (!document.querySelector(".modal-backdrop")) setNewOpen(true);
+      if (!document.querySelector(".modal-backdrop, .fv-backdrop")) setNewOpen(true);
     };
     addEventListener("keydown", onKey);
     addEventListener("keydown", onCtrlT, true);

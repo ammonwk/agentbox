@@ -201,6 +201,8 @@ export function go(to: Route, replace = false): void {
  *  link, a notification, a reload), so back from it is the list too. */
 export function listUnderSession(): void {
   if (!matchMedia(NARROW).matches || parseHash(location.hash).page !== "session" || overList()) return;
+  // A file open in the viewer: this tab made the history under it already.
+  if ((history.state as { fileViewer?: unknown } | null)?.fileViewer) return;
   const href = hrefOf(parseHash(location.hash));
   history.replaceState(null, "", hrefOf({ page: "sessions" }));
   history.pushState({ overList: true } satisfies Entry, "", href);
