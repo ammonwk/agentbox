@@ -1,0 +1,57 @@
+/* A refusal is a reply the provider withheld, not a step: its own card, in
+ * the warning hue, so it is never mistaken for the agent's answer. */
+.tl-refusal {
+  margin: 4px 2px;
+  padding: 8px 11px 9px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 7%, var(--panel));
+  font-size: 12.5px;
+}
+.tl-refusal-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warning);
+  font-weight: 600;
+}
+.tl-refusal-head > svg {
+  flex: none;
+}
+.tl-refusal-cat {
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.tl-refusal-head .tl-time {
+  margin-left: auto;
+  font-weight: 400;
+}
+.tl-refusal-text {
+  margin: 6px 0 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.tl-refusal-detail {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.tl-refusal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 6px;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+.tl-refusal-foot a {
+  color: var(--accent);
+}

@@ -701,6 +701,24 @@ export type TimelineEvent = { id: string; at: number } & (
       versions?: { index: number; of: string[] };
     }
   | { kind: "assistant"; text: string }
+  | {
+      /** The provider's safety classifier stopped a response instead of
+       *  producing one. Not an error: the turn may carry on on a fallback
+       *  model, or wait for you to edit and retry. */
+      kind: "refusal";
+      /** What the provider said happened, in one or two sentences. */
+      text: string;
+      /** The policy category it named: "cyber", "bio", "misalignment". */
+      category?: string;
+      /** Its longer explanation, when it gave one. */
+      detail?: string;
+      /** The model that was refused. */
+      model?: string;
+      /** The model that answered instead, when the provider fell back. */
+      fallback?: string;
+      /** A page explaining the refusal. */
+      url?: string;
+    }
   | { kind: "thinking"; text: string }
   | {
       kind: "tool";

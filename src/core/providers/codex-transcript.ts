@@ -581,6 +581,75 @@ function meta(id: string, at: number, text: string, tone: "info" | "warn" | "err
   return { kind: "event", event: { id, at, kind: "meta", text, tone } };
 }
 
+/**
+ * Codex's policy refusals: `task_complete.error` (or an `error` event) whose
+ * `codex_error_info` is `cyber_policy`, `bio_policy` or
+ * `misalignment_policy_violation`. The message is the TUI's own wording
+ * ("This request has been flagged for possible cybersecurity risk"), and a
+ * cyber refusal may say it was routed to a fallback model.
+ */
+const POLICY_TEXT = /flagged for possible cyber|high-risk cyber|cyber policy|possible biological risk|bio policy|misalignment policy/i;
+
+function policyCategory(info: string, message: string): string | null {
+  if (/cyber/i.test(info) || /cyber/i.test(message)) return "cyber";
+  if (/bio/i.test(info) || /biological/i.test(message)) return "bio";
+  if (/misalign/i.test(info) || /misalignment/i.test(message)) return "misalignment";
+  return null;
+}
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function stringOf(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** An error's message, unwrapping the nested JSON some API 4xxs carry. */
+function codexErrorText(e: unknown): string {
+  const record = recordOf(e);
+  let text = stringOf(record?.message) ?? "";
+  if (text.startsWith("{")) {
+    try {
+      const parsed = recordOf(JSON.parse(text) as unknown);
+      const error = recordOf(parsed?.error);
+      text = stringOf(error?.message) ?? stringOf(parsed?.message) ?? text;
+    } catch {
+      /* not the wrapper */
+    }
+  }
+  return text;
+}
+
+function codexRefusal(id: string, at: number, e: unknown): Piece | null {
+  const record = recordOf(e);
+  if (!record) return null;
+  const raw = record.codex_error_info ?? record.codexErrorInfo;
+  const info = stringOf(raw) ?? stringOf(recordOf(raw)?.type) ?? "";
+  const message = codexErrorText(record);
+  const named = /policy|misalign/i.test(info) ? policyCategory(info, "") : null;
+  const category = named ?? (POLICY_TEXT.test(message) ? policyCategory("", message) : null);
+  if (!category) return null;
+  const extra = record.additional_details ?? record.additionalDetails;
+  const detail =
+    stringOf(extra) ??
+    stringOf(recordOf(extra)?.detailed_explanation) ??
+    stringOf(recordOf(extra)?.detailedExplanation);
+  const ev: Extract<TimelineEvent, { kind: "refusal" }> = {
+    id,
+    at,
+    kind: "refusal",
+    text: oneLine(message || "The safety policy refused this turn.", 600),
+    category,
+  };
+  if (detail) ev.detail = oneLine(detail, 1000);
+  const fallback = /routed to ([^\s,]+) as a fallback/i.exec(message)?.[1];
+  if (fallback) ev.fallback = fallback;
+  const url = (detail ?? message).match(/https?:\/\/[^\s)]+/)?.[0]?.replace(/[.,;]+$/, "");
+  if (url) ev.url = url;
+  return { kind: "event", event: ev };
+}
+
 /** Timeline pieces for one rollout record. Records carry no uuid of their
  *  own, but a record's index never changes in an append-only file. */
 export function codexPieces(r: any, index: number, fold?: { isInherited(r: any, i: number): boolean }): Piece[] {
@@ -595,10 +664,13 @@ export function codexPieces(r: any, index: number, fold?: { isInherited(r: any, 
     switch (p.type) {
       case "turn_aborted":
         return [meta(id, at, `turn aborted${p.reason ? ` (${p.reason})` : ""}`, "warn")];
-      case "error":
-        return [meta(id, at, oneLine(String(p.message ?? "error"), 300), isUsageLimit(p) ? "warn" : "error")];
+      case "error": {
+        const refused = codexRefusal(id, at, p);
+        return [refused ?? meta(id, at, oneLine(String(p.message ?? "error"), 300), isUsageLimit(p) ? "warn" : "error")];
+      }
       case "task_complete":
-        return p.error ? [meta(id, at, oneLine(String(p.error.message ?? "turn failed"), 300), isUsageLimit(p.error) ? "warn" : "error")] : [];
+        if (!p.error) return [];
+        return [codexRefusal(id, at, p.error) ?? meta(id, at, oneLine(String(p.error.message ?? "turn failed"), 300), isUsageLimit(p.error) ? "warn" : "error")];
       case "token_count": {
         const reached = p.rate_limits?.rate_limit_reached_type;
         return reached ? [meta(id, at, `rate limit reached: ${typeof reached === "string" ? reached : JSON.stringify(reached)}`, "warn")] : [];

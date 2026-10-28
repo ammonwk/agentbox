@@ -2,6 +2,7 @@ import { createContext, memo, startTransition, useCallback, useContext, useEffec
 import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
+import { modelName } from "../../lib/newsession";
 import { Button, Empty, Icon, Spinner } from "../../components";
 import { firstLine, groupTimeline, rowEventIds, traceTurns, withBtw, type TimelineRow } from "../../lib/timeline";
 import { field, type SendCall } from "../../lib/sendtool";
@@ -20,6 +21,7 @@ import { dropPasteTags, readSent, splitPastes } from "../../../../src/core/sent"
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
 import { EditBox, EditButton, EditsCtx, editsOf, keepEdit, openEdit, VersionBar, VersionNav, useVersionTimeline, type MessageEdits } from "./versions";
+import "./refusal.css";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
 
@@ -638,6 +640,8 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
       return <AssistantRow ev={ev} />;
     case "thinking":
       return <Thinking text={ev.text} dur={dur} />;
+    case "refusal":
+      return <RefusalRow ev={ev} />;
     case "meta":
       if (ev.mate) return <MateRow id={ev.id} mate={ev.mate} />;
       return (
@@ -648,6 +652,39 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
       );
   }
 });
+
+/**
+ * The provider's safety classifier stopped a reply: what it said, the policy
+ * it named, and whether another model answered in its place. A reply that was
+ * withheld is not a reply, so this never folds into the work above it.
+ */
+function RefusalRow({ ev }: { ev: Extract<TimelineEvent, { kind: "refusal" }> }) {
+  const model = ev.model ? modelName(ev.model) : null;
+  const fallback = ev.fallback ? modelName(ev.fallback) : null;
+  return (
+    <div className="tl-refusal" data-ev={ev.id}>
+      <div className="tl-refusal-head">
+        <Icon.alert size={13} />
+        <span>Response refused</span>
+        {ev.category ? <span className="tl-refusal-cat">{ev.category}</span> : null}
+        <time className="tl-time">{fmtHourMin(ev.at)}</time>
+      </div>
+      <p className="tl-refusal-text">{ev.text}</p>
+      {ev.detail && ev.detail !== ev.text ? <p className="tl-refusal-detail">{ev.detail}</p> : null}
+      {model || fallback || ev.url ? (
+        <div className="tl-refusal-foot">
+          {model ? <span>by {model}</span> : null}
+          {fallback ? <span>{model ? " · " : ""}answered instead by {fallback}</span> : null}
+          {ev.url ? (
+            <a href={ev.url} target="_blank" rel="noreferrer">
+              What this means
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Something said to the agent. What you typed is yours, in a bubble on the

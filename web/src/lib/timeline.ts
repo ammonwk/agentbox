@@ -167,7 +167,9 @@ export function traceTurns(rows: TimelineRow[], live: boolean): TimelineRow[] {
       if (r.type !== "btw") endTurn();
       out.push(r);
       anchor = { id: rowEventIds(r)[0] ?? `btw-${rowAt(r)}`, at: rowAt(r) };
-    } else if (r.type === "event" && r.event.kind === "assistant") {
+    } else if (r.type === "event" && (r.event.kind === "assistant" || r.event.kind === "refusal")) {
+      // A refusal is not work to hide: it is why the reply is missing, and
+      // what the provider said about it.
       fold(false, rowAt(r));
       out.push(r);
       anchor = { id: r.event.id, at: rowAt(r) };

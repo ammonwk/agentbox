@@ -883,9 +883,10 @@ export class ClaudeFold {
     }
     const text = blocksText(m.content).trim();
     if (text) this.lastMessage = text.length > 300 ? `…${text.slice(-299)}` : text;
-    // `end_turn`/`stop_sequence` hand back to you; `tool_use` waits on a tool;
-    // null is a block written before the message finished.
-    if (m.stop_reason === "end_turn" || m.stop_reason === "stop_sequence") this.turnOpen = false;
+    // `end_turn`/`stop_sequence` hand back to you, and so does a `refusal`
+    // (the CLI retries only if the provider falls back); `tool_use` waits on a
+    // tool, and null is a block written before the message finished.
+    if (m.stop_reason === "end_turn" || m.stop_reason === "stop_sequence" || m.stop_reason === "refusal") this.turnOpen = false;
     else this.turnOpen = true;
   }
 
@@ -994,6 +995,29 @@ function meta(id: string, at: number, text: string, tone: "info" | "warn" | "err
   return { kind: "event", event: { id, at, kind: "meta", text, tone } };
 }
 
+/** A refusal is folded to its own event, not a warning line: it is a reply
+ *  the provider withheld, and the turn may continue on another model. */
+function refusal(id: string, at: number, text: string, fields: Omit<Extract<TimelineEvent, { kind: "refusal" }>, "id" | "at" | "kind" | "text"> = {}): Piece {
+  return { kind: "event", event: { id, at, kind: "refusal", text, ...fields } };
+}
+
+const SAFEGUARD_NOTICE = /safeguards (stopped|flagged|blocked)|safety classifier/i;
+const URL_IN_TEXT = /https?:\/\/[^\s)]+/;
+
+function urlIn(...texts: (string | undefined)[]): string | undefined {
+  for (const text of texts) {
+    const m = text?.match(URL_IN_TEXT);
+    if (m) return m[0]!.replace(/[.,;]+$/, "");
+  }
+  return undefined;
+}
+
+/** The first sentence of a provider's paragraph, for a refusal's headline. */
+function firstSentence(text: string): string {
+  const m = /^([\s\S]*?[.!?])(?=\s|$)/.exec(text.trim());
+  return m ? m[1]! : text;
+}
+
 /** Timeline pieces for one Claude record. Ids are the record's uuid plus the
  *  block index, so a tool event re-sent with its result keeps its id. */
 export function claudePieces(r: any, index: number): Piece[] {
@@ -1072,6 +1096,19 @@ export function claudePieces(r: any, index: number): Piece[] {
           out.push(meta(id, at, `model fallback: ${b.from?.model ?? "?"} → ${b.to?.model ?? "?"}`, "warn"));
         }
       });
+      // The API answered with a refusal: `message.stop_reason` is "refusal",
+      // carrying the policy category and the provider's explanation. The CLI
+      // then either retries on a fallback model or asks you to edit.
+      const stop = m.stop_details ?? {};
+      if (m.stop_reason === "refusal" || stop.type === "refusal") {
+        const detail = typeof stop.explanation === "string" ? stop.explanation : undefined;
+        const fields: Parameters<typeof refusal>[3] = { detail };
+        if (typeof stop.category === "string" && stop.category) fields.category = stop.category;
+        if (typeof m.model === "string" && m.model !== SYNTHETIC) fields.model = m.model;
+        const url = urlIn(detail);
+        if (url) fields.url = url;
+        out.push(refusal(`${base}:refusal`, at, "The safety classifier stopped this response.", fields));
+      }
       return out;
     }
 
@@ -1094,10 +1131,32 @@ export function claudePieces(r: any, index: number): Piece[] {
           const nums = cm.preTokens ? ` (${Math.round(cm.preTokens / 1000)}K → ${Math.round((cm.postTokens ?? 0) / 1000)}K tokens)` : "";
           return [meta(id, at, `${cm.trigger === "auto" ? "auto-compacted" : "compacted"}${nums}`)];
         }
-        case "informational":
-          return content ? [meta(id, at, content, r.level === "warning" ? "warn" : "info")] : [];
-        case "model_refusal_fallback":
-          return [meta(id, at, oneLine(content, 300), "warn")];
+        case "informational": {
+          if (!content) return [];
+          // The CLI's own notice that a response was stopped. Older versions
+          // write only this (no assistant record), so it has to stand as the
+          // refusal itself.
+          if (SAFEGUARD_NOTICE.test(content)) {
+            const ev: Extract<TimelineEvent, { kind: "refusal" }> = { id, at, kind: "refusal", text: oneLine(content, 400) };
+            const url = urlIn(content);
+            if (url) ev.url = url;
+            return [{ kind: "event", event: ev }];
+          }
+          return [meta(id, at, content, r.level === "warning" ? "warn" : "info")];
+        }
+        case "model_refusal_fallback": {
+          // It carries the whole story: the model that refused, the policy
+          // category, and the model answering instead.
+          const fields: Parameters<typeof refusal>[3] = {};
+          if (typeof r.apiRefusalCategory === "string" && r.apiRefusalCategory) fields.category = r.apiRefusalCategory;
+          const detail = typeof r.apiRefusalExplanation === "string" ? r.apiRefusalExplanation : undefined;
+          if (detail) fields.detail = detail;
+          if (typeof r.originalModel === "string" && r.originalModel) fields.model = r.originalModel;
+          if (typeof r.fallbackModel === "string" && r.fallbackModel) fields.fallback = r.fallbackModel;
+          const url = urlIn(detail, content);
+          if (url) fields.url = url;
+          return [refusal(id, at, firstSentence(content) || "The safety classifier stopped this response.", fields)];
+        }
         case "api_error":
           return [meta(id, at, oneLine(content || "API error, retrying", 300), "warn")];
         case "local_command": {
