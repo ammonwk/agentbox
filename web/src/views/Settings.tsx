@@ -8,6 +8,7 @@ import { ACCENT_PRESETS, chooseAccent, useAccent } from "../lib/accent";
 import { BALANCER_HELP } from "../lib/balancer";
 import { disablePush, enablePush, pushState, type PushState } from "../lib/push";
 import { hrefOf } from "../route";
+import { Keybinds } from "./Keybinds";
 import { WhenField } from "./newsession/WhenField";
 import { scheduleTitle } from "./session/Scheduled";
 import { useAction } from "./session/useAction";
@@ -23,6 +24,7 @@ export function Settings({ state }: { state: AppState }) {
       <Schedules state={state} />
       <General {...section} />
       <Notifications />
+      <Keybinds />
       <Models {...section} installed={state.providers} />
       <Balancer {...section} />
       <Repositories repos={repos} sessions={sessions} track={track} saveStateOf={saveStateOf} />
