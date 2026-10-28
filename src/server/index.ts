@@ -27,6 +27,7 @@ import { behindHead, type Behind } from "../core/behind";
 import { restartService } from "../core/restart";
 import { sourceCheckout } from "../core/snapshot";
 import { Fleet, FleetError } from "../core/fleet";
+import { ResourceCleanup } from "../core/cleanup";
 import { repoRootOf } from "../core/git";
 import { sessionProject } from "../core/projects";
 import * as tmux from "../core/tmux";
@@ -49,6 +50,7 @@ import { contextDocs, readContextDoc, writeContextDoc } from "./context";
 import { briefingText } from "../core/providers/briefing";
 import { addRepo, deleteRepo, getDb, getKv, listSessionRecords, resolveSessionRefs, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
+import { devServerPage, devServerStatus } from "../core/devserver";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
@@ -63,6 +65,7 @@ import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
+import { recentScreenshots, screenshotImage } from "../core/screenshots";
 import { completeDir, resolveDirs } from "../core/dirs";
 import { backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { FileError, rawFile, rawHeaders, viewFile } from "../core/files";
@@ -177,6 +180,8 @@ export const fleet = new Fleet({
   poolAgents: () => poolAgents(),
 });
 setMetricsSource(() => fleet.sessions());
+export const cleanup = new ResourceCleanup(fleet, () => { scheduleCold(); scheduleHot(); });
+fleet.activityAllowed = id => cleanup.allows(id);
 /** Sessions to start later; on the board and in Settings, so cold state. */
 export const scheduler = new Scheduler(fleet, () => agents, () => scheduleCold());
 /** What sessions wait on, and how each is told (src/core/waits.ts). */
@@ -268,7 +273,7 @@ function hotState(open = false): HotState {
       closedStamp += 1 + (s.closedAt ?? 0);
       return !open || s.pinOrder !== null || s.bookmarkedAt !== null;
     })
-    .map((s) => ({ ...s, attention: attentionOf(s, fleet.blockedReason(s.id)) }));
+    .map((s) => ({ ...s, paused: !!s.pid && !cleanup.allows(s.id), attention: attentionOf(s, fleet.blockedReason(s.id)) }));
   return { sessions: sessions.sort(byAttention), serverTime: Date.now(), closedStamp };
 }
 
@@ -441,6 +446,7 @@ function coldState(): ColdState {
   const prClaims = prClaimsNow();
   return {
     accounts: views,
+    cleanup: cleanup.state(),
     logins: accounts.loginFlows(),
     repos: reposWithRoots(),
     prs: slow.prs.map((p) => ({ ...p, owner: holderOf(prClaims, p.repo, p.number)?.sessionId ?? null })),
@@ -739,6 +745,7 @@ function handleTermMessage(ws: Socket, raw: string | Buffer): void {
   }
   const m = msg as { type?: string; data?: unknown; cols?: unknown; rows?: unknown };
   if (m.type === "input" && typeof m.data === "string") {
+    if (ws.data.kind === "term" && !fleet.activityAllowed(ws.data.sessionId)) return;
     t.write(m.data);
     if (ws.data.kind === "term" && !TERM_REPORT.test(m.data)) typedAt.set(ws.data.sessionId, Date.now());
   } else if (m.type === "resize" && typeof m.cols === "number" && typeof m.rows === "number") {
@@ -803,6 +810,13 @@ function uploadResponse(name: string): Response {
   return new Response(Bun.file(f.path), { headers: { "content-type": f.mime, "cache-control": "private, max-age=86400" } });
 }
 
+/** The paperclip's recent screenshots are for the person at the board: a
+ *  request with a session's capability headers, valid or not, is an agent. */
+function refuseAgent(req: Request): void {
+  if (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token"))
+    throw new HttpError(403, "Screenshot previews belong to the user's attachment picker");
+}
+
 /** Requests from a browser on this machine, whose desktop is the server's. */
 const fromThisMachine = new WeakSet<Request>();
 
@@ -832,6 +846,12 @@ const router = new Router(mapError)
   })
 
   // ---- sessions
+  .add("GET", "/api/cleanup", () => json(cleanup.state()))
+  .add("POST", "/api/cleanup", async () => {
+    await fleet.ready;
+    return json(await cleanup.start());
+  })
+  .add("POST", "/api/cleanup/resume", async () => json(await cleanup.resume()))
   .add("POST", "/api/placement", async ({ req }) => {
     const b = await readBody(req);
     return json(fleet.placement(provider(b.provider), optionalString(b, "model") ?? null, optionalString(b, "accountId") ?? null, optionalString(b, "effort") ?? null, true, scopeOf(b)));
@@ -866,6 +886,7 @@ const router = new Router(mapError)
         branch,
         ref,
         pr: typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0 ? b.pr : undefined,
+        devServer: b.devServer === true,
         prompt: typeof b.prompt === "string" ? b.prompt : undefined,
         model: optionalString(b, "model"),
         effort: optionalString(b, "effort"),
@@ -892,6 +913,13 @@ const router = new Router(mapError)
       if (holding) startingOn.delete(key);
     }
   })
+
+  // ---- a session's dev server (src/core/devserver.ts)
+  // Only a session the board knows (404 otherwise): the id names files and goes into the page.
+  .add("GET", "/api/sessions/:id/dev", async ({ params }) => json(await devServerStatus(fleet.get(params.id!).id)))
+  .add("GET", "/api/sessions/:id/dev/open", ({ params }) =>
+    new Response(devServerPage(fleet.get(params.id!).id), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }),
+  )
 
   // ---- who has which pull request
   // The session a command runs in, for the CLI to tell "you" from another:
@@ -1152,6 +1180,20 @@ const router = new Router(mapError)
     }
   })
   .add("GET", "/api/uploads/:name", ({ params }) => uploadResponse(params.name!))
+  .add("GET", "/api/screenshots", ({ req }) => {
+    refuseAgent(req);
+    return json(recentScreenshots());
+  })
+  .add("GET", "/api/screenshots/:id", ({ req, params }) => {
+    refuseAgent(req);
+    let img;
+    try {
+      img = screenshotImage(params.id!);
+    } catch (e) {
+      throw new HttpError(404, (e as Error).message);
+    }
+    return new Response(Bun.file(img.path), { headers: { "content-type": img.mime, "cache-control": "private, no-store", "x-content-type-options": "nosniff" } });
+  })
   .add("GET", "/api/sessions/:id/image", ({ req, params, url }) => {
     const s = fleet.get(params.id!);
     let img;

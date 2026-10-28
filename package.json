@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "doctor": "bun bin/agentbox doctor",
     "docs:cli": "bun scripts/docs-cli.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "desktop": "cd desktop && bun install && bun run start"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",

@@ -140,6 +140,8 @@ export interface NewSessionInput {
   /** An existing branch to run on — its worktree, or a new one. */
   branch?: string;
   pr?: number;
+  /** Start the repo's dev server too, with the checkout's deps linked in. */
+  devServer?: boolean;
   prompt?: string;
   model?: string;
   effort?: string;
@@ -183,6 +185,16 @@ async function transcribe(audio: Blob): Promise<string> {
 }
 
 export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComponent(name)}`;
+
+/** One of the newest screenshots on this machine, by an id the server gave
+ *  out; the browser never learns its path (src/core/screenshots.ts). */
+export interface RecentScreenshot {
+  id: string;
+  name: string;
+  at: number;
+}
+
+export const screenshotUrl = (id: string): string => `/api/screenshots/${encodeURIComponent(id)}`;
 
 /** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
  *  is the session's directory's. */
@@ -238,6 +250,8 @@ export const api = {
 
   /** One `agentbox wait`, and the end of its job's log while that runs. */
   wait: (id: number) => get<WaitView>(`/api/waits/${id}`),
+  startCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup"),
+  resumeCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup/resume"),
   /** The board's open sessions and cold state; the closed ones page from `closed`. */
   state: () => get<AppState>("/api/state?open=1"),
   /** Opening prompts you wrote, newest first, for the new-session box's ↑. */
@@ -312,6 +326,8 @@ export const api = {
   /** Continue on another account (`auto` = the balancer's pick), sending `prompt`. */
   move: (id: string, opts: { accountId?: string; prompt?: string }) => post<Session>(`/api/sessions/${enc(id)}/move`, opts),
   upload,
+  /** For the paperclip's hover: the newest three. */
+  screenshots: () => get<RecentScreenshot[]>("/api/screenshots"),
   transcribe,
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
   /** Close stops it and takes it off the list; `false` reopens it (still stopped). */

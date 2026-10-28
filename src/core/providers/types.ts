@@ -229,6 +229,14 @@ export interface TranscriptFacts {
    *  (claude's Monitor), whitespace-collapsed: a never-ending shell that is
    *  work. */
   monitors?: string[];
+  /**
+   * Work the session started in the background (claude: a Workflow, or an
+   * Agent with `run_in_background`) whose notification has not come back:
+   * launched, by `toolUseResult.status: "async_launched"`, and not yet ended
+   * by a `<task-notification>` or a TaskStop. It runs inside the session's
+   * process, so only a launch after that process started can still be live.
+   */
+  backgroundTasks?: BackgroundTask[];
   /** An AskUserQuestion call (claude) still waiting for its answer. */
   pendingAsk?: { id: string; questions: AskQuestion[] } | null;
   /** The session is in its CLI's skip-every-permission mode as of its latest
@@ -237,6 +245,15 @@ export interface TranscriptFacts {
   /** A scripted one-shot run (claude `-p`): its caller reads the answer, so
    *  once its process ends it is history, not something to come back to. */
   headless?: boolean;
+}
+
+export interface BackgroundTask {
+  id: string;
+  /** The provider's word for it: `local_workflow`, `local_agent`. */
+  kind: string;
+  /** The workflow's name, or the agent's description. */
+  name: string;
+  since: number;
 }
 
 /** An incremental reader over one transcript. Holds its own offsets. */

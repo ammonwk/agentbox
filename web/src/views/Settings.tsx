@@ -701,51 +701,26 @@ function Repositories({
   );
 }
 
-const START_IN: [boolean | null, string][] = [
-  [true, "New worktree"],
-  [false, "Main checkout"],
-  [null, "Last used"],
-];
-
 /**
- * Where the repo's new sessions start, and what a worktree of it needs that git
- * does not carry. Folded to one line: set once per repo, then only read.
+ * What a worktree of the repo needs that git does not carry, and the dev
+ * server New session can start in it. Folded to one line: set once per repo, then only read.
  */
 function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Track; saveStateOf: SectionProps["saveStateOf"] }) {
   const key = (field: string) => `repo:${repo.id}:${field}`;
   const patch = (field: string, p: RepoPatch) => track(key(field), api.patchRepo(repo.id, p));
   const { copy, run } = repo.setup;
+  const dev = repo.setup.dev ?? "";
   const summary = [
-    `Starts in: ${START_IN.find(([v]) => v === repo.worktreeDefault)![1].toLowerCase()}`,
     copy.length > 0 ? `copies ${copy.length} path${copy.length === 1 ? "" : "s"}` : null,
     run ? `runs ${run}` : null,
+    repo.setup.dev ? `dev server: ${repo.setup.dev}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
 
   return (
     <details className="repo-setup">
-      <summary>{summary}</summary>
-
-      <Field label="New sessions start in" hint="What New session picks when this repo is chosen. Last used keeps whatever the previous session did.">
-        {(id) => (
-          <div className="seg" role="group" aria-label="New sessions start in" id={id}>
-            {START_IN.map(([v, label]) => (
-              <button
-                key={label}
-                type="button"
-                aria-pressed={repo.worktreeDefault === v}
-                disabled={v === false && repo.kind === "github"}
-                title={v === false && repo.kind === "github" ? "A GitHub repo has no checkout of its own to work in." : undefined}
-                onClick={() => patch("start", { worktreeDefault: v })}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-      </Field>
-      <SaveMark state={saveStateOf(key("start"))} />
+      <summary>{summary || "Worktree setup and dev server"}</summary>
 
       <Field
         label="Copy into new worktrees"
@@ -759,7 +734,7 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
             mono
             value={copy.join("\n")}
             placeholder={".env\napps/api/.env"}
-            onCommit={(v) => patch("copy", { setup: { copy: v.split("\n").map((l) => l.trim()).filter(Boolean), run } })}
+            onCommit={(v) => patch("copy", { setup: { copy: v.split("\n").map((l) => l.trim()).filter(Boolean), run, dev } })}
           />
         )}
       </Field>
@@ -770,10 +745,20 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
         hint="Runs in each new worktree as the agent starts. Its output is in the agentbox logs, under setup/<session>.log."
       >
         {(id) => (
-          <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim() } })} />
+          <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim(), dev } })} />
         )}
       </Field>
       <SaveMark state={saveStateOf(key("run"))} />
+
+      <Field
+        label="Dev server command"
+        hint="What New session's Dev server switch starts, with PORT set to a free port ($PORT in the command is that port). Blank runs the package.json dev script. The worktree uses this checkout's node_modules through symlinks, and the setup command does not run. Its output is under dev/<session>.log."
+      >
+        {(id) => (
+          <CommitInput id={id} mono value={dev} placeholder="bun run dev -- --port $PORT" onCommit={(v) => patch("dev", { setup: { copy, run, dev: v.trim() } })} />
+        )}
+      </Field>
+      <SaveMark state={saveStateOf(key("dev"))} />
     </details>
   );
 }

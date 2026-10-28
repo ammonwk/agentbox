@@ -19,6 +19,8 @@ export interface NewSessionPrefs {
   /** A manual Where choice holds while the saved draft is edited. */
   wherePicked?: boolean;
   worktree?: boolean;
+  /** Start a dev server with the session. */
+  devServer?: boolean;
   path?: string;
   perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string; effort?: string }>>;
   /** The unsent prompt; cleared when a session starts. */
@@ -271,15 +273,6 @@ export function promptPrs(text: string, prs: readonly PrInfo[], repoSlug: string
 }
 
 /** The open PRs of one repo. */
-/**
- * Where a session in this repo starts, applied when the repo is picked: the
- * repo's default from Settings (repos.worktree_default). Null leaves the box
- * as it is.
- */
-export function worktreeDefault(repo: Pick<Repo, "worktreeDefault">): boolean | null {
-  return repo.worktreeDefault;
-}
-
 export function prsOf(prs: readonly PrInfo[], repo: Repo | null): PrInfo[] {
   if (!repo?.fullName) return [];
   return prs.filter((p) => p.repo === repo.fullName);

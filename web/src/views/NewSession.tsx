@@ -26,7 +26,6 @@ import {
   savePrefs,
   skillsFor,
   tidyFolderChoices,
-  worktreeDefault,
   type NewSessionPrefs,
 } from "../lib/newsession";
 import { AccountPicker } from "./newsession/AccountPicker";
@@ -85,14 +84,13 @@ export function NewSession({
   const [repoId, setRepoId] = useState<string>(
     prefs.repoId && state.repos.some((r) => r.id === prefs.repoId) ? prefs.repoId : repos[0]?.id ?? "",
   );
-  // The repo's default from Settings, over whatever the last session did.
-  const [worktree, setWorktree] = useState(() => {
-    const r = knownRepos.find((x) => x.id === repoId);
-    return (r && worktreeDefault(r)) ?? prefs.worktree ?? true;
-  });
-  /** With "New worktree" off: blank (main checkout), `new`, or a PR. Not
-   *  remembered — a PR is a one-off. */
+  // A repo session always runs in a worktree: a new one, or the one that
+  // has the picked PR or branch checked out. The main checkout is not offered.
+  const [worktree, setWorktree] = useState(true);
+  /** With "New worktree" off: a PR or a branch. Not remembered — a PR is a
+   *  one-off. */
   const [wtText, setWtText] = useState("");
+  const [devServer, setDevServer] = useState(prefs.devServer ?? false);
   const [path, setPath] = useState(prefs.path ?? "");
   const [prompt, setPrompt] = useState(prefs.draft ?? "");
   const [wherePicked, setWherePicked] = useState(prefs.wherePicked ?? false);
@@ -306,9 +304,7 @@ export function NewSession({
     if (repoId !== id || where !== "repo") setWtText("");
     const next = knownRepos.find((r) => r.id === id);
     if (!next || promptPrs(prompt, prsOf(state.prs, next), next.fullName).length > 0) return;
-    const def = worktreeDefault(next);
-    if (def === null) return;
-    setWorktree(def);
+    setWorktree(true);
     setWtText("");
   }
 
@@ -368,11 +364,8 @@ export function NewSession({
       setRepoId(r.id);
       setWhere("repo");
       if (promptPrs(prompt, prsOf(state.prs, r), r.fullName).length > 0) return;
-      const def = worktreeDefault(r);
-      if (def !== null) {
-        setWorktree(def);
-        setWtText("");
-      }
+      setWorktree(true);
+      setWtText("");
     } catch (e) {
       setOtherErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -385,8 +378,8 @@ export function NewSession({
   const draftImagesKey = JSON.stringify(draftImages);
   useEffect(() => {
     // A PR the prompt ticked off is not a preference for next time.
-    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider, wherePicked, draft: prompt, draftImages }, project);
-  }, [provider, where, repoId, worktree, wtFromPrompt, path, perProvider, wherePicked, prompt, draftImagesKey]);
+    savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, perProvider, wherePicked, draft: prompt, draftImages }, project);
+  }, [provider, where, repoId, worktree, wtFromPrompt, devServer, path, perProvider, wherePicked, prompt, draftImagesKey]);
   // Typing `new` is the same as ticking the box again.
   useEffect(() => {
     if (!worktree && wt.kind === "new") {
@@ -417,6 +410,8 @@ export function NewSession({
     if (!prompt.trim()) setWherePicked(false);
   }, [prompt]);
 
+  // A dev server runs in a repo, where its deps can be linked from.
+  const withDev = devServer && where === "repo";
   const noEligible = !manual && placement?.mode === "none";
   const whereOk = where === "repo" ? !!repoId : path.trim().length > 0;
 
@@ -449,10 +444,15 @@ export function NewSession({
     if (!canSubmit) return;
     setBusy(true);
     setError(null);
+    // Opened now, while the click still counts as one: a tab opened after the
+    // awaits below is a popup the browser blocks. It goes to the dev server's
+    // waiting page once the session has an id.
+    const devTab = withDev && mode === "now" ? window.open("about:blank", "_blank") : null;
     let text: string;
     try {
       text = (await images.resolve(prompt)).trim();
     } catch (e) {
+      devTab?.close();
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
       return;
@@ -461,11 +461,10 @@ export function NewSession({
       provider,
       ...(where === "path"
         ? { cwd: path.trim() }
-        : worktree || wt.kind === "new"
+        : worktree || wt.kind === "new" || wt.kind === "main"
           ? { repoId, worktree: true }
-          : wt.kind === "main"
-            ? { repoId, worktree: false }
-            : { repoId, branch: wt.branch, ...(wt.kind === "pr" ? { pr: wt.number } : {}) }),
+          : { repoId, branch: wt.branch, ...(wt.kind === "pr" ? { pr: wt.number } : {}) }),
+      ...(withDev ? { devServer: true } : {}),
       ...(text ? { prompt: text } : {}),
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
@@ -475,16 +474,18 @@ export function NewSession({
     try {
       if (mode === "schedule") {
         const sc = await api.createSchedule({ when, spec: input });
-        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider }, project);
+        savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, perProvider }, project);
         onScheduled(sc);
         return;
       }
       const r = await api.createSession(input);
+      if (devTab) devTab.location.href = `/api/sessions/${encodeURIComponent(r.session.id)}/dev/open`;
       noteStarted(r.session);
       if (where === "path") noteFolderChoice(r.session.cwd ?? path.trim());
-      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, path, perProvider }, project);
+      savePrefs({ provider, where, repoId, worktree: worktree || wtFromPrompt, devServer, path, perProvider }, project);
       onCreated(r.session.id);
     } catch (e) {
+      devTab?.close();
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
@@ -535,6 +536,7 @@ export function NewSession({
           {where === "repo" && repo ? (
             <WorktreeField on={worktree} onToggle={setWorktree} text={wtText} onText={setWtText} prs={repoPrs} hint={hint} fromPrompt={wtFromPrompt} note={wtNote} />
           ) : null}
+          {where === "repo" && repo ? <DevServerToggle on={devServer} onChange={setDevServer} /> : null}
           <StartButton mode={mode} onMode={setMode} busy={busy} disabled={!canSubmit} why={whyNot} />
         </div>
 
@@ -674,6 +676,24 @@ function ScopePicker({ org, value, onChange }: { org: string; value: Scope; onCh
   );
 }
 
+/** Start the repo's dev server with the session, and open it in a new tab. */
+function DevServerToggle({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      className="ns-pill ns-toggle"
+      title="Start the dev server in the session's worktree and open it in a new tab. The worktree uses the main checkout's node_modules through symlinks, so it needs no install. Set the command in Settings, else the package.json dev script runs."
+      onClick={() => onChange(!on)}
+    >
+      <Icon.monitor size={13} />
+      <span className="ns-pill-text">Dev server</span>
+      <span className="ns-switch" aria-hidden="true" />
+    </button>
+  );
+}
+
 /** Start, with a ▾ beside it for Schedule. */
 function StartButton({
   mode,
@@ -742,7 +762,7 @@ function worktreeHint(wt: ReturnType<typeof parseWorktreeRef>, repoPath: string 
   switch (wt.kind) {
     case "main":
     case "new":
-      return `Runs in the main checkout${repoPath ? `, ${repoPath}` : ""}, on whatever branch it has out.`;
+      return `Runs in a new worktree of ${repoPath ?? "the repo"}, on a fresh branch.`;
     case "pr":
       // `67` on the way to `6730` is not a claim about PR #67.
       if (!wt.pr && prs.some((p) => String(p.number).startsWith(String(wt.number)))) return "Pick a PR from the list, or type its whole number.";

@@ -34,11 +34,12 @@ function copyPath(raw: string): string | null {
 
 /** Check a `RepoSetup` from a request, or say what is wrong with it. */
 export function parseSetup(v: unknown): RepoSetup {
-  const b = (v ?? {}) as { copy?: unknown; run?: unknown };
+  const b = (v ?? {}) as { copy?: unknown; run?: unknown; dev?: unknown };
   if (!Array.isArray(b.copy) || !b.copy.every((c) => typeof c === "string")) {
     throw new Error("setup.copy must be a list of paths");
   }
   if (typeof b.run !== "string") throw new Error("setup.run must be a string");
+  if (b.dev !== undefined && typeof b.dev !== "string") throw new Error("setup.dev must be a string");
   const copy: string[] = [];
   for (const raw of b.copy as string[]) {
     if (!raw.trim()) continue;
@@ -46,7 +47,7 @@ export function parseSetup(v: unknown): RepoSetup {
     if (!p) throw new Error(`"${raw}" is not a path inside the repo`);
     if (!copy.includes(p)) copy.push(p);
   }
-  return { copy, run: b.run.trim() };
+  return { copy, run: b.run.trim(), dev: typeof b.dev === "string" ? b.dev.trim() : "" };
 }
 
 /**
@@ -54,8 +55,11 @@ export function parseSetup(v: unknown): RepoSetup {
  * writes to, or null when there is no command. Never throws: a worktree that
  * could not be set up is still a worktree, and the agent can finish the job.
  */
-export function setUpWorktree(repo: Repo, worktree: string, sessionId: string): string | null {
-  const { copy, run } = repo.setup;
+export function setUpWorktree(repo: Repo, worktree: string, sessionId: string, opts: { skipRun?: boolean } = {}): string | null {
+  const { copy } = repo.setup;
+  // With the checkout's deps linked in, an install would write into the
+  // checkout's own node_modules: the dev server's worktree skips it.
+  const run = opts.skipRun ? "" : repo.setup.run;
   if (copy.length === 0 && !run) return null;
   const source = repoCheckoutPath(repo);
   const lines: string[] = [];

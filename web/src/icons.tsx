@@ -63,6 +63,8 @@ import { Plugs } from "@phosphor-icons/react/dist/csr/Plugs";
 import { PlugsConnected } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { PushPin } from "@phosphor-icons/react/dist/csr/PushPin";
 import { BookmarkSimple } from "@phosphor-icons/react/dist/csr/BookmarkSimple";
+import { Heartbeat } from "@phosphor-icons/react/dist/csr/Heartbeat";
+import { Pause } from "@phosphor-icons/react/dist/csr/Pause";
 
 export type IconProps = { size?: number; className?: string; weight?: IconWeight };
 export type IconComponent = (props: IconProps) => ReactElement;
@@ -150,4 +152,6 @@ export const Icon = {
   zoomIn: icon(MagnifyingGlassPlus),
   zoomOut: icon(MagnifyingGlassMinus),
   wrap: icon(TextAlignLeft),
+  heartbeat: icon(Heartbeat),
+  pause: icon(Pause),
 };

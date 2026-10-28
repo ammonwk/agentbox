@@ -129,7 +129,7 @@ export function SessionView({
   const list = useListState();
   const scope = useScope();
   const { repos } = useProjectData();
-  const { filter, sort, view, kids, quiet, reveal, toggleKids } = list;
+  const { filter, sort, view, kids, quiet, reveal, toggleKids, ranks } = list;
   // Moves a session to Inactive once its last activity is 3 hours old, with no new state frame.
   const now = useNow(60_000);
   const closing = useClosing().pending;
@@ -166,12 +166,13 @@ export function SessionView({
         shown,
         { open: (x, auto) => shownBy(kids, x, auto), quiet: (x, auto) => shownBy(quiet, x, auto), keep, now },
         sort,
+        ranks,
       ),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
       // What a folded row adds up: the rows before folding hid them.
       listed: shown,
     };
-  }, [visible.sessions, keep, filter, sort, view, split, now, kids, quiet, closing]);
+  }, [visible.sessions, keep, filter, sort, ranks, view, split, now, kids, quiet, closing]);
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
 
   // Coming back to the list on a computer reopens the session you were last
@@ -342,7 +343,7 @@ export function SessionView({
   return (
     <div className="sv" data-rail={!showRail ? "off" : showMain ? "on" : "full"} style={{ "--rail-w": `${railW}px` } as CSSProperties}>
       {showRail && showMain ? <RailResizer width={railW} onWidth={setRailW} /> : null}
-      {showRail ? <Rail sections={sections} listed={listed} counts={counts} state={state} visibleSessions={visible.sessions} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} /> : null}
+      {showRail ? <Rail sections={sections} listed={listed} counts={counts} state={state} visibleSessions={visible.sessions} current={id} list={list} onOpenFirst={() => ordered[0] && onOpen(ordered[0].id)} onClose={close} scheduled={scheduled} onCancelSchedule={cancelSchedule} onNew={onNew} /> : null}
       {!showMain ? null : session ? (
         <Detail key={session.id} session={session} state={state} tab={tab} onTab={onTab} onClose={close} />
       ) : sched ? (

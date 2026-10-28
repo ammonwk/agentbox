@@ -60,6 +60,7 @@ import {
 } from "./db";
 import { branchOnDisk, createWorktree, detachedWorktree, repoRootOf, worktreeForBranch } from "./git";
 import { setUpWorktree } from "./setup";
+import { startDevServer, stopDevServer } from "./devserver";
 import { ensureCheckout } from "./worktrees";
 import { describe as describeWait, TELL_FOR_MS } from "./waits";
 import { prReleaseLine, prReleaseTold, unfinishedClaims } from "./prclaims";
@@ -68,6 +69,7 @@ import { withGlobalMcp, cleanMcpLaunch } from "./mcp-reach";
 import {
   LIMIT_DIALOG,
   transcriptFile,
+  type BackgroundTask,
   type Command,
   type LiveProcess,
   type ModelOutcome,
@@ -166,6 +168,7 @@ import type {
   TimelineEvent,
   TimelinePage,
   UsageWindow,
+  Repo,
 } from "./types";
 
 const DAY = 86_400_000;
@@ -313,6 +316,9 @@ export interface SpawnRequest {
   branch?: string;
   /** The PR `branch` belongs to, for fetching it when origin has no such branch. */
   pr?: number;
+  /** Start the repo's dev server in the session's directory, with the
+   *  checkout's deps linked in (src/core/devserver.ts). */
+  devServer?: boolean;
   /** Run at this ref of the repo (a branch, tag or commit) as origin has it
    *  now, in a new worktree with a detached HEAD (`detachedWorktree`). Wins
    *  over `branch` and `worktree`. */
@@ -337,6 +343,15 @@ export interface SpawnRequest {
 }
 
 export class Fleet extends EventEmitter {
+  /** Machine cleanup holds all activity except its one helper session. */
+  activityAllowed: (id?: string) => boolean = () => true;
+  private requireActivity(id?: string): void {
+    if (!this.activityAllowed(id)) throw new FleetError(409, "Sessions are paused for machine cleanup. Resume them from the system bar first.");
+  }
+  async settleActivity(): Promise<void> {
+    await Promise.allSettled([...this.busy.values()]);
+    await this.tick();
+  }
   private readonly adapters: Map<ProviderId, ProviderAdapter>;
   private readonly now: () => number;
 
@@ -727,9 +742,9 @@ export class Fleet extends EventEmitter {
     this.reapParked(now);
     this.rebuildViews(since, now);
     lap("views");
-    await this.parkIdle(now, settings.parkIdleMin);
+    if (this.activityAllowed()) await this.parkIdle(now, settings.parkIdleMin);
     // What acts on a session's transcript waits for every one to be read.
-    if (this.caughtUp) {
+    if (this.caughtUp && this.activityAllowed()) {
       this.continueStalled(now);
       this.nudgeErrored(now);
       this.keepWarm(now, settings.parkIdleMin);
@@ -737,13 +752,14 @@ export class Fleet extends EventEmitter {
     lap("park");
     await this.refreshWork(now);
     lap("work");
-    await this.watchStarts(now);
-    if (this.caughtUp) this.watchChildren(now);
+    if (this.activityAllowed()) await this.watchStarts(now);
+    if (this.caughtUp && this.activityAllowed()) this.watchChildren(now);
     lap("starts");
-    this.checkCrash(now);
+    if (this.activityAllowed()) this.checkCrash(now);
     // Until then the snapshot recovery would start from stays the last one
-    // written from transcripts read through.
-    if (this.caughtUp) this.recordLive(now);
+    // written from transcripts read through. A cleanup pause keeps the one
+    // from before it, so a crash while paused still recovers those sessions.
+    if (this.caughtUp && this.activityAllowed()) this.recordLive(now);
     for (const b of this.btwHistory.read(accountsOf("claude").map((a) => a.home))) this.watchTerminalBtw(b);
     if (now - this.readersSavedAt >= READER_SAVE_MS) this.saveReaders();
     lap("rest");
@@ -1658,7 +1674,7 @@ export class Fleet extends EventEmitter {
           updateSessionRecord(v.id, { parkedAt: now, parkedMates: check.mates.length ? check.mates : null, parkedWhy: null });
           // The board says so now, not a tick from now: a message sent in
           // between must resume it, not type into a pane that is gone.
-          this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null, background: false });
+          this.views.set(v.id, { ...v, status: v.status === "closed" ? "closed" : "waiting", host: "none", pid: null, tmux: null, parkedAt: now, parkHold: null, background: false, backgroundWork: null });
           parked = true;
           const team = check.mates.length ? `, with teammates ${check.mates.join(", ")}` : "";
           console.log(`agentbox: parked ${v.id} (${v.title}) after ${minutes(now - v.lastActivityAt)} idle${team}`);
@@ -1727,6 +1743,7 @@ export class Fleet extends EventEmitter {
     // Told first (`keepWarm`), parked only if it goes quiet again. One
     // already nudged holds nothing: a nudge that never landed must not keep
     // the session up for good.
+    if (v.backgroundWork) return `${v.backgroundWork} is running`;
     const stranded = v.limitHit ? [] : this.strandedOf(v);
     if (stranded.length > 0 && this.strandedSeen.get(v.id) !== stranded.at(-1)!.at) {
       return `${stranded.length} finished background task${stranded.length === 1 ? "" : "s"} never woke it; it is told first`;
@@ -2329,6 +2346,7 @@ export class Fleet extends EventEmitter {
 
     let status: SessionStatus;
     let background = false;
+    let tasks: BackgroundTask[] = [];
     // Parked is still your move: the fleet stopped the process, not you, and
     // the next message resumes it.
     if (host === "none") status = rec.parkedAt ? "waiting" : "stopped";
@@ -2344,6 +2362,14 @@ export class Fleet extends EventEmitter {
       // Busy with its own turn over: the CLI is waiting on what it left going
       // (teammates, background agents, shells), not thinking.
       background = status === "running" && !!busy && host !== "subagent" && !!f && !f.turnOpen;
+      // A workflow or background agent it launched is still going: Claude
+      // calls the session idle meanwhile, but it is working, and stopping
+      // the process (adopting it, parking it) would kill that work.
+      tasks = this.liveTasks(f, pid, tracked?.ref, now);
+      if (tasks.length > 0 && status === "waiting") {
+        status = "running";
+        background = true;
+      }
       // Claude says so itself while a permission dialog is up, which is the
       // only way to know it for a session in some other terminal. Its /btw
       // panel is a dialog to Claude too, but a prompt to no one: while it
@@ -2513,8 +2539,25 @@ export class Fleet extends EventEmitter {
       parkedAt: host === "none" ? (rec.parkedAt ?? null) : null,
       parkHold: host === "tmux" ? (this.parkHolds.get(rec.id) ?? null) : null,
       background: background && status === "running",
+      backgroundWork: tasks.length > 0 ? backgroundWorkOf(tasks) : null,
       waits: this.waitsOf.get(rec.id) ?? [],
     };
+  }
+
+  /**
+   * The background work (TranscriptFacts.backgroundTasks) still running in a
+   * session's live process. A task launched before the process started died
+   * with the one before. One stopped from Claude's own task panel leaves no
+   * mark in the transcript, so after SUBAGENT_QUIET_MS a task is believed
+   * only while its subagents are still writing.
+   */
+  private liveTasks(f: Partial<TranscriptFacts> | null, pid: number | null, ref: TranscriptRef | undefined, now: number): BackgroundTask[] {
+    if (!pid || !f?.backgroundTasks?.length) return [];
+    const since = startedAtOf(pid);
+    if (since === null) return [];
+    const mine = f.backgroundTasks.filter((t) => t.since >= since);
+    if (mine.length === 0 || mine.some((t) => now - t.since < SUBAGENT_QUIET_MS)) return mine;
+    return ref && this.subagentsWorking(ref, now) ? mine : [];
   }
 
   /**
@@ -2948,6 +2991,7 @@ export class Fleet extends EventEmitter {
   }
 
   async spawn(req: SpawnRequest): Promise<{ session: Session; placement: Placement }> {
+    this.requireActivity(req.id);
     const adapter = this.adapter(req.provider);
     if (req.readOnly && !adapter.readOnly) throw new FleetError(400, `${adapter.label} sessions cannot be started read-only`);
     const settings = getSettings();
@@ -2970,6 +3014,7 @@ export class Fleet extends EventEmitter {
     const id = req.id ?? newSessionId();
     let cwd = req.cwd ? expandHome(req.cwd) : "";
     let worktree: string | null = null;
+    let devRepo: Repo | null = null;
     if (req.repoId) {
       const repo = getRepoById(req.repoId);
       if (!repo) throw new FleetError(404, `no repo ${req.repoId}`);
@@ -2995,7 +3040,8 @@ export class Fleet extends EventEmitter {
       }
       // Only a checkout cut just now: an existing one was set up by whoever
       // made it. A read-only look at a ref needs no `.env` or install.
-      if (worktree && !(req.ref && req.readOnly)) setUpWorktree(repo, worktree, id);
+      if (worktree && !(req.ref && req.readOnly)) setUpWorktree(repo, worktree, id, { skipRun: req.devServer });
+      if (req.devServer) devRepo = repo;
     }
     if (!cwd) throw new FleetError(400, "say where the session should run: a repo or a directory");
     try {
@@ -3038,6 +3084,9 @@ export class Fleet extends EventEmitter {
       parent: parent ?? null,
       parentByHand: !!req.parent,
     });
+    // Alongside the agent, as the setup command runs: the tab New session
+    // opened waits for it. After the record, so closing the session stops it.
+    if (devRepo) void startDevServer(devRepo, cwd, id);
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     // Carried on every resume, as an adopted session's own flags are.
     if (req.readOnly) updateSessionRecord(id, { launch: { args: [...adapter.readOnly!], env: {} } });
@@ -3108,7 +3157,7 @@ export class Fleet extends EventEmitter {
    */
   private serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
     this.touched.set(id, this.now());
-    const run = (this.busy.get(id) ?? Promise.resolve()).then(fn);
+    const run = (this.busy.get(id) ?? Promise.resolve()).then(() => { this.requireActivity(id); return fn(); });
     const tail = run.then(
       () => {},
       () => {},
@@ -3136,6 +3185,7 @@ export class Fleet extends EventEmitter {
   }
 
   private async resumeNow(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
+    this.requireActivity(id);
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
@@ -3302,6 +3352,7 @@ export class Fleet extends EventEmitter {
    * and so is a warm session that is not at a limit (`force` moves it anyway).
    */
   async moveAndContinue(id: string, opts: { accountId?: string | null; prompt?: string; must?: boolean; force?: boolean }): Promise<Session> {
+    this.requireActivity(id);
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
@@ -3422,6 +3473,7 @@ export class Fleet extends EventEmitter {
   }
 
   private startTmux(rec: SessionRecord, account: Account, cwd: string, prompt?: string, prepared?: PreparedLaunch): void {
+    this.requireActivity(rec.id);
     const adapter = this.adapter(rec.provider);
     const { opts, cmd, typed, inherited, line } = prepared ?? this.resumeLaunch(rec, account, cwd, prompt);
     try {
@@ -3493,6 +3545,7 @@ export class Fleet extends EventEmitter {
    * work is how a session gets destroyed.
    */
   async adopt(id: string): Promise<Session> {
+    this.requireActivity(id);
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
@@ -3503,6 +3556,9 @@ export class Fleet extends EventEmitter {
     if (!account) throw new FleetError(409, "this session's account is not set up in agentbox");
     const cwd = this.resumeDir(rec);
     if (!rec.transcriptPath || !existsSync(transcriptFile(rec.transcriptPath))) throw new FleetError(409, "its transcript is missing, so a resume would start empty");
+    // Adopting stops the process, and a workflow or background agent runs
+    // inside it: that work would be lost, not moved.
+    if (view.backgroundWork) throw new FleetError(409, `${view.backgroundWork} is still running in that process, and adopting stops it; adopt it once that finishes`);
 
     const pid = view.pid;
     // Read how it was launched before it is gone: the resume keeps its flags
@@ -3539,6 +3595,7 @@ export class Fleet extends EventEmitter {
    *  does one that was stopped or closed, which otherwise is an error. */
   send(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
     return this.serial(id, async () => {
+      this.requireActivity(id);
       if (!(await this.wakeElsewhere(id, text, attempt))) await this.sendNow(id, text, attempt, resume);
     });
   }
@@ -3591,6 +3648,7 @@ export class Fleet extends EventEmitter {
   /** Type a message into a session's pane, the way its TUI takes one as typed.
    *  One its TUI did not take is a refusal the sender must hear, never a send. */
   private async typeInto(id: string, provider: ProviderId, pane: string, text: string): Promise<void> {
+    this.requireActivity(id);
     const adapter = this.adapter(provider);
     // What the session must read before it reads this: the PRs it lost, once
     // each. It is said here and not again: the next thing delivered to it
@@ -3613,6 +3671,7 @@ export class Fleet extends EventEmitter {
   }
 
   private async sendNow(id: string, text: string, attempt?: () => void, resume = false): Promise<void> {
+    this.requireActivity(id);
     const s = this.get(id);
     if (s.host === "none") {
       const rec = getSessionRecord(id);
@@ -3703,6 +3762,7 @@ export class Fleet extends EventEmitter {
   }
 
   keys(id: string, keys: string[]): void {
+    this.requireActivity(id);
     this.touched.set(id, this.now());
     const s = this.get(id);
     if (s.host !== "tmux" || !s.tmux) throw new FleetError(409, "not running in agentbox");
@@ -4071,6 +4131,7 @@ export class Fleet extends EventEmitter {
   }
 
   async stopSession(id: string): Promise<void> {
+    this.requireActivity(id);
     const s = this.get(id);
     // Killing it under its MCP server would look to its caller like a crash.
     if (s.host === "subagent") throw this.callersAgent(s);
@@ -4112,6 +4173,7 @@ export class Fleet extends EventEmitter {
    * one gives up is said in `dropped`.
    */
   async close(id: string, closed: boolean, alone = false): Promise<Closed> {
+    this.requireActivity(id);
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     if (!closed) {
@@ -4135,6 +4197,7 @@ export class Fleet extends EventEmitter {
       }
       if (s.host === "subagent") continue;
       this.touched.set(sid, this.now());
+      stopDevServer(sid);
       if (s.host === "tmux" && s.tmux) this.killTmux(s.tmux);
       else if (s.host === "external" && s.pid) {
         try {
@@ -4628,4 +4691,13 @@ function expandHome(p: string): string {
   if (p === "~") return home;
   if (p.startsWith("~/")) return `${home}${p.slice(1)}`;
   return p;
+}
+
+/** Background work in words, for the board and for refusals: `workflow
+ *  "babysit-fleet"`, `background agent "Review the diff"`, `2 background tasks`. */
+function backgroundWorkOf(tasks: readonly BackgroundTask[]): string {
+  if (tasks.length !== 1) return `${tasks.length} background tasks`;
+  const t = tasks[0]!;
+  const kind = t.kind === "local_workflow" ? "workflow" : t.kind === "local_agent" ? "background agent" : "background task";
+  return `${kind} "${t.name}"`;
 }

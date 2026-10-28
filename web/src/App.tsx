@@ -23,6 +23,7 @@ import { Context } from "./views/Context";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
 import { Review } from "./views/Review";
+import { Dictation } from "./Dictation";
 import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { ProjectTabs } from "./ProjectTabs";
@@ -180,6 +181,7 @@ export function App() {
   return (
     <ProjectContext.Provider value={{ repos: state?.repos ?? [] }}>
     <div className="app" data-page={route.page}>
+      <Dictation />
       <a className="skip" href="#content">
         Skip to content
       </a>
@@ -358,7 +360,7 @@ export function App() {
         </SysbarSlot.Provider>
 
         <ErrorBoundary label="The system bar">
-          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} slotRef={setSysbarSlot} />
+          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} cleanup={state?.cleanup ?? null} focusAccount={focusAccount} slotRef={setSysbarSlot} />
         </ErrorBoundary>
       </div>
 
@@ -455,7 +457,7 @@ function UpdateReady() {
       disabled={restarting}
       title={behind
         ? `${n} newer commit${n === 1 ? "" : "s"} in the checkout than the server runs. Click to restart the server on ${n === 1 ? "it" : "them"}; sessions keep running.`
-        : "agentbox was rebuilt. Reload to run the new version (it reloads by itself next time you leave the page)"}
+        : "agentbox was rebuilt. Reload to run the new version (it reloads by itself once the page is idle)"}
       onClick={() => {
         if (!behind) return location.reload();
         setRestarting(true);

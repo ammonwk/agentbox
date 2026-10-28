@@ -10,8 +10,9 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { api, uploadUrl } from "./api";
+import { api, screenshotUrl, uploadUrl, type RecentScreenshot } from "./api";
 import { Icon, Spinner } from "./components";
+import { useDismiss, useFloating } from "./views/newsession/popover";
 
 export interface Attachment {
   n: number;
@@ -252,20 +253,109 @@ export function AttachFrame({ a, className, children, footer }: { a: Attachments
   );
 }
 
-/** A paperclip that opens the file picker. */
+/** A paperclip that opens the file picker. Hovering it, or reaching it by
+ *  keyboard, shows the newest screenshots on this machine: one click attaches
+ *  one, through the same upload as a pasted image. */
 export function AttachButton({ a, className }: { a: Attachments; className?: string }) {
   const input = useRef<HTMLInputElement>(null);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const popup = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [recent, setRecent] = useState<RecentScreenshot[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  // A short grace period, so the pointer can cross the gap to the popup.
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const enter = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    setOpen(true);
+  };
+  const leave = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 180);
+  };
+  useEffect(() => () => void (closeTimer.current && clearTimeout(closeTimer.current)), []);
+  useDismiss(open, () => setOpen(false), [anchor, popup]);
+  const style = useFloating(anchor, open, 220, Math.min(360, window.innerWidth - 16));
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setRecent(null);
+    setError(null);
+    api
+      .screenshots()
+      .then((rows) => live && setRecent(rows))
+      .catch(() => live && setError("Screenshot previews unavailable. Click the paperclip to choose a file."));
+    return () => {
+      live = false;
+    };
+  }, [open]);
+
+  async function pick(s: RecentScreenshot) {
+    setPicking(true);
+    setError(null);
+    try {
+      const res = await fetch(screenshotUrl(s.id));
+      if (!res.ok) throw new Error("Screenshot changed or expired. Reopen the picker to refresh it.");
+      const blob = await res.blob();
+      a.add([new File([blob], s.name, { type: blob.type })]);
+      setOpen(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPicking(false);
+    }
+  }
+
   return (
     <>
       <button
+        ref={anchor}
         type="button"
         className={`att-pick${className ? ` ${className}` : ""}`}
-        title="Attach images — or paste or drop them into the box"
+        title="Attach images — hover for recent screenshots, or paste or drop them into the box"
         aria-label="Attach images"
-        onClick={() => input.current?.click()}
+        aria-expanded={open}
+        onMouseEnter={enter}
+        onMouseLeave={leave}
+        // Keyboard focus only: focus coming back from the file picker must not open it.
+        onFocus={(e) => e.currentTarget.matches(":focus-visible") && enter()}
+        onKeyDown={(e) => {
+          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+          e.preventDefault();
+          popup.current?.querySelector<HTMLButtonElement>("button")?.focus();
+        }}
+        onClick={() => {
+          setOpen(false);
+          input.current?.click();
+        }}
       >
         <Icon.paperclip size={17} />
       </button>
+      {open
+        ? createPortal(
+            <div ref={popup} className="att-recent" style={style} role="group" aria-label="Recent screenshots" onMouseEnter={enter} onMouseLeave={leave}>
+              <strong>Recent screenshots</strong>
+              {error ? (
+                <p role="status">{error}</p>
+              ) : recent === null ? (
+                <p>Loading screenshots…</p>
+              ) : recent.length === 0 ? (
+                <p>No recent screenshots. Click the paperclip to choose a file.</p>
+              ) : (
+                <div className="att-recent-grid">
+                  {recent.map((s) => (
+                    <button key={s.id} type="button" disabled={picking} onClick={() => void pick(s)} title={s.name} aria-label={`Attach ${s.name}`}>
+                      <img src={screenshotUrl(s.id)} alt="" />
+                      <span>{s.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>,
+            document.body,
+          )
+        : null}
       <input
         ref={input}
         type="file"

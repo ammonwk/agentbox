@@ -31,6 +31,7 @@ import {
   type SortKey,
 } from "../../lib/board";
 import { baseName, fmtBytes } from "../../lib/format";
+import { halfOf, placeIn, ranksOf, readOrder, saveOrder, stepIn } from "../../lib/manualorder";
 import { openingTab, usePickedTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
 import { hrefOf } from "../../route";
@@ -45,8 +46,10 @@ import { endedDone, turnStatus } from "../../../../src/core/turnstatus";
 // ------------------------------------------------------------------- state
 
 const SORT_KEY = "agentbox.sort";
-const SORTS: readonly SortKey[] = ["mine", "all", "status", "repo"];
+const SORTS: readonly SortKey[] = ["mine", "all", "status", "repo", "custom"];
 const VIEW_KEY = "agentbox.railView";
+/** Your order, by project, as lib/manualorder.ts keeps it. */
+const ORDER_KEY = "agentbox.railOrder";
 
 function readSort(): SortKey {
   try {
@@ -131,6 +134,10 @@ export function useListState() {
   const [view, setViewState] = useState<RailView>(readView);
   const [kids, setKids] = useState(kidsByHand);
   const [quiet, setQuiet] = useState(quietByHand);
+  const orderScope = project ?? "all";
+  const [order, setOrderState] = useState(() => ({ scope: orderScope, ids: readOrder(ORDER_KEY, orderScope) }));
+  const orderIds = useMemo(() => (order.scope === orderScope ? order.ids : readOrder(ORDER_KEY, orderScope)), [order, orderScope]);
+  const ranks = useMemo(() => ranksOf(orderIds), [orderIds]);
   const toggleKids = useCallback((id: string, shown: boolean) => {
     setKids((kidsByHand = flip(kidsByHand, id, shown)));
     saveFolds();
@@ -171,6 +178,15 @@ export function useListState() {
       }
       setViewState(v);
     },
+    /** Each session's place in your order, used by the custom sort. */
+    ranks,
+    orderIds,
+    /** Keep a new order; `known` are the sessions there are now, and only theirs are kept. */
+    setOrder: (next: readonly string[], known: ReadonlySet<string>) => {
+      const kept = next.filter((id) => known.has(id));
+      saveOrder(ORDER_KEY, orderScope, kept);
+      setOrderState({ scope: orderScope, ids: kept });
+    },
     kids,
     quiet,
     toggleKids,
@@ -195,6 +211,7 @@ export function Rail({
   onClose,
   scheduled,
   onCancelSchedule,
+  onNew,
 }: {
   /** The sections of the tab `list.view` names, or of every row unsplit. */
   sections: Section<Nested<SessionRow>>[];
@@ -212,6 +229,8 @@ export function Rail({
   /** One-time scheduled sessions, soonest first. */
   scheduled: Schedule[];
   onCancelSchedule: (sc: Schedule) => void;
+  /** Open New session (also `n`, anywhere but a text field). */
+  onNew: () => void;
 }) {
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const usual = useMemo(() => usualProvider(rows), [rows]);
@@ -249,9 +268,57 @@ export function Rail({
   //
   // A pinned session dragged among the pinned is put in a new place there
   // instead: before the row it is dropped on, or after it, by which half.
+  // In your order, a row dropped on the top or bottom edge of one beside it
+  // (at the top level, or under the same session) goes before or after it.
   const [drag, setDrag] = useState<{ s: SessionRow; banned: ReadonlySet<string>; pin: boolean } | null>(null);
   const [over, setOver] = useState<string | null>(null);
-  const [pos, setPos] = useState<DropPos | null>(null);
+  const [pos, setPos] = useState<DropAt | null>(null);
+  // The rows beside each other, as drawn: the pinned at the top level, and in
+  // each section the rows under one session, or at its top level.
+  const { groupOf, groups } = useMemo(() => {
+    const groupOf = new Map<string, string>();
+    const groups = new Map<string, string[]>();
+    for (const sec of sections) {
+      const up: string[] = [];
+      for (const r of sec.rows) {
+        up.length = r.depth;
+        const g = sec.key === "pinned" && r.depth === 0 ? "pinned" : `${sec.key}\u0000${up[r.depth - 1] ?? ""}`;
+        groupOf.set(r.id, g);
+        const sib = groups.get(g);
+        if (sib) sib.push(r.id);
+        else groups.set(g, [r.id]);
+        up.push(r.id);
+      }
+    }
+    return { groupOf, groups };
+  }, [sections]);
+  const reorder = (next: readonly string[]) => list.setOrder(next, new Set(state.sessions.map((s) => s.id)));
+  /** The rows beside it that a step moves it among: the pinned in any sort,
+   *  the rest only in your order. */
+  const stepGroup = (id: string): string[] | null => {
+    const g = groupOf.get(id);
+    return g && (g === "pinned" || sort === "custom") ? groups.get(g)! : null;
+  };
+  const canStep = (id: string, step: -1 | 1): boolean => {
+    const siblings = stepGroup(id);
+    return !!siblings && siblings[siblings.indexOf(id) + step] !== undefined;
+  };
+  /** Move a row one place up or down among those beside it. Whether it moved. */
+  const stepRow = (id: string, step: -1 | 1): boolean => {
+    const siblings = stepGroup(id);
+    if (!siblings || !canStep(id, step)) return false;
+    if (groupOf.get(id) === "pinned") {
+      const s = rows.find((r) => r.id === id);
+      const t = rows.find((r) => r.id === siblings[siblings.indexOf(id) + step]);
+      if (!s || !t) return false;
+      movePin(s, t, step === -1 ? "before" : "after", state.sessions);
+    } else {
+      const next = stepIn(list.orderIds, siblings, id, step);
+      if (!next) return false;
+      reorder(next);
+    }
+    return true;
+  };
   const endDrag = () => {
     setDrag(null);
     setOver(null);
@@ -263,22 +330,33 @@ export function Rail({
     if (p && !p.open) list.toggleKids(p.id, false);
     api.patchSession(s.id, { parent }).catch((e: Error) => reportFailure(s.id, titleOf(s), "move", e.message));
   };
-  const toRoot = !drag?.pin && drag?.s.parent != null;
+  const toRoot = !drag?.pin && drag?.s.host !== "subagent" && drag?.s.parent != null;
   const dropping: DropProps = {
     start: (s, pin) => setDrag({ s, banned: new Set([s.id, ...descendantsOf(s, state.sessions).map((c) => c.id)]), pin }),
     end: endDrag,
-    can: (s, pin) =>
-      !!drag && (drag.pin ? pin && s.id !== drag.s.id : !drag.banned.has(s.id) && drag.s.parent !== s.id),
-    reordering: !!drag?.pin,
+    where: (s, pin, e) => {
+      if (!drag) return null;
+      if (drag.pin) return pin && s.id !== drag.s.id ? halfOf(e) : null;
+      const under = drag.s.host !== "subagent" && !drag.banned.has(s.id) && drag.s.parent !== s.id;
+      const g = groupOf.get(s.id);
+      const beside = sort === "custom" && s.id !== drag.s.id && g !== undefined && g !== "pinned" && g === groupOf.get(drag.s.id);
+      if (!beside) return under ? "under" : null;
+      if (!under) return halfOf(e);
+      // The middle of the row is for under it.
+      const r = e.currentTarget.getBoundingClientRect();
+      const y = (e.clientY - r.top) / r.height;
+      return y < 0.3 ? "before" : y > 0.7 ? "after" : "under";
+    },
     over: (id, p = null) => {
       setOver(id);
       setPos(p);
     },
-    drop: (s, p) => {
+    drop: (s, at) => {
       if (!drag) return;
-      if (!drag.pin) return move(drag.s, s.id);
+      if (at === "under") return move(drag.s, s.id);
       endDrag();
-      movePin(drag.s, s, p, state.sessions);
+      if (drag.pin) movePin(drag.s, s, at, state.sessions);
+      else reorder(placeIn(list.orderIds, groups.get(groupOf.get(drag.s.id)!) ?? [], drag.s.id, s.id, at));
     },
   };
 
@@ -299,10 +377,7 @@ export function Rail({
       dnd: {
         start: (s, pin) => latest.current.dropping.start(s, pin),
         end: () => latest.current.dropping.end(),
-        can: (s, pin) => latest.current.dropping.can(s, pin),
-        get reordering() {
-          return latest.current.dropping.reordering;
-        },
+        where: (s, pin, e) => latest.current.dropping.where(s, pin, e),
         over: (id, p) => latest.current.dropping.over(id, p),
         drop: (s, p) => latest.current.dropping.drop(s, p),
       },
@@ -313,6 +388,18 @@ export function Rail({
   // Tree expansion stays local. At the root ← reaches application navigation;
   // → on an expanded parent or leaf opens the conversation.
   const onArrow = (e: KeyboardEvent<HTMLElement>) => {
+    // Alt+↑ and Alt+↓ move the focused row among those beside it, as a drag does.
+    const el = e.target as HTMLElement;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && el.classList.contains("rail-row") && el.dataset.id) {
+      const id = el.dataset.id;
+      if (!stepRow(id, e.key === "ArrowUp" ? -1 : 1)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // The row is drawn again in its new place; keep the focus on it.
+      const nav = e.currentTarget;
+      requestAnimationFrame(() => nav.querySelector<HTMLElement>(`.rail-row[data-id="${CSS.escape(id)}"]`)?.focus());
+      return;
+    }
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.nativeEvent.isComposing || !e.key.startsWith("Arrow")) return;
     const t = e.target as HTMLElement;
     const nav = e.currentTarget;
@@ -391,6 +478,14 @@ export function Rail({
         </label>
         <BookmarksMenu sessions={visibleSessions} current={current} shapes={shapes} />
         <SortMenu list={list} />
+        {/* Blurring on a mouse click (e.detail > 0) keeps the Modal from
+            handing focus back here on close; Enter keeps the restore. */}
+        <button type="button" className="rail-sort-btn rail-new" aria-label="New session" title="New session (n)" onClick={(e) => {
+          if (e.detail > 0) e.currentTarget.blur();
+          onNew();
+        }}>
+          <Icon.plus size={15} />
+        </button>
       </div>
       {split ? <RailTabs view={view} counts={counts} onChange={list.setView} /> : null}
 
@@ -456,7 +551,7 @@ export function Rail({
                   sort={sort}
                   api={rowApi}
                   pinned={sec.key === "pinned" && s.depth === 0}
-                  target={over === s.id ? (drag?.pin ? pos : "under") : null}
+                  target={over === s.id ? pos : null}
                 />
               </RowAndQuiet>
             ))}
@@ -469,9 +564,11 @@ export function Rail({
         <div className="rail-drophint" data-active={over === "root" || undefined} aria-hidden="true">
           {drag.pin
             ? "Drop on a pinned session to put it before or after that one"
-            : toRoot
-              ? "Drop on a session to put it under that one, or anywhere else for the top level"
-              : "Drop on a session to put it under that one"}
+            : sort === "custom"
+              ? drag.s.host === "subagent"
+                ? "Drop on a session beside it to put it before or after that one"
+                : `Drop on the top or bottom edge of a session beside it to put it before or after that one, or on the middle to put it under that one${toRoot ? ", or anywhere else for the top level" : ""}`
+              : `${toRoot ? "Drop on a session to put it under that one, or anywhere else for the top level" : "Drop on a session to put it under that one"}. Sort by Your order to reorder them`}
         </div>
       ) : null}
       {menu ? (
@@ -481,6 +578,8 @@ export function Rail({
           x={menu.x}
           y={menu.y}
           onDone={() => setMenu(null)}
+          canStep={(step) => canStep(menu.id, step)}
+          onStep={(step) => stepRow(menu.id, step)}
         />
       ) : null}
     </nav>
@@ -557,26 +656,20 @@ const QuietLine = memo(function QuietLine({ q, onToggle }: { q: Quiet; onToggle:
 });
 
 type DropPos = "before" | "after";
+type DropAt = DropPos | "under";
 
 /** What a row needs to be dragged, and dropped on. */
 interface DropProps {
   /** `pin`: it is a pinned row, dragged to a new place among the pinned. */
   start: (s: SessionRow, pin: boolean) => void;
   end: () => void;
-  /** Whether the row being dragged may go under `s`, or, reordering the
-   *  pinned, beside it; `pin` says `s` is a pinned row. */
-  can: (s: SessionRow, pin: boolean) => boolean;
-  /** The drag is one among the pinned: a drop goes before or after. */
-  reordering: boolean;
-  over: (id: string | null, pos?: DropPos | null) => void;
-  drop: (s: SessionRow, pos: DropPos) => void;
+  /** Where the row being dragged would go, dropped on `s` where the pointer
+   *  is: under it, or before or after it; null when it cannot. `pin` says `s`
+   *  is a pinned row. */
+  where: (s: SessionRow, pin: boolean, e: { clientY: number; currentTarget: Element }) => DropAt | null;
+  over: (id: string | null, pos?: DropAt | null) => void;
+  drop: (s: SessionRow, at: DropAt) => void;
 }
-
-/** Which half of the row the pointer is over. */
-const halfOf = (e: { clientY: number; currentTarget: Element }): DropPos => {
-  const r = e.currentTarget.getBoundingClientRect();
-  return e.clientY < r.top + r.height / 2 ? "before" : "after";
-};
 
 /** Drawn again only when its session, its place or its state in the list
  *  changes: the list holds hundreds of rows, and a frame changes a few. */
@@ -602,13 +695,14 @@ const Row = memo(function Row({
   /** A top-level row of the Pinned section: dragging it reorders the pinned. */
   pinned: boolean;
   /** A dragged row is over this one, and may go under it, or before or after it. */
-  target: "under" | DropPos | null;
+  target: DropAt | null;
 }) {
   usePickedTab(); // its link opens on the tab you last picked
   const said = snippetOf(s);
   // A repo's shape is tinted with the provider's colour, so only a row without one needs the badge.
   const shape = useRowShape(s);
-  const movable = pinned || s.host !== "subagent";
+  // A subagent stays under the session whose MCP runs it, but has a place in your order.
+  const movable = pinned || s.host !== "subagent" || sort === "custom";
   const { dnd } = api;
   return (
     <a
@@ -636,15 +730,17 @@ const Row = memo(function Row({
       onDragOver={(e) => {
         // A row is never the list's top-level target, even one it cannot go under.
         e.stopPropagation();
-        if (!dnd.can(s, pinned)) return dnd.over(null);
+        const at = dnd.where(s, pinned, e);
+        if (!at) return dnd.over(null);
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        dnd.over(s.id, dnd.reordering ? halfOf(e) : null);
+        dnd.over(s.id, at);
       }}
       onDrop={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (dnd.can(s, pinned)) dnd.drop(s, halfOf(e));
+        const at = dnd.where(s, pinned, e);
+        if (at) dnd.drop(s, at);
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -963,8 +1059,17 @@ function SortMenu({ list }: { list: ListState }) {
   );
 }
 
-/** A row's right-click menu: pin it, bookmark it. */
-function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: readonly SessionRow[]; x: number; y: number; onDone: () => void }) {
+/** A row's right-click menu: pin it, bookmark it, move it. */
+function RowMenu({ s, sessions, x, y, onDone, canStep, onStep }: {
+  s: SessionRow;
+  sessions: readonly SessionRow[];
+  x: number;
+  y: number;
+  onDone: () => void;
+  /** Whether it can move up (-1) or down (1) among the rows beside it: a touch screen's way to reorder. */
+  canStep: (step: -1 | 1) => boolean;
+  onStep: (step: -1 | 1) => void;
+}) {
   const wrap = useRef<HTMLDivElement>(null);
   useDismiss(true, onDone, [wrap]);
   // Kept on screen: a right-click near the foot or the edge opens it upward or leftward.
@@ -1031,6 +1136,12 @@ function RowMenu({ s, sessions, x, y, onDone }: { s: SessionRow; sessions: reado
         </span>
         {s.bookmarkedAt !== null ? "Remove bookmark" : "Bookmark"}
       </button>
+      {([-1, 1] as const).filter(canStep).map((step) => (
+        <button key={step} type="button" role="menuitem" title={step === -1 ? "Alt+↑" : "Alt+↓"} onClick={pick(() => onStep(step))}>
+          <span className="rail-menu-check">{step === -1 ? <Icon.chevronUp size={12} /> : <Icon.chevronDown size={12} />}</span>
+          {step === -1 ? "Move up" : "Move down"}
+        </button>
+      ))}
     </div>
   );
 }

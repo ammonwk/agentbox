@@ -12,6 +12,7 @@
  */
 
 import { mockMcp } from "./mockmcp";
+import type { CleanupState } from "../../src/core/cleanup";
 import type {
   AccountUsage,
   AccountView,
@@ -64,6 +65,8 @@ const H = 60 * M;
 const D = 24 * H;
 const T0 = Date.now();
 const HOME = "/home/dev";
+/** The system bar's machine cleanup pause (POST /api/cleanup). */
+let cleanupState: CleanupState | null = null;
 
 // ------------------------------------------------------------- settings
 
@@ -385,6 +388,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     parkedAt: null,
     parkHold: null,
     background: false,
+    backgroundWork: null,
     waits: [],
     ...p,
     lastPromptAt: p.lastPromptAt ?? p.lastActivityAt ?? T0 - 5 * M,
@@ -779,6 +783,7 @@ function hot(): HotState {
 
 function cold(): ColdState {
   return {
+    cleanup: cleanupState,
     accounts: accountViews(),
     logins: logins.slice(),
     repos: repos.slice(),
@@ -1435,6 +1440,24 @@ async function handle(method: string, path: string, b: unknown): Promise<unknown
   const url = new URL(path, "http://mock");
   const p = url.pathname.split("/").filter(Boolean).map(decodeURIComponent); // ["api", ...]
   const [, head, id, action] = p;
+
+  if (head === "cleanup") {
+    if (method === "GET") return cleanupState;
+    if (id === "resume") {
+      const helper = sessions.find(s => s.id === cleanupState?.sessionId);
+      if (helper) { helper.status = "stopped"; helper.host = "none"; helper.pid = null; }
+      for (const s of sessions) s.paused = false;
+      cleanupState = null;
+    } else if (!cleanupState) {
+      const live = sessions.filter(s => s.host !== "none");
+      for (const s of live) s.paused = true;
+      const helper = sess({ id: "cleanup-demo", provider: "claude", cwd: HOME, title: "Machine cleanup", status: "running", host: "tmux", firstPrompt: "Find and clean up wasted CPU and memory.", lastMessage: "Checking unused servers and containers. Your paused sessions are protected." });
+      sessions.unshift(helper);
+      cleanupState = { phase: "paused", sessionId: helper.id, startedAt: Date.now(), sessions: live.map(s => s.id), error: null };
+    }
+    pushHot(); pushCold();
+    return cleanupState;
+  }
 
   if (head === "mcp") return mockMcp(method, p.slice(2), b);
   if (head === "context") return mockContext(method, url, b);
