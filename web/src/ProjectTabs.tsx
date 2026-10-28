@@ -1,11 +1,14 @@
 /** The projects you keep open, as tabs above the page, with a dot on one that
  *  has something waiting on you. Picking one is navigation (route.ts
- *  `selectScope`), as the switcher's pick is: nothing running is touched. */
+ *  `selectScope`), as the switcher's pick is: nothing running is touched.
+ *  Next and previous project tab are keybinds with no key until you give
+ *  them one (Settings → Keybinds). */
 
 import { useEffect, useState } from "react";
 import type { AppState } from "../../src/core/types";
 import { Icon } from "./components";
 import { needsYou } from "./lib/board";
+import { useKeybinds } from "./lib/keybinds";
 import { scopedState, sessionProject } from "./lib/projects";
 import { selectScope } from "./route";
 
@@ -67,6 +70,12 @@ function attentionOf(state: AppState, project: string | null): string {
 
 export function ProjectTabs({ state, selected, onOpen, hint }: { state: AppState; selected: string | null; onOpen: () => void; hint?: string }) {
   const { tabs, close } = useProjectTabs(state, selected);
+  const all = [null, ...tabs.map((r) => r.id)];
+  const step = (delta: 1 | -1) => () => {
+    const at = all.indexOf(selected);
+    selectScope("project", all[(at + delta + all.length) % all.length] ?? null);
+  };
+  useKeybinds({ "project.next": step(1), "project.prev": step(-1) });
   return (
     <nav className="project-bar" aria-label="Projects">
       <div className="project-tabs" role="tablist" aria-label="Open projects">

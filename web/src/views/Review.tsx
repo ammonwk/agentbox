@@ -20,6 +20,7 @@ import type { AppState, Card } from "../../../src/core/types";
 import { describeAt } from "../../../src/core/schedule";
 import { api } from "../api";
 import { laterOf, stackOf } from "../lib/cardorder";
+import { useKeybinds, type Handler } from "../lib/keybinds";
 import { Button, Empty, Icon, Modal, RelativeTime } from "../components";
 import { hrefOf } from "../route";
 import { Markdown } from "./session/Markdown";
@@ -153,28 +154,25 @@ export function Review({ state }: { state: AppState }) {
   const top = tab === "stack" ? (stack.find((c) => c.id !== leaving?.id) ?? null) : null;
   const shownTop = stack[0] ?? null;
 
-  // The keys, while no sheet has the keyboard.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (answering || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
-      const el = e.target as HTMLElement | null;
-      if (!el?.closest(".review")) return;
-      if (e.key.startsWith("Arrow") && !e.shiftKey) return;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
-      const card = reading ?? (tab === "stack" ? shownTop : null);
-      if (e.key === "u") undo();
-      else if (!card || card.state === "answered" || card.state === "closed") return;
-      else if (e.key === "ArrowRight") setAnswering(card);
-      else if (e.key === "ArrowLeft") act(card, "later");
-      else if (e.key === "ArrowUp" && !reading) setReading(card);
-      else if (e.key === "ArrowDown" && !reading) approve(card);
-      else return;
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    addEventListener("keydown", onKey, true);
-    return () => removeEventListener("keydown", onKey, true);
-  }, [answering, reading, tab, shownTop, act, undo, approve]);
+  // The keys (lib/keybinds.ts), while no sheet has the keyboard: by default
+  // Shift and an arrow act on the card (the arrows alone move around the
+  // page), and u undoes.
+  const onCard = (does: (card: Card) => void, whenReading = true): Handler => (e) => {
+    if (answering || !(e.target as HTMLElement | null)?.closest?.(".review")) return false;
+    const card = reading ?? (tab === "stack" ? shownTop : null);
+    if (!card || card.state === "answered" || card.state === "closed" || (reading && !whenReading)) return false;
+    does(card);
+  };
+  useKeybinds({
+    "review.undo": (e) => {
+      if (answering || !(e.target as HTMLElement | null)?.closest?.(".review")) return false;
+      undo();
+    },
+    "review.answer": onCard(setAnswering),
+    "review.later": onCard((card) => act(card, "later")),
+    "review.read": onCard(setReading, false),
+    "review.approve": onCard(approve, false),
+  });
 
   return (
     <div className="review">

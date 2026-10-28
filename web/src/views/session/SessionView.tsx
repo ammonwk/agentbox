@@ -31,7 +31,8 @@ import { WorkStrip } from "./WorkStrip";
 import { LoadPanel } from "./LoadPanel";
 import { useAction } from "./useAction";
 import { useIsNarrow } from "./useIsNarrow";
-import { isInstalledApp, openingTab, useIsPhone } from "../../lib/phone";
+import { openingTab, useIsPhone } from "../../lib/phone";
+import { useKeybinds } from "../../lib/keybinds";
 import { useSysbarSlot } from "../../sysbarslot";
 import { prBaseFor } from "../../lib/prlinks";
 import { filterModels, modelName, rankModels, repoOfSession, skillsFor, type ModelChoice } from "../../lib/newsession";
@@ -58,9 +59,6 @@ const NONE: SessionRow[] = [];
 /** Pin and bookmark drawn filled while on. */
 const PinOn: IconComponent = (p) => <Icon.pin {...p} weight="fill" />;
 const BookmarkOn: IconComponent = (p) => <Icon.bookmark {...p} weight="fill" />;
-
-/** The digit keys that pick a tab, as KeyboardEvent.code. */
-const TAB_KEY = new RegExp(`^Digit[1-${SESSION_TABS.length}]$`);
 
 const TAB_LABEL: Record<SessionTab, string> = {
   terminal: "Terminal",
@@ -233,96 +231,72 @@ export function SessionView({
     }, (e: Error) => reportNote(`Could not list the closed sessions: ${e.message}`));
   };
 
-  // Alt+W closes the open session and Alt+Shift+T reopens the most recently
-  // closed one; in the installed app Ctrl does too, and Ctrl+Tab and
-  // Ctrl+Shift+Tab step through the sessions like a browser's tabs. Capture
-  // these before the terminal handles its own keys (so there Ctrl+W no longer
-  // deletes a word: Ctrl+Backspace still does). Shift+Tab in the terminal is
-  // taken here too: it steps back a tab as it does everywhere else, and never
-  // reaches the agent, where it would change the permission mode.
+  // Shift+Tab in the terminal steps back a tab as it does everywhere else, and
+  // never reaches the agent, where it would change the permission mode. It is
+  // taken before the terminal handles its own keys, and is not a keybind.
   useEffect(() => {
-    const onShortcut = (e: KeyboardEvent) => {
-      if (e.key === "Tab" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && id && (e.target as HTMLElement | null)?.closest(".xterm")) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!e.isComposing && !document.querySelector(".modal-backdrop")) {
-          onTab(SESSION_TABS[(SESSION_TABS.indexOf(tab) - 1 + SESSION_TABS.length) % SESSION_TABS.length]);
-        }
-        return;
-      }
-      const app = e.ctrlKey && !e.altKey && isInstalledApp();
-      if ((app || (e.altKey && !e.ctrlKey)) && !e.metaKey && !e.defaultPrevented && !document.querySelector(".modal-backdrop")) {
-        if (app && e.key === "Tab") {
-          if (ordered.length === 0) return;
-          e.preventDefault();
-          e.stopPropagation();
-          const i = ordered.findIndex((s) => s.id === id);
-          const step = e.shiftKey ? -1 : 1;
-          onOpen(ordered[i === -1 ? (step === 1 ? 0 : ordered.length - 1) : (i + step + ordered.length) % ordered.length].id);
-        } else if (e.key.toLowerCase() === "w" && !e.shiftKey) {
-          const row = id ? state.sessions.find((s) => s.id === id) : null;
-          if (!row || row.status === "closed") return;
-          e.preventDefault();
-          e.stopPropagation();
-          if (row.status === "running" && runningDescendants(row, state.sessions).length === 0) setConfirmCloseRow(row);
-          else close(row);
-        } else if (e.shiftKey && e.key.toLowerCase() === "t") {
-          e.preventDefault();
-          e.stopPropagation();
-          reopenLast();
-        } else if (!app && !e.shiftKey && (e.code === "KeyJ" || e.code === "KeyK")) {
-          // j/k, from the composer or the terminal too.
-          const next = neighbourId(ordered, id, e.code === "KeyJ" ? 1 : -1);
-          if (!next || next === id) return;
-          e.preventDefault();
-          e.stopPropagation();
-          onOpen(next);
-        } else if (!app && !e.shiftKey && id && TAB_KEY.test(e.code)) {
-          e.preventDefault();
-          e.stopPropagation();
-          onTab(SESSION_TABS[Number(e.code.slice(5)) - 1]);
-        }
+    const onShiftTab = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || !id || !(e.target as HTMLElement | null)?.closest(".xterm")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.isComposing && !document.querySelector(".modal-backdrop")) {
+        onTab(SESSION_TABS[(SESSION_TABS.indexOf(tab) - 1 + SESSION_TABS.length) % SESSION_TABS.length]);
       }
     };
-    // j/k switch sessions and l/h fold within this page, outside text fields
-    // and the terminal (Alt+J/K and Alt+1–3 work from those too); 1–3 pick a
-    // tab. Tab reaches controls normally, except Shift+Tab in the terminal,
-    // which is reserved above. Pane navigation
-    // lives in the shared keyboard handler.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || e.isComposing) return;
-      const t = e.target as HTMLElement | null;
-      if (!t?.closest(".sv")) return;
-      if (t.closest(".xterm") || t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) return;
-      if (document.querySelector(".modal-backdrop")) return;
-      const row = ordered.find((s) => s.id === id);
-      if (e.key === "j" || e.key === "k") {
-        const next = neighbourId(ordered, id, e.key === "j" ? 1 : -1);
-        if (next && next !== id) {
-          e.preventDefault();
-          onOpen(next);
-        }
-      } else if (e.key === "l" && row?.kids && !row.open) {
-        e.preventDefault();
-        toggleKids(row.id, false);
-      } else if (e.key === "h" && row) {
-        if (row.kids && row.open) {
-          e.preventDefault();
-          toggleKids(row.id, true);
-        } else if (row.depth > 0 && row.parent) {
-          e.preventDefault();
-          onOpen(row.parent);
-        }
-      } else if (id && TAB_KEY.test(`Digit${e.key}`)) {
-        onTab(SESSION_TABS[Number(e.key) - 1]);
-      }
-    };
-    addEventListener("keydown", onShortcut, true);
-    addEventListener("keydown", onKey);
-    return () => {
-      removeEventListener("keydown", onShortcut, true);
-      removeEventListener("keydown", onKey);
-    };
+    addEventListener("keydown", onShiftTab, true);
+    return () => removeEventListener("keydown", onShiftTab, true);
+  });
+
+  // The session keys (lib/keybinds.ts): by default j/k and Alt+J/K switch
+  // sessions, h/l fold within this page, 1–3 and Alt+1–3 pick a tab, Alt+W
+  // closes the open session and Alt+Shift+T reopens the last closed one; in
+  // the installed app Ctrl+W and Ctrl+Shift+T do too, and Ctrl+Tab and
+  // Ctrl+Shift+Tab step round the sessions like a browser's tabs. A key
+  // without Ctrl, Alt or Meta counts only on this page, outside the terminal
+  // and text fields; the shared keyboard handler owns pane navigation.
+  const onPage = (e: KeyboardEvent) => e.ctrlKey || e.altKey || e.metaKey || !!(e.target as HTMLElement | null)?.closest?.(".sv");
+  const step = (delta: 1 | -1) => (e: KeyboardEvent) => {
+    if (!onPage(e)) return false;
+    const next = neighbourId(ordered, id, delta);
+    if (!next || next === id) return false;
+    onOpen(next);
+  };
+  const cycle = (delta: 1 | -1) => () => {
+    if (ordered.length === 0) return false;
+    const i = ordered.findIndex((s) => s.id === id);
+    onOpen(ordered[i === -1 ? (delta === 1 ? 0 : ordered.length - 1) : (i + delta + ordered.length) % ordered.length].id);
+  };
+  const pick = (to: SessionTab) => (e: KeyboardEvent) => {
+    if (!id || !onPage(e)) return false;
+    onTab(to);
+  };
+  const row = ordered.find((s) => s.id === id);
+  useKeybinds({
+    "session.next": step(1),
+    "session.prev": step(-1),
+    "session.cycleNext": cycle(1),
+    "session.cyclePrev": cycle(-1),
+    "session.unfold": (e) => {
+      if (!onPage(e) || !row?.kids || row.open) return false;
+      toggleKids(row.id, false);
+    },
+    "session.fold": (e) => {
+      if (!onPage(e) || !row) return false;
+      if (row.kids && row.open) toggleKids(row.id, true);
+      else if (row.depth > 0 && row.parent) onOpen(row.parent);
+      else return false;
+    },
+    "session.timeline": pick("timeline"),
+    "session.terminal": pick("terminal"),
+    "session.load": pick("load"),
+    "session.close": () => {
+      const open = id ? state.sessions.find((s) => s.id === id) : null;
+      if (!open || open.status === "closed") return false;
+      // On a mid-turn session this asks first, as the Close button does.
+      if (open.status === "running" && runningDescendants(open, state.sessions).length === 0) setConfirmCloseRow(open);
+      else close(open);
+    },
+    "session.reopen": () => void reopenLast(),
   });
 
   const [railW, setRailW] = useRailWidth();

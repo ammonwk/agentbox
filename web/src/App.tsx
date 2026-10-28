@@ -8,7 +8,8 @@ import type { AgentSettings, AppState } from "../../src/core/types";
 import { Button, Empty, ErrorBoundary, Icon, type IconComponent } from "./components";
 import { needsYou, titleOf } from "./lib/board";
 import { go, hrefOf, navOf, onGo, parseHash, restoreScope, scopeOf, selectScope, type NavId, type Route } from "./route";
-import { isInstalledApp, isPhone, openingTab, pickedTab } from "./lib/phone";
+import { isPhone, openingTab, pickedTab } from "./lib/phone";
+import { useKeybinds } from "./lib/keybinds";
 import { useServerBehind, useUpdateReady } from "./lib/update";
 import { useKeyboardNavigation } from "./lib/keyboard";
 import { SystemBar } from "./SystemBar";
@@ -60,15 +61,6 @@ function useRoute(): [Route, (to: Route, replace?: boolean) => void] {
   }, []);
 
   return [route, go];
-}
-
-/** Keys that work anywhere except while typing: `n` new session, `/` search. */
-function isTyping(e: KeyboardEvent): boolean {
-  const t = e.target as HTMLElement | null;
-  if (!t) return false;
-  if (t.closest(".xterm")) return true; // the terminal owns every key it gets
-  const tag = t.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
 }
 
 // -------------------------------------------------------------------- app
@@ -139,40 +131,19 @@ export function App() {
     document.title = counts.sessions > 0 ? `(${counts.sessions}) ${here}` : here;
   }, [counts.sessions, here]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
-      if (document.querySelector(".modal-backdrop, .fv-backdrop")) return;
-      if (e.key === "n") {
-        e.preventDefault();
-        setNewOpen(true);
-      } else if (e.key === "?") {
-        e.preventDefault();
-        setKeysOpen(true);
-      } else if (e.key === "/") {
-        const search = document.querySelector<HTMLInputElement>("[data-search]");
-        if (search) {
-          e.preventDefault();
-          search.focus();
-          search.select();
-        }
-      }
-    };
-    // Ctrl+T is `n` in the installed app, from anywhere, the terminal
-    // included: captured before xterm can send it as a key.
-    const onCtrlT = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || e.key.toLowerCase() !== "t" || !isInstalledApp()) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (!document.querySelector(".modal-backdrop, .fv-backdrop")) setNewOpen(true);
-    };
-    addEventListener("keydown", onKey);
-    addEventListener("keydown", onCtrlT, true);
-    return () => {
-      removeEventListener("keydown", onKey);
-      removeEventListener("keydown", onCtrlT, true);
-    };
-  }, []);
+  // The board's own keys (lib/keybinds.ts): by default `n` and, in the
+  // installed app, Ctrl+T (from the terminal too) start a session, `/`
+  // searches the list and `?` shows the keys.
+  useKeybinds({
+    "app.newSession": () => setNewOpen(true),
+    "app.help": () => setKeysOpen(true),
+    "app.search": () => {
+      const search = document.querySelector<HTMLInputElement>("[data-search]");
+      if (!search) return false;
+      search.focus();
+      search.select();
+    },
+  });
 
   const flush = route.page === "agents" || route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
