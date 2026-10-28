@@ -14,6 +14,8 @@ export type PushState =
   | "on";
 
 function supported(): boolean {
+  // Electron has PushManager but no push service to subscribe to.
+  if (/\bElectron\//.test(navigator.userAgent)) return false;
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && window.isSecureContext;
 }
 
