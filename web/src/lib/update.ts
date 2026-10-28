@@ -4,9 +4,10 @@
  *  chunks that no longer exist the first time it opens a lazy view — the
  *  Timeline, the terminal, Accounts — and crashes there. The server says which
  *  build is on disk (`{type:"build"}` on the socket); a page on another one
- *  reloads when that loses nothing: while it is hidden, or when you go to
- *  another page or session (whose composer draft is dropped anyway). Until
- *  then the rail offers the reload. A chunk that is already gone reloads at
+ *  reloads when that loses nothing: while it is hidden, when you go to
+ *  another page or session (whose composer draft is dropped anyway), or in
+ *  the foreground after two seconds without input, when nothing on screen is
+ *  in progress. Until then the rail offers the reload. A chunk that is already gone reloads at
  *  once, which is the most a crash would have kept. */
 
 import { useSyncExternalStore } from "react";
@@ -22,6 +23,21 @@ function ownEntry(): string | null {
 const mine = ownEntry();
 let stale = false;
 const listeners = new Set<() => void>();
+/** A page left alone this long reloads in the foreground too, if `idle()`. */
+const IDLE_MS = 2000;
+let timer: ReturnType<typeof setTimeout> | undefined;
+let composing = false;
+let dragging = false;
+/** Fields typed into: not every form keeps its edits as a composer does, so
+ *  one stays safe until it is cleared or leaves the screen. */
+const edited = new Set<HTMLElement>();
+
+/** Start the idle wait again; each input restarts it. */
+function scheduleReload(): void {
+  clearTimeout(timer);
+  if (!stale) return;
+  timer = setTimeout(() => (idle() ? location.reload() : scheduleReload()), IDLE_MS);
+}
 
 /** From the socket: the build the server would serve a fresh load. */
 export function noteServerBuild(entry: string | null): void {
@@ -31,6 +47,7 @@ export function noteServerBuild(entry: string | null): void {
   stale = next;
   for (const fn of listeners) fn();
   if (stale && document.visibilityState === "hidden" && quiet()) location.reload();
+  scheduleReload();
 }
 
 export function useUpdateReady(): boolean {
@@ -51,6 +68,18 @@ function quiet(): boolean {
   return ![...document.querySelectorAll("textarea")].some((t) => t.value.trim() !== "");
 }
 
+/** Quiet, and nothing in progress a foreground reload would cut short: a
+ *  dialog, a load, an attachment, a recording, a terminal, an edited field. */
+function idle(): boolean {
+  if (!quiet() || composing || dragging) return false;
+  if (document.querySelector('[role="dialog"], [aria-busy="true"], .att-strip, .vn-rec, [data-rec], .xterm')) return false;
+  for (const el of edited) {
+    if (!el.isConnected) edited.delete(el);
+    else if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement ? el.value !== "" : el.textContent) return false;
+  }
+  return true;
+}
+
 function samePlace(a: Route, b: Route): boolean {
   if (a.page !== b.page) return false;
   return a.page !== "session" || (b.page === "session" && a.id === b.id);
@@ -64,6 +93,17 @@ document.addEventListener("visibilitychange", () => {
 addEventListener("hashchange", (e) => {
   if (stale && !samePlace(parseHash(new URL((e as HashChangeEvent).oldURL).hash), parseHash(location.hash))) location.reload();
 });
+
+document.addEventListener("input", (e) => {
+  if (e.target instanceof HTMLElement && e.target.matches('input, select, [contenteditable="true"]')) edited.add(e.target);
+  scheduleReload();
+});
+document.addEventListener("keydown", scheduleReload);
+document.addEventListener("pointerdown", scheduleReload);
+document.addEventListener("compositionstart", () => ((composing = true), scheduleReload()));
+document.addEventListener("compositionend", () => ((composing = false), scheduleReload()));
+document.addEventListener("dragstart", () => ((dragging = true), scheduleReload()));
+document.addEventListener("dragend", () => ((dragging = false), scheduleReload()));
 
 // ------------------------------------------------------ a chunk already gone
 
