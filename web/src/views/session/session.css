@@ -169,6 +169,14 @@
   color: var(--text);
   background: var(--hover);
 }
+/* New session: the one action here, so it keeps the accent. */
+.rail-new,
+.rail-new:hover {
+  color: var(--accent);
+}
+.rail-new:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 /* Active and Inactive: a two-way switch under the search. The chosen side is
  * a raised chip on a sunken track; no accent, so the list keeps the colour. */
 .rail-views {
