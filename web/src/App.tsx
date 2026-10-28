@@ -340,7 +340,7 @@ export function App() {
         </SysbarSlot.Provider>
 
         <ErrorBoundary label="The system bar">
-          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} slotRef={setSysbarSlot} />
+          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} cleanup={state?.cleanup ?? null} focusAccount={focusAccount} slotRef={setSysbarSlot} />
         </ErrorBoundary>
       </div>
 

@@ -313,7 +313,7 @@ export class Waits {
   private telling = new Set<number>();
 
   constructor(
-    private readonly fleet: Pick<Fleet, "get" | "heir" | "note" | "finishNote">,
+    private readonly fleet: Pick<Fleet, "get" | "heir" | "note" | "finishNote"> & Partial<Pick<Fleet, "activityAllowed">>,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -540,7 +540,9 @@ export class Waits {
       updateWait(w.id, { ended: "cancelled", endedAt: now, outcome: prReleasedLine(s?.id ?? w.sessionId), untold: null });
       return;
     }
-    const hold = !s
+    const hold = s && this.fleet.activityAllowed?.(s.id) === false
+      ? "its session is paused for machine cleanup"
+      : !s
       ? "its session is gone"
       : s.closedAt
         ? "its session is closed; it is told if it is reopened and runs again"

@@ -1,0 +1,62 @@
+.sys-cleanup {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+  align-self: stretch;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+}
+.sys-cleanup-action,
+.sys-cleanup-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 42px;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sys-cleanup-action:hover,
+.sys-cleanup-link:hover { background: var(--hover); color: var(--text); }
+.sys-cleanup-action:focus-visible,
+.sys-cleanup-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.sys-cleanup-action:disabled { opacity: .45; cursor: wait; }
+.sys-cleanup[data-active="true"] { color: var(--warning); }
+.pill-paused, .st-paused { color: var(--warning); }
+.st-dot.st-paused, .pill-paused .pill-dot { background: var(--warning); animation: none; }
+.sys-cleanup-error {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 8px;
+  width: min(360px, calc(100vw - 32px));
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sunken);
+  color: var(--danger);
+  font-size: 13px;
+  box-shadow: 0 4px 20px #0004;
+  z-index: 20;
+}
+.sys-cleanup-error button { align-self: flex-start; color: inherit; background: none; border: 0; cursor: pointer; }
+@media (max-width: 860px) {
+  /* Keep the escape from a pause reachable inside a phone conversation,
+   * where the ordinary machine strip is normally hidden. */
+  .app[data-page] .sysbar:has(.sys-cleanup[data-active="true"]) { display: block; }
+  .sysbar:has(.sys-cleanup[data-active="true"]) .sys-session { display: none; }
+  .sysbar-line > .sysbar-row { min-width: 0; height: 48px; }
+  .sys-cleanup-action { min-width: 48px; min-height: 48px; }
+  .sys-cleanup-link { padding: 0 8px; }
+  .sys-cleanup-link > svg { display: none; }
+}

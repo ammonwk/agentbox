@@ -250,6 +250,8 @@ export const api = {
 
   /** One `agentbox wait`, and the end of its job's log while that runs. */
   wait: (id: number) => get<WaitView>(`/api/waits/${id}`),
+  startCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup"),
+  resumeCleanup: () => post<import("../../src/core/cleanup").CleanupState | null>("/api/cleanup/resume"),
   /** The board's open sessions and cold state; the closed ones page from `closed`. */
   state: () => get<AppState>("/api/state?open=1"),
   /** Opening prompts you wrote, newest first, for the new-session box's ↑. */
