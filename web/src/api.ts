@@ -184,6 +184,16 @@ async function transcribe(audio: Blob): Promise<string> {
 
 export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComponent(name)}`;
 
+/** One of the newest screenshots on this machine, by an id the server gave
+ *  out; the browser never learns its path (src/core/screenshots.ts). */
+export interface RecentScreenshot {
+  id: string;
+  name: string;
+  at: number;
+}
+
+export const screenshotUrl = (id: string): string => `/api/screenshots/${encodeURIComponent(id)}`;
+
 /** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
  *  is the session's directory's. */
 /** A file's bytes by its absolute path (`FileView.path`), so a page's relative
@@ -312,6 +322,8 @@ export const api = {
   /** Continue on another account (`auto` = the balancer's pick), sending `prompt`. */
   move: (id: string, opts: { accountId?: string; prompt?: string }) => post<Session>(`/api/sessions/${enc(id)}/move`, opts),
   upload,
+  /** For the paperclip's hover: the newest three. */
+  screenshots: () => get<RecentScreenshot[]>("/api/screenshots"),
   transcribe,
   stop: (id: string) => post<unknown>(`/api/sessions/${enc(id)}/stop`),
   /** Close stops it and takes it off the list; `false` reopens it (still stopped). */

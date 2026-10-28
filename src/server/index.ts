@@ -63,6 +63,7 @@ import { modelOptions } from "../core/models";
 import { MAX_UPLOAD_BYTES, saveUpload, uploadFile } from "../core/uploads";
 import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
+import { recentScreenshots, screenshotImage } from "../core/screenshots";
 import { completeDir, resolveDirs } from "../core/dirs";
 import { backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
 import { FileError, rawFile, rawHeaders, viewFile } from "../core/files";
@@ -803,6 +804,13 @@ function uploadResponse(name: string): Response {
   return new Response(Bun.file(f.path), { headers: { "content-type": f.mime, "cache-control": "private, max-age=86400" } });
 }
 
+/** The paperclip's recent screenshots are for the person at the board: a
+ *  request with a session's capability headers, valid or not, is an agent. */
+function refuseAgent(req: Request): void {
+  if (req.headers.has("x-agentbox-session") || req.headers.has("x-agentbox-session-token"))
+    throw new HttpError(403, "Screenshot previews belong to the user's attachment picker");
+}
+
 /** Requests from a browser on this machine, whose desktop is the server's. */
 const fromThisMachine = new WeakSet<Request>();
 
@@ -1152,6 +1160,20 @@ const router = new Router(mapError)
     }
   })
   .add("GET", "/api/uploads/:name", ({ params }) => uploadResponse(params.name!))
+  .add("GET", "/api/screenshots", ({ req }) => {
+    refuseAgent(req);
+    return json(recentScreenshots());
+  })
+  .add("GET", "/api/screenshots/:id", ({ req, params }) => {
+    refuseAgent(req);
+    let img;
+    try {
+      img = screenshotImage(params.id!);
+    } catch (e) {
+      throw new HttpError(404, (e as Error).message);
+    }
+    return new Response(Bun.file(img.path), { headers: { "content-type": img.mime, "cache-control": "private, no-store", "x-content-type-options": "nosniff" } });
+  })
   .add("GET", "/api/sessions/:id/image", ({ req, params, url }) => {
     const s = fleet.get(params.id!);
     let img;
