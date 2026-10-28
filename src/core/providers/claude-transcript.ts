@@ -1063,6 +1063,11 @@ export function claudePieces(r: any, index: number): Piece[] {
         return [meta(`${base}:0`, at, text, isRateLimitRecord(r) ? "warn" : "error")];
       }
       if (!Array.isArray(m.content)) return [];
+      // The API answered with a refusal: `message.stop_reason` is "refusal",
+      // carrying the policy category and the provider's explanation. The CLI
+      // then either retries on a fallback model or asks you to edit.
+      const stop = m.stop_details ?? {};
+      const refused = m.stop_reason === "refusal" || stop.type === "refusal";
       m.content.forEach((b: any, i: number) => {
         const id = `${base}:${i}`;
         if (b?.type === "text") {
@@ -1073,7 +1078,9 @@ export function claudePieces(r: any, index: number): Piece[] {
         } else if (b?.type === "thinking") {
           // Without --thinking-display summarized, thinking is a signature with empty text.
           if (b.thinking?.trim()) out.push({ kind: "event", event: { id, at, kind: "thinking", text: b.thinking } });
-        } else if (b?.type === "tool_use" || b?.type === "server_tool_use") {
+        } else if (!refused && (b?.type === "tool_use" || b?.type === "server_tool_use")) {
+          // A refused response's unfinished calls did not run; showing them
+          // as running tools would invent work that never happened.
           const name = String(b.name ?? "tool");
           const ev: ToolEvent = {
             id,
@@ -1096,11 +1103,7 @@ export function claudePieces(r: any, index: number): Piece[] {
           out.push(meta(id, at, `model fallback: ${b.from?.model ?? "?"} → ${b.to?.model ?? "?"}`, "warn"));
         }
       });
-      // The API answered with a refusal: `message.stop_reason` is "refusal",
-      // carrying the policy category and the provider's explanation. The CLI
-      // then either retries on a fallback model or asks you to edit.
-      const stop = m.stop_details ?? {};
-      if (m.stop_reason === "refusal" || stop.type === "refusal") {
+      if (refused) {
         const detail = typeof stop.explanation === "string" ? stop.explanation : undefined;
         const fields: Parameters<typeof refusal>[3] = { detail };
         if (typeof stop.category === "string" && stop.category) fields.category = stop.category;
