@@ -14,7 +14,8 @@ export interface CleanupState {
   sessions: string[];
   error: string | null;
 }
-interface Journal extends CleanupState { processes: ProcessRef[] }
+/** `external`: sessions in your own terminals, left running and protected. */
+interface Journal extends CleanupState { processes: ProcessRef[]; external?: string[] }
 export interface PauseProcess { pid: number; ppid: number; stopped: boolean }
 export interface CleanupIO {
   table(): Promise<PauseProcess[]>;
@@ -44,7 +45,9 @@ function localIO(): CleanupIO {
       if (await p.exited) throw new Error("Could not read the process table; nothing was paused.");
       return text.trim().split("\n").filter(Boolean).map(line => {
         const [pid, ppid, state] = line.trim().split(/\s+/);
-        return { pid: Number(pid), ppid: Number(ppid), stopped: state!.includes("T") };
+        // A zombie (Z) cannot run either: a child that exited after its
+        // parent stopped stays one until the parent resumes and reaps it.
+        return { pid: Number(pid), ppid: Number(ppid), stopped: /[TZ]/.test(state!) };
       });
     },
     load: () => existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Journal | null : null,
@@ -107,7 +110,7 @@ export class ResourceCleanup {
 
   state(): CleanupState | null {
     if (!this.journal) return null;
-    const { processes: _, ...state } = this.journal;
+    const { processes: _, external: __, ...state } = this.journal;
     return { ...state, sessions: [...state.sessions] };
   }
   allows(id?: string): boolean { return !this.journal || id === this.journal.sessionId; }
@@ -134,7 +137,12 @@ export class ResourceCleanup {
       // Close the activity gate before awaiting anything. Let already-started
       // Fleet actions finish, then take a fresh inventory of all live agents.
       await this.fleet.settleActivity();
-      const live = this.fleet.sessions().filter(s => s.pid && s.host !== "none");
+      // Only agentbox's own panes: an agent in your terminal runs under a
+      // job-control shell, which takes the terminal back on SIGSTOP and leaves
+      // the agent in the background after SIGCONT.
+      const all = this.fleet.sessions();
+      const live = all.filter(s => s.pid && s.host === "tmux");
+      this.journal.external = all.filter(s => s.pid && s.host === "external").map(s => s.id);
       const roots = live.map(s => ({ pid: s.pid!, startedAt: this.io.identity(s.pid!) }));
       const initial = await this.io.table();
       pauseTree(initial, roots.map(r => r.pid), this.io.ownPid);
@@ -244,6 +252,7 @@ function cleanupPrompt(state: Journal): string {
 The user pressed Pause sessions and clean up in Agentbox. You are the single cleanup agent. Other agent sessions and their process trees are temporarily suspended, NOT abandoned. They retain their context and allocated memory. The user will resume them using the system bar when ready. Do not spawn helpers, resume sessions, or stop, kill, alter, or signal the protected sessions/processes below. Do not stop Agentbox, tmux, essential OS services, or your own process tree.
 
 Protected session IDs: ${state.sessions.join(", ") || "none"}
+Sessions running in the user's own terminals (not paused, also protected, with their process trees): ${state.external?.join(", ") || "none"}
 Protected process identities (PID and start time): ${state.processes.map(p => `${p.pid}@${p.startedAt}`).join(", ") || "none"}
 
 Measure CPU, memory pressure, swap, and disk first. Inspect process ownership, age, open connections, Agentbox status, active waits/jobs, PR ownership, and container workloads to distinguish unused leftovers from useful services. Detached jobs may still belong to paused sessions even when their parent PID is 1. Investigate orphaned dev/preview servers, failing container restart loops, duplicate workers, and heavy applications. Use the machine's actual OS and installed tools.

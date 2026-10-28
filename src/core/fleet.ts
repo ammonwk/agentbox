@@ -757,8 +757,9 @@ export class Fleet extends EventEmitter {
     lap("starts");
     if (this.activityAllowed()) this.checkCrash(now);
     // Until then the snapshot recovery would start from stays the last one
-    // written from transcripts read through.
-    if (this.caughtUp) this.recordLive(now);
+    // written from transcripts read through. A cleanup pause keeps the one
+    // from before it, so a crash while paused still recovers those sessions.
+    if (this.caughtUp && this.activityAllowed()) this.recordLive(now);
     for (const b of this.btwHistory.read(accountsOf("claude").map((a) => a.home))) this.watchTerminalBtw(b);
     if (now - this.readersSavedAt >= READER_SAVE_MS) this.saveReaders();
     lap("rest");
