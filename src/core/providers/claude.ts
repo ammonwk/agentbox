@@ -484,6 +484,17 @@ export function claudeDialog(raw: string): PromptMenu | null {
     }
   }
   if (first < 0) return null;
+  // The menu is in the dialog block below the rule that sets it apart; a
+  // numbered list in the conversation above is not a menu.
+  let rule = -1;
+  for (let i = first - 1; i >= 0; i--) {
+    if (RULE.test(lines[i]!)) {
+      rule = i;
+      break;
+    }
+  }
+  // A short pane can scroll the rule away; a known menu is still a menu.
+  if (rule < 0 && blocked !== "waiting on a safety refusal" && blocked !== LIMIT_DIALOG) return null;
   const options: { label: string; n: number }[] = [];
   for (let i = first; i < lines.length; i++) {
     const line = lines[i]!;
@@ -507,14 +518,7 @@ export function claudeDialog(raw: string): PromptMenu | null {
   if (!options.length) return null;
   // The heading is the first line of the block after the rule above it, so a
   // long explanation below does not become the title.
-  let from = -1;
-  for (let i = first - 1; i >= 0; i--) {
-    if (RULE.test(lines[i]!)) {
-      from = i + 1;
-      break;
-    }
-  }
-  const title = from >= 0 ? (lines.slice(from, first).map((l) => l.trim()).find(Boolean) ?? null) : null;
+  const title = rule >= 0 ? (lines.slice(rule + 1, first).map((l) => l.trim()).find(Boolean) ?? null) : null;
   const foot = lines.slice(first).join("\n");
   const dismiss = /Esc to (?:cancel|go back|dismiss)/i.test(foot) ? ["Escape"] : null;
   return {
