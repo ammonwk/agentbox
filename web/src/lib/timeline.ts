@@ -75,9 +75,30 @@ export type TimelineRow =
   | { type: "end"; id: string; at: number };
 
 type IdleEvent = Extract<TimelineEvent, { kind: "meta" }> & { mate: NonNullable<Extract<TimelineEvent, { kind: "meta" }>["mate"]> };
+type RefusalEvent = Extract<TimelineEvent, { kind: "refusal" }>;
 
 /** A teammate's turn ended and it said nothing with it. A lead hears one per turn per teammate. */
 const quietIdle = (ev: TimelineEvent): ev is IdleEvent => ev.kind === "meta" && !!ev.mate && ev.mate.idle === "available" && !ev.mate.body;
+
+/** Claude writes one refusal as several records — the refused message, the
+ *  CLI's notice, and the fallback — moments apart. One card says it once. */
+const REFUSAL_MERGE_MS = 10 * 60_000;
+
+function sameRefusal(a: RefusalEvent, b: RefusalEvent): boolean {
+  return Math.abs(a.at - b.at) <= REFUSAL_MERGE_MS && (!a.category || !b.category || a.category === b.category) && (!a.model || !b.model || a.model === b.model);
+}
+
+function mergeRefusal(a: RefusalEvent, b: RefusalEvent): RefusalEvent {
+  const longer = (a.detail?.length ?? 0) >= (b.detail?.length ?? 0) ? a.detail : b.detail;
+  return {
+    ...a,
+    category: a.category ?? b.category,
+    detail: longer,
+    model: a.model ?? b.model,
+    fallback: b.fallback ?? a.fallback,
+    url: a.url ?? b.url,
+  };
+}
 
 export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = [];
@@ -95,6 +116,11 @@ export function groupTimeline(events: readonly TimelineEvent[]): TimelineRow[] {
       const last = rows[rows.length - 1];
       if (last?.type === "idle") last.events.push(ev);
       else rows.push({ type: "idle", id: ev.id, events: [ev] });
+    } else if (ev.kind === "refusal") {
+      const last = rows[rows.length - 1];
+      if (last?.type === "event" && last.event.kind === "refusal" && sameRefusal(last.event, ev)) {
+        rows[rows.length - 1] = { type: "event", event: mergeRefusal(last.event, ev) };
+      } else rows.push({ type: "event", event: ev });
     } else {
       rows.push({ type: "event", event: ev });
     }
