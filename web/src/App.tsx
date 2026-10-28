@@ -437,7 +437,7 @@ function UpdateReady() {
       disabled={restarting}
       title={behind
         ? `${n} newer commit${n === 1 ? "" : "s"} in the checkout than the server runs. Click to restart the server on ${n === 1 ? "it" : "them"}; sessions keep running.`
-        : "agentbox was rebuilt. Reload to run the new version (it reloads by itself next time you leave the page)"}
+        : "agentbox was rebuilt. Reload to run the new version (it reloads by itself once the page is idle)"}
       onClick={() => {
         if (!behind) return location.reload();
         setRestarting(true);
