@@ -98,6 +98,53 @@ describe("reader state across a restart", () => {
     expect((await snapshot(path, replacedFrom)).restored).toBe(false);
   });
 
+  test("a live reader starts its index over when the file is rewritten under it", async () => {
+    const path = join(dir, "live-rewrite.jsonl");
+    // Chained records, as Claude writes them: a message continues from the
+    // record before it, so nothing reads as a branch.
+    const record = (uuid: string, parentUuid: string | null, content: unknown) =>
+      line({ type: "user", sessionId: SESSION, cwd: "/w", uuid, parentUuid, timestamp: at(), message: { role: "user", content } });
+    const call = (uuid: string, parentUuid: string, id: string, text: string) =>
+      line({
+        type: "assistant",
+        sessionId: SESSION,
+        cwd: "/w",
+        uuid,
+        parentUuid,
+        timestamp: at(),
+        message: {
+          id,
+          role: "assistant",
+          model: "claude-opus-5-5",
+          content: [{ type: "text", text }, { type: "tool_use", id: `t${uuid}`, name: "Bash", input: { command: "ls" } }],
+          usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 50 },
+        },
+      });
+    const answer = (uuid: string, parentUuid: string, tool: string) =>
+      record(uuid, parentUuid, [{ type: "tool_result", tool_use_id: tool, content: "a b c" }]);
+    writeFileSync(
+      path,
+      record("u1", null, "first") +
+        call("a1", "u1", "m1", "reply one") +
+        answer("r1", "a1", "ta1") +
+        record("u2", "r1", "second") +
+        call("a2", "u2", "m2", "reply two") +
+        answer("r2", "a2", "ta2"),
+    );
+    const r = claudeReader(refFor(path));
+    await r.refresh();
+
+    // A redactor rewrites the transcript in place (same inode) while the
+    // reader tails it: the lines are longer, so it sees only "more bytes".
+    writeFileSync(path, readFileSync(path, "utf8").replace(/reply (one|two)/g, "a longer reply $1"));
+    await r.refresh();
+
+    const page = await r.timeline({ limit: 100 });
+    const tools = page.events.flatMap((e) => (e.kind === "tool" ? [e] : []));
+    expect(tools.map((e) => e.status)).toEqual(["ok", "ok"]);
+    expect(page.events).toEqual((await snapshot(path)).events);
+  });
+
   test("a refused state leaves the reader to read the whole file", async () => {
     const path = join(dir, "refused.jsonl");
     writeFileSync(path, user("hello") + assistant("m1", "hi"));

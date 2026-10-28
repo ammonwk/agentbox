@@ -14,7 +14,7 @@
 
 import { statSync } from "node:fs";
 import type { TimelineEvent, TimelinePage } from "../types";
-import { JsonlTail, type JsonlTailState } from "./jsonl";
+import { JsonlTail, StaleIndex, type JsonlTailState } from "./jsonl";
 import { branched, currentLeaf, hiddenRanges, isHidden, leafThrough, settled, versionsOf, wentBack, type Branches, type PromptRows } from "./branches";
 import type { TranscriptFacts, TranscriptReader, TranscriptRef } from "./types";
 
@@ -132,6 +132,27 @@ export class JsonlTranscriptReader implements TranscriptReader {
     this.calls.clear();
     this.next = 0;
     this.resets++;
+  }
+
+  /** The file changed under the record index: read it whole, once again. */
+  private rebuild(): void {
+    this.resetState();
+    this.tail.forget();
+    this.ino = -1;
+  }
+
+  /** Run `fn` against the record index, starting the read over once if the
+   *  transcript was rewritten under it (its starts are its own alone). */
+  private retryIfStale<T>(fn: () => T): T {
+    this.pull();
+    try {
+      return fn();
+    } catch (e) {
+      if (!(e instanceof StaleIndex)) throw e;
+      this.rebuild();
+      this.pull();
+      return fn();
+    }
   }
 
   /**
@@ -371,54 +392,56 @@ export class JsonlTranscriptReader implements TranscriptReader {
   }
 
   async timeline(opts: { before?: string | null; limit: number; via?: string | null }): Promise<TimelinePage> {
-    this.pull();
-    const n = this.tail.recordCount;
-    const end = this.parse(opts.before) ?? n;
-    const limit = Math.max(1, opts.limit);
-    const { events, start } = this.page(end, limit, this.pathOf(opts.via));
-    const page: TimelinePage = { events, before: start > 0 ? this.cursorAt(start) : null, cursor: this.cursorAt(n) };
-    if (opts.via) page.via = opts.via;
-    return page;
+    return this.retryIfStale(() => {
+      const n = this.tail.recordCount;
+      const end = this.parse(opts.before) ?? n;
+      const limit = Math.max(1, opts.limit);
+      const { events, start } = this.page(end, limit, this.pathOf(opts.via));
+      const page: TimelinePage = { events, before: start > 0 ? this.cursorAt(start) : null, cursor: this.cursorAt(n) };
+      if (opts.via) page.via = opts.via;
+      return page;
+    });
   }
 
   async since(cursor: string): Promise<{ events: TimelineEvent[]; cursor: string; reset: boolean }> {
-    this.pull();
-    const n = this.tail.recordCount;
-    const from = this.parse(cursor);
-    const path = this.pathOf();
-    // A message that went back to before what the reader has hides some of
-    // it: start again from the conversation as it now stands.
-    if (from === null || n - from > MAX_SINCE_RECORDS || (path.branches && wentBack(path.branches, from))) {
-      const { events } = this.page(n, RESET_PAGE, path);
-      return { events, cursor: this.cursorAt(n), reset: true };
-    }
-    if (from === n) return { events: [], cursor: this.cursorAt(n), reset: false };
+    return this.retryIfStale(() => {
+      const n = this.tail.recordCount;
+      const from = this.parse(cursor);
+      const path = this.pathOf();
+      // A message that went back to before what the reader has hides some of
+      // it: start again from the conversation as it now stands.
+      if (from === null || n - from > MAX_SINCE_RECORDS || (path.branches && wentBack(path.branches, from))) {
+        const { events } = this.page(n, RESET_PAGE, path);
+        return { events, cursor: this.cursorAt(n), reset: true };
+      }
+      if (from === n) return { events: [], cursor: this.cursorAt(n), reset: false };
 
-    const loaded = new Map<number, any>();
-    const recs = this.tail.range(from, n);
-    for (const r of recs) loaded.set(r.index, r.value);
-    const events: TimelineEvent[] = [];
-    for (const r of recs) {
-      if (path.hidden && isHidden(path.hidden, r.index)) continue;
-      for (const p of this.piecesOf(r.value, r.index)) {
-        if (p.kind === "event") events.push(this.versioned(p.event, r.index, path));
-        else if (p.kind === "call") events.push(this.withResult(p.event, this.resultOf(p.callId, loaded)));
-        else {
-          // A result for a call the client already has: send the call again,
-          // same id, now finished. Calls inside this batch were folded above.
-          // Only the result the index holds for the call counts, so a page and
-          // a stream never disagree about which one it was.
-          const c = this.calls.get(p.callId);
-          if (!c || c[0] >= from || c[1] !== r.index) continue;
-          const call = this.tail.range(c[0], c[0] + 1)[0];
-          if (!call) continue;
-          const piece = this.piecesOf(call.value, call.index).find(
-            (q): q is Extract<Piece, { kind: "call" }> => q.kind === "call" && q.callId === p.callId,
-          );
-          if (piece) events.push(this.withResult(piece.event, p));
+      const loaded = new Map<number, any>();
+      const recs = this.tail.range(from, n);
+      for (const r of recs) loaded.set(r.index, r.value);
+      const events: TimelineEvent[] = [];
+      for (const r of recs) {
+        if (path.hidden && isHidden(path.hidden, r.index)) continue;
+        for (const p of this.piecesOf(r.value, r.index)) {
+          if (p.kind === "event") events.push(this.versioned(p.event, r.index, path));
+          else if (p.kind === "call") events.push(this.withResult(p.event, this.resultOf(p.callId, loaded)));
+          else {
+            // A result for a call the client already has: send the call again,
+            // same id, now finished. Calls inside this batch were folded above.
+            // Only the result the index holds for the call counts, so a page and
+            // a stream never disagree about which one it was.
+            const c = this.calls.get(p.callId);
+            if (!c || c[0] >= from || c[1] !== r.index) continue;
+            const call = this.tail.range(c[0], c[0] + 1)[0];
+            if (!call) continue;
+            const piece = this.piecesOf(call.value, call.index).find(
+              (q): q is Extract<Piece, { kind: "call" }> => q.kind === "call" && q.callId === p.callId,
+            );
+            if (piece) events.push(this.withResult(piece.event, p));
+          }
         }
       }
-    }
-    return { events, cursor: this.cursorAt(n), reset: false };
+      return { events, cursor: this.cursorAt(n), reset: false };
+    });
   }
 }

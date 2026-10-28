@@ -38,6 +38,16 @@ export interface JsonlTailState {
 /** How far back from `offset` a saved state's check reaches. */
 const CHECK_BYTES = 4096;
 
+/** The file no longer matches the record index: something rewrote it in place
+ *  (a transcript editor, a redactor, a session that edits its own record), so
+ *  offsets recorded before are not line starts now. The reader starts over. */
+export class StaleIndex extends Error {
+  constructor() {
+    super("transcript rewritten under the reader");
+    this.name = "StaleIndex";
+  }
+}
+
 export class JsonlTail {
   /** Next unread byte. Always at the start of a line. */
   private offset = 0;
@@ -132,6 +142,13 @@ export class JsonlTail {
     else out.push(rec);
   }
 
+  /** Forget where it was and every record start: the file changed under it. */
+  forget(): void {
+    this.offset = 0;
+    this.ino = -1;
+    this.starts = [];
+  }
+
   /** Where this tail is, for `restore` in a later process. */
   state(): JsonlTailState {
     const spans = new Uint32Array(this.starts.length);
@@ -201,13 +218,20 @@ export class JsonlTail {
       const data = buf.subarray(0, n);
       for (let i = 0; i <= data.length; i++) {
         if (i < data.length && data[i] !== NEWLINE) continue;
-        if (i > lineStart && idx < to && this.starts[idx] === startByte + lineStart) {
-          try {
-            out.push({ offset: startByte + lineStart, index: idx, value: JSON.parse(data.toString("utf8", lineStart, i)) });
-          } catch {
-            // Parsed once already; a failure now means the file changed under us.
+        if (i > lineStart) {
+          const at = startByte + lineStart;
+          if (idx < to && this.starts[idx] === at) {
+            try {
+              out.push({ offset: at, index: idx, value: JSON.parse(data.toString("utf8", lineStart, i)) });
+            } catch {
+              // Parsed once already; a failure now means the file changed under us.
+            }
+            idx++;
+          } else if (looksLikeRecord(data, lineStart, i)) {
+            // A record the index does not know at this offset: the file was
+            // rewritten in place and the recorded starts no longer line up.
+            throw new StaleIndex();
           }
-          idx++;
         }
         lineStart = i + 1;
       }
@@ -215,5 +239,20 @@ export class JsonlTail {
       closeSync(fd);
     }
     return out;
+  }
+}
+
+/** Would `parseLine` have indexed this line? A line that parses as a JSON
+ *  object is a record; anything else was skipped, so a mismatch on it is not
+ *  evidence that the file changed. */
+function looksLikeRecord(data: Buffer, from: number, to: number): boolean {
+  let first = from;
+  while (first < to && (data[first] === 0x20 || data[first] === 0x09 || data[first] === 0x0d)) first++;
+  if (data[first] !== 0x7b /* { */) return false;
+  try {
+    JSON.parse(data.toString("utf8", from, to));
+    return true;
+  } catch {
+    return false;
   }
 }
