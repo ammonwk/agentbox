@@ -657,6 +657,10 @@ export interface Session {
    *  turn is over and it is waiting on teammates, background agents or
    *  shells, not thinking. */
   background: boolean;
+  /** Work it launched in the background that is still running, in words:
+   *  `workflow "babysit-fleet"`. It runs inside the session's process, so
+   *  the session counts as running, and is neither adopted nor parked. */
+  backgroundWork: string | null;
   /** The waits it has armed (`agentbox wait`) and not yet been told the end
    *  of: what each is on, and that in a line (`PR #8883: every check on 0ab9de7654`). */
   waits: { kind: WaitSpec["kind"]; what: string }[];

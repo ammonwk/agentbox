@@ -117,7 +117,7 @@ describe("a red streak's last session owns it until it is finished", () => {
   const session = (over: Partial<Session> = {}) =>
     ({
       id: "s1", status: "waiting", closedAt: null, question: null, limitHit: null, turnError: null,
-      autoResume: null, waits: [], parkHold: null, background: false, lastMessage: "Fixed.\n\nSTATUS: done", ...over,
+      autoResume: null, waits: [], parkHold: null, background: false, backgroundWork: null, lastMessage: "Fixed.\n\nSTATUS: done", ...over,
     }) as Session;
   const none = new Map<string, string[]>();
   // Started at minute 35; the run that finished at minute 60 is red again.
