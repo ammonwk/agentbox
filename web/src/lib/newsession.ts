@@ -17,6 +17,8 @@ export interface NewSessionPrefs {
   where?: "repo" | "path";
   repoId?: string;
   worktree?: boolean;
+  /** Start a dev server with the session. */
+  devServer?: boolean;
   path?: string;
   perProvider?: Partial<Record<ProviderId, { accountId?: string; model?: string; effort?: string }>>;
   /** The unsent prompt; cleared when a session starts. */
