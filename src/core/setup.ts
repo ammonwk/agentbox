@@ -13,6 +13,11 @@ import type { Repo, RepoSetup } from "./types";
  * agent rather than ahead of it, in a scope of its own so that restarting the
  * server does not kill it half way through `node_modules`. Its output goes to
  * a log whose last line says it is done.
+ *
+ * Commands run one at a time across all worktrees. A fan-out cuts twenty at
+ * once, and twenty `npm ci`s together swap the machine into the ground while
+ * finishing no sooner than they would in a queue: an install takes ~36s alone
+ * and ~8 minutes in a pack of eight or more.
  */
 
 /** The last line of a finished setup log. */
@@ -78,9 +83,11 @@ export function setUpWorktree(repo: Repo, worktree: string, sessionId: string): 
   try {
     mkdirSync(dirname(log), { recursive: true });
     writeFileSync(log, [...lines, `$ ${run}`, ""].join("\n"));
-    // $1 is the command, $2 the log: nothing the user typed is quoted into a script.
-    const script = `sh -c "$1" </dev/null >>"$2" 2>&1; echo "${SETUP_DONE} $?" >>"$2"`;
-    const argv = ["sh", "-c", script, "agentbox-setup", run, log];
+    // $1 is the command, $2 the log, $3 the lock: nothing the user typed is quoted into a script.
+    const script =
+      `flock -n "$3" true || echo "waiting for another worktree's setup to finish" >>"$2"; ` +
+      `flock "$3" sh -c "$1" </dev/null >>"$2" 2>&1; echo "${SETUP_DONE} $?" >>"$2"`;
+    const argv = ["sh", "-c", script, "agentbox-setup", run, log, join(dirname(log), ".lock")];
     const scoped = Bun.which("systemd-run")
       ? ["systemd-run", "--user", "--scope", "--collect", "--quiet", `--unit=agentbox-setup-${sessionId}`, ...argv]
       : argv;
