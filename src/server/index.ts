@@ -915,9 +915,10 @@ const router = new Router(mapError)
   })
 
   // ---- a session's dev server (src/core/devserver.ts)
-  .add("GET", "/api/sessions/:id/dev", async ({ params }) => json(await devServerStatus(params.id!)))
+  // Only a session the board knows (404 otherwise): the id names files and goes into the page.
+  .add("GET", "/api/sessions/:id/dev", async ({ params }) => json(await devServerStatus(fleet.get(params.id!).id)))
   .add("GET", "/api/sessions/:id/dev/open", ({ params }) =>
-    new Response(devServerPage(params.id!), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }),
+    new Response(devServerPage(fleet.get(params.id!).id), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }),
   )
 
   // ---- who has which pull request

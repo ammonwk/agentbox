@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join, relative } from "node:path";
 import { repoCheckoutPath } from "./git";
+import { startedAtOf } from "./providers/procs";
 import { logDir, worktreeRoot } from "./paths";
 import type { Repo } from "./types";
 
@@ -75,6 +76,7 @@ export function depDirs(root: string, depth = LINK_DEPTH): string[] {
  */
 export function linkDeps(source: string, worktree: string): string[] {
   const lines: string[] = [];
+  const linked: string[] = [];
   for (const rel of depDirs(source)) {
     const to = join(worktree, rel);
     let present = false;
@@ -90,12 +92,32 @@ export function linkDeps(source: string, worktree: string): string[] {
       try {
         symlinkSync(join(source, rel), to, "dir");
         lines.push(`linked ${rel}`);
+        linked.push(rel);
       } catch (e) {
         lines.push(`not linked, ${(e as Error).message}: ${rel}`);
       }
     }
   }
+  if (linked.length) ignoreLinks(worktree, linked);
   return lines;
+}
+
+/** A `node_modules/` line in .gitignore matches only a directory, so a
+ *  `git add -A` in the worktree would commit the link. The repo's exclude
+ *  file takes each one, with no trailing slash. */
+function ignoreLinks(worktree: string, rels: string[]): void {
+  try {
+    const p = Bun.spawnSync(["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], { stdout: "pipe", stderr: "ignore" });
+    const file = p.stdout.toString().trim();
+    if (p.exitCode !== 0 || !file) return;
+    const have = existsSync(file) ? readFileSync(file, "utf8") : "";
+    const add = rels.map((r) => `/${r}`).filter((l) => !have.split("\n").includes(l));
+    if (!add.length) return;
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, `${have && !have.endsWith("\n") ? "\n" : ""}${add.join("\n")}\n`);
+  } catch {
+    /* the links stay visible to git */
+  }
 }
 
 function lockfilePm(dir: string): string {
@@ -166,7 +188,7 @@ export async function startDevServer(repo: Repo, cwd: string, sessionId: string)
     closeSync(fd);
     child.unref();
     if (!child.pid) throw new Error("it did not start");
-    const info: DevServerInfo = { pid: child.pid, port, command, log, cwd, startedAt: Date.now() };
+    const info: DevServerInfo = { pid: child.pid, port, command, log, cwd, startedAt: startedAtOf(child.pid) ?? Date.now() };
     writeFileSync(infoPath(sessionId), JSON.stringify(info));
     return info;
   } catch (e) {
@@ -194,6 +216,13 @@ function alive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/** Still the process the info names, not a later one given its pid. */
+function ours(info: DevServerInfo): boolean {
+  if (!alive(info.pid)) return false;
+  const started = startedAtOf(info.pid);
+  return started === null || Math.abs(started - info.startedAt) < 2000;
 }
 
 /** The first local URL the server printed. ANSI colour is stripped first:
@@ -227,7 +256,7 @@ export async function devServerStatus(sessionId: string): Promise<DevServerStatu
   }
   const tail = text.split("\n").slice(-20).join("\n").trim() || null;
   if (!info) return { state: log ? "exited" : "none", url: null, command: null, log, tail };
-  if (!alive(info.pid)) return { state: "exited", url: null, command: info.command, log, tail };
+  if (!ours(info)) return { state: "exited", url: null, command: info.command, log, tail };
   const printed = urlFromLog(text);
   if (printed) return { state: "ready", url: printed, command: info.command, log, tail: null };
   if (await answers(info.port)) return { state: "ready", url: `http://localhost:${info.port}/`, command: info.command, log, tail: null };
@@ -238,6 +267,9 @@ export async function devServerStatus(sessionId: string): Promise<DevServerStatu
 export function stopDevServer(sessionId: string): void {
   const info = readInfo(sessionId);
   if (!info) return;
+  rmSync(infoPath(sessionId), { force: true });
+  // A pid the server no longer holds may be another process's now.
+  if (!ours(info)) return;
   try {
     process.kill(-info.pid, "SIGTERM");
   } catch {
@@ -247,7 +279,6 @@ export function stopDevServer(sessionId: string): void {
       /* gone */
     }
   }
-  rmSync(infoPath(sessionId), { force: true });
 }
 
 /**
@@ -256,7 +287,8 @@ export function stopDevServer(sessionId: string): void {
  * machine opens the dev server on the machine that runs it.
  */
 export function devServerPage(sessionId: string): string {
-  const id = JSON.stringify(sessionId);
+  // `<` escaped, so no id can close the script element.
+  const id = JSON.stringify(sessionId).replace(/</g, "\\u003c");
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Dev server</title>
 <style>:root{color-scheme:light dark}body{font:15px system-ui,sans-serif;margin:0;padding:48px 16px;background:Canvas;color:CanvasText}
