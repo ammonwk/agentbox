@@ -440,3 +440,117 @@
   font-size: 12.5px;
   color: var(--muted);
 }
+
+/* Keybinds (Keybinds.tsx): one row an action, its keys, and what to do with them. */
+.kb-group h4 {
+  margin: 4px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.kb-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.kb-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 236px;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.kb-row:first-child {
+  border-top: 0;
+}
+.kb-row[data-recording] .kb-keys {
+  outline: 1px dashed var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+.kb-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-height: 24px;
+}
+.kb-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.kb-key[data-off] kbd {
+  opacity: 0.55;
+}
+.kb-key[data-conflict] kbd {
+  border-color: var(--warning);
+}
+.kb-key > svg {
+  color: var(--warning);
+}
+.kb-tag {
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.kb-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.kb-remove:hover,
+.kb-remove:focus-visible {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+}
+.kb-none,
+.kb-listening,
+.kb-fixed-note {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.kb-listening {
+  color: var(--accent);
+}
+.kb-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.kb-why {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+.kb-fixed .kb-label {
+  color: var(--muted);
+}
+.kb-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+@media (max-width: 640px) {
+  .kb-row {
+    grid-template-columns: 1fr;
+  }
+  .kb-actions {
+    justify-content: flex-start;
+  }
+}

@@ -1,62 +1,45 @@
 import { Modal } from "../components";
+import { ACTIONS, FIXED, GROUPS, isAppOnly, keysOf, showCombo, useKeybindings } from "../lib/keybinds";
 import { isInstalledApp } from "../lib/phone";
 import { loadedPlugins as loaded } from "../plugin/registry";
+import { go } from "../route";
 
-/** Every key the board answers to, in one place: `?` opens it. Keep it in
- *  step with the handlers it names. */
-function groups(): [string, [string, string][]][] {
+
+/** Every key the board answers to: `?` opens it. It reads the keybinds
+ *  (lib/keybinds.ts), so a key changed in Settings shows here; one only the
+ *  installed app gets is left out in a browser tab. */
+function groups(): [string, [string[], string][]][] {
   const app = isInstalledApp();
+  const board = GROUPS.map((group): [string, [string[], string][]] => {
+    const rows: [string[], string][] = [
+      ...ACTIONS.filter((a) => a.group === group).map((a): [string[], string] => [keysOf(a.id).filter((k) => app || !isAppOnly(k)), a.label]),
+      ...FIXED.filter((f) => f.group === group).map((f): [string[], string] => [f.keys, f.label]),
+    ];
+    return [group, rows.filter(([keys]) => keys.length > 0)];
+  });
+  // What extensions add: their pages' own keys, and their keys that work anywhere.
+  const one = (key: string, label: string): [string[], string] => [[key], label];
   return [
-    ["Anywhere", [
-      ["n", "New session"],
-      ...(app ? [["Ctrl+T", "New session, from the terminal too"] as [string, string]] : []),
-      ["/", "Search the list"],
-      ["?", "These shortcuts"],
-      ["↑ ↓ ← →", "Move through the sidebar, the list and the open pane"],
-      ["F6", "Next pane, from a field or the terminal too"],
-    ]],
-    ["Sessions", [
-      ["j  k", "Next and previous session"],
-      ["Alt+J  Alt+K", "The same, from the composer or the terminal"],
-      ["h  l", "Fold and unfold a session's children; h goes up to its parent"],
-      ["1  2  3", "Timeline, Terminal, Load"],
-      ["Alt+1  Alt+2  Alt+3", "The same, from the composer or the terminal"],
-      ["Shift+Tab", "Previous tab, in the terminal"],
-      [app ? "Ctrl+W / Alt+W" : "Alt+W", "Close the open session"],
-      [app ? "Ctrl+Shift+T / Alt+Shift+T" : "Alt+Shift+T", "Reopen the last closed session"],
-      ...(app ? [["Ctrl+Tab  Ctrl+Shift+Tab", "Step through the sessions"] as [string, string]] : []),
-      ["Esc", "Stop the running turn (outside a field)"],
-    ]],
-    ["Composer", [
-      ["Enter", "Send"],
-      ["Shift+Enter", "New line"],
-      ["↑  ↓", "In an empty box: what you said before"],
-      ["/", "Skills"],
-      ["Esc", "Stop a running turn; at rest, leave the box"],
-    ]],
-    ["New session", [
-      ["Alt+1 … Alt+6", "Pick the agent"],
-      ["Ctrl+Enter", "Start"],
-    ]],
-    // What extensions add: their pages' own keys, and their keys that work anywhere.
-    ...loaded().flatMap((l): [string, [string, string][]][] => l.pages.filter((p) => p.keys?.length).map((p) => [p.label, p.keys!])),
+    ...board,
+    ...loaded().flatMap((l) => l.pages.filter((p) => p.keys?.length).map((p): [string, [string[], string][]] => [p.label, p.keys!.map(([k, label]) => one(k, label))])),
     ...(loaded().some((l) => l.commands.length)
-      ? [["Extensions", loaded().flatMap((l) => l.commands.map((c): [string, string] => [c.key, `${c.label} (${l.name})`]))] as [string, [string, string][]]]
+      ? [["Extensions", loaded().flatMap((l) => l.commands.map((c) => one(c.key, `${c.label} (${l.name})`)))] as [string, [string[], string][]]]
       : []),
   ];
 }
 
 export function Shortcuts({ onClose }: { onClose: () => void }) {
+  useKeybindings();
   return (
     <Modal title="Keyboard shortcuts" onClose={onClose} wide>
       <div className="shortcuts">
-        {groups().map(([title, keys]) => (
+        {groups().map(([title, rows]) => (
           <section key={title}>
             <h3>{title}</h3>
             <dl>
-              {keys.map(([k, what]) => (
-                <div key={k}>
-                  <dt>{k.split(/\s{2,}| \/ /).map((one, i) => <kbd key={i}>{one}</kbd>)}</dt>
+              {rows.map(([keys, what]) => (
+                <div key={what}>
+                  <dt>{keys.map((k) => <kbd key={k}>{showCombo(k)}</kbd>)}</dt>
                   <dd>{what}</dd>
                 </div>
               ))}
@@ -64,6 +47,21 @@ export function Shortcuts({ onClose }: { onClose: () => void }) {
           </section>
         ))}
       </div>
+      <p className="hint shortcuts-more">
+        Change them in{" "}
+        <a
+          href="#/settings"
+          onClick={(e) => {
+            e.preventDefault();
+            onClose();
+            go({ page: "settings" });
+            setTimeout(() => document.getElementById("keybinds")?.scrollIntoView({ block: "start" }), 100);
+          }}
+        >
+          Settings → Keybinds
+        </a>
+        .
+      </p>
     </Modal>
   );
 }
