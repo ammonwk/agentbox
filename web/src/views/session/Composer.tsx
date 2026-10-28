@@ -139,6 +139,9 @@ export function Composer({ session, accounts, skills, textareaRef }: {
 
   async function submit() {
     if (busy || submitting.current || images.uploading) return;
+    // A numbered menu is up: a message would type into the dialog, not the
+    // agent. Answer it in the Timeline; the message can go after.
+    if (session.dialog) return;
     if (mode.kind === "send" && !text.trim()) return;
     setSpoke(false);
     submitting.current = true;
@@ -345,8 +348,8 @@ export function Composer({ session, accounts, skills, textareaRef }: {
               variant="ghost"
               icon={voice.phase === "locked" ? Icon.check : talks && (voice.phase === "held" || !text.trim()) ? Icon.mic : Icon.send}
               loading={busy}
-              disabled={talks ? images.uploading : !text.trim() || images.uploading}
-              title="Send (Enter)"
+              disabled={!!session.dialog || (talks ? images.uploading : !text.trim() || images.uploading)}
+              title={session.dialog ? "Choose an option in the Timeline first" : "Send (Enter)"}
               aria-label={voice.phase === "locked" ? "Finish the recording" : talks && !text.trim() ? "Hold to record a voice message" : "Send"}
               data-ready={text.trim() ? true : undefined}
               data-rec={recording ? voice.phase : undefined}
