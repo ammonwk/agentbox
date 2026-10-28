@@ -49,6 +49,7 @@ import { contextDocs, readContextDoc, writeContextDoc } from "./context";
 import { briefingText } from "../core/providers/briefing";
 import { addRepo, deleteRepo, getDb, getKv, listSessionRecords, resolveSessionRefs, getRepoById, getSettings, setKv, listBtw, listRepos, listSchedules, mergeSettings, saveSettings, setRepoSetup, setRepoWorktreeDefault } from "../core/db";
 import { parseSetup } from "../core/setup";
+import { devServerPage, devServerStatus } from "../core/devserver";
 import { serviceInstalled, installService, lingering } from "../core/service";
 import { readUserIdentity } from "../core/user";
 import { Scheduler, type ScheduleEdit } from "../core/scheduler";
@@ -874,6 +875,7 @@ const router = new Router(mapError)
         branch,
         ref,
         pr: typeof b.pr === "number" && Number.isInteger(b.pr) && b.pr > 0 ? b.pr : undefined,
+        devServer: b.devServer === true,
         prompt: typeof b.prompt === "string" ? b.prompt : undefined,
         model: optionalString(b, "model"),
         effort: optionalString(b, "effort"),
@@ -900,6 +902,12 @@ const router = new Router(mapError)
       if (holding) startingOn.delete(key);
     }
   })
+
+  // ---- a session's dev server (src/core/devserver.ts)
+  .add("GET", "/api/sessions/:id/dev", async ({ params }) => json(await devServerStatus(params.id!)))
+  .add("GET", "/api/sessions/:id/dev/open", ({ params }) =>
+    new Response(devServerPage(params.id!), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }),
+  )
 
   // ---- who has which pull request
   // The session a command runs in, for the CLI to tell "you" from another:

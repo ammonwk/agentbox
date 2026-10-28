@@ -715,6 +715,7 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
   const key = (field: string) => `repo:${repo.id}:${field}`;
   const patch = (field: string, p: RepoPatch) => track(key(field), api.patchRepo(repo.id, p));
   const { copy, run } = repo.setup;
+  const dev = repo.setup.dev ?? "";
   const summary = [
     `Starts in: ${START_IN.find(([v]) => v === repo.worktreeDefault)![1].toLowerCase()}`,
     copy.length > 0 ? `copies ${copy.length} path${copy.length === 1 ? "" : "s"}` : null,
@@ -759,7 +760,7 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
             mono
             value={copy.join("\n")}
             placeholder={".env\napps/api/.env"}
-            onCommit={(v) => patch("copy", { setup: { copy: v.split("\n").map((l) => l.trim()).filter(Boolean), run } })}
+            onCommit={(v) => patch("copy", { setup: { copy: v.split("\n").map((l) => l.trim()).filter(Boolean), run, dev } })}
           />
         )}
       </Field>
@@ -770,10 +771,20 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
         hint="Runs in each new worktree as the agent starts. Its output is in the agentbox logs, under setup/<session>.log."
       >
         {(id) => (
-          <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim() } })} />
+          <CommitInput id={id} mono value={run} placeholder="npm ci" onCommit={(v) => patch("run", { setup: { copy, run: v.trim(), dev } })} />
         )}
       </Field>
       <SaveMark state={saveStateOf(key("run"))} />
+
+      <Field
+        label="Dev server command"
+        hint="What New session's Dev server switch starts, with PORT set to a free port ($PORT in the command is that port). Blank runs the package.json dev script. The worktree uses this checkout's node_modules through symlinks, and the setup command does not run. Its output is under dev/<session>.log."
+      >
+        {(id) => (
+          <CommitInput id={id} mono value={dev} placeholder="bun run dev -- --port $PORT" onCommit={(v) => patch("dev", { setup: { copy, run, dev: v.trim() } })} />
+        )}
+      </Field>
+      <SaveMark state={saveStateOf(key("dev"))} />
     </details>
   );
 }
