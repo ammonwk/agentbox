@@ -429,6 +429,21 @@ code {
   border-radius: 0 3px 3px 0;
   background: var(--accent);
 }
+/* On a computer New session is the + at the top of the sessions list
+   (Rail.tsx); the nav keeps it only for the phone's bottom bar. */
+.nav-new {
+  display: none;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.nav-new:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.nav-new kbd {
+  margin-left: auto;
+}
 .nav-keys kbd {
   margin-left: auto;
 }
@@ -2530,14 +2545,16 @@ kbd {
   .sidebar .spacer,
   .sidebar .nav-keys,
   .sidebar .conn,
-  .nav-fullscreen {
+  .nav-fullscreen,
+  .nav-new kbd {
     display: none;
   }
   .sidebar .nav-label {
     opacity: 1;
     transition: none;
   }
-  .nav-item {
+  .nav-item,
+  .nav-new {
     flex: 1 1 0;
     min-width: 0;
     min-height: 48px;
@@ -2571,7 +2588,14 @@ kbd {
      each entry is placed by name, so a page added later takes its place
      without renumbering the rest. */
   .sidebar { overflow-x: auto; }
-  .sidebar .nav-item, .sidebar .nav-bell { flex: 0 0 56px; }
+  .sidebar .nav-item, .sidebar .nav-new, .sidebar .nav-bell { flex: 0 0 56px; }
+  /* New sits where the thumb rests, after Sessions and Review. */
+  .nav-new {
+    display: flex;
+    order: 3;
+  }
+  .nav-new .nav-label { display: none; }
+  .nav-new::after { content: "New"; }
   .sidebar [data-nav-id="agents"],
   .sidebar [data-nav-id="sessions"] { order: 1; }
   .sidebar [data-nav-id="review"] { order: 2; }

@@ -208,6 +208,26 @@ export function App() {
             ) : null}
           </button>
 
+          {/* Blurring on a mouse click (e.detail > 0) keeps the Modal from
+              handing focus back here on close: a script refocus outside the
+              gesture reads as keyboard focus, and :focus-visible on this
+              button held the sidebar open after sending. Keyboard activation
+              (Enter) keeps the restore. */}
+          <button
+            type="button"
+            className="nav-item nav-new"
+            data-nav-item
+            title="New session (n)"
+            onClick={(e) => {
+              if (e.detail > 0) e.currentTarget.blur();
+              setNewOpen(true);
+            }}
+          >
+            <Icon.plus />
+            <span className="nav-label">New session</span>
+            <kbd className="nav-label">n</kbd>
+          </button>
+
           <nav aria-label="Primary">
             {NAV.map(({ id, label, icon: IconCmp, to }) => {
               const count = counts[id];
