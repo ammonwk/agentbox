@@ -701,15 +701,9 @@ function Repositories({
   );
 }
 
-const START_IN: [boolean | null, string][] = [
-  [true, "New worktree"],
-  [false, "Main checkout"],
-  [null, "Last used"],
-];
-
 /**
- * Where the repo's new sessions start, and what a worktree of it needs that git
- * does not carry. Folded to one line: set once per repo, then only read.
+ * What a worktree of the repo needs that git does not carry, and the dev
+ * server New session can start in it. Folded to one line: set once per repo, then only read.
  */
 function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Track; saveStateOf: SectionProps["saveStateOf"] }) {
   const key = (field: string) => `repo:${repo.id}:${field}`;
@@ -717,36 +711,16 @@ function RepoSetupFields({ repo, track, saveStateOf }: { repo: Repo; track: Trac
   const { copy, run } = repo.setup;
   const dev = repo.setup.dev ?? "";
   const summary = [
-    `Starts in: ${START_IN.find(([v]) => v === repo.worktreeDefault)![1].toLowerCase()}`,
     copy.length > 0 ? `copies ${copy.length} path${copy.length === 1 ? "" : "s"}` : null,
     run ? `runs ${run}` : null,
+    repo.setup.dev ? `dev server: ${repo.setup.dev}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
 
   return (
     <details className="repo-setup">
-      <summary>{summary}</summary>
-
-      <Field label="New sessions start in" hint="What New session picks when this repo is chosen. Last used keeps whatever the previous session did.">
-        {(id) => (
-          <div className="seg" role="group" aria-label="New sessions start in" id={id}>
-            {START_IN.map(([v, label]) => (
-              <button
-                key={label}
-                type="button"
-                aria-pressed={repo.worktreeDefault === v}
-                disabled={v === false && repo.kind === "github"}
-                title={v === false && repo.kind === "github" ? "A GitHub repo has no checkout of its own to work in." : undefined}
-                onClick={() => patch("start", { worktreeDefault: v })}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-      </Field>
-      <SaveMark state={saveStateOf(key("start"))} />
+      <summary>{summary || "Worktree setup and dev server"}</summary>
 
       <Field
         label="Copy into new worktrees"
