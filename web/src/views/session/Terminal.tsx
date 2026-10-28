@@ -9,6 +9,7 @@ import { resolvedSessions, resolveSessions } from "../../lib/sessionresolve";
 import { backoffMs, openTerm, type TermChannel } from "../../api";
 import { terminalAccent } from "../../lib/accent";
 import { Button, Icon } from "../../components";
+import { registerDictationTarget } from "../../lib/dictationTarget";
 
 /**
  * The session's real TUI: an xterm.js view onto the same tmux session a
@@ -110,6 +111,7 @@ export default function Terminal({
     box.addEventListener("wheel", moved, { passive: true, capture: true });
 
     let alive = true;
+    let connected = false;
     let chan: TermChannel | null = null;
     let attempts = 0;
     let retry: ReturnType<typeof setTimeout> | null = null;
@@ -135,6 +137,7 @@ export default function Terminal({
       chan = openTerm(sessionId, {
         onOpen: () => {
           if (!alive) return;
+          connected = true;
           if (grace) clearTimeout(grace);
           grace = null;
           attempts = 0;
@@ -149,6 +152,7 @@ export default function Terminal({
         },
         onOutput: (bytes) => alive && term.write(bytes),
         onClose: (reason) => {
+          connected = false;
           if (!alive) return;
           attempts += 1;
           if (attempts === 1) {
@@ -227,6 +231,20 @@ export default function Terminal({
       return false;
     });
     const input = term.onData((d) => chan?.send(d));
+    const unregisterDictation = term.textarea && registerDictationTarget(term.textarea, () => {
+      const field = term.textarea!;
+      const unchanged = () => alive && connected && field.isConnected && document.activeElement === field;
+      return {
+        unchanged,
+        insert: (text, spoken) => {
+          if (!unchanged()) return;
+          // Speech is editable TUI input. Even a transcript containing line
+          // breaks must never send Enter or another terminal control key.
+          if (spoken) term.paste(text.replace(/[\x00-\x1f\x7f]+/g, " "));
+          else chan?.send(text);
+        },
+      };
+    });
     const sized = term.onResize(({ cols, rows }) => chan?.resize(cols, rows));
 
     let raf = 0;
@@ -256,6 +274,7 @@ export default function Terminal({
       cancelAnimationFrame(raf);
       ro.disconnect();
       input.dispose();
+      unregisterDictation?.();
       sized.dispose();
       links.dispose();
       prLinks.dispose();

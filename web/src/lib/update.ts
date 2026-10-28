@@ -43,10 +43,11 @@ export function useUpdateReady(): boolean {
   );
 }
 
-/** Nothing on screen a reload would throw away: a half-typed message, an open dialog, a voice call. */
+/** Nothing on screen a reload would throw away: a half-typed message, an open dialog, a voice call, a dictation. */
 function quiet(): boolean {
   if (parseHash(location.hash).page === "voice") return false;
   if (document.querySelector(".modal-backdrop")) return false;
+  if (document.querySelector('.dictation[data-phase="starting"], .dictation[data-phase="recording"], .dictation[data-phase="transcribing"]')) return false;
   return ![...document.querySelectorAll("textarea")].some((t) => t.value.trim() !== "");
 }
 
