@@ -36,6 +36,7 @@ import {
   ompSlug,
   sessionIdFromFileName,
   startFromFileName,
+  textOf,
   titleFromSlot,
   toolOutcomeOf,
   type OmpState,
@@ -224,18 +225,26 @@ interface OmpProc {
  *     (`AGENTBOX_SESSION` in its environment), once agentbox has matched that
  *     session to its file: omp opens its file only some way into its first
  *     turn, and until then siblings started beside it in one checkout read
- *     alike to rule 4, which handed nine omp sessions started in four seconds
- *     each other's ids, so a session's own `agentbox pr claim` was refused as
- *     held by itself;
+ *     alike to the newest-file guess, which handed nine omp sessions started
+ *     in four seconds each other's ids, so a session's own `agentbox pr
+ *     claim` was refused as held by itself;
  *  3. `-r <id|path>` in argv;
- *  4. the newest session file in the cwd's slug dir created after the
- *     process started and not already claimed.
+ *  4. for one agentbox started with a prompt (`promptOf`), the file in its
+ *     cwd's slug dir, born after it started, whose first prompt holds that
+ *     prompt. omp writes nothing until its first answer, so a slow start
+ *     has no file for a while, and the newest-file guess below handed it a
+ *     sibling's born later in the same checkout (sihfi7cr, 10-28, given a
+ *     brief written twenty minutes after it started); until its own
+ *     appears it has none;
+ *  5. for one started without a prompt (in your own terminal), the newest
+ *     such file not already claimed.
  */
 export function attributeOmp(
   procs: OmpProc[],
   root: string,
   filesWritten: (pid: number, keep: (path: string) => boolean) => string[],
   startedAs: (pid: number) => string | null = () => null,
+  promptOf: (pid: number) => string | null = () => null,
 ): Map<number, string | null> {
   const out = new Map<number, string | null>();
   const claimed = new Set<string>();
@@ -294,27 +303,88 @@ export function attributeOmp(
     }
   }
 
-  // 4. A file born after the process started, in its cwd.
-  for (const p of procs) {
-    if (out.has(p.pid)) continue;
+  // A file born after the process started, in its cwd.
+  const bornAfter = (p: OmpProc) => {
     const dir = slugDirFor(root, p.cwd);
-    let best: { id: string; mtime: number } | null = null;
-    for (const n of sessionFilesIn(dir)) {
+    return sessionFilesIn(dir).flatMap((n) => {
       const id = sessionIdFromFileName(n);
       const born = startFromFileName(n);
-      if (!id || born === null || claimed.has(id) || born < p.startedAt - 2000) continue;
+      return id && born !== null && !claimed.has(id) && born >= p.startedAt - 2000 ? [{ id, born, path: join(dir, n) }] : [];
+    });
+  };
+
+  // 4. The file that holds the prompt it was started with; the first started
+  // takes the first born, should two have been told the same words.
+  for (const p of [...procs].sort((a, b) => a.startedAt - b.startedAt)) {
+    const prompt = out.has(p.pid) ? null : promptOf(p.pid);
+    if (!prompt) continue;
+    const said = squash(prompt);
+    const own = bornAfter(p)
+      .filter((f) => firstPromptIn(f.path)?.includes(said))
+      .sort((a, b) => a.born - b.born)[0];
+    out.set(p.pid, own?.id ?? null);
+    if (own) claimed.add(own.id);
+  }
+
+  // 5. Started without one: the newest.
+  for (const p of procs) {
+    if (out.has(p.pid)) continue;
+    let best: { id: string; mtime: number } | null = null;
+    for (const f of bornAfter(p)) {
       let mtime = 0;
       try {
-        mtime = statSync(join(dir, n)).mtimeMs;
+        mtime = statSync(f.path).mtimeMs;
       } catch {
         continue;
       }
-      if (!best || mtime > best.mtime) best = { id, mtime };
+      if (!best || mtime > best.mtime) best = { id: f.id, mtime };
     }
     out.set(p.pid, best?.id ?? null);
     if (best) claimed.add(best.id);
   }
   return out;
+}
+
+const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/** How far into a session file its first prompt is looked for: past the
+ *  header lines and a prompt of any size agentbox types. */
+const FIRST_PROMPT_BYTES = 256 * 1024;
+const firstPromptBuf = Buffer.alloc(FIRST_PROMPT_BYTES);
+/** A file's first prompt never changes once written. */
+const firstPrompts = new Map<string, string>();
+
+/** The first thing said to a session in its file, whitespace squashed; null
+ *  until it is there. */
+function firstPromptIn(path: string): string | null {
+  const known = firstPrompts.get(path);
+  if (known !== undefined) return known;
+  let text = "";
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    text = firstPromptBuf.subarray(0, readSync(fd, firstPromptBuf, 0, FIRST_PROMPT_BYTES, 0)).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+  for (const line of text.split("\n")) {
+    let m: any;
+    try {
+      m = JSON.parse(line);
+    } catch {
+      continue; // the last line may be cut short, or still being written
+    }
+    m = m?.type === "message" ? m.message : null;
+    // A subagent's assignment is attributed to the agent, not said to it.
+    if (m?.role !== "user" || m.attribution === "agent") continue;
+    const said = squash(textOf(m.content));
+    if (!said) continue;
+    firstPrompts.set(path, said);
+    return said;
+  }
+  return null;
 }
 
 // ------------------------------------------------------------ reader
@@ -825,6 +895,7 @@ export const ompAdapter: ProviderAdapter = {
     const procs: OmpProc[] = [];
     const accountOf = new Map<number, string | null>();
     const startedAs = new Map<number, string>();
+    const promptOf = new Map<number, string>();
     for (const m of matches) {
       // A child omp (a worker it spawned) is part of its parent's session.
       if (pids.has(m.ppid)) continue;
@@ -837,9 +908,15 @@ export const ompAdapter: ProviderAdapter = {
       accountOf.set(m.pid, (accountOfEnv(env, accounts) ?? first)?.id ?? null);
       const rec = env?.get("AGENTBOX_SESSION") ? getSessionRecord(env.get("AGENTBOX_SESSION")!) : null;
       if (rec?.provider === "omp" && rec.agentSessionId) startedAs.set(m.pid, rec.agentSessionId);
+      // Until it is matched, the record's facts are the spawn's own: the
+      // prompt the fleet types into it.
+      else if (rec?.provider === "omp") {
+        const prompt = (rec.facts as { firstPrompt?: unknown } | null)?.firstPrompt;
+        if (typeof prompt === "string" && prompt.trim()) promptOf.set(m.pid, prompt);
+      }
     }
     if (procs.length === 0) return [];
-    const ids = attributeOmp(procs, sessionsRoot(), filesWrittenBy, (pid) => startedAs.get(pid) ?? null);
+    const ids = attributeOmp(procs, sessionsRoot(), filesWrittenBy, (pid) => startedAs.get(pid) ?? null, (pid) => promptOf.get(pid) ?? null);
     return procs.map(
       (p): LiveProcess => ({
         pid: p.pid,

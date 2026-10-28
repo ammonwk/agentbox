@@ -1213,7 +1213,7 @@ export class Fleet extends EventEmitter {
    * omp) writes a transcript some seconds after we start it. The session we
    * spawned is waiting with a null id. A recorded launch marker or the
    * process in its pane identifies it. Only older adapters without a marker
-   * may use the directory/time fallback; Codex must never use that guess.
+   * may use the directory/time fallback; Codex and omp never use that guess.
    */
   private matchPendingSpawns(now: number): void {
     const defaults = new Set(listAccounts().filter((a) => a.isDefault).map((a) => a.id));
@@ -1243,7 +1243,9 @@ export class Fleet extends EventEmitter {
       if (agentId && this.transcriptStartedBefore(rec.provider, agentId, rec.createdAt - 10_000)) continue;
 
       if (!agentId) {
-        if (rec.provider === "codex" || now - rec.createdAt >= MATCH_WINDOW_MS) continue;
+        // omp's adapter has matched every file it can prove, by the prompt
+        // typed into it (`attributeOmp`).
+        if (rec.provider === "codex" || rec.provider === "omp" || now - rec.createdAt >= MATCH_WINDOW_MS) continue;
         let best: Tracked | null = null;
         for (const t of this.tracked.values()) {
           const f = t.facts;

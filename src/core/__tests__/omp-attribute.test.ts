@@ -43,3 +43,32 @@ test("a sibling not yet matched never takes one that was", () => {
   expect(got.get(102)).toBe(ids[2]);
   expect([got.get(100), got.get(101)]).not.toContain(ids[2]);
 });
+
+/**
+ * Two starts in one checkout, the first slow to write: sihfi7cr (10-28) was
+ * given the file of a start made twenty minutes after it, whose brief it then
+ * showed as its own.
+ */
+test("a slow start is never given the file of a sibling started after it", () => {
+  const dir2 = slugDirFor(root, "/work/other");
+  mkdirSync(dir2, { recursive: true });
+  const fast = "01a181d1-cadd-7330-ab9d-57c4642eb0b0";
+  const born = new Date(t0 + 20 * 60_000);
+  const lines = [
+    { type: "session", version: 3, id: fast, timestamp: born.toISOString(), cwd: "/work/other" },
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "You lost #12 to a restart.\n\nSteward: you take over\nowed:1260" }] } },
+  ];
+  writeFileSync(join(dir2, `${born.toISOString().replace(/[:.]/g, "-")}_${fast}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const two = [
+    { pid: 200, ppid: 1, argv: ["omp"], cwd: "/work/other", startedAt: t0 },
+    { pid: 201, ppid: 1, argv: ["omp"], cwd: "/work/other", startedAt: t0 + 19 * 60_000 },
+  ];
+  const prompts: Record<number, string> = { 200: "Steward: recheck #10847", 201: "Steward: you take over  owed:1260" };
+
+  // The newest-file guess hands the slow one its sibling's file.
+  expect(attributeOmp(two, root, noFiles).get(200)).toBe(fast);
+
+  const got = attributeOmp(two, root, noFiles, () => null, (pid) => prompts[pid] ?? null);
+  expect(got.get(200)).toBeNull();
+  expect(got.get(201)).toBe(fast);
+});
