@@ -158,6 +158,7 @@ import type {
   Placement,
   Scope,
   PromptHistoryEntry,
+  PromptMenu,
   QueuedMessage,
   ProviderId,
   Session,
@@ -389,6 +390,8 @@ export class Fleet extends EventEmitter {
   private blocked = new Map<string, string>();
   /** A question read off the screen, for a session whose transcript does not have it (yet). */
   private screenAsks = new Map<string, { id: string; questions: AskQuestion[] }>();
+  /** The numbered menu a blocked session is showing, read off its screen. */
+  private dialogs = new Map<string, PromptMenu>();
   private tokenSampled = new Map<string, { at: number; costEquiv: number; turnOpen: boolean }>();
   /** `${session}:${pid}` whose process ancestry has been looked at. */
   private ancestryChecked = new Set<string>();
@@ -2405,8 +2408,16 @@ export class Fleet extends EventEmitter {
             this.screenAsks.delete(rec.id);
             if (why === "asking a question" && !f?.pendingAsk) this.deps.runtime.unsquash?.(pane.name);
           }
+          // A numbered menu (a safety refusal's choices, a limit dialog):
+          // read it off the same screen so the Timeline can put buttons on it.
+          const dialog = status === "blocked" && screen && adapter.dialogOn ? adapter.dialogOn(screen) : null;
+          if (dialog) this.dialogs.set(rec.id, dialog);
+          else this.dialogs.delete(rec.id);
         }
       }
+      // A menu is only what the live screen shows; one from an earlier block
+      // must not outlive it.
+      if (status !== "blocked") this.dialogs.delete(rec.id);
       // Came back unable to act (`watchStarts`) and stopped trying: it needs you.
       const trouble = host === "tmux" ? this.trouble.get(rec.id) : undefined;
       if (trouble && status === "waiting") {
@@ -2488,6 +2499,7 @@ export class Fleet extends EventEmitter {
       // Only while the dialog is up: a call recorded but not yet answered is
       // also what a session interrupted mid-question leaves behind.
       question: live === "blocked" && host === "tmux" ? (f?.pendingAsk ?? this.screenAsks.get(rec.id) ?? null) : null,
+      dialog: live === "blocked" && host === "tmux" ? (this.dialogs.get(rec.id) ?? null) : null,
       // The queue lives in the process: one that has ended took it with it.
       queued: live === "running" || live === "blocked" ? (f?.queued ?? []) : [],
       origin: rec.origin,

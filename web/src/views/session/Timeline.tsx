@@ -1,5 +1,5 @@
 import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Btw, MateMessage, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
+import type { Btw, MateMessage, PromptMenu, QueuedMessage, Session, TimelineEvent, Turn } from "../../../../src/core/types";
 import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
 import { modelName } from "../../lib/newsession";
@@ -21,6 +21,7 @@ import { dropPasteTags, readSent, splitPastes } from "../../../../src/core/sent"
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
 import { EditBox, EditButton, EditsCtx, editsOf, keepEdit, openEdit, VersionBar, VersionNav, useVersionTimeline, type MessageEdits } from "./versions";
+import { useAction } from "./useAction";
 import "./refusal.css";
 
 type ToolEvent = Extract<TimelineEvent, { kind: "tool" }>;
@@ -172,6 +173,8 @@ export function Timeline({ session }: { session: Session }) {
   // one): show it from its top, which a card taller than the view would
   // otherwise have scrolled past.
   const question = viewing ? null : session.question;
+  const dialog = viewing ? null : session.dialog;
+  const dialogSig = dialog ? `${dialog.title ?? ""}|${dialog.options.map((o) => o.label).join("|")}` : null;
   useLayoutEffect(() => {
     const el = boxRef.current;
     const card = el?.querySelector<HTMLElement>(".ask-live");
@@ -179,7 +182,7 @@ export function Timeline({ session }: { session: Session }) {
     el.scrollTop = el.scrollHeight;
     const over = el.getBoundingClientRect().top + 8 - card.getBoundingClientRect().top;
     if (over > 0) el.scrollTop -= over;
-  }, [question?.id, ready]);
+  }, [question?.id, dialogSig, ready]);
 
   // The rest of a staged page rendered above what is on screen: stay at the
   // bottom if that is where the reader was, else keep their place.
@@ -495,7 +498,11 @@ export function Timeline({ session }: { session: Session }) {
               renderRow(r)
             ),
           )}
-          {question ? <QuestionCard key={question.id} sessionId={session.id} ask={question} /> : null}
+          {question ? (
+            <QuestionCard key={question.id} sessionId={session.id} ask={question} />
+          ) : dialog ? (
+            <DialogCard key={dialogSig} sessionId={session.id} dialog={dialog} />
+          ) : null}
           {queued.map((q, i) => (
             <UserRow key={`q${i}:${q.at}`} ev={{ id: `queued:${q.at}`, at: q.at, kind: "user", text: q.text }} queued />
           ))}
@@ -683,6 +690,79 @@ function RefusalRow({ ev }: { ev: Extract<TimelineEvent, { kind: "refusal" }> })
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The numbered menu a blocked CLI is showing at its foot — Claude's "Switch
+ * to Opus 4.8 / Edit prompt and retry" after a safety refusal, a limit
+ * dialog — answerable where you read the conversation. Each button presses
+ * the keys that choose its option in the terminal, so the two stay one
+ * dialog.
+ */
+function DialogCard({ sessionId, dialog }: { sessionId: string; dialog: PromptMenu }) {
+  const { run, busy, error } = useAction();
+  const [sent, setSent] = useState(false);
+  // The CLI may ignore a key or take a moment; let the choice be tried again
+  // rather than leaving a dead button if the screen does not move.
+  useEffect(() => {
+    if (!sent) return;
+    const t = setTimeout(() => setSent(false), 5_000);
+    return () => clearTimeout(t);
+  }, [sent]);
+  const choose = async (keys: string[]) => {
+    if (busy || sent) return;
+    const ok = await run(() => api.keys(sessionId, keys));
+    if (ok) setSent(true);
+  };
+  return (
+    <section className="ask ask-live tl-dialog" aria-label="The agent is waiting for you">
+      <div className="ask-legend">
+        <span className="ask-chip">waiting</span>
+        <span className="ask-text">{dialog.title || "Choose how to continue"}</span>
+      </div>
+      <div className="ask-opts">
+        {dialog.options.map((o, i) => (
+          <button
+            key={`${i}:${o.label}`}
+            type="button"
+            className="ask-opt"
+            disabled={busy || sent}
+            onClick={() => void choose(o.keys)}
+          >
+            <span className="tl-dialog-key" aria-hidden="true">
+              {i + 1}
+            </span>
+            <span className="ask-body">
+              <span className="ask-label">{o.label}</span>
+            </span>
+          </button>
+        ))}
+        {dialog.dismiss ? (
+          <button type="button" className="ask-opt" disabled={busy || sent} onClick={() => void choose(dialog.dismiss!)}>
+            <span className="tl-dialog-key" aria-hidden="true">
+              esc
+            </span>
+            <span className="ask-body">
+              <span className="ask-label">Dismiss this prompt</span>
+            </span>
+          </button>
+        ) : null}
+      </div>
+      <div className="ask-foot">
+        {error ? (
+          <span className="ask-error" role="alert">
+            <Icon.alert size={13} /> {error}
+          </span>
+        ) : sent ? (
+          <span className="faint">
+            <Spinner size={11} /> Chosen — waiting for the agent…
+          </span>
+        ) : (
+          <span className="faint">The terminal follows the same choice.</span>
+        )}
+      </div>
+    </section>
   );
 }
 

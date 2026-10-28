@@ -253,7 +253,10 @@ export function Composer({ session, accounts, skills, textareaRef }: {
       {session.question && mode.kind === "send" ? null : session.status === "blocked" && mode.kind === "send" && shownStatus(session) !== "retrying" ? (
         <div className="cmp-keys" role="group" aria-label="Answer the prompt">
           <span className="cmp-keys-label">
-            <Icon.alert size={13} /> The agent is showing a prompt — answer it in the terminal, or send a key:
+            <Icon.alert size={13} />{" "}
+            {session.dialog
+              ? "The agent is showing a prompt — choose an option in the Timeline, or send a key:"
+              : "The agent is showing a prompt — answer it in the terminal, or send a key:"}
           </span>
           {PROMPT_KEYS.map((k) => (
             <button

@@ -19,6 +19,7 @@ import type {
   Account,
   AskAnswer,
   AskQuestion,
+  PromptMenu,
   ProviderId,
   QueuedMessage,
   TimelineEvent,
@@ -506,6 +507,11 @@ export interface ProviderAdapter {
    *  for (a permission prompt, a login), in a few words — or null.
    *  `LIMIT_DIALOG` is the one answer that is not a prompt for you. */
   blockedOn?(screen: string): string | null;
+
+  /** The numbered menu `blockedOn` names, when the screen shows one: each
+   *  option with the keys that choose it. Null for prompts that are not a
+   *  menu (a permission question, a login). */
+  dialogOn?(screen: string): PromptMenu | null;
 
   /** The next keys to press toward answering an AskUserQuestion dialog on
    *  `screen` (see claude-ask.ts). `visited` is kept by the caller across steps. */

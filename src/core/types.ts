@@ -596,6 +596,9 @@ export interface Session {
   /** The AskUserQuestion dialog it is showing, while it shows one: answer it
    *  with `POST /api/sessions/:id/answer`. */
   question: { id: string; questions: AskQuestion[] } | null;
+  /** The numbered menu it is showing at its foot, while it waits on you:
+   *  answer it by pressing an option's keys (`POST /api/sessions/:id/keys`). */
+  dialog: PromptMenu | null;
   /** What it was sent mid-turn and is holding until the current step yields
    *  (claude), oldest first; empty unless it is running or blocked. Claude
    *  records its queue in the transcript, so this outlives the page that sent it. */
@@ -798,6 +801,19 @@ export interface AskQuestion {
 export interface AskAnswer {
   labels: string[];
   other?: string;
+}
+
+/**
+ * A numbered menu a blocked CLI is showing at its foot — Claude's refusal
+ * choices, a limit dialog — with the tmux keys that choose each option. The
+ * screen is the record; this is what the Timeline puts a button on.
+ */
+export interface PromptMenu {
+  /** The dialog's own heading, when it has one ("Session paused"). */
+  title: string | null;
+  options: { label: string; keys: string[] }[];
+  /** The keys that dismiss it, when the screen names a key. */
+  dismiss: string[] | null;
 }
 
 /**

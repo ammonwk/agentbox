@@ -367,6 +367,7 @@ function sess(p: Partial<Session> & Pick<Session, "id" | "provider" | "status" |
     turnError: null,
     autoResume: null,
     question: null,
+    dialog: null,
     queued: [],
     origin: "agentbox",
     parent: null,

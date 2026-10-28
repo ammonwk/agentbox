@@ -55,3 +55,23 @@
 .tl-refusal-foot a {
   color: var(--accent);
 }
+
+/* The menu a blocked CLI is showing: its options are buttons, in the same
+ * warning hue as the refusal that brought it up. */
+.tl-dialog {
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+  background: color-mix(in srgb, var(--warning) 4%, var(--panel));
+}
+.tl-dialog-key {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+}

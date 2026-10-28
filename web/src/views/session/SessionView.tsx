@@ -767,7 +767,7 @@ export function Detail({
             ) : (
               <>
                 <Icon.alert size={13} /> {session.attention.reason}.{" "}
-                The Terminal tab shows the prompt.
+                {session.dialog ? "Choose an option at the end of the Timeline, or answer in the Terminal." : "The Terminal tab shows the prompt."}
               </>
             )}
           </div>

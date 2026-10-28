@@ -27,7 +27,7 @@ import { moveInto } from "./move";
 import { randomUUID } from "node:crypto";
 import { packageRoot, userHome } from "../paths";
 import { cliVersion } from "./cli-version";
-import type { Account } from "../types";
+import type { Account, PromptMenu } from "../types";
 import { JsonlTranscriptReader } from "./jsonl-reader";
 import { claudeFormat } from "./claude-transcript";
 import { SubagentTokens } from "./claude-subagents";
@@ -427,6 +427,11 @@ export function claudeBlockedOn(raw: string): string | null {
   const s = underInput(screen, inputBox);
   if (/Select login method/.test(s)) return "login required";
   if (limitDialog(s)) return LIMIT_DIALOG;
+  // The dialog Claude puts up when its safety classifier stopped a response:
+  // "Session paused" over the provider's explanation, then "1. Switch to … /
+  // 2. Edit prompt and retry with …". Its Details line names the policy.
+  const foot = s.trimEnd().split("\n").slice(-30).join("\n");
+  if ((/Details:\s*`?\[[a-z][a-z-]*\]`?/i.test(foot) || /Session paused/i.test(foot)) && /^\s*(?:❯\s*)?1\.\s+\S/m.test(foot)) return "waiting on a safety refusal";
   // The options alone: in a short pane the dialog's heading has scrolled away.
   if (/Yes, I trust this folder/.test(s) && /No, exit/.test(s)) return "folder trust";
   if (/Bypass Permissions mode/.test(s) && /Yes, I accept/.test(s)) return "confirm bypass-permissions mode";
@@ -450,6 +455,76 @@ export function claudeBlockedOn(raw: string): string | null {
   // Its last tab, which has no footer.
   if (/Review your answers/.test(flat) && /Submit answers/.test(flat)) return "asking a question";
   return null;
+}
+
+const NUMBERED_OPTION = /^\s*(?:[❯›▶]\s*)?(\d+)[.)]\s+(.*\S)\s*$/;
+const MENU_FOOTER = /^(?:Esc|Enter|↑|↓|Tab|Shift|Press|ctrl|\?|✻)/i;
+
+const regexEscape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The numbered menu at the foot of a Claude dialog, with the keys that choose
+ * each option. Only for a screen `claudeBlockedOn` already names: the same
+ * numbered text can be a quoted menu in the conversation above. The title is
+ * the dialog's heading after the rule that set it apart ("Session paused");
+ * a dialog without one gets no title.
+ */
+export function claudeDialog(raw: string): PromptMenu | null {
+  const blocked = claudeBlockedOn(raw);
+  // A question has its own card, answered through `/answer`, not by keys.
+  if (!blocked || blocked === "asking a question") return null;
+  const screen = plainScreen(raw);
+  const lines = screen.replace(/\s+$/, "").split("\n");
+  let first = -1;
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 40); i--) {
+    const m = NUMBERED_OPTION.exec(lines[i]!);
+    if (m && Number(m[1]) === 1) {
+      first = i;
+      break;
+    }
+  }
+  if (first < 0) return null;
+  const options: { label: string; n: number }[] = [];
+  for (let i = first; i < lines.length; i++) {
+    const line = lines[i]!;
+    const m = NUMBERED_OPTION.exec(line);
+    if (m) {
+      const n = Number(m[1]);
+      if (n !== options.length + 1) break;
+      options.push({ label: m[2]!.trim(), n });
+      continue;
+    }
+    const text = line.trim();
+    if (!text) {
+      if (options.length) break;
+      continue;
+    }
+    if (MENU_FOOTER.test(text)) break;
+    if (!options.length) break;
+    const last = options[options.length - 1]!;
+    last.label = `${last.label} ${text}`;
+  }
+  if (!options.length) return null;
+  // The heading is the first line of the block after the rule above it, so a
+  // long explanation below does not become the title.
+  let from = -1;
+  for (let i = first - 1; i >= 0; i--) {
+    if (RULE.test(lines[i]!)) {
+      from = i + 1;
+      break;
+    }
+  }
+  const title = from >= 0 ? (lines.slice(from, first).map((l) => l.trim()).find(Boolean) ?? null) : null;
+  const foot = lines.slice(first).join("\n");
+  const dismiss = /Esc to (?:cancel|go back|dismiss)/i.test(foot) ? ["Escape"] : null;
+  return {
+    title,
+    options: options.map((o) => ({
+      label: o.label,
+      keys: pickOption(screen, new RegExp(`^${regexEscape(o.label)}$`)) ?? [String(o.n)],
+    })),
+    dismiss,
+  };
 }
 
 // ------------------------------------------------------------- commands
@@ -711,6 +786,7 @@ export const claudeAdapter: ProviderAdapter = {
   autoAnswer: claudeAutoAnswer,
   approvePrompt: claudeApprovePrompt,
   blockedOn: claudeBlockedOn,
+  dialogOn: claudeDialog,
   answerStep: askStep,
   rewind: {
     start: rewindStart,
