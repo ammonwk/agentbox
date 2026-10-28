@@ -39,6 +39,7 @@ import { WhenField } from "./newsession/WhenField";
 import { Dropdown } from "./newsession/Dropdown";
 import { useDismiss, useFloating } from "./newsession/popover";
 import { noteStarted } from "./session/started";
+import { useVoiceNote, VoiceButton } from "./session/voicenote";
 import "./newsession.css";
 
 /**
@@ -151,6 +152,47 @@ export function NewSession({
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
+
+  /** A voice prompt is on its way to words. */
+  const [hearing, setHearing] = useState(false);
+  /** The last failure was the recording's, not Start's. */
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  /** Bumps after a dictation, so the caret lands at its end for reading over. */
+  const [dictated, setDictated] = useState(0);
+
+  /** Put a recording into words, after what is already typed, to be read over before Start. */
+  async function hear(audio: Blob) {
+    if (busy) return;
+    setVoiceError(null);
+    setHearing(true);
+    try {
+      const heard = (await api.transcribe(audio)).trim();
+      if (!heard) throw new Error("no speech was heard in the recording");
+      setPrompt((p) => [p.trimEnd(), heard].filter(Boolean).join(" "));
+      setDictated((n) => n + 1);
+    } catch (e) {
+      setVoiceError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHearing(false);
+    }
+  }
+
+  const voice = useVoiceNote({
+    onDone: (audio) => void hear(audio),
+    onError: (why) => setVoiceError(why),
+    working: hearing,
+    tapStarts: true,
+  });
+  // The words just dictated end the prompt; the box takes the caret there, so
+  // they can be read and corrected without hunting for them.
+  useEffect(() => {
+    if (!dictated) return;
+    const el = promptRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    el.scrollTop = el.scrollHeight;
+  }, [dictated]);
 
   // In an org, the org's pool or your own accounts; out of one, your own.
   const [scope, setScope] = useState<Scope>(state.org ? state.settings.scope : "personal");
@@ -382,17 +424,21 @@ export function NewSession({
   // not a reason not to schedule it.
   const parsedWhen = mode === "schedule" && when.trim() ? parseWhen(when) : null;
   /** What stops Start, said on its tooltip and, if you press it anyway, under the form. */
-  const whyNot = !installed.includes(provider)
-    ? `${PROVIDER_LABEL[provider]} is not installed on this machine`
-    : !whereOk
-      ? where === "repo" ? "Pick a repository" : "Give it a folder to work in"
-      : mode === "now"
-        ? noEligible ? placement?.why || `No ${PROVIDER_LABEL[provider]} account has room` : null
-        : !when.trim()
-          ? "Say when to start it"
-          : parsedWhen && "error" in parsedWhen
-            ? parsedWhen.error
-            : !prompt.trim() ? "A scheduled session needs a prompt" : null;
+  const whyNot = hearing
+    ? "Wait for the voice note to be put into words"
+    : voice.phase !== "idle"
+      ? "Finish the voice note first"
+      : !installed.includes(provider)
+        ? `${PROVIDER_LABEL[provider]} is not installed on this machine`
+        : !whereOk
+          ? where === "repo" ? "Pick a repository" : "Give it a folder to work in"
+          : mode === "now"
+            ? noEligible ? placement?.why || `No ${PROVIDER_LABEL[provider]} account has room` : null
+            : !when.trim()
+              ? "Say when to start it"
+              : parsedWhen && "error" in parsedWhen
+                ? parsedWhen.error
+                : !prompt.trim() ? "A scheduled session needs a prompt" : null;
   const canSubmit = !busy && !whyNot;
 
   /** Start was pressed while something stopped it: say what, until it no longer does. */
@@ -509,9 +555,13 @@ export function NewSession({
           textareaRef={promptRef}
           attachments={images}
           onSubmit={() => void submit()}
+          overlay={voice.bar}
           footer={
             <div className="ns-bar">
-              <AttachButton a={images} />
+              <div className="ns-bar-lead">
+                <AttachButton a={images} />
+                <VoiceButton voice={voice} disabled={busy || hearing} />
+              </div>
               {state.org ? <ScopePicker org={state.org.name} value={scope} onChange={setScope} /> : null}
               <AccountPicker
                 pill
@@ -534,6 +584,15 @@ export function NewSession({
             </div>
           }
         />
+
+        {voiceError ? (
+          <p className="error-line" role="alert">
+            Not heard: {voiceError}{" "}
+            <button type="button" className="linkish" onClick={() => setVoiceError(null)}>
+              dismiss
+            </button>
+          </p>
+        ) : null}
 
         {mode === "schedule" ? <WhenField value={when} onChange={setWhen} inputRef={whenRef} /> : null}
 

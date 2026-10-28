@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Icon } from "../../components";
 import { isPhone } from "../../lib/phone";
+import "../voicenote.css";
 
 /**
  * A voice message from the Send button, the way WhatsApp's works: hold it to
@@ -52,11 +53,15 @@ export interface VoiceNote {
   above: React.ReactNode;
 }
 
-export function useVoiceNote({ onDone, onError, working }: {
+export function useVoiceNote({ onDone, onError, working, tapStarts = false }: {
   onDone: (audio: Blob) => void;
   onError: (why: string) => void;
   /** The last recording is being put into words. */
   working: boolean;
+  /** A tap with no hold starts a recording, and locks it until the next tap,
+   *  rather than saying how the button works. A Send button cannot: its tap
+   *  sends. */
+  tapStarts?: boolean;
 }): VoiceNote {
   const [phase, setPhase] = useState<Phase>("idle");
   const [ms, setMs] = useState(0);
@@ -118,13 +123,13 @@ export function useVoiceNote({ onDone, onError, working }: {
   // Leaving the session mid-recording lets go of the microphone.
   useEffect(() => () => end(false), []);
 
-  const begin = async () => {
+  const begin = async (locked = false) => {
     const s = g.current;
     s.timer = null;
     s.swallow = true;
     s.startedAt = 0;
     setMs(0);
-    go("held");
+    go(locked ? "locked" : "held");
     setHinting(false);
     navigator.vibrate?.(12);
     const take = ++s.take;
@@ -197,6 +202,8 @@ export function useVoiceNote({ onDone, onError, working }: {
       if (s.timer) {
         clearTimeout(s.timer);
         s.timer = null;
+        // A tap: a Send button says how to hold, a mic button starts listening.
+        if (tapStarts && !working) void begin(true);
       } else if (s.phase === "held") end(true);
     },
     onPointerCancel: () => {
@@ -232,39 +239,73 @@ export function useVoiceNote({ onDone, onError, working }: {
   const clock = `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
   const bar =
     phase !== "idle" ? (
-      <div className="cmp-rec" data-phase={phase} role="status" aria-live="off">
+      <div className="vn-rec" data-phase={phase} role="status" aria-live="off">
         {phase === "locked" ? (
-          <button type="button" className="cmp-rec-bin" aria-label="Discard the recording" onClick={() => end(false)}>
+          <button type="button" className="vn-rec-bin" aria-label="Discard the recording" onClick={() => end(false)}>
             <Icon.trash size={17} />
           </button>
         ) : null}
-        <span className="cmp-rec-dot" aria-hidden />
-        <span className="cmp-rec-clock">{clock}</span>
+        <span className="vn-rec-dot" aria-hidden />
+        <span className="vn-rec-clock">{clock}</span>
         {phase === "held" ? (
-          <span className="cmp-rec-slide" style={{ transform: `translateX(${-pull.left * 28}px)`, opacity: 1 - pull.left * 0.7 }}>
+          <span className="vn-rec-slide" style={{ transform: `translateX(${-pull.left * 28}px)`, opacity: 1 - pull.left * 0.7 }}>
             <Icon.chevronLeft size={14} /> Slide to cancel
           </span>
         ) : (
-          <span className="cmp-rec-slide">Tap ✓ when done</span>
+          <span className="vn-rec-slide">Tap ✓ when done</span>
         )}
       </div>
     ) : working ? (
-      <div className="cmp-rec" data-phase="working" role="status">
-        <span className="cmp-rec-slide">Transcribing…</span>
+      <div className="vn-rec" data-phase="working" role="status">
+        <span className="vn-rec-slide">Transcribing…</span>
       </div>
     ) : null;
 
   const above =
     phase === "held" ? (
-      <span className="cmp-rec-lock" aria-hidden style={{ transform: `translateY(${-pull.up * 14}px)` }} data-near={pull.up > 0.6 || undefined}>
+      <span className="vn-rec-lock" aria-hidden style={{ transform: `translateY(${-pull.up * 14}px)` }} data-near={pull.up > 0.6 || undefined}>
         <Icon.lock size={15} />
         <Icon.chevronUp size={13} />
       </span>
     ) : hinting ? (
-      <span className="cmp-rec-hint" role="status">
+      <span className="vn-rec-hint" role="status">
         Hold to record, release to type it out
       </span>
     ) : null;
 
   return { phase, button, click, hint: () => setHinting(true), bar, above };
+}
+
+/**
+ * A microphone for a prompt box that has no Send button to hold: tap it and
+ * speak (tap again, or ✓, when done), or hold it and let go. The words land
+ * in the box for reading over before anything is started.
+ */
+export function VoiceButton({ voice, disabled }: {
+  voice: VoiceNote;
+  disabled?: boolean;
+}) {
+  const live = voice.phase !== "idle";
+  return (
+    <span className="vn-mic-wrap">
+      {voice.above}
+      <button
+        type="button"
+        className="vn-mic"
+        aria-label={
+          voice.phase === "idle" ? "Record a voice prompt" : voice.phase === "locked" ? "Finish the recording" : "Release to finish the recording"
+        }
+        title="Tap to dictate, or hold while you speak"
+        disabled={disabled}
+        data-rec={live ? voice.phase : undefined}
+        {...voice.button}
+        onClick={() => {
+          if (voice.click()) return;
+          voice.hint();
+        }}
+      >
+        {voice.phase === "locked" ? <Icon.check size={16} /> : <Icon.mic size={17} />}
+      </button>
+    </span>
+  );
 }

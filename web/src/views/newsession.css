@@ -56,6 +56,23 @@
   resize: none;
   field-sizing: content;
 }
+/* The prompt and its recording bar share the space above the footer; the bar
+   is absolute so dictating never moves the pills or the Start button. */
+.ns-prompt-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: 12px 12px 0 0;
+}
+.ns-prompt-wrap > .vn-rec {
+  padding: 0 14px;
+}
+/* A mic at the left edge points its hint to the right, into the box. */
+.ns-bar-lead .vn-rec-hint {
+  right: auto;
+  left: 0;
+}
 /* Right-aligned, so a pill that wraps on a phone stays under the others. */
 .ns-bar {
   display: flex;
@@ -65,7 +82,10 @@
   gap: 2px;
   padding: 4px 6px 6px;
 }
-.ns-bar > .att-pick {
+.ns-bar-lead {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   margin-right: auto;
 }
 

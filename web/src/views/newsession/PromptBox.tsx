@@ -19,6 +19,7 @@ export function PromptBox({
   onSubmit,
   id,
   footer,
+  overlay,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -29,6 +30,8 @@ export function PromptBox({
   onSubmit: () => void;
   id?: string;
   footer?: ReactNode;
+  /** Covers the text while it is being dictated, leaving the footer usable. */
+  overlay?: ReactNode;
 }) {
   const localRef = useRef<HTMLTextAreaElement | null>(null);
   const skill = useSkillComplete({ value, onChange, skills, textareaRef: localRef, onComplete: leaveHistory });
@@ -85,42 +88,45 @@ export function PromptBox({
 
   return (
     <AttachFrame a={attachments} className="ns-promptbox" footer={footer}>
-      <textarea
-        id={id}
-        className="ns-prompt"
-        ref={(el) => {
-          localRef.current = el;
-          if (typeof textareaRef === "function") textareaRef(el);
-          else if (textareaRef) textareaRef.current = el;
-        }}
-        value={value}
-        placeholder="What should it do?"
-        aria-label="Prompt"
-        rows={5}
-        {...skill.props}
-        aria-busy={historyBusy}
-        onChange={(e) => {
-          leaveHistory();
-          onChange(e.target.value);
-          skill.onEdit(e.target);
-        }}
-        onKeyDown={(e) => {
-          const historyArrow = e.key === "ArrowUp" || e.key === "ArrowDown";
-          const inHistory = browsing.current && value === browsing.current.text;
-          if (historyArrow && !e.nativeEvent.isComposing && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
-              (inHistory || (!value && history.length > 0 && e.key === "ArrowUp"))) {
-            e.preventDefault();
-            void browse(e.key === "ArrowUp" ? 1 : -1);
-            return;
-          }
-          if (skill.onKeyDown(e) || attachments.onKeyDown(e)) return;
-          // Ctrl+Enter is the form's, so it does not submit twice.
-          if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            onSubmit();
-          }
-        }}
-      />
+      <div className="ns-prompt-wrap">
+        <textarea
+          id={id}
+          className="ns-prompt"
+          ref={(el) => {
+            localRef.current = el;
+            if (typeof textareaRef === "function") textareaRef(el);
+            else if (textareaRef) textareaRef.current = el;
+          }}
+          value={value}
+          placeholder="What should it do?"
+          aria-label="Prompt"
+          rows={5}
+          {...skill.props}
+          aria-busy={historyBusy}
+          onChange={(e) => {
+            leaveHistory();
+            onChange(e.target.value);
+            skill.onEdit(e.target);
+          }}
+          onKeyDown={(e) => {
+            const historyArrow = e.key === "ArrowUp" || e.key === "ArrowDown";
+            const inHistory = browsing.current && value === browsing.current.text;
+            if (historyArrow && !e.nativeEvent.isComposing && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
+                (inHistory || (!value && history.length > 0 && e.key === "ArrowUp"))) {
+              e.preventDefault();
+              void browse(e.key === "ArrowUp" ? 1 : -1);
+              return;
+            }
+            if (skill.onKeyDown(e) || attachments.onKeyDown(e)) return;
+            // Ctrl+Enter is the form's, so it does not submit twice.
+            if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              onSubmit();
+            }
+          }}
+        />
+        {overlay}
+      </div>
       {historyBusy ? <span className="field-hint" role="status">Reading the earlier prompt…</span> : null}
       {historyError ? <span className="field-hint" role="alert">Could not read prompt history: {historyError}</span> : null}
       {skill.list}

@@ -2939,7 +2939,7 @@ a.wk-item:hover {
   padding: 2px 4px 6px;
 }
 /* A recording covers the paperclip and the text, not Send: Send ends it. */
-.cmp-frame > .cmp-rec {
+.cmp-frame > .vn-rec {
   grid-column: 1 / 3;
   grid-row: 1;
 }
@@ -3015,7 +3015,8 @@ a.wk-item:hover {
 }
 
 /* A voice message (voicenote.tsx): held on Send, the box becomes the
-   recording's bar and the lock to slide up to floats over the button. */
+   recording's bar and the lock to slide up to floats over the button. The
+   bar and the lock are shared, in voicenote.css. */
 .cmp-go-wrap {
   position: relative;
   display: flex;
@@ -3028,95 +3029,6 @@ a.wk-item:hover {
   transform: scale(1.35);
   background: var(--danger);
   border-color: var(--danger);
-}
-.cmp-rec {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border-radius: inherit;
-  background: var(--panel);
-  font-variant-numeric: tabular-nums;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.cmp-rec-dot {
-  width: 9px;
-  height: 9px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--danger);
-  animation: cmp-rec-blink 1.1s ease-in-out infinite;
-}
-@keyframes cmp-rec-blink {
-  50% { opacity: 0.25; }
-}
-.cmp-rec-slide {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12.5px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.cmp-rec[data-phase="working"] .cmp-rec-slide {
-  margin-left: 0;
-}
-.cmp-rec-bin {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  flex: none;
-  margin-left: -4px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--danger);
-}
-.cmp-rec-bin:active {
-  background: var(--active);
-}
-.cmp-rec-lock,
-.cmp-rec-hint {
-  position: absolute;
-  bottom: calc(100% + 14px);
-  z-index: 5;
-  border: 1px solid var(--border-strong);
-  background: var(--raised);
-  box-shadow: var(--shadow-md);
-  pointer-events: none;
-}
-.cmp-rec-lock {
-  left: 50%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  width: 34px;
-  margin-left: -17px;
-  padding: 9px 0 6px;
-  border-radius: 17px;
-  color: var(--muted);
-}
-.cmp-rec-lock[data-near] {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.cmp-rec-hint {
-  right: 0;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12.5px;
-  white-space: nowrap;
 }
 
 /* Stopped at a usage limit: say where, and offer to carry on elsewhere. */

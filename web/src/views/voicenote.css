@@ -1,0 +1,133 @@
+/* A voice note (voicenote.tsx): the bar over the text box while recording,
+   the lock to slide up to, and the hint after a tap. The button that carries
+   the gesture is styled by the box it sits in, since a Send button and a Mic
+   button do not look alike. */
+
+.vn-rec {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: inherit;
+  background: var(--panel);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.vn-rec-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: vn-rec-blink 1.1s ease-in-out infinite;
+}
+@keyframes vn-rec-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+.vn-rec-slide {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.vn-rec[data-phase="working"] .vn-rec-slide {
+  margin-left: 0;
+}
+.vn-rec-bin {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--danger);
+}
+.vn-rec-bin:active {
+  background: var(--active);
+}
+.vn-rec-lock,
+.vn-rec-hint {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  z-index: 5;
+  border: 1px solid var(--border-strong);
+  background: var(--raised);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+.vn-rec-lock {
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 34px;
+  margin-left: -17px;
+  padding: 9px 0 6px;
+  border-radius: 17px;
+  color: var(--muted);
+}
+.vn-rec-lock[data-near] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.vn-rec-hint {
+  right: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+/* The button a voice note hangs off: a quiet icon, red while recording. */
+.vn-mic-wrap {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+.vn-mic {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  touch-action: none;
+}
+.vn-mic:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+.vn-mic[data-rec="held"] {
+  transform: scale(1.15);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.vn-mic[data-rec="locked"] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.vn-mic:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
