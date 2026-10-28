@@ -3133,9 +3133,6 @@ export class Fleet extends EventEmitter {
     } catch (e) {
       throw new FleetError(400, (e as Error).message);
     }
-    // Alongside the agent, as the setup command runs: the tab New session
-    // opened waits for it.
-    if (devRepo) void startDevServer(devRepo, cwd, id);
 
     // Unasked on an account whose service does not sell the CLI's default,
     // the placement named that service's own.
@@ -3173,6 +3170,9 @@ export class Fleet extends EventEmitter {
       parent: parent ?? null,
       parentByHand: !!req.parent,
     });
+    // Alongside the agent, as the setup command runs: the tab New session
+    // opened waits for it. After the record, so closing the session stops it.
+    if (devRepo) void startDevServer(devRepo, cwd, id);
     if (cmd.agentSessionId) this.byAgentId.set(`${req.provider}:${cmd.agentSessionId}`, id);
     // Carried on every resume, as an adopted session's own flags are.
     if (req.readOnly) updateSessionRecord(id, { launch: { args: [...adapter.readOnly!], env: {} } });
