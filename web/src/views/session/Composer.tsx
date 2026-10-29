@@ -447,7 +447,11 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
   }, [session.id, hit.at]);
 
   const mine = accounts.filter((a) => a.provider === accountProvider(session.provider));
-  const canMove = MOVABLE[session.provider] === true && mine.length > 1;
+  const movable = MOVABLE[session.provider] === true && mine.length > 1;
+  // Offer a move only when some other account is not behind a wall (a spent
+  // window, logged out, refused): with every one full there is nowhere to go.
+  // Unasked, the balancer's error leaves it to you.
+  const canMove = movable && (placeErr !== null || !!placement?.candidates.some((c) => c.accountId !== session.accountId && !c.wall));
   const here = accounts.find((a) => a.id === session.accountId) ?? null;
   const auto = placement?.accountId && placement.mode !== "none" ? accounts.find((a) => a.id === placement.accountId) ?? null : null;
   const target = choice !== "auto" ? mine.find((a) => a.id === choice) ?? null : canMove ? auto : null;
@@ -491,13 +495,15 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
               ? `${choice !== "auto" ? "" : placement?.mode === "overflow" ? `${target!.label} is the least claimed. ` : `${target!.label} has the most room. `}Moving re-sends ${resend} without the cache; the agent is told “${CONTINUE}”.`
               : choice !== "auto"
                 ? `Stays here; the agent is told “${CONTINUE}”.`
-                : !canMove
-                  ? `It can only continue here, so this just tells it “${CONTINUE}”.`
-                  : placement
-                    ? `The balancer would keep it here, so this just tells it “${CONTINUE}”.`
-                    : placeErr
-                      ? `Could not ask the balancer (${placeErr}); pick an account below, or continue here.`
-                      : "Asking the balancer where there is room…"}
+                : !placement && !placeErr
+                  ? "Asking the balancer where there is room…"
+                  : !canMove
+                    ? movable
+                      ? `No other account has room either, so this just tells it “${CONTINUE}”.`
+                      : `It can only continue here, so this just tells it “${CONTINUE}”.`
+                    : placement
+                      ? `The balancer would keep it here, so this just tells it “${CONTINUE}”.`
+                      : `Could not ask the balancer (${placeErr}); pick an account below, or continue here.`}
           </span>
         )}
       </div>
@@ -512,7 +518,7 @@ function LimitBanner({ session, accounts }: { session: Session; accounts: readon
       >
         <span className="cmp-limit-label">{label}</span>
       </Button>
-      <button type="button" className="cmp-limit-more" aria-expanded={more} aria-label={more ? "Less" : "Why, and pick an account"} onClick={() => setMore(!more)}>
+      <button type="button" className="cmp-limit-more" aria-expanded={more} aria-label={more ? "Less" : canMove ? "Why, and pick an account" : "Why"} onClick={() => setMore(!more)}>
         <Icon.chevronDown size={14} className={more ? "rot" : undefined} />
       </button>
       {canMove ? (
