@@ -2,7 +2,7 @@ import { Fragment, useContext, useState } from "react";
 import { Lightbox } from "../../attachments";
 import { shownImageUrl } from "../../api";
 import { SessionLinks } from "./sessionlinks";
-import { FileBase, inBase } from "./viewerstore";
+import { AgentDir, FileBase, inBase } from "./viewerstore";
 
 /** A path to an image in text: absolute, `~/…`, `./…` or relative, ending in
  *  an extension the server will show. Not the tail of a URL (`https://…/a.png`
@@ -30,9 +30,10 @@ export const isImagePath = (s: string): boolean => {
 export function ImagePath({ path: ref, children }: { path: string; children?: React.ReactNode }) {
   const { self } = useContext(SessionLinks);
   const path = inBase(useContext(FileBase), ref);
+  const dirs = useContext(AgentDir);
   const [open, setOpen] = useState(false);
   if (!self) return <>{children ?? ref}</>;
-  const url = shownImageUrl(self, path);
+  const url = shownImageUrl(self, path, dirs);
   return (
     <>
       <a

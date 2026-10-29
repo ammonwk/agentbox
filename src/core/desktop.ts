@@ -57,8 +57,8 @@ export async function openUrlBehind(url: string): Promise<void> {
   }
 }
 
-export async function openLocalFile(ref: string, cwd: string | null, background = false): Promise<{ path: string; action: "open" | "reveal" }> {
-  const { path, suffix, stat } = resolveLocal(ref, cwd);
+export async function openLocalFile(ref: string, dirs: readonly string[], background = false): Promise<{ path: string; action: "open" | "reveal" }> {
+  const { path, suffix, stat } = resolveLocal(ref, dirs);
   const directory = stat.isDirectory();
   if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) throw new FileError(503, "no desktop session is available on this machine");
   const uri = pathToFileURL(path).href;

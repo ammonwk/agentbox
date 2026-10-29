@@ -4,7 +4,7 @@ import { Icon } from "../../components";
 import { localFileLink } from "../../../../src/core/filelinks";
 import { SessionLinks } from "./sessionlinks";
 import { useAction } from "./useAction";
-import { FileBase, inBase, openInViewer, useOnThisMachine } from "./viewerstore";
+import { AgentDir, FileBase, inBase, openInViewer, useOnThisMachine } from "./viewerstore";
 
 const HTML = /\.html?$/i;
 
@@ -15,16 +15,17 @@ const HTML = /\.html?$/i;
 export function FileLink({ path: ref, children }: { path: string; children?: React.ReactNode }) {
   const { self } = useContext(SessionLinks);
   const path = inBase(useContext(FileBase), ref);
+  const dirs = useContext(AgentDir);
   const here = useOnThisMachine();
   const { busy, error, run } = useAction();
   if (!self) return <>{children ?? ref}</>;
   const page = HTML.test(localFileLink(path, true)?.path ?? "");
   const desktop = (background: boolean) => {
-    if (!busy) void run(() => api.openFile(self, path, background));
+    if (!busy) void run(() => api.openFile(self, path, background, dirs));
   };
   const open = (modified: boolean) => {
     if (here && (page || modified)) desktop(modified && page);
-    else openInViewer({ session: self, path });
+    else openInViewer({ session: self, path, dirs });
   };
   const title = here
     ? page

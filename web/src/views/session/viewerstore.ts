@@ -2,10 +2,12 @@ import { createContext, useSyncExternalStore } from "react";
 import { api } from "../../api";
 
 /** A file in the viewer (FileViewer.tsx): the session whose directory a
- *  relative path is read in, and the path as it was written, `:line` and all. */
+ *  relative path is read in, the path as it was written, `:line` and all,
+ *  and where the agent was when it wrote it (`AgentDir`), tried first. */
 export interface ViewerEntry {
   session: string;
   path: string;
+  dirs?: readonly string[];
 }
 
 /** What the viewer shows, as a stack: a link in a viewed file opens over it.
@@ -22,7 +24,7 @@ let stack = stackOf();
 const listeners = new Set<() => void>();
 const sync = () => {
   const next = stackOf();
-  if (next.length === stack.length && next.every((e, i) => e.path === stack[i]!.path && e.session === stack[i]!.session)) return;
+  if (next.length === stack.length && next.every((e, i) => e.path === stack[i]!.path && e.session === stack[i]!.session && String(e.dirs) === String(stack[i]!.dirs))) return;
   stack = next;
   listeners.forEach((fn) => fn());
 };
@@ -56,6 +58,11 @@ export function useViewerStack(): ViewerEntry[] {
 /** The directory of the file being viewed: a relative link or image in it is
  *  read beside it, not in the session's directory. */
 export const FileBase = createContext<string | null>(null);
+
+/** Where the agent was when it wrote the text being read: the directories of
+ *  its last few `cd`s (`agentDirs`), where a relative path it names is looked
+ *  for before the session's own directory. */
+export const AgentDir = createContext<readonly string[]>([]);
 
 export function inBase(base: string | null, path: string): string {
   if (!base || /^(?:\/|~(?:\/|$)|file:)/.test(path)) return path;

@@ -65,7 +65,7 @@ import { agentTimeline, sessionWork } from "../core/work";
 import { shownImage } from "../core/images";
 import { completeDir, resolveDirs } from "../core/dirs";
 import { backgroundTabs, openLocalFile, openUrlBehind } from "../core/desktop";
-import { FileError, rawFile, rawHeaders, viewFile } from "../core/files";
+import { FileError, rawFile, rawHeaders, readDirs, viewFile } from "../core/files";
 import { checkRequest } from "./csrf";
 import { authenticatedSession } from "../core/session-authority";
 import { recordYourAct, yourTime } from "../core/yourtime";
@@ -1156,7 +1156,7 @@ const router = new Router(mapError)
     const s = fleet.get(params.id!);
     let img;
     try {
-      img = shownImage(url.searchParams.get("path") ?? "", s.cwd || null);
+      img = shownImage(url.searchParams.get("path") ?? "", readDirs(s.cwd || null, url.searchParams.getAll("dir")));
     } catch (e) {
       throw new HttpError(404, (e as Error).message);
     }
@@ -1167,7 +1167,7 @@ const router = new Router(mapError)
     return new Response(Bun.file(img.path), { headers });
   })
   // The viewer: a clicked path, read in the app wherever it was clicked.
-  .add("GET", "/api/sessions/:id/file", ({ params, url }) => json(viewFile(url.searchParams.get("path") ?? "", fleet.get(params.id!).cwd || null)))
+  .add("GET", "/api/sessions/:id/file", ({ params, url }) => json(viewFile(url.searchParams.get("path") ?? "", readDirs(fleet.get(params.id!).cwd || null, url.searchParams.getAll("dir")))))
   // Its bytes, by absolute path, so a page's relative links reach the files beside it.
   .add("GET", "/api/files/*path", ({ req, params, url }) => {
     const f = rawFile(`/${params.path}`);
@@ -1187,7 +1187,7 @@ const router = new Router(mapError)
     if (!fromThisMachine.has(req)) throw new HttpError(403, "only a browser on this machine opens files on its desktop");
     const s = fleet.get(params.id!);
     const body = await readBody(req);
-    return json(await openLocalFile(requireString(body, "path"), s.cwd || null, body.background === true));
+    return json(await openLocalFile(requireString(body, "path"), readDirs(s.cwd || null, Array.isArray(body.dirs) ? body.dirs.filter((d): d is string => typeof d === "string") : []), body.background === true));
   })
   .add("POST", "/api/sessions/:id/adopt", async ({ params }) => {
     const s = await fleet.adopt(params.id!);

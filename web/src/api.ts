@@ -184,15 +184,18 @@ async function transcribe(audio: Blob): Promise<string> {
 
 export const uploadUrl = (name: string): string => `/api/uploads/${encodeURIComponent(name)}`;
 
-/** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
- *  is the session's directory's. */
 /** A file's bytes by its absolute path (`FileView.path`), so a page's relative
  *  links reach the files beside it. */
 export const rawFileUrl = (path: string, download = false): string =>
   `/api/files${path.split("/").map(encodeURIComponent).join("/")}${download ? "?download" : ""}`;
 
-export const shownImageUrl = (sessionId: string, path: string): string =>
-  `/api/sessions/${encodeURIComponent(sessionId)}/image?path=${encodeURIComponent(path)}`;
+/** Where the agent was (`AgentDir`), as the file endpoints take it: `&dir=…` for each. */
+const dirQuery = (dirs: readonly string[] | undefined): string => (dirs ?? []).map((d) => `&dir=${encodeURIComponent(d)}`).join("");
+
+/** An image an agent showed by path (`![…](/tmp/shot.png)`); a relative path
+ *  is read where the agent was (`dirs`), else in the session's directory. */
+export const shownImageUrl = (sessionId: string, path: string, dirs?: readonly string[]): string =>
+  `/api/sessions/${encodeURIComponent(sessionId)}/image?path=${encodeURIComponent(path)}${dirQuery(dirs)}`;
 
 /**
  * `GET /api/health` as Diagnostics rows: the probed dependencies first, then
@@ -248,7 +251,8 @@ export const api = {
   voiceStatus: () => get<{ ready: boolean; missing?: string }>("/api/voice"),
   /** Whether web links can open behind the window in front, for this browser. */
   desktop: () => get<{ here: boolean; backgroundTabs: boolean }>("/api/desktop"),
-  viewFile: (id: string, path: string) => get<FileView>(`/api/sessions/${enc(id)}/file?path=${encodeURIComponent(path)}`),
+  viewFile: (id: string, path: string, dirs?: readonly string[]) =>
+    get<FileView>(`/api/sessions/${enc(id)}/file?path=${encodeURIComponent(path)}${dirQuery(dirs)}`),
   openUrl: (url: string) => post<null>("/api/open-url", { url }),
 
   // notifications (lib/push.ts)
@@ -285,8 +289,8 @@ export const api = {
     request<SendReceipt>("POST", `/api/sessions/${enc(id)}/submissions`, { sendId, kind, text }, AbortSignal.timeout(30_000)),
   submission: (id: string, sendId: string) => request<SendReceipt | null>("GET", `/api/sessions/${enc(id)}/submissions/${enc(sendId)}`, undefined, AbortSignal.timeout(10_000)),
   /** `background` leaves a browser tab behind the window in front (Ctrl-click). */
-  openFile: (id: string, path: string, background = false) =>
-    post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path, background }),
+  openFile: (id: string, path: string, background = false, dirs?: readonly string[]) =>
+    post<{ path: string; action: "open" | "reveal" }>(`/api/sessions/${enc(id)}/open-file`, { path, background, dirs }),
   keys: (id: string, keys: string[]) => post<unknown>(`/api/sessions/${enc(id)}/keys`, { keys }),
   /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
   /** Go back to one of your messages and carry on from there with `text`; `code` puts the files back too. */

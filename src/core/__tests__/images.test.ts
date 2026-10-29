@@ -18,25 +18,25 @@ symlinkSync(join(dir, "shot.png"), join(dir, "link.png"));
 
 describe("shownImage", () => {
   test("an absolute path, typed by its bytes", () => {
-    expect(shownImage(join(dir, "shot.png"), null).mime).toBe("image/png");
-    expect(shownImage(join(dir, "photo.webp"), null).mime).toBe("image/webp");
+    expect(shownImage(join(dir, "shot.png"), []).mime).toBe("image/png");
+    expect(shownImage(join(dir, "photo.webp"), []).mime).toBe("image/webp");
   });
 
   test("relative to the session's directory, or a file:// URL", () => {
-    expect(shownImage("shot.png", dir).path).toBe(join(dir, "shot.png"));
-    expect(shownImage("./a b.png", dir).path).toBe(join(dir, "a b.png"));
-    expect(shownImage(`file://${dir}/shot.png`, null).path).toBe(join(dir, "shot.png"));
-    expect(() => shownImage("shot.png", null)).toThrow(/relative/);
+    expect(shownImage("shot.png", [dir]).path).toBe(join(dir, "shot.png"));
+    expect(shownImage("./a b.png", [dir]).path).toBe(join(dir, "a b.png"));
+    expect(shownImage(`file://${dir}/shot.png`, []).path).toBe(join(dir, "shot.png"));
+    expect(() => shownImage("shot.png", [])).toThrow(/relative/);
   });
 
   test("a symlink is served as what it points at", () => {
-    expect(shownImage(join(dir, "link.png"), null).path).toBe(join(dir, "shot.png"));
+    expect(shownImage(join(dir, "link.png"), []).path).toBe(join(dir, "shot.png"));
   });
 
   test("never a page, a script or an SVG, whatever the name says", () => {
-    expect(() => shownImage(join(dir, "fake.png"), null)).toThrow(/not a png/);
-    expect(() => shownImage(join(dir, "logo.svg"), null)).toThrow(/not a png/);
-    expect(() => shownImage(dir, null)).toThrow(/not a file/);
-    expect(() => shownImage(join(dir, "gone.png"), null)).toThrow(/no such file/);
+    expect(() => shownImage(join(dir, "fake.png"), [])).toThrow(/not a png/);
+    expect(() => shownImage(join(dir, "logo.svg"), [])).toThrow(/not a png/);
+    expect(() => shownImage(dir, [])).toThrow(/not a file/);
+    expect(() => shownImage(join(dir, "gone.png"), [])).toThrow(/no such file/);
   });
 });

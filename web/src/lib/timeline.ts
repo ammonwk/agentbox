@@ -237,3 +237,45 @@ export function firstLine(text: string, max = 140): string {
   const line = text.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
   return line.length > max ? line.slice(0, max - 1) + "…" : line;
 }
+
+/**
+ * Where the agent was when it wrote each event, by id: the directories of its
+ * last few `cd`s (or a call's `workdir`) before it, the latest first. A CLI
+ * may put its shell back after each call (Claude does outside its working
+ * directories, so its transcript's `cwd` never moves), yet a relative path
+ * the agent writes next is still one it was looking at.
+ */
+export function agentDirs(events: readonly TimelineEvent[]): ReadonlyMap<string, readonly string[]> {
+  const m = new Map<string, readonly string[]>();
+  let dirs: string[] = [];
+  for (const ev of events) {
+    if (ev.kind !== "tool") {
+      if (dirs.length) m.set(ev.id, dirs);
+      continue;
+    }
+    const dir = dirAfter(ev.input, dirs[0] ?? null);
+    if (dir && dir !== dirs[0]) dirs = [dir, ...dirs.filter((d) => d !== dir)].slice(0, 4);
+  }
+  return m;
+}
+
+/** A `cd` that starts a command, or follows `&&`, `;`, `|` or `(`. */
+const CD = /(?:^|[;&|(\n])\s*cd\s+(?:"([^"$]+)"|'([^']+)'|([^\s;&|)"'$`]+))/g;
+
+function dirAfter(input: string | undefined, dir: string | null): string | null {
+  let a: Record<string, unknown>;
+  try {
+    a = JSON.parse(input ?? "");
+  } catch {
+    return dir;
+  }
+  if (!a || typeof a !== "object") return dir;
+  const into = (to: unknown) => {
+    if (typeof to !== "string" || !to || to === "-") return;
+    dir = /^[/~]/.test(to) || !dir ? to : `${dir}/${to}`;
+  };
+  into(a.workdir ?? a.working_directory ?? a.cwd);
+  const cmd = [a.command, a.cmd].map((c) => (Array.isArray(c) ? c.join(" ") : c)).find((c) => typeof c === "string");
+  if (cmd) for (const m of cmd.matchAll(CD)) into(m[1] ?? m[2] ?? m[3]);
+  return dir;
+}

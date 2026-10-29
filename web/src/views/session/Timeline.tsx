@@ -4,7 +4,7 @@ import { api, useAppState, useBtw, useTimeline } from "../../api";
 import { fmtDur, fmtHourMin } from "../../lib/format";
 import { modelName } from "../../lib/newsession";
 import { Button, Empty, Icon, Spinner } from "../../components";
-import { firstLine, groupTimeline, rowEventIds, traceTurns, withBtw, type TimelineRow } from "../../lib/timeline";
+import { agentDirs, firstLine, groupTimeline, rowEventIds, traceTurns, withBtw, type TimelineRow } from "../../lib/timeline";
 import { field, type SendCall } from "../../lib/sendtool";
 import { inputFields, labelOf, type InputField } from "../../lib/toolinput";
 import { Markdown } from "./Markdown";
@@ -20,6 +20,7 @@ import { hrefOf } from "../../route";
 import { dropPasteTags, readSent, splitPastes } from "../../../../src/core/sent";
 import { BoardSessions, LocalAgents, senderOf, useBoardSessions, useLocalAgents } from "./boardsessions";
 import { WithImagePaths } from "./imagepaths";
+import { AgentDir } from "./viewerstore";
 import { EditBox, EditButton, EditsCtx, editsOf, keepEdit, openEdit, VersionBar, VersionNav, useVersionTimeline, type MessageEdits } from "./versions";
 import { useAction } from "./useAction";
 import "./refusal.css";
@@ -149,6 +150,7 @@ export function Timeline({ session }: { session: Session }) {
   // Ticks once a second while the turn runs, so live durations advance.
   const now = useNow(session.status === "running");
   const thinkDur = useThinkDur(events);
+  const dirs = useMemo(() => agentDirs(events), [events]);
 
   const boxRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(() => !places.get(session.id)?.at);
@@ -425,7 +427,7 @@ export function Timeline({ session }: { session: Session }) {
         <time dateTime={new Date(r.at).toISOString()}>{fmtHourMin(r.at)}</time>
       </div>
     ) : (
-      <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
+      <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} dirs={dirs.get(r.event.id)?.join("\n")} />
     );
 
   // Just started, and the CLI has not written its first turn: what you asked
@@ -553,6 +555,7 @@ export function AgentSteps({ events, live, from }: { events: readonly TimelineEv
   const rows = useMemo(() => groupTimeline(events), [events]);
   const now = useNow(live);
   const thinkDur = useThinkDur(events);
+  const dirs = useMemo(() => agentDirs(events), [events]);
   return (
     <div className="tl-stream">
       {rows.map((r) =>
@@ -575,7 +578,7 @@ export function AgentSteps({ events, live, from }: { events: readonly TimelineEv
             </Clamp>
           </div>
         ) : r.type === "event" ? (
-          <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} />
+          <EventRow key={r.event.id} ev={r.event} dur={thinkDur.get(r.event.id)} dirs={dirs.get(r.event.id)?.join("\n")} />
         ) : null,
       )}
     </div>
@@ -639,7 +642,18 @@ function useThinkDur(events: readonly TimelineEvent[]): ReadonlyMap<string, numb
   }, [events]);
 }
 
-const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number }) {
+/** `dirs` comes joined by newlines, so a memoized row stays equal while the
+ *  timeline's directories are worked out afresh with each event. */
+const EventRow = memo(function EventRow({ ev, dur, dirs }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number; dirs?: string }) {
+  const value = useMemo(() => (dirs ? dirs.split("\n") : []), [dirs]);
+  return (
+    <AgentDir.Provider value={value}>
+      <EventBody ev={ev} dur={dur} />
+    </AgentDir.Provider>
+  );
+});
+
+function EventBody({ ev, dur }: { ev: Exclude<TimelineEvent, ToolEvent>; dur?: number }) {
   switch (ev.kind) {
     case "user":
       return <UserRow ev={ev} />;
@@ -658,7 +672,7 @@ const EventRow = memo(function EventRow({ ev, dur }: { ev: Exclude<TimelineEvent
         </div>
       );
   }
-});
+}
 
 /**
  * The provider's safety classifier stopped a reply: what it said, the policy

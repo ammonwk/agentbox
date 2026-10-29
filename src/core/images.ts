@@ -32,9 +32,9 @@ export interface ShownImage {
 }
 
 /** The image `ref` names, read as the agent wrote it: absolute, `~/…`,
- *  `file://…`, or relative to the session's `cwd`. Throws with the reason. */
-export function shownImage(ref: string, cwd: string | null): ShownImage {
-  const { path, stat } = resolveLocal(ref, cwd);
+ *  `file://…`, or relative to one of `dirs`. Throws with the reason. */
+export function shownImage(ref: string, dirs: readonly string[]): ShownImage {
+  const { path, stat } = resolveLocal(ref, dirs);
   if (!stat.isFile()) throw new Error(`not a file: ${path}`);
   if (stat.size > MAX_IMAGE_BYTES) throw new Error(`over ${MAX_IMAGE_BYTES / 1024 / 1024} MB: ${path}`);
   const head = new Uint8Array(12);

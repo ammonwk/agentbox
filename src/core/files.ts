@@ -22,27 +22,39 @@ export const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 2000;
 
 /** The file or directory `ref` names, as an agent wrote it: absolute, `~/…`,
- *  `file://…`, or relative to the session's `cwd`, with any `:line` suffix
- *  dropped. Symlinks are followed, so what is classified is what is read. */
-export function resolveLocal(ref: string, cwd: string | null): { path: string; suffix: string; stat: Stats } {
+ *  `file://…`, or relative, with any `:line` suffix dropped. A relative path
+ *  is tried in each of `dirs` in turn, and is the first that holds it
+ *  (`readDirs`). Symlinks are followed, so what is classified is what is read. */
+export function resolveLocal(ref: string, dirs: readonly string[]): { path: string; suffix: string; stat: Stats } {
   const link = localFileLink(ref.trim(), true);
   if (!link) throw new FileError(400, "not a local file path");
-  let path = link.path;
-  if (path === "~" || path.startsWith("~/")) path = userHome() + path.slice(1);
-  if (!isAbsolute(path)) {
-    if (!cwd) throw new FileError(400, "a relative path needs the session's directory");
-    path = resolve(cwd, path);
+  const path = home(link.path);
+  if (!isAbsolute(path) && dirs.length === 0) throw new FileError(400, "a relative path needs the session's directory");
+  const tries = isAbsolute(path) ? [path] : dirs.map((d) => resolve(d, path));
+  for (const p of tries) {
+    let real: string, stat: Stats;
+    try {
+      real = realpathSync(p);
+      stat = statSync(real);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile() && !stat.isDirectory()) throw new FileError(400, `not a regular file or directory: ${real}`);
+    return { path: real, suffix: link.suffix, stat };
   }
-  let stat: Stats;
-  try {
-    path = realpathSync(path);
-    stat = statSync(path);
-  } catch {
-    throw new FileError(404, `no such file: ${path}`);
-  }
-  if (!stat.isFile() && !stat.isDirectory()) throw new FileError(400, `not a regular file or directory: ${path}`);
-  return { path, suffix: link.suffix, stat };
+  throw new FileError(404, `no such file: ${tries[0]}`);
 }
+
+/** Where a session's relative path is read: where the agent was when it
+ *  wrote it (`dirs`, the board's reading of its last `cd`s, latest first),
+ *  then the session's own directory, as its shell may be back there. */
+export function readDirs(cwd: string | null, dirs: readonly string[] = []): string[] {
+  const out = dirs.map((d) => (cwd ? resolve(cwd, home(d)) : home(d)));
+  if (cwd) out.push(cwd);
+  return out.filter((d) => isAbsolute(d));
+}
+
+const home = (p: string) => (p === "~" || p.startsWith("~/") ? userHome() + p.slice(1) : p);
 
 export type FileKind = "markdown" | "text" | "pdf" | "html" | "image" | "binary" | "directory";
 
@@ -109,8 +121,8 @@ function readHead(path: string, bytes: number): Uint8Array {
   }
 }
 
-export function viewFile(ref: string, cwd: string | null): FileView {
-  const { path, stat } = resolveLocal(ref, cwd);
+export function viewFile(ref: string, dirs: readonly string[]): FileView {
+  const { path, stat } = resolveLocal(ref, dirs);
   const base = { path, name: basename(path) || path, size: stat.size, mtimeMs: stat.mtimeMs };
   if (stat.isDirectory()) {
     let names: Dirent[];
@@ -147,7 +159,7 @@ export function viewFile(ref: string, cwd: string | null): FileView {
 /** The bytes of a file the viewer shows in a frame: a PDF, a page and what
  *  it links beside it, an image, a download. */
 export function rawFile(ref: string): { path: string; mime: string; size: number; mtimeMs: number } {
-  const { path, stat } = resolveLocal(ref, null);
+  const { path, stat } = resolveLocal(ref, []);
   if (!stat.isFile()) throw new FileError(400, `not a file: ${path}`);
   return { path, mime: MIME[extname(path).toLowerCase()] ?? (looksLikeText(readHead(path, 8192)) ? "text/plain; charset=utf-8" : "application/octet-stream"), size: stat.size, mtimeMs: stat.mtimeMs };
 }

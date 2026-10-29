@@ -67,14 +67,14 @@ function FileViewer({ entry, depth }: { entry: ViewerEntry; depth: number }) {
 
   useEffect(() => {
     let live = true;
-    api.viewFile(entry.session, entry.path).then(
+    api.viewFile(entry.session, entry.path, entry.dirs).then(
       (file) => live && setLoaded({ state: "ok", file }),
       (e: Error) => live && setLoaded({ state: "error", message: e.message }),
     );
     return () => {
       live = false;
     };
-  }, [entry.session, entry.path]);
+  }, [entry.session, entry.path, entry.dirs]);
 
   // Escape closes the viewer and nothing under it; the page under it stays put.
   useEffect(() => {
