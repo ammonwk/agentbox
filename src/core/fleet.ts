@@ -53,6 +53,7 @@ import {
   listClosedRecords,
   listOpenWaits,
   listSessionRecords,
+  sessionOfJob,
   tokenSampleAt,
   updateSessionRecord,
   usageSamplesSince,
@@ -77,7 +78,7 @@ import {
   type TranscriptReader,
   type TranscriptRef,
 } from "./providers/types";
-import { argvOf, childrenOf, cwdOf, environOf, isAlive, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
+import { argvOf, childrenOf, cwdOf, environOf, isAlive, jobUnitOf, ppidOf, runsCli, startedAtOf, withProcessScan } from "./providers/procs";
 import { sessionCapability } from "./session-authority";
 import { dropAgentAws } from "./agent-aws";
 import { describe, isToolShell, sharedProcTable, subtree, subtreeCpuTicks, type ProcTable } from "./proc";
@@ -1429,13 +1430,12 @@ export class Fleet extends EventEmitter {
     }
   }
 
-  /** The session whose process `pid` runs under: the nearest ancestor that is
-   *  a live session's own process. */
   /**
    * The session a process runs under, found by walking up from it: who is
    * calling, when the caller cannot say. `agentbox send` asks this when
    * `AGENTBOX_SESSION` did not reach it — Codex runs commands with only the
-   * core environment (`shell_environment_policy.inherit = "core"`).
+   * core environment (`shell_environment_policy.inherit = "core"`) — and a
+   * new session's parent.
    */
   callerOf(pid: number): string | null {
     const found = this.sessionAbove(pid);
@@ -1448,9 +1448,14 @@ export class Fleet extends EventEmitter {
       if (id && getSessionRecord(id)) return id;
       cur = this.ppid(cur);
     }
-    return null;
+    // A `wait job` runs under the service manager, out of every session's
+    // tree: it works for the session that armed it.
+    const unit = jobUnitOf(pid);
+    return unit ? sessionOfJob(unit) : null;
   }
 
+  /** The session whose process `pid` runs under: the nearest ancestor that is
+   *  a live session's own process. */
   private sessionAbove(pid: number): string | null {
     let cur = this.ppid(pid);
     for (let i = 0; i < 32 && cur !== null && cur > 1; i++) {
@@ -2971,7 +2976,7 @@ export class Fleet extends EventEmitter {
     const effort = req.effort || undefined;
     // A session started from another runs where that one does: a subagent of
     // an org session draws on the org, not on you.
-    const parentId = req.parent ?? (req.callerPid ? this.sessionAbove(req.callerPid) : null);
+    const parentId = req.parent ?? (req.callerPid ? this.callerOf(req.callerPid) : null);
     const scope = req.scope ?? (parentId ? getSessionRecord(parentId)?.scope : undefined) ?? settings.scope;
     if (scope === "org" && !readOrg()) throw new FleetError(409, "this machine is in no org: agentbox org join <invite>");
     const placement = this.placement(req.provider, req.model, req.accountId, effort, true, scope);

@@ -915,6 +915,12 @@ export function listWaits(since: number, sessionId?: string): Wait[] {
   return (rows as WaitRow[]).map(rowToWait);
 }
 
+/** The session that armed the wait on job `unit`. */
+export function sessionOfJob(unit: string): string | null {
+  const row = getDb().query("SELECT session_id FROM waits WHERE json_extract(spec, '$.unit') = ? ORDER BY id DESC LIMIT 1").get(unit) as { session_id: string } | null;
+  return row?.session_id ?? null;
+}
+
 export function updateWait(id: number, patch: Partial<Pick<Wait, keyof typeof WAIT_COLUMNS>>): void {
   const sets: string[] = [];
   const vals: (string | number | null)[] = [];

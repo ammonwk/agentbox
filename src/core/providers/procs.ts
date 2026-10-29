@@ -16,6 +16,15 @@ import type { ProviderId } from "../types";
 export { argvOf };
 
 /** The whole environment a process was started with. */
+/** The `agentbox wait job` unit a process runs in (src/cli/waits.ts), from its cgroup. */
+export function jobUnitOf(pid: number): string | null {
+  try {
+    return /agentbox-job-\w+\.service/.exec(readFileSync(`/proc/${pid}/cgroup`, "utf8"))?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function environOf(pid: number): Map<string, string> | null {
   if (darwin.isDarwin) return darwin.procArgs(pid)?.env ?? null;
   try {
