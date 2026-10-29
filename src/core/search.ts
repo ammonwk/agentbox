@@ -103,22 +103,24 @@ export function searchSaid(q: string, limit: number, include: (sessionId: string
 }
 
 /** Every message a person or program sent a session since `since`, oldest
- *  first; `first` when it is the first its session was ever sent. */
-export function userSaidSince(since: number): { session: string; at: number; text: string; first: boolean }[] {
+ *  first; `launch` when it is part of what the session was launched with:
+ *  said before its first reply. A launch prompt can be several rows (omp
+ *  records each paragraph of a typed-in prompt as one). */
+export function userSaidSince(since: number): { session: string; at: number; text: string; launch: boolean }[] {
   const reader = index();
   if (!reader) return [];
   const rows = reader.query("SELECT session, at, text FROM said WHERE kind = 'user' AND at >= ? ORDER BY at").all(since) as { session: string; at: number; text: string }[];
-  const firsts = new Map(
+  const replied = new Map(
     (
       reader
         .query(
-          `SELECT session, min(at) AS at FROM said WHERE kind = 'user'
+          `SELECT session, min(at) AS at FROM said WHERE kind = 'assistant'
              AND session IN (SELECT DISTINCT session FROM said WHERE kind = 'user' AND at >= ?) GROUP BY session`,
         )
         .all(since) as { session: string; at: number }[]
     ).map((r) => [r.session, r.at]),
   );
-  return rows.map((r) => ({ ...r, first: firsts.get(r.session) === r.at }));
+  return rows.map((r) => ({ ...r, launch: r.at < (replied.get(r.session) ?? Infinity) }));
 }
 
 function snippetOf(text: string, needle: string): string {

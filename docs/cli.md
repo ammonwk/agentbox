@@ -191,7 +191,9 @@ why). Arming the same wait twice is one wait.
 ## Your user's time
 
     agentbox your-time [--days N] [--json]   # per local day: the messages, cards, MFA codes and
-                                    # logins your user gave the fleet, and the minutes they took
+                                    # logins your user gave the fleet, the minutes they took, and
+                                    # those the fleet asked of them (cards, MFA, logins, messages
+                                    # to sessions they did not start)
                                     # (GET /api/you/time?days=14; the rule is in src/core/yourtime.ts)
 
 ## AWS

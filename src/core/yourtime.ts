@@ -10,8 +10,9 @@
  *    anything signed by `agentbox send`, a schedule or agentbox itself
  *    (`readSent`); a card's answer as it is typed in (the card counts); a
  *    subagent's or another CLI's session (`origin` external: its messages are
- *    a script's), and a session's first message unless you started it,
- *    since every other launch prompt is the launcher's. An answer to a
+ *    a script's), and what a session was launched with (everything said
+ *    before its first reply) unless you started it, since every other launch
+ *    prompt is the launcher's. An answer to a
  *    question dialog given on the board, and `agentbox send` from your own
  *    terminal, are recorded as they come (`you_acts`).
  *  - card: a card you answered (`cards`).
@@ -34,6 +35,12 @@
  *  per item says the six cards took six minutes, or the hour's conversation
  *  twelve. Covering time says three and sixty, which is what a clock would
  *  have shown.
+ *
+ *  `minutes` is all of it; `asks` is the same fold over what the fleet
+ *  asked of you: cards, MFA codes, logins, and your messages to sessions you
+ *  did not start. The rest is you using the fleet, in sessions you started
+ *  for work of your own, and a fleet that costs you less should not read as
+ *  you doing less.
  *
  *  Eight minutes for the gap, measured: the spacing between one thing you
  *  gave and the next (the two weeks to 2026-10-23, about 870 of them) is two
@@ -58,6 +65,8 @@ export interface YourAct {
   kind: YourActKind;
   /** Characters you typed for it, for its cost. */
   typed: number;
+  /** The fleet asked it of you: anything but a message to a session you started. */
+  asked: boolean;
 }
 
 export interface YourDay {
@@ -65,6 +74,8 @@ export interface YourDay {
   day: string;
   counts: Record<YourActKind, number>;
   minutes: number;
+  /** The minutes of the acts the fleet asked of you, folded alone. */
+  asks: number;
 }
 
 export interface YourTime {
@@ -87,7 +98,24 @@ export function costMs(a: YourAct): number {
   return Math.min(10 * MIN, MIN + (a.typed / TYPED_PER_MIN) * MIN);
 }
 
-const RULE = `each item covers the minute before it (half a minute for an MFA code, two for a login) plus what you typed at 40 wpm, ten minutes at most; items at most ${GAP_MS / MIN} minutes apart count the gap between them; minutes = time covered`;
+const RULE = `each item covers the minute before it (half a minute for an MFA code, two for a login) plus what you typed at 40 wpm, ten minutes at most; items at most ${GAP_MS / MIN} minutes apart count the gap between them; minutes = time covered; asks = the same over cards, MFA codes, logins and messages to sessions you did not start`;
+
+/** The minutes a day's acts cover, oldest first. */
+function covered(list: readonly YourAct[]): number {
+  let total = 0;
+  let span: { from: number; to: number } | null = null;
+  for (const a of list) {
+    const start = a.at - costMs(a);
+    if (!span) span = { from: start, to: a.at };
+    else if (a.at - span.to > GAP_MS) {
+      total += span.to - span.from;
+      // A long message's lead never reaches back over time already counted.
+      span = { from: Math.max(start, span.to), to: a.at };
+    } else span = { from: Math.min(span.from, start), to: a.at };
+  }
+  if (span) total += span.to - span.from;
+  return Math.round(total / MIN);
+}
 
 /** Pure: the acts, grouped into the `days` local days that end today. */
 export function foldYourTime(acts: readonly YourAct[], days: number, timezone: string, now: number): YourTime {
@@ -104,20 +132,8 @@ export function foldYourTime(acts: readonly YourAct[], days: number, timezone: s
     days: order.map((day) => {
       const list = byDay.get(day)!.sort((a, b) => a.at - b.at);
       const counts = Object.fromEntries(YOUR_ACT_KINDS.map((k) => [k, 0])) as Record<YourActKind, number>;
-      let covered = 0;
-      let span: { from: number; to: number } | null = null;
-      for (const a of list) {
-        counts[a.kind]++;
-        const start = a.at - costMs(a);
-        if (!span) span = { from: start, to: a.at };
-        else if (a.at - span.to > GAP_MS) {
-          covered += span.to - span.from;
-          // A long message's lead never reaches back over time already counted.
-          span = { from: Math.max(start, span.to), to: a.at };
-        } else span = { from: Math.min(span.from, start), to: a.at };
-      }
-      if (span) covered += span.to - span.from;
-      return { day, counts, minutes: Math.round(covered / MIN) };
+      for (const a of list) counts[a.kind]++;
+      return { day, counts, minutes: covered(list), asks: covered(list.filter((a) => a.asked)) };
     }),
   };
 }
@@ -129,15 +145,16 @@ function typedIn(text: string): number {
     .reduce((n, p) => n + p.text.replace(/\[Image #\d+:[^\]]*\]/g, "").trim().length, 0);
 }
 
-/** A message as one of your acts, or null when it is not yours to count. */
-export function messageAct(raw: string, at: number): YourAct | null {
+/** A message as one of your acts, or null when it is not yours to count;
+ *  `yours` when it went to a session you started. */
+export function messageAct(raw: string, at: number, yours: boolean): YourAct | null {
   const sent = readSent(raw);
   if (sent.agent) return null;
   const text = withoutNotes(sent.text).trim();
   // A card's answer, typed into its session: the card is counted.
   if (/^\[card \d+ “/.test(text)) return null;
-  if (MFA.test(text)) return { at, kind: "mfa", typed: 6 };
-  return { at, kind: "message", typed: typedIn(text) };
+  if (MFA.test(text)) return { at, kind: "mfa", typed: 6, asked: true };
+  return { at, kind: "message", typed: typedIn(text), asked: !yours };
 }
 
 /** Something agentbox saw you do as it happened, that no transcript or card
@@ -159,7 +176,9 @@ export function yourActs(since: number): YourAct[] {
     sessionId: string | null;
   }[];
   const yours = new Set(recorded.flatMap((r) => (r.kind === "launch" && r.sessionId ? [r.sessionId] : [])));
-  const acts: YourAct[] = recorded.flatMap((r) => (r.kind !== "launch" && r.at >= since ? [{ at: r.at, kind: r.kind, typed: 0 }] : []));
+  const acts: YourAct[] = recorded.flatMap((r) =>
+    r.kind !== "launch" && r.at >= since ? [{ at: r.at, kind: r.kind, typed: 0, asked: r.kind === "login" || !yours.has(r.sessionId ?? "") }] : [],
+  );
 
   // A transcript copied into another session (a fork) carries the same
   // messages at the same moments, and claude records a slash command twice
@@ -168,7 +187,7 @@ export function yourActs(since: number): YourAct[] {
   const last = new Map<string, number>();
   for (const m of userSaidSince(since)) {
     const provider = started.get(m.session);
-    if (!provider || (m.first && !yours.has(m.session))) continue;
+    if (!provider || (m.launch && !yours.has(m.session))) continue;
     // opencode types this into its own session, seconds apart, when a run stops short.
     if (provider === "opencode" && m.text.trim() === "Continue.") continue;
     const once = `${m.at}\n${m.text}`;
@@ -177,14 +196,14 @@ export function yourActs(since: number): YourAct[] {
     last.set(again, m.at);
     if (seen.has(once) || (before !== undefined && m.at - before < 1000)) continue;
     seen.add(once);
-    const act = messageAct(m.text, m.at);
+    const act = messageAct(m.text, m.at, yours.has(m.session));
     if (act) acts.push(act);
   }
 
   const cards = db.query("SELECT answer, answered_at AS at FROM cards WHERE state = 'answered' AND answered_at >= ?").all(since) as { answer: string | null; at: number }[];
   for (const c of cards) {
     const answer = (c.answer ?? "").trim();
-    acts.push(MFA.test(answer) ? { at: c.at, kind: "mfa", typed: 6 } : { at: c.at, kind: "card", typed: answer.length });
+    acts.push(MFA.test(answer) ? { at: c.at, kind: "mfa", typed: 6, asked: true } : { at: c.at, kind: "card", typed: answer.length, asked: true });
   }
   return acts;
 }

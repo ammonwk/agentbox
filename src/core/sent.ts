@@ -6,7 +6,8 @@
  *  paste each, so older transcripts have the whole message in that wrapper,
  *  the sender mark inside it (they go in piecewise now and are not wrapped:
  *  `ProviderAdapter.pasteInPieces`). A paste you made yourself in the
- *  terminal is still recorded that way, wherever in the message it went. */
+ *  terminal is still recorded that way, wherever in the message it went.
+ *  omp marks one with its chip instead (`OMP_PASTE`). */
 
 /** How much of a session's first and last prompt the board carries (and its
  *  record keeps); the transcript has the rest. */
@@ -28,8 +29,13 @@ const PASTE_CLOSE = /<\/pasted_content(?:\s+id="[^"]*")?\s*>/;
 const PASTE = new RegExp(`${PASTE_OPEN.source}([\\s\\S]*?)(?:${PASTE_CLOSE.source}|$)`, "g");
 const WHOLE_PASTE = new RegExp(`^\\s*${PASTE_OPEN.source}([\\s\\S]*?)(?:${PASTE_CLOSE.source})?\\s*$`);
 
+/** omp records a paste as its chip (`📄 #2`, or the nerd-font glyph) and
+ *  then the pasted text. */
+const OMP_PASTE = /^\s*(?:📄|\uf15c) #[1-9]\d* /u;
+
 /** The text without a paste wrapper that holds the whole of it. */
 export function unwrapPaste(text: string): string {
+  if (OMP_PASTE.test(text)) return text.replace(OMP_PASTE, "").trim();
   const m = WHOLE_PASTE.exec(text);
   // Two pastes side by side are not one wrapper.
   return m && !PASTE_OPEN.test(m[1]!) ? m[1]!.trim() : text;

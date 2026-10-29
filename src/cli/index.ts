@@ -517,7 +517,7 @@ pull requests and issues (who has one: no two sessions work the same one; an iss
 
 your time (src/core/yourtime.ts):
   your-time [--days N] [--json]   per day: the messages, cards, MFA codes and logins you gave
-                        the fleet, and the minutes they took you
+                        the fleet, the minutes they took you, and those the fleet asked of you
 
 cards (what a session hands the user to decide or to know; the app's Review page shows them):
   card add --kind decision|merged|note --title T --short S [--long L | --long-file F] [--pr URL]

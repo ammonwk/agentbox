@@ -15,10 +15,10 @@ export async function yourTime(api: Api, args: string[]): Promise<number> {
     console.log(JSON.stringify(t, null, 2));
     return 0;
   }
+  const hm = (m: number): string => (m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`);
   for (const d of t.days) {
-    const h = d.minutes >= 60 ? `${Math.floor(d.minutes / 60)}h ${String(d.minutes % 60).padStart(2, "0")}m` : `${d.minutes}m`;
     const c = d.counts;
-    console.log(`${d.day}  ${h.padStart(7)}  ${plural(c.message, "message")}, ${plural(c.card, "card")}, ${plural(c.mfa, "MFA code")}, ${plural(c.login, "login")}`);
+    console.log(`${d.day}  ${hm(d.minutes).padStart(7)}  ${hm(d.asks).padStart(7)} asked  ${plural(c.message, "message")}, ${plural(c.card, "card")}, ${plural(c.mfa, "MFA code")}, ${plural(c.login, "login")}`);
   }
   console.log(`(${t.timezone}; ${t.rule})`);
   return 0;

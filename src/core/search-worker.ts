@@ -31,6 +31,8 @@ function open(): Database {
     CREATE TRIGGER IF NOT EXISTS said_ai AFTER INSERT ON said BEGIN INSERT INTO said_fts (rowid, text) VALUES (new.id, new.text); END;
     CREATE INDEX IF NOT EXISTS said_user_at ON said (at) WHERE kind = 'user';
     CREATE INDEX IF NOT EXISTS said_user_session ON said (session, at) WHERE kind = 'user';
+    -- A session's first reply, which ends its launch prompt (userSaidSince).
+    CREATE INDEX IF NOT EXISTS said_reply_session ON said (session, at) WHERE kind = 'assistant';
     CREATE TRIGGER IF NOT EXISTS said_ad AFTER DELETE ON said BEGIN INSERT INTO said_fts (said_fts, rowid, text) VALUES ('delete', old.id, old.text); END;
   `);
   return db;
