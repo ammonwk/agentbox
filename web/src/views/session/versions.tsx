@@ -149,7 +149,7 @@ export function EditButton({ ev }: { ev: UserEvent }) {
 }
 
 const MODES: { mode: EditMode; label: string; detail: string }[] = [
-  { mode: "send", label: "Send", detail: "Go back to before this message and carry on with this instead. What came after stays as the other version." },
+  { mode: "send", label: "Send", detail: "Go back to before this message and carry on with this instead. What came after stays as the other version. From before the conversation was compacted, it carries on in a new session instead, as Fork here does." },
   { mode: "code", label: "Undo code changes and send", detail: "The same, and put the files back as they were before it (what the agent changed with its own edit tools)." },
   { mode: "fork", label: "Fork here", detail: "A new session with the conversation up to here, carrying on with this. This one stays as it is." },
 ];
@@ -194,13 +194,14 @@ export function EditBox({ ev, text }: { ev: UserEvent; text: string }) {
     setBusy(mode);
     setError(null);
     try {
-      if (mode === "fork") {
-        const { session: fork } = await api.fork(session.id, ev.id, draft);
+      const sent = mode === "fork" ? await api.fork(session.id, ev.id, draft) : await api.edit(session.id, ev.id, draft, mode, crypto.randomUUID());
+      // A message from before the conversation was compacted is edited in a fork.
+      if ("session" in sent) {
         edits.setEditing(null);
-        go({ page: "session", id: fork.id, tab: "timeline" });
+        go({ page: "session", id: sent.session.id, tab: "timeline" });
         return;
       }
-      const { receipt } = await api.edit(session.id, ev.id, draft, mode, crypto.randomUUID());
+      const { receipt } = sent;
       if (receipt.state === "sent") edits.setEditing(null);
       else setError(receipt.error ?? `not confirmed (${receipt.state}); the Terminal tab shows where it is`);
     } catch (e) {

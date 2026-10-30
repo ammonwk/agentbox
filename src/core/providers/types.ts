@@ -314,8 +314,6 @@ export interface ResumeOptions {
   model?: string;
   effort?: string;
   autoApprove: boolean;
-  /** Resume into a new session with this id, the conversation copied: a fork. */
-  forkAs?: string;
   /** Flags the session was launched with outside agentbox, kept by adopt
    *  (`carryOver`). When present they decide model and permissions: the
    *  session keeps the permissions it was started with, whatever
@@ -526,7 +524,7 @@ export interface ProviderAdapter {
    * another: an edit (`claude-rewind.ts`). Driven off the screen a step at a
    * time, as `answerStep`; `inputEmpty` says the restored message has been
    * cleared from the input box, and `isOpen` that a dialog of its own is up.
-   * `fork` sessions are started by `resumeCommand` with `ResumeOptions.forkAs`.
+   * A fork resumes a copy of the conversation up to the message (`copyBefore`).
    */
   rewind?: {
     start(): RewindState;
@@ -535,8 +533,11 @@ export interface ProviderAdapter {
     isOpen(screen: string): boolean;
     /** It can put the files back as they were, too. */
     undoesCode: boolean;
-    /** `resumeCommand` takes `forkAs`. */
-    forks: boolean;
+    /** The CLI has the message loaded, so its rewind can reach it. */
+    holds?(transcriptPath: string, messageId: string): boolean;
+    /** Write the conversation up to just before the message as a new
+     *  transcript for agent session `asId`, beside this one. */
+    copyBefore?(transcriptPath: string, messageId: string, asId: string): void;
     /** Point the conversation at another branch's last record (`branches.ts`),
      *  and the command that makes the running TUI take it up. */
     pointAt?(transcriptPath: string, agentSessionId: string, leafId: string): void;

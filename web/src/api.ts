@@ -295,7 +295,7 @@ export const api = {
   /** Answer the AskUserQuestion dialog the session shows; `question` is its call id. */
   /** Go back to one of your messages and carry on from there with `text`; `code` puts the files back too. */
   edit: (id: string, turnId: string, text: string, mode: "send" | "code", sendId: string) =>
-    request<{ receipt: SendReceipt }>("POST", `/api/sessions/${enc(id)}/edit`, { turnId, text, mode, sendId }, AbortSignal.timeout(120_000)),
+    request<{ receipt: SendReceipt } | { session: Session }>("POST", `/api/sessions/${enc(id)}/edit`, { turnId, text, mode, sendId }, AbortSignal.timeout(120_000)),
   /** The same in a new session copied from this one, which is left as it was. */
   fork: (id: string, turnId: string, text: string) =>
     request<{ session: Session }>("POST", `/api/sessions/${enc(id)}/edit`, { turnId, text, mode: "fork" }, AbortSignal.timeout(180_000)),

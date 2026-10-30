@@ -3409,14 +3409,13 @@ export class Fleet extends EventEmitter {
     });
   }
 
-  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string, fork?: { as: string; id: string }): PreparedLaunch {
-    const forkAs = fork?.as;
+  private resumeLaunch(rec: SessionRecord, account: Account, cwd: string, prompt?: string, forkId?: string): PreparedLaunch {
     const adapter = this.adapter(rec.provider);
     // What the session must read before it reads its prompt: the PRs it lost,
     // once each. A fork is a new session: what the old one was told is not
     // its news. A CLI that reads the prompt from a file is told it there; one
     // the fleet types is told it when it is typed, with the prompt.
-    const line = forkAs ? "" : prReleaseLine(rec.id);
+    const line = forkId ? "" : prReleaseLine(rec.id);
     const fromFile = adapter.promptDelivery === "file";
     const launch = rec.launch ? cleanMcpLaunch(rec.provider, rec.launch, new Map([["CODEX_HOME", account.home]])) : undefined;
     // The prompt and the briefing go in files the launch names: a command
@@ -3425,14 +3424,13 @@ export class Fleet extends EventEmitter {
     const text = sessionText(rec.id, briefing(cwd), fromFile ? withLine || undefined : undefined);
     const typed = fromFile ? undefined : prompt ?? (line ? "" : undefined);
     const opts = {
-      session: fork?.id ?? rec.id, account, agentSessionId: rec.agentSessionId!, cwd,
+      session: forkId ?? rec.id, account, agentSessionId: rec.agentSessionId!, cwd,
       promptFile: text.prompt,
       briefingFile: text.briefing,
       ...(rec.effort ? { effort: rec.effort } : {}),
       ...(resumeOn(rec) ? { model: resumeOn(rec)! } : {}),
       autoApprove: getSettings().autoApprove,
       ...(launch ? { carry: launch.args } : {}),
-      ...(forkAs ? { forkAs } : {}),
     };
     const resumed = adapter.resumeCommand(opts);
     const readOnly = !!adapter.readOnly && !!launch && adapter.readOnly.every((a) => launch.args.includes(a));
@@ -3818,26 +3816,31 @@ export class Fleet extends EventEmitter {
   }
 
   /**
-   * Edit in a copy: a new session with the conversation so far (the CLI's own
-   * fork, on the same account so it starts warm, in the same directory),
-   * gone back to the message there and carried on with `text`. The session
-   * it came from is left as it was; the fork is started under it.
+   * Edit in a copy: a new session with the conversation up to just before the
+   * message (`copyBefore`), on the same account so it starts warm, in the
+   * same directory, carried on with `text`. The session it came from is left
+   * as it was; the fork is started under it.
    */
-  async fork(id: string, goal: RewindGoal, text: string): Promise<Session> {
+  async fork(id: string, messageId: string, text: string): Promise<Session> {
     const rec = getSessionRecord(id);
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
     const adapter = this.adapter(rec.provider);
-    const rw = adapter.rewind;
-    if (!rw?.forks) throw new FleetError(409, `${adapter.label} sessions cannot be forked from here`);
-    if (!rec.agentSessionId) throw new FleetError(409, "this session never started a conversation, so there is nothing to fork");
+    const copyBefore = adapter.rewind?.copyBefore;
+    if (!copyBefore) throw new FleetError(409, `${adapter.label} sessions cannot be forked from here`);
+    if (!rec.agentSessionId || !rec.transcriptPath) throw new FleetError(409, "this session never started a conversation, so there is nothing to fork");
     const account = this.accountFor(rec, view);
     if (!account) throw new FleetError(409, "this session's account is no longer set up");
     const cwd = this.resumeDir(rec);
 
     const forkAs = randomUUID();
     const newId = newSessionId();
-    const prepared = this.resumeLaunch(rec, account, cwd, undefined, { as: forkAs, id: newId });
+    try {
+      copyBefore(transcriptFile(rec.transcriptPath), messageId, forkAs);
+    } catch (e) {
+      throw new FleetError(409, (e as Error).message);
+    }
+    const prepared = this.resumeLaunch({ ...rec, agentSessionId: forkAs }, account, cwd, undefined, newId);
     const now = this.now();
     const placement = this.placement(rec.provider, view.model, account.id, rec.effort ?? null, true, rec.scope);
     const claim = this.claimOf(rec.provider, view.model, rec.effort ?? null, false);
@@ -3884,12 +3887,18 @@ export class Fleet extends EventEmitter {
     await this.serial(newId, async () => {
       await this.untilReady(newId);
       await this.untilSettled(newId, pane);
-      await this.rewindIn(pane, rw, goal);
       await this.typeInto(newId, rec.provider, pane, text);
     }).catch((e) => {
-      throw new FleetError(409, `the fork ${newId} started, but going back in it failed: ${(e as Error).message}`);
+      throw new FleetError(409, `the fork ${newId} started, but typing the message into it failed: ${(e as Error).message}`);
     });
     return this.get(newId);
+  }
+
+  /** The CLI has the message loaded, so an edit can go back to it in place. */
+  holds(id: string, messageId: string): boolean {
+    const rec = getSessionRecord(id);
+    const holds = rec && this.adapter(rec.provider).rewind?.holds;
+    return !holds || !rec.transcriptPath || holds(transcriptFile(rec.transcriptPath), messageId);
   }
 
   /**

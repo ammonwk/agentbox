@@ -1055,8 +1055,13 @@ const router = new Router(mapError)
     if (mode !== "send" && mode !== "code" && mode !== "fork") throw new HttpError(400, "mode is send, code or fork");
     const goal = rewindGoalOf((await turnIndex.list(params.id!)).turns, turnId, mode === "code");
     if (typeof goal === "string") throw new HttpError(409, goal);
-    if (mode === "fork") {
-      const session = await fleet.fork(params.id!, goal, text);
+    // A turn's id is its record's uuid and the event's place in it.
+    const messageId = turnId.split(":")[0]!;
+    // Before the CLI's latest compaction, an edit can only be made in a fork.
+    const held = mode === "fork" || fleet.holds(params.id!, messageId);
+    if (mode === "code" && !held) throw new HttpError(409, "the files cannot be put back from before the conversation was compacted; Save & Send forks a new session from there");
+    if (mode === "fork" || !held) {
+      const session = await fleet.fork(params.id!, messageId, text);
       scheduleHot();
       return json({ session });
     }

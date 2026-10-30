@@ -21,7 +21,7 @@
  * stale file for a recycled pid detectable.
  */
 
-import { appendFileSync, existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { moveInto } from "./move";
 import { randomUUID } from "node:crypto";
@@ -598,7 +598,6 @@ function resumeCommand(opts: ResumeOptions): Command {
     if (opts.autoApprove) argv.push("--dangerously-skip-permissions");
     argv.push(...THINKING, ...told(opts.briefingFile), ...HOOKED);
   }
-  if (opts.forkAs) argv.push("--fork-session", "--session-id", opts.forkAs);
   return { argv, ...accountCommand(opts.account), stdinFile: opts.promptFile };
 }
 
@@ -610,6 +609,48 @@ function resumeCommand(opts: ResumeOptions): Command {
  */
 function pointAt(transcriptPath: string, agentSessionId: string, leafId: string): void {
   appendFileSync(transcriptPath, `${JSON.stringify({ type: "last-prompt", leafUuid: leafId, explicit: true, sessionId: agentSessionId })}\n`);
+}
+
+/** The transcript's records, in the order written; a torn line is skipped. */
+function recordsOf(transcriptPath: string): any[] {
+  const out: any[] = [];
+  for (const line of readFileSync(transcriptPath, "utf8").split("\n")) {
+    if (!line) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {}
+  }
+  return out;
+}
+
+/**
+ * Claude has the message loaded, so its rewind lists it. Claude reads nothing
+ * from before the latest compaction but the messages that compaction kept.
+ */
+function holds(transcriptPath: string, messageId: string): boolean {
+  const records = recordsOf(transcriptPath);
+  const at = records.map((r) => r.subtype).lastIndexOf("compact_boundary");
+  if (at === -1) return true;
+  const kept = records[at].compactMetadata?.preservedMessages?.allUuids ?? [];
+  return kept.includes(messageId) || records.slice(at).some((r) => r.uuid === messageId);
+}
+
+/**
+ * The conversation up to just before `messageId`, written beside the
+ * transcript as a new one for `asId`, ending on a pointer to the record the
+ * message followed, for `claude --resume <asId>` to carry on from: a fork.
+ * Copied rather than `--fork-session`, because Claude loads nothing from
+ * before its latest compaction, so a rewind cannot reach a message there.
+ */
+function copyBefore(transcriptPath: string, messageId: string, asId: string): void {
+  const records = recordsOf(transcriptPath);
+  const parent = records.find((r) => r.uuid === messageId)?.parentUuid;
+  if (parent === undefined) throw new Error("that message is not in the transcript");
+  if (!parent) throw new Error("nothing comes before the first message; start a new session instead");
+  const end = records.findIndex((r) => r.uuid === parent);
+  const lines = records.slice(0, end + 1).map((r) => JSON.stringify(r.sessionId ? { ...r, sessionId: asId } : r));
+  lines.push(JSON.stringify({ type: "last-prompt", leafUuid: parent, explicit: true, sessionId: asId }));
+  writeFileSync(join(dirname(transcriptPath), `${asId}.jsonl`), `${lines.join("\n")}\n`, { mode: 0o600 });
 }
 
 /** Flags adopt carries over, by how many values each takes (`carryFlags`). */
@@ -798,7 +839,8 @@ export const claudeAdapter: ProviderAdapter = {
     inputEmpty: claudeInputEmpty,
     isOpen: claudeRewindOpen,
     undoesCode: true,
-    forks: true,
+    holds,
+    copyBefore,
     pointAt,
     reload: (id) => `/resume ${id}`,
   },
