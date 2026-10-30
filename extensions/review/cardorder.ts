@@ -1,4 +1,4 @@
-import type { Card } from "../../../src/core/types";
+import type { Card } from "agentbox/client";
 
 /** A decision kept for later comes back to the top this long before its default's time. */
 export const LATER_RETURNS_MS = 2 * 60 * 60_000;

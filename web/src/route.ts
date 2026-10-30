@@ -9,7 +9,8 @@ export type Route =
   | { page: "sessions" }
   /** An extension's page (docs/extensions.md), or the first one's: a tab of Settings. */
   | { page: "extensions"; name: string | null }
-  | { page: "session"; id: string; tab: SessionTab }
+  /** A session; `at`, one message in its timeline: the conversation opened there. */
+  | { page: "session"; id: string; tab: SessionTab; at?: string }
   | { page: "accounts"; sub: "accounts" | "calibration" }
   /** One account's usage insights. */
   | { page: "accounts"; sub: "insights"; account: string }
@@ -17,16 +18,17 @@ export type Route =
   | { page: "context" }
   /** The global MCP servers every agent is given. */
   | { page: "mcps" }
-  /** The cards sessions handed you: to decide, or to know. */
-  | { page: "review" }
+  /** A page an extension added (web/src/plugin/registry.tsx), at `#/<id>[/<rest>]`. */
+  | { page: "ext"; id: string; rest: string }
   | { page: "voice" }
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "sessions" | "review" | "voice" | "accounts" | "context" | "mcps" | "settings";
+export type NavId = "sessions" | "voice" | "accounts" | "context" | "mcps" | "settings" | (string & {});
 
 export function navOf(route: Route): NavId {
   if (route.page === "extensions") return "settings";
+  if (route.page === "ext") return route.id;
   return route.page === "session" ? "sessions" : route.page;
 }
 
@@ -43,6 +45,7 @@ export function parseHash(hash: string): Route {
   const parts = hash.split("?")[0]!.replace(/^#\/?/, "").split("/").filter(Boolean).map(decode);
   const [head, a, b] = parts;
   if (head === "s" && a) {
+    if (b === "at" && parts[3]) return { page: "session", id: a, tab: "timeline", at: parts[3] };
     const tab = SESSION_TABS.includes(b as SessionTab) ? (b as SessionTab) : "timeline";
     return { page: "session", id: a, tab };
   }
@@ -56,17 +59,21 @@ export function parseHash(hash: string): Route {
   if (head === "context" || head === "skills") return { page: "context" };
   if (head === "mcps") return { page: "mcps" };
   if (head === "voice") return { page: "voice" };
-  if (head === "review") return { page: "review" };
   if (head === "settings") return { page: "settings" };
+  // Anything else is a page an extension adds, once it has loaded (or says there is none).
+  if (head && /^[a-z][a-z0-9-]{0,39}$/.test(head)) return { page: "ext", id: head, rest: parts.slice(1).join("/") };
   return { page: "sessions" };
 }
 
 function routePath(route: Route): string {
   switch (route.page) {
     case "session":
+      if (route.at) return `#/s/${encodeURIComponent(route.id)}/at/${encodeURIComponent(route.at)}`;
       return `#/s/${encodeURIComponent(route.id)}${route.tab === "timeline" ? "" : `/${route.tab}`}`;
     case "extensions":
       return route.name ? `#/extensions/${encodeURIComponent(route.name)}` : "#/extensions";
+    case "ext":
+      return `#/${route.id}${route.rest ? `/${route.rest.split("/").map(encodeURIComponent).join("/")}` : ""}`;
     case "accounts":
       if (route.sub === "insights") return `#/accounts/insights/${encodeURIComponent(route.account)}`;
       return route.sub === "calibration" ? "#/accounts/calibration" : "#/accounts";

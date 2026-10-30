@@ -7,6 +7,7 @@ import { Button, CommitInput, Confirm, Empty, Field, Icon, RelativeTime, Toggle 
 import { ACCENT_PRESETS, chooseAccent, useAccent } from "../lib/accent";
 import { BALANCER_HELP } from "../lib/balancer";
 import { disablePush, enablePush, pushState, type PushState } from "../lib/push";
+import { Fenced, usePlugins } from "../plugin/registry";
 import { hrefOf } from "../route";
 import { WhenField } from "./newsession/WhenField";
 import { scheduleTitle } from "./session/Scheduled";
@@ -28,6 +29,7 @@ export function Settings({ state }: { state: AppState }) {
       <Repositories repos={repos} sessions={sessions} track={track} saveStateOf={saveStateOf} />
       <Disk {...section} />
       <Diagnostics warnings={warnings} providers={state.providers} />
+      <ExtensionSections />
     </div>
   );
 }
@@ -1170,5 +1172,24 @@ function SaveMark({ state }: { state: SaveStatus | undefined }) {
     <span className="save-mark error" role="alert">
       <Icon.alert size={14} /> Not saved: {state.message}
     </span>
+  );
+}
+
+/** The sections extensions add (web/src/plugin/registry.tsx), each in a card of its own. */
+function ExtensionSections() {
+  const { loaded } = usePlugins();
+  return (
+    <>
+      {loaded.flatMap((l) =>
+        l.settings.map((def, i) => (
+          <section key={`${l.name}:${i}`} className="card" data-nav-item data-nav-id={`settings:ext:${l.name}:${i}`} tabIndex={0} aria-label={def.title}>
+            <h3>{def.title}</h3>
+            <Fenced ext={l.name} what="This section">
+              {def.render()}
+            </Fenced>
+          </section>
+        )),
+      )}
+    </>
   );
 }

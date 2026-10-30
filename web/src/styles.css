@@ -1250,6 +1250,17 @@ textarea,
   width: auto;
   min-width: 320px;
 }
+/* What extensions add at the bar's end. */
+.sys-ext {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 14px;
+  border-left: 1px solid var(--border);
+  font-size: 12px;
+}
 .sys-session {
   display: flex;
   align-items: center;
@@ -2533,15 +2544,14 @@ kbd {
      without renumbering the rest. */
   .sidebar { overflow-x: auto; }
   .sidebar .nav-item, .sidebar .nav-new, .sidebar .nav-bell { flex: 0 0 56px; }
-  /* New sits where the thumb rests, after Sessions and Review. */
+  /* New sits where the thumb rests, after Sessions and the pages extensions add. */
   .nav-new {
     order: 3;
   }
   .nav-new .nav-label { display: none; }
   .nav-new::after { content: "New"; }
-  .sidebar [data-nav-id="agents"],
   .sidebar [data-nav-id="sessions"] { order: 1; }
-  .sidebar [data-nav-id="review"] { order: 2; }
+  .sidebar [data-nav-ext] { order: 2; }
   .sidebar [data-nav-id="voice"] { order: 4; }
   .sidebar [data-nav-id="accounts"] { order: 5; }
   .sidebar [data-nav-id="skills"] { order: 6; }
@@ -2599,7 +2609,6 @@ kbd {
      worth more to the conversation. */
   .app[data-page="session"] .sysbar,
   .app[data-page="voice"] .sysbar,
-  .app[data-page="review"] .sysbar,
   :root[data-kb] .sysbar {
     display: none;
   }

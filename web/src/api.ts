@@ -81,7 +81,7 @@ const loadMock = (): Promise<MockModule> => (mockModule ??= import("./mock"));
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function request<T>(method: Method, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   if (MOCK) {
     const m = await loadMock();
     // The mock is typed loosely at its one boundary; everything past this line is the contract's type.
@@ -214,6 +214,7 @@ export const api = {
   extensions: () => get<ExtensionInfo[]>("/api/extensions"),
   extensionRestart: (name: string) => post<void>(`/api/extensions/${enc(name)}/restart`),
   extensionLog: (name: string) => get<{ text: string }>(`/api/extensions/${enc(name)}/log`),
+  extensionOn: (name: string, on: boolean) => request<null>("PUT", `/api/extensions/${enc(name)}/on`, { on }),
 
   /** One `agentbox wait`, and the end of its job's log while that runs. */
   wait: (id: number) => get<WaitView>(`/api/waits/${id}`),

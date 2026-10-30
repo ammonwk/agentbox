@@ -16,19 +16,16 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import type { AppState, Card } from "../../../src/core/types";
-import { describeAt } from "../../../src/core/schedule";
-import { api } from "../api";
-import { laterOf, stackOf } from "../lib/cardorder";
-import { Button, Empty, Icon, Modal, RelativeTime } from "../components";
-import { hrefOf } from "../route";
-import { Markdown } from "./session/Markdown";
-import { PrBase } from "./session/prbase";
-import { SessionLinks } from "./session/sessionlinks";
-import { buildSessionIndex, withResolved } from "../lib/sessionrefs";
-import { useResolvedSessions } from "../lib/sessionresolve";
-import { prBaseFor } from "../lib/prlinks";
+import { type AppState, type Card, Button, call, describeAt, Empty, href, Icon, Markdown, MarkdownLinks, Modal, RelativeTime } from "agentbox/client";
+import { laterOf, stackOf } from "./cardorder";
 import "./review.css";
+
+const api = {
+  card: (id: number) => call<Card>("GET", `/api/cards/${id}`),
+  answerCard: (id: number, text: string) => call<Card>("POST", `/api/cards/${id}/answer`, { text }),
+  laterCard: (id: number) => call<Card>("POST", `/api/cards/${id}/later`),
+  undoCard: (id: number) => call<Card>("POST", `/api/cards/${id}/undo`),
+};
 
 type Tab = "stack" | "later" | "done";
 /** How long the last gesture can be taken back; the server holds an answer this long (UNDO_MS). */
@@ -325,7 +322,7 @@ function Source({ card, state }: { card: Card; state: AppState }) {
   return (
     <div className="card-source">
       {card.sessionId ? (
-        <a className="card-from" href={hrefOf({ page: "session", id: card.sessionId, tab: "timeline" })} title={`The session that asked (${card.sessionId})`}>
+        <a className="card-from" href={href({ page: "session", id: card.sessionId, tab: "timeline" })} title={`The session that asked (${card.sessionId})`}>
           <Icon.sessions size={12} />
           <span>{s ? s.label || s.title : card.sessionId}</span>
         </a>
@@ -342,23 +339,15 @@ function Source({ card, state }: { card: Card; state: AppState }) {
 }
 
 /**
- * What a card's words link to: a session it names (matched against the
- * board's, so a word that only looks like an id stays a word) opens that
- * session, and `#123` the pull request, in the repo of the card's own PR,
- * else of the session that made it.
+ * What a card's words link to: a session it names opens that session, and
+ * `#123` the pull request, in the repo of the card's own PR, else of the
+ * session that made it.
  */
-function CardLinks({ card, state, children }: { card: Card; state: AppState; children: ReactNode }) {
-  const resolved = useResolvedSessions();
-  const links = useMemo(() => ({ index: withResolved(buildSessionIndex(state.sessions), resolved), self: null }), [state.sessions, resolved]);
-  const base = useMemo(() => {
-    const own = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/pull\/\d+/.exec(card.pr ?? "")?.[1];
-    const asker = state.sessions.find((x) => x.id === card.sessionId);
-    return own ?? prBaseFor(asker ?? { repoRoot: null, prRepo: null }, state);
-  }, [card.pr, card.sessionId, state]);
+function CardLinks({ card, children }: { card: Card; children: ReactNode }) {
   return (
-    <PrBase.Provider value={base}>
-      <SessionLinks.Provider value={links}>{children}</SessionLinks.Provider>
-    </PrBase.Provider>
+    <MarkdownLinks session={card.sessionId} pr={card.pr}>
+      {children}
+    </MarkdownLinks>
   );
 }
 
@@ -490,7 +479,7 @@ function SwipeCard({
         <span className="card-kind-chip">{KIND[card.kind]}</span>
         {card.state === "later" ? <span className="faint">kept for later</span> : null}
       </div>
-      <CardLinks card={card} state={state}>
+      <CardLinks card={card}>
         <h3 className="card-title">
           <Markdown inline text={card.title} />
         </h3>
@@ -577,7 +566,7 @@ function LongView({
           Back
         </Button>
       </div>
-      <CardLinks card={card} state={state}>
+      <CardLinks card={card}>
       <div className="review-long-body">
         <h2 className="card-title">
           <Markdown inline text={card.title} />

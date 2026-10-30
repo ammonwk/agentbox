@@ -12,6 +12,7 @@ import { parseArgs } from "./sessions";
 export const EXT_USAGE = `agentbox ext [ls]                       the extensions and their programs
 agentbox ext add <dir> [--name n]       link the one in <dir> (its extension.json) in
 agentbox ext rm <name>                  unlink it; its directory and state stay
+agentbox ext off|on <name>              stop its program and take its part out of the app, or put both back
 agentbox ext restart <name>             stop its program; it starts again at once
 agentbox ext log <name>                 the end of its program's output
 agentbox ext call <name> <path> [--json <file|->]
@@ -30,7 +31,10 @@ export async function ext(api: Api, args: string[]): Promise<number> {
     case "list": {
       const all = await api<ExtensionInfo[]>("GET", "/api/extensions");
       if (!all.length) console.log("no extensions: link one in with `agentbox ext add <dir>`");
-      for (const x of all) console.log(`${x.name}  ${x.state}${x.pid ? ` pid ${x.pid}` : ""}${x.restarts ? ` restarts ${x.restarts}` : ""}  ${x.dir}${x.error ? `  ERROR ${x.error}` : ""}`);
+      for (const x of all) {
+        const what = !x.enabled ? "off" : [x.run ? x.state : "", x.client ? "in the app" : ""].filter(Boolean).join(", ");
+        console.log(`${x.name}  ${what}${x.pid ? ` pid ${x.pid}` : ""}${x.restarts ? ` restarts ${x.restarts}` : ""}  ${x.builtIn ? "(comes with agentbox)" : x.dir}${x.error ? `  ERROR ${x.error}` : ""}`);
+      }
       return 0;
     }
     case "add": {
@@ -38,13 +42,18 @@ export async function ext(api: Api, args: string[]): Promise<number> {
       if (!dirs[0]) throw new Error("ext add needs the extension's directory");
       const n = flags.get("name");
       const out = await api<{ name: string }>("POST", "/api/extensions", { dir: resolve(dirs[0]), ...(typeof n === "string" ? { name: n } : {}) });
-      console.log(`${out.name} added: its page is /x/${out.name}/`);
+      console.log(`${out.name} added: see it in Settings → Extensions`);
       return 0;
     }
     case "rm":
     case "remove":
       await api("DELETE", `/api/extensions/${name()}`);
       console.log(`${rest[0]} removed`);
+      return 0;
+    case "on":
+    case "off":
+      await api("PUT", `/api/extensions/${name()}/on`, { on: verb === "on" });
+      console.log(`${rest[0]} ${verb === "on" ? "on" : "off"}: reload the app to see it ${verb === "on" ? "back" : "gone"}`);
       return 0;
     case "restart":
       await api("POST", `/api/extensions/${name()}/restart`);
@@ -74,7 +83,7 @@ export async function ext(api: Api, args: string[]): Promise<number> {
       console.log(EXT_USAGE);
       return 0;
     default:
-      throw new Error(`ext takes ls, add, rm, restart, log or call: not "${verb}"`);
+      throw new Error(`ext takes ls, add, rm, on, off, restart, log or call: not "${verb}"`);
   }
 }
 

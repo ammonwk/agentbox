@@ -22,10 +22,10 @@ import { Shortcuts } from "./views/Shortcuts";
 import { Context } from "./views/Context";
 import { Mcps } from "./views/Mcps";
 import { InboxBell } from "./Inbox";
-import { Review } from "./views/Review";
 import { ProjectContext, scopedState, sessionProject, useScope } from "./lib/projects";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { ProjectTabs } from "./ProjectTabs";
+import { Fenced, loadPlugins, pagesOf, runCommand, SeenContext, usePlugins } from "./plugin/registry";
 
 // Accounts and Calibration are visited, not lived in; keep them out of the
 // first paint. (The terminal is lazy too, inside SessionView — xterm is the
@@ -75,7 +75,6 @@ function isTyping(e: KeyboardEvent): boolean {
 
 const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
-  { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
   { id: "accounts", label: "Accounts", icon: Icon.users, to: { page: "accounts", sub: "accounts" } },
   { id: "context", label: "Context", icon: Icon.context, to: { page: "context" } },
@@ -83,13 +82,12 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
   { id: "settings", label: "Settings", icon: Icon.settings, to: { page: "settings" } },
 ];
 
-/** Pages a project filters; the rest are the machine's, whatever is selected. */
-const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions", "review"]);
+/** Pages a project filters (and extensions' pages that say `scoped`); the rest are the machine's, whatever is selected. */
+const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions"]);
 const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "extensions", "context", "mcps", "voice"]);
 
-const PAGE_TITLE: Record<NavId, string> = {
+const PAGE_TITLE: Record<string, string> = {
   sessions: "Sessions",
-  review: "Review",
   voice: "Voice",
   accounts: "Accounts",
   context: "Context",
@@ -100,6 +98,9 @@ const PAGE_TITLE: Record<NavId, string> = {
 export function App() {
   useKeyboardNavigation();
   const { state } = useAppState();
+  useEffect(() => void loadPlugins(), []);
+  const plugins = usePlugins();
+  const extPages = useMemo(() => pagesOf(plugins.loaded), [plugins.loaded]);
   const [route, navigate] = useRoute();
   useTheme(state?.settings.theme);
   const [newOpen, setNewOpen] = useState(false);
@@ -124,7 +125,29 @@ export function App() {
   // The start of the system bar, where an open session puts its facts.
   const [sysbarSlot, setSysbarSlot] = useState<HTMLElement | null>(null);
 
-  const counts = useMemo(() => countsOf(scoped), [scoped]);
+  const extPage = route.page === "ext" ? (extPages.find((p) => p.id === route.id) ?? null) : null;
+  const scopedPage = SCOPED_PAGES.has(route.page) || !!extPage?.scoped;
+  // The rail: Sessions, then what extensions added, then the app's own tools.
+  const rail = useMemo(
+    () => [
+      NAV[0]!,
+      ...extPages.map((p) => ({ id: p.id, label: p.label, icon: p.icon, to: { page: "ext", id: p.id, rest: "" } as Route })),
+      ...NAV.slice(1),
+    ],
+    [extPages],
+  );
+  const counts = useMemo(() => {
+    const out: Record<string, number> = countsOf(scoped);
+    for (const p of extPages) {
+      if (!p.badge || !state || !scoped) continue;
+      try {
+        out[p.id] = p.badge(p.scoped ? scoped : state);
+      } catch (e) {
+        console.error(`agentbox: extension ${p.ext}, the count on ${p.id}`, e);
+      }
+    }
+    return out;
+  }, [scoped, state, extPages]);
 
   const contentRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -154,6 +177,8 @@ export function App() {
           search.focus();
           search.select();
         }
+      } else if (runCommand(e.key)) {
+        e.preventDefault();
       }
     };
     // Ctrl+T is `n` in the installed app, from anywhere, the terminal
@@ -172,12 +197,13 @@ export function App() {
     };
   }, []);
 
-  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
+  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice" || !!extPage?.flush;
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
     <ProjectContext.Provider value={{ repos: state?.repos ?? [] }}>
-    <div className="app" data-page={route.page}>
+    <SeenContext.Provider value={state && scoped ? { state, scoped, project: scope.project } : null}>
+    <div className="app" data-page={route.page === "ext" ? route.id : route.page}>
       <a className="skip" href="#content">
         Skip to content
       </a>
@@ -225,14 +251,15 @@ export function App() {
           </button>
 
           <nav aria-label="Primary">
-            {NAV.map(({ id, label, icon: IconCmp, to }) => {
-              const count = counts[id];
+            {rail.map(({ id, label, icon: IconCmp, to }) => {
+              const count = counts[id] ?? 0;
               const active = nav === id;
               return (
                 <a
                   key={id}
                   data-nav-item
                   data-nav-id={id}
+                  data-nav-ext={extPages.some((p) => p.id === id) || undefined}
                   aria-keyshortcuts="ArrowUp ArrowDown ArrowRight"
                   className={`nav-item ${active ? "active" : ""}`}
                   href={hrefOf(to)}
@@ -242,7 +269,7 @@ export function App() {
                   <IconCmp size={20} weight="duotone" />
                   <span className="nav-label">{label}</span>
                   {count > 0 ? (
-                    <span className={`count${id === "accounts" ? " count-warn" : ""}`} title={countTitle(id, count)}>
+                    <span className={`count${id === "accounts" ? " count-warn" : ""}`} title={extPages.find((p) => p.id === id)?.badgeTitle?.(count) ?? countTitle(id, count)}>
                       {count}
                     </span>
                   ) : null}
@@ -277,7 +304,7 @@ export function App() {
             the session's title — so a page title above them is a second one. */}
         {flush ? null : (
           <header className="topbar">
-            <h1>{PAGE_TITLE[nav]}</h1>
+            <h1>{extPage?.label ?? PAGE_TITLE[nav] ?? ""}</h1>
             {route.page === "accounts" ? (
               <div className="seg topbar-seg" role="group" aria-label="Accounts view">
                 <button
@@ -318,7 +345,7 @@ export function App() {
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
-            ) : staleProject && SCOPED_PAGES.has(route.page) ? (
+            ) : staleProject && scopedPage ? (
               <Empty title="This project is no longer registered" action={<Button onClick={() => selectScope("project", null)}>All projects</Button>}>
                 <p>Your conversations and work remain in All projects.</p>
               </Empty>
@@ -353,8 +380,20 @@ export function App() {
               <Suspense fallback={<Empty title="Loading…" />}>
                 <Voice />
               </Suspense>
-            ) : route.page === "review" ? (
-              <Review key={scope.project ?? "all"} state={scoped!} />
+            ) : route.page === "ext" ? (
+              extPage ? (
+                <Fenced ext={extPage.ext} what="This page" reset={hrefOf(route)}>
+                  {extPage.render({ state: extPage.scoped ? scoped! : state, rest: route.rest })}
+                </Fenced>
+              ) : !plugins.ready ? (
+                <Empty title="Loading…" />
+              ) : (
+                <Empty title="No such page" action={<a className="btn" href={hrefOf({ page: "extensions", name: null })}>Extensions</a>}>
+                  <p>
+                    No extension adds a page called <code>{route.id}</code>.
+                  </p>
+                </Empty>
+              )
             ) : route.page === "context" ? (
               <Context state={state} />
             ) : route.page === "mcps" ? (
@@ -367,7 +406,13 @@ export function App() {
         </SysbarSlot.Provider>
 
         <ErrorBoundary label="The system bar">
-          <SystemBar accounts={state?.accounts ?? []} sessions={state?.sessions ?? []} focusAccount={focusAccount} slotRef={setSysbarSlot} />
+          <SystemBar
+            accounts={state?.accounts ?? []}
+            sessions={state?.sessions ?? []}
+            focusAccount={focusAccount}
+            slotRef={setSysbarSlot}
+            tail={plugins.loaded.flatMap((l) => l.status.map((render, i) => <Fenced key={`${l.name}:${i}`} ext={l.name} what="A status item">{render()}</Fenced>))}
+          />
         </ErrorBoundary>
       </div>
 
@@ -396,6 +441,7 @@ export function App() {
         </ErrorBoundary>
       ) : null}
     </div>
+    </SeenContext.Provider>
     </ProjectContext.Provider>
   );
 }
@@ -414,24 +460,17 @@ function titleOfId(state: AppState, id: string): string {
 
 // ----------------------------------------------------------------- counts
 
-function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, context: 0, mcps: 0, settings: 0 };
+function countsOf(state: AppState | null): Record<string, number> {
+  if (!state) return {};
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
     sessions: needsYou(state.sessions),
-    // Kept for later is still yours, but you have seen it: it does not nag.
-    review: state.cards.filter((c) => c.state === "open").length,
-    voice: 0,
     accounts: Math.max(loginsOpen, authBad),
-    context: 0,
-    mcps: 0,
-    settings: 0,
   };
 }
 
 function countTitle(id: NavId, n: number): string {
-  if (id === "review") return `${n} card${n === 1 ? "" : "s"} to review`;
   if (id === "accounts") return `${n} account${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} a login`;
   return `${n} session${n === 1 ? "" : "s"} waiting on you`;
 }

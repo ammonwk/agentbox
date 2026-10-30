@@ -42,12 +42,15 @@ export function SystemBar({
   sessions,
   focusAccount,
   slotRef,
+  tail,
 }: {
   accounts: readonly AccountView[];
   sessions: readonly Session[];
   focusAccount: string | null;
   /** Gets the element the open session's facts go in. */
   slotRef?: (el: HTMLElement | null) => void;
+  /** What extensions put at its end (web/src/plugin/registry.tsx). */
+  tail?: ReactNode[];
 }) {
   const { metrics, stale } = useMetrics();
   const [open, setOpen] = useState(false);
@@ -56,10 +59,11 @@ export function SystemBar({
   const limits = recentAccounts(accounts, sessions, focusAccount);
 
   const slot = <div className="sys-session" ref={slotRef} />;
+  const extras = tail?.length ? <div className="sys-ext">{tail}</div> : null;
   // No machine figures: the first sweep has not landed, or this system gives
   // none. An empty strip would be a permanent piece of furniture claiming a
   // measurement, so only a session's facts show, and only while one is open.
-  if (!sys) return <div className="sysbar sysbar-bare">{slot}</div>;
+  if (!sys) return <div className="sysbar sysbar-bare">{slot}{extras}</div>;
 
   const memUsed = sys.memTotal - sys.memAvailable;
   const memFrac = sys.memTotal ? memUsed / sys.memTotal : 0;
@@ -292,6 +296,7 @@ export function SystemBar({
           {open ? "▾" : "▴"}
         </span>
       </button>
+      {extras}
       </div>
 
       {open ? <SystemDetail sys={sys} limits={limits} now={now} /> : null}

@@ -1,5 +1,6 @@
 import { Modal } from "../components";
 import { isInstalledApp } from "../lib/phone";
+import { loadedPlugins as loaded } from "../plugin/registry";
 
 /** Every key the board answers to, in one place: `?` opens it. Keep it in
  *  step with the handlers it names. */
@@ -37,13 +38,11 @@ function groups(): [string, [string, string][]][] {
       ["Alt+1 … Alt+6", "Pick the agent"],
       ["Ctrl+Enter", "Start"],
     ]],
-    ["Review", [
-      ["→", "Answer the card"],
-      ["↓", "Approve it"],
-      ["←", "Later"],
-      ["↑", "Read it whole"],
-      ["u", "Undo"],
-    ]],
+    // What extensions add: their pages' own keys, and their keys that work anywhere.
+    ...loaded().flatMap((l): [string, [string, string][]][] => l.pages.filter((p) => p.keys?.length).map((p) => [p.label, p.keys!])),
+    ...(loaded().some((l) => l.commands.length)
+      ? [["Extensions", loaded().flatMap((l) => l.commands.map((c): [string, string] => [c.key, `${c.label} (${l.name})`]))] as [string, [string, string][]]]
+      : []),
   ];
 }
 

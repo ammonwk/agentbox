@@ -19,7 +19,7 @@
 
 import { ensureBridge } from "../bridge/service";
 import { ZodError } from "zod";
-import { chmodSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import { DEFAULT_PORT, packageRoot, serverSocket, webDist } from "../core/paths";
@@ -91,7 +91,7 @@ import { AccountError, AccountsService, owners } from "../core/accounts";
 import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
-import { addExtension, ExtensionError, Extensions, removeExtension } from "../core/extensions";
+import { addExtension, bundleClient, ExtensionError, extensionData, Extensions, removeExtension, saveExtensionData, setExtensionOn } from "../core/extensions";
 import { Org } from "../core/org";
 import { OrgAccountError, shareWithOrg, unshareFromOrg, reclaimFromOrg } from "../core/org/accounts";
 import { RUNNING_REVISION } from "../revision";
@@ -1265,6 +1265,27 @@ const router = new Router(mapError)
     const bytes = Number(url.searchParams.get("bytes")) || undefined;
     return json({ text: extensions.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
   })
+  .add("PUT", "/api/extensions/:name/on", async ({ req, params }) => {
+    const b = await readBody(req);
+    if (typeof b.on !== "boolean") throw new HttpError(400, "on must be true or false");
+    setExtensionOn(params.name!, b.on);
+    scheduleCold();
+    return json(null);
+  })
+  // Its client, for the app to load into itself: bundled each time, so an edit shows at the next reload.
+  .add("GET", "/api/extensions/:name/client.js", async ({ params }) => {
+    const host = clientEntry();
+    if (!host) throw new HttpError(503, "the app is not built, so there is no agentbox/client for an extension's client to run against (bun run build)");
+    return new Response(await bundleClient(params.name!, `/assets/${host}`), {
+      headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" },
+    });
+  })
+  .add("GET", "/api/extensions/:name/data", ({ params }) => json(extensionData(params.name!)))
+  .add("PUT", "/api/extensions/:name/data", async ({ req, params }) => {
+    const b = await readBody(req);
+    saveExtensionData(params.name!, b.value);
+    return json(null);
+  })
   // ---- the org (docs/org.md)
   .add("GET", "/api/org", () => json(org.status()))
   // An org session on another member's machine: its conversation, as that machine answers.
@@ -1848,6 +1869,15 @@ router.otherwise(({ req, url }) => {
  * build empties the directory, and a watcher does not survive its removal.
  */
 let uiBuild = builtEntry(webDist);
+
+/** The build's `agentbox/client` (web/src/plugin/client.ts): the module every extension's client imports. */
+function clientEntry(): string | null {
+  try {
+    return readdirSync(join(webDist, "assets")).find((f) => /^agentbox-client-[\w-]+\.js$/.test(f)) ?? null;
+  } catch {
+    return null;
+  }
+}
 let uiBuildMtime = 0;
 function checkBuild(): void {
   let mtime = 0;

@@ -49,6 +49,7 @@ import { SessionLinks } from "./sessionlinks";
 import { TermRail } from "./MessageRail";
 import { jumpInTimeline } from "./jump";
 import { FamilyContext, FamilyStrip, ParentLine, useFamilyOf } from "./family";
+import { ExtSessionActions } from "../../plugin/registry";
 import "./session.css";
 
 const Terminal = lazy(() => import("./Terminal"));
@@ -795,6 +796,7 @@ export function Detail({
           {narrow ? null : <SessionIdentity session={session} sessions={state.sessions} run={run} busy={busy} />}
           <div className="sx-tabbar-actions">
             {narrow ? null : marks}
+            <ExtSessionActions session={session} />
             {session.host === "external" ? (
               <Button size="sm" variant="primary" icon={Icon.link} loading={busy} onClick={() => void run(() => api.adopt(session.id))}>
                 Adopt

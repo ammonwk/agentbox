@@ -1769,7 +1769,15 @@ export interface ExtensionInfo {
   dir: string;
   /** Why its manifest cannot be read, when it cannot. */
   error: string | null;
-  state: "running" | "starting" | "backoff" | "stopped";
+  /** It comes with agentbox (`extensions/` in its checkout), rather than being one of yours. */
+  builtIn: boolean;
+  /** Off: its program is stopped and its client not loaded, until it is turned on. */
+  enabled: boolean;
+  /** It has a program to run (`run`), and a part in the app (`client`). */
+  run: boolean;
+  client: boolean;
+  /** Its program's; "none" when it has no program or is off. */
+  state: "running" | "starting" | "backoff" | "stopped" | "none";
   pid: number | null;
   since: number | null;
   restarts: number;

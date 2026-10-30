@@ -2,20 +2,22 @@
  * Extensions: programs that run on agentbox, not in it (docs/extensions.md).
  *
  * An extension is a directory (or a link to one) in `<agentbox home>/extensions/`
- * holding an `extension.json` that says how to run it. Agentbox keeps that
- * program running, gives it a port, and serves whatever it answers under
- * `/x/<name>/`, which the app shows in a frame of its own. That is all:
- * everything else it does — start sessions, talk to them, keep a
+ * holding an `extension.json`, or one that comes with agentbox in its
+ * checkout's `extensions/`. It has a program, a client, or both. Agentbox keeps
+ * the program running, gives it a port, and serves whatever it answers under
+ * `/x/<name>/`; and it bundles the client, against the app's own React and
+ * `agentbox/client`, for the app to load into itself (web/src/plugin/). That
+ * is all: everything else it does — start sessions, talk to them, keep a
  * conversation, remember things — it does through the public HTTP API, like
  * any other client. Nothing here knows any extension by name, and nothing
  * here should.
  */
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync, lstatSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, lstatSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Subprocess } from "bun";
-import { agentboxBin, agentboxHome } from "./paths";
+import { agentboxBin, agentboxHome, packageRoot } from "./paths";
 import type { ExtensionInfo } from "./types";
 
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
@@ -31,9 +33,12 @@ const Manifest = z
     title: z.string().trim().min(1).max(80).optional(),
     description: z.string().max(2000).optional(),
     /** The program, run in the directory and kept running: argv, not a shell line. */
-    run: z.array(z.string().min(1)).min(1),
+    run: z.array(z.string().min(1)).min(1).optional(),
+    /** Its part in the app: a module (TypeScript, JSX) the app loads into itself. */
+    client: z.string().min(1).optional(),
   })
-  .passthrough();
+  .passthrough()
+  .refine((m) => m.run || m.client, { message: "say `run` (a program), `client` (a part in the app), or both" });
 type Manifest = z.infer<typeof Manifest>;
 
 type Proc = {
@@ -64,21 +69,113 @@ export const extensionsDir = (): string => join(agentboxHome(), "extensions");
 /** Each one's own state: its log, its pid, its token, and whatever it keeps. */
 export const extensionHome = (name: string): string => join(extensionsDir(), ".state", name);
 
-function names(): string[] {
+/** The ones that come with agentbox. One of yours by the same name is the one used. */
+const builtInDir = join(packageRoot, "extensions");
+
+function namesIn(dir: string): string[] {
   try {
-    return readdirSync(extensionsDir())
-      .filter((n) => NAME.test(n))
-      .sort();
+    return readdirSync(dir).filter((n) => NAME.test(n));
   } catch {
     return [];
   }
 }
 
+function names(): string[] {
+  return [...new Set([...namesIn(builtInDir), ...namesIn(extensionsDir())])].sort();
+}
+
+const isBuiltIn = (name: string): boolean => !existsSync(join(extensionsDir(), name)) && existsSync(join(builtInDir, name));
+
 function dirOf(name: string): string {
   if (!NAME.test(name)) throw new ExtensionError(400, "not an extension name");
-  const dir = join(extensionsDir(), name);
+  const dir = join(isBuiltIn(name) ? builtInDir : extensionsDir(), name);
   if (!existsSync(dir)) throw new ExtensionError(404, `no extension ${name}`);
   return dir;
+}
+
+const offFile = (name: string): string => join(extensionHome(name), "off");
+const isOn = (name: string): boolean => !existsSync(offFile(name));
+
+/** Turn it off (its program stops within seconds, and the app loads its client no more) or on again. */
+export function setExtensionOn(name: string, on: boolean): void {
+  dirOf(name);
+  if (on) rmSync(offFile(name), { force: true });
+  else {
+    mkdirSync(extensionHome(name), { recursive: true, mode: 0o700 });
+    writeFileSync(offFile(name), "");
+  }
+}
+
+/** The JSON value its client keeps (`data.json` in its home), or null. */
+export function extensionData(name: string): unknown {
+  dirOf(name);
+  try {
+    return JSON.parse(readFileSync(join(extensionHome(name), "data.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export function saveExtensionData(name: string, value: unknown): void {
+  dirOf(name);
+  const home = extensionHome(name);
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  const tmp = join(home, `data.json.${process.pid}`);
+  writeFileSync(tmp, JSON.stringify(value ?? null, null, 2));
+  renameSync(tmp, join(home, "data.json"));
+}
+
+/** What `react`, `react-dom` and the JSX runtimes export, so an extension's import of each can be pointed at the app's. */
+let shared: Promise<Record<string, string>> | null = null;
+function sharedModules(): Promise<Record<string, string>> {
+  return (shared ??= (async () => {
+    const keys = async (m: string) => Object.keys(await import(m)).filter((k) => k !== "default" && /^[A-Za-z_$][\w$]*$/.test(k));
+    const from = (ns: string, names: string[]) =>
+      `import * as H from "agentbox/client"; const M = H.${ns}; export default M; export const { ${names.join(", ")} } = M;`;
+    return {
+      react: from("React", await keys("react")),
+      "react-dom": from("ReactDOM", await keys("react-dom")),
+      "react/jsx-runtime": `import * as H from "agentbox/client"; export const { jsx, jsxs, Fragment } = H.JSX;`,
+      // What a bundler's development JSX calls: the same elements, without the dev-only checks.
+      "react/jsx-dev-runtime": `import * as H from "agentbox/client"; export const { Fragment } = H.JSX; export const jsxDEV = (type, props, key) => H.JSX.jsx(type, props, key);`,
+    };
+  })());
+}
+
+/**
+ * Its client, bundled for the app: everything it imports is bundled in except
+ * `agentbox/client`, which is `host` (this build's own entry, so the client
+ * runs with the page's React and parts), and React itself, read from there.
+ * Its CSS goes in a `<style>` it adds. A failure to bundle is a module that
+ * throws why, so the app can say so beside the extension.
+ */
+export async function bundleClient(name: string, host: string): Promise<string> {
+  const dir = dirOf(name);
+  const m = readManifest(dir);
+  if (!m.client) throw new ExtensionError(404, `${name} has no client`);
+  const mods = await sharedModules();
+  const r = await Bun.build({
+    entrypoints: [resolve(dir, m.client)],
+    target: "browser",
+    format: "esm",
+    throw: false,
+    plugins: [
+      {
+        name: "agentbox-shared",
+        setup(b) {
+          b.onResolve({ filter: /^agentbox\/client$/ }, () => ({ path: host, external: true }));
+          b.onResolve({ filter: /^(react|react-dom|react\/jsx-(dev-)?runtime)$/ }, (a) => ({ path: a.path, namespace: "agentbox-shared" }));
+          b.onLoad({ filter: /.*/, namespace: "agentbox-shared" }, (a) => ({ contents: mods[a.path]!, loader: "js" }));
+        },
+      },
+    ],
+  });
+  if (!r.success) return `throw new Error(${JSON.stringify(`${name}'s client did not build: ${r.logs.map((l) => String(l.message ?? l)).join("; ")}`)});`;
+  const js = await r.outputs.find((o) => o.kind === "entry-point")!.text();
+  const css = (await Promise.all(r.outputs.filter((o) => o.path.endsWith(".css")).map((o) => o.text()))).join("\n");
+  if (!css) return js;
+  const style = `{ const s = document.createElement("style"); s.dataset.extension = ${JSON.stringify(name)}; s.textContent = ${JSON.stringify(css)}; document.head.append(s); }\n`;
+  return style + js;
 }
 
 function readManifest(dir: string): Manifest {
@@ -129,6 +226,7 @@ export function addExtension(dir: string, name?: string): string {
 
 /** Unlink it: a link goes, a directory stays where it is (move it out yourself). */
 export function removeExtension(name: string): void {
+  if (isBuiltIn(name)) throw new ExtensionError(409, `${name} comes with agentbox: turn it off instead (agentbox ext off ${name})`);
   const at = dirOf(name);
   if (!lstatSync(at).isSymbolicLink()) throw new ExtensionError(409, `${at} is a directory, not a link: move it out of ${extensionsDir()} to remove it`);
   unlinkSync(at);
@@ -156,7 +254,7 @@ export class Extensions {
 
   list(): ExtensionInfo[] {
     return names().map((name) => {
-      const dir = join(extensionsDir(), name);
+      const dir = dirOf(name);
       let m: Manifest | null = null;
       let error: string | null = null;
       try {
@@ -165,13 +263,18 @@ export class Extensions {
         error = (e as Error).message;
       }
       const p = this.procs.get(name);
+      const enabled = isOn(name);
       return {
         name,
         title: m?.title ?? name,
         description: m?.description ?? "",
         dir,
         error,
-        state: p?.child ? "running" : p && p.backoffUntil > Date.now() ? "backoff" : error ? "stopped" : "starting",
+        builtIn: isBuiltIn(name),
+        enabled,
+        run: !!m?.run,
+        client: !!m?.client,
+        state: p?.child ? "running" : !m?.run || !enabled ? "none" : p && p.backoffUntil > Date.now() ? "backoff" : error ? "stopped" : "starting",
         pid: p?.pid ?? null,
         since: p?.since ?? null,
         restarts: p?.restarts ?? 0,
@@ -242,7 +345,8 @@ export class Extensions {
   /** Start what should run and is not, each after its backoff; stop what has gone. */
   private async tick(): Promise<void> {
     const now = Date.now();
-    const here = new Set(names());
+    // What has a program to run, and is on.
+    const here = new Set(names().filter(isOn));
     for (const name of [...this.procs.keys()]) {
       if (here.has(name)) continue;
       this.kill(name);
@@ -252,20 +356,24 @@ export class Extensions {
     for (const name of here) {
       let m: Manifest;
       try {
-        m = readManifest(join(extensionsDir(), name));
+        m = readManifest(dirOf(name));
       } catch {
         continue;
       }
       const p = this.procs.get(name);
+      if (!m.run) {
+        this.kill(name);
+        continue;
+      }
       // A changed manifest starts it again with the one it has now.
       if (p?.child && p.run !== JSON.stringify(m.run)) this.kill(name);
       if (p?.child || (p && p.backoffUntil > now)) continue;
-      await this.spawn(name, m, p);
+      await this.spawn(name, { ...m, run: m.run }, p);
     }
   }
 
-  private async spawn(name: string, m: Manifest, old: Proc | undefined): Promise<void> {
-    const dir = resolve(join(extensionsDir(), name));
+  private async spawn(name: string, m: Manifest & { run: string[] }, old: Proc | undefined): Promise<void> {
+    const dir = resolve(dirOf(name));
     const home = extensionHome(name);
     mkdirSync(home, { recursive: true, mode: 0o700 });
     const logFile = join(home, "process.log");

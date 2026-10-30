@@ -611,3 +611,10 @@
     animation: none;
   }
 }
+
+/* On a phone, the machine strip gives its rows to the stack. */
+@media (max-width: 640px) {
+  .app[data-page="review"] .sysbar {
+    display: none;
+  }
+}

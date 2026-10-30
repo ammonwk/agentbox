@@ -1,0 +1,5 @@
+{
+  "title": "Review",
+  "description": "The cards sessions hand you, one at a time: decisions you owe, what merged, what you kept for later.",
+  "client": "client.tsx"
+}
