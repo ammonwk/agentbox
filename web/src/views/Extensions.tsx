@@ -1,4 +1,4 @@
-/** The Extensions page: the programs that run on agentbox (docs/extensions.md),
+/** Settings → Extensions: the programs that run on agentbox (docs/extensions.md),
  *  and beside the list the open one's page, framed from `/x/<name>/`. What the
  *  page shows is the program's own; agentbox only keeps it running. */
 

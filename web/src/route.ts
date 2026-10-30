@@ -7,7 +7,7 @@ export const SESSION_TABS: readonly SessionTab[] = ["timeline", "terminal", "loa
 
 export type Route =
   | { page: "sessions" }
-  /** An extension's page (docs/extensions.md), or the first one's. */
+  /** An extension's page (docs/extensions.md), or the first one's: a tab of Settings. */
   | { page: "extensions"; name: string | null }
   | { page: "session"; id: string; tab: SessionTab }
   | { page: "accounts"; sub: "accounts" | "calibration" }
@@ -23,9 +23,10 @@ export type Route =
   | { page: "settings" };
 
 /** The rail entry a route lights up. */
-export type NavId = "extensions" | "sessions" | "review" | "voice" | "accounts" | "context" | "mcps" | "settings";
+export type NavId = "sessions" | "review" | "voice" | "accounts" | "context" | "mcps" | "settings";
 
 export function navOf(route: Route): NavId {
+  if (route.page === "extensions") return "settings";
   return route.page === "session" ? "sessions" : route.page;
 }
 

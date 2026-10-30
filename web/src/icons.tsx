@@ -42,7 +42,7 @@ import { Image } from "@phosphor-icons/react/dist/csr/Image";
 import { PencilSimple } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TerminalWindow } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { MagnifyingGlass } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { Brain } from "@phosphor-icons/react/dist/csr/Brain";
+import { PuzzlePiece } from "@phosphor-icons/react/dist/csr/PuzzlePiece";
 import { ArrowBendUpLeft } from "@phosphor-icons/react/dist/csr/ArrowBendUpLeft";
 import { SortDescending } from "@phosphor-icons/react/dist/csr/SortDescending";
 import { Clock } from "@phosphor-icons/react/dist/csr/Clock";
@@ -121,7 +121,7 @@ export const Icon = {
   edit: icon(PencilSimple),
   terminal: icon(TerminalWindow),
   search: icon(MagnifyingGlass),
-  brain: icon(Brain),
+  extension: icon(PuzzlePiece),
   move: icon(ArrowBendUpLeft),
   sort: icon(SortDescending),
   clock: icon(Clock),

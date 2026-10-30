@@ -13,7 +13,7 @@ Agentbox does three things for one, and nothing else:
   whenever it exits (at once if it ran a minute, else after a backoff that
   doubles to a minute), with the environment below.
 - **It serves its page.** `/x/<name>/<path>` on agentbox is passed to the
-  program as `/<path>`, and the Extensions page frames `/x/<name>/`.
+  program as `/<path>`, and Settings → Extensions frames `/x/<name>/`.
 - **It says who asked.** Every request it passes carries `x-agentbox-caller`
   and the program's token.
 

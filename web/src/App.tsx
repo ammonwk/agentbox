@@ -74,7 +74,6 @@ function isTyping(e: KeyboardEvent): boolean {
 // -------------------------------------------------------------------- app
 
 const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
-  { id: "extensions", label: "Extensions", icon: Icon.brain, to: { page: "extensions", name: null } },
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
   { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
@@ -86,10 +85,9 @@ const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
 
 /** Pages a project filters; the rest are the machine's, whatever is selected. */
 const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions", "review"]);
-const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "context", "mcps", "voice"]);
+const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "extensions", "context", "mcps", "voice"]);
 
 const PAGE_TITLE: Record<NavId, string> = {
-  extensions: "Extensions",
   sessions: "Sessions",
   review: "Review",
   voice: "Voice",
@@ -174,7 +172,7 @@ export function App() {
     };
   }, []);
 
-  const flush = route.page === "extensions" || route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
+  const flush = route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
@@ -297,6 +295,17 @@ export function App() {
                   Calibration
                 </button>
               </div>
+            ) : route.page === "settings" || route.page === "extensions" ? (
+              <div className="seg topbar-seg" role="group" aria-label="Settings view">
+                <button type="button" aria-pressed={route.page === "settings"} onClick={() => navigate({ page: "settings" })}>
+                  <Icon.settings size={14} />
+                  General
+                </button>
+                <button type="button" aria-pressed={route.page === "extensions"} onClick={() => navigate({ page: "extensions", name: null })}>
+                  <Icon.extension size={14} />
+                  Extensions
+                </button>
+              </div>
             ) : null}
           </header>
         )}
@@ -305,7 +314,7 @@ export function App() {
         <StaleBanner />
 
         <SysbarSlot.Provider value={sysbarSlot}>
-        <main className={`content ${(flush || route.page === "mcps") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
+        <main className={`content ${(flush || route.page === "mcps" || route.page === "extensions") && state ? "flush" : ""}`} id="content" ref={contentRef} tabIndex={-1} data-nav-region="page" data-nav-route={hrefOf(route)}>
           <ErrorBoundary resetKey={hrefOf(route)} label="This page">
             {!state ? (
               <Bootstrapping />
@@ -406,11 +415,10 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { extensions: 0, sessions: 0, review: 0, voice: 0, accounts: 0, context: 0, mcps: 0, settings: 0 };
+  if (!state) return { sessions: 0, review: 0, voice: 0, accounts: 0, context: 0, mcps: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
-    extensions: 0,
     sessions: needsYou(state.sessions),
     // Kept for later is still yours, but you have seen it: it does not nag.
     review: state.cards.filter((c) => c.state === "open").length,
