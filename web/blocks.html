@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#0d0d0d" />
+    <title>agentbox extension</title>
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      // Paint in the right theme before React mounts. The real preference is a
+      // server setting; this is only the cache App.tsx writes on every change,
+      // so a reload does not flash white before the socket answers.
+      (function () {
+        var pref = null;
+        try {
+          pref = localStorage.getItem("agentbox.theme");
+        } catch (err) {
+          // Private-mode Safari throws on localStorage; the system default is fine.
+        }
+        var dark =
+          pref === "dark" ||
+          ((pref === null || pref === "system") &&
+            matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+      // The accent chosen in Settings, from the values lib/accent.ts stores.
+      // With none stored, the stylesheet's orange stays.
+      (function () {
+        try {
+          var s = JSON.parse(localStorage.getItem("agentbox.accent") || "null");
+          if (!s || typeof s.pick !== "string") return;
+          var root = document.documentElement;
+          root.dataset.accent = s.pick;
+          root.style.setProperty("--pick-dark", s.dark);
+          root.style.setProperty("--pick-light", s.light);
+          root.style.setProperty("--pick-dark-on", s.darkOn);
+          root.style.setProperty("--pick-light-on", s.lightOn);
+        } catch (err) {
+          // Private mode or a bad value: the orange is fine.
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/blocks/main.tsx"></script>
+  </body>
+</html>

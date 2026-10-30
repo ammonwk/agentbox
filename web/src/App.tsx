@@ -32,7 +32,7 @@ import { ProjectTabs } from "./ProjectTabs";
 // heaviest thing in the bundle.)
 const Accounts = lazy(() => import("./views/Accounts").then((m) => ({ default: m.Accounts })));
 const Voice = lazy(() => import("./views/Voice").then((m) => ({ default: m.Voice })));
-const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
+const Extensions = lazy(() => import("./views/Extensions").then((m) => ({ default: m.Extensions })));
 
 // ----------------------------------------------------------------- routing
 
@@ -74,7 +74,7 @@ function isTyping(e: KeyboardEvent): boolean {
 // -------------------------------------------------------------------- app
 
 const NAV: { id: NavId; label: string; icon: IconComponent; to: Route }[] = [
-  { id: "agents", label: "Agents", icon: Icon.brain, to: { page: "agents", name: null, tab: null } },
+  { id: "extensions", label: "Extensions", icon: Icon.brain, to: { page: "extensions", name: null } },
   { id: "sessions", label: "Sessions", icon: Icon.sessions, to: { page: "sessions" } },
   { id: "review", label: "Review", icon: Icon.cards, to: { page: "review" } },
   { id: "voice", label: "Voice", icon: Icon.mic, to: { page: "voice" } },
@@ -89,7 +89,7 @@ const SCOPED_PAGES = new Set<Route["page"]>(["session", "sessions", "review"]);
 const GLOBAL_PAGES = new Set<Route["page"]>(["accounts", "settings", "context", "mcps", "voice"]);
 
 const PAGE_TITLE: Record<NavId, string> = {
-  agents: "Agents",
+  extensions: "Extensions",
   sessions: "Sessions",
   review: "Review",
   voice: "Voice",
@@ -174,7 +174,7 @@ export function App() {
     };
   }, []);
 
-  const flush = route.page === "agents" || route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
+  const flush = route.page === "extensions" || route.page === "sessions" || route.page === "session" || route.page === "voice" || route.page === "review";
   const focusAccount = route.page === "session" ? state?.sessions.find((x) => x.id === route.id)?.accountId ?? null : null;
 
   return (
@@ -332,9 +332,9 @@ export function App() {
                 onOpen={(id) => navigate({ page: "session", id, tab: openingTab(state.sessions.find((s) => s.id === id)) })}
                 onNew={() => setNewOpen(true)}
               />
-            ) : route.page === "agents" ? (
+            ) : route.page === "extensions" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
-                <Agents state={state} name={route.name} tab={route.tab} sub={route.sub ?? null} />
+                <Extensions name={route.name} />
               </Suspense>
             ) : route.page === "accounts" ? (
               <Suspense fallback={<Empty title="Loading…" />}>
@@ -406,11 +406,11 @@ function titleOfId(state: AppState, id: string): string {
 // ----------------------------------------------------------------- counts
 
 function countsOf(state: AppState | null): Record<NavId, number> {
-  if (!state) return { agents: 0, sessions: 0, review: 0, voice: 0, accounts: 0, context: 0, mcps: 0, settings: 0 };
+  if (!state) return { extensions: 0, sessions: 0, review: 0, voice: 0, accounts: 0, context: 0, mcps: 0, settings: 0 };
   const loginsOpen = state.logins.filter((l) => l.state !== "done" && l.state !== "failed").length;
   const authBad = state.accounts.filter((a) => a.enabled && (a.auth.state === "expired" || a.auth.state === "missing")).length;
   return {
-    agents: 0,
+    extensions: 0,
     sessions: needsYou(state.sessions),
     // Kept for later is still yours, but you have seen it: it does not nag.
     review: state.cards.filter((c) => c.state === "open").length,

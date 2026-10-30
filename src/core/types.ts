@@ -1771,6 +1771,22 @@ export type ClientMessage =
   | { type: "watch"; sessionId: string | null; cursor?: string }
   | { type: "ping" };
 
+/** An extension and its program (`GET /api/extensions`, src/core/extensions.ts). */
+export interface ExtensionInfo {
+  name: string;
+  title: string;
+  description: string;
+  /** Where its `extension.json` and code are. */
+  dir: string;
+  /** Why its manifest cannot be read, when it cannot. */
+  error: string | null;
+  state: "running" | "starting" | "backoff" | "stopped";
+  pid: number | null;
+  since: number | null;
+  restarts: number;
+  lastExit: { code: number | null; at: number } | null;
+}
+
 /** An agent as the Agents page shows it (`GET /api/agents`, src/core/agents.ts). */
 /** The pictures an agent's manifest can name (`icon`), for when no picture was uploaded. */
 export const AGENT_ICONS = ["brain", "sparkle", "fix", "release", "health"] as const;

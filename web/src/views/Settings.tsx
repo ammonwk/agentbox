@@ -118,7 +118,7 @@ export function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
           disabled={busy}
           onChange={(on) => void run(() => api.patchSchedule(sc.id, { enabled: on }))}
         />
-        {sc.agent ? null : <ProviderBadge provider={sc.spec.provider} short />}
+        <ProviderBadge provider={sc.spec.provider} short />
         <span className="sched-name" title={sc.spec.prompt}>
           {scheduleTitle(sc)}
         </span>
@@ -139,7 +139,7 @@ export function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
         {sc.lastRunAt ? (
           <>
             {" "}
-            · {sc.agent ? "last spoke" : "last ran"} <RelativeTime ts={sc.lastRunAt} />
+            · last ran <RelativeTime ts={sc.lastRunAt} />
             {sc.lastSessionId && !sc.lastError ? (
               <>
                 {" "}
@@ -149,26 +149,14 @@ export function ScheduleItem({ sc, state }: { sc: Schedule; state: AppState }) {
           </>
         ) : null}
       </p>
-      {sc.agent || sc.noteCmd ? (
+      {sc.noteCmd ? (
         <p className="sched-meta">
-          {sc.agent ? (
-            <>
-              Speaks to <a href={hrefOf({ page: "agents", name: sc.agent, tab: null })}>{sc.agent}</a>'s main conversation
-            </>
-          ) : (
-            "Starts a session each time"
-          )}
-          {sc.noteCmd ? (
-            <>
-              {" "}
-              · only when <span className="mono">{sc.noteCmd}</span> prints something, which it is told first
-            </>
-          ) : null}
+          Starts a session only when <span className="mono">{sc.noteCmd}</span> prints something, which it is told first
         </p>
       ) : null}
       {sc.lastError ? (
         <p className="error" role="alert">
-          {(sc.rule.kind === "red" && sc.lastError.startsWith("could not read")) || sc.noteCmd || sc.agent ? "" : "Last time it did not start: "}{sc.lastError}
+          {(sc.rule.kind === "red" && sc.lastError.startsWith("could not read")) || sc.noteCmd ? "" : "Last time it did not start: "}{sc.lastError}
         </p>
       ) : null}
       {editing ? (

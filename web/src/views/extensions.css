@@ -1,0 +1,144 @@
+/* The Extensions page (Extensions.tsx): the list beside the open one's framed page. */
+
+.ext {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.ext[data-detail="off"]:only-child,
+.ext:not(:has(.ext-list)),
+.ext:not(:has(.ext-pane)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.ext-list {
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  padding: 10px 8px;
+}
+.ext-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ext-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+}
+.ext-row:hover {
+  background: var(--hover);
+}
+.ext-row.on {
+  background: var(--active);
+}
+.ext-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ext-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.ext-dot.ok {
+  background: var(--success);
+}
+.ext-dot.busy {
+  background: var(--info);
+}
+.ext-dot.bad {
+  background: var(--danger);
+}
+.ext-dot.idle {
+  background: var(--border-strong);
+}
+.ext-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+.ext-open {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.ext-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.ext-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.ext-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+.ext-desc {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ext-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  color: var(--muted);
+}
+.ext-about {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.ext-log {
+  margin: 6px 0 0;
+  padding: 10px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font: 12px/1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ext-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--bg);
+}
+.ext-note {
+  padding: 8px 9px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.ext-note.bad {
+  color: var(--danger);
+}

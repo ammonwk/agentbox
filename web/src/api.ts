@@ -41,8 +41,7 @@ import type {
   ReclaimResult,
   Repo,
   ContextDoc,
-  AgentInfo,
-  AgentView,
+  ExtensionInfo,
   Schedule,
   ServerMessage,
   Session,
@@ -118,14 +117,6 @@ async function request<T>(method: Method, path: string, body?: unknown, signal?:
 const get = <T,>(path: string) => request<T>("GET", path);
 const post = <T,>(path: string, body?: unknown) => request<T>("POST", path, body);
 const enc = encodeURIComponent;
-
-/** What an agent's program answers an action with (docs/agents.md). */
-export interface AgentActionReply {
-  message?: string;
-  view?: AgentView;
-  open?: string;
-  compose?: string;
-}
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 export type SettingsPatch = DeepPartial<AgentSettings>;
@@ -219,25 +210,10 @@ export function healthRows(h: Health): { name: string; state: DepState; detail: 
 }
 
 export const api = {
-  // ---- agents (docs/agents.md)
-  agents: () => get<AgentInfo[]>("/api/agents"),
-  agentView: (name: string, tab: string | null) =>
-    get<AgentView | null>(`/api/agents/${enc(name)}/view${tab ? `?tab=${enc(tab)}` : ""}`),
-  agentAction: (name: string, body: { action: string; values: Record<string, unknown>; tab: string | null }) =>
-    post<AgentActionReply>(`/api/agents/${enc(name)}/action`, body),
-  agentChat: (name: string, text: string, sendId: string) =>
-    post<{ session: string; started: boolean }>(`/api/agents/${enc(name)}/chat`, { text, sendId }),
-  agentPatch: (name: string, patch: { enabled?: boolean; main?: string | null }) =>
-    request<AgentInfo>("PATCH", `/api/agents/${enc(name)}`, patch),
-  agentRestart: (name: string) => post<AgentInfo>(`/api/agents/${enc(name)}/restart`),
-  /** Sets its picture, or removes it with null. Raw bytes, as `upload`. */
-  agentAvatar: async (name: string, file: Blob | null): Promise<AgentInfo> => {
-    const res = await fetch(`/api/agents/${enc(name)}/avatar`, { method: file ? "PUT" : "DELETE", headers: { "x-agentbox": "1", ...(file ? { "content-type": file.type } : {}) }, body: file });
-    const env = (await res.json().catch(() => ({ ok: false, error: `${res.status} ${res.statusText}` }))) as { ok?: boolean; data?: AgentInfo; error?: string };
-    if (!env.ok || !env.data) throw new Error(env.error || `that did not save: ${res.status}`);
-    return env.data;
-  },
-  agentLog: (name: string) => get<{ text: string }>(`/api/agents/${enc(name)}/log`),
+  // ---- extensions (docs/extensions.md)
+  extensions: () => get<ExtensionInfo[]>("/api/extensions"),
+  extensionRestart: (name: string) => post<void>(`/api/extensions/${enc(name)}/restart`),
+  extensionLog: (name: string) => get<{ text: string }>(`/api/extensions/${enc(name)}/log`),
 
   /** One `agentbox wait`, and the end of its job's log while that runs. */
   wait: (id: number) => get<WaitView>(`/api/waits/${id}`),

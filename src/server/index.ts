@@ -92,6 +92,7 @@ import { poolAgents } from "../subagents/record";
 import { dependencies } from "../deps";
 import { VERSION } from "../version";
 import { Agents, MAX_AVATAR, readAvatar, writeAvatar } from "../core/agents";
+import { addExtension, ExtensionError, Extensions, removeExtension } from "../core/extensions";
 import { Org } from "../core/org";
 import { OrgAccountError, shareWithOrg, unshareFromOrg, reclaimFromOrg } from "../core/org/accounts";
 import { RUNNING_REVISION } from "../revision";
@@ -183,6 +184,8 @@ export const scheduler = new Scheduler(fleet, () => agents, () => scheduleCold()
 export const waits = new Waits(fleet);
 /** Programs that run on agentbox's API, shown on the Agents page (src/core/agents.ts). */
 export const agents = new Agents(fleet, `http://127.0.0.1:${PORT}`);
+/** Programs that run on agentbox's API, each with a page under /x/<name>/ (src/core/extensions.ts). */
+export const extensions = new Extensions(`http://127.0.0.1:${PORT}`, () => scheduleCold());
 /** The registered repo a start names: its id, its GitHub `owner/name`, or its ref. */
 function repoNamed(name: string): Repo | null {
   const lower = name.trim().toLowerCase();
@@ -760,7 +763,7 @@ function mapError(e: unknown): HttpError {
   if (e instanceof HttpError) return e;
   // A schema refusal is the request's shape, not the server's fault.
   if (e instanceof ZodError) return new HttpError(400, e.message);
-  if (e instanceof FileError) return new HttpError(e.status, e.message);
+  if (e instanceof FileError || e instanceof ExtensionError) return new HttpError(e.status, e.message);
   if (e instanceof FleetError || e instanceof AccountError || e instanceof McpError) return new HttpError(e.status, e.message);
   return new HttpError(500, e instanceof Error ? e.message : String(e));
 }
@@ -855,7 +858,7 @@ const router = new Router(mapError)
       if (typeof b.repo === "string" && b.repo && !named) throw new HttpError(404, `no repo ${b.repo} is registered here`);
       const ref = optionalString(b, "ref");
       const branch = optionalString(b, "branch");
-      const out = await fleet.spawn({
+      const asked = {
         provider: provider(b.provider),
         readOnly: b.readOnly === true,
         notify: b.notify === false ? false : undefined,
@@ -872,7 +875,13 @@ const router = new Router(mapError)
         scope: scopeOf(b),
         callerPid: typeof b.callerPid === "number" && Number.isInteger(b.callerPid) && b.callerPid > 1 ? b.callerPid : undefined,
         parent: optionalString(b, "parent"),
-      });
+      };
+      // Other providers to try, in order, when its own has no account with room:
+      // each on its own default model, effort and account.
+      const others = b.fallbacks === undefined ? [] : providers(b.fallbacks).filter((p) => p !== asked.provider);
+      const out = others.length
+        ? { session: await fleet.spawnFirstWithRoom([asked, ...others.map((p) => ({ ...asked, provider: p, model: undefined, effort: undefined, accountId: null }))]) }
+        : await fleet.spawn(asked);
       if (claim) claimPr([], fleet.sessions(), claim.repo, claim.number, out.session.id, Date.now());
       if (byYou(req, b)) recordYourAct("launch", out.session.id);
       scheduleHot();
@@ -1241,6 +1250,24 @@ const router = new Router(mapError)
     return json({ to, children: moved, cards: cardsMoved, claims: claimsMoved, closed: b.close === true });
   })
 
+  // ----- extensions (src/core/extensions.ts, docs/extensions.md); their pages are /x/<name>/
+  .add("GET", "/api/extensions", () => json(extensions.list()))
+  .add("POST", "/api/extensions", async ({ req }) => {
+    const b = await readBody(req);
+    const name = addExtension(requireString(b, "dir"), optionalString(b, "name"));
+    scheduleCold();
+    return json({ name }, 201);
+  })
+  .add("DELETE", "/api/extensions/:name", ({ params }) => {
+    removeExtension(params.name!);
+    scheduleCold();
+    return json(null);
+  })
+  .add("POST", "/api/extensions/:name/restart", async ({ params }) => json(await extensions.restart(params.name!)))
+  .add("GET", "/api/extensions/:name/log", ({ params, url }) => {
+    const bytes = Number(url.searchParams.get("bytes")) || undefined;
+    return json({ text: extensions.log(params.name!, bytes && Math.min(bytes, 1024 * 1024)) });
+  })
   // ----- agents (src/core/agents.ts, docs/agents.md)
   // ---- the org (docs/org.md)
   .add("GET", "/api/org", () => json(org.status()))
@@ -1976,6 +2003,7 @@ export async function startServer(): Promise<void> {
     scheduler.stop();
     waits.stop();
     agents.stopAll();
+    extensions.stopAll();
     org.stop();
     fleet.stop();
     accounts.stop();
@@ -2062,6 +2090,18 @@ export async function startServer(): Promise<void> {
       const rows = Math.max(5, Math.min(200, Number(url.searchParams.get("rows")) || 40));
       return srv.upgrade(req, { data: { kind: "term", sessionId: term[1]!, cols, rows } }) ? undefined : fail("websocket upgrade failed", 500);
     }
+    // An extension's page and API (src/core/extensions.ts): the same Host,
+    // Origin and x-agentbox rules as /api, then passed to its program.
+    const ext = url.pathname.match(/^\/x\/([a-z][a-z0-9-]{0,39})(\/.*)?$/);
+    if (ext) {
+      if (!ext[2]) return Response.redirect(`${url.origin}/x/${ext[1]}/${url.search}`, 308);
+      const session = authenticatedSession(req);
+      const caller = session ? `session:${session}` : req.headers.get("origin") || req.headers.get("sec-fetch-site") ? "app" : "api";
+      return extensions.proxy(req, ext[1]!, ext[2].slice(1), caller).catch((e: unknown) => {
+        const err = mapError(e);
+        return fail(err.message, err.status);
+      });
+    }
     // A search reads every transcript, minutes on a loaded machine, and sends
     // nothing until it is done: the idle timeout would cut it.
     if (url.pathname === "/api/grep") srv.timeout(req, 0);
@@ -2110,6 +2150,7 @@ export async function startServer(): Promise<void> {
   scheduler.start();
   waits.start();
   agents.start();
+  extensions.start();
   cards.start();
   org.start();
   // omp's OpenCode Go endpoint is the bridge (its models.yml), in agentbox's

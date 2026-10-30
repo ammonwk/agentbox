@@ -20,10 +20,13 @@ export const agentSentMark = (from?: string | null): string => (from ? `[via age
 /** What a schedule that keeps to one session puts before each note it types
  *  into it (src/core/scheduler.ts): not you, and not another session. */
 export const scheduleSentMark = (scheduleId: string): string => `[via agentbox schedule ${scheduleId}]`;
+/** What an extension's program puts before a message it types into a session
+ *  (docs/extensions.md): not you, and not another session. */
+export const extSentMark = (name: string): string => `[via agentbox ext ${name}]`;
 
 // The removed Project session signed its messages `[Project session]`; old
 // transcripts still carry that form.
-const MARK = /^\s*\[(?:via agentbox send(?: from ([\w-]+))?|via agentbox (schedule) [\w-]+|Project session)\]\s*/;
+const MARK = /^\s*\[(?:via agentbox send(?: from ([\w-]+))?|via agentbox (schedule|ext) ([\w-]+)|Project session)\]\s*/;
 const PASTE_OPEN = /<pasted_content\s+id="[^"]*"\s*>/;
 const PASTE_CLOSE = /<\/pasted_content(?:\s+id="[^"]*")?\s*>/;
 const PASTE = new RegExp(`${PASTE_OPEN.source}([\\s\\S]*?)(?:${PASTE_CLOSE.source}|$)`, "g");
@@ -53,9 +56,9 @@ export interface Sent {
   /** Who sent it, when the message says: an agentbox id from the send mark,
    *  the name a delivered message carries, or "agentbox" for its own note. */
   from: string | null;
-  /** How it came: `agentbox send`, a schedule's note, or Claude's own
-   *  delivery between sessions. */
-  via: "agentbox send" | "a schedule" | "Claude" | null;
+  /** How it came: `agentbox send`, a schedule's note, an extension's
+   *  program, or Claude's own delivery between sessions. */
+  via: "agentbox send" | "a schedule" | "an extension" | "Claude" | null;
   /** The message without its wrapper and mark. */
   text: string;
 }
@@ -82,8 +85,8 @@ export function readSent(raw: string): Sent {
   const shown = (rest: string): string => [notes, rest.trim()].filter(Boolean).join("\n\n");
   const m = MARK.exec(signed);
   if (m) {
-    const via = m[2] ? "a schedule" : "agentbox send";
-    return { agent: true, from: m[2] ? "agentbox" : (m[1] ?? null), via, text: shown(signed.slice(m[0].length)) };
+    const via = m[2] === "ext" ? "an extension" : m[2] ? "a schedule" : "agentbox send";
+    return { agent: true, from: m[2] === "ext" ? m[3]! : m[2] ? "agentbox" : (m[1] ?? null), via, text: shown(signed.slice(m[0].length)) };
   }
   const d = DELIVERED.exec(signed);
   if (d) {
