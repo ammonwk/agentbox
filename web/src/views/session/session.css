@@ -421,6 +421,12 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* Where a search's words are in a row's text: found at a glance, not shouted. */
+.rail-hit {
+  background: color-mix(in srgb, var(--warning) 24%, transparent);
+  color: var(--text);
+  border-radius: 2px;
+}
 .rail-closed-end {
   height: 1px;
 }

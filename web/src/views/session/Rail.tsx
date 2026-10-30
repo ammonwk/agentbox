@@ -34,7 +34,7 @@ import {
 import { baseName, fmtBytes } from "../../lib/format";
 import { openingTab, usePickedTab } from "../../lib/phone";
 import { api, useMetrics } from "../../api";
-import { hrefOf } from "../../route";
+import { hrefOf, type SessionTab } from "../../route";
 import { useScope } from "../../lib/projects";
 import { useDismiss } from "../newsession/popover";
 import { reportFailure, useClosing } from "./closing";
@@ -346,9 +346,59 @@ export function Rail({
     e.stopPropagation();
   };
 
+  const q = filter.query.trim();
+  const hits = useSearchHits(q);
+  // One row per session: its name found it first, then what was said in it.
+  const listedIds = new Set(listed.map((s) => s.id));
+  const titledElsewhere = (hits?.titled ?? []).filter((s) => !listedIds.has(s.id));
+  const titledHere = sections.find((sec) => sec.key === "titled");
+  const named = new Set([...(titledHere?.rows ?? []), ...titledElsewhere].map((s) => s.id));
+  const saidHits = (hits?.said ?? []).filter((h) => !named.has(h.sessionId));
+  const saidIds = new Set(saidHits.map((h) => h.sessionId));
+  const otherHere = sections.find((sec) => sec.key === "other");
+  const others = otherHere ? { ...otherHere, rows: otherHere.rows.filter((s) => !saidIds.has(s.id)) } : null;
+
+  const drawSection = (sec: Section<Nested<SessionRow>>, more: readonly SessionRow[] = []) => (
+    <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
+      {sec.label ? (
+        <div className="rail-label" title={sec.key === "pinned" ? "Drag a pinned session to reorder them" : sort === "repo" && shapes.has(sec.key) ? sec.key : undefined}>
+          {sec.key === "pinned" ? <Icon.pin size={11} /> : null}
+          {sort === "repo" && shapes.has(sec.key) ? <ShapeMark shape={shapes.get(sec.key)!} /> : null}
+          {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length + more.length}</span>
+        </div>
+      ) : null}
+      {sec.rows.map((s, i) => (
+        <RowAndQuiet key={s.id} quiet={sec.quiet?.get(s.id)} onQuiet={list.toggleQuiet}>
+          <Row
+            s={s}
+            enter={!!s.depth && enters(sec, i)}
+            current={s.id === current}
+            refFn={s.id === current ? cur : undefined}
+            usual={usual}
+            sort={sort}
+            api={rowApi}
+            pinned={sec.key === "pinned" && s.depth === 0}
+            target={over === s.id ? (drag?.pin ? pos : "under") : null}
+          />
+        </RowAndQuiet>
+      ))}
+      {more.map((s) => (
+        <HitRow
+          key={s.id}
+          s={s}
+          current={s.id === current}
+          onMenu={onMenu}
+          tab={openingTab(s)}
+          when={<RelativeTime ts={sortTime(s, sort)} short title={sentTip(s)} />}
+        />
+      ))}
+    </div>
+  );
+
   return (
     <RepoMarks.Provider value={marks}>
     <RailRows.Provider value={listed}>
+    <SearchQuery.Provider value={q}>
     <nav className="rail" data-nav-region="list" tabIndex={-1} aria-label="Sessions" onKeyDown={onArrow}>
       <div className="rail-top">
         <label className="rail-search">
@@ -426,43 +476,47 @@ export function Rail({
             ))}
           </div>
         ) : null}
-        {rows.length === 0 && ((split && view === "inactive") || scheduled.length === 0) ? (
-          filter.query ? (
-            <SaidList query={filter.query} none={`Nothing ${split ? `${view} ` : ""}matches.`} current={current} onMenu={onMenu} />
-          ) : (
+        {rows.length === 0 && !q && ((split && view === "inactive") || scheduled.length === 0) ? (
           <p className="rail-none">
             {state.sessions.length
                 ? split ? `Nothing ${view}.` : "Nothing open."
                 : "No sessions yet."}
           </p>
-          )
         ) : null}
-        {sections.map((sec) => (
-          <div key={sec.key} className="rail-sec" data-kind={sec.kind}>
-            {sec.label ? (
-              <div className="rail-label" title={sec.key === "pinned" ? "Drag a pinned session to reorder them" : sort === "repo" ? sec.key : undefined}>
-                {sec.key === "pinned" ? <Icon.pin size={11} /> : null}
-                {sort === "repo" && shapes.has(sec.key) ? <ShapeMark shape={shapes.get(sec.key)!} /> : null}
-                {sec.label} <span>{sec.rows.filter((s) => s.depth === 0).length}</span>
+        {q ? (
+          <>
+            {titledHere || titledElsewhere.length ? drawSection(titledHere ?? { key: "titled", label: "In title", rows: [] }, titledElsewhere) : null}
+            {saidHits.length ? (
+              <div className="rail-sec" data-kind="said">
+                <div className="rail-label">
+                  Said in <span>{saidHits.length}</span>
+                </div>
+                {saidHits.map(({ session: s, event, snippet, at, kind }) => (
+                  <HitRow
+                    key={s.id}
+                    s={s}
+                    current={s.id === current}
+                    onMenu={onMenu}
+                    tab="timeline"
+                    onClick={() => jumpInTimeline(s.id, { turnId: event })}
+                    when={<RelativeTime ts={at} short title={`Said ${new Date(at).toLocaleString()}`} />}
+                  >
+                    <span className="rail-said-line">
+                      {kind === "user" ? "You: " : ""}
+                      <Marked text={snippet} />
+                    </span>
+                  </HitRow>
+                ))}
               </div>
             ) : null}
-            {sec.rows.map((s, i) => (
-              <RowAndQuiet key={s.id} quiet={sec.quiet?.get(s.id)} onQuiet={list.toggleQuiet}>
-                <Row
-                  s={s}
-                  enter={!!s.depth && enters(sec, i)}
-                  current={s.id === current}
-                  refFn={s.id === current ? cur : undefined}
-                  usual={usual}
-                  sort={sort}
-                  api={rowApi}
-                  pinned={sec.key === "pinned" && s.depth === 0}
-                  target={over === s.id ? (drag?.pin ? pos : "under") : null}
-                />
-              </RowAndQuiet>
-            ))}
-          </div>
-        ))}
+            {others?.rows.length ? drawSection(others) : null}
+            {rows.length === 0 && !titledElsewhere.length && !saidHits.length && ((split && view === "inactive") || scheduled.length === 0) ? (
+              <p className="rail-none">{hits === null && q.length >= 3 ? "Looking in what was said…" : `Nothing ${split ? `${view} ` : ""}matches.`}</p>
+            ) : null}
+          </>
+        ) : (
+          sections.map((sec) => drawSection(sec))
+        )}
         {state.org && (!split || view === "active") ? <OrgSessions org={state.org} query={filter.query} /> : null}
         {!split || view === "inactive" ? <ClosedList query={filter.query} current={current} stamp={closedStamp} onMenu={onMenu} /> : null}
       </div>
@@ -485,6 +539,7 @@ export function Rail({
         />
       ) : null}
     </nav>
+    </SearchQuery.Provider>
     </RailRows.Provider>
     </RepoMarks.Provider>
   );
@@ -508,6 +563,17 @@ const RepoMarks = createContext<{ shape: boolean; shapes: ReadonlyMap<string, Sh
 /** The rows of the tab on screen. A folded row adds up the load of what the
  *  fold hides, and those rows are the ones it must not add up twice. */
 const RailRows = createContext<readonly SessionRow[]>([]);
+
+/** What the search box holds, for the rows to mark where it is in their text. */
+const SearchQuery = createContext("");
+
+/** `text` with each place the search is found in it marked. */
+function Marked({ text }: { text: string }) {
+  const q = useContext(SearchQuery);
+  if (!q) return <>{text}</>;
+  const parts = text.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"));
+  return <>{parts.map((p, i) => (i % 2 ? <mark key={i} className="rail-hit">{p}</mark> : p))}</>;
+}
 
 /** What a row calls back. The same object for the life of the list. */
 interface RowApi {
@@ -902,7 +968,7 @@ function RowTitle({ s }: { s: SessionRow }) {
       ) : project ? (
         <span className="rail-proj">{project}</span>
       ) : null}
-      {shownTitle(s)}
+      <Marked text={shownTitle(s)} />
     </span>
   );
 }
@@ -1254,26 +1320,26 @@ function ClosedList({
   );
 }
 
-type SaidHits = Awaited<ReturnType<typeof api.said>>;
+type SearchHits = Awaited<ReturnType<typeof api.search>>;
 
-/** A search no title matches looks in what was said: you and the agents,
- *  not tool output. From the server's index of every transcript. */
-function SaidList({ query, none, current, onMenu }: { query: string; none: string; current: string | null; onMenu: (s: SessionRow, x: number, y: number) => void }) {
+/** What a search finds beyond the board's rows, from the server: sessions of
+ *  any age called it, and where it was said, by you and the agents, not in tool
+ *  output. Null while it is on its way. */
+function useSearchHits(q: string): SearchHits | null {
   const { project } = useScope();
-  const q = query.trim();
-  const [hits, setHits] = useState<SaidHits | null>(null);
+  const [hits, setHits] = useState<SearchHits | null>(null);
   useEffect(() => {
     setHits(null);
     if (q.length < 3) return;
     let live = true;
     const t = setTimeout(() => {
-      api.said(q, project).then(
+      api.search(q, project).then(
         (h) => {
           if (!live) return;
-          for (const x of h) closedSessions.set(x.session.id, x.session);
+          for (const s of [...h.titled, ...h.said.map((x) => x.session)]) closedSessions.set(s.id, s);
           setHits(h);
         },
-        () => live && setHits([]),
+        () => live && setHits({ titled: [], said: [] }),
       );
     }, 200);
     return () => {
@@ -1281,41 +1347,48 @@ function SaidList({ query, none, current, onMenu }: { query: string; none: strin
       clearTimeout(t);
     };
   }, [q, project]);
-  if (!hits?.length) return <p className="rail-none">{hits === null && q.length >= 3 ? "Looking in what was said…" : none}</p>;
+  return hits;
+}
+
+/** A session a search found off the board's rows. */
+function HitRow({
+  s,
+  current,
+  onMenu,
+  tab,
+  onClick,
+  when,
+  children,
+}: {
+  s: SessionRow;
+  current: boolean;
+  onMenu: (s: SessionRow, x: number, y: number) => void;
+  tab: SessionTab;
+  onClick?: () => void;
+  when: ReactNode;
+  children?: ReactNode;
+}) {
   return (
-    <div className="rail-sec" data-kind="said">
-      <div className="rail-label">
-        Said in <span>{hits.length}</span>
-      </div>
-      {hits.map(({ session: s, event, snippet, at, kind }) => (
-        <a
-          key={s.id}
-          className="rail-row rail-said"
-          data-nav-item
-          data-nav-id={`session:${s.id}`}
-          href={hrefOf({ page: "session", id: s.id, tab: "timeline" })}
-          onClick={() => jumpInTimeline(s.id, { turnId: event })}
-          aria-current={s.id === current ? "page" : undefined}
-          data-status={s.status}
-          title={namedTitle(s)}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            onMenu(s, e.clientX, e.clientY);
-          }}
-        >
-          <span className="rail-text">
-            <RowTitle s={s} />
-            <span className="rail-said-line">
-              {kind === "user" ? "You: " : ""}
-              {snippet}
-            </span>
-          </span>
-          <span className="rail-when">
-            <RelativeTime ts={at} short title={`Said ${new Date(at).toLocaleString()}`} />
-          </span>
-        </a>
-      ))}
-    </div>
+    <a
+      className="rail-row rail-said"
+      data-nav-item
+      data-nav-id={`session:${s.id}`}
+      href={hrefOf({ page: "session", id: s.id, tab })}
+      onClick={onClick}
+      aria-current={current ? "page" : undefined}
+      data-status={s.status}
+      title={namedTitle(s)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(s, e.clientX, e.clientY);
+      }}
+    >
+      <span className="rail-text">
+        <RowTitle s={s} />
+        {children}
+      </span>
+      <span className="rail-when">{when}</span>
+    </a>
   );
 }
 

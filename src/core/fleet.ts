@@ -144,6 +144,7 @@ import { accountProvider } from "./providers";
 import { bridgedModel } from "../bridge/models";
 import { isOrgAccount } from "./org/accounts";
 import { readOrg } from "./org/config";
+import { titleOf } from "./changes";
 import { awaitAnswer, BtwHistory, clearPanel, closePanel, copyAnswer, type HistoryBtw } from "./btw";
 import type {
   Account,
@@ -2648,8 +2649,9 @@ export class Fleet extends EventEmitter {
   /**
    * Closed sessions for the See closed list, most recently closed first: all
    * of them, not only the board's window, so an old one can be found and
-   * reopened. `q` matches as the board's search does; `offset` pages;
-   * `include` filters before paging, so a project's page is a full page.
+   * reopened. `q` matches as the board's search does: what a session is called
+   * and where it runs, not what was said in it; `offset` pages; `include`
+   * filters before paging, so a project's page is a full page.
    */
   closed(q: string, offset: number, limit: number, include?: (s: Session) => boolean): { sessions: Session[]; total: number } {
     const needle = q.trim().toLowerCase();
@@ -2657,10 +2659,24 @@ export class Fleet extends EventEmitter {
     for (const rec of listClosedRecords()) {
       const s = this.views.get(rec.id) ?? this.viewOf(rec, this.now());
       if (!s || (include && !include(s))) continue;
-      if (needle && ![s.label, s.title, s.cwd, s.branch, s.lastMessage, s.firstPrompt, s.id, s.model, s.provider].some((x) => x?.toLowerCase().includes(needle))) continue;
+      if (needle && ![titleOf(s), s.label, s.title, s.cwd, s.branch, s.id, s.model, s.provider].some((x) => x?.toLowerCase().includes(needle))) continue;
       all.push(s);
     }
     return { sessions: all.slice(offset, offset + limit), total: all.length };
+  }
+
+  /** The sessions called `q`, the most recently active first, from all of
+   *  history: the rail's search, which finds the board's own itself. */
+  titled(q: string, limit: number, include: (s: Session) => boolean): Session[] {
+    const needle = q.trim().toLowerCase();
+    const out: Session[] = [];
+    for (const rec of listSessionRecords(0)) {
+      const s = this.views.get(rec.id) ?? this.viewOf(rec, this.now());
+      if (!s || !titleOf(s).toLowerCase().includes(needle) || !include(s)) continue;
+      out.push(s);
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   /** Opening prompts you wrote, newest first, from all of history, for the

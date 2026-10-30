@@ -69,11 +69,13 @@ export function projectOf(s: Pick<Session, "repoRoot" | "cwd">): string {
   return (i === -1 ? baseName(repoKey(s)) : parts[i + 1]).toLowerCase();
 }
 
+/** What a search finds on the board: what a session is called and where it
+ *  runs. What was said in it comes from the server's index of every transcript. */
 export function filterSessions<T extends SessionRow>(rows: readonly T[], f: BoardFilter): T[] {
   const q = f.query.trim().toLowerCase();
   return rows.filter((s) => {
     if (!q) return true;
-    return [s.label, s.title, s.cwd, s.branch, s.lastMessage, s.firstPrompt, s.id, s.model, s.provider]
+    return [shownTitle(s), s.label, s.title, s.cwd, s.branch, s.id, s.model, s.provider]
       .some((x) => x != null && x.toLowerCase().includes(q));
   });
 }
@@ -338,6 +340,21 @@ export function sectionsOf<T extends SessionRow>(
     sections = [build("all", pinned.length ? "Sessions" : "", unpinned)];
   }
   return [{ key: "pinned", label: "Pinned", rows: pinned, quiet: pinnedQuiet }, ...sections].filter((s) => s.rows.length > 0);
+}
+
+/**
+ * The list under a search, flat whatever the sort: the sessions whose name has
+ * it, then those found by their folder, branch, id or model, which the rail
+ * puts after what was said.
+ */
+export function searchSectionsOf<T extends SessionRow>(rows: readonly T[], query: string, folds: Folds, sort: SortKey): Section<Nested<T>>[] {
+  const q = query.trim().toLowerCase();
+  const section = (key: string, label: string, picked: T[]): Section<Nested<T>> => {
+    const secs = sectionsOf(picked, folds, sort === "all" ? "all" : "mine");
+    return { key, label, rows: secs.flatMap((s) => s.rows), quiet: new Map(secs.flatMap((s) => [...(s.quiet ?? [])])) };
+  };
+  const named = (s: T) => shownTitle(s).toLowerCase().includes(q);
+  return [section("titled", "In title", rows.filter(named)), section("other", "Other matches", rows.filter((s) => !named(s)))].filter((s) => s.rows.length > 0);
 }
 
 /** The shapes a session's status dot takes, one per repo. */

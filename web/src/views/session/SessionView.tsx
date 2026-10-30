@@ -12,6 +12,7 @@ import {
   parentsOf,
   runningDescendants,
   runningSubagents,
+  searchSectionsOf,
   sectionsOf,
   shownStatus,
   shownTitle,
@@ -161,12 +162,9 @@ export function SessionView({
     const tabs = splitActive(rows, now);
     const roots = (r: SessionRow[]) => r.length - parentsOf(r).size;
     const shown = split ? tabs[view] : rows;
+    const folds = { open: (x: string, auto: boolean) => shownBy(kids, x, auto), quiet: (x: string, auto: boolean) => shownBy(quiet, x, auto), keep, now };
     return {
-      sections: sectionsOf(
-        shown,
-        { open: (x, auto) => shownBy(kids, x, auto), quiet: (x, auto) => shownBy(quiet, x, auto), keep, now },
-        sort,
-      ),
+      sections: filter.query.trim() ? searchSectionsOf(shown, filter.query, folds, sort) : sectionsOf(shown, folds, sort),
       counts: { active: roots(tabs.active), inactive: roots(tabs.inactive) },
       // What a folded row adds up: the rows before folding hid them.
       listed: shown,

@@ -1445,21 +1445,25 @@ const router = new Router(mapError)
     const page = fleet.closed(url.searchParams.get("q") ?? "", offset, limit, project ? (s) => sessionProject(repos, s) === project : undefined);
     return json({ sessions: page.sessions.map((s) => ({ ...s, attention: attentionOf(s, null) })), total: page.total });
   })
-  // Sessions where the words were said, for the rail's search when no title matches.
-  .add("GET", "/api/sessions/said", ({ url }) => {
+  // The rail's search, from all of history: the sessions called it, and where it was said.
+  .add("GET", "/api/sessions/search", ({ url }) => {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    if (q.length < 3) return json({ titled: [], said: [] });
     const project = url.searchParams.get("project");
     const repos = project ? reposWithRoots() : [];
+    const inProject = (s: Session) => !project || sessionProject(repos, s) === project;
     const views = new Map<string, Session>();
-    const hits = searchSaid(url.searchParams.get("q") ?? "", 30, (id) => {
+    const said = searchSaid(q, 30, (id) => {
       try {
         const s = fleet.get(id);
         views.set(id, s);
-        return !project || sessionProject(repos, s) === project;
+        return inProject(s);
       } catch {
         return false; // deleted since
       }
     });
-    return json(hits.map((h) => ({ ...h, session: { ...views.get(h.sessionId)!, attention: attentionOf(views.get(h.sessionId)!, null) } })));
+    const row = (s: Session) => ({ ...s, attention: attentionOf(s, null) });
+    return json({ titled: fleet.titled(q, 30, inProject).map(row), said: said.map((h) => ({ ...h, session: row(views.get(h.sessionId)!) })) });
   })
   // Words in agent output that may name a session off the board (an old
   // one's id or provider id): which of them do, and as which session.

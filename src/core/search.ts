@@ -1,5 +1,5 @@
-/** What was said in every session, searchable: the rail's search when no
- *  session's title matches.
+/** What was said in every session, searchable: the part of the rail's search
+ *  under the sessions whose title has it.
  *
  *  Transcripts are tens of gigabytes, almost all of it tool calls, their
  *  output and thinking; what you and the agents said is about 1% of it. A
@@ -127,7 +127,7 @@ export function userSaidSince(since: number): { session: string; at: number; tex
 
 function snippetOf(text: string, needle: string): string {
   const at = text.toLowerCase().indexOf(needle.toLowerCase());
-  const from = Math.max(0, at - 60);
+  const from = Math.max(0, at - 40); // little enough that the match is on the rail's two lines
   const s = text.slice(from, from + 200).replace(/\s+/g, " ").trim();
   return (from > 0 ? "…" : "") + s;
 }

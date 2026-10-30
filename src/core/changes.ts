@@ -32,7 +32,7 @@ export function tail(s: string | null | undefined, n: number): string {
   return t.length > n ? `…${t.slice(-n)}` : t;
 }
 
-const titleOf = (s: ChangeRow) => oneLine(s.label) || oneLine(s.title) || oneLine(s.firstPrompt?.split("\n")[0]).slice(0, 80) || "untitled";
+export const titleOf = (s: Pick<Session, "label" | "title" | "firstPrompt">) => oneLine(s.label) || oneLine(s.title) || oneLine(s.firstPrompt?.split("\n")[0]).slice(0, 80) || "untitled";
 
 function changeOf(was: { status: SessionStatus; lastMessage: string | null }, s: ChangeRow): Change | null {
   const c = (kind: ChangeKind, detail = ""): Change => ({ id: s.id, kind, title: titleOf(s), detail });
