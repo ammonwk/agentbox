@@ -34,7 +34,7 @@ test("a parked scheduled session told its wait ended is not closed as finished b
   // and closed as finished in the same pass, before the resume it was told by got going.
   const panes: PaneInfo[] = [];
   const runtime: Runtime = {
-    listPanes: () => panes,
+    listPanes: async () => panes,
     newSession: (s) => {
       panes.push({ name: s.name, pid: 99999981, dead: false, activity: now / 1000 } as PaneInfo);
       return 0;

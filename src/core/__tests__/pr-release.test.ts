@@ -112,7 +112,7 @@ test("a message queued before the release carries the line when it lands, and th
   const blocked = new Promise<void>(resolve => { unblock = resolve; });
   const pane = { name: "ab-messenger", pid: 99999999, dead: false, activity: now / 1000 } as PaneInfo;
   const runtime: Runtime = {
-    listPanes: () => [pane], newSession: () => 0, killSession: () => {}, sendKeys: () => {}, capture: () => "", captureMany: () => new Map(),
+    listPanes: async () => [pane], newSession: () => 0, killSession: () => {}, sendKeys: () => {}, capture: () => "", captureMany: () => new Map(),
     sendText: async (_pane, text) => { delivered.push(text); if (text === "first") { entered(); await blocked; } },
   };
   const fleet = new Fleet({ adapters: [claudeAdapter], runtime, usage: { usageOf: () => null } });
@@ -137,7 +137,7 @@ test("a message queued before the release carries the line when it lands, and th
 
 test("resuming a parked former holder without a prompt still starts with its release notice", async () => {
   const launches: NewSession[] = [];
-  const runtime: Runtime = { listPanes: () => [], newSession: s => { launches.push(s); return 0; }, killSession: () => {}, sendText: async () => {}, sendKeys: () => {}, capture: () => null, captureMany: () => new Map() };
+  const runtime: Runtime = { listPanes: async () => [], newSession: s => { launches.push(s); return 0; }, killSession: () => {}, sendText: async () => {}, sendKeys: () => {}, capture: () => null, captureMany: () => new Map() };
   insertAccount({ id: "fixture-account", provider: "claude", label: "fixture", email: null, plan: null, home: join(dir, "account"), isDefault: false, enabled: true, createdAt: now });
   insertSessionRecord({ id: "parked", provider: "claude", agentSessionId: "00000000-0000-4000-8000-000000000150", accountId: "fixture-account", cwd: dir, worktree: null,
     label: null, claim: 1, origin: "agentbox", scope: "personal", tmux: null, transcriptPath: null, startedAt: now, lastActivityAt: now,
@@ -181,7 +181,7 @@ test("repeated schedule retirement cannot revoke a PR its successor explicitly r
 function fleetFor(id: string, pane: PaneInfo): { fleet: Fleet; delivered: string[] } {
   const delivered: string[] = [];
   const runtime: Runtime = {
-    listPanes: () => [pane], newSession: () => 0, killSession: () => {}, sendKeys: () => {}, capture: () => "", captureMany: () => new Map(),
+    listPanes: async () => [pane], newSession: () => 0, killSession: () => {}, sendKeys: () => {}, capture: () => "", captureMany: () => new Map(),
     sendText: async (_pane, text) => { delivered.push(text); },
   };
   const fleet = new Fleet({ adapters: [claudeAdapter], runtime, usage: { usageOf: () => null } });

@@ -69,7 +69,7 @@ test("no provider puts the words of a prompt or a briefing on the command line",
 test("a session the fleet starts carries no prompt on its command line", async () => {
   const launches: NewSession[] = [];
   const runtime: Runtime = {
-    listPanes: () => [],
+    listPanes: async () => [],
     newSession: s => { launches.push(s); return 0; },
     killSession: () => {},
     sendText: async () => {},

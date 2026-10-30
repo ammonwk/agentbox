@@ -34,6 +34,15 @@ function tmux(args: string[], input?: string): TmuxResult {
   return { code: p.exitCode ?? -1, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
 }
 
+/** `tmux` without holding up the server: on a loaded machine the tmux server
+ *  can take a few hundred ms to answer, and a spawnSync stops every request
+ *  for that long. */
+async function tmuxAsync(args: string[]): Promise<TmuxResult> {
+  const p = Bun.spawn(["tmux", "-L", tmuxSocket(), ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { code, stdout, stderr };
+}
+
 export const tmuxName = (sessionId: string): string => `ab-${sessionId}`;
 
 /**
@@ -223,11 +232,11 @@ export interface PaneInfo {
 
 /** Every agentbox session on our tmux server. Empty when the server is not
  *  running, which is the normal state with nothing open. */
-export function listPanes(): PaneInfo[] {
+export async function listPanes(): Promise<PaneInfo[]> {
   // `|` and not a tab: under a non-UTF-8 locale tmux rewrites tabs in `-F`
   // output, and every pane then failed to parse. Session names are `ab-<id>`,
   // so a `|` in one is not possible.
-  const r = tmux([
+  const r = await tmuxAsync([
     "list-panes", "-a", "-F",
     "#{session_name}|#{pane_pid}|#{pane_dead}|#{pane_dead_status}|#{session_attached}|#{pane_width}|#{pane_height}|#{pid}|#{start_time}|#{window_activity}",
   ]);

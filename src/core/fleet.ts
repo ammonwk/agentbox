@@ -199,7 +199,7 @@ const MATCH_WINDOW_MS = 10 * 60_000;
 
 export interface Runtime {
   newSession(s: NewSession): number;
-  listPanes(): PaneInfo[];
+  listPanes(): Promise<PaneInfo[]>;
   sendText(name: string, text: string, opts?: { pieces?: number }): Promise<void>;
   /** Enter on a message `sendText` left in the input box; false when the pane does not show it. */
   submitDraft?(name: string, text: string): Promise<boolean>;
@@ -563,7 +563,7 @@ export class Fleet extends EventEmitter {
     };
 
     this.passes++;
-    this.panes = new Map(this.deps.runtime.listPanes().map((p) => [p.name, p]));
+    this.panes = new Map((await this.deps.runtime.listPanes()).map((p) => [p.name, p]));
     for (const name of this.screens.keys()) if (!this.panes.has(name)) this.screens.delete(name);
     this.prefetchScreens();
     this.coldAfterMs = settings.balancer.claimIdleMin * 60_000;
@@ -1603,7 +1603,7 @@ export class Fleet extends EventEmitter {
     if (candidates.length > 0) {
       const table = await sharedProcTable().catch(() => null);
       const panes = new Map<string, PaneInfo[]>();
-      for (const p of this.deps.runtime.listPanes()) panes.set(p.name, [...(panes.get(p.name) ?? []), p]);
+      for (const p of await this.deps.runtime.listPanes()) panes.set(p.name, [...(panes.get(p.name) ?? []), p]);
       const live = readLive().filter((e) => subagentWorking(e.text));
       let parked = false;
       for (const v of candidates) {
@@ -1653,14 +1653,14 @@ export class Fleet extends EventEmitter {
             holds.set(v.id, "something stirred since the last check");
             continue;
           }
-          if (this.deps.runtime.listPanes().some((p) => p.name === v.tmux && p.clients > 0)) {
+          if ((await this.deps.runtime.listPanes()).some((p) => p.name === v.tmux && p.clients > 0)) {
             holds.set(v.id, "a terminal or browser is attached to it");
             continue;
           }
           const starts = check.agentPids.map((pid) => [pid, startedAtOf(pid)] as const);
           this.killTmux(v.tmux!);
           clean.delete(v.id);
-          if (this.paneAlive(v.tmux)) {
+          if (await this.paneAlive(v.tmux)) {
             holds.set(v.id, "tmux did not stop it");
             continue;
           }
@@ -3146,8 +3146,8 @@ export class Fleet extends EventEmitter {
   }
 
   /** Is the tmux session up right now? Asked of tmux, not the last pass. */
-  private paneAlive(name: string | null | undefined): boolean {
-    return !!name && this.deps.runtime.listPanes().some((p) => p.name === name && !p.dead);
+  private async paneAlive(name: string | null | undefined): Promise<boolean> {
+    return !!name && (await this.deps.runtime.listPanes()).some((p) => p.name === name && !p.dead);
   }
 
   resume(id: string, prompt?: string, attempt?: () => void): Promise<Session> {
@@ -3159,7 +3159,7 @@ export class Fleet extends EventEmitter {
     if (!rec) throw new FleetError(404, `no session ${id}`);
     const view = this.get(id);
     if (view.host === "subagent") throw this.callersAgent(view);
-    if (view.host !== "none" || this.paneAlive(rec.tmux)) throw new FleetError(409, `session is already running (${view.host === "none" ? "tmux" : view.host})`);
+    if (view.host !== "none" || (await this.paneAlive(rec.tmux))) throw new FleetError(409, `session is already running (${view.host === "none" ? "tmux" : view.host})`);
     // Its teammates were stopped with it and do not come back; say so, or it
     // will message them and wait for answers that never come.
     if (prompt && rec.parkedAt && rec.parkedMates?.length) {
@@ -3384,7 +3384,7 @@ export class Fleet extends EventEmitter {
       // The pane, not the last pass, says whether it still runs: a stop taken
       // mid-pass leaves the view on "tmux" for a tick, and restarting from
       // that would stop a process already gone and resume an id it never wrote.
-      if (!rec.tmux || !this.paneAlive(rec.tmux)) {
+      if (!rec.tmux || !(await this.paneAlive(rec.tmux))) {
         updateSessionRecord(id, { model, modelAt: at });
         await this.tick();
         return this.get(id);
@@ -3493,7 +3493,7 @@ export class Fleet extends EventEmitter {
     let last = "";
     let still = 0;
     while (this.now() < deadline) {
-      if (!this.paneAlive(pane)) throw new Error("its pane exited before the prompt could be typed");
+      if (!(await this.paneAlive(pane))) throw new Error("its pane exited before the prompt could be typed");
       const screen = this.deps.runtime.capture(pane, { scrollback: 200 }) ?? "";
       const dialog = adapter?.autoAnswer?.(screen, { bypassPermissions: getSettings().autoApprove });
       still = !dialog && screen.trim() && screen === last ? still + 1 : 0;
@@ -3635,7 +3635,7 @@ export class Fleet extends EventEmitter {
       const rec = getSessionRecord(id);
       // Back already — an earlier message resumed it, and the board lags
       // a pass behind.
-      if (rec?.tmux && this.paneAlive(rec.tmux)) {
+      if (rec?.tmux && (await this.paneAlive(rec.tmux))) {
         await this.untilReady(id);
         if (s.provider === "claude") await this.clearBtw(id, rec.tmux);
         await this.clearLimitDialog(s.provider, rec.tmux);

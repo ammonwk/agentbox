@@ -24,7 +24,7 @@ afterAll(() => {
 });
 const account = { id: "bind-account", provider: "codex" as const, label: "Fixture", email: null, plan: null, home: dir, isDefault: false, enabled: true, createdAt: 0 };
 const now = Date.now();
-const fleet = new Fleet({ adapters: [codexAdapter], runtime: { listPanes: () => [] } as any, usage: { usageOf: () => null } }) as unknown as {
+const fleet = new Fleet({ adapters: [codexAdapter], runtime: { listPanes: async () => [] } as any, usage: { usageOf: () => null } }) as unknown as {
   tracked: Map<string, { ref: TranscriptRef; facts: TranscriptFacts }>;
   byAgentId: Map<string, string>;
   matchPendingSpawns(at: number): void;

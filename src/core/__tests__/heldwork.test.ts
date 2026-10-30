@@ -46,7 +46,7 @@ function parked(id: string, parent: string | null): SessionRecord {
 }
 
 const noPanes: Runtime = {
-  newSession: () => 0, listPanes: () => [], sendText: async () => {}, sendKeys: () => {}, capture: () => null,
+  newSession: () => 0, listPanes: async () => [], sendText: async () => {}, sendKeys: () => {}, capture: () => null,
   captureMany: () => new Map(), killSession: () => {},
 };
 
