@@ -236,12 +236,6 @@ function rates(a: number, b: number): [string, string] {
   return [a.toFixed(d), b.toFixed(d)];
 }
 
-/** Reads at its 5-hour limit now and not resetting within the horizon (which
- *  would have raised its room). */
-function atShortLimit(c: Candidate): boolean {
-  return c.short !== null && c.short >= 100 && c.legRoom === 0;
-}
-
 /** On pace to hit the 5-hour limit well before the window resets. */
 function runsOut(c: Candidate): boolean {
   return c.shortRunsOutAt !== null && c.shortResetsAt !== null && c.shortResetsAt - c.shortRunsOutAt > STALL_MS;
@@ -340,8 +334,11 @@ function evaluate(
     c.score = -Number.MAX_VALUE;
   }
 
-  const spent = budgets.find((b) => b.used >= 100);
-  const spokenFor = budgets.find((b) => b.effective >= 100);
+  // A window that reads 100% is not a refusal (`stopped` is): a provider can
+  // let a spent window run on, so its account stays open, and ranks by when
+  // it resets like any other. Claims are not counted against it either: how
+  // much it has left is unknown, and the provider says when it is gone.
+  const spokenFor = budgets.find((b) => b.used < 100 && b.effective >= 100);
   if (!state.account.enabled) {
     c.eligible = false;
     c.wall = true;
@@ -364,15 +361,6 @@ function evaluate(
     c.eligible = false;
     c.wall = true;
     c.reason = `its provider stopped a session at ${clockOf(s.at)} (${s.detail.replace(/\s+/g, " ").slice(-80)}); tried again ${dayOf(s.until)}`;
-  } else if (spent || atShortLimit(c)) {
-    // A reading at 100% is not a refusal: a provider can let a spent window
-    // run on, so the account is a last resort (`lastResort`) until it stops
-    // a session (`stopped`). However empty its other windows read, it is
-    // read as spent: Go's week read 0% while its month was spent.
-    const [label, used, resetsAt] = spent ? [spent.w.label, spent.used, spent.w.resetsAt] : ["5-hour", c.short, c.shortResetsAt];
-    c.eligible = false;
-    c.atLimit = true;
-    c.reason = `${label.toLowerCase()} reads ${used}%${resetsAt ? ` (resets ${dayOf(resetsAt)})` : ""}: taken only when no account has room, until its provider refuses a session`;
   } else if (runsOut(c)) {
     c.eligible = false;
     c.reason = `at its pace (+${c.shortPace}%/h) it hits its 5-hour limit at ${clockOf(c.shortRunsOutAt!)}, before it resets at ${clockOf(c.shortResetsAt!)}`;
@@ -437,31 +425,10 @@ function rank(candidates: Candidate[], now: number): Candidate[] {
 const leftOf = (c: Candidate): number => c.budget?.left ?? 100;
 
 /**
- * The accounts a session can go to when none is eligible, best first: those
- * ruled out only by an estimate — claims, or a reading at a limit its provider
- * has not yet held it to — not by a fact (`Candidate.wall`), which stops a
- * session on its first call. Merely claimed before reading at a limit; one on
- * pace to run out after, since a measured pace is not an estimate; then the
- * most budget left, then the most room.
- */
-function lastResort(candidates: Candidate[]): Candidate[] {
-  return candidates
-    .filter((c) => !c.wall)
-    .sort(
-      (a, b) =>
-        Number(!!a.atLimit) - Number(!!b.atLimit) ||
-        Number(runsOut(a)) - Number(runsOut(b)) ||
-        leftOf(b) - leftOf(a) ||
-        (b.legRoom ?? 0) - (a.legRoom ?? 0),
-    );
-}
-
-/**
  * Where a session cut off at `own`'s limit can carry on: the first of the
  * other accounts, in the balancer's order, that can take a session and whose
- * budget has room for what this one claims; with none eligible, the first
- * last resort (`lastResort`), since a spent reading may still run. Null when
- * there is none — it stays where it is.
+ * budget has room for what this one claims. Null when none can take a
+ * session — it stays where it is.
  *
  * The room is asked of this placement alone. A new session may be given an
  * account's last points (`fits`), because one that overruns them is moved
@@ -471,7 +438,6 @@ function lastResort(candidates: Candidate[]): Candidate[] {
  */
 export function elsewhere(p: Placement, own: string): Candidate | null {
   const others = p.candidates.filter((c) => c.eligible && c.accountId !== own);
-  if (others.length === 0) return lastResort(p.candidates.filter((c) => c.accountId !== own))[0] ?? null;
   return others.find((c) => leftOf(c) >= p.claim) ?? others.reduce<Candidate | null>((best, c) => (best && leftOf(best) >= leftOf(c) ? best : c), null);
 }
 
@@ -504,20 +470,23 @@ export function place(req: PlaceRequest): Placement {
     return { ...base, accountId: null, mode: "none", why: `no ${req.provider} account is set up` };
   }
   if (eligible.length === 0) {
-    // Claims are estimates, and so is a reading at 100% (`atLimit`). When
-    // every account is ruled out by one but some may still have room,
-    // refusing outright would leave work undone that the accounts could in
-    // fact do — so overflow onto the best of them, and say so.
-    const open = lastResort(candidates);
+    // Claims are estimates. When every account is spoken for but some still
+    // has real budget left, refusing outright would leave work undone that the
+    // accounts could in fact do — so overflow onto the least-claimed one, and
+    // say so. Only what claims ruled out is open to it: an account behind a
+    // wall (`Candidate.wall`) stops a session on its first call, estimate or
+    // not. One on pace to run out goes last: overflow is for estimates that
+    // overran, and a measured pace is not an estimate.
+    const open = candidates
+      .filter((c) => !c.wall)
+      .sort((a, b) => Number(runsOut(a)) - Number(runsOut(b)) || leftOf(b) - leftOf(a) || (b.legRoom ?? 0) - (a.legRoom ?? 0));
     const least = open[0];
     if (least) {
       return {
         ...base,
         accountId: least.accountId,
         mode: "overflow",
-        why: least.atLimit
-          ? `every ${req.provider} account reads at a limit and none has refused a session yet; trying ${least.label} (${least.reason})`
-          : `no ${req.provider} account has both an unclaimed budget and an open 5-hour window; ${least.label} is the least claimed${least.budget ? ` (${least.budget.label.toLowerCase()} ${least.budget.used}% used + ${round1(least.budget.effective - least.budget.used)} claimed)` : ""}`,
+        why: `no ${req.provider} account has both an unclaimed budget and an open 5-hour window; ${least.label} is the least claimed${least.budget ? ` (${least.budget.label.toLowerCase()} ${least.budget.used}% used + ${round1(least.budget.effective - least.budget.used)} claimed)` : ""}`,
       };
     }
     // The model's doing, not the accounts': say so, since another model would go.
@@ -567,7 +536,8 @@ function explain(chosen: Candidate, eligible: Candidate[], now: number): string 
   if (b && due(chosen, now) < due(next, now)) {
     const theirs = next.budget && next.budget.label !== b.label ? ` ${next.budget.label.toLowerCase()}` : "";
     const other = due(next, now) === Infinity ? `${next.label}'s${theirs} has not started` : `${next.label}'s${theirs} in ${until(due(next, now), now)}`;
-    return `${chosen.label}'s ${b.label.toLowerCase()} resets soonest (in ${until(due(chosen, now), now)}; ${other}), with ${round1(Math.max(0, 100 - b.effective))}% of it still to use, and it has room in its 5-hour window`;
+    const left = b.used >= 100 ? `reading ${b.used}% but with nothing refused yet` : `with ${round1(Math.max(0, 100 - b.effective))}% of it still to use`;
+    return `${chosen.label}'s ${b.label.toLowerCase()} resets soonest (in ${until(due(chosen, now), now)}; ${other}), ${left}, and it has room in its 5-hour window`;
   }
   if (chosen.perHour !== null && next.perHour !== null && chosen.perHour !== next.perHour) {
     const [x, y] = rates(chosen.perHour, next.perHour);
