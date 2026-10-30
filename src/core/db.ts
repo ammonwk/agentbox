@@ -482,6 +482,8 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX IF NOT EXISTS you_acts_at ON you_acts (at);
   `,
+  // 39 — listOpenWaits' untold branch, which scanned every wait ever made.
+  `CREATE INDEX IF NOT EXISTS waits_untold ON waits (told_at);`,
 ];
 
 function migrate(d: Database) {
