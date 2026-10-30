@@ -1145,7 +1145,7 @@ function citations(text: string): { text: string; cites: string[] } {
 function AssistantRow({ ev }: { ev: Extract<TimelineEvent, { kind: "assistant" }> }) {
   const { text, cites } = useMemo(() => citations(ev.text), [ev.text]);
   return (
-    <div className="tl-assistant">
+    <div className="tl-assistant" data-ev={ev.id}>
       <Markdown text={text} />
       {cites.length ? (
         <div className="tl-cites">
