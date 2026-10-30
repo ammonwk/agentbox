@@ -5,7 +5,8 @@
  * without which the server refuses a mutation (docs/v2.md, Security).
  */
 
-import { DEFAULT_PORT } from "./core/paths";
+import { existsSync } from "node:fs";
+import { DEFAULT_PORT, serverSocket } from "./core/paths";
 import { sessionHeaders } from "./core/session-authority";
 
 /** Where the server listens: loopback, on `$AGENTBOX_PORT` or the default. */
@@ -31,10 +32,12 @@ export class ApiError extends Error {
 export type Api = <T>(method: string, path: string, body?: unknown) => Promise<T>;
 
 export function apiClient(base: string): Api {
+  const sock = base === serverBase() ? serverSocket() : null;
   return async <T>(method: string, path: string, body?: unknown): Promise<T> => {
     let res: Response;
     try {
       res = await fetch(`${base}${path}`, {
+        unix: sock && existsSync(sock) ? sock : undefined,
         method,
         headers: { "content-type": "application/json", "x-agentbox": "1", ...sessionHeaders() },
         body: body === undefined ? undefined : JSON.stringify(body),

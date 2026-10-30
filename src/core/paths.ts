@@ -70,6 +70,12 @@ export const webDist = join(packageRoot, "web", "dist");
 
 export const DEFAULT_PORT = 4479;
 
+/** The server's Unix socket, for the CLI and the MCP: it is in a directory only
+ *  you can open, so a request on it is yours without reading the kernel's
+ *  whole TCP table to find out (src/server/peeruid.ts). */
+export const serverSocket = (port = Number(process.env.AGENTBOX_PORT ?? DEFAULT_PORT)): string =>
+  join(agentboxHome(), "run", `server-${port}.sock`);
+
 export function ensureDirs() {
   for (const d of [worktreeRoot(), logDir(), repoRoot(), accountsRoot()]) {
     mkdirSync(d, { recursive: true });

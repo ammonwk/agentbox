@@ -19,10 +19,10 @@
 
 import { ensureBridge } from "../bridge/service";
 import { ZodError } from "zod";
-import { statSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
-import { DEFAULT_PORT, packageRoot, webDist } from "../core/paths";
+import { DEFAULT_PORT, packageRoot, serverSocket, webDist } from "../core/paths";
 import { behindHead, type Behind } from "../core/behind";
 import { restartService } from "../core/restart";
 import { sourceCheckout } from "../core/snapshot";
@@ -2085,6 +2085,7 @@ export async function startServer(): Promise<void> {
     },
   });
   console.log(`agentbox listening on http://${HOST}:${PORT}`);
+  listenOnSocket(websocket, handle);
   void listenOnTailnet(websocket, handle);
   const progress = setInterval(() => {
     for (const ws of waiting) send(ws, { type: "starting", ...startupProgress() });
@@ -2177,6 +2178,31 @@ async function sayRateChanges(): Promise<void> {
     for (const c of changes) cards.add({ kind: "note", title: c.title, short: c.short, key: c.key });
   } catch (e) {
     console.error("agentbox: checking what the plans are worth failed:", e);
+  }
+}
+
+/** The CLI's and the MCP's way in (`serverSocket`). Whoever can open it is
+ *  you, so its requests skip the TCP listener's per-request uid check. Called
+ *  once the TCP port is held, so the socket left by an earlier server is ours
+ *  to replace. */
+function listenOnSocket(
+  websocket: WebSocketHandler<SocketData>,
+  handle: (req: Request, srv: Server<SocketData>) => Response | undefined | Promise<Response>,
+): void {
+  const sock = serverSocket(PORT);
+  try {
+    mkdirSync(dirname(sock), { recursive: true, mode: 0o700 });
+    chmodSync(dirname(sock), 0o700);
+    rmSync(sock, { force: true });
+    Bun.serve<SocketData>({
+      unix: sock,
+      websocket,
+      fetch: (req, srv) => handle(req, srv),
+      // Bun's types omit it for a socket, but it applies: the 10s default cuts the CLI's long polls.
+      ...({ idleTimeout: 60 } as object),
+    });
+  } catch (err) {
+    console.error(`agentbox: not listening on ${sock}: ${(err as Error).message}`);
   }
 }
 
